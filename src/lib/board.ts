@@ -38,8 +38,8 @@ export interface BoardPost {
 
 /** The user's Forum replies carry this author id. */
 export const BOARD_USER = "user";
-/** Mirrors ownReply in server/board.ts: only replies typed in the Forum's box can be deleted. */
-export const isOwnReply = (post: BoardPost) => post.author_bot_id === BOARD_USER && post.source_ref.startsWith("reply:");
+/** Mirrors removable in server/board.ts: the user's own replies and any top-level post can be deleted. */
+export const isRemovable = (post: BoardPost) => post.parent_id === null || (post.author_bot_id === BOARD_USER && post.source_ref.startsWith("reply:"));
 
 /** The sidebar selection for the Forum. It never matches a bot, group or room id. */
 export const FORUM_SELECTION = "forum:board";
@@ -123,6 +123,20 @@ export function useBoardPosts(): BoardPostsView {
   const mine = useRef(new Map<string, BoardPost>());
   // a deleted reply stays gone, even from a load asked before the delete or with the live link down
   const gone = useRef(new Map<string, string | null>());
+  // a deleted top-level post takes its whole thread, even replies a later load brings
+  const cut = useRef(new Set<string>());
+  const prune = useCallback((list: BoardPost[]) => {
+    const byId = new Map(list.map((post) => [post.id, post]));
+    const under = (post: BoardPost) => {
+      const seen = new Set<string>();
+      for (let parent = post.parent_id; parent && !seen.has(parent); parent = byId.get(parent)?.parent_id ?? gone.current.get(parent) ?? null) {
+        if (cut.current.has(parent)) return true;
+        seen.add(parent);
+      }
+      return false;
+    };
+    return list.filter((post) => !gone.current.has(post.id) && !under(post));
+  }, []);
   // replies under a deleted post move up to its parent, as the server moves them
   const lift = useCallback((post: BoardPost) => {
     let parent = post.parent_id;
@@ -137,9 +151,9 @@ export function useBoardPosts(): BoardPostsView {
       request("/api/board").then(
         (body: { posts?: BoardPost[] }) => {
           if (!live || seq !== asked.current) return;
-          const list = (Array.isArray(body?.posts) ? body.posts : []).filter((post) => !gone.current.has(post.id));
+          const list = Array.isArray(body?.posts) ? body.posts : [];
           for (const post of list) mine.current.delete(post.id);
-          setPosts((forumKept.posts = [...list, ...mine.current.values()].map(lift)));
+          setPosts((forumKept.posts = prune([...list, ...mine.current.values()]).map(lift)));
           setFailed(false);
         },
         () => live && seq === asked.current && setFailed(true),
@@ -152,16 +166,17 @@ export function useBoardPosts(): BoardPostsView {
       live = false;
       window.removeEventListener(BOARD_CHANGED_EVENT, load);
     };
-  }, [lift]);
+  }, [lift, prune]);
   const saved = useCallback((post: BoardPost) => {
     mine.current.set(post.id, post);
     setPosts((now) => (forumKept.posts = [...(now ?? []).filter((held) => held.id !== post.id), post]));
   }, []);
   const removed = useCallback((post: BoardPost) => {
     gone.current.set(post.id, post.parent_id);
+    if (post.parent_id === null) cut.current.add(post.id);
     mine.current.delete(post.id);
-    setPosts((now) => (forumKept.posts = (now ?? []).filter((held) => held.id !== post.id).map(lift)));
-  }, [lift]);
+    setPosts((now) => (forumKept.posts = prune(now ?? []).map(lift)));
+  }, [lift, prune]);
   const retry = useCallback(() => reload.current(), []);
   return { posts, failed, saved, removed, retry };
 }

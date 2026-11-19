@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { z } from "zod";
 
-import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, REPLY_REF, ROOM_REF, type Board } from "./board.ts";
+import { BOARD_KINDS, BOARD_USER, boardLine, removable, REPLY_REF, ROOM_REF, type Board } from "./board.ts";
 import { json, readBody } from "./http-helpers.ts";
 
 export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply", remove: "/api/board/delete" } as const;
@@ -89,13 +89,13 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       });
       return json(res, 200, { post });
     },
-    /** The user deletes only what they typed in the Forum's reply box. */
+    /** The user deletes their own replies and any top-level post; a bot has no route here. */
     async remove(req: IncomingMessage, res: ServerResponse) {
       const body = removeSchema.safeParse(await readBody(req));
       if (!body.success) return json(res, 400, { error: "a delete needs id" });
       const post = deps.board.get(body.data.id);
       if (!post) return json(res, 404, { error: `no Board post ${body.data.id}` });
-      if (!ownReply(post)) return json(res, 403, { error: "only your own replies can be deleted" });
+      if (!removable(post)) return json(res, 403, { error: "only your own replies and top-level posts can be deleted" });
       deps.board.remove(post.id);
       return json(res, 200, { id: post.id });
     },

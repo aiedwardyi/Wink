@@ -4,7 +4,7 @@ import { ArrowBigUp, CircleCheck, Flame, MessageCircle, Sparkles, TrendingUp, ty
 
 import { agoText } from "@/lib/ago";
 import {
-  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isOwnReply, replyToBoard, sortBoardThreads, useBoardPosts,
+  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isRemovable, replyToBoard, sortBoardThreads, useBoardPosts,
   type BoardKind, type BoardPost, type BoardReply, type BoardSort,
 } from "@/lib/board";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
@@ -166,7 +166,7 @@ const preview = (post: BoardPost) => (post.body && post.body !== post.title ? po
 
 type OnMenu = (menu: MessageMenuRequest) => void;
 
-/** The chat's message menu on a post: Copy on any, Delete added on the user's own replies. */
+/** The chat's message menu on a post: Copy on any, Delete added on the user's own replies and any top-level post. */
 const menuProps = (post: BoardPost, onMenu: OnMenu) => {
   const text = post.body || post.title;
   const user = post.author_bot_id === BOARD_USER;
@@ -460,6 +460,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
   const remove = (post: BoardPost) => deleteFromBoard(post.id).then(() => {
     removed(post);
+    if (post.id === openId) close();
     setDeleteFailed(false);
   }, () => setDeleteFailed(true));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
@@ -590,7 +591,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
           target={shownMenu.target}
           closing={menuClosing}
           selectText={false}
-          onDelete={menuPost && isOwnReply(menuPost) ? () => setDeleting(menuPost) : undefined}
+          onDelete={menuPost && isRemovable(menuPost) ? () => setDeleting(menuPost) : undefined}
           onClose={() => setMenu(null)}
         />
       ) : shownMenu ? (

@@ -711,7 +711,7 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     expect([...host.querySelectorAll("article, [role=list]")].map((part) => part.textContent).join(" ")).not.toMatch(/Edward|EY|coool|push it/);
   });
 
-  it("right-click opens the chat's menu: Copy on bot posts, Copy and Delete on the user's own reply", async () => {
+  it("right-click opens the chat's menu: Copy on bot replies, Copy and Delete on any top-level post and the user's own reply", async () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     posts = [
@@ -725,11 +725,11 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
       await act(async () => { host.querySelector(selector)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
       return [...document.body.querySelectorAll("[data-message-menu] [role=menuitem]")].map((item) => item.textContent);
     };
-    expect(await menuFor('[data-board-post="pbot"] button')).toEqual(["Copy"]);
+    expect(await menuFor('[data-board-post="pbot"] button')).toEqual(["Copy", "Delete"]);
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-copy]")!.click());
     expect(writeText).toHaveBeenCalledWith("Codex usage limit");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pbot"] button')!.click());
-    expect(await menuFor("article")).toEqual(["Copy"]);
+    expect(await menuFor("article")).toEqual(["Copy", "Delete"]);
     expect(await menuFor('[data-board-post="pcarbon"] [data-board-author]')).toEqual(["Copy"]);
     expect(await menuFor('[data-board-post="pmine"] p')).toEqual(["Copy", "Delete"]);
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
@@ -743,6 +743,40 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     await menuFor("article");
     await esc();
     expect(host.querySelector("article")).not.toBeNull();
+  });
+
+  it("deleting the open post closes it back to the list and takes its replies, even from a stale load", async () => {
+    posts = [
+      post("pbot", { created_at: 1 }),
+      post("pother", { created_at: 2 }),
+      post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 3 }),
+      post("pchild", { parent_id: "pmine", author_bot_id: "carbon", kind: "tip", body: "Child.", created_at: 4 }),
+    ];
+    const stale = [...posts];
+    const ok = globalThis.fetch;
+    const deletes: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/delete") {
+        deletes.push(JSON.parse(String(init?.body)).id);
+        return json({ posts: [] });
+      }
+      if (url === "/api/board" && deletes.length) return json({ posts: stale });
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pbot");
+    expect(host.querySelector("article")).not.toBeNull();
+    await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    expect(deletes).toEqual(["pbot"]);
+    expect(host.querySelector("article")).toBeNull();
+    expect(forumKept.openId).toBeNull();
+    expect(rows()).toEqual(["pother"]);
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual(["pother"]);
   });
 
   it("says so when a delete fails and keeps the reply", async () => {

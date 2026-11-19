@@ -200,4 +200,35 @@ describe("board Drive sync", () => {
     expect(createBoard({ dir: a.board.dir, pcId: () => "pc-a" }).get(reply.id)).toBeUndefined();
     expect(readdirSync(join(folder, BOARD_DIR, "pc-b"))).not.toContain(`${reply.id}.json`);
   });
+
+  it("a deleted top-level post takes every reply under it, on every PC, and no stale copy brings it back", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const ids = { out: (id: string) => id, in: (id: string) => id };
+    const keep = a.board.post({ ...STUCK, source_ref: "call:t2:engine:other" });
+    const stuck = a.board.post(STUCK);
+    const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+    const deep = a.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+    a.board.sync(folder, ids);
+    b.board.sync(folder, ids);
+    expect(b.board.get(deep.id)).toBeDefined();
+    expect(a.board.remove(stuck.id)).toBe(true);
+    expect(a.board.list().map((post) => post.id)).toEqual([keep.id]);
+    for (let pass = 0; pass < 2; pass++) {
+      a.board.sync(folder, ids);
+      b.board.sync(folder, ids);
+    }
+    for (const side of [a, b]) expect(side.board.list().map((post) => post.id)).toEqual([keep.id]);
+    expect(createBoard({ dir: a.board.dir, pcId: () => "pc-a" }).list().map((post) => post.id)).toEqual([keep.id]);
+  });
+
+  it("removing a reply still moves the replies under it up to its parent", () => {
+    const { board } = home("pc-a");
+    const stuck = board.post(STUCK);
+    const reply = board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+    const under = board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+    board.remove(reply.id);
+    expect(board.get(under.id)).toMatchObject({ parent_id: stuck.id });
+  });
 });

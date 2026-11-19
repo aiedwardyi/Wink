@@ -19,8 +19,9 @@ export const ROOM_REF = "room:";
 export const fromRoom = (post: Pick<BoardPost, "source_ref">) => post.source_ref.startsWith(ROOM_REF);
 /** The Forum's reply box; any other post by the user is a chat answer saved before chat stayed out of the Board. */
 export const REPLY_REF = "reply:";
-/** The only posts the user can delete. */
 export const ownReply = (post: BoardPost) => post.author_bot_id === BOARD_USER && post.source_ref.startsWith(REPLY_REF);
+/** What the user can delete: their own replies and any top-level post. */
+export const removable = (post: BoardPost) => ownReply(post) || post.parent_id === null;
 const copiedChat = (post: BoardPost) => post.author_bot_id === BOARD_USER && !ownReply(post);
 
 const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const;
@@ -269,11 +270,18 @@ export function createBoard(options: BoardOptions) {
       options.changed?.();
       return next;
     },
-    /** Replies under a removed post move up to its parent, so they stay in their thread. */
+    /** A removed top-level post takes its whole thread; replies under a removed reply move up to its parent. */
     remove(id: string): boolean {
       const held = posts().get(id);
       if (!held) return false;
       const at = now();
+      if (held.parent_id === null) {
+        const doomed = [id];
+        for (const next of doomed) for (const child of posts().values()) if (child.parent_id === next) doomed.push(child.id);
+        for (const gone of doomed) drop(gone);
+        options.changed?.();
+        return true;
+      }
       for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: held.parent_id, updated_at: at, pc_id: options.pcId() });
       drop(id);
       options.changed?.();

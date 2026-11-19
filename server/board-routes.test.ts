@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { boardLine, createBoard, fromRoom } from "./board.ts";
-import { createBoardRoutes } from "./board-routes.ts";
+import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const temps = createTempDirs();
@@ -151,8 +151,10 @@ describe("Forum replies and helped", () => {
   it("deletes the user's own reply for real and nothing else", async () => {
     const { board, routes } = setup();
     const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:3" });
+    const botReply = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "Try again.", parent_id: stuck.id, source_ref: "tool:tc:3" });
     const saved = await call(routes.reply, { parent_id: stuck.id, body: "Switching is fine by me." });
-    expect((await call(routes.remove, { id: stuck.id })).status).toBe(403);
+    expect((await call(routes.remove, { id: botReply.id })).status).toBe(403);
+    expect(board.get(botReply.id)).toBeDefined();
     expect(await call(routes.remove, { id: saved.body.post.id })).toMatchObject({ status: 200 });
     expect(board.list().map((post) => post.id)).toContain(stuck.id);
     expect(board.get(saved.body.post.id)).toBeUndefined();
@@ -167,5 +169,22 @@ describe("Forum replies and helped", () => {
     const under = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "That worked.", parent_id: saved.body.post.id, source_ref: "tool:tc:5" });
     await call(routes.remove, { id: saved.body.post.id });
     expect(board.get(under.id)).toMatchObject({ parent_id: stuck.id, body: "That worked." });
+  });
+
+  it("deletes a top-level post and every reply under it, for real", async () => {
+    const { board, routes, tip } = setup();
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:6" });
+    const other = board.post({ author_bot_id: "astra", kind: "stuck", title: "Another", body: "Other.", source_ref: "tool:ta:7" });
+    const saved = await call(routes.reply, { parent_id: stuck.id, body: "Try the work account." });
+    const under = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "That worked.", parent_id: saved.body.post.id, source_ref: "tool:tc:8" });
+    expect(await call(routes.remove, { id: stuck.id })).toMatchObject({ status: 200 });
+    expect(board.list().map((post) => post.id).sort()).toEqual([other.id, tip.id].sort());
+    for (const id of [stuck.id, saved.body.post.id, under.id]) expect(existsSync(join(board.dir, `${id}.json`))).toBe(false);
+    expect((await call(routes.remove, { id: stuck.id })).status).toBe(404);
+  });
+
+  it("delete is a user route: no bot route deletes", () => {
+    expect(BOARD_ROUTES.remove.startsWith("/api/internal/")).toBe(false);
+    expect(Object.keys(createBoardRoutes({ board: setup().board, caller: () => undefined, known: () => false, projectOf: () => "", roomTurn: () => null })).sort()).toEqual(["list", "post", "remove", "reply", "search"]);
   });
 });
