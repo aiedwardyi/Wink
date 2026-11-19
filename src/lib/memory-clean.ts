@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchResponse } from "./api-request";
+import { forgetMemory } from "./memory-last";
 import type { Message } from "@/state/store";
 
 export type CleanFile = "MEMORY.md" | `memory/${string}.md`;
@@ -72,6 +73,7 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
       setRun(response.status === 200 && body.ok ? { ...run, undoneAt: Date.now(), undoable: false } : null);
       if ((response.status === 200 && body.ok) || response.status === 404 || response.status === 409) {
         pending.delete(botId);
+        forgetMemory(botId);
         listeners.get(botId)?.forEach((listener) => listener());
       }
     } catch { setRun(null); }
