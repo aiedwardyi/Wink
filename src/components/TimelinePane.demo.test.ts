@@ -4,19 +4,22 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
+import { noteMemorySnapshot } from "@/lib/memory-clean-events";
 
 import { TimelinePane } from "./TimelinePane";
 
 describe("TimelinePane demo", () => {
   const urls: string[] = [];
+  let landed = false;
   let host: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
 
   beforeEach(async () => {
     urls.length = 0;
+    landed = false;
     vi.stubGlobal("fetch", async (url: string) => {
       urls.push(String(url));
-      return new Response("{}", { status: 404 });
+      return landed ? new Response(JSON.stringify({ entries: [{ id: "2026-11-19 10:00", key: "name", picked: "Wink", over: ["Nova"], overPictures: [], files: [], tweaks: [] }] })) : new Response("{}", { status: 404 });
     });
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     host = document.createElement("div");
@@ -64,5 +67,16 @@ describe("TimelinePane demo", () => {
     act(() => { canvas().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); });
     expect(urls).toHaveLength(1);
     expect(urls[0]).toContain("/memory/topics/decisions.md");
+  });
+
+  it("the first real pick starts from the default view, not where the demo was panned", async () => {
+    const start = sheet().style.transform;
+    act(() => { canvas().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })); });
+    expect(sheet().style.transform).not.toBe(start);
+
+    landed = true;
+    await act(async () => { noteMemorySnapshot(); });
+    expect(host.querySelector("[data-timeline-pick]")).toBeTruthy();
+    expect(sheet().style.transform).toBe(start);
   });
 });

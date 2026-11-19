@@ -342,7 +342,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
                 <small className={DEMO_CHIP}>{t("timeline.sample")}</small>
                 <p className="show-media-empty">{t("timeline.empty")}</p>
               </div>
-              <Canvas days={days} needle="" botId={botId} threadId={threadId} you={you} closing={closing} />
+              <Canvas key="sample" days={days} needle="" botId={botId} threadId={threadId} you={you} closing={closing} />
             </>
           )
           : entries && (
