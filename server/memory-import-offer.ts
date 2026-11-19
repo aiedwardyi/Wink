@@ -71,6 +71,20 @@ export type ImportMemoryDeps = {
   now?: () => number;
 };
 
+// A later steered "thanks" or a side quick ask must not stand in for the paste, so prefer the latest Source:-signed one.
+function pastedAnswer(messages: readonly Message[]): string {
+  let latest: string | undefined;
+  for (let i = messages.length - 1, seen = 0; i >= 0 && seen <= TOOL_TURNS; i--) {
+    const message = messages[i];
+    if (message.role !== "user" || message.kind !== "text" || (message.quick && !message.steered)) continue;
+    seen++;
+    const text = message.text ?? "";
+    if (/^\s*Source:/m.test(text)) return text;
+    latest ??= text;
+  }
+  return latest ?? "";
+}
+
 export async function importMemoryRoute(req: IncomingMessage, res: ServerResponse, deps: ImportMemoryDeps): Promise<void> {
   const source = deps.caller(req.headers.authorization);
   if (!source) return json(res, 403, { error: "unknown sender" });
@@ -82,8 +96,7 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
     writeFileAtomic(declinedFile(), "", { mode: 0o600 });
     return json(res, 200, { text: "Saved: no bot offers this again. Settings > Import Memory still works." });
   }
-  const paste = deps.messages(source.threadId).findLast((message) => message.role === "user" && message.kind === "text")?.text ?? "";
-  const result = addToAboutYou(paste, day((deps.now ?? Date.now)()));
+  const result = addToAboutYou(pastedAnswer(deps.messages(source.threadId)), day((deps.now ?? Date.now)()));
   const note = !("error" in result) ? aboutYouNote(result, t)
     : result.error === "too-large" ? t("aboutYou.tooLarge")
     : result.error === "empty" ? t("aboutYou.noFacts")

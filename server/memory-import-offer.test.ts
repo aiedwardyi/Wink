@@ -97,6 +97,13 @@ describe("import_memory saves through the Settings path", () => {
     expect((await call({}, [typed(paste)])).text).toContain(en["aboutYou.nothingNew"]);
   });
 
+  it("imports the paste the bot saw, not a later steered line or a side quick question", async () => {
+    const steered = { ...typed("thanks, take your time"), steered: true } as Message;
+    const quickAsk = { ...typed("what time is it?"), quick: { state: "asked" } } as Message;
+    expect((await call({}, [typed("hi"), reply("offer"), typed(paste), steered, quickAsk])).text).toContain("Added 2 new.");
+    expect(aboutYouSources()).toEqual([{ source: "ChatGPT", facts: ["The user is Dana Park; call her Dana.", "Speaks Korean and English."] }]);
+  });
+
   it("refuses a paste over 4 MB with the Settings message", async () => {
     const result = await call({}, [typed("x".repeat(ABOUT_YOU_MAX_PASTE + 1))]);
     expect(result.text).toContain(en["aboutYou.tooLarge"]);
