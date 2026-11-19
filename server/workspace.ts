@@ -200,15 +200,6 @@ export function saveMemoryFile(botId: string, text: string, baseRevision?: strin
   return current.text.startsWith(text) ? { conflict: false as const, ...current } : conflict();
 }
 
-/** Rewrites memory/`name` only while it still reads `base`; false, with nothing written, when it changed first or cannot be pinned. */
-export function saveMemoryTopic(botId: string, name: string, text: string, base: string): boolean {
-  if (!isMemoryTopicName(name)) return false;
-  const stem = join(ensureWorkspace(botId), "memory", name.slice(0, -".md".length));
-  const swap = swapPinned(`${stem}.md`, text, (current) => current === base, stem);
-  if (swap?.late !== undefined) parkCopy(stem, swap.late);
-  return Boolean(swap?.landed);
-}
-
 // set aside where the prompt names it for the bot to merge, as memory sync parks a copy
 function parkCopy(stem: string, late: string): void {
   writeFileAtomic(`${stem}.conflict-${memoryRevision(late).slice(0, 8)}.md`, late, { mode: 0o600 });

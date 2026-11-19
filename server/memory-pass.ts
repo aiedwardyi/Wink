@@ -20,7 +20,6 @@ import {
   readMemoryFile,
   readMemoryTopic,
   saveMemoryFile,
-  saveMemoryTopic,
 } from "./workspace.ts";
 
 const IDLE_MS = 3 * 60_000;
@@ -251,29 +250,58 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
-/** The bullets Markdown shows as list items, in file order, each with its text when Auto Notes dated it. One retired into a
- * comment block or a fenced or indented code example reads as gone, so it never stands in for a new one; a comment opener
- * inside a line, as note text or in code, hides nothing after it. */
-function liveRows(text: string): Array<{ at: number; note: string | undefined }> {
-  const rows: Array<{ at: number; note: string | undefined }> = [];
-  let fence: RegExp | undefined;
-  let comment = false;
-  for (const [at, row] of text.split("\n").map((line) => line.replace(/\r$/, "")).entries()) {
-    if (comment) {
-      comment = !row.includes("-->");
-      continue;
-    }
-    if (fence) {
-      if (fence.test(row)) fence = undefined;
+function liveRows(text: string): { rows: string[]; close: string } {
+  const rows: string[] = [];
+  let block: { close: string; end: RegExp } | undefined;
+  for (const row of text.split("\n")) {
+    if (block) {
+      if (block.end.test(row)) block = undefined;
       continue;
     }
     const marks = /^ {0,3}(`{3,}|~{3,})/.exec(row)?.[1];
-    if (marks) fence = new RegExp(`^ {0,3}${marks[0]}{${marks.length},}\\s*$`);
-    else if (/^ {0,3}<!--/.test(row)) comment = !row.slice(row.indexOf("<!--") + 4).includes("-->");
-    // four spaces in is an indented code example
-    else if (/^ {0,3}[-*+]\s/.test(row)) rows.push({ at, note: /^ {0,3}[-*+]\s+(.*?)\s*\(noted \d{4}-\d{2}-\d{2}\)\s*$/.exec(row)?.[1] });
+    if (marks) {
+      block = { close: marks, end: new RegExp(`^ {0,3}${marks[0]}{${marks.length},}\\s*$`) };
+      continue;
+    }
+    const opener = /^ {0,3}(?:<!--|<(pre|details)\b[^>]*>)/i.exec(row);
+    if (opener) {
+      const close = opener[1] ? `</${opener[1]}>` : "-->";
+      const end = new RegExp(close, "i");
+      if (!end.test(row.slice(opener[0].length))) block = { close, end };
+      continue;
+    }
+    const bullet = /^ {0,3}[-*+][ \t]+([^\r\n]+)/.exec(row)?.[1];
+    if (bullet) rows.push(NOTED.exec(row)?.[1] ?? bullet.trim());
   }
-  return rows;
+  return { rows, close: block ? `${block.close}\n` : "" };
+}
+
+const OVERFLOW_FIELDS: Array<[string, RegExp]> = [
+  ["residence", /^(?:[Ll]ives in|[Mm]oved to) (\p{Lu}[\p{L} .'-]*)$/u],
+  ["JavaScript package manager", /^(?:uses|switched to) (p?npm|yarn|bun)$/i],
+  ["Python package manager", /^(?:uses|switched to) (pip|uv|poetry)$/i],
+  ["operating system", /^(?:on|uses|switched to) (macOS|Linux|Windows|(?:Free|Open|Net)BSD|Ubuntu|Debian|Fedora)$/i],
+  ["pet", /^has an? (cat|dog|rabbit|hamster|parrot|guinea pig)$/i],
+  ["diet", /^(vegetarian|vegan|pescat[ae]rian|eats meat)(?: again)?$/i],
+  ["appearance", /^(?:uses|prefers|switched to) (dark|light) (?:mode|theme)$/i],
+  ["relationship", /^(single|married to .+|engaged to .+|divorced|widowed)$/i],
+  ["timezone", /^(?:[Tt]ime ?zone is|[Nn]ow in) ([ECMP][SD]T|[A-Z]?GMT|UTC|[CE][E]?S?T|KST|JST|IST|A[EW][SD]T)$/],
+  ["age", /^(\d+) years? old$/i],
+  ["wake time", /^wakes at (\d{1,2}(?::\d\d)?\s*(?:am|pm)?)$/i],
+  ["budget", /^budget is (\S.*)$/i],
+  ["favorite color", /^favou?rite colou?r (?:is )?(\S.*)$/i],
+  ["milk", /^drinks (\S+) milk$/i],
+];
+const COEXISTING_FIELDS = new Set(["pet", "milk"]);
+
+function overflowValue(line: string): { field: string; value: string } | undefined {
+  const label = /^([\p{L}][\p{L}\p{N} -]*):\s+(\S.*)$/u.exec(line);
+  if (label) return { field: `label:${squash(label[1]!)}`, value: squash(label[2]!) };
+  for (const [field, pattern] of OVERFLOW_FIELDS) {
+    const value = pattern.exec(line)?.[1];
+    if (value) return { field, value: squash(value) };
+  }
+  return undefined;
 }
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
@@ -775,22 +803,33 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       try {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-        const rows = liveRows(current);
-        wrote = wrote.filter((line) => rows.some(({ note }) => note === line));
+        const { rows, close } = liveRows(current);
+        const known = new Set(rows);
+        wrote = wrote.filter((line) => known.has(line));
         const due = overflow.filter(({ line }) => !wrote.includes(line));
-        // the last row is what the user said last: unless the file already ends on them, notes go last in the order said
+        // a restart can replay a batch whose notes already landed in order
         let ends = due.length;
-        while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends)?.note !== line)) ends -= 1;
-        const fresh = due.slice(ends);
+        while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line)) ends -= 1;
+        const latest = new Map<string, string>();
+        for (const row of rows) {
+          const entry = overflowValue(row);
+          if (entry) latest.set(entry.field, entry.value);
+        }
+        const changed = (line: string) => batch.facts.some(({ fact, quote }) =>
+          squash(fact.replace(/^[-*]\s+/, "")) === squash(line) &&
+          batch.source.some(({ text }) => quotes(text, quote) && /\b(?:now|back to|no wait|instead|actually)\b/i.test(clauseOf(text, quote))),
+        );
+        // free-form facts can coexist, even when they share words
+        const fresh = due.slice(ends).filter(({ line }) => {
+          const entry = overflowValue(line);
+          if (known.has(line) && (!entry || latest.get(entry.field) === entry.value ||
+            (COEXISTING_FIELDS.has(entry.field) && !changed(line)))) return false;
+          if (entry) latest.set(entry.field, entry.value);
+          return true;
+        });
         if (fresh.length) {
           const added = fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("");
-          // an older dated copy of a note comes out in the same write, so no note keeps two dated rows
-          const old = new Set(rows.flatMap(({ at, note }) => (fresh.some(({ line }) => line === note) ? [at] : [])));
-          const rest = current.split("\n").filter((_, at) => !old.has(at)).join("\n");
-          // a last line with no break keeps none, so a move never grows the file past the lookup budget
-          const moved = old.size > 0 && saveMemoryTopic(botId, OVERFLOW_FILE, !rest || rest.endsWith("\n") ? `${rest}${added}` : `${rest}\n${added.slice(0, -1)}`, current);
-          // appended, never replaced: a line another writer lands after the read stays
-          if (!moved) appendLines(path, `${current ? "" : OVERFLOW_HEAD}${added}`);
+          appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);
           overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.includes(line)).length, since: prior?.since ?? now() });
           wrote = [...wrote, ...fresh.map(({ line }) => line)];
