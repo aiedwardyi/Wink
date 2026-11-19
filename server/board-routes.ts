@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { z } from "zod";
 
-import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, REPLY_REF, ROOM_REF, type Board } from "./board.ts";
+import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, REPLY_REF, ROOM_REF, SEARCH_SHOWN, type Board } from "./board.ts";
 import { json, readBody } from "./http-helpers.ts";
 
 export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply", remove: "/api/board/delete" } as const;
@@ -40,8 +40,11 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       if (!from) return json(res, 403, { error: "unknown sender" });
       const body = searchSchema.safeParse(await readBody(req));
       if (!body.success) return json(res, 400, { error: "board_search needs a query" });
-      const posts = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId) });
-      return json(res, 200, { count: posts.length, text: posts.length ? posts.map((post) => boardLine(post)).join("\n\n") : "No Board posts match." });
+      const found = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId), limit: Infinity });
+      const posts = found.slice(0, SEARCH_SHOWN);
+      const more = found.length - posts.length;
+      const lines = [...posts.map((post) => boardLine(post)), ...(more ? [`+${more} more match${more === 1 ? "" : "es"}, search more specifically.`] : [])];
+      return json(res, 200, { count: posts.length, text: posts.length ? lines.join("\n\n") : "No Board posts match." });
     },
     async post(req: IncomingMessage, res: ServerResponse) {
       const from = source(req);

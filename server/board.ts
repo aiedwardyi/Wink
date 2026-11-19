@@ -12,6 +12,7 @@ import { redactSecretsInText } from "./redact.ts";
 export const BOARD_DIR = "board";
 export const BOARD_KINDS = ["stuck", "fix", "handoff", "tip"] as const;
 export const BOARD_USER = "user";
+export const SEARCH_SHOWN = 5;
 /** Ids of deleted posts, kept beside them so a sync never brings one back. */
 const DELETED = "deleted.json";
 /** A post written on a team room turn starts its source_ref with this: people outside this PC shaped it. */
@@ -283,7 +284,7 @@ export function createBoard(options: BoardOptions) {
         return [{ post, score: (sig ? 1 : 0) + share, local: Boolean(input.projectId && post.project_id === input.projectId) }];
       });
       scored.sort((a, b) => Number(b.local) - Number(a.local) || b.score - a.score || b.post.updated_at - a.post.updated_at);
-      return scored.slice(0, input.limit ?? 5).map((entry) => entry.post);
+      return scored.slice(0, input.limit ?? SEARCH_SHOWN).map((entry) => entry.post);
     },
     /**
      * Drive sync. Each PC writes only its own folder, so two PCs posting at once never

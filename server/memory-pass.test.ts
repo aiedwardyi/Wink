@@ -90,6 +90,8 @@ describe("memory pass", () => {
   };
   const chips = (threadId: string) => store.rows(threadId).filter((m) => m.tool?.name === MEMORY_SAVE_TOOL);
   const stored = () => JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"));
+  const overflowPath = () => join(workspaceDir("bot-t1"), "memory", "auto-notes-overflow.md");
+  const overflow = () => (existsSync(overflowPath()) ? readFileSync(overflowPath(), "utf8") : null);
   const switchTo = (next: boolean) => {
     on = next;
     pass.onConfigChanged();
@@ -350,15 +352,114 @@ describe("memory pass", () => {
     expect(stored()).toEqual({ threads: {} });
   });
 
-  it("skips an append that would pass the memory budget", async () => {
+  it("saves notes a MEMORY.md at its limit turns away to the overflow file", async () => {
     const full = `# Memory\n${"- note\n".repeat(198)}`;
     writeMemoryFile("bot-t1", full);
     generate.mockResolvedValue(facts(["38 years old", "i'm 38"], ["Can't read Korean", "can't read korean"]));
     say("t1", "i'm 38, can't read korean");
     await settle("t1", 3 * MINUTE);
     expect(memoryFileRaw("bot-t1")).toBe(full);
-    expect(chips("t1")).toHaveLength(0);
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n`);
+    expect(chips("t1").map((m) => m.tool?.spoken)).toEqual(["38 years old, Can't read Korean (MEMORY.md is full, saved in memory/auto-notes-overflow.md)"]);
     expect(console.info).toHaveBeenCalledWith(expect.stringContaining("too-large"));
+  });
+
+  it("adds one pointer line to the overflow file when it fits, and appends to the file after", async () => {
+    const full = `# Memory\n${"- note\n".repeat(197)}`;
+    writeMemoryFile("bot-t1", full);
+    generate.mockResolvedValueOnce(facts(["38 years old", "i'm 38"], ["Can't read Korean", "can't read korean"]));
+    say("t1", "i'm 38, can't read korean");
+    await settle("t1", 3 * MINUTE);
+    const pointed = `${full}- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)\n`;
+    expect(memoryFileRaw("bot-t1")).toBe(pointed);
+
+    generate.mockResolvedValueOnce(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(pointed);
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(2);
+  });
+
+  it("counts an overflowed note once when its pointer save conflicts and lands on retry", async () => {
+    const full = `# Memory\n${"- note\n".repeat(197)}`;
+    writeMemoryFile("bot-t1", full);
+    generate.mockImplementationOnce(async () => {
+      writeMemoryFile("bot-t1", `${full}- edited meanwhile\n`);
+      return facts(["38 years old", "i'm 38"], ["Likes tea", "i like tea"]);
+    });
+    say("t1", "i'm 38, i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBeNull();
+    expect(pass.droppedNotes("bot-t1")).toBeUndefined();
+    await settle("t1");
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
+    expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 2, since: NOW + 3 * MINUTE });
+  });
+
+  it("writes a repeated note to the overflow file once", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n`);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+  });
+
+  it("holds the batch when the overflow file cannot be read, never rewriting it", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(overflowPath(), { recursive: true });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    expect(chips("t1")).toHaveLength(0);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("auto-notes-overflow.md write failed"));
+    rmSync(overflowPath(), { recursive: true });
+    writeFileSync(overflowPath(), "# Overflow\n- Uses pnpm\n");
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(overflow()).toBe("# Overflow\n- Uses pnpm\n- 38 years old (noted 2026-10-15)\n");
+  });
+
+  it("appends to an overflow file the bot already keeps", async () => {
+    const full = `# Memory\n- memory/auto-notes-overflow.md: overflow notes\n${"- note\n".repeat(197)}`;
+    writeMemoryFile("bot-t1", full);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), "# Overflow\n- Uses pnpm\n");
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(full);
+    expect(overflow()).toBe("# Overflow\n- Uses pnpm\n- 38 years old (noted 2026-10-15)\n");
+  });
+
+  it("leaves the overflow file alone when the note fits an empty MEMORY.md", async () => {
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- 38 years old (noted 2026-10-15)\n`);
+    expect(existsSync(overflowPath())).toBe(false);
+  });
+
+  it("saves a room member's turned-away note to its own overflow file", async () => {
+    Object.assign(store, {
+      // SAFETY: the pass reads only the member ids and the bot id.
+      groupByThread: (threadId: string) => (threadId.startsWith("room") ? ({ id: "g", memberIds: ["bot-t1"] } as never) : undefined),
+      // SAFETY: the pass reads only the bot id.
+      bot: (botId: string) => ({ id: botId }) as never,
+    });
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("room1", "i'm 38");
+    pass.onSettled("bot-t1", "room1");
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n`);
+    expect(chips("room1")).toHaveLength(1);
   });
 
   it("records notes a full file turned away until a later save lands", async () => {
@@ -381,7 +482,7 @@ describe("memory pass", () => {
     generate.mockResolvedValueOnce(facts(["Uses pnpm", "i use pnpm"]));
     say("t1", "i use pnpm");
     await settle("t1", 3 * MINUTE);
-    expect(chips("t1")).toHaveLength(1);
+    expect(chips("t1")).toHaveLength(3);
     expect(pass.droppedNotes("bot-t1")).toBeUndefined();
     expect(stored()).toEqual({ threads: {} });
   });
