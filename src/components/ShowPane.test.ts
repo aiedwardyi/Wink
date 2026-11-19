@@ -502,6 +502,7 @@ it("draws the bot's picks on the Timeline canvas, newest day first, each pick ci
   expect(old.querySelector(".timeline-key")?.textContent).toBe("Bot to bot, like Reddit");
   expect(old.textContent).toContain("i thot this is bot to bot forum, not me?");
   expect(old.querySelector(".timeline-said span")?.textContent).toMatch(/^Edward · /);
+  expect(old.querySelector(".timeline-label time")?.textContent).toMatch(/^replaced · (?:2026-)?11-17 11:18$/);
   expect(strokes("replaced")).toBe(1);
   expect(strokes("route")).toBe(1);
   expect([...forum.querySelectorAll(".timeline-tweaks q")].map((tweak) => tweak.textContent)).toEqual(["im wondering if it should have a small title up top so ppl know what it is", "humans can reply too if they want, but its made for the bots"]);
@@ -686,6 +687,29 @@ it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows 
   const open = named("Map on phone").querySelector<HTMLButtonElement>("[data-won] button")!;
   await act(async () => { pointer("pointerdown", 10, 10); pointer("pointermove", 80, 80); pointer("pointerup", 80, 80); open.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
   expect(document.querySelector("[data-media-viewer]")).toBeNull();
+});
+
+it("keeps a pinch's move at the canvas edge, and moves the canvas with the arrow keys", async () => {
+  pickList();
+  await openTimeline("b-edge");
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
+  Object.defineProperties(canvas, { clientWidth: { value: 400 }, clientHeight: { value: 600 } });
+  Object.defineProperties(sheet, { offsetWidth: { value: 1000 }, offsetHeight: { value: 2000 } });
+  const view = () => /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(sheet.style.transform)!.slice(1).map(Number);
+  expect(view()).toEqual([4, 44, 0.86]);
+  const pointer = (kind: string, x: number, pointerId: number) => canvas.dispatchEvent(new PointerEvent(kind, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: 200, pointerId, pointerType: "touch" }));
+  await act(async () => { pointer("pointerdown", 100, 1); pointer("pointerdown", 200, 2); pointer("pointermove", 260, 2); pointer("pointerup", 100, 1); pointer("pointerup", 260, 2); });
+  const [x, y, scale] = view();
+  expect(scale).toBeCloseTo(1.376);
+  expect(x).toBeCloseTo(180 - (180 - 34) * 1.6);
+  expect(y).toBeCloseTo(200 - (200 - 44) * 1.6);
+  const label = named("Forum look").querySelector<HTMLElement>("[data-label]")!;
+  await act(async () => { label.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
+  expect(view()[0]).toBeCloseTo(x - 40);
+  await act(async () => { label.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })); });
+  expect(view()[1]).toBeCloseTo(y - 40);
 });
 
 it("draws the newest picks first and the rest a batch a frame", async () => {

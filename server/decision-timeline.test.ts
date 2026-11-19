@@ -433,7 +433,7 @@ describe("decision timeline", () => {
       const settings = answer("settings");
       reply(claim("Forum", question.id, settings.id), claim("Settings", question.id, settings.id));
       await settle();
-      expect(shown()).toEqual([["Settings", "verified", settings.at, [shot("settings")], undefined], ["Forum", "unbound", undefined, [], undefined]]);
+      expect(shown()).toEqual([["Forum", "unbound", undefined, [], undefined], ["Settings", "verified", settings.at, [shot("settings")], undefined]]);
     });
 
     it("gives an answer two picks claim to neither when its question names both", async () => {

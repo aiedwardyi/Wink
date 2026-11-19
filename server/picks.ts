@@ -313,11 +313,14 @@ export function mergeTimelines(a: string, b: string): string | null {
   const union = <T>(x: T[], y: T[]) => unique(x, y).sort((x, y) => compare(JSON.stringify(x), JSON.stringify(y)));
   // same-minute tweaks keep the order they were said in; the sort is stable
   const said = (x: Tweak[], y: Tweak[]) => unique(x, y).sort((x, y) => compare(x.at, y.at));
+  // a retyped tap keeps the tap's identity, so another PC's copy of the typed message alone joins it by that message
+  const pinned = new Map(timelines.flatMap(({ entries }) => entries.flatMap((entry) => entry.source && entry.messageId ? [[identity({ ...entry, source: undefined }), entry.source] as const] : [])));
+  const slot = (entry: PickEntry) => pinned.get(identity(entry)) ?? identity(entry);
   for (const { entries } of timelines) {
-    const sources = new Map(entries.map((entry) => [entry.id, identity(entry)]));
+    const sources = new Map(entries.map((entry) => [entry.id, slot(entry)]));
     const byId = new Map(entries.map((entry) => [entry.id, entry]));
     for (const entry of entries) {
-      const key = identity(entry);
+      const key = slot(entry);
       const next = entry.replacedBy ? sources.get(entry.replacedBy) : undefined;
       // typed beats tapped whatever the order, so a link between them orders nothing
       const ordered = Boolean(entry.tapped) === Boolean(entry.replacedBy && byId.get(entry.replacedBy)?.tapped);

@@ -111,6 +111,8 @@ function dayLabel(day: string, now: Date, t: (key: MessageKey) => string, locale
 
 const ZOOM = { min: 0.3, max: 2.5 };
 const SLOP = 4;
+const KEY_PAN = 40;
+const ARROWS = new Map<string, [number, number]>([["ArrowLeft", [1, 0]], ["ArrowRight", [-1, 0]], ["ArrowUp", [0, 1]], ["ArrowDown", [0, -1]]]);
 // Hundreds of picks mount in one task too slowly, so the newest draw first and the rest follow a batch a frame.
 const FIRST = 8;
 const BATCH = 24;
@@ -392,8 +394,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
   }, []);
 
-  const zoomAt = useCallback((x: number, y: number, factor: number) => {
-    const at = view.current!;
+  const zoomAt = useCallback((x: number, y: number, factor: number, at = view.current!) => {
     const scale = Math.min(ZOOM.max, Math.max(ZOOM.min, at.scale * factor));
     const ratio = scale / at.scale;
     show({ scale, x: x - (x - at.x) * ratio, y: y - (y - at.y) * ratio });
@@ -471,8 +472,8 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
         frame.current!.setPointerCapture?.(event.pointerId);
       }
       const mid = { x: (c.x + d.x) / 2, y: (c.y + d.y) / 2 };
-      show({ ...at, x: at.x + mid.x - (a.x + b.x) / 2, y: at.y + mid.y - (a.y + b.y) / 2 });
-      zoomAt(mid.x, mid.y, Math.hypot(c.x - d.x, c.y - d.y) / (Math.hypot(a.x - b.x, a.y - b.y) || 1));
+      // one clamp after both the move and the zoom, so an edge never eats the move
+      zoomAt(mid.x, mid.y, Math.hypot(c.x - d.x, c.y - d.y) / (Math.hypot(a.x - b.x, a.y - b.y) || 1), { ...at, x: at.x + mid.x - (a.x + b.x) / 2, y: at.y + mid.y - (a.y + b.y) / 2 });
       return;
     }
     if (!dragged.current) {
@@ -503,6 +504,14 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
         if (!dragged.current || event.detail === 0) return;
         event.preventDefault();
         event.stopPropagation();
+      }}
+      // the arrow keys move the canvas, so a keyboard reaches a quote no tab stop brings into view
+      onKeyDown={(event) => {
+        const step = ARROWS.get(event.key);
+        if (!step || event.altKey || event.ctrlKey || event.metaKey) return;
+        event.preventDefault();
+        const at = view.current!;
+        show({ ...at, x: at.x + step[0] * KEY_PAN, y: at.y + step[1] * KEY_PAN });
       }}
       onFocus={(event) => {
         if (!(event.target instanceof HTMLElement) || !event.target.matches(":focus-visible")) return;
@@ -555,18 +564,19 @@ function Decision({ row, opened, toggle, threadId, you }: { row: Row; opened: Re
   return (
     <>
       <Pick entry={row} threadId={threadId} you={you} chips={chips} />
-      {row.older.filter((each) => opened.has(each.id)).map((each) => <div key={each.id} className="timeline-old"><Pick entry={each} threadId={threadId} you={you} old /></div>)}
+      {row.older.filter((each) => opened.has(each.id)).map((each) => <div key={each.id} className="timeline-old"><Pick entry={each} threadId={threadId} you={you} replaced={[row, ...row.older].find((other) => other.id === each.replacedBy)} old /></div>)}
     </>
   );
 }
 
-function Pick({ entry, threadId: viewing, you, chips, old = false }: { entry: Entry; threadId: string; you: string; chips?: ReactNode; old?: boolean }) {
+function Pick({ entry, threadId: viewing, you, chips, replaced, old = false }: { entry: Entry; threadId: string; you: string; chips?: ReactNode; replaced?: Entry; old?: boolean }) {
   const { t } = useI18n();
   // a room pick's own files load through the room that links them
   const threadId = entry.thread ?? viewing;
   const now = new Date();
   const stamp = entryStamp(entry);
   const at = when(stamp, now);
+  const replacedAt = replaced && entryStamp(replaced) && when(entryStamp(replaced), now);
   const options = crossedOf(entry).map((each, n) => <Option key={n} label={each.label} picture={each.picture} threadId={threadId} />);
   // the pick sits among its options, second from the left, the way it was picked from a row
   options.splice(Math.min(1, options.length), 0, <Option key="won" label={entry.picked} picture={entry.picture} threadId={threadId} won />);
@@ -575,7 +585,7 @@ function Pick({ entry, threadId: viewing, you, chips, old = false }: { entry: En
       <div className="timeline-left">
         <div className="timeline-label" data-label tabIndex={0}>
           <span className="timeline-key">{old ? entry.picked : entry.key}</span>
-          {at && <time>{old ? t("timeline.replacedAt", { when: at }) : at}</time>}
+          {old ? replacedAt && <time>{t("timeline.replacedAt", { when: replacedAt })}</time> : at && <time>{at}</time>}
           {chips}
         </div>
         <div className="timeline-options">{options}</div>

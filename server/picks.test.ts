@@ -123,6 +123,15 @@ describe("applyPicks", () => {
       { thread: "t2", messageId: "m2", questionId: "q2", files: ["/shots/typed.png"] },
     ]);
   });
+  it("merges a retyped tap with another PC's copy of the typed pick", () => {
+    const tapped = applyPicks("", [pick("forum", "B", "b", at(17, 10), { tapped: true, thread: "t1", messageId: "m1", questionId: "q1" })])!.text;
+    const typing = pick("forum", "B", "I choose B", at(17, 11), { thread: "t2", messageId: "m2", questionId: "q2" });
+    const retyped = applyPicks(tapped, [typing])!.text;
+    const copy = applyPicks("", [typing])!.text;
+    for (const merged of [mergeTimelines(retyped, copy)!, mergeTimelines(copy, retyped)!, mergeTimelines(mergeTimelines(copy, retyped)!, tapped)!]) {
+      expect(parseTimeline(merged).entries).toMatchObject([{ messageId: "m2", picked: "B" }]);
+    }
+  });
   it("dates a retyped tap at the typing, so an older delayed pick never replaces it", () => {
     const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
     const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;

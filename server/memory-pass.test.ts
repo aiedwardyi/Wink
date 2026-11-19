@@ -669,6 +669,20 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(1);
   });
 
+  it("keeps a tweak said after an unbound pick in the same pass", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Should the picker follow the app theme, or stay dark always?" });
+    say("t1", "the first one");
+    say("t1", "and make the header smaller");
+    generate.mockResolvedValue(JSON.stringify([
+      { kind: "decision", fact: "Picker look follows the app theme", quote: "the first one", message_id: "not-a-message" },
+      { kind: "tweak", key: "Picker look follows the app theme", fact: "Make the header smaller", quote: "and make the header smaller" },
+    ]));
+    await settle("t1", 3 * MINUTE);
+    const timeline = readMemoryTopic("bot-t1", "decisions.md") ?? "";
+    expect(timeline).toContain("- Binding: unbound");
+    expect(timeline).toContain('"and make the header smaller"');
+  });
+
   it("takes context from the bot's reply over a later options card, and from the card when no reply names the options", async () => {
     const card = (subtitle: string, options: string[]) => ({ title: "Your bot has a question", subtitle, options, askUser: true as const });
     store.appendMessage("t1", { role: "bot", kind: "text", text: "1. Always dark 2. Follow the app theme 3. Always light." });

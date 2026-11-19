@@ -472,7 +472,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       seen.add(id);
       live.add(pickKey(thing));
       decided.add(squash(said));
-      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? (source.id ? 0 : source.at ?? 0), key: thing, picked: line, said };
+      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? source.at ?? 0, key: thing, picked: line, said };
       if (source.id) pick.binding = binding ?? "unbound";
       if (over.length) pick.over = over;
       if (source.tap && binding) pick.tapped = true;
