@@ -103,6 +103,18 @@
       "kind": "vendor"
     },
     {
+      "model": "gemini-4-neon",
+      "effort": "all",
+      "price": {
+        "input": 3,
+        "cachedInput": 0.15,
+        "output": 15
+      },
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "retrieved_at": "2026-11-19T00:30:15.585Z",
+      "kind": "vendor"
+    },
+    {
       "model": "gemini-4-argon",
       "effort": "all",
       "price": {

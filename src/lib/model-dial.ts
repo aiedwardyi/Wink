@@ -5,8 +5,8 @@ import { blendedPrice, modelIndexToday, priceOn } from "./model-index";
 
 export type DialStat = "intelligence" | "coding";
 
-const tierOf = (model: string) => model.match(/^gemini-.+-(high|medium|low)$/)?.[1];
-const indexId = (model: string) => model.replace(/^(gemini-.+)-(high|medium|low)$/, "$1");
+const tierOf = (model: string) => model.match(/^gemini-.+-(xhigh|high|medium|low)$/)?.[1];
+const indexId = (model: string) => model.replace(/^(gemini-.+)-(xhigh|high|medium|low)$/, "$1");
 
 const dialEntry = (model: string, effort: string | undefined, index: DialStat) => {
   const id = indexId(model);

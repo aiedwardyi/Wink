@@ -322,6 +322,50 @@
       "kind": "independent"
     },
     {
+      "model": "gemini-4-neon",
+      "effort": "low",
+      "value": 32.8282828282828,
+      "cost_per_task": 1.283828678883681,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gemini-4-neon-low",
+      "source_url": "https://artificialanalysis.ai/models/gemini-4-neon-low",
+      "retrieved_at": "2026-11-19T00:30:48.552Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-neon",
+      "effort": "medium",
+      "value": 54.5454545454545,
+      "cost_per_task": 2.924153422010316,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gemini-4-neon-medium",
+      "source_url": "https://artificialanalysis.ai/models/gemini-4-neon-medium",
+      "retrieved_at": "2026-11-19T00:30:48.552Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-neon",
+      "effort": "high",
+      "value": 61.6161616161616,
+      "cost_per_task": 4.919710166220768,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gemini-4-neon-high",
+      "source_url": "https://artificialanalysis.ai/models/gemini-4-neon-high",
+      "retrieved_at": "2026-11-19T00:30:48.552Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "value": 63.6363636363636,
+      "cost_per_task": 6.696523326075095,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gemini-4-neon",
+      "source_url": "https://artificialanalysis.ai/models/gemini-4-neon",
+      "retrieved_at": "2026-11-19T00:30:48.552Z",
+      "kind": "independent"
+    },
+    {
       "model": "gemini-4-argon",
       "effort": "medium",
       "value": 55.050505050505,
