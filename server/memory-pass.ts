@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -11,6 +11,7 @@ import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import {
+  appendLines,
   ensureWorkspace,
   MEMORY_MAX_BYTES,
   MEMORY_MAX_LINES,
@@ -59,7 +60,9 @@ export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
 export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; thread?: string };
-export type DroppedNotes = z.infer<typeof droppedSchema> & { lost?: true };
+type DroppedCount = z.infer<typeof droppedSchema>;
+/** Notes sent to the overflow file, and apart from them notes an older version turned away and lost. */
+export type DroppedNotes = DroppedCount & { lost?: DroppedCount };
 
 export interface MemoryPassDeps {
   store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot">>;
@@ -247,8 +250,40 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
-// a note retired into a comment or code block reads as gone, so it never stands in for a new one
-const liveText = (text: string) => text.replace(/<!--[\s\S]*?(?:-->|$)/g, "").replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
+/** The Auto Notes bullets Markdown shows as notes, in file order. One retired into a comment block or a
+ * fenced or indented code example reads as gone, so it never stands in for a new one; a comment opener
+ * inside a line, as note text or in code, hides nothing after it. */
+function liveNotes(text: string): string[] {
+  const notes: string[] = [];
+  let fence: RegExp | undefined;
+  let comment = false;
+  for (const row of text.split("\n").map((line) => line.replace(/\r$/, ""))) {
+    if (comment) {
+      comment = !row.includes("-->");
+      continue;
+    }
+    if (fence) {
+      if (fence.test(row)) fence = undefined;
+      continue;
+    }
+    const marks = /^ {0,3}(`{3,}|~{3,})/.exec(row)?.[1];
+    if (marks) fence = new RegExp(`^ {0,3}${marks[0]}{${marks.length},}\\s*$`);
+    else if (/^ {0,3}<!--/.test(row)) comment = !row.slice(row.indexOf("<!--") + 4).includes("-->");
+    else {
+      // four spaces in is an indented code example
+      const note = /^ {0,3}[-*+]\s+(.*?)\s*\(noted \d{4}-\d{2}-\d{2}\)\s*$/.exec(row);
+      if (note) notes.push(note[1]!);
+    }
+  }
+  return notes;
+}
+
+/** What a later note on the same thing shares: the words before a colon, or all but the last word. */
+function noteTopic(line: string): string {
+  const colon = line.indexOf(":");
+  if (colon > 0) return `${words(line.slice(0, colon)).join(" ")}:`;
+  return words(line).slice(0, -1).join(" ") || squash(line);
+}
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
 function legacyLine(key: string, lines: string[], taken: Set<string>): string | undefined {
@@ -533,16 +568,6 @@ export function appendNotes(raw: string, notes: Note[], now: number): string | n
   return text;
 }
 
-function appendSynced(path: string, text: string): void {
-  const fd = openSync(path, "a", 0o600);
-  try {
-    writeFileSync(fd, text);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
 export function noteSummary(facts: string[]): string {
   const joined = facts.join(", ");
   return joined.length > SUMMARY_MAX ? `${joined.slice(0, SUMMARY_MAX - 3).trimEnd()}...` : joined;
@@ -586,7 +611,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const now = deps.now ?? Date.now;
   const statePath = join(deps.dataDir, STATE_FILE);
   const pending = new Map<string, string[]>();
-  const dropped = new Map<string, DroppedNotes>();
+  // notes sent to the overflow file, and apart from them notes an older version turned away and lost
+  const overflowed = new Map<string, DroppedCount>();
+  const lost = new Map<string, DroppedCount>();
   // generated but unsaved, so a busy turn or a moved revision never pays for the same batch twice
   const held = new Map<string, Batch>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -616,8 +643,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     for (const [threadId, ids] of Object.entries(state.threads)) {
       if (ids.length) pending.set(threadId, ids);
     }
-    for (const [botId, record] of Object.entries(state.dropped ?? {})) dropped.set(botId, { ...record, lost: true });
-    for (const [botId, record] of Object.entries(state.overflow ?? {})) dropped.set(botId, record);
+    for (const [botId, record] of Object.entries(state.dropped ?? {})) lost.set(botId, record);
+    for (const [botId, record] of Object.entries(state.overflow ?? {})) overflowed.set(botId, record);
   } catch {
     // first run or unreadable: start empty
   }
@@ -627,11 +654,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     saveTimer = undefined;
     try {
       const state: z.infer<typeof stateSchema> = { threads: Object.fromEntries(pending) };
-      const counts = [...dropped].map(([botId, { dropped: count, since, lost }]) => ({ botId, record: { dropped: count, since }, lost }));
-      const lost = counts.filter((count) => count.lost);
-      const moved = counts.filter((count) => !count.lost);
-      if (lost.length) state.dropped = Object.fromEntries(lost.map(({ botId, record }) => [botId, record]));
-      if (moved.length) state.overflow = Object.fromEntries(moved.map(({ botId, record }) => [botId, record]));
+      if (lost.size) state.dropped = Object.fromEntries(lost);
+      if (overflowed.size) state.overflow = Object.fromEntries(overflowed);
       writeFileAtomic(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
     } catch (error) {
       console.warn(`[memory-pass] state save failed (${error instanceof Error ? error.name : "error"})`);
@@ -757,14 +781,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       try {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-        const known = new Set(liveText(current).split("\n").map((row) => NOTED.exec(row)?.[1]));
-        const fresh = overflow.filter(({ line }) => !known.has(line));
+        const latest = new Map(liveNotes(current).map((note) => [noteTopic(note), note] as const));
+        // a repeat is known only while it is the latest note on its topic, so a value back after a correction lands again
+        const fresh = overflow.filter(({ line }) => latest.get(noteTopic(line)) !== line);
         if (fresh.length) {
           // appended, never replaced: a line another writer lands after the read stays
-          appendSynced(path, `${!current ? OVERFLOW_HEAD : current.endsWith("\n") ? "" : "\n"}${fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("")}`);
-          const last = dropped.get(botId);
-          const prior = last && !last.lost ? last : undefined;
-          dropped.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.length, since: prior?.since ?? now() });
+          appendLines(path, `${current ? "" : OVERFLOW_HEAD}${fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("")}`);
+          const prior = overflowed.get(botId);
+          overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.length, since: prior?.since ?? now() });
         }
       } catch (error) {
         held.set(threadId, { ...batch, picked });
@@ -775,8 +799,17 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     // a pointer alone is appended, so a line another writer lands after the revision check stays
     const tail = pointer !== null && base === raw ? pointer.slice(raw.length) : null;
-    const conflict = tail !== null ? readMemoryFile(botId).revision !== memory.revision : saved !== null && saveMemoryFile(botId, saved, memory.revision).conflict;
-    if (tail !== null && !conflict) appendSynced(join(ensureWorkspace(botId), "MEMORY.md"), tail);
+    let conflict: boolean;
+    try {
+      conflict = tail !== null ? readMemoryFile(botId).revision !== memory.revision : saved !== null && saveMemoryFile(botId, saved, memory.revision).conflict;
+      if (tail !== null && !conflict) appendLines(join(ensureWorkspace(botId), "MEMORY.md"), tail);
+    } catch (error) {
+      // the overflow notes are on disk; a retry finds them there, then finishes MEMORY.md and the receipt
+      held.set(threadId, { ...batch, picked });
+      log({ botId, threadId, facts: accepted.length, ms, result: "error" });
+      console.warn(`[memory-pass] MEMORY.md write failed (${error instanceof Error ? error.name : "error"})`);
+      return arm(botId, threadId);
+    }
     if (conflict) {
       held.set(threadId, { ...batch, picked });
       log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
@@ -796,7 +829,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       botId, threadId, lines: batch.source.length, facts: noted.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
       replaced: (landed?.replaced ?? 0) + noted.filter((note) => note.replaces).length, ms, result: full ? "too-large" : "saved",
     });
-    if (!full) dropped.delete(botId);
+    if (!full) {
+      overflowed.delete(botId);
+      lost.delete(botId);
+    }
     done(threadId, batch.ids);
   };
 
@@ -957,7 +993,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     onConfigChanged() {
       if (!disposed) stop();
     },
-    droppedNotes: (botId) => dropped.get(botId),
+    droppedNotes: (botId) => {
+      const sent = overflowed.get(botId);
+      const gone = lost.get(botId);
+      if (!gone) return sent;
+      const notes: DroppedNotes = { ...(sent ?? { dropped: 0, since: gone.since }) };
+      notes.lost = gone;
+      return notes;
+    },
     async idle() {
       while (running.size) await Promise.all([...running.values()].map((pass) => pass.done));
     },

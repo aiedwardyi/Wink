@@ -44,7 +44,8 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       const posts = found.slice(0, SEARCH_SHOWN);
       const more = found.length - posts.length;
       const lines = [...posts.map((post) => boardLine(post)), ...(more ? [`+${more} more match${more === 1 ? "" : "es"}, search more specifically.`] : [])];
-      return json(res, 200, { count: posts.length, text: posts.length ? lines.join("\n\n") : "No Board posts match." });
+      // count is the posts shown, total every match
+      return json(res, 200, { count: posts.length, total: found.length, text: posts.length ? lines.join("\n\n") : "No Board posts match." });
     },
     async post(req: IncomingMessage, res: ServerResponse) {
       const from = source(req);

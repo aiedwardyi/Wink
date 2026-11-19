@@ -512,6 +512,146 @@ describe("memory pass", () => {
     expect(pass.droppedNotes("bot-t1")?.dropped).toBe(2);
   });
 
+  it("saves a fact that an overflow line names only in an indented code example", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const examples = "# Notebook\n\nExample:\n\n    - Likes tea (noted 2026-10-14) <!-- example only -->\n    - Uses pnpm (noted 2026-10-14)\n";
+    writeFileSync(overflowPath(), examples);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"], ["Uses pnpm", "i use pnpm"]));
+    say("t1", "i like tea, i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${examples}- Likes tea (noted 2026-10-15)\n- Uses pnpm (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("still knows the notes after a literal comment opener in an overflow line", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const notes = "# Notebook\n- Opens comments with `<!--` in templates (noted 2026-10-14)\n- Writes <!-- by hand in notes (noted 2026-10-14)\n- Likes tea (noted 2026-10-14)\n- North office is in building 4 (noted 2026-10-14)\n";
+    writeFileSync(overflowPath(), notes);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    for (let turn = 0; turn < 3; turn++) {
+      say("t1", "i like tea");
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(overflow()).toBe(notes);
+  });
+
+  it("saves a value an overflow file had before a later correction as the latest", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const moves = "# Notebook\n- Home city: Toronto (noted 2026-10-01)\n- Lives in Toronto (noted 2026-10-01)\n- Home city: Vancouver (noted 2026-10-10)\n- Lives in Vancouver (noted 2026-10-10)\n- Likes tea (noted 2026-10-11)\n";
+    writeFileSync(overflowPath(), moves);
+    generate.mockResolvedValue(facts(["Home city: Toronto", "i moved back to Toronto"], ["Lives in Toronto", "back to Toronto"], ["Likes tea", "i like tea"]));
+    say("t1", "i moved back to Toronto, i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${moves}- Home city: Toronto (noted 2026-10-15)\n- Lives in Toronto (noted 2026-10-15)\n`);
+  });
+
+  it("keeps the count of notes an older version lost when a new note overflows", async () => {
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ threads: {}, dropped: { "bot-t1": { dropped: 2, since: NOW - 2 * 86_400_000 } } }));
+    pass = start();
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    const notice = memoryNotice({ longLines: 0, orphans: [] }, pass.droppedNotes("bot-t1"));
+    expect(notice).toContain("2 auto notes since 10-13 were not saved because the file is full");
+    expect(notice).toContain("1 auto note since 10-15 went to memory/auto-notes-overflow.md because MEMORY.md is full");
+    pass.dispose();
+    expect(stored()).toEqual({ threads: {}, dropped: { "bot-t1": { dropped: 2, since: NOW - 2 * 86_400_000 } }, overflow: { "bot-t1": { dropped: 1, since: NOW + 3 * MINUTE } } });
+    pass = start();
+    expect(memoryNotice({ longLines: 0, orphans: [] }, pass.droppedNotes("bot-t1"))).toBe(notice);
+  });
+
+  it("retries the batch, without a second extraction, when its pointer append fails after the overflow write", async () => {
+    const full = `# Memory\n${"- note\n".repeat(198)}`;
+    writeMemoryFile("bot-t1", full);
+    const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+    const open = fs.openSync;
+    let failed = false;
+    // SAFETY: the wrapper passes every other call through and returns the real descriptor.
+    vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof open>) => {
+      if (!failed && args[0] === path) {
+        failed = true;
+        throw Object.assign(new Error("locked"), { code: "EBUSY" });
+      }
+      return open(...args);
+    }) as typeof open);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(failed).toBe(true);
+    expect(chips("t1")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    vi.mocked(fs.openSync).mockRestore();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memoryFileRaw("bot-t1")).toBe(`${full}- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)`);
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- Likes tea (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  describe("a correction in a MEMORY.md at its limit, while another writer edits it", () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    const full = `# Memory\n${old}\n${"- note\n".repeat(197)}`;
+    // lands after the revision check, just before the corrected file is written
+    const editDuringSwap = (script: string) => {
+      const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+      const write = atomic.writeFileAtomic;
+      const edit = { landed: false };
+      vi.spyOn(atomic, "writeFileAtomic").mockImplementation((target, ...args) => {
+        if (!edit.landed && target === path) {
+          execFileSync(process.execPath, ["-e", script, path], { windowsHide: true });
+          edit.landed = true;
+        }
+        write(target, ...args);
+      });
+      return edit;
+    };
+    const correct = async () => {
+      generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }, { fact: "Uses pnpm", quote: "i use pnpm" }]));
+      say("t1", "i now live in Vancouver, i use pnpm");
+      await settle("t1", 3 * MINUTE);
+    };
+
+    it("keeps a line the other writer appended", async () => {
+      writeMemoryFile("bot-t1", full);
+      const edit = editDuringSwap("require('node:fs').appendFileSync(process.argv[1], '- Cobalt preference\\n')");
+      await correct();
+      await vi.advanceTimersByTimeAsync(3 * MINUTE);
+      await pass.idle();
+      vi.mocked(atomic.writeFileAtomic).mockRestore();
+      expect(edit.landed).toBe(true);
+      const after = memoryFileRaw("bot-t1");
+      expect(after).toContain("\n- Cobalt preference\n");
+      expect(after).toContain("- Home city: Vancouver (noted 2026-10-15)");
+      expect(after).not.toContain("Toronto");
+      expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
+      expect(chips("t1")).toHaveLength(1);
+    });
+
+    it("keeps a line the other writer changed in place", async () => {
+      writeMemoryFile("bot-t1", full);
+      const edit = editDuringSwap("const fs = require('node:fs'); const p = process.argv[1]; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace('- note\\n', '- edited by hand\\n'))");
+      await correct();
+      await vi.advanceTimersByTimeAsync(3 * MINUTE);
+      await pass.idle();
+      vi.mocked(atomic.writeFileAtomic).mockRestore();
+      expect(edit.landed).toBe(true);
+      const after = memoryFileRaw("bot-t1");
+      expect(after).toContain("\n- edited by hand\n");
+      expect(after).toContain("- Home city: Vancouver (noted 2026-10-15)");
+      expect(after).not.toContain("Toronto");
+      expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(chips("t1")).toHaveLength(1);
+    });
+  });
+
   it("swaps a correction into a MEMORY.md at its limit and sends the rest to the overflow file", async () => {
     const old = "- Home city: Toronto (noted 2026-10-01)";
     writeMemoryFile("bot-t1", `# Memory\n${old}\n${"- note\n".repeat(197)}`);
