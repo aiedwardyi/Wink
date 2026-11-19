@@ -1,6 +1,8 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { mock } from "node:test";
+import { Readable } from "node:stream";
 import { parentPort, workerData } from "node:worker_threads";
 import { z } from "zod";
 
@@ -12,6 +14,8 @@ import { createThreadSyncV2Store } from "../thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "../thread-sync-v2-gate.ts";
 import { createSyncEngine } from "../thread-sync-v2-engine.ts";
 import type { ContextCompactionV1 } from "../../shared/context-compaction.ts";
+import type { DriveFile } from "../drive-client.ts";
+import { syncHold } from "../sync-hold.ts";
 import { testBootReads } from "./boot-rows.ts";
 
 export interface TestArgs {
@@ -27,6 +31,7 @@ export interface TestArgs {
   leaf?: string | null;
   at?: number;
   compaction?: ContextCompactionV1;
+  heads?: Array<[string, DriveFile[]]>;
 }
 
 export interface Snapshot {
@@ -141,6 +146,29 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
     let value: TestResult;
     const threadId = args.threadId ?? "thread";
     switch (method) {
+      case "join":
+        syncHold.feed(input.folder, new Map(args.heads), { profileDeviceId: input.deviceId, writerId: input.writer!, memoryDeviceId: "a".repeat(12) });
+        bot = store.createBot({}, { seedMessages: false, threadId: syncHold.chat(input.folder, "bot") });
+        value = bot;
+        break;
+      case "send": {
+        const [{ createBotChatRoutes }, { SendSequencer }, { startedTurn }, queue] = await Promise.all([
+          import("../bot-chat-routes.ts"), import("../send-idempotency.ts"), import("../send-receipt.ts"), import("../steer-queue.ts"),
+        ]);
+        queue.initializeSteerQueue(store, () => queue.drainSteeredMessages(store, () => {}));
+        const noop = () => {};
+        // SAFETY: an idle bot's send reads only these deps.
+        const routes = createBotChatRoutes({
+          cfg: {}, store, threadSyncGate: { enabled: true }, sendSequencer: new SendSequencer(), instanceForBot: () => null, botHasActiveTurn: () => false,
+          noteTalked: noop, markChatLatency: noop, ensureChatLatency: noop, resolveReplyTarget: () => undefined, pullSyncedThread: (id: string) => sync?.pull(id),
+          startTurn: async (_bot: string, text: string, options: { sendId?: string }) => startedTurn(store.appendMessage(threadId, { role: "user", kind: "text", text, sendId: options.sendId })),
+        } as unknown as Parameters<typeof createBotChatRoutes>[0]);
+        // SAFETY: the route reads the body stream, status and match groups only.
+        const req = Readable.from([JSON.stringify({ threadId, text: args.text, sendId: `first-sync-send-${String(id).padStart(4, "0")}` })]) as IncomingMessage;
+        // SAFETY: the route answers through writeHead and end only.
+        await routes.send(req, { writeHead: noop, end: noop } as unknown as ServerResponse, ["", bot.id] as RegExpMatchArray);
+        break;
+      }
       case "seed": store.adoptSyncedTask(bot.id, { threadId, title: "Chat", createdAt: 1 }, args.rows ?? [], args.leaf ?? null, true); break;
       case "append": value = store.appendMessage(threadId, { role: args.role ?? "user", kind: "text", text: args.text, at: args.at ?? Date.now(), ...args.patch }); break;
       case "compaction": value = store.appendCompaction(threadId, args.compaction!); break;

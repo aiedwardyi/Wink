@@ -2,14 +2,18 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { writeDeviceRecord } from "./device-sync.ts";
 import { GoogleAccount, type GoogleSession } from "./google-account.ts";
+import { decodeDrivePath } from "./drive-mirror.ts";
 import { createGoogleSync, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
 import { ensureMemorySyncDevice, type MemorySyncLedger } from "./memory-sync.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
+import type { BotRecord, Message, TaskRecord } from "./store.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
+import type { Snapshot, TestArgs, TestResult } from "./testing/thread-sync-v2-pc.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -27,6 +31,7 @@ type Booting = Omit<PC, "sync"> & { sync?: GoogleSync };
 let root: string;
 let drive: FakeDrive;
 let pcs: PC[];
+let engines: Array<() => Promise<void>>;
 
 const bot = (name: string, talked = true): LocalBot => ({ id: `local-${name}`, syncId: randomUUID(), name, talked, published: false });
 const botNames = (folder: string) => readSyncOperations(folder).operations.filter((op) => op.entity === "bot").map((op) => String(op.changes?.name)).sort();
@@ -124,12 +129,41 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "orbit-google-join-"));
   drive = new FakeDrive();
   pcs = [];
+  engines = [];
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const pc of pcs) pc.sync.stop();
-  rmSync(root, { recursive: true, force: true });
+  await Promise.all(engines.map((close) => close()));
+  rmSync(root, { recursive: true, force: true, maxRetries: 5 });
 });
+
+/** A PC's chat engine on its Drive mirror, in its own worker like the app's message store. */
+function engine(folder: string, name: string) {
+  const dataDir = join(root, `${name}-engine`);
+  const worker = new Worker(new URL("./testing/thread-sync-v2-pc.ts", import.meta.url), {
+    workerData: { folder, dataDir, deviceId: `device-${name}`, writer: `writer-${name}`, enabled: true },
+    env: { ...process.env, OMB_DATA_DIR: dataDir, OMB_THREAD_SYNC_V2: "1" },
+    execArgv: ["--experimental-strip-types"],
+  });
+  let sequence = 0;
+  const call = <T extends TestResult = TestResult>(method: string, args: TestArgs = {}) => new Promise<T>((resolve, reject) => {
+    const id = ++sequence;
+    const reply = (message: { id: number; value: T; error?: string }) => {
+      if (message.id !== id) return;
+      worker.off("message", reply);
+      if (message.error) reject(new Error(message.error));
+      else resolve(message.value);
+    };
+    worker.on("message", reply);
+    worker.postMessage({ id, method, args });
+  });
+  engines.push(async () => {
+    await call("close").catch(() => {});
+    await worker.terminate();
+  });
+  return call;
+}
 
 /** Home uploads one bot, one chat and one picture; work, with no bots of its own, taps Start. */
 async function joinWithChats() {
@@ -170,6 +204,61 @@ describe("Google sync first join", { timeout: 60_000 }, () => {
     work.filing = true;
     await settle(work);
     expect(work.sync.status().firstSync).toBeUndefined();
+  });
+});
+
+describe("Google sync first join with chat engines", { timeout: 180_000 }, () => {
+  it("keeps a send to a bot whose chat has not downloaded yet at the end of that chat on both PCs", async () => {
+    const home = makePC("home", [{ ...bot("Counsel"), syncId: "bot" }]);
+    await startOn(home);
+    const source = engine(home.folder!, "home");
+    const { threadId } = await source<TaskRecord>("create");
+    await source("batch", { threadId, count: 2001 });
+    await source("flush", { threadId });
+    const tip = (await source<Snapshot>("snapshot", { threadId })).leaf;
+    await settle(home);
+
+    const work = makePC("work", []);
+    work.account.setSession(A);
+    await work.sync.read();
+    let reached = () => {};
+    const atChat = new Promise<void>((resolve) => { reached = resolve; });
+    let resume = () => {};
+    const resumed = new Promise<void>((resolve) => { resume = resolve; });
+    drive.onDownload = async (file) => {
+      if (!decodeDrivePath(file.name)?.startsWith("threads-v2/")) return;
+      reached();
+      await resumed;
+    };
+    const joined = work.sync.start();
+    await atChat;
+    const laptop = engine(work.folder!, "work");
+    await laptop("clock");
+    const heads = [...drive.records.values()].flatMap(({ file }): Array<[string, typeof file[]]> => {
+      const path = decodeDrivePath(file.name);
+      return path?.endsWith("/head.json") ? [[path, [file]]] : [];
+    });
+    const opened = await laptop<BotRecord>("join", { heads });
+    await laptop("poll");
+    await laptop("send", { threadId: opened.threadId, text: "continue our conversation" });
+    resume();
+    await joined;
+    await work.sync.idle();
+    await laptop("pull", { threadId });
+    await laptop("flush", { threadId });
+    await settle(work);
+    await settle(home);
+    await source("poll");
+
+    for (const call of [laptop, source]) {
+      const shown = await call<BotRecord>("bot");
+      const chat = await call<Snapshot>("snapshot", { threadId });
+      const send = chat.rows.find((row: Message) => row.text === "continue our conversation");
+      expect(shown.threadId).toBe(threadId);
+      expect(chat.rows).toHaveLength(2002);
+      expect(send?.parentId).toBe(tip);
+      expect(chat.leaf).toBe(send?.id);
+    }
   });
 });
 

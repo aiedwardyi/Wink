@@ -1601,6 +1601,8 @@ export class Store {
       host?: { platform?: string; packaged?: boolean };
       /** A bot lost with bots.json comes back under its old id. */
       id?: string;
+      /** An imported bot opens on the chat Drive already holds for it. */
+      threadId?: string;
     } = {},
   ): BotRecord {
     const name = profile.name?.trim() || pickBotName(this.bots.map((b) => b.name));
@@ -1609,7 +1611,7 @@ export class Store {
     const computer = profile.computer ?? defaultComputerForNewBot(opts.host);
     const bot: BotRecord = {
       id: opts.id ?? newId(),
-      threadId: newId(),
+      threadId: opts.threadId ?? newId(),
       name,
       title: profile.title ?? (job ? titleFromMessage(job) : ""),
       description: profile.description ?? job ?? "",

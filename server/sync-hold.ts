@@ -22,6 +22,7 @@ const google = new Map<string, boolean>();
 const delivered = new Map<string, { folder: string; behind: boolean }>();
 const peers = new Map<string, Map<string, { feed?: string; pull?: string }>>();
 const released = new Set<string>();
+const chats = new Map<string, { threadId: string; at: number }>();
 const expired = new Set<string>();
 let waiting: WaitingSend[] = [];
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -109,6 +110,9 @@ export const syncHold = {
       const file = [...copies].sort((a, b) => Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime) || Date.parse(b.createdTime) - Date.parse(a.createdTime) || a.id.localeCompare(b.id))[0];
       if (!file?.md5Checksum) continue;
       notePeer(threadId, `${key}/${path}`, "feed", file.md5Checksum);
+      const bot = `${key}/${path.split("/")[1]}`;
+      const at = Date.parse(file.modifiedTime);
+      if ((chats.get(bot)?.at ?? -Infinity) < at) chats.set(bot, { threadId, at });
       if (applied.get(key)?.get(path) === file.md5Checksum) cleared = heads.delete(path) || cleared;
       else heads.set(path, file.md5Checksum);
     }
@@ -138,6 +142,10 @@ export const syncHold = {
     return !released.has(threadId) && behind(threadId) === true ? Date.now() + HOLD_MS : undefined;
   },
   release,
+  /** The bot's chat with the newest peer head Drive listed. */
+  chat(folder: string, botSyncId: string): string | undefined {
+    return chats.get(`${folderKey(folder)}/${botSyncId}`)?.threadId;
+  },
   /** Resolves once the thread has the peer heads Drive listed, or when the hold runs out. */
   async settle(threadId: string): Promise<void> {
     const until = syncHold.until(threadId);
@@ -157,6 +165,7 @@ export const syncHold = {
     peers.clear();
     released.clear();
     expired.clear();
+    chats.clear();
     drain = () => {};
     enabled = () => true;
   },
