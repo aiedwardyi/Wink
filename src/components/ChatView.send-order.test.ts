@@ -42,7 +42,7 @@ let store: ReturnType<typeof useStore>;
 let host: HTMLDivElement;
 let unmount: (() => Promise<void>) | undefined;
 const posts = new Map<string, (receipt: object) => void>();
-const bodies = new Map<string, { sendSeq?: number }>();
+const bodies = new Map<string, { sendSeq?: number; actedAt?: number }>();
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -80,13 +80,13 @@ async function answer(sendId: string, receipt: object) {
 
 const frame = (value: object) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 
-async function mount(driverKind: string, queueing: boolean, messages: Message[], queued: object[] = []) {
+async function mount(driverKind: string, queueing: boolean, messages: Message[], queued: object[] = [], hello: object = {}) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url) === "/api/bots?messages=200") {
       return Response.json({ bots: [{ ...teacher, messages, activeLeafId: messages.at(-1)?.id }], groups: [], computerControl: {}, queued: { t1: queued } });
     }
     if (String(url) === "/api/bots/b1/messages" && init?.method === "POST") {
-      const body = JSON.parse(String(init.body)) as { sendId: string; sendSeq?: number };
+      const body = JSON.parse(String(init.body)) as { sendId: string; sendSeq?: number; actedAt?: number };
       bodies.set(body.sendId, body);
       return new Promise<Response>((resolve) => posts.set(body.sendId, (receipt) => resolve(Response.json(receipt, { status: 202 }))));
     }
@@ -104,7 +104,7 @@ async function mount(driverKind: string, queueing: boolean, messages: Message[],
     await act(async () => root.unmount());
     host.remove();
   };
-  await frame({ kind: "hello", resumed: false, cursor: "s:0" });
+  await frame({ kind: "hello", resumed: false, cursor: "s:0", ...hello });
   await act(async () => {
     store.dispatch({ type: "select", id: "b1" });
     store.dispatch({ type: "instances", instances: [engine(driverKind, queueing)] });
@@ -167,7 +167,7 @@ describe("ChatView send order", () => {
     c.name("R3", "r3");
     const lead = size ? ["H"] : [];
     const steered = (id: string, sendId: string, text: string, sent: number, at: number) =>
-      ({ id, sendId, text, role: "user" as const, steered: true, actedAt: T0 + sent, at: T0 + at });
+      ({ id, sendId, text, role: "user" as const, steered: true, actedAt: T0 + sent, at: T0 + at, sendSeq: bodies.get(sendId)?.sendSeq });
 
     await c.at(4509, () => c.send("s1", "이거 이상해"));
     await c.at(5485, () => c.land(steered("row-s1", "s1", "이거 이상해", 4509, 5485)));
@@ -221,7 +221,7 @@ describe("ChatView send order", () => {
     await c.at(900, async () => {
       live.current = { streaming: {}, reasoning: {}, signal: { t1: "started" }, gen: {}, turn: {} };
       await frame({ kind: "bot", bot: { ...teacher, busy: true, activity: "working" } });
-      await c.land({ id: "row-s1", sendId: "s1", text: "지금 보내", role: "user", actedAt: T0, at: T0 + 900 });
+      await c.land({ id: "row-s1", sendId: "s1", text: "지금 보내", role: "user", actedAt: T0, at: T0 + 900, sendSeq: bodies.get("s1")?.sendSeq });
     });
     const final = await c.at(5000, () => c.land({ id: "r2", text: "새 답", at: T0 + 5000 }));
     expect(final).toEqual(["H", "L1", "R1", "R2"]);
@@ -244,7 +244,7 @@ describe("ChatView send order", () => {
     expect(final).toEqual(["H", "L1", "R1"]);
 
     await unmount?.();
-    await mount("claude", true, [...earlier, ...c.landed], [{ queueId: "q1", text: "내 첫 줄", sendId: "s1", at: T0 }]);
+    await mount("claude", true, [...earlier, ...c.landed], [{ queueId: "q1", text: "내 첫 줄", sendId: "s1", at: T0, sendSeq: bodies.get("s1")?.sendSeq }]);
     expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
   });
 
@@ -266,6 +266,80 @@ describe("ChatView send order", () => {
     const held = (sendId: string, queueId: string, text: string) => ({ queueId, text, sendId, at: T0 + 60_001, sendSeq: bodies.get(sendId)?.sendSeq });
     await mount("claude", true, [peer], [held("s2", "q2", "둘째 답"), held("s1", "q1", "첫 답")]);
     expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
+  });
+
+  it.each([
+    [300, "steer"],
+    [300, "queue"],
+    [2000, "steer"],
+    [2000, "queue"],
+  ])("keeps a line where it was sent while this window's clock runs %i ms ahead of the server (%s)", async (ahead, path) => {
+    const earlier = history(2);
+    // the window counts on from the server's clock by elapsed time, which only timers move here
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
+    // the server's hello reads T0 while this window reads T0 + ahead
+    vi.setSystemTime(T0 + ahead);
+    await mount("claude", true, earlier, [], { now: T0 });
+    const c = chat(earlier);
+    c.name("L1", "s1", "q1", "row-s1");
+    c.name("P1", "p1");
+    await c.at(ahead, () => c.send("s1", "내 줄"));
+    // the server takes the POST at T0 + 10 and never stamps a line later than that
+    const stamp = Math.min(bodies.get("s1")!.actedAt!, T0 + 10);
+    await c.at(ahead + 40, () => c.land({ id: "p1", text: "진행 중", at: T0 + 40 }));
+    if (path === "steer") {
+      await c.at(ahead + 70, () => c.land({ id: "row-s1", sendId: "s1", text: "내 줄", role: "user", steered: true, actedAt: stamp, at: T0 + 70, sendSeq: bodies.get("s1")?.sendSeq }));
+      await c.at(ahead + 80, () => answer("s1", { steered: true, threadId: "t1", message: c.landed.at(-1) }));
+    } else {
+      await c.at(ahead + 80, () => answer("s1", { queued: true, threadId: "t1", queueId: "q1", actedAt: stamp }));
+    }
+    const final = c.order().filter((row) => row !== "thinking");
+    expect(final).toEqual(["H", "L1", "P1"]);
+
+    await unmount?.();
+    const held = path === "queue" ? [{ queueId: "q1", text: "내 줄", sendId: "s1", at: stamp, sendSeq: bodies.get("s1")?.sendSeq }] : [];
+    await mount("claude", true, [...earlier, ...c.landed], held, { now: T0 + 100 });
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
+  });
+
+  it.each([
+    ["steered", "codex", true],
+    ["held", "acp", false],
+  ])("draws a %s line stored before send order where it was stored", async (_, driverKind, steered) => {
+    const at = (offset: number) => T0 - 600_000 + offset;
+    // written before lines carried a send order: a sent time on every line, no waited mark
+    const stored = [
+      { id: "u0", sendId: "s0", role: "user", text: "first ask", at: at(0), actedAt: at(0) },
+      { id: "b0", role: "bot", text: "working on first", at: at(3000) },
+      { id: "b1", role: "bot", text: "reply to first", at: at(5000) },
+      { id: "u1", sendId: "s1", role: "user", text: "typed while busy", at: at(6000), actedAt: at(1000), ...(steered ? { steered } : {}) },
+      { id: "b2", role: "bot", text: "reply to typed", at: at(8000) },
+    ].map((row, i, rows) => ({ kind: "text", parentId: i ? rows[i - 1]!.id : null, ...row }) as Message);
+    await mount(driverKind, steered, stored);
+    const c = chat(stored);
+    for (const row of stored) c.name(row.text!, row.id);
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(stored.map((row) => row.text));
+  });
+
+  it("draws a chat's first reply once when a line sent before it lands draws above it", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const stored: Message[] = [
+      { id: "root", parentId: null, role: "bot", kind: "text", text: "bot speaks first", at: T0 + 2000 },
+      { id: "u1", parentId: "root", sendId: "s1", sendSeq: 1, role: "user", kind: "text", text: "early line", steered: true, actedAt: T0 + 1000, at: T0 + 3000 },
+      { id: "r2", parentId: "u1", role: "bot", kind: "text", text: "answer to early", at: T0 + 4000 },
+    ];
+    await mount("codex", true, stored);
+    const c = chat(stored);
+    c.name("first", "root");
+    c.name("early", "u1");
+    c.name("answer", "r2");
+    for (let i = 0; i < 3; i++) {
+      c.name(`later ${i}`, `l${i}`);
+      await c.land({ id: `l${i}`, text: `later row ${i}`, at: T0 + 5000 + i * 1000 });
+    }
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(["early", "first", "answer", "later 0", "later 1", "later 2"]);
+    expect(host.textContent?.split("bot speaks first").length).toBe(2);
+    expect(errors.mock.calls.flat().join(" ")).not.toContain("same key");
   });
 
   it("still shows Sends next for a line queued with Ctrl+Enter", async () => {

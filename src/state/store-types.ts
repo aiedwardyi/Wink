@@ -625,6 +625,7 @@ export type Action =
       text: string;
       actedAt?: number;
       waited?: boolean;
+      sendSeq?: number;
       sendId?: string;
       replyToId?: string;
       threadId?: string;

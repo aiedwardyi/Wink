@@ -63,6 +63,7 @@ import {
   forgetAcceptedSend,
   hasAcceptedThinking,
   nextSendSeq,
+  noteServerTime,
   receiptRejectsAcceptedSend,
   rememberAcceptedSend,
   sendClock,
@@ -202,6 +203,15 @@ function stampSend(state: AppState, send: Extract<Action, { type: "send" }>): Ac
     ...send,
     actedAt: send.actedAt ?? held?.at ?? sendClock(bot?.messages),
     sendSeq: send.sendSeq ?? held?.sendSeq ?? nextSendSeq(bot?.messages, state.acceptedSends[threadId], state.pendingQueued[threadId]),
+  };
+}
+
+function stampGroupSend(state: AppState, send: Extract<Action, { type: "sendGroup" }>): Action {
+  const group = state.groups.find((candidate) => candidate.id === send.groupId);
+  return {
+    ...send,
+    actedAt: send.actedAt ?? sendClock(group?.messages),
+    sendSeq: send.sendSeq ?? nextSendSeq(group?.messages, state.acceptedSends[send.threadId ?? group?.threadId ?? ""]),
   };
 }
 
@@ -856,7 +866,8 @@ export function reducer(state: AppState, action: Action): AppState {
           sendId,
           kind: paint.kind,
           text: action.text,
-          at: sendClock(group.messages),
+          at: action.actedAt ?? sendClock(group.messages),
+          sendSeq: action.sendSeq,
           replyToId: action.replyToId,
           posting: true,
         }),
@@ -1413,7 +1424,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const wrapped: React.Dispatch<Action> = (dispatched) => {
-      const rawAction: Action = dispatched.type === "send" ? stampSend(stateRef.current, dispatched) : dispatched;
+      const rawAction: Action = dispatched.type === "send" ? stampSend(stateRef.current, dispatched) : dispatched.type === "sendGroup" ? stampGroupSend(stateRef.current, dispatched) : dispatched;
       const action =
         (rawAction.type === "send" || rawAction.type === "sendGroup") && !rawAction.sendId
           ? { ...rawAction, sendId: crypto.randomUUID() }
@@ -1701,7 +1712,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "answerGroupCard": {
-          const actedAt = Date.now();
+          const actedAt = sendClock();
           const room = stateRef.current.groups.find((group) => group.id === action.groupId);
           const messages = room?.messages ?? [];
           if (!canAnswerCard(messages, action.messageId)) break;
@@ -1861,7 +1872,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? sendClock(stateRef.current.groups.find((group) => group.id === action.groupId)?.messages), waited: action.waited }),
+            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? sendClock(stateRef.current.groups.find((group) => group.id === action.groupId)?.messages), waited: action.waited, sendSeq: action.sendSeq }),
           })
             .then((body) => {
               if (receiptRejectsAcceptedSend(body)) {
@@ -2575,6 +2586,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     const stopLive = openLiveEvents({
       wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
+      onServerTime: noteServerTime,
       onOpen: () => {
         trackStream(true);
         rawDispatch({ type: "connected", value: true });

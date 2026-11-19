@@ -4,7 +4,7 @@
 import { showWorkingDots } from "./turn-tail";
 import type { Message } from "@/state/store";
 
-export { sendClock } from "../../shared/send-clock";
+export { noteServerTime, sendClock } from "../../shared/send-clock";
 
 export type AcceptedSendKind = "thinking" | "sends-next";
 
@@ -79,7 +79,8 @@ function landedAfter(row: Message, sent: number, sendSeq = 0): boolean {
 }
 
 function sentAt(message: Message): number | undefined {
-  if (message.role !== "user" || !message.sendId || message.waited) return undefined;
+  // a line stored before lines kept a send order stays where it was stored
+  if (message.role !== "user" || !message.sendId || message.waited || message.sendSeq === undefined) return undefined;
   return (message.placeholder ? message.at : message.actedAt) || undefined;
 }
 

@@ -132,6 +132,14 @@ describe("GroupView sent lines", () => {
     expect(order()).toEqual(["u1", "guest", "h1"]);
   });
 
+  it("draws a line stored before send order where it was stored", async () => {
+    // written before lines carried a send order: a sent time, no waited mark
+    const earlier = { ...line("g0", "보낸 줄", "s0"), at: 96_000, steered: true, actedAt: 94_000 };
+    await mount(false, [...room.messages, { id: "m0", at: 95_000, role: "bot", kind: "text", text: "답장 0", from: { botId: "b1", name: "Atlas", color: "blue" } }, earlier]);
+    const order = () => [...host.querySelectorAll("[data-mid]")].map((el) => el.getAttribute("data-mid")).filter((id) => ["u1", "m0", "g0"].includes(id ?? ""));
+    expect(order()).toEqual(["u1", "m0", "g0"]);
+  });
+
   it("keeps every line where it was sent while a member replies, live and after reload", async () => {
     await mount();
     const names: Record<string, string> = { u1: "U", s1: "L1", g1: "L1", s2: "L2", g2: "L2", s3: "L3", g3: "L3", m1: "M1", m2: "M2" };
@@ -153,7 +161,7 @@ describe("GroupView sent lines", () => {
       return frame({ kind: "message", threadId: "gt", message });
     };
     const member = (id: string, text: string, at: number): Message => ({ id, at, role: "bot", kind: "text", text, from: { botId: "b1", name: "Atlas", color: "blue" } });
-    const mine = (id: string, sendId: string, text: string, sent: number, at: number): Message => ({ ...line(id, text, sendId), at, steered: true, actedAt: sent });
+    const mine = (id: string, sendId: string, text: string, sent: number, at: number): Message => ({ ...line(id, text, sendId), at, steered: true, actedAt: sent, sendSeq: Number(sendId.slice(1)) });
 
     await at(100_000, () => send("s1", "이거 이상해"));
     await at(100_600, () => land(member("m1", "답장 1", 100_600)));

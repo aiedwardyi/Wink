@@ -7463,7 +7463,7 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number, waited?: boolean) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number, waited?: boolean, sendSeq?: number) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
@@ -7486,6 +7486,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     answersCard,
     actedAt,
     waited,
+    sendSeq,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -8516,6 +8517,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           // A client that offered no cursor gets false too, which is exactly
           // what a cold start should do.
           resumed,
+          // a window stamps its sends by this clock, so a cap here never moves a line
+          now: Date.now(),
         })}\n\n`,
       );
       if (resumed) {
@@ -8533,7 +8536,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // liveness watchdog. Heartbeats carry no id and never advance replay.
       const keepalive = setInterval(() => {
         try {
-          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping" })}\n\n`);
+          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping", now: Date.now() })}\n\n`);
         } catch {}
       }, SSE_HEARTBEAT_MS);
       req.on("close", () => {

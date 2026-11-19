@@ -114,7 +114,7 @@ describe("splitQueuedSends", () => {
 
 describe("inSendOrder", () => {
   const row = (id: string, at: number, extra: Partial<Message> = {}): Message => ({ id, role: "bot", kind: "text", text: id, at, ...extra });
-  const line = (id: string, sent: number, at: number, extra: Partial<Message> = {}) => row(id, at, { role: "user", sendId: `send-${id}`, actedAt: sent, ...extra });
+  const line = (id: string, sent: number, at: number, extra: Partial<Message> = {}) => row(id, at, { role: "user", sendId: `send-${id}`, actedAt: sent, sendSeq: 1, ...extra });
   const ids = (messages: Message[]) => messages.map((message) => message.id);
 
   it("draws a landed line where it was sent, above what landed after it", () => {
@@ -128,8 +128,8 @@ describe("inSendOrder", () => {
     expect(ids(inSendOrder([row("a", 1_000), row("b", 3_000), sending]))).toEqual(["a", "s1", "b"]);
   });
 
-  it("leaves a line that waited for the turn, and rows with no send time, where they landed", () => {
-    const messages = [row("a", 1_000), row("reply", 3_000), line("after", 2_000, 4_000, { waited: true }), row("peer", 5_000, { role: "user" }), line("old", 0, 6_000, { actedAt: undefined })];
+  it("leaves a line that waited for the turn, a line stored before send order, and rows with no send time, where they landed", () => {
+    const messages = [row("a", 1_000), row("reply", 3_000), line("after", 2_000, 4_000, { waited: true }), row("peer", 5_000, { role: "user" }), line("old", 0, 6_000, { actedAt: undefined }), line("stored", 2_500, 7_000, { sendSeq: undefined })];
     expect(inSendOrder(messages)).toBe(messages);
   });
 

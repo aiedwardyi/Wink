@@ -1,5 +1,12 @@
+let server: { at: number; since: number } | undefined;
+
+/** The server's clock off this window's live stream, counted on by elapsed time: a send stamped by it is one the server never caps, so the line never moves when the server answers. */
+export function noteServerTime(at?: number): void {
+  server = at === undefined ? undefined : { at, since: performance.now() };
+}
+
 /** A send is newer than the newest row on screen, whatever this device's clock says; the server caps a sent time by the same rule, so both agree. */
-export function sendClock(messages: readonly { at: number; actedAt?: number; waited?: boolean }[] = [], now = Date.now()): number {
+export function sendClock(messages: readonly { at: number; actedAt?: number; waited?: boolean }[] = [], now = server ? Math.floor(server.at + performance.now() - server.since) : Date.now()): number {
   const last = messages.at(-1);
   // a line stamped past a row ahead of this clock is ordered by that stamp, not by when it landed
   const newest = last && !last.waited ? Math.max(last.at, last.actedAt ?? 0) : last?.at ?? 0;
