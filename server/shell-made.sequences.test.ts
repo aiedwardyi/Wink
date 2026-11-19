@@ -10,7 +10,7 @@ import { shellMade } from "./shell-made.ts";
 type Entry = { dir: boolean; birth: number; mtime: number };
 type Copy = "ps" | "sh" | "robo";
 type Op = [op: "mkdir" | "write" | "remove" | "move" | "moveAll" | "copy" | "cp" | "tree" | "robocopy", from: string, to?: string];
-type Sequence = { name: string; cwd: string; command: string; setup: () => void; effects: (() => void)[] };
+type Sequence = { name: string; cwd: string; command: string; setup: () => void; effects: (() => void)[]; secondWriter?: () => void };
 
 const disk = vi.hoisted(() => ({ entries: new Map<string, Entry>(), kids: new Map<string, Set<string>>() }));
 
@@ -459,7 +459,7 @@ const files = () => new Map([...disk.entries].filter(([, entry]) => !entry.dir).
 const tooBig = (refs: Set<string>, path: string) =>
   [...refs].some((folder) => path.startsWith(folder + sep) && [...disk.entries.keys()].filter((key) => key.startsWith(folder + sep)).length > LISTING_BOUND);
 
-function replay({ name, cwd, command, setup, effects }: Sequence) {
+function replay({ name, cwd, command, setup, effects, secondWriter }: Sequence) {
   disk.entries.clear();
   disk.kids.clear();
   clock = OLD;
@@ -467,25 +467,67 @@ function replay({ name, cwd, command, setup, effects }: Sequence) {
   const before = files();
   clock = SINCE + 1_000;
   for (const effect of effects) effect();
-  const made = [...files()].filter(([path, stamp]) => before.get(path) !== stamp).map(([path]) => path);
+  const made = new Set([...files()].filter(([path, stamp]) => before.get(path) !== stamp).map(([path]) => path));
+  secondWriter?.();
   const base = new Set(baseMade(command, cwd, SINCE));
   const head = new Set(shellMade(command, cwd, SINCE));
-  const kept = made.filter((path) => base.has(path));
-  return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path) && !tooBig(head, path)), missing: made.filter((path) => !head.has(path)) };
+  const kept = [...made].filter((path) => base.has(path));
+  const extra = [...head].filter((path) => disk.entries.get(path)?.dir === false && !base.has(path) && !made.has(path));
+  return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path) && !tooBig(head, path)), missing: [...made].filter((path) => !head.has(path)), extra };
 }
 
-const CONTROL_FLOW = generateControlFlow();
-const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)]), ["control flow", CONTROL_FLOW]];
+const SECOND_WRITER = [
+  ...["left-removed-ps", "left-existing-renamed-ps", "left-removed-bash"].map((name) => {
+    const sequence = row(TABLE.find(([id]) => id === name)!);
+    return { ...sequence, name: `second-writer-${name}`, secondWriter: () => {
+      for (let index = 0; index < 6; index++) write(join(dirname(sequence.cwd), `other-${index}.log`));
+    } };
+  }),
+  ...[true, false].map((ps) => {
+    const sequence = row([
+      `guard-pop-second-writer-${ps ? "ps" : "bash"}`,
+      ["inputs/shot-*11", "phase/real-shots/", "real-shots/"],
+      ps
+        ? "Push-Location 'phase'\ngit --version | Out-Null\nif ($LASTEXITCODE -ne 0) {\n  Pop-Location\n  exit 1\n}\nCopy-Item '{w}/inputs/*.png' 'real-shots'\nPop-Location"
+        : "pushd phase > /dev/null\ncommand -v git > /dev/null || {\n  popd > /dev/null\n  exit 1\n}\ncp ../inputs/*.png real-shots\npopd > /dev/null",
+      [[ps ? "copy" : "cp", "inputs", "phase/real-shots"]],
+    ]);
+    return { ...sequence, secondWriter: () => write(join(sequence.cwd, "real-shots", "their-output.png")) };
+  }),
+];
 
-it("replays 4349 sequences", () => {
-  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4349);
+const CONTROL_FLOW = generateControlFlow();
+const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)]), ["control flow", CONTROL_FLOW], ["second writers", SECOND_WRITER]];
+
+it("replays 4354 sequences", () => {
+  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4354);
 });
 
-it.each(GROUPS)("keeps every file the base named in %s", (_, sequences) => {
+it.each(GROUPS)("keeps base files and excludes extra files the command never touched in %s", (_, sequences) => {
   const runs = sequences.map(replay);
   // a replay the mock missed would name nothing on either side and pass
   expect(runs.reduce((sum, run) => sum + run.kept, 0)).toBeGreaterThan(0);
   expect(runs.filter((run) => run.lost.length).map(({ name, command, lost }) => ({ name, command, lost }))).toEqual([]);
+  expect(runs.filter((run) => run.extra.length).map(({ name, command, extra }) => ({ name, command, extra }))).toEqual([]);
+});
+
+it.each([
+  ["removed", "mkdir scratch; rmdir scratch; cd scratch 2>/dev/null; cp inputs/*.png .", [["mkdir", "scratch"], ["remove", "scratch"], ["cp", "inputs", "."]]],
+  ["renamed", "mkdir scratch; mv scratch moved; cd scratch 2>/dev/null; cp inputs/*.png .", [["mkdir", "scratch"], ["move", "scratch", "moved"], ["cp", "inputs", "."]]],
+  ["renamed using named arguments", "New-Item -ItemType Directory scratch; Rename-Item -NewName moved -LiteralPath scratch; Set-Location scratch -ErrorAction SilentlyContinue; Copy-Item inputs/*.png .", [["mkdir", "scratch"], ["move", "scratch", "moved"], ["copy", "inputs", "."]]],
+] satisfies [string, string, Op[]][])("stays put when the cd target was already %s", (name, command, ops) => {
+  const run = replay(row([name, ["inputs/shot-*11"], command, ops]));
+  expect(run.missing).toEqual([]);
+});
+
+it("keeps outputs after a failed cd to a file that is later renamed", () => {
+  const run = replay(row([
+    "file-later-renamed",
+    ["inputs/shot-*11", "old.txt"],
+    "cd old.txt 2>/dev/null; cp inputs/*.png .; echo changed > '{w}/old.txt'; mv '{w}/old.txt' '{w}/new.txt'",
+    [["cp", "inputs", "."], ["write", "old.txt"], ["move", "old.txt", "new.txt"]],
+  ]));
+  expect(run.missing).toEqual([]);
 });
 
 it("keeps every file made after a skipped pop or a failed cd in control flow", () => {
