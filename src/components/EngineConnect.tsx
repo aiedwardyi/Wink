@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Check, Download } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { firstLaunchConnectInstances } from "@/lib/engine-rail";
@@ -77,11 +77,16 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
             : t("engineConnect.install", { name: instance.displayName });
     const accountKey = ACCOUNTS[instance.driverKind as keyof typeof ACCOUNTS];
     const buttonClassName = `flex w-full items-center gap-2.5 rounded-lg disabled:cursor-default ${featured ? `justify-center px-4 py-2.5 text-[14px] font-semibold ${PRIMARY_BUTTON}` : "border border-hairline/60 px-3.5 py-2.5 text-[13px] font-medium text-ink hover:bg-control"}`;
-    const content = featured ? <>{!working && <Download size={15} />}{label}</> : <>
+    const content = featured ? <>{!installed && !working && <Download size={15} />}{label}</> : <>
       <ProviderBrandMark driverKind={instance.driverKind} size={16} />{label}
       <span className="ml-auto flex items-center gap-1.5 text-[11.5px] font-normal text-ink-secondary">{accountKey && t(accountKey)}{ready && <Check size={14} />}</span>
     </>;
-    const button = installed && !ready ? <EngineSignIn instance={signInAs(instance)} buttonLabel={content} buttonClassName={buttonClassName}
+    // The button gives way while signing in; the name stays so waiting rows are told apart.
+    const named = (status: ReactNode) => <div className="flex w-full items-start gap-2.5 rounded-lg border border-hairline/60 px-3.5 py-2.5">
+      <span className="flex items-center gap-2.5 text-[13px] font-medium text-ink"><ProviderBrandMark driverKind={instance.driverKind} size={16} />{instance.displayName}</span>
+      <div className="ml-auto flex min-w-0 flex-col items-end gap-1.5">{status}</div>
+    </div>;
+    const button = installed && !ready ? <EngineSignIn instance={signInAs(instance)} buttonLabel={content} buttonClassName={buttonClassName} named={named}
       onUpdated={(next) => { if (next.snapshot.authenticated === true) void onRefresh(); }} />
       // Launchers report spawn, not the window's end, so an open window never locks the button.
       : <button type="button" disabled={Boolean(ready || checking || busy[instance.instanceId])}

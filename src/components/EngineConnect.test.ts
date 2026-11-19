@@ -442,6 +442,45 @@ describe("first engine connection", () => {
     expect(row.textContent).not.toContain(locale === "en" ? "A window opens and installs Claude." : "창이 열리고 Claude를 설치합니다.");
   });
 
+  it.each(["en", "ko"] as const)("signs in installed Claude with no download arrow, which only install rows show, in %s", async (locale) => {
+    persistPreference(locale);
+    instances[0]!.snapshot = { state: "available", authenticated: false };
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const button = host.querySelector('[data-engine-connect="claude"] button')!;
+    expect(button.textContent).toBe(locale === "en" ? "Sign in to Claude" : "Claude에 로그인");
+    expect(button.querySelector("svg")).toBeNull();
+    instances[0]!.snapshot = { state: "unavailable" };
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    expect(host.querySelector('[data-engine-connect="claude"] button svg')).not.toBeNull();
+  });
+
+  it.each(["en", "ko"] as const)("keeps each engine's logo and name while its sign-in waits and once it connects in %s", async (locale) => {
+    persistPreference(locale);
+    for (const instance of instances.slice(0, 2)) instance.snapshot = { state: "available", authenticated: false };
+    let signedIn = false;
+    fetchMock.mockImplementation(async (url: string) => Response.json(url === "/api/instances"
+      ? { instances: instances.map((row) => row.instanceId === "claude" && signedIn ? { ...row, snapshot: { state: "available", authenticated: true } } : row) }
+      : { url: "https://auth.example/sign-in" }));
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const claude = host.querySelector('[data-engine-connect="claude"]')!;
+    const codex = host.querySelector('[data-engine-connect="codex"]')!;
+    await press(claude);
+    await press(codex);
+    const finish = locale === "en" ? "Sign in with your browser" : "브라우저로 로그인하세요";
+    for (const [row, name] of [[claude, "Claude"], [codex, "Codex"]] as const) {
+      const line = row.firstElementChild!;
+      expect(row.querySelector("[data-sign-in]")).toBeNull();
+      expect(line.textContent).toContain(name);
+      expect(line.textContent).toContain(finish);
+      expect(line.querySelector("svg")).not.toBeNull();
+    }
+    signedIn = true;
+    await advance(2000);
+    expect(claude.firstElementChild!.textContent).toBe(`Claude${locale === "en" ? "Connected" : "연결됨"}`);
+    expect(claude.firstElementChild!.querySelector("svg")).not.toBeNull();
+    expect(codex.firstElementChild!.textContent).toContain("Codex");
+  });
+
   it("resets the connect session on Back after an engine becomes available", async () => {
     await connect();
     instances[0]!.snapshot = { state: "available", authenticated: false };
