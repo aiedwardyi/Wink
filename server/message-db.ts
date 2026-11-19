@@ -26,7 +26,8 @@ let handle: DatabaseSync | null = null;
 let handlePath: string | null = null;
 let opened = 0;
 const changes = new Map<string, number>();
-const changeListeners = new Set<(threadId: string, id: string) => void>();
+let transactionKeys = 0;
+const changeListeners = new Set<(threadId: string, id: string, deleted: boolean) => void>();
 
 function open(): DatabaseSync {
   const file = DB_FILE();
@@ -63,25 +64,25 @@ function open(): DatabaseSync {
       active_leaf_id TEXT
     );
   `);
-  db.function("message_changed", (threadId, id) => {
+  db.function("message_changed", (threadId, id, deleted) => {
     changes.set(String(threadId), (changes.get(String(threadId)) ?? 0) + 1);
-    for (const listener of changeListeners) listener(String(threadId), String(id));
+    for (const listener of changeListeners) listener(String(threadId), String(id), deleted === 1);
     return null;
   });
   // An insert raises its thread's newest rowid; an insert trigger would slow a 237k-row import from 1.6 to 4.5 s.
   db.exec(`
     CREATE TEMP TRIGGER message_updated AFTER UPDATE ON main.messages BEGIN
-      SELECT message_changed(old.thread_id, old.id);
-      SELECT message_changed(new.thread_id, new.id) WHERE new.thread_id IS NOT old.thread_id OR new.id IS NOT old.id;
+      SELECT message_changed(old.thread_id, old.id, 0);
+      SELECT message_changed(new.thread_id, new.id, 0) WHERE new.thread_id IS NOT old.thread_id OR new.id IS NOT old.id;
     END;
-    CREATE TEMP TRIGGER message_deleted AFTER DELETE ON main.messages BEGIN SELECT message_changed(old.thread_id, old.id); END;
+    CREATE TEMP TRIGGER message_deleted AFTER DELETE ON main.messages BEGIN SELECT message_changed(old.thread_id, old.id, 1); END;
   `);
   opened++;
   return db;
 }
 
-/** Calls `listener` inside each statement on this process's handle that updates or deletes a row, so one that throws fails the write. */
-export function onMessageChange(listener: (threadId: string, id: string) => void): () => void {
+/** Calls `listener` inside each statement on this process's handle that updates or deletes a row (`deleted` for a delete), so one that throws fails the write. */
+export function onMessageChange(listener: (threadId: string, id: string, deleted: boolean) => void): () => void {
   changeListeners.add(listener);
   return () => changeListeners.delete(listener);
 }
@@ -154,6 +155,8 @@ export function threadVersion(threadId: string): string | undefined {
   // SAFETY: MAX(rowid) returns one integer row, NULL for no rows.
   const row = db().prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null };
   if (row.cursor === null) return undefined;
+  // other handles see none of an open transaction's writes, so a read keyed inside one must match no key after it ends
+  if (db().isTransaction) return `open:${++transactionKeys}`;
   // SAFETY: PRAGMA data_version returns one integer row; it moves when another connection commits.
   const other = db().prepare("PRAGMA data_version").get() as { data_version: number };
   return `${opened}:${other.data_version}:${row.cursor}:${changes.get(threadId) ?? 0}`;
@@ -450,6 +453,7 @@ export function botRepliesByEngine(): Array<{ threadId: string; botId: string | 
 export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
+  changes.delete(threadId);
 }
 
 export interface SearchHit {

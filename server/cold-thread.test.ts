@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatListPage, coldLoad, coldPaneReason, coldWriteRows, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
-import { messageDatabase, messageDbFile, readThread } from "./message-db.ts";
+import { applySyncedRows, insertMessage, messageDatabase, messageDbFile, readThread } from "./message-db.ts";
+import { paneLines, paneReason } from "../shared/pane-note.ts";
 import { Store, type Message } from "./store.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
 
@@ -223,6 +224,18 @@ describe("Map's reads of an unloaded chat", () => {
     expect((await coldWriteRows(unloaded, bot.threadId))?.map(row => row.tool?.writes)).toEqual([["/b/file.ts"]]);
   });
 
+  it("reads again once a transaction it read inside commits", async () => {
+    const store = fresh();
+    const bot = store.createBot({}, { seedMessages: false });
+    const edit = store.appendMessage(bot.threadId, wrote("/a/file.ts"));
+    const writes = async () => (await coldWriteRows(unloaded, bot.threadId))?.map(row => row.tool?.writes);
+    messageDatabase().exec("BEGIN IMMEDIATE");
+    store.applySyncChanges(bot.id, bot.threadId, [synced({ ...edit, tool: { ...edit.tool!, writes: ["/b/file.ts"] } }), synced({ ...wrote("/c/file.ts"), id: "peer", at: Date.now() })]);
+    expect(await writes()).toEqual([["/a/file.ts"]]);
+    messageDatabase().exec("COMMIT");
+    expect(await writes()).toEqual([["/b/file.ts"], ["/c/file.ts"]]);
+  });
+
   it("keeps a chat's reads while another bot's chat or a room's changes", async () => {
     const store = fresh();
     const bot = store.createBot({}, { seedMessages: false });
@@ -286,6 +299,71 @@ describe("loading a chat off the server thread", () => {
     const read = fresh();
     expect(store.messagesFor(bot.threadId)).toEqual(read.messagesFor(bot.threadId));
     expect(store.activeLeaf(bot.threadId)).toBe(read.activeLeaf(bot.threadId));
+  });
+
+  it("loads the row that took a deleted row's rowid behind the pages read", async () => {
+    const setup = fresh();
+    const bot = setup.createBot({}, { seedMessages: false });
+    applySyncedRows(bot.threadId, Array.from({ length: 1024 }, (_, n): Message => ({ id: `pad-${n}`, at: n, role: "user", kind: "text", text: "filler" })));
+    const note = (id: string, text: string): Message => ({ id, at: Date.now(), role: "bot", kind: "note", text: `[pane a1b2c3d4] ${text}` });
+    const first = note("first", "original");
+    const notice: Message = { id: "notice", at: Date.now(), role: "bot", kind: "activity", parentId: first.id, tool: { name: "error: sync conflict notice", ok: false } };
+    setup.applySyncChanges(bot.id, bot.threadId, [synced(first), synced(notice)]);
+    const rowid = (id: string) => Number(messageDatabase().prepare("SELECT rowid FROM messages WHERE thread_id = ? AND id = ?").get(bot.threadId, id)?.rowid);
+    const top = rowid(notice.id);
+    const store = fresh();
+    const incoming = note("incoming", "new peer note");
+    const post = Worker.prototype.postMessage;
+    let patched = false;
+    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: { threadId?: string; after?: number }, transfer) {
+      if (!patched && request.threadId === bot.threadId && request.after === top) {
+        patched = true;
+        store.removeSyncNotices(bot.threadId, [notice.id]);
+        store.applySyncChanges(bot.id, bot.threadId, [synced({ ...first, text: "[pane a1b2c3d4] patched" }), synced(incoming), { cursor: 0, kind: "head", rowId: "", value: incoming.id, conflict: false }]);
+      }
+      post.call(this, request, transfer);
+    });
+    await coldLoad(store, bot.threadId);
+    expect(rowid(incoming.id)).toBe(top);
+    expect(store.loaded(bot.threadId)).toBe(true);
+    const read = fresh();
+    const reason = (from: Store) => paneReason(paneLines(from.messagesFor(bot.threadId).toReversed(), 0, "a1b2c3d4-pane"), "a1b2c3d4-pane", 0);
+    expect(store.messagesFor(bot.threadId)).toEqual(read.messagesFor(bot.threadId));
+    expect(store.activeLeaf(bot.threadId)).toBe(read.activeLeaf(bot.threadId));
+    expect([reason(store), reason(read)]).toEqual(["new peer note", "new peer note"]);
+  });
+
+  it("keeps each moved row's newest copy when the pages it moved to are read again", async () => {
+    const bot = fresh().createBot({}, { seedMessages: false });
+    applySyncedRows(bot.threadId, Array.from({ length: 1024 }, (_, n): Message => ({ id: `pad-${n}`, at: n, role: "user", kind: "text", text: "filler" })));
+    const row = (id: string, text: string): Message => ({ id, at: Date.now(), role: "user", kind: "text", text });
+    const rowid = (id: string) => Number(messageDatabase().prepare("SELECT rowid FROM messages WHERE thread_id = ? AND id = ?").get(bot.threadId, id)?.rowid);
+    const writes = new Map([[rowid("pad-1023"), () => {
+      insertMessage(bot.threadId, row("pad-0", "moved"));
+      insertMessage(bot.threadId, row("twice", "moves again"));
+      insertMessage(bot.threadId, row("last", "deleted later"));
+      writes.set(rowid("last"), () => {
+        insertMessage(bot.threadId, row("twice", "moved again"));
+        writes.set(rowid("twice"), () => {
+          messageDatabase().prepare("DELETE FROM messages WHERE thread_id = ? AND id = ?").run(bot.threadId, "last");
+          insertMessage(bot.threadId, row("next", "after the delete"));
+        });
+      });
+    }]]);
+    const post = Worker.prototype.postMessage;
+    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: { threadId?: string; after?: number }, transfer) {
+      const write = request.threadId === bot.threadId && request.after !== undefined ? writes.get(request.after) : undefined;
+      if (write) {
+        writes.delete(request.after!);
+        write();
+      }
+      post.call(this, request, transfer);
+    });
+    const store = fresh();
+    await coldLoad(store, bot.threadId);
+    expect(writes.size).toBe(0);
+    expect(store.loaded(bot.threadId)).toBe(true);
+    expect(store.messagesFor(bot.threadId)).toEqual(fresh().messagesFor(bot.threadId));
   });
 
   it("keeps the chat the store loaded first", async () => {

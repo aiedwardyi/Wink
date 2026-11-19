@@ -154,27 +154,59 @@ export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: strin
 async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
   // only this handle writes rows (a peer's land through applySyncChanges), so its updates and deletes are all the pages can miss
   const changed = new Set<string>();
-  const stop = onMessageChange((thread, id) => { if (thread === threadId) changed.add(id); });
+  // a new row takes the table's top rowid + 1, so once a page's last row is deleted an insert can land behind the cursor
+  const deletedAt = new Map<string, number>();
+  let deletes = 0;
+  const stop = onMessageChange((thread, id, deleted) => {
+    if (thread !== threadId) return;
+    changed.add(id);
+    if (deleted) deletedAt.set(id, ++deletes);
+  });
   try {
     const messages: Message[] = [];
     const at = new Map<string, number>();
-    const gone = new Set<number>();
+    // a row's index to the index of its later copy, or to itself once deleted
+    const gone = new Map<number, number>();
     let chars = 0;
     const take = (message: Message) => {
+      const index = messages.push(message) - 1;
       const was = at.get(message.id);
-      if (was !== undefined) gone.add(was);
-      at.set(message.id, messages.push(message) - 1);
+      if (was !== undefined) gone.set(was, index);
+      at.set(message.id, index);
     };
+    const pages: Array<{ after: number; asked: number; length: number; chars: number; last: string }> = [];
     let cursor = 0;
+    const rewind = (from: number) => {
+      const { after, length, chars: before } = pages[from]!;
+      for (let index = length; index < messages.length; index++) if (at.get(messages[index]!.id) === index) at.delete(messages[index]!.id);
+      for (const [was, index] of gone) {
+        if (index < length) continue;
+        gone.delete(was);
+        if (was < length) at.set(messages[was]!.id, was);
+      }
+      messages.length = length;
+      pages.length = from;
+      chars = before;
+      cursor = after;
+    };
     for (;;) {
+      const asked = deletes;
       const page = await (reader ??= startReader())({ threadId, after: cursor });
       if (store.loaded(threadId) || changed.size > 1024) return;
-      if (!page.length) break;
-      for (const row of page) {
-        take(rowToMessage(row));
-        chars += row.json.length;
+      if (page.length) {
+        const length = messages.length;
+        const before = chars;
+        for (const row of page) {
+          take(rowToMessage(row));
+          chars += row.json.length;
+        }
+        pages.push({ after: cursor, asked, length, chars: before, last: messages.at(-1)!.id });
+        cursor = page.at(-1)!.cursor;
       }
-      cursor = page.at(-1)!.cursor;
+      // read again from the first page whose last row was deleted after it was asked for
+      const from = pages.findIndex((read) => (deletedAt.get(read.last) ?? 0) > read.asked);
+      if (from >= 0) rewind(from);
+      else if (!page.length) break;
     }
     // rows added since the worker's last page
     for (let tail = scanThreadRows(threadId, cursor, 1024); tail.messages.length; tail = scanThreadRows(threadId, tail.cursor, 1024)) {
@@ -189,7 +221,7 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
       if (index === undefined) continue;
       const message = readMessage(threadId, id);
       if (message) messages[index] = message;
-      else gone.add(index);
+      else gone.set(index, index);
     }
     const activeLeafId = storedHead(threadId);
     if (activeLeafId === undefined) return;

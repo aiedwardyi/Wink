@@ -20,6 +20,7 @@ import {
   searchHaystack,
   searchMessages,
   setActiveLeaf,
+  threadVersion,
   updateMessage,
   withMessageTransaction,
 } from "./message-db.ts";
@@ -218,6 +219,14 @@ describe("message-db", () => {
     const thread = readThread("t4", legacy("t4"));
     expect(thread.messages).toEqual([]);
     expect(thread.activeLeafId).toBeNull();
+  });
+
+  it("deleteThread drops the thread's change count", () => {
+    insertMessage("t4", msg("m1", "edited soon"));
+    updateMessage("t4", msg("m1", "edited"));
+    deleteThread("t4");
+    insertMessage("t4", msg("m1", "back"));
+    expect(threadVersion("t4")?.split(":").at(-1)).toBe("0");
   });
 
   it("search is case-insensitive, escapes LIKE wildcards, and snips long text", () => {
