@@ -41,6 +41,7 @@ interface GisInit {
   nonce: string;
   auto_select: boolean;
   ux_mode: string;
+  login_hint?: string;
 }
 
 interface GisMoment {
@@ -153,6 +154,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
   document.body.innerHTML = "";
   history.replaceState(null, "", "/");
 });
@@ -462,6 +464,7 @@ describe("phone sign-in page", () => {
     await vi.waitFor(() => expect(inits).toHaveLength(1));
     expect(inits[0]?.nonce).toBe(NONCE);
     expect(inits[0]?.auto_select).toBe(true);
+    expect(inits[0]?.login_hint).toBeUndefined();
     expect(prompts).toHaveLength(1);
     expect(renders).toBe(0);
     inits[0]?.callback({ credential: PC_TOKEN });
@@ -470,6 +473,22 @@ describe("phone sign-in page", () => {
     expect(prompts).toHaveLength(1);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.authorization).toBe(`Bearer ${PC_TOKEN}`);
+  });
+
+  it("asks Google for the cold start's account on the return leg, so a first sign-in picks the account once", async () => {
+    const idToken = ["e30", Buffer.from(JSON.stringify({ sub: "1234567890" })).toString("base64url"), "sig"].join(".");
+    open("/signin", [
+      { label: LABEL_A, name: "Ada" },
+      { label: LABEL_B, name: "Zed" },
+    ]);
+    expect(inits[0]?.login_hint).toBeUndefined();
+    inits[0]!.callback({ credential: idToken });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button:last-child")!.click();
+    expect(location.href).toBe(pair(LABEL_B, "?g=1"));
+    open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]).toMatchObject({ nonce: NONCE, auto_select: true, login_hint: "1234567890" });
   });
 
   it("shows the button when auto_select does not fire", async () => {
