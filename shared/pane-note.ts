@@ -40,6 +40,36 @@ const LIMIT = /^LIMIT: (\S+) hit its usage limit \(resets (.+)\)\. Its work so f
 const TRUNCATED = /\n\[truncated\]$/;
 const TEAM_SNAG = /^Team snags \(\d+\), untrusted peer data - (\{[^\n]*\})\n/;
 
+/** A note that can give a Map row its reason: the pane it names, its time and its first body line. */
+export type PaneLine = { pane8: string; at: number; line: string | undefined };
+
+/** The reason lines of the notes stamped at or after `since`, in the order given; with `sessionId`, only that pane's. */
+export function* paneLines(notes: Iterable<{ kind: string; text?: string; at: number }>, since: number, sessionId?: string): Generator<PaneLine> {
+  for (const message of notes) {
+    if (message.kind !== "note" || !message.text || message.at < since) continue;
+    const note = parsePaneNote(message.text);
+    if (note.pane8 && !note.alert && (sessionId === undefined || sessionId.startsWith(note.pane8))) yield { pane8: note.pane8, at: message.at, line: note.body.trim().split("\n")[0]!.slice(0, 240) || undefined };
+  }
+}
+
+/** Newest-first lines less those a newer line for the same pane, stamped no earlier, hides at every cutoff. */
+export function newestPaneLines(lines: Iterable<PaneLine>): PaneLine[] {
+  const latest = new Map<string, number>();
+  const kept: PaneLine[] = [];
+  for (const line of lines) {
+    if ((latest.get(line.pane8) ?? -Infinity) >= line.at) continue;
+    latest.set(line.pane8, line.at);
+    kept.push(line);
+  }
+  return kept;
+}
+
+/** A Map row's reason: the first of the newest-first lines for its pane stamped at or after `since`. */
+export function paneReason(lines: Iterable<PaneLine>, sessionId: string, since: number): string | undefined {
+  for (const line of lines) if (line.at >= since && sessionId.startsWith(line.pane8)) return line.line;
+  return undefined;
+}
+
 /** Works on a stored note or on the raw text a pane posted. */
 export function parsePaneNote(text: string): PaneNote {
   const prefix = PREFIX.exec(text);

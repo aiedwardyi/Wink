@@ -170,13 +170,16 @@ export function roomEchoesSinceLastUserTurn(messages: readonly Message[], exclud
 }
 
 /** Marks the carried echoes noted on the turn's first model event; a turn that ends before it leaves them for the next. */
-export function roomEchoesTaken(store: Pick<Store, "messagesFor" | "patchMessage">, event: RuntimeEvent): void {
+export function roomEchoesTaken(store: Pick<Store, "row" | "patchRow">, event: RuntimeEvent): void {
   const ids = carried.get(event.threadId);
   const ended = event.type === "turn.completed" || event.type === "session.exited";
   if (!ids || (!ended && !MODEL_EVENTS.has(event.type))) return;
   carried.delete(event.threadId);
   if (ended) return;
-  for (const row of store.messagesFor(event.threadId)) if (row.roomEcho && ids.includes(row.id)) store.patchMessage(event.threadId, row.id, { roomEcho: { ...row.roomEcho, noted: true } });
+  for (const id of ids.toReversed()) {
+    const row = store.row(event.threadId, id);
+    if (row?.roomEcho) store.patchRow(event.threadId, id, { roomEcho: { ...row.roomEcho, noted: true } });
+  }
 }
 
 export interface MyChatsDeps {
