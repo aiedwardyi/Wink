@@ -62,7 +62,12 @@ describe("readAntigravityModelCatalog", () => {
       { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)", contextWindow: 1_048_576 },
       { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)", contextWindow: 1_048_576 },
     ]);
-    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 7).map((option) => option.id)).toEqual(["gemini-4-neon-high", "gemini-4-neon-medium", "gemini-4-neon-low", "gemini-4-neon-xhigh"]);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 7)).toEqual([
+      { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-low", label: "Gemini 4 Neon (Low)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)", contextWindow: 1_048_576 },
+    ]);
     expect(STATIC_ANTIGRAVITY_MODELS.options.slice(10, 13)).toEqual([
       { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
