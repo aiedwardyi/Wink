@@ -982,7 +982,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }) });
     try {
       const result = await api("/api/internal/ask-user", { method: "POST", body });
-      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };
+      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : result.settled ? "Already closed; the user answered it." : "No matching open question." };
       return { text: "Asked. Their answer will arrive as a new message." };
     } catch (e) {
       return { text: `Couldn't ask: ${e instanceof Error ? e.message : String(e)}`, isError: true };

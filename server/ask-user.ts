@@ -66,7 +66,7 @@ export interface AskUserDeps<B extends Sender> {
 
 export interface AskUserResult {
   status: number;
-  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean };
+  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean; settled?: true };
 }
 
 export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: AskUserRequest): AskUserResult {
@@ -79,12 +79,17 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   if (!question) return { status: 400, body: { error: "question required" } };
   if (request.close) {
     let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
+    let settled = false;
     for (const [message, state] of askStates(deps.activePath(request.fromThreadId))) {
-      if (state.state !== "waiting" || message.card!.subtitle.trim() !== question) continue;
+      if (message.card!.subtitle.trim() !== question) continue;
       if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
+      if (state.state !== "waiting") {
+        settled = true;
+        continue;
+      }
       closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card: { ...message.card!, answered: ANSWERED_IN_CHAT } })) || closed;
     }
-    return { status: 200, body: { closed } };
+    return { status: 200, body: closed || !settled ? { closed } : { closed, settled: true } };
   }
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",

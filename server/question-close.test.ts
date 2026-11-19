@@ -53,9 +53,18 @@ describe("close question", () => {
     const card = h.store.activePath(h.bot.threadId).at(-1)!;
     h.store.patchMessage(h.bot.threadId, card.id, { card: { ...card.card!, ...patch } });
     const before = h.store.activePath(h.bot.threadId);
-    expect(h.ask("Ship it?", true)).toEqual({ status: 200, body: { closed: false } });
+    expect(h.ask("Ship it?", true)).toEqual({ status: 200, body: { closed: false, settled: true } });
     expect(h.patchMessage).not.toHaveBeenCalled();
     expect(h.store.activePath(h.bot.threadId)).toEqual(before);
+  });
+
+  it.each([["Yes", ["Yes", "No"]], ["Use staging first.", []]])("reports a card answered in chat (%s) as settled, not missing", (reply, options) => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Ship it?", options, askUser: true, staysOpen: true } });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: reply });
+    expect(h.ask("Ship it?", true)).toEqual({ status: 200, body: { closed: false, settled: true } });
+    expect(h.ask("Never asked", true)).toEqual({ status: 200, body: { closed: false } });
+    expect(h.patchMessage).not.toHaveBeenCalled();
   });
 
   it("closes once and leaves other questions open", () => {
@@ -63,7 +72,7 @@ describe("close question", () => {
     h.ask("Ship it?");
     h.ask("Which region?");
     expect(h.ask(" Ship it? ", true)).toMatchObject({ body: { closed: true } });
-    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: false } });
+    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: false, settled: true } });
     expect(scanQuestion(h.store.activePath(h.bot.threadId))?.card?.subtitle).toBe("Which region?");
     expect(h.patchMessage).toHaveBeenCalledTimes(1);
   });
