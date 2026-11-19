@@ -148,6 +148,13 @@ function deletedJson(deleted: ReadonlyMap<string, string | null>): string {
   return `${JSON.stringify([...ids, ...replies])}\n`;
 }
 
+/** The ref a deleted post's twin is written under: generation 0 is the ref itself. */
+const refGeneration = (sourceRef: string, generation: number) => {
+  if (!generation) return sourceRef.slice(0, LIMITS.ref);
+  const mark = `#${generation + 1}`;
+  return `${sourceRef.slice(0, LIMITS.ref - mark.length)}${mark}`;
+};
+
 const same = (left: BoardPost, right: BoardPost) => JSON.stringify(left) === JSON.stringify(right);
 
 export interface BoardSearch {
@@ -264,6 +271,12 @@ export function createBoard(options: BoardOptions) {
 
   const board = {
     dir: options.dir,
+    /** The ref an event writes under: its own, or the next free one when its post was deleted. */
+    ref(sourceRef: string): string {
+      let generation = 0;
+      while (gone().has(boardPostId(refGeneration(sourceRef, generation)))) generation++;
+      return refGeneration(sourceRef, generation);
+    },
     list(): BoardPost[] {
       return [...readable().values()].sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
     },
@@ -272,7 +285,8 @@ export function createBoard(options: BoardOptions) {
     },
     /** Writes the post the event names; the same event again updates that post. A fix also solves its parent. */
     post(input: NewBoardPost): BoardPost {
-      const id = boardPostId(input.source_ref);
+      const sourceRef = board.ref(input.source_ref);
+      const id = boardPostId(sourceRef);
       const at = now();
       const held = posts().get(id);
       const title = clean(input.title, LIMITS.title);
@@ -292,7 +306,7 @@ export function createBoard(options: BoardOptions) {
         error_sig: input.error_sig ?? held?.error_sig ?? errorSig(`${title}\n${body}`),
         status: held?.status === "solved" ? "solved" : input.status ?? (input.kind === "fix" ? "solved" : "open"),
         fix,
-        source_ref: input.source_ref.slice(0, LIMITS.ref),
+        source_ref: sourceRef,
         helped_bot_ids: held?.helped_bot_ids ?? [],
         created_at: held?.created_at ?? at,
         updated_at: at,

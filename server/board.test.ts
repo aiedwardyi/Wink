@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { BOARD_DIR, BOARD_USER, boardPostId, createBoard, errorSig, mergeBoardPosts, projectIdOf, type BoardPost } from "./board.ts";
+import { createBoardCalls } from "./board-calls.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 import { CONFLICT_NOTICE_V2 } from "./thread-sync.ts";
 
@@ -360,5 +361,58 @@ describe("board Drive sync", () => {
     const under = board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
     board.remove(reply.id);
     expect(board.get(under.id)).toMatchObject({ parent_id: stuck.id });
+  });
+});
+
+describe("a post written after its twin was deleted", () => {
+  const ids = { out: (id: string) => id, in: (id: string) => id };
+  const BLOCKER = { kind: "engine" as const, note: "pnpm install fails with EPERM on node_modules" };
+
+  it.each(["Drive sync", "no sync"])("a repeat call lists as a new post on every PC with its fix saved (%s)", (mode) => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const sync = () => {
+      if (mode === "Drive sync") for (const side of [a, b, a, b]) side.board.sync(folder, ids);
+    };
+    const calls = createBoardCalls({ board: a.board, projectOf: () => "wink", room: () => false });
+    const first = calls.called("bot-1", "t1", BLOCKER)!;
+    sync();
+    a.board.remove(first.id);
+    sync();
+    const again = calls.called("bot-1", "t1", BLOCKER)!;
+    expect(again.id).not.toBe(first.id);
+    sync();
+    expect(a.board.list().map((post) => post.id)).toEqual([again.id]);
+    if (mode === "Drive sync") expect(b.board.list().map((post) => post.id)).toEqual([again.id]);
+    expect(calls.cleared("t1", [BLOCKER], [], "ran the terminal as admin once")).toHaveLength(1);
+    sync();
+    for (const side of mode === "Drive sync" ? [a, b] : [a]) expect(side.board.get(again.id)).toMatchObject({ status: "solved", fix: "ran the terminal as admin once" });
+    for (const side of [a, b]) expect(side.board.get(first.id)).toBeUndefined();
+  });
+
+  it("a repeat call while the post is live still joins it", () => {
+    const { board } = home("pc-a");
+    const calls = createBoardCalls({ board, projectOf: () => "wink", room: () => false });
+    const first = calls.called("bot-1", "t1", BLOCKER)!;
+    board.remove(first.id);
+    const second = calls.called("bot-1", "t1", BLOCKER)!;
+    expect(calls.called("bot-1", "t1", BLOCKER)!.id).toBe(second.id);
+    expect(board.list()).toHaveLength(1);
+  });
+
+  it("the same words posted again after a delete is a new post that stays", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const first = a.board.post(STUCK);
+    a.board.remove(first.id);
+    const again = a.board.post(STUCK);
+    expect(again.id).not.toBe(first.id);
+    expect(boardPostId(again.source_ref)).toBe(again.id);
+    expect(a.board.post(STUCK).id).toBe(again.id);
+    for (const side of [a, b, a, b]) side.board.sync(folder, ids);
+    for (const side of [a, b]) expect(side.board.list().map((post) => post.id)).toEqual([again.id]);
+    expect(createBoard({ dir: a.board.dir, pcId: () => "pc-a" }).list().map((post) => post.id)).toEqual([again.id]);
   });
 });
