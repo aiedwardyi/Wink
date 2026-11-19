@@ -11,6 +11,7 @@ import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { noteSendLocale } from "./memory-import-offer.ts";
 import { callLinesSinceLastUserTurn, parseCallTag } from "./live-call.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
@@ -309,6 +310,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         return json(res, 400, { error: "threadId must be a task id" });
       }
       noteTalked(bot.id);
+      noteSendLocale(body.locale);
       // A retry carries its original task. That lets us return the canonical
       // receipt after a task switch, while a genuinely new send still has to
       // target the task that is active now.

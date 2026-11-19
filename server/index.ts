@@ -332,6 +332,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
+import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -707,7 +708,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -722,6 +723,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number, searc
       ...(searchOwnerChats ? { OMB_OWNER_CHATS: "1" } : {}),
       ...(readOnly ? { OMB_READ_ONLY_TURN: "1" } : {}),
       ...(handOff ? { OMB_HAND_OFF: "1" } : {}),
+      ...(importMemory ? { OMB_IMPORT_MEMORY: "1" } : {}),
     },
   };
 }
@@ -5165,7 +5167,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePath(bot.threadId), 1).tool) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5619,7 +5621,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ...reactions,
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
+  const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
+    ? importMemoryTurn(activeMessages)
+    : { offer: false, tool: false };
   const currentPrompt = [
+    ...(importMemory.offer ? [importOfferNote()] : []),
     composeUserTurnPrompt(text, turnOpts),
     ...folded,
   ].join("\n\n");
@@ -6019,7 +6025,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly);
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -8289,6 +8295,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === BOARD_ROUTES.post) return await boardRoutes.post(req, res);
       if (method === "POST" && path === "/api/internal/my-chats") {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
+      }
+      if (method === "POST" && path === "/api/internal/import-memory") {
+        return await importMemoryRoute(req, res, {
+          caller: (header) => commsCallers.resolve(header),
+          ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
+          messages: (threadId) => store.activePath(threadId),
+        });
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
         const source = commsCallers.resolve(req.headers.authorization);
