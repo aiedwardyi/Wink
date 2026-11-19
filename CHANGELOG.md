@@ -2,6 +2,24 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.288] - 2026-11-19
+
+### Fixed
+- An expired Claude login now offers Sign In again, instead of "couldn't finish that".
+- Sign In and Retry sit side by side on the sign-in card.
+- Each sign-in row keeps its engine name, with one button on the right.
+- The Google sign-in finish page matches the sign-in page.
+- Turning on Devices asks first, then signs in.
+- The Forum slides in and out from the left.
+- What's New clips play smoother.
+- The Timeline demo can be moved and zoomed like a real Timeline.
+- Your first Timeline pick shows with no error.
+- The + menu stays inside the window when the sidebar is on the right.
+- The side pane button stays gray when open.
+- Your first reply comes faster.
+- A message you send while your bot works gets one reply, not two.
+- When you give an order while your bot works, the sidekick leaves it to your bot.
+
 ## [1.0.287] - 2026-11-19
 
 ### Added
