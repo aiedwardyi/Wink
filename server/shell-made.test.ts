@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -52,9 +52,46 @@ it("keeps every file a large copy made", () => {
   expect(shellMade(`Copy-Item -Path 'source\\*.png' -Destination '${shots}'`, cwd, since).sort()).toEqual(made);
 });
 
-it("names a folder too large to list", () => {
-  const { cwd, shots, since } = copied(513);
-  const listed = shellMade(`cp source/*.png "${shots}"`, cwd, since);
-  expect(listed).toContain(shots);
-  expect(listed).toHaveLength(513);
+it("names a folder too large to list only when the command changed it, never a short count", () => {
+  const { cwd, shots, made } = copied(514);
+  const since = Date.now() + 60_000;
+  expect(shellMade(`ls "${shots}"`, cwd, since)).toEqual([]);
+  for (const path of [made[0]!, shots]) utimesSync(path, new Date(since), new Date(since));
+  expect(shellMade(`cp source/*.png "${shots}"`, cwd, since)).toEqual([shots]);
+});
+
+it("keeps every file past the listing bound in a folder made long before", () => {
+  const { cwd, shots, made } = copied(513);
+  const since = Date.now() + 60_000;
+  for (const path of made) utimesSync(path, new Date(since), new Date(since));
+  expect(shellMade(`cp source/*.png "${shots}"`, cwd, since).sort()).toEqual(made);
+});
+
+it("follows a location the command pushed and popped back", () => {
+  const { cwd, shots, since } = copied();
+  const task = join(cwd, "task");
+  const outside = join(cwd, "launch outside task");
+  const paste = join(outside, "paste");
+  mkdirSync(task);
+  mkdirSync(join(paste, "real-shots"), { recursive: true });
+  expect(shellMade(`Push-Location -LiteralPath '${paste}'; Pop-Location; Copy-Item -Path 'x\\*.png' -Destination '../launch outside task/real-shots'`, task, since)).toEqual([join(shots, "a.png")]);
+  expect(shellMade(`pushd "${paste}" && popd && cp x/*.png real-shots`, outside, since)).toEqual([join(shots, "a.png")]);
+});
+
+it("finds what a recursive copy put in a new folder", () => {
+  const { cwd, shots, since } = copied();
+  const day = join(shots, "nested", "day1");
+  mkdirSync(day, { recursive: true });
+  copyFileSync(join(cwd, "source", "a.png"), join(day, "a.png"));
+  expect(shellMade(`Copy-Item -Path 'source\\nested' -Recurse -Destination '${shots}'`, cwd, since).sort()).toEqual([join(shots, "a.png"), join(day, "a.png")].sort());
+});
+
+it("keeps an install or a repo the command made as its folder", () => {
+  const { cwd, shots, since } = copied();
+  const pkg = join(shots, "node_modules", "pkg");
+  mkdirSync(pkg, { recursive: true });
+  for (let index = 0; index < 512; index++) writeFileSync(join(pkg, `${index}.js`), "x");
+  mkdirSync(join(shots, ".git"));
+  writeFileSync(join(shots, ".git", "HEAD"), "x");
+  expect(shellMade(`npm install --prefix "${shots}"`, cwd, since).sort()).toEqual([join(shots, ".git"), join(shots, "a.png"), join(shots, "node_modules")].sort());
 });

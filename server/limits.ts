@@ -91,8 +91,8 @@ export const KEPT_LIMITS: Limits = {
   "server/routines.ts": { MAX_RUNS: STATE },
   "server/self-wake.ts": { MAX_AHEAD_MS: AUTO },
   "server/shell-made.ts": {
-    MAX_ENTRIES: "Crash: a named folder is listed on the event loop after each shell command; a huge folder would stall the server. Past it the folder itself is kept. Nothing is refused.",
-    MAX_TOKENS: "Crash: each path a command names costs a stat on the event loop; a long script would stall the server. Nothing is refused.",
+    MAX_ENTRIES: "Crash: named folders and the new folders in them are listed on the event loop after each shell command; a huge folder would stall the server. It bounds the entries a command left untouched in a named folder and the size of a new folder tree; past it the folder itself is kept when anything in it changed, never a short list. Nothing is refused.",
+    MAX_TOKENS: "Crash: each path a command names costs a stat per folder named before it, on the event loop; a long script would stall the server. It also bounds those folders. Nothing is refused.",
   },
   "server/side-chat.ts": {
     MAX_MS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",
