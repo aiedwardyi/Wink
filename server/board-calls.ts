@@ -46,15 +46,15 @@ export function createBoardCalls(deps: BoardCallDeps) {
     limit: Number.POSITIVE_INFINITY,
     withoutRoom: true,
   }).filter(solvedFix);
-  /** The episode's post ref: the full-note ref an older call already posted under, else a digest of the whole blocker. */
-  const episodeRef = (threadId: string, blocker: Blocker, episode: number) => {
+  /** The episode's post refs: the full-note ref older calls posted under, then the digest of the whole blocker a new post takes. */
+  const episodeRefs = (threadId: string, blocker: Blocker, episode: number) => {
     const legacy = `${callRef(threadId)}${episode}:${blocker.kind}:${blocker.note}`;
+    const digest = `${callRef(threadId)}${episode}:${blocker.kind}:${createHash("sha256").update(keyOf(blocker)).digest("hex").slice(0, 24)}`;
     // a longer legacy ref was cut before hashing, so another note may share its post
-    if (legacy.length <= BOARD_REF_MAX && deps.board.get(boardPostId(legacy))) return legacy;
-    return `${callRef(threadId)}${episode}:${blocker.kind}:${createHash("sha256").update(keyOf(blocker)).digest("hex").slice(0, 24)}`;
+    return legacy.length <= BOARD_REF_MAX ? [legacy, digest] : [digest];
   };
-  /** The call's current ref: the first episode whose post was neither deleted nor solved. */
-  const currentRef = (threadId: string, blocker: Blocker) => deps.board.next((episode) => episodeRef(threadId, blocker, episode), (post) => post.status === "solved");
+  /** The call's current ref: the live post of the first episode neither deleted nor solved, else a new post. */
+  const currentRef = (threadId: string, blocker: Blocker) => deps.board.next((episode) => episodeRefs(threadId, blocker, episode), (post) => post.status === "solved");
 
   return {
     /**
