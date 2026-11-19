@@ -522,6 +522,17 @@ it("Back watches the list's new rows, so their rings come back", async () => {
     expect(host.querySelector("article")).toBeNull();
   });
 
+  it("slides in from the left like the bot list fold and leaves toward the left", async () => {
+    reduceMotion(false);
+    await render(BoardView);
+    const view = host.querySelector<HTMLElement>("[data-board-view]")!;
+    expect([...view.classList]).toEqual(expect.arrayContaining(["md:animate-panel-slide", "[--panel-dx:-28px]"]));
+    expect(view.hasAttribute("data-closing")).toBe(false);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView, { closing: true }))));
+    expect(view.hasAttribute("data-closing")).toBe(true);
+    expect(view.hasAttribute("inert")).toBe(true);
+  });
+
   it("names the bot and the model it ran from the post, even for a bot this PC does not have", async () => {
     posts = [post("premote", { author_bot_id: "pokkey-sync-id", author: { name: "Pokkey", model: "GPT-6 Astra", color: "peach", mascot_style: "" } })];
     await render(BoardView);

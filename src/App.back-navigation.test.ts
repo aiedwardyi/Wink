@@ -158,6 +158,42 @@ describe("Back inside a Forum post on a phone", () => {
   });
 });
 
+describe("Closing the Forum on desktop", () => {
+  it("keeps it mounted over the chat while it slides out, then drops it", async () => {
+    localStorage.setItem("omb-onboarding-done", "true");
+    localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
+      bots: [{ id: "b1", threadId: "t1", name: "b1", messages: [], modelSelection: { instanceId: "inst", model: "m" } }],
+      groups: [],
+      selectedId: "b1",
+    }));
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("fetch", vi.fn((url: string) => String(url).includes("/api/board")
+      ? Promise.resolve(new Response(JSON.stringify({ posts: [] }), { headers: { "content-type": "application/json" } }))
+      : new Promise<Response>(() => {})));
+    vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
+    const view = () => document.querySelector("[data-board-view]");
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(App)));
+      await act(async () => store.dispatch!({ type: "select", id: FORUM_SELECTION }));
+      expect(view()).not.toBeNull();
+      expect(view()!.hasAttribute("data-closing")).toBe(false);
+      await act(async () => store.dispatch!({ type: "select", id: "b1" }));
+      expect(view()?.hasAttribute("data-closing")).toBe(true);
+      await vi.waitFor(() => expect(view()).toBeNull());
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      localStorage.clear();
+      store.dispatch = null;
+    }
+  });
+});
+
 describe("Phone menu across a rotation", () => {
   async function mountPhone() {
     localStorage.setItem("omb-onboarding-done", "true");

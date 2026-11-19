@@ -638,6 +638,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [terminalCovers, dispatch]);
 
   const botsUnreadable = state.botsUnreadable && state.bots.length === 0;
+  // a phone keeps the Forum as a full page with no exit, as before
+  const board = usePresence(forum && !noEngines && !botsUnreadable);
+  const boardShown = phoneMenuVisible ? forum && !noEngines && !botsUnreadable : board.mounted;
+  const boardClosing = !phoneMenuVisible && board.closing;
   const createBotRequired = !noEngines && state.bots.length === 0 && !botsUnreadable;
   const createBotSheetOpen = !onboardingOpen && state.connected && state.hydrated && (state.createBotOpen || createBotRequired);
   const secondaryViewOpen =
@@ -841,6 +845,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         folded={slotShown}
         onUnfold={() => slotPanels.forEach(closeSlot)}
       />
+      {boardShown && <BoardView hidden={nativeViewOverlayOpen} closing={boardClosing} />}
       {noEngines ? (
         <LazyView fallback={<BootFallback />}>
           <NoEngines />
@@ -850,9 +855,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
-      ) : forum ? (
-        <BoardView hidden={nativeViewOverlayOpen} />
-      ) : swipeChatId ? (
+      ) : forum ? null : swipeChatId ? (
         <div ref={conversationRef} className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip md:flex-row ${watchDock}`}>
           <PhoneChatPages id={swipeChatId} enabled={!terminalCovers && !nativeViewOverlayOpen} menuVisible={phoneMenuVisible} hidden={terminalCovers} rider={menuButtonRef} order={swipeOrder} onSelect={selectSwipe}>
             {(id, preview) => {
