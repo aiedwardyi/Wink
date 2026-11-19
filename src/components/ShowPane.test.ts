@@ -58,6 +58,19 @@ const until = async (done: () => boolean | undefined) => {
 };
 const button = (name: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
 
+it("puts the desktop pane toggle after Maximize in the pane header", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await render({ item: shown, source: { threadId: "t1", messages: [] }, hidden: false });
+  const head = host.querySelector(".show-pane-head")!;
+  const toggle = head.querySelector<HTMLButtonElement>("[data-show-pane-button]");
+  expect(toggle).not.toBeNull();
+  expect(toggle?.previousElementSibling?.getAttribute("aria-label")).toBe("Maximize");
+  expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => toggle?.click());
+  expect(host.querySelector("[data-show-pane-button]")?.getAttribute("aria-pressed")).toBe("false");
+});
+
 it("fits an image in the pane", async () => {
   await render({ item: item("C:\\w\\signups.png", "image"), hidden: false });
   const img = host.querySelector("img")!;
@@ -218,10 +231,10 @@ it.each(["missing", "offline"])("offers Open instead of navigating a %s page", a
   expect(host.querySelector("[data-show-fallback]")).not.toBeNull();
 });
 
-it("hosts the checker with its Maximize and Close in the pane header", async () => {
+it("hosts the checker with its Maximize and pane toggle in the header", async () => {
   await render({ watch: { card, threadId: "t1", live: false }, hidden: false });
   expect(host.querySelector(".verify-watch-frame .verify-watch-bar")).not.toBeNull();
-  expect(host.querySelectorAll('button[aria-label="Close"]')).toHaveLength(1);
+  expect(host.querySelectorAll(".show-pane-head [data-show-pane-button]")).toHaveLength(1);
   expect(host.querySelectorAll('button[aria-label="Maximize"]')).toHaveLength(1);
   expect(host.querySelector(".verify-watch-bar button[aria-label='Close']")).toBeNull();
   expect(host.querySelector("aside")!.hasAttribute("data-wide")).toBe(false);
@@ -236,20 +249,20 @@ it("docks files wide and closes from the header", async () => {
   expect(aside.hasAttribute("data-wide")).toBe(true);
   expect(aside.classList.contains("md:animate-panel-slide")).toBe(true);
   expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Show");
-  await act(async () => button("Close")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".show-pane-head [data-show-pane-button]")!.click());
   let shown: ShowItem | null = item("x", "image");
   function Probe() { shown = useShowItem(); return null; }
   await act(async () => root.render(createElement(Probe)));
   expect(shown).toBeNull();
 });
 
-it.each([false, true])("closes from one X at the far right of the header, phone %s", async (phone) => {
+it.each([false, true])("closes from the far right of the header, phone %s", async (phone) => {
   vi.stubGlobal("matchMedia", () => ({ matches: phone, addEventListener() {}, removeEventListener() {} }));
   await act(async () => showItem(item("C:\\w\\a.png", "image")));
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
   const head = document.querySelector(".show-pane-head")!;
   const buttons = [...head.querySelectorAll<HTMLButtonElement>(":scope > button")];
-  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Close"] : ["Maximize", "Close"]);
+  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Close"] : ["Maximize", "Show and media"]);
   expect(head.lastElementChild).toBe(buttons.at(-1));
   expect(head.querySelector(".lucide-chevron-right")).toBeNull();
   await act(async () => buttons.at(-1)!.click());
@@ -264,7 +277,7 @@ it("speaks Korean", async () => {
   await render({ item: item("C:\\w\\sync-flow.html", "page"), hidden: false });
   expect(host.querySelector('[role="tab"]')?.textContent).toBe("보기");
   expect(button("새로고침")).not.toBeNull();
-  expect(button("닫기")).not.toBeNull();
+  expect(button("보기와 미디어")).not.toBeNull();
   expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(2);
 });
 

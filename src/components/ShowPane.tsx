@@ -14,6 +14,7 @@ import { MediaFiles, ShowMedia } from "./ShowMedia";
 import { TimelinePane } from "./TimelinePane";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import { VerifyWatchFrame } from "./VerifyWatch";
+import { ShowPaneButton } from "./ShowPaneButton";
 import { listedFor, useSharedWorkers, WorkerPage } from "./WorkerRows";
 import "./VerifyWatch.css";
 import "./ShowPane.css";
@@ -136,7 +137,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
-        <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>
+        {!phone && (source?.threadId || item?.threadId || watch?.threadId) ? <ShowPaneButton threadId={(source?.threadId || item?.threadId || watch?.threadId)!} workers={crew} inPane /> : <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>}
       </div>
       {item && (item.kind === "folder"
         ? <ShowFolder key={`${item.threadId}:${item.path}`} item={item} maximized={expanded} />
