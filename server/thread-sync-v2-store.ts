@@ -477,7 +477,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     await turn(async () => finishPull(task, target, cursor, own, pulled.result.heads));
   }
 
-  function finishPull(task: StoredTask, target: Target, cursor: number, own: string | null | undefined, heads: SyncApplyResult["heads"]): void {
+  function finishPull(task: StoredTask, target: Target, cursor: number, own: string | null | undefined, heads: Parameters<typeof syncHold.pulled>[2]): void {
     resolveHeads(task, task.cursor !== cursor, own);
     notifyConflict(task);
     if (task.cursor !== cursor && !room(target)) host.store.applySyncImport(() => host.imported(target.botId));

@@ -532,7 +532,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await c.call("slowPulls", { at: 50 });
     let filed = false;
     const poll = c.call("poll").then(() => { filed = true; });
-    await delay(150);
+    await vi.waitFor(async () => expect((await c.snapshot()).pulls.length).toBeGreaterThan(0), { timeout: 30_000, interval: 5 });
     await c.call("pull", { threadId: "t19" });
     expect(filed).toBe(false);
     expect((await c.call<Snapshot>("snapshot", { threadId: "t19" })).rows.map((row) => row.text)).toEqual(["t19", "t19 new"]);
@@ -580,10 +580,14 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await c.call("slowPulls", { at: 50 });
     await c.snapshot();
     const poll = c.call("poll");
-    await delay(150);
+    const pulls: string[] = [];
+    await vi.waitFor(async () => {
+      pulls.push(...(await c.snapshot()).pulls);
+      expect(pulls.length).toBeGreaterThan(0);
+    }, { timeout: 30_000, interval: 5 });
     await c.call("open", { threadId: "t19" });
     await poll;
-    const pulls = (await c.snapshot()).pulls;
+    pulls.push(...(await c.snapshot()).pulls);
     expect(pulls.indexOf("t19")).toBeLessThan(pulls.indexOf("t10"));
   });
 
