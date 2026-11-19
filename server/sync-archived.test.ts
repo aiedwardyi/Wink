@@ -125,6 +125,27 @@ describe("archived bots between two PCs", { timeout: 240_000 }, () => {
     expect(published()).toEqual(["Kept", "Shelved"]);
   });
 
+  it("arrive archived on a PC that already shares the bot from before archive synced", async () => {
+    const a = await boot("a");
+    await create(a, "Kept");
+    await create(a, "Shelved");
+    await sync(a);
+    let b = await boot("b");
+    const active = [{ name: "Kept", archived: false }, { name: "Shelved", archived: false }];
+    await settle(async () => [await bots(a), await bots(b)], [active, active]);
+    await close(b);
+    // what a PC that synced on a build without archive sync has: no base for hidden
+    const state = join(b.dataDir, "profile-sync.json");
+    const settings = JSON.parse(readFileSync(state, "utf8"));
+    settings.syncedHashes = Object.fromEntries(Object.entries(settings.syncedHashes).filter(([key]) => !key.endsWith(":hidden")));
+    writeFileSync(state, JSON.stringify(settings));
+    await a.api("PATCH", `/api/bots/${await idOf(a, "Shelved")}`, { hidden: true });
+    await sync(a);
+    b = await boot("b");
+    const want = [{ name: "Kept", archived: false }, { name: "Shelved", archived: true }];
+    await settle(async () => [await bots(a), await bots(b)], [want, want]);
+  });
+
   it("publishes an archived bot a joined PC held back, and keeps its unused bot held", async () => {
     const a = await boot("a");
     await create(a, "Kept");

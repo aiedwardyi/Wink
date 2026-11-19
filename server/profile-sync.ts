@@ -769,8 +769,8 @@ export function remoteFieldsToApply(
     const base = synced[key];
     if (syncValueHash(value) === base) continue;
     if (local && base !== undefined && syncValueHash(local[field]) !== base) continue;
-    // no base on a mapped bot (a pre-auto-sync mapping): its own value wins and publishes
-    if (local && base === undefined && entity === "bot" && local[field] != null) continue;
+    // no base on a mapped bot (a pre-auto-sync mapping): its own value wins and publishes, unless it is a later default that never publishes
+    if (local && base === undefined && entity === "bot" && local[field] != null && !(field in LATER_BOT_DEFAULTS && valueEqual(local[field], LATER_BOT_DEFAULTS[field]))) continue;
     apply[field] = value;
   }
   return apply;
