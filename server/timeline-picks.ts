@@ -23,7 +23,7 @@ export function timelinePicks(entries: PickEntry[], bot: BotRecord, store: Pick<
   const loose = pending.filter((entry) => minuteOf(entry) !== undefined);
   const times = new Set(precise.map(exactTime));
   const minutes = new Set(loose.map(minuteOf));
-  const threads = new Set(precise.flatMap(({ thread }) => thread ? [thread] : []));
+  const threads = new Set([...precise, ...loose].flatMap(({ thread }) => thread ? [thread] : []));
   if ([...precise, ...loose].some(({ thread }) => !thread)) {
     threads.add(bot.threadId);
     for (const task of bot.tasks ?? []) threads.add(task.threadId);

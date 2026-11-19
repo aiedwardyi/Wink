@@ -424,13 +424,21 @@ describe("decision timeline", () => {
     const read = () => timelinePicks(parseTimeline(timeline()).entries, { id: BOT, threadId: "t1" } as never, { groups: [], messagesFor: store.messagesFor } as never);
     const shown = () => read().map(({ key, binding, at, files, picture }) => [key, binding, at, files, picture]);
 
-    it("gives an answer two picks claim to neither of them", async () => {
+    it("gives an answer two picks claim only to the pick its question names", async () => {
       ask("Forum");
       answer("forum");
       vi.setSystemTime(NOW + MINUTE);
       const question = ask("Settings");
       const settings = answer("settings");
       reply(claim("Forum", question.id, settings.id), claim("Settings", question.id, settings.id));
+      await settle();
+      expect(shown()).toEqual([["Settings", "verified", settings.at, [shot("settings")], undefined], ["Forum", "unbound", undefined, [], undefined]]);
+    });
+
+    it("gives an answer two picks claim to neither when its question names both", async () => {
+      const question = ask("Forum and Settings");
+      const both = answer("both");
+      reply(claim("Forum", question.id, both.id), claim("Settings", question.id, both.id));
       await settle();
       expect(shown()).toEqual([["Forum", "unbound", undefined, [], undefined], ["Settings", "unbound", undefined, [], undefined]]);
     });
@@ -456,6 +464,40 @@ describe("decision timeline", () => {
       const { question } = show("Settings");
       const settings = answer("settings");
       reply(claim("Settings", question.id, settings.id, { picture: forum.picture }));
+      await settle();
+      const [pick] = read();
+      expect(pick).toMatchObject({ key: "Settings", binding: "verified", at: settings.at, files: [shot("settings")] });
+      expect(pick?.picture).toBeUndefined();
+    });
+
+    it.each([
+      ["swapped", "the same answer"], ["one swapped", "the same answer"], ["matching", "the same answer"],
+      ["swapped", "different answers"], ["matching", "different answers"],
+    ] as const)("binds %s question and answer pairs given %s only to the topic the question names", async (pairs, answers) => {
+      const forum = ask("Forum");
+      const first = answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const settings = ask("Settings");
+      const red = answers === "different answers";
+      const second = red ? say(`I choose A\n\n<attached-image path="${shot("settings")}"/>`) : answer("settings");
+      const picked = red ? { fact: "A - red cards", quote: "I choose A" } : {};
+      reply(...pairs === "matching" ? [claim("Forum", forum.id, first.id), claim("Settings", settings.id, second.id, picked)]
+        : [claim("Forum", settings.id, second.id, picked), ...pairs === "swapped" ? [claim("Settings", forum.id, first.id)] : []]);
+      await settle();
+      const rows = Object.fromEntries(read().map(({ key, binding, at, files }) => [key, [binding, at, files]]));
+      const unbound = ["unbound", undefined, []];
+      expect(rows).toEqual(pairs === "matching"
+        ? { Forum: ["verified", first.at, [shot("forum")]], Settings: ["verified", second.at, [shot("settings")]] }
+        : pairs === "swapped" ? { Forum: unbound, Settings: unbound } : { Forum: unbound });
+    });
+
+    it.each(["Choose Forum: A - red cards or B - blue cards.", "Forum: A - red cards or B - blue cards?"])("ends an earlier question's pictures at the option prompt %s", async (prompt) => {
+      const forum = screen("forum-only", "B - blue cards");
+      bot(prompt);
+      screen("settings-only", "B - blue cards");
+      const question = ask("Settings");
+      const settings = answer("settings");
+      reply(claim("Settings", question.id, settings.id, { picture: forum }));
       await settle();
       const [pick] = read();
       expect(pick).toMatchObject({ key: "Settings", binding: "verified", at: settings.at, files: [shot("settings")] });

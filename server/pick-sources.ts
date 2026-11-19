@@ -38,8 +38,9 @@ function botTurn(messages: readonly Message[], start: number, parent: (index: nu
   return { turn: turn.reverse(), previous: -1 };
 }
 
+const OPTION = /(?:^|\s)(?:[a-h]|\d{1,2})\s*[-.):]\s+\S/gi;
 const isQuestionCard = (row: Message) => row.kind === "options" && row.role === "bot" && row.card?.askUser && !row.card.requestId;
-const asks = (row: Message) => isQuestionCard(row) || (row.kind === "text" && /[?？]/.test(row.text ?? ""));
+const asks = (row: Message) => isQuestionCard(row) || (row.kind === "text" && (/[?？]/.test(row.text ?? "") || (row.text?.match(OPTION)?.length ?? 0) > 1));
 
 function picturesIn(turn: Message[], attachments: string, answered?: Message): PictureTurn | undefined {
   const tools = new Map(turn.filter((row) => row.kind === "activity" && row.tool?.ok !== false && SHOW_IMAGE.test(row.tool?.name ?? "")).map((row) => [row.id, row.tool?.summary]));
@@ -100,13 +101,23 @@ function shownPicture(value: string | null | undefined, shown: ShownPicture[]): 
   return shown.some(({ path, caption }) => pathKey(path) === pathKey(match.path) && caption !== match.caption) ? undefined : { path: match.path, caption: match.caption };
 }
 
+/** How well a reply's question names a pick: the whole key as one phrase first, then how many of its words. */
+function topicScore(source: PickSource, key: string): [number, number] {
+  const text = ` ${pickKey([source.context, source.prior?.context].filter(Boolean).join(" "))} `;
+  const words = pickKey(key).split(" ");
+  return [text.includes(` ${words.join(" ")} `) ? 1 : 0, words.filter((word) => text.includes(` ${word} `)).length];
+}
+
 function captionMatches(caption: string, option: string): boolean {
   const [a, b] = [caption.trim(), option.trim()];
   const [left, right] = [LABELED.exec(a)?.[1]?.toLowerCase(), LABELED.exec(b)?.[1]?.toLowerCase()];
   return (!left || !right || left === right) && pickKey(a.replace(LABELED, "")) === pickKey(b.replace(LABELED, ""));
 }
 
-export function validatePickBinding(claim: PickClaim, source: PickSource | undefined, before?: PickEntry): PickBinding | undefined {
+export const offersOption = (source: PickSource, option: string) => ` ${pickKey(source.context ?? "")} `.includes(` ${pickKey(option)} `);
+
+/** Rivals are the batch's other replies that could carry this pick: the bound reply's question must name the pick better than each. */
+export function validatePickBinding(claim: PickClaim, source: PickSource | undefined, before?: PickEntry, rivals: readonly PickSource[] = []): PickBinding | undefined {
   if (!source?.id || !source.thread || source.at === undefined || !Number.isFinite(new Date(source.at).getTime()) || source.invalidCard) return undefined;
   if ((claim.messageId != null && claim.messageId !== source.id) || (claim.thread !== undefined && claim.thread !== source.thread) || (claim.at !== undefined && claim.at !== source.at)) return undefined;
   const topic = (context = "") => ` ${pickKey(context)} `.includes(` ${pickKey(claim.key)} `);
@@ -115,6 +126,12 @@ export function validatePickBinding(claim: PickClaim, source: PickSource | undef
     ? [before.picture, ...before.overPictures].filter((picture): picture is Picture => Boolean(picture)) : [];
   const questionId = prior?.questionId ?? (recorded.length ? before?.questionId : undefined) ?? source.questionId ?? source.id;
   if (claim.questionId != null && claim.questionId !== questionId) return undefined;
+  const [phrase, words] = topicScore(source, claim.key);
+  if (rivals.some((other) => {
+    if (other.questionId === questionId || other.prior?.questionId === questionId) return false;
+    const [otherPhrase, otherWords] = topicScore(other, claim.key);
+    return otherPhrase > phrase || (otherPhrase === phrase && otherWords >= words);
+  })) return undefined;
 
   const shown = [...(source.pictures ?? []), ...(prior?.pictures ?? []), ...recorded];
   const options = [claim.picked, ...claim.over];

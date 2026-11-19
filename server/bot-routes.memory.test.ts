@@ -150,12 +150,12 @@ it("drops legacy option pictures whose captions disagree with an exact-time pick
   expect(pick?.picture).toBeUndefined();
 });
 
-it("does not borrow either attachment for two old minute-only records", async () => {
-  const { file, threadId, say, read } = timelineRoute("bot-legacy-minute-only");
+it.each([false, true])("does not borrow either attachment for two old minute-only records, thread saved: %s", async (scoped) => {
+  const { file, threadId, say, read } = timelineRoute(`bot-legacy-minute-only-${scoped}`);
   say(threadId, MINUTE, "/shots/first.png");
   say(threadId, MINUTE + 15_000, "/shots/second.png");
   writeFileSync(file, ["# Decision timeline", "", ...["", " (2)"].flatMap((suffix, i) => [
-    `## 2026-11-17 10:00${suffix} | Menu ${i} | current`, "- Picked: B", '- Said: "I choose B"', "- Files: /shots/first.png; /shots/second.png", "",
+    `## 2026-11-17 10:00${suffix} | Menu ${i} | current`, "- Picked: B", '- Said: "I choose B"', "- Files: /shots/first.png; /shots/second.png", ...scoped ? [`- Thread: ${threadId}`] : [], "",
   ])].join("\n"));
   expect((await read()).body.entries.map(({ files }) => files)).toEqual([[], []]);
 });
@@ -173,10 +173,10 @@ it("holds files and time on previously saved picks that claim the same answer", 
   expect(readFileSync(file, "utf8")).toBe(saved);
 });
 
-it("keeps the screenshot of an old minute-only pick when its minute holds only its own reply", async () => {
-  const { file, threadId, say, read } = timelineRoute("bot-legacy-one-minute");
+it.each([false, true])("keeps the screenshot of an old minute-only pick when its minute holds only its own reply, thread saved: %s", async (scoped) => {
+  const { file, threadId, say, read } = timelineRoute(`bot-legacy-one-minute-${scoped}`);
   say(threadId, MINUTE + 20_000, "/shots/solo.png");
-  writeFileSync(file, ["# Decision timeline", "", "## 2026-11-17 10:00 | Menu | current", "- Picked: B", '- Said: "I choose B"', "- Files: /shots/solo.png", ""].join("\n"));
+  writeFileSync(file, ["# Decision timeline", "", "## 2026-11-17 10:00 | Menu | current", "- Picked: B", '- Said: "I choose B"', "- Files: /shots/solo.png", ...scoped ? [`- Thread: ${threadId}`] : [], ""].join("\n"));
   expect((await read()).body.entries.map(({ files, at, binding }) => [files, at, binding])).toEqual([[["/shots/solo.png"], undefined, undefined]]);
 });
 

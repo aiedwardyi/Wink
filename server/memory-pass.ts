@@ -5,7 +5,7 @@ import { z } from "zod";
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
+import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
@@ -463,10 +463,11 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       const over = listOf(fact.over)
         .filter((option) => option.length <= DECISION_MAX && !secretLike(option) && pickKey(option) !== pickKey(line) && optionNamed(option, said, known, own))
         .slice(0, OPTIONS_MAX);
+      const bound = identified.length === 1 ? identified[0] : undefined;
       const binding = validatePickBinding({
         key: thing, picked: line, over, messageId: fact.message_id, questionId: fact.question_id, picture: fact.picture,
         overPictures: fact.over_pictures == null ? undefined : listOf(fact.over_pictures),
-      }, identified.length === 1 ? identified[0] : undefined, before);
+      }, bound, before, sources.filter((other) => other !== bound && (quoting.includes(other) || offersOption(other, line))));
       const old = target ? NOTED.exec(target) : null;
       seen.add(id);
       live.add(pickKey(thing));
