@@ -342,7 +342,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn || workersOn || timelineOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), map: mapOn, workers: workersOn, timeline: timelineOn, profileName: shownProfile(state)?.profile?.name?.trim(), botId: bot?.id, card: paneCard, source } : null);
   const withWatch = Boolean(bot || group && (isTeamRoom(group) || LIVE_VERIFY_V0));
   const watchDock = withWatch && watchShown.mounted ? "verify-watch-dock" : "";
-  const slotPanels: SlotPanel[] = [...(!forum && (watch || show || media || mapping || crewThread || timelineThread) ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : []), ...(terminalOpen && !terminalCovers ? ["terminal" as const] : [])];
+  const slotPanels: SlotPanel[] = [...(watch || show || media || mapping || crewThread || timelineThread ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : []), ...(terminalOpen && !terminalCovers ? ["terminal" as const] : [])].filter((panel) => !forum || panel !== "show");
   const closeSlot = (panel: SlotPanel) => panel === "show" ? closePane() : panel === "terminal" ? closeTerminal() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
   // on desktop the Forum only hides the pane; the chat it was opened from finds it as it was
