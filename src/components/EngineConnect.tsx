@@ -18,7 +18,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   instances: InstanceInfo[];
   onRefresh: () => void | Promise<void>;
   recheckOnFocus?: boolean;
-  footer?: { back: () => void; open: () => void; label?: MessageKey; disabled?: boolean; skip?: () => void };
+  footer?: { back: () => void; open: () => void; label?: MessageKey };
 }) {
   const { t } = useI18n();
   const canInstall = Boolean(window.ogb?.openEngineInstall);
@@ -85,16 +85,19 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
     // Signing in keeps the engine's name on the row, with that state's one action at the end.
     const named = (end: ReactNode) => <div className="flex w-full items-center gap-2.5 rounded-lg border border-hairline/60 px-3.5 py-2.5 text-[13px] font-medium text-ink">
       {mark}<span className="min-w-0 truncate">{instance.displayName}</span>
-      <span className="ml-auto shrink-0 text-[12.5px] font-semibold text-accent">{end}</span>
+      <span className="ml-auto flex shrink-0 items-center gap-3 text-[12.5px] font-semibold text-accent">{end}</span>
     </div>;
+    const help = featured && t(installed ? "chat.signInHelp" : "engineConnect.note", { name: instance.displayName });
+    const helpClassName = "break-keep text-center text-[12px] leading-relaxed text-ink-secondary";
     const button = installed && !ready ? <EngineSignIn instance={signInAs(instance)} buttonLabel={content} buttonClassName={buttonClassName} row={named}
+      note={help && <p className={`mt-1 ${helpClassName}`}>{help}</p>}
       onUpdated={(next) => { if (next.snapshot.authenticated === true) void onRefresh(); }} />
       // Launchers report spawn, not the window's end, so an open window never locks the button.
       : <button type="button" disabled={Boolean(ready || checking || busy[instance.instanceId])}
       onClick={() => void install(instance)} className={buttonClassName}>{content}</button>;
     return <div key={instance.instanceId} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}>
       {button}
-      {featured && <p className="mt-2.5 break-keep text-center text-[12px] leading-relaxed text-ink-secondary">{t(installed ? "chat.signInHelp" : "engineConnect.note", { name: instance.displayName })}</p>}
+      {!installed && help && <p className={`mt-2.5 ${helpClassName}`}>{help}</p>}
       {working && <p role="status" className="mt-1.5 text-center text-[12px] text-ink-secondary">{t(paste ? "engine.pasteAndEnter" : "engineConnect.finish")}</p>}
       {failed && <p role="status" className="mt-1.5 text-center text-[12px] text-ink-secondary">{t("engineConnect.didntFinish")}</p>}
     </div>;
@@ -117,10 +120,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
     </div>
     {footer && <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-1">
       <button type="button" onClick={footer.back} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>
-      <div className="flex items-center gap-1">
-        {footer.skip && <button type="button" onClick={footer.skip} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.openOrbit")}</button>}
-        <button type="button" data-engine-connect-primary onClick={footer.open} disabled={footer.disabled} className="rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{t(footer.label ?? "onboarding.openOrbit")}</button>
-      </div>
+      <button type="button" data-engine-connect-primary onClick={footer.open} className="rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{t(footer.label ?? "onboarding.openOrbit")}</button>
     </div>}
   </div>;
 }

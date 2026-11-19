@@ -337,13 +337,13 @@ describe("first engine connection", () => {
     expect(host.textContent).toContain("ClaudeSign In");
     expect(host.querySelector("code")).toBeNull();
     const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
-    expect(next.disabled).toBe(true);
+    expect(next.disabled).toBe(false);
     expect(next.className).not.toMatch(/flex-1|w-full/);
+    expect(next.parentElement!.textContent).toBe("BackContinue");
     expect(host.textContent).not.toContain("Optional setup");
     instances[0]!.snapshot = { state: "available", authenticated: true };
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(host.textContent).toContain("Claude is ready");
-    expect(next.disabled).toBe(false);
     await click("Continue");
     expect(host.textContent).toContain("You're all set");
     expect(host.textContent).toContain("Open Wink");
@@ -461,7 +461,7 @@ describe("first engine connection", () => {
     for (const instance of instances.slice(0, 2)) instance.snapshot = { state: "available", authenticated: false };
     let signedIn = false;
     fetchMock.mockImplementation(async (url: string) => Response.json(url === "/api/instances"
-      ? { instances: instances.map((row) => row.instanceId === "claude" && signedIn ? { ...row, snapshot: { state: "available", authenticated: true } } : { ...row, loginState: "pending" }) }
+      ? { instances: instances.map((row) => row.instanceId === "claude" && signedIn ? { ...row, snapshot: { state: "available", authenticated: true } } : { ...row, loginState: "pending", loginCapture: { url: "https://auth.example/sign-in" } }) }
       : { url: "https://auth.example/sign-in" }));
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const claude = host.querySelector('[data-engine-connect="claude"]')!;
@@ -469,16 +469,17 @@ describe("first engine connection", () => {
     await press(claude);
     await press(codex);
     const cancel = locale === "en" ? "Cancel" : "취소";
+    const openAgain = locale === "en" ? "Open Again" : "다시 열기";
     for (const [row, name] of [[claude, "Claude"], [codex, "Codex"]] as const) {
       expect(row.querySelector("[data-sign-in]")).toBeNull();
-      expect(nameRow(row).textContent).toBe(`${name}${cancel}`);
-      expect(row.querySelector("a")?.textContent).toBe(locale === "en" ? "Open Again" : "다시 열기");
-      expect(row.textContent).not.toContain(locale === "en" ? "Sign in with your browser" : "브라우저로 로그인하세요");
+      expect(row.textContent).toBe(`${name}${openAgain}${cancel}`);
+      expect(nameRow(row).textContent).toBe(`${name}${openAgain}${cancel}`);
+      expect(nameRow(row).querySelector("a")?.textContent).toBe(openAgain);
     }
     signedIn = true;
     await advance(2000);
     expect(nameRow(claude).textContent).toBe(`Claude${locale === "en" ? "Connected" : "연결됨"}`);
-    expect(nameRow(codex).textContent).toBe(`Codex${cancel}`);
+    expect(nameRow(codex).textContent).toBe(`Codex${openAgain}${cancel}`);
   });
 
   it("keeps the browser code form under the signing-in row, not inside it", async () => {
@@ -487,7 +488,7 @@ describe("first engine connection", () => {
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const claude = host.querySelector('[data-engine-connect="claude"]')!;
     await press(claude);
-    expect(nameRow(claude).textContent).toBe("ClaudeCancel");
+    expect(nameRow(claude).textContent).toBe("ClaudeOpen AgainCancel");
     expect(claude.querySelector("form")!.parentElement).toBe(nameRow(claude).parentElement);
   });
 
