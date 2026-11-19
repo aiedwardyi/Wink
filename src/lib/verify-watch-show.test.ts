@@ -159,7 +159,7 @@ it("derives the same positions from the clock with 8 ms and 16 ms frames", () =>
 
 it("redraws during a glide before a thing changes the UI", () => {
   const show = replay(result(0, 0, 0), result(2000, 1000, 0), end(2100));
-  toClock(show, 1300);
+  toClock(show, 200);
   const { version, ui } = show;
   expect(show.advance(16)).toBe(true);
   expect(show.version).toBeGreaterThan(version);
@@ -608,6 +608,20 @@ it("never lands two cursors on the same spot when checkers share boxes", () => {
     const landed = swarm(show).filter(c => show.clock >= c.at + c.duration && c.to.y >= 0).map(c => c.to);
     landed.forEach((p, i) => landed.slice(i + 1).forEach(q => expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(20)));
   }
+});
+
+it("never points a cursor back at a spot it just pointed at when few are in view", () => {
+  const show = replay(frame(0), ...[0, 1, 2].flatMap(i => [result(i, 100 + i * 300, 100), result(10 + i, 100 + i * 300, 100, { checker: "FIT" })]), end(40));
+  const targets = new Map<string, Array<{ x: number; y: number }>>(), seen = new Set<string>();
+  while (show.phase === "play") {
+    show.advance(16);
+    for (const [id, c] of show.cursors) {
+      if (show.clock < c.at + c.duration || seen.has(`${id}@${c.at}`) || c.to.y < 0 || c.to.y > 720) continue;
+      seen.add(`${id}@${c.at}`);
+      targets.set(id, [...targets.get(id) ?? [], c.to]);
+    }
+  }
+  for (const list of targets.values()) list.forEach((p, i) => expect(list.slice(Math.max(0, i - 4), i).filter(q => Math.hypot(p.x - q.x, p.y - q.y) < 12)).toEqual([]));
 });
 
 it("labels only a checker's own cursor, never its spares", () => {

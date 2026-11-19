@@ -22,6 +22,7 @@ const CURSOR_ALONG = [0, 0.6, 0.3];
 const CURSOR_MAX = 6;
 const CURSOR_EXTRA = 3;
 const CURSOR_ROOM = 4;
+const CURSOR_FRESH = 4;
 
 type Row = Record<string, unknown> & { result?: unknown; box: number[] | null };
 
@@ -117,7 +118,7 @@ const nearest = (list: Stored[], y: number) => list.reduce((best, f) => Math.abs
 interface Spot { x: number; y: number; w: number; thing: number; top: number | null; visits: number }
 
 function spotsOf(things: Thing[], [w, h]: readonly number[]) {
-  const spots = new Map<string, Map<string, Spot>>();
+  const spots = new Map<string, Map<string, Spot>>(), places = new Map<string, Spot>();
   things.forEach((thing, i) => {
     for (const row of thing.rows) {
       if (row.result === "skip") continue;
@@ -125,7 +126,10 @@ function spotsOf(things: Thing[], [w, h]: readonly number[]) {
       spots.set(checker, own);
       if (!box) continue;
       const x = box[0]! + Math.min(box[2]! * 0.3, 12), y = box[1]! + Math.min(box[3]! * 0.6, 10);
-      own.set(`${x},${y}`, { x, y, w: box[2]!, thing: i, top: row.pin ? typeof row.mscroll === "number" ? row.mscroll : 0 : null, visits: 0 });
+      // Checkers that share a box share its spot, so a cursor that switches checkers never comes back to a place it just pointed at.
+      const key = `${x},${y}`, spot = places.get(key) ?? { x, y, w: box[2]!, thing: i, top: row.pin ? typeof row.mscroll === "number" ? row.mscroll : 0 : null, visits: 0 };
+      places.set(key, spot);
+      own.set(key, spot);
     }
   });
   // A check with no box looked at the page as a whole.
@@ -148,7 +152,7 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
   // A spare cursor needs boxes of its own to visit, so a check with no box (or a few) lends none.
   const spare = Math.min(CURSOR_EXTRA, CURSOR_MAX - lanes.length, Math.floor(richest.n / CURSOR_ROOM));
   for (let extra = 1; extra <= spare; extra++) lanes.push({ id: `+${extra}`, checker: richest.checker, extra });
-  const now = new Map<string, { x: number; y: number }>(), arrived = new Map<string, number>(), last = new Map<string, Spot>();
+  const now = new Map<string, { x: number; y: number }>(), arrived = new Map<string, number>(), last = new Map<string, Spot>(), recent = new Map<string, Spot[]>();
   const aim = (lane: Lane, at: number) => {
     const top = scrollAt(at), lit = slot ? Math.floor(at / slot) : 0, others = [...now].filter(([id]) => id !== lane.id).map(([, p]) => p), from = now.get(lane.id);
     if (lane.extra) {
@@ -156,9 +160,11 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
       const pick = [...spots.keys()].sort((a, b) => fresh(b) - fresh(a))[0]!;
       if (!fresh(lane.checker) && fresh(pick)) lane.checker = pick;
     }
-    let best: { spot: Spot; x: number; y: number; score: number } | null = null;
+    let best: { spot: Spot; x: number; y: number; score: number } | null = null, held = false;
     for (const spot of spots.get(lane.checker)!) {
       if (!shown(spot, top) || (lane.extra && !spot.w)) continue;
+      // A spot it pointed at a moment ago is no news: it rests on its last one instead of looping over the same few.
+      if (recent.get(lane.id)?.includes(spot)) { held = true; continue; }
       const y = spot.y - (spot.top ?? top);
       const x = spot.x + Math.max(0, spot.w - 30) * CURSOR_ALONG[spot.visits % CURSOR_ALONG.length]!;
       const gap = Math.min(Infinity, ...others.map(p => Math.hypot(p.x - x, p.y - y)));
@@ -167,14 +173,20 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
       const score = (gap < CURSOR_GAP ? 1e6 - gap : 0) + spot.visits * 1000 + Math.abs(spot.thing - lit) + far * 10;
       if (!best || score < best.score) best = { spot, x, y, score };
     }
-    if (best) { best.spot.visits++; last.set(lane.id, best.spot); return { x: best.x, y: best.y }; }
+    if (best) {
+      best.spot.visits++;
+      last.set(lane.id, best.spot);
+      recent.set(lane.id, [...recent.get(lane.id) ?? [], best.spot].slice(-CURSOR_FRESH));
+      return { x: best.x, y: best.y };
+    }
+    if (held && last.has(lane.id) && shown(last.get(lane.id)!, top)) return null;
     // Nothing free of its own in this view: it waits just off the page, on the side its last check went.
     const gone = last.get(lane.id) ?? spots.get(lane.checker)![0]!;
     return { x: gone.x, y: gone.y - (gone.top ?? top) < 0 ? -40 : h + 8 };
   };
   const cursor = (lane: Lane, fields: Pick<Cursor, "from" | "to" | "at" | "duration">): Cursor => ({ checker: lane.checker, tile, ...(lane.extra ? { extra: lane.extra } : {}), ...fields });
   for (const lane of lanes) {
-    const to = aim(lane, 0);
+    const to = aim(lane, 0)!;
     now.set(lane.id, to);
     arrived.set(lane.id, 0);
     route.push(cursor(lane, { from: to, to, at: 0, duration: 0 }));
@@ -184,6 +196,7 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
   for (let turn = 1; lead + turn * step < play + CURSOR_MS; turn++) {
     const lane = lanes[(turn - 1) % lanes.length]!, due = lead + turn * step, from = now.get(lane.id)!;
     const free = due - (CURSOR_MS - CURSOR_REST_MS), at = Math.max(arrived.get(lane.id)!, turn <= lanes.length ? Math.min(free, CURSOR_REST_MS) : free), to = aim(lane, due);
+    if (!to) continue;
     now.set(lane.id, to);
     arrived.set(lane.id, due);
     route.push(cursor(lane, { from, to, at, duration: due - at }));

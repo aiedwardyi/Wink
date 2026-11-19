@@ -71,9 +71,12 @@ export class VerifyDocShow {
     const body = length - compare, room = Math.min(body, 3 * CURSOR_MS);
     // A check answered from cache took no time: its chunks get the whole show.
     const at = (run: number) => last > first ? Math.max(0, Math.min(run, last) - first) / (last - first) * body : 0;
-    for (const c of chunks.values()) {
-      c.s = Math.min(at(c.start), body - room);
-      c.e = last > first ? Math.max(at(c.done), c.s + room) : body;
+    // The run read chunks side by side; the show reads them top to bottom, one after another, so the readers and the view only move down.
+    const lines = [...chunks.values()].reduce((n, c) => n + c.to - c.from + 1, 0);
+    let before = 0;
+    for (const c of [...chunks.values()].sort((x, y) => x.from - y.from)) {
+      c.s = Math.min(before / lines * body, body - room);
+      c.e = Math.max((before += c.to - c.from + 1) / lines * body, c.s + room);
     }
     const found = new Map<string, VerifyReplayMark[]>(), merged: VerifyReplayMark[] = [];
     for (const mark of marks) {

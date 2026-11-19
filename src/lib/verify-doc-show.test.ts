@@ -38,6 +38,14 @@ it("plays a 150-line, four-chunk replay in about 5 s", () => {
   expect(length).toBeLessThanOrEqual(5_300);
 });
 
+it("reads a replay's chunks top to bottom, one after another, though the run read them side by side", () => {
+  const show = new VerifyDocShow(false), opened = new Map<number, number>();
+  show.plan([text(150), band(4, 1, 40, "start"), band(5, 41, 80, "start"), band(6, 81, 120, "start"), band(9_000, 1, 40, "done"), band(9_001, 121, 150, "start"), band(11_000, 41, 80, "done"), band(12_500, 81, 120, "done"), band(16_000, 121, 150, "done")], 19_000, false);
+  play(show, (_, open) => { for (const from of open.keys()) if (!opened.has(from)) opened.set(from, show.clock); });
+  const at = [1, 41, 81, 121].map(from => opened.get(from)!);
+  at.slice(1).forEach((ms, i) => expect(ms - at[i]!).toBeGreaterThanOrEqual(600));
+});
+
 it("glides each cursor quickly and rests only on a quote it marked", () => {
   const show = new VerifyDocShow(false), last = new Map<string, { end: number; quote: boolean }>();
   let reading = 0, quote = 0;
