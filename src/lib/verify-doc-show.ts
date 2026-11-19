@@ -256,7 +256,8 @@ export class VerifyDocShow {
     if (this.sweep.length && !band.compare) {
       // Lands where the front will be on time, even when this turn runs late.
       let line = Math.min(this.lines.length, Math.ceil(this.front(at + duration)! + lane.i * SPREAD));
-      while (line < this.lines.length && !this.lines[line - 1]?.trim()) line++;
+      // A reader reads the first text in its own rows; past a long blank stretch it stays on its row, with the front.
+      line = Array.from({ length: SPREAD }, (_, k) => line + k).find(n => n <= this.lines.length && this.lines[n - 1]?.trim()) ?? line;
       return this.point(band, lane, { line, along: turn % 2 ? READ : 0, duration: Math.max(0, at + duration - this.clock), ride: true });
     }
     if (band.compare) {

@@ -233,6 +233,7 @@ export function runHiddenVerify(input) {
           for (const reason of checked.notChecked) notChecked.add(reason);
           for (const row of checked.details ?? []) details.push(decorate(row));
           looked.push({ rule, data, candidates, decorate, remaining: [...checked.problems], left: candidates.length });
+          input.onTiming?.("first-check", Date.now());
         } catch (error) {
           if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
           notChecked.add(`${rule.label} (${tile})`);
@@ -277,7 +278,6 @@ export function runHiddenVerify(input) {
       }
       flushChecks(); casts[tile]?.readerStop();
       if (tile === "desktop" && looked.some(look => look.rule === linksRule)) emit({ kind: "part", part: "links" });
-      if (looked.length) input.onTiming?.("first-check", Date.now());
       await interact(cdp, tile);
       const data = { images: [] };
       await pageErrors(data, tiles[i], blockedGuard(blocked.filter(row => !hmr.has(row.url))).scripts || guard.scripts);

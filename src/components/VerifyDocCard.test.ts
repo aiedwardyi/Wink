@@ -290,11 +290,11 @@ it.each([0, 32])("keeps cursor visibility exceptions narrow with a %i ms animati
   await act(async () => root.unmount());
 });
 
-it("skims a 100-page replay: the view sweeps down at an even pace and the readers ride inside it", async () => {
+it.each([0, 30])("skims a 100-page replay with %i blank lines in a row: the view sweeps down at an even pace and the readers ride inside it", async blank => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "requestAnimationFrame", "cancelAnimationFrame"] });
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
-  const LINE = 24, VIEW = 900, n = 3_000, lines = Array.from({ length: n }, (_, i) => `Line ${i + 1} of a hundred-page script.`);
+  const LINE = 24, VIEW = 900, n = 3_000, lines = Array.from({ length: n }, (_, i) => i >= 1_500 && i < 1_500 + blank ? "" : `Line ${i + 1} of a hundred-page script.`);
   const bytes = [chunk(0, { runId: "run-123456", site: "SCRIPT.md", page: "" }), chunk(2, { ms: 0, kind: "doc-text", lines, pageStarts: [] })];
   // The run reads three chunks side by side, like server/verify-doc.ts.
   for (let c = 0; c < 10; c++) {
