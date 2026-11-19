@@ -11,13 +11,15 @@ import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 afterEach(() => { applyLocale("en"); vi.unstubAllGlobals(); });
 const card = (patch: Partial<VerifyCardData> = {}): VerifyCardData => ({ v: 1, runId: "run-123456", owner: "bot", site: "index.html", status: "completed", mode: "auto", decisionNonce: "nonce", offeredAt: 1000, startedAt: 1000, endedAt: 13000, replay: ["run-elsewhere"], ...patch });
 const doc = { pages: 1, lines: 4, chunks: [1, 1] as [number, number], by: {}, findings: [], findingTotal: 0 };
-const kept = (...runs: string[]) => vi.stubGlobal("fetch", vi.fn(async (path: string) => String(path).endsWith("/replays") ? Response.json({ runs }) : new Response(null, { status: 404 })));
+const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, statusText: "", json: async () => body });
+const kept = (...runs: string[]) => vi.stubGlobal("fetch", vi.fn(async (path: string) => String(path).endsWith("/replays") ? reply({ runs }) : reply({}, 404)));
+const asked = () => (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([path]) => String(path).endsWith("/replays")).length;
 const mount = async (...nodes: ReturnType<typeof createElement>[]) => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.stubGlobal("matchMedia", (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }));
   const host = document.body.appendChild(document.createElement("div")), root = createRoot(host);
   await act(async () => root.render(createElement("div", null, ...nodes)));
-  await act(async () => { await new Promise(done => setTimeout(done, 20)); });
+  await act(async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); });
   return { host, close: async () => { await act(async () => root.unmount()); host.remove(); } };
 };
 
@@ -67,6 +69,6 @@ it("keeps Watch when this PC could not say which replays it has", async () => {
 it("asks once per chat for every card it shows", async () => {
   kept("run-here03");
   const view = await mount(...["a", "b", "c"].map(runId => createElement(VerifyCard, { card: card({ runId: `run-${runId}00000`, replay: ["run-here03"] }), threadId: "thread-batch" })));
-  expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([path]) => String(path).endsWith("/replays"))).toHaveLength(1);
+  expect(asked()).toBe(1);
   await view.close();
 });
