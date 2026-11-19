@@ -8,6 +8,9 @@ const MAX_TOKENS = 64;
 // coarse file systems stamp to the second or two
 const CLOCK_SLACK_MS = 2_000;
 const TOKEN = /"([^"\n]+)"|'([^'\n]+)'|([^\s"'|;&<>()]+)/g;
+const CHANGE_DIR = /^(?:cd|chdir|sl|set-location)$/i;
+const PUSH_DIR = /^(?:pushd|push-location)$/i;
+const POP_DIR = /^(?:popd|pop-location)$/i;
 
 const statOf = (path: string): Stats | undefined => {
   try {
@@ -24,35 +27,45 @@ const changed = (stat: Stats, after: number) => Math.max(stat.mtimeMs, stat.birt
 export function shellMade(command: string, cwd: string, since: number): string[] {
   const after = since - CLOCK_SLACK_MS;
   const made = new Set<string>();
-  // cd, pushd and popd are not replayed: a path is read against the newest folder named before it, then older ones, and kept at the first place something changed
-  const bases = [cwd];
-  const found = new Map<string, boolean>();
-  const folders = new Set<string>();
+  const seen = new Set<string>();
+  const locations: string[] = [];
+  let here = cwd;
+  let change: "set" | "push" | undefined;
+  let end = 0;
   for (const match of [...command.matchAll(TOKEN)].slice(0, MAX_TOKENS)) {
+    const first = end === 0 || /[;&|\n]/.test(command.slice(end, match.index));
+    end = match.index + match[0].length;
     const token = match[1] ?? match[2] ?? match[3]!;
+    if (first) {
+      change = undefined;
+      if (POP_DIR.test(token)) {
+        here = locations.pop() ?? here;
+        continue;
+      }
+      if (CHANGE_DIR.test(token) || PUSH_DIR.test(token)) {
+        change = PUSH_DIR.test(token) ? "push" : "set";
+        continue;
+      }
+    }
     if (!token || token.startsWith("-") || /[*?]/.test(token) || /^\w{2,}:\/\//.test(token) || isNetworkPath(token)) continue;
-    for (const path of new Set(bases.map((base) => resolve(base, token)).reverse())) {
-      if (isNetworkPath(path)) continue;
-      if (!found.has(path)) {
-        const stat = statOf(path);
-        let refs: string[] = [];
-        if (stat?.isFile() && changed(stat, after)) refs = [path];
-        if (stat?.isDirectory()) {
-          folders.add(path);
-          try {
-            refs = listed(path, stat, after);
-          } catch {}
-        }
-        for (const ref of refs) made.add(ref);
-        found.set(path, refs.length > 0);
+    const path = resolve(here, token);
+    if (isNetworkPath(path)) continue;
+    if (!change && seen.has(path)) continue;
+    const stat = statOf(path);
+    if (change) {
+      if (stat?.isDirectory()) {
+        if (change === "push") locations.push(here);
+        here = path;
       }
-      // a folder named again is the newest again, so a later relative path reads against the folder current at that point
-      if (folders.has(path)) {
-        const at = bases.indexOf(path);
-        if (at >= 0) bases.splice(at, 1);
-        if (bases.length <= MAX_TOKENS) bases.push(path);
-      }
-      if (found.get(path)) break;
+      change = undefined;
+    }
+    if (seen.has(path)) continue;
+    seen.add(path);
+    if (stat?.isFile() && changed(stat, after)) made.add(path);
+    if (stat?.isDirectory()) {
+      try {
+        for (const ref of listed(path, stat, after)) made.add(ref);
+      } catch {}
     }
   }
   return [...made];

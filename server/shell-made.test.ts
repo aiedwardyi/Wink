@@ -97,7 +97,13 @@ it("keeps an install or a repo the command made as its folder", () => {
   expect(shellMade(`npm install --prefix "${shots}"`, cwd, since).sort()).toEqual([join(shots, ".git"), join(shots, "a.png"), join(shots, "node_modules")].sort());
 });
 
-it("reads a repeated relative destination against the folder the command went back to", () => {
+const twoDestinations = [
+  ["revisits an absolute folder", (one: string, two: string) => [`Set-Location -Path '${one}'; Set-Location -Path '${two}'; Set-Location -Path '${one}'`, `Set-Location -Path '${two}'`]],
+  ["revisits a relative folder", () => ["Set-Location -Path 'one'; Set-Location -Path '../two'; Set-Location -Path '../one'", "Set-Location -Path '../two'"]],
+  ["lists the previous folder", (one: string, two: string) => [`Set-Location -Path '${one}'`, `Set-Location -Path '${two}'; Get-ChildItem -LiteralPath '${one}' | Out-Null`]],
+] as const;
+
+it.each(twoDestinations)("reads each relative destination in the active folder when the command %s", (_, locations) => {
   const { cwd } = copied(0);
   const since = Date.now() + 60_000;
   const names = Array.from({ length: 11 }, (_, index) => `${String(index + 1).padStart(2, "0")}.png`);
@@ -112,11 +118,9 @@ it("reads a repeated relative destination against the folder the command went ba
   }
   const [one, two] = [join(cwd, "one"), join(cwd, "two")];
   const copy = "Copy-Item -Path '../source/*.png' -Destination 'real-shots'";
-  for (const [first, second] of [[one, two], ["one", "../two"]]) {
-    const command = `Set-Location -Path '${first}'; Set-Location -Path '${second}'; Set-Location -Path '${first === one ? one : "../one"}'; ${copy}; Set-Location -Path '${second}'; ${copy}`;
-    const found = shellMade(command, cwd, since);
-    expect(found.slice().sort()).toEqual(made.slice().sort());
-    const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
-    for (const folder of ["one", "two"]) expect(memory).toContain(`${join(folder, "real-shots")} 11 (`);
-  }
+  const [first, second] = locations(one, two);
+  const found = shellMade(`${first}; ${copy}; ${second}; ${copy}`, cwd, since);
+  expect(found.slice().sort()).toEqual(made.slice().sort());
+  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  for (const folder of ["one", "two"]) expect(memory).toContain(`${join(folder, "real-shots")} 11 (`);
 });
