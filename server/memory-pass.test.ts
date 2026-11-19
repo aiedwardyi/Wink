@@ -24,6 +24,7 @@ import {
 import * as atomic from "./atomic.ts";
 import { memoryNotesEnabled } from "./config.ts";
 import { memoryNotice } from "./memory-health.ts";
+import { createMemoryLookup } from "./memory-lookup.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { replyTurns } from "./pick-sources.ts";
 import type { Message, StoreChange } from "./store.ts";
@@ -549,6 +550,43 @@ describe("memory pass", () => {
     expect(overflow()).toBe(`${moves}- Home city: Toronto (noted 2026-10-15)\n- Lives in Toronto (noted 2026-10-15)\n`);
   });
 
+  it("saves a return to a multiword city after a one-word city as the latest", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    for (const city of ["New York", "Boston", "New York"]) {
+      generate.mockResolvedValue(facts([`Lives in ${city}`, `i now live in ${city}`]));
+      say("t1", `i now live in ${city}`);
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- Lives in"))).toEqual([
+      "- Lives in New York (noted 2026-10-15)",
+      "- Lives in Boston (noted 2026-10-15)",
+      "- Lives in New York (noted 2026-10-15)",
+    ]);
+  });
+
+  it("knows a repeated preference that shares its first word with a later one, so recall keeps the overflow topic", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n- memory/auto-notes-overflow.md: prior pointer\n${"- note\n".repeat(197)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const fillers = Array.from({ length: 120 }, (_, i) => `- filler kettle${i} harbor${i} lantern${i}\n`).join("");
+    // eight bytes under the lookup budget, so any growth drops the whole topic from recall
+    const notes = `# Notebook\n\n- Likes tea (noted 2026-10-01)\n- Likes coffee (noted 2026-10-02)\n- COBALT WALRUS: invoice goes to the north office\n${fillers}`
+      .padEnd(2 * 1024 * 1024 - Buffer.byteLength(memoryFileRaw("bot-t1")) - 8, " ");
+    writeFileSync(overflowPath(), notes);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    const recalled = async (cursor: string) => {
+      await lookup.refresh("bot-t1");
+      return lookup.take("bot-t1", "t1", cursor, "cobalt walrus").join("").includes("north office");
+    };
+    expect(await recalled("before")).toBe(true);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()!.split("\n").filter((row) => row.startsWith("- Likes"))).toEqual(["- Likes tea (noted 2026-10-01)", "- Likes coffee (noted 2026-10-02)"]);
+    expect(Buffer.byteLength(overflow()!)).toBe(Buffer.byteLength(notes));
+    expect(await recalled("after")).toBe(true);
+  });
+
   it("keeps the count of notes an older version lost when a new note overflows", async () => {
     pass.dispose();
     writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ threads: {}, dropped: { "bot-t1": { dropped: 2, since: NOW - 2 * 86_400_000 } } }));
@@ -598,17 +636,19 @@ describe("memory pass", () => {
   describe("a correction in a MEMORY.md at its limit, while another writer edits it", () => {
     const old = "- Home city: Toronto (noted 2026-10-01)";
     const full = `# Memory\n${old}\n${"- note\n".repeat(197)}`;
-    // lands after the revision check, just before the corrected file is written
-    const editDuringSwap = (script: string) => {
+    // lands after the revision check, just before the corrected file is written; `then` lands just after it
+    const editDuringSwap = (script: string, then?: string) => {
       const path = join(workspaceDir("bot-t1"), "MEMORY.md");
       const write = atomic.writeFileAtomic;
       const edit = { landed: false };
       vi.spyOn(atomic, "writeFileAtomic").mockImplementation((target, ...args) => {
-        if (!edit.landed && target === path) {
+        const first = !edit.landed && target === path;
+        if (first) {
           execFileSync(process.execPath, ["-e", script, path], { windowsHide: true });
           edit.landed = true;
         }
         write(target, ...args);
+        if (first && then) execFileSync(process.execPath, ["-e", then, path], { windowsHide: true });
       });
       return edit;
     };
@@ -646,6 +686,29 @@ describe("memory pass", () => {
       expect(after).toContain("\n- edited by hand\n");
       expect(after).toContain("- Home city: Vancouver (noted 2026-10-15)");
       expect(after).not.toContain("Toronto");
+      expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(chips("t1")).toHaveLength(1);
+    });
+
+    it("keeps a line another writer appends once the corrected file has landed, and parks the line changed in place", async () => {
+      writeMemoryFile("bot-t1", full);
+      const edit = editDuringSwap(
+        "const fs = require('node:fs'); const p = process.argv[1]; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace('- note\\n', '- Cobalt hand edit\\n'))",
+        "require('node:fs').appendFileSync(process.argv[1], '\\n- Indigo after install\\n')",
+      );
+      await correct();
+      await vi.advanceTimersByTimeAsync(3 * MINUTE);
+      await pass.idle();
+      vi.mocked(atomic.writeFileAtomic).mockRestore();
+      expect(edit.landed).toBe(true);
+      const after = memoryFileRaw("bot-t1");
+      expect(after).toContain("\n- Indigo after install\n");
+      expect(after).toContain("- Home city: Vancouver (noted 2026-10-15)");
+      const memory = dirname(overflowPath());
+      const parked = fs.readdirSync(memory).filter((name) => name.startsWith("MEMORY.conflict-")).map((name) => readFileSync(join(memory, name), "utf8"));
+      expect(parked).toHaveLength(1);
+      expect(parked[0]).toContain("\n- Cobalt hand edit\n");
       expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
       expect(generate).toHaveBeenCalledTimes(1);
       expect(chips("t1")).toHaveLength(1);

@@ -278,11 +278,15 @@ function liveNotes(text: string): string[] {
   return notes;
 }
 
-/** What a later note on the same thing shares: the words before a colon, or all but the last word. */
+const LINK_WORDS = new Set(["in", "at", "from", "is", "are"]);
+
+/** What a later note on the same thing shares: the words before a colon or through a link word ("Lives in", "Works at"), else the whole note. */
 function noteTopic(line: string): string {
   const colon = line.indexOf(":");
   if (colon > 0) return `${words(line.slice(0, colon)).join(" ")}:`;
-  return words(line).slice(0, -1).join(" ") || squash(line);
+  const all = words(line);
+  const link = all.findIndex((word, index) => index > 0 && index < all.length - 1 && LINK_WORDS.has(word));
+  return (link < 0 ? all : all.slice(0, link + 1)).join(" ") || squash(line);
 }
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */

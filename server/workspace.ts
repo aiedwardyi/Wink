@@ -156,8 +156,9 @@ export function writeMemoryFile(botId: string, text: string): void {
 /** Writes only while MEMORY.md is still at `baseRevision`, so an editor never
  * overwrites notes it has not seen. No base writes as before, for older clients.
  * A second name pins the file it checked: a line another writer appends before
- * the new text lands is carried over, and a file changed in place is handed
- * back as a conflict, so a save never erases an edit it did not see. */
+ * the new text lands is carried over, and a file changed in place goes back as
+ * a conflict while nothing has touched the new text, else is parked as a
+ * conflict copy, so a save never erases an edit it did not see. */
 export function saveMemoryFile(botId: string, text: string, baseRevision?: string) {
   const conflict = () => {
     const current = readMemoryFile(botId);
@@ -167,34 +168,61 @@ export function saveMemoryFile(botId: string, text: string, baseRevision?: strin
     writeMemoryFile(botId, text);
     return { conflict: false as const, ...readMemoryFile(botId) };
   };
+  // set aside where the prompt names it for the bot to merge, as memory sync parks a copy
+  const park = (late: string) =>
+    writeFileAtomic(join(workspaceDir(botId), "memory", `MEMORY.conflict-${memoryRevision(late).slice(0, 8)}.md`), late, { mode: 0o600 });
   if (baseRevision === undefined) return save();
   if (baseRevision !== readMemoryFile(botId).revision) return conflict();
   const path = join(ensureWorkspace(botId), "MEMORY.md");
+  const swap = swapPinned(path, text, (checked) => rawRevision(checked) === baseRevision);
+  // no file yet, or a volume without hard links: the check above is all there is
+  if (swap === null) return save();
+  if (!swap.landed) return conflict();
+  if (swap.late === undefined) return { conflict: false as const, ...readMemoryFile(botId) };
+  let back: Swap | null = null;
+  try {
+    // the other writer's whole file goes back, and the caller saves again on top of it
+    back = swapPinned(path, swap.late, (current) => current === text);
+  } catch {
+    /* a failed restore leaves the new file, and the old one is parked below */
+  }
+  if (back?.landed) {
+    if (back.late !== undefined) park(back.late);
+    return conflict();
+  }
+  // a writer changed the new file after it landed, so it stays
+  park(swap.late);
+  const current = readMemoryFile(botId);
+  return current.text.startsWith(text) ? { conflict: false as const, ...current } : conflict();
+}
+
+type Swap = { landed: boolean; late?: string };
+
+/** Puts `next` at `path` while `holds` accepts the file there. A second name pins the file it replaces: a line
+ * another writer appends to it before `next` lands is carried over, and any other change comes back as `late`.
+ * Null when the file cannot be pinned. */
+function swapPinned(path: string, next: string, holds: (current: string) => boolean): Swap | null {
   const pin = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     linkSync(path, pin);
   } catch {
-    // no file yet, or a volume without hard links: the check above is all there is
-    return save();
+    return null;
   }
   try {
-    const checked = readFileSync(pin, "utf8");
-    if (rawRevision(checked) !== baseRevision) return conflict();
-    const saved = save();
+    const current = readFileSync(pin, "utf8");
+    if (!holds(current)) return { landed: false };
+    writeFileAtomic(path, next, { mode: 0o600 });
     const late = readFileSync(pin, "utf8");
-    if (late === checked) return saved;
-    try {
-      if (late.startsWith(checked)) {
-        appendLines(path, late.slice(checked.length));
-        return { conflict: false as const, ...readMemoryFile(botId) };
+    if (late === current) return { landed: true };
+    if (late.startsWith(current)) {
+      try {
+        appendLines(path, late.slice(current.length));
+        return { landed: true };
+      } catch {
+        /* handed back whole, for the caller to keep */
       }
-      // the other writer's whole file goes back, and the caller saves again on top of it
-      writeFileAtomic(path, late, { mode: 0o600 });
-    } catch {
-      // set aside where the prompt names it for the bot to merge, as memory sync parks a copy
-      writeFileAtomic(join(workspaceDir(botId), "memory", `MEMORY.conflict-${memoryRevision(late).slice(0, 8)}.md`), late, { mode: 0o600 });
     }
-    return conflict();
+    return { landed: true, late };
   } finally {
     try {
       rmSync(pin, { force: true });
