@@ -141,6 +141,11 @@ describe("inSendOrder", () => {
     expect(inSendOrder(pair)).toBe(pair);
   });
 
+  it("draws two lines stamped alike in the order sent, whichever reached the server first", () => {
+    const messages = [row("peer", 2_000), line("second", 2_001, 2_100, { sendSeq: 2 }), line("first", 2_001, 2_200, { sendSeq: 1 })];
+    expect(ids(inSendOrder(messages))).toEqual(["peer", "first", "second"]);
+  });
+
   it("hands back a heavy chat untouched when every line is in place", () => {
     const messages = Array.from({ length: 5_000 }, (_, i) => i % 2 ? row(`r${i}`, i * 10) : line(`u${i}`, i * 10 - 5, i * 10));
     expect(inSendOrder(messages)).toBe(messages);
@@ -151,6 +156,8 @@ describe("inSendOrder", () => {
 describe("sendClock", () => {
   it("never stamps a send older than the newest row on screen", () => {
     expect(sendClock([{ at: 5_000 }], 4_000)).toBe(5_001);
+    expect(sendClock([{ at: 5_000, actedAt: 9_000 }], 4_000)).toBe(9_001);
+    expect(sendClock([{ at: 5_000, actedAt: 9_000, waited: true }], 4_000)).toBe(5_001);
     expect(sendClock([{ at: 3_000 }], 4_000)).toBe(4_000);
     expect(sendClock([], 4_000)).toBe(4_000);
   });

@@ -13,6 +13,7 @@ export type AcceptedSend = {
   kind: AcceptedSendKind;
   text: string;
   at?: number;
+  sendSeq?: number;
   /** Sent "after this turn": waits even on an engine that could steer it. */
   after?: boolean;
   replyToId?: string;
@@ -25,12 +26,12 @@ export type AcceptedSends = Record<string, AcceptedSend[]>;
 export function withAcceptedMessages(
   messages: Message[],
   accepted: readonly AcceptedSend[] = [],
-  pending: readonly { queueId: string; text: string; at?: number; sendId?: string; replyToId?: string }[] = [],
+  pending: readonly { queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; sendSeq?: number }[] = [],
 ): Message[] {
   if (!accepted.length && !pending.length) return messages;
   const seen = new Set(messages.flatMap((message) => [message.id, message.sendId, message.queueId]));
   const waiting = [
-    ...pending.filter((entry) => !entry.sendId || !seen.has(entry.sendId)).map((entry) => ({ sendId: entry.queueId, text: entry.text, at: entry.at, replyToId: entry.replyToId })),
+    ...pending.filter((entry) => !entry.sendId || !seen.has(entry.sendId)).map((entry) => ({ sendId: entry.queueId, text: entry.text, at: entry.at, replyToId: entry.replyToId, sendSeq: entry.sendSeq })),
     ...accepted.filter((entry) => !pending.some((held) => held.sendId === entry.sendId)),
   ];
   const added: Message[] = [];
@@ -45,6 +46,7 @@ export function withAcceptedMessages(
       text: entry.text,
       at: entry.at ?? 0,
       replyToId: entry.replyToId,
+      sendSeq: entry.sendSeq,
       placeholder: true,
     });
   }
@@ -61,7 +63,7 @@ export function inSendOrder(messages: Message[], queued?: ReadonlySet<string>): 
     if (sent === undefined) continue;
     const list = ordered ?? messages;
     let to = i;
-    while (to > 0 && landedAfter(list[to - 1]!, sent)) to--;
+    while (to > 0 && landedAfter(list[to - 1]!, sent, message.sendSeq)) to--;
     if (to === i) continue;
     ordered ??= messages.slice();
     ordered.splice(i, 1);
@@ -70,15 +72,22 @@ export function inSendOrder(messages: Message[], queued?: ReadonlySet<string>): 
   return ordered ?? messages;
 }
 
-// sendClock stamps a send past every row it saw, so a row in its millisecond landed after it; two sends keep their order
-function landedAfter(row: Message, sent: number): boolean {
+// sendClock stamps a send past every row it saw, so a row in its millisecond landed after it; two sends stamped alike keep the order sent
+function landedAfter(row: Message, sent: number, sendSeq = 0): boolean {
   const at = sentAt(row);
-  return at === undefined ? row.at >= sent : at > sent;
+  return at === undefined ? row.at >= sent : at > sent || (at === sent && (row.sendSeq ?? 0) > sendSeq);
 }
 
 function sentAt(message: Message): number | undefined {
   if (message.role !== "user" || !message.sendId || message.waited) return undefined;
   return (message.placeholder ? message.at : message.actedAt) || undefined;
+}
+
+/** One past every send this window knows: the server can stamp two lines alike, and this keeps them in the order sent. */
+export function nextSendSeq(...sends: readonly (readonly { sendSeq?: number }[] | undefined)[]): number {
+  let seq = 0;
+  for (const list of sends) for (const send of list ?? []) seq = Math.max(seq, send.sendSeq ?? 0);
+  return seq + 1;
 }
 
 /** Sends that run after the reply render below the turn; a steering engine reads an accepted send mid-turn. */

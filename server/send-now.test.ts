@@ -295,6 +295,16 @@ describe("a send the server holds", () => {
     expect(queue.queuedSteeredMessage(h.bot.id, h.bot.threadId, sendId)?.waited).toBe(waited);
   });
 
+  it("answers with the sent time it keeps, not the sender's clock", async () => {
+    const h = harness(vi.fn(async () => false));
+    const sendId = `send-now-${"fast".padEnd(16, "0")}`;
+    // this sender's clock runs a minute ahead
+    const receipt = await h.post({ text: "held", sendId, threadId: h.bot.threadId, actedAt: Date.now() + 60_000 });
+    const kept = queue.waitingSends()[h.bot.threadId]?.[0]?.at;
+    expect(kept).toBeLessThanOrEqual(Date.now());
+    expect(receipt.body).toMatchObject({ queued: true, actedAt: kept });
+  });
+
   it("keeps a promoted after-turn send marked as waited", async () => {
     const h = harness();
     const sendId = "send-now-waited000000000";
@@ -316,5 +326,16 @@ describe("a send while a row stamped ahead of this clock is newest", () => {
     const sent = steers ? receipt.body.message?.actedAt : queue.waitingSends()[h.bot.threadId]?.[0]?.at;
     expect(sent).toBe(actedAt);
     expect(sent).toBeGreaterThan(peer.at);
+  });
+
+  it.each([["held", false], ["steered", true]])("keeps two lines it stamps alike in the order sent when the second POST lands first (%s)", async (_name, steers) => {
+    const h = harness(vi.fn(async () => steers));
+    h.messages.push({ id: "peer", role: "bot", kind: "text", text: "peer", at: Date.now() + 60_000 } as Message);
+    const actedAt = sendClock(h.messages);
+    for (const [text, sendSeq] of [["second", 2], ["first", 1]] as const) {
+      await h.post({ text, sendId: `send-now-${text.padEnd(16, "0")}`, threadId: h.bot.threadId, actedAt, sendSeq });
+    }
+    const kept = steers ? h.messages.slice(1).map((message) => ({ text: message.text, at: message.actedAt, sendSeq: message.sendSeq })) : queue.waitingSends()[h.bot.threadId];
+    expect(kept).toMatchObject([{ text: "second", at: actedAt, sendSeq: 2 }, { text: "first", at: actedAt, sendSeq: 1 }]);
   });
 });

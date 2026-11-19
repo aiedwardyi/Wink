@@ -42,6 +42,7 @@ let store: ReturnType<typeof useStore>;
 let host: HTMLDivElement;
 let unmount: (() => Promise<void>) | undefined;
 const posts = new Map<string, (receipt: object) => void>();
+const bodies = new Map<string, { sendSeq?: number }>();
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -61,6 +62,7 @@ afterEach(async () => {
   await unmount?.();
   unmount = undefined;
   posts.clear();
+  bodies.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -84,8 +86,9 @@ async function mount(driverKind: string, queueing: boolean, messages: Message[],
       return Response.json({ bots: [{ ...teacher, messages, activeLeafId: messages.at(-1)?.id }], groups: [], computerControl: {}, queued: { t1: queued } });
     }
     if (String(url) === "/api/bots/b1/messages" && init?.method === "POST") {
-      const { sendId } = JSON.parse(String(init.body)) as { sendId: string };
-      return new Promise<Response>((resolve) => posts.set(sendId, (receipt) => resolve(Response.json(receipt, { status: 202 }))));
+      const body = JSON.parse(String(init.body)) as { sendId: string; sendSeq?: number };
+      bodies.set(body.sendId, body);
+      return new Promise<Response>((resolve) => posts.set(body.sendId, (receipt) => resolve(Response.json(receipt, { status: 202 }))));
     }
     return Response.json({}, { status: 404 });
   }));
@@ -225,6 +228,43 @@ describe("ChatView send order", () => {
 
     await unmount?.();
     await mount("claude", true, [...earlier, ...c.landed]);
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
+  });
+
+  it("keeps a held line where the server stamped it while this window's clock runs a minute ahead", async () => {
+    const earlier = history(2);
+    await mount("claude", true, earlier);
+    const c = chat(earlier);
+    c.name("L1", "s1", "q1");
+    c.name("R1", "r1");
+    // this window reads +60000 while the server stamps the held line and the reply by its own clock
+    await c.at(60_000, () => c.send("s1", "내 첫 줄"));
+    await c.at(60_200, () => answer("s1", { queued: true, threadId: "t1", queueId: "q1", actedAt: T0 }));
+    const final = await c.at(60_500, () => c.land({ id: "r1", text: "진행 중", at: T0 + 500 }));
+    expect(final).toEqual(["H", "L1", "R1"]);
+
+    await unmount?.();
+    await mount("claude", true, [...earlier, ...c.landed], [{ queueId: "q1", text: "내 첫 줄", sendId: "s1", at: T0 }]);
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
+  });
+
+  it("keeps two lines in the order sent when the second POST is answered first", async () => {
+    // a synced row stamped a minute ahead: the server stamps both lines just past it
+    const peer: Message = { id: "peer", role: "bot", kind: "text", text: "앞선 답", at: T0 + 60_000 };
+    await mount("claude", true, [peer]);
+    const c = chat([peer]);
+    c.name("A1", "s1", "q1");
+    c.name("A2", "s2", "q2");
+    await c.at(0, () => c.send("s1", "첫 답"));
+    await c.at(100, () => c.send("s2", "둘째 답"));
+    await c.at(300, () => answer("s2", { queued: true, threadId: "t1", queueId: "q2", actedAt: T0 + 60_001 }));
+    const final = await c.at(400, () => answer("s1", { queued: true, threadId: "t1", queueId: "q1", actedAt: T0 + 60_001 }));
+    expect(final).toEqual(["H", "A1", "A2"]);
+
+    await unmount?.();
+    // the server held the second POST first
+    const held = (sendId: string, queueId: string, text: string) => ({ queueId, text, sendId, at: T0 + 60_001, sendSeq: bodies.get(sendId)?.sendSeq });
+    await mount("claude", true, [peer], [held("s2", "q2", "둘째 답"), held("s1", "q1", "첫 답")]);
     expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
   });
 

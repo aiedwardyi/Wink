@@ -4970,6 +4970,7 @@ type StartTurnOptions = {
   call?: CallTag;
   answersCard?: string;
   actedAt?: number;
+  sendSeq?: number;
   waited?: boolean;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
@@ -5286,6 +5287,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           call: opts?.call,
           answersCard: opts?.answersCard,
           actedAt: opts?.actedAt,
+          sendSeq: opts?.sendSeq,
           waited: opts?.waited,
           from: opts?.peerSender,
           comm: opts?.peerComm,

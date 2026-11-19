@@ -91,7 +91,7 @@ describe("waiting sends across restart", () => {
     }]);
     const restarted = await boot();
     expect(restarted.queue.queuedSteeredMessage(bot.id, bot.threadId, "restart-send-000001")).toEqual({
-      id: receipt.id, text: "다음에 요약해 줘", replyToId: "reply",
+      id: receipt.id, text: "다음에 요약해 줘", replyToId: "reply", ...(after ? { waited: true } : {}),
     });
   });
 
@@ -127,16 +127,24 @@ describe("waiting sends across restart", () => {
     expect(savedQueue()).toEqual([]);
   });
 
-  it("keeps an after-turn send saved before waited existed waiting for the turn", async () => {
-    const { queue, store } = await boot();
+  it.each([["an after-turn send", true], ["a plain send an engine could not steer", false]])("keeps %s saved before waited existed waiting for the turn", async (_name, after) => {
+    const { store } = await boot();
     const bot = store.createBot();
-    // what the previous version saved: after-turn mode, no waited mark
-    queue.queueSteeredMessage(bot.id, bot.threadId, "다음에", { after: true, sendId: "restart-send-000003", actedAt: 1_000 });
-    expect(savedQueue()[0].items[0].waited).toBeUndefined();
+    // what the previous version saved: no waited mark
+    writeFileSync(join(dir, "queued-sends.json"), JSON.stringify([{ botId: bot.id, threadId: bot.threadId, items: [{ messageId: "legacy-1", seq: 1, text: "다음에", prompt: "다음에", sendId: "restart-send-000003", after, actedAt: 1_000 }] }]));
     const restarted = await boot();
     expect(restarted.queue.waitingSends()[bot.threadId]).toMatchObject([{ text: "다음에", at: 1_000, waited: true }]);
     restarted.queue.drainSteeredMessages(restarted.store, vi.fn());
     expect(restarted.store.messagesFor(bot.threadId).filter((message) => message.role === "user")).toMatchObject([{ text: "다음에", actedAt: 1_000, waited: true }]);
+  });
+
+  it("keeps a plain held send's sent time, send order and place across a restart", async () => {
+    const { queue, store } = await boot();
+    const bot = store.createBot();
+    queue.queueSteeredMessage(bot.id, bot.threadId, "지금", { sendId: "restart-send-000004", actedAt: 1_000, sendSeq: 3 });
+    const [held] = (await boot()).queue.waitingSends()[bot.threadId]!;
+    expect(held).toMatchObject({ at: 1_000, sendSeq: 3 });
+    expect(held!.waited).toBeUndefined();
   });
 
   it("keeps per-thread FIFO and sequence marks across threads and another enqueue", async () => {

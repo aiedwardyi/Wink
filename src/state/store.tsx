@@ -62,6 +62,7 @@ import {
   dropIdleAcceptedThinking,
   forgetAcceptedSend,
   hasAcceptedThinking,
+  nextSendSeq,
   receiptRejectsAcceptedSend,
   rememberAcceptedSend,
   sendClock,
@@ -190,6 +191,17 @@ function consumeFocus(state: AppState, threadId?: string): AppState {
   const focus = state.focusMessage;
   if (!focus || focus.consumed || (threadId !== undefined && focus.threadId !== threadId)) return state;
   return { ...state, focusMessage: { ...focus, consumed: true } };
+}
+
+// one sent time and send order for the line on screen and its POST, so a reload draws it where it was drawn
+function stampSend(state: AppState, send: Extract<Action, { type: "send" }>): Action {
+  const bot = state.bots.find((candidate) => candidate.id === send.botId);
+  const threadId = send.threadId ?? bot?.threadId ?? "";
+  return {
+    ...send,
+    actedAt: send.actedAt ?? sendClock(bot?.messages),
+    sendSeq: send.sendSeq ?? nextSendSeq(bot?.messages, state.acceptedSends[threadId], state.pendingQueued[threadId]),
+  };
 }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -772,7 +784,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         pendingQueued: {
           ...state.pendingQueued,
-          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason, waited: action.waited }],
+          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason, waited: action.waited, sendSeq: action.sendSeq }],
         },
       };
     }
@@ -819,6 +831,7 @@ export function reducer(state: AppState, action: Action): AppState {
           kind: paint.kind,
           text: action.text,
           at: action.actedAt ?? sendClock(bot.messages),
+          sendSeq: action.sendSeq,
           after: action.after,
         }),
       };
@@ -1399,10 +1412,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const wrapped: React.Dispatch<Action> = (dispatched) => {
-      // one sent time for the line on screen and its POST, so a reload draws it where it was drawn
-      const rawAction: Action = dispatched.type === "send" && dispatched.actedAt === undefined
-        ? { ...dispatched, actedAt: sendClock(stateRef.current.bots.find((bot) => bot.id === dispatched.botId)?.messages) }
-        : dispatched;
+      const rawAction: Action = dispatched.type === "send" ? stampSend(stateRef.current, dispatched) : dispatched;
       const action =
         (rawAction.type === "send" || rawAction.type === "sendGroup") && !rawAction.sendId
           ? { ...rawAction, sendId: crypto.randomUUID() }
@@ -1514,6 +1524,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 deliver: action.after ? "after" : undefined,
                 queueId: action.queueId,
                 actedAt,
+                sendSeq: action.sendSeq,
                 locale: activeLocale(),
               }),
             });
@@ -1557,8 +1568,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 threadId: body.threadId,
                 queueId: body.queueId,
                 text: action.text,
-                at: accepted?.at ?? Date.now(),
+                // the server's sent time, not this window's clock
+                at: typeof body.actedAt === "number" ? body.actedAt : accepted?.at ?? Date.now(),
                 sendId,
+                sendSeq: action.sendSeq,
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
                 waited: action.after || undefined,
