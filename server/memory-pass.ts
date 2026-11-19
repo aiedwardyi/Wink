@@ -247,6 +247,8 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
+// a note retired into a comment or code block reads as gone, so it never stands in for a new one
+const liveText = (text: string) => text.replace(/<!--[\s\S]*?(?:-->|$)/g, "").replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
 function legacyLine(key: string, lines: string[], taken: Set<string>): string | undefined {
@@ -531,6 +533,16 @@ export function appendNotes(raw: string, notes: Note[], now: number): string | n
   return text;
 }
 
+function appendSynced(path: string, text: string): void {
+  const fd = openSync(path, "a", 0o600);
+  try {
+    writeFileSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function noteSummary(facts: string[]): string {
   const joined = facts.join(", ");
   return joined.length > SUMMARY_MAX ? `${joined.slice(0, SUMMARY_MAX - 3).trimEnd()}...` : joined;
@@ -745,17 +757,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       try {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-        const known = new Set(current.split("\n").map((row) => NOTED.exec(row)?.[1]));
+        const known = new Set(liveText(current).split("\n").map((row) => NOTED.exec(row)?.[1]));
         const fresh = overflow.filter(({ line }) => !known.has(line));
         if (fresh.length) {
           // appended, never replaced: a line another writer lands after the read stays
-          const fd = openSync(path, "a", 0o600);
-          try {
-            writeFileSync(fd, `${!current ? OVERFLOW_HEAD : current.endsWith("\n") ? "" : "\n"}${fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("")}`);
-            fsyncSync(fd);
-          } finally {
-            closeSync(fd);
-          }
+          appendSynced(path, `${!current ? OVERFLOW_HEAD : current.endsWith("\n") ? "" : "\n"}${fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("")}`);
           const last = dropped.get(botId);
           const prior = last && !last.lost ? last : undefined;
           dropped.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.length, since: prior?.since ?? now() });
@@ -767,7 +773,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         return arm(botId, threadId);
       }
     }
-    if (saved !== null && saveMemoryFile(botId, saved, memory.revision).conflict) {
+    // a pointer alone is appended, so a line another writer lands after the revision check stays
+    const tail = pointer !== null && base === raw ? pointer.slice(raw.length) : null;
+    const conflict = tail !== null ? readMemoryFile(botId).revision !== memory.revision : saved !== null && saveMemoryFile(botId, saved, memory.revision).conflict;
+    if (tail !== null && !conflict) appendSynced(join(ensureWorkspace(botId), "MEMORY.md"), tail);
+    if (conflict) {
       held.set(threadId, { ...batch, picked });
       log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
       return arm(botId, threadId);

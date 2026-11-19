@@ -476,6 +476,42 @@ describe("memory pass", () => {
     expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
   });
 
+  it("keeps a line another writer adds to MEMORY.md after the revision check of its overflow pointer", async () => {
+    const full = `# Memory\n${"- note\n".repeat(198)}`;
+    writeMemoryFile("bot-t1", full);
+    const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+    const open = fs.openSync;
+    let landed = false;
+    // SAFETY: the wrapper passes every argument through and returns the real descriptor.
+    vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof open>) => {
+      // lands after the revision check, just before the pointer reaches MEMORY.md
+      if (!landed && args[0] === path) {
+        execFileSync(process.execPath, ["-e", "require('node:fs').appendFileSync(process.argv[1], '- Cobalt preference\\n')", path], { windowsHide: true });
+        landed = true;
+      }
+      return open(...args);
+    }) as typeof open);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    vi.mocked(fs.openSync).mockRestore();
+    expect(landed).toBe(true);
+    expect(memoryFileRaw("bot-t1")).toBe(`${full}- Cobalt preference\n- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)`);
+    expect(overflow()).toContain("- Likes tea (noted 2026-10-15)");
+  });
+
+  it("saves a fact that an overflow line names only inside a comment or code block", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const retired = "# Notebook\n<!-- Retired\n* Likes tea (noted 2020-01-01)\n-->\n```\n- Uses pnpm (noted 2020-01-02)\n```\n";
+    writeFileSync(overflowPath(), retired);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"], ["Uses pnpm", "i use pnpm"]));
+    say("t1", "i like tea, i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${retired}- Likes tea (noted 2026-10-15)\n- Uses pnpm (noted 2026-10-15)\n`);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(2);
+  });
+
   it("swaps a correction into a MEMORY.md at its limit and sends the rest to the overflow file", async () => {
     const old = "- Home city: Toronto (noted 2026-10-01)";
     writeMemoryFile("bot-t1", `# Memory\n${old}\n${"- note\n".repeat(197)}`);
