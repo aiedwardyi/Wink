@@ -98,7 +98,8 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     if (day) day.push(row);
     else days.set(key, [row]);
   }
-  return [...days].map(([day, list]) => ({ day, rows: list }));
+  // built newest first so replaced picks list newest first; drawn oldest first, down to the newest
+  return [...days].reverse().map(([day, list]) => ({ day, rows: list.reverse() }));
 }
 
 // Drawn only while the bot has no picks: never saved, sent or counted.
@@ -377,6 +378,8 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   const ink = useRef<SVGSVGElement>(null);
   const zoom = useRef<HTMLElement>(null);
   const view = useRef<View | null>(null);
+  const pinned = useRef(false);
+  const laid = useRef({ rows: "", first: "", height: 0 });
   const searched = useRef(needle);
   const wasClosing = useRef(closing);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
@@ -395,11 +398,11 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   const total = days.reduce((sum, day) => sum + day.rows.length, 0);
   const drawn = useMemo(() => {
     let left = grow.limit;
-    return days.flatMap((day) => {
-      const rows = day.rows.slice(0, Math.max(0, left));
+    return [...days].reverse().flatMap((day) => {
+      const rows = day.rows.slice(Math.max(0, day.rows.length - left));
       left -= rows.length;
       return rows.length ? [{ ...day, rows }] : [];
-    });
+    }).reverse();
   }, [days, grow.limit]);
   useEffect(() => {
     if (grow.limit >= total) return;
@@ -417,6 +420,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       ? { scale: next.scale, x: edge(width, box.clientWidth, next.x, START.x), y: edge(height, box.clientHeight, next.y, START.y) }
       : next;
     view.current = kept;
+    pinned.current = kept.y <= box.clientHeight - height + 1;
     sheet.current!.style.transform = `translate(${kept.x}px, ${kept.y}px) scale(${kept.scale})`;
     zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
   }, []);
@@ -436,13 +440,25 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     redraw();
     const box = frame.current!;
     const width = sheet.current!.offsetWidth;
-    const scale = Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1));
+    const height = sheet.current!.offsetHeight;
+    const fit = Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1));
     const at = view.current;
     const reopened = wasClosing.current && !closing;
     const changed = searched.current !== needle;
-    const next = !at || reopened || (changed && !needle)
-      ? { ...START, scale }
-      : changed ? { ...START, scale: at.scale } : at;
+    const was = laid.current;
+    const first = drawn[0]?.rows[0]?.id ?? "";
+    const rows = `${first}\n${drawn.at(-1)?.rows.at(-1)?.id}\n${drawn.reduce((sum, day) => sum + day.rows.length, 0)}`;
+    // the newest pick is at the bottom, so a view left there follows new picks down
+    const floor = (scale: number) => Math.min(START.y, box.clientHeight - height * scale);
+    let next: View;
+    if (!at || reopened || changed) {
+      const scale = !at || reopened || !needle ? fit : at.scale;
+      next = { x: START.x, y: floor(scale), scale };
+    } else if (was.rows === rows) next = at;
+    else if (pinned.current) next = { ...at, y: floor(at.scale) };
+    // older picks mounting above keep a scrolled-up view on what it shows
+    else next = first === was.first ? at : { ...at, y: at.y - (height - was.height) * at.scale };
+    laid.current = { rows, first, height };
     wasClosing.current = closing;
     searched.current = needle;
     show(next, true);
@@ -555,7 +571,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       <Redraw.Provider value={redraw}>
         <div ref={sheet} className="timeline-sheet">
           <svg ref={ink} className="timeline-ink" aria-hidden="true" />
-          <p className="timeline-day"><b>{t("timeline.newest")}</b></p>
+          {grow.limit >= total && <p className="timeline-day">{t("timeline.oldest")}</p>}
           {drawn.map(({ day, rows }) => {
             const [name, date] = day ? dayLabel(day, now, t, locale) : [];
             return (
@@ -565,7 +581,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
               </section>
             );
           })}
-          {grow.limit >= total && <p className="timeline-day"><b>{t("timeline.oldest")}</b></p>}
+          <p className="timeline-day">{t("timeline.newest")}</p>
         </div>
       </Redraw.Provider>
       <p className="timeline-hint">{t(touch ? "timeline.hintTouch" : "timeline.hintMouse")}<b ref={zoom} /></p>
