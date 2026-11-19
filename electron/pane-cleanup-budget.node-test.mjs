@@ -26,6 +26,13 @@ function count(dir) {
   return found;
 }
 
+async function until(ready, what) {
+  for (let tries = 0; !ready(); tries++) {
+    assert.ok(tries < 1_000, `no ${what} after 10 s`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function tree(t, { bystanders = 20, worktrees = 3, files = 0, scratch = 10, nested = 0, budget = SWEEP_BUDGET, cpu } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pane-budget-"));
   const worktreeRoot = path.join(home, "worktrees");
@@ -288,9 +295,12 @@ test("a re-pointed link re-reads only the links that resolve through it", { skip
   await f.cleanup.sweep();
   const later = await f.close(4, 7);
   const moved = path.join(f.worktreeRoot, "by-0", "d0", "link-0");
+  const heard = [];
+  const watcher = fs.watch(path.dirname(moved), (type, name) => heard.push(name));
   fs.unlinkSync(moved);
   fs.symlinkSync(path.join(f.home, "shared", "node_modules", "pkg-1"), moved, kind);
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await until(() => heard.length, "re-point event");
+  watcher.close();
   const promises = await import("node:fs/promises");
   const original = promises.default.readlink;
   let reads = 0;
@@ -307,7 +317,7 @@ test("a check settles while other folders keep changing", { skip: process.platfo
   const busy = path.join(f.worktreeRoot, "by-0");
   const writer = childProcess.spawn(process.execPath, ["-e", `const fs = require("fs"); let next = 0; setInterval(() => fs.mkdirSync(${JSON.stringify(busy)} + "/n" + next++), 20);`], { stdio: "ignore", windowsHide: true });
   t.after(() => writer.kill());
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await until(() => fs.existsSync(path.join(busy, "n1")), "writer folder");
   const later = await f.close(4, 7);
   f.written();
   await f.cleanup.sweep();
@@ -317,7 +327,8 @@ test("a check settles while other folders keep changing", { skip: process.platfo
 
 test("a resting link index is dropped once watching it costs more than building it, and the next pass builds it again", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
   let spent = 0;
-  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3, cpu: () => spent });
+  let weighed = 0;
+  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3, cpu: () => { weighed++; return spent; } });
   const promises = await import("node:fs/promises");
   const readdir = promises.default.readdir;
   const building = t.mock.method(promises.default, "readdir", (...args) => { spent++; return readdir(...args); });
@@ -327,8 +338,9 @@ test("a resting link index is dropped once watching it costs more than building 
   assert.equal(builds(), 1);
   const pass = async (from, watching) => {
     spent += watching;
+    const seen = weighed;
     fs.mkdirSync(path.join(f.worktreeRoot, "by-0", `n${from}`));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await until(() => weighed > seen, "watch cost check");
     const later = await f.close(from, from + 1);
     f.written();
     await f.cleanup.sweep();
