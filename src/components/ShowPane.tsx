@@ -117,7 +117,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (expanded) { event.preventDefault(); setMaximized(false); }
-      else closePane();
+      else { event.preventDefault(); closePane(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -147,7 +147,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
       {tab === "media" && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />}
       {tab === "workers" && <WorkerPage source={crew} maximized={expanded} onClose={closePane} />}
       {tab === "map" && botId && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
-      {tab === "timeline" && botId && source && <TimelinePane key={botId} botId={botId} threadId={source.threadId} maximized={expanded} profileName={profileName} />}
+      {tab === "timeline" && botId && source && <TimelinePane key={botId} botId={botId} threadId={source.threadId} maximized={expanded} closing={closing} profileName={profileName} />}
     </aside>
   );
   // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons. One portal box moves between the dock and the body, so crossing the phone width keeps the pane mounted.
