@@ -1,7 +1,9 @@
 // Per-PC presence records in the sync folder so a phone can jump between PCs.
 // Records carry only a name, a public tailnet or relay host and a timestamp: never a key or cookie.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir, hostname, userInfo } from "node:os";
 import { basename, join } from "node:path";
 
 import { z } from "zod";
@@ -26,6 +28,7 @@ const deviceSchema = z.object({
   lastSeen: z.number().int().nonnegative(),
   laptop: z.boolean().optional(),
   chatSync: z.literal(2).optional(),
+  machine: z.string().regex(/^[0-9a-f]{16}$/).optional().catch(undefined),
   /** PCs this PC removed from the list, by id, with when; one shows again once it runs Wink after that. */
   removed: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/), z.number().int().nonnegative())
     .refine((value) => Object.keys(value).length <= MAX_DEVICE_FILES).optional().catch(undefined),
@@ -40,7 +43,7 @@ export function namedDevicePeers<T extends { name: string; host: string }>(peers
 }
 
 export function writeDeviceRecord(folder: string, record: Omit<DeviceRecord, "lastSeen">, now: number): void {
-  const parsed = deviceSchema.parse({ deviceId: record.deviceId, name: record.name, host: record.host, relayHost: record.relayHost, lastSeen: now, laptop: record.laptop, chatSync: record.chatSync, removed: record.removed && Object.keys(record.removed).length ? record.removed : undefined });
+  const parsed = deviceSchema.parse({ deviceId: record.deviceId, name: record.name, host: record.host, relayHost: record.relayHost, lastSeen: now, laptop: record.laptop, chatSync: record.chatSync, machine: record.machine, removed: record.removed && Object.keys(record.removed).length ? record.removed : undefined });
   const directory = join(folder, DEVICE_DIR);
   mkdirSync(directory, { recursive: true });
   writeFileAtomic(join(directory, `${parsed.deviceId}.json`), `${JSON.stringify(parsed, null, 2)}\n`);
@@ -107,24 +110,29 @@ export function listDevices(folder: string, currentId: string, now: number, limi
       items.push({ ...parsed.data, current, offline: !current && !checking && now - parsed.data.lastSeen > DEVICE_STALE_MS, checking });
     } catch {}
   }
-  // A PC whose ~/.orbit was wiped comes back under a new id on the same tailnet host; its stale old record is the same PC.
-  const newest = new Map<string, DeviceListItem>();
   const removedAt = new Map<string, number>();
-  for (const item of items) {
-    const kept = newest.get(item.host);
-    if (item.host !== item.relayHost && (!kept || item.current || (!kept.current && item.lastSeen > kept.lastSeen))) newest.set(item.host, item);
-    for (const [id, at] of Object.entries(item.removed ?? {})) removedAt.set(id, Math.max(at, removedAt.get(id) ?? 0));
-  }
+  for (const item of items) for (const [id, at] of Object.entries(item.removed ?? {})) removedAt.set(id, Math.max(at, removedAt.get(id) ?? 0));
+  // A PC whose ~/.orbit was wiped comes back under a new id; only its newest record shows.
+  const outranks = (a: DeviceListItem, b: DeviceListItem) => a.current || (!b.current && (a.lastSeen > b.lastSeen || (a.lastSeen === b.lastSeen && a.deviceId > b.deviceId)));
   return items
-    .filter((item) => item.host === item.relayHost || newest.get(item.host) === item || now - item.lastSeen <= DEVICE_STALE_MS)
+    .filter((item) => !items.some((other) => other !== item && samePc(item, other) && outranks(other, item)))
     .filter((item) => item.current || item.lastSeen > (removedAt.get(item.deviceId) ?? -1))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Only an offline PC: a live one would publish itself back within a heartbeat. */
-export function removableDevice(folder: string, currentId: string, deviceId: string, now: number): boolean {
-  const item = listDevices(folder, currentId, now).find((device) => device.deviceId === deviceId);
-  return !!item && !item.current && now - item.lastSeen > DEVICE_STALE_MS;
+/** Records without a machine key (older builds) fall back to a shared tailnet host; a relay host is per install. */
+function samePc(a: DeviceRecord, b: DeviceRecord): boolean {
+  if (a.machine && b.machine) return a.machine === b.machine;
+  return a.host !== a.relayHost && a.host === b.host;
+}
+
+/** Stable across a reinstall on one PC and different on a PC that got a copied ~/.orbit. */
+export function machineKey(): string {
+  let user = "";
+  try {
+    user = userInfo().username;
+  } catch {}
+  return createHash("sha256").update(["wink-device", hostname(), user, homedir()].join("\0")).digest("hex").slice(0, 16);
 }
 
 /** Removals still in force: one whose PC ran Wink again, or whose record is gone, drops out. */

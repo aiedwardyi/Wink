@@ -59,7 +59,9 @@ export function YourPcs() {
   const [devices, reload, known] = useDevices(true, true, true);
   const [opening, setOpening] = useState<string | null>(null);
   const [removing, setRemoving] = useState<{ deviceId: string; name: string } | null>(null);
+  const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<{ deviceId: string; name: string; code?: string } | null>(null);
   const others = devices.filter((device) => !device.current);
   if (!known) return <DevicesSection title={t("chrome.devices")} data-your-pcs=""><PendingRow /></DevicesSection>;
   if (!others.length) return null;
@@ -71,27 +73,39 @@ export function YourPcs() {
       if (!opened) void reload();
     }, () => void reload()).finally(() => setOpening(null));
   };
-  const remove = (deviceId: string) => {
+  const remove = (target: { deviceId: string; name: string }) => {
     setBusy(true);
-    void api(`/api/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" }).catch(() => {}).then(() => reload()).finally(() => {
-      setBusy(false);
-      setRemoving(null);
-    });
+    setFailed(null);
+    void api(`/api/devices/${encodeURIComponent(target.deviceId)}`, { method: "DELETE" })
+      .then(() => undefined, (error: { code?: string }) => setFailed({ deviceId: target.deviceId, name: target.name, code: error.code }))
+      .then(() => reload())
+      .finally(() => {
+        setBusy(false);
+        setAsking(false);
+      });
   };
+  // A PC another tab already removed needs no message.
+  const failure = failed && others.some((device) => device.deviceId === failed.deviceId)
+    ? t(failed.code === "pc-online" ? "settings.devices.removePcOnline" : failed.code === "no-own-record" ? "settings.devices.removePcNoHost" : "settings.devices.removePcError", { name: failed.name })
+    : null;
   return (
-    <DevicesSection title={t("chrome.devices")} data-your-pcs="" after={
-      <Presence open={removing !== null}>
+    <DevicesSection title={t("chrome.devices")} data-your-pcs="" after={<>
+      {failure ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{failure}</p> : null}
+      <Presence open={asking}>
         {(leaving) => <ConfirmDialog closing={leaving} title={t("settings.devices.removePcTitle", { name: removing?.name ?? "" })} body={t("settings.devices.removePcBody")}
           confirmLabel={t("settings.phoneAccess.remove")} cancelLabel={t("settings.phoneAccess.cancel")} confirmDisabled={busy}
-          onConfirm={() => removing && remove(removing.deviceId)} onCancel={() => setRemoving(null)} />}
+          onConfirm={() => removing && remove(removing)} onCancel={() => setAsking(false)} />}
       </Presence>
-    }>
+    </>}>
       {others.map((device) => {
         const online = !device.offline && !device.checking;
         const sub = device.checking ? t("chrome.deviceChecking") : device.offline ? t("chrome.deviceOffline") : undefined;
         return <DeviceRow key={device.deviceId} name={device.name} sub={sub} ready={online ? t("settings.devices.online") : undefined}
           control={online ? <button type="button" disabled={opening === device.host} onClick={() => open(device.host, device.name)} className={OPEN_BUTTON}>{t("settings.devices.openButton")}</button>
-            : device.offline ? <button type="button" onClick={() => setRemoving(device)} aria-label={t("settings.phoneAccess.removeAria", { name: device.name })} className={ROW_BUTTON}>{t("settings.phoneAccess.remove")}</button> : null} />;
+            : device.offline ? <button type="button" onClick={() => {
+              setRemoving(device);
+              setAsking(true);
+            }} aria-label={t("settings.phoneAccess.removeAria", { name: device.name })} className={ROW_BUTTON}>{t("settings.phoneAccess.remove")}</button> : null} />;
       })}
     </DevicesSection>
   );

@@ -364,9 +364,9 @@ import {
   heldRemovals,
   listDevices,
   loadDeviceName,
+  machineKey,
   namedDevicePeers,
   pickerDevices,
-  removableDevice,
   saveDeviceName,
   writeDeviceRecord,
 } from "./device-sync.ts";
@@ -2382,6 +2382,7 @@ function scheduleProfilePublish(): void {
 let deviceName = loadDeviceName(DATA_DIR);
 let deviceLaptop = false;
 const removedPcs: Record<string, number> = {};
+const deviceMachine = machineKey();
 
 function publishDeviceRecord(): void {
   const folder = profileSyncSettings.folder;
@@ -2402,6 +2403,7 @@ function publishDeviceRecord(): void {
         relayHost,
         laptop: deviceLaptop,
         chatSync: 2,
+        machine: deviceMachine,
         removed: heldRemovals(folder, { ...own?.removed, ...removedPcs }),
       },
       Date.now(),
@@ -8654,12 +8656,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "DELETE" && path.startsWith("/api/devices/")) {
       if (!credentials.bearerOk || !isLoopbackHost(req.headers.host)) return json(res, 403, { error: "Manage devices on this PC" });
       const deviceId = decodeURIComponent(path.slice("/api/devices/".length));
-      const folder = profileSyncSettings.folder;
-      if (!folder || !removableDevice(folder, profileSyncSettings.deviceId, deviceId, Date.now())) return json(res, 409, { error: "Only an offline PC can be removed" });
+      // The same presence the list showed, so a PC shown offline can be removed.
+      const shown = devicePresence(syncedDevices(), REMOTE_HOST, remoteRetry.status().state === "checking").find((device) => device.deviceId === deviceId);
+      if (!shown || shown.current || !shown.offline || shown.checking) return json(res, 409, { error: "Only an offline PC can be removed", code: "pc-online" });
       removedPcs[deviceId] = Date.now();
       publishDeviceRecord();
       // A PC with no tailnet or relay host has no record of its own to hold the removal.
-      if (removableDevice(folder, profileSyncSettings.deviceId, deviceId, Date.now())) return json(res, 409, { error: "This PC cannot hold a removal yet" });
+      if (syncedDevices().some((device) => device.deviceId === deviceId)) return json(res, 409, { error: "This PC cannot hold a removal yet", code: "no-own-record" });
       return json(res, 200, { ok: true });
     }
     if (method === "PUT" && path === "/api/devices/name") {

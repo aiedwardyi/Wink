@@ -106,6 +106,43 @@ describe("Your PCs", () => {
     await act(async () => root.unmount());
   });
 
+  it("says why a refused remove failed, and stays quiet when another tab removed it", async () => {
+    let gone = false;
+    let code = "pc-online";
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") return Response.json({ error: "refused", code }, { status: 409 });
+      return Response.json({ devices: gone ? DEVICES.filter((device) => device.deviceId !== "c") : DEVICES });
+    }));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(YourPcs))));
+    const removeLaptop = async () => {
+      await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Remove")!.click());
+      const dialog = document.querySelector('[role="dialog"], [role="alertdialog"]')!;
+      await act(async () => [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Remove")!.click());
+    };
+    await removeLaptop();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Laptop is online again, so it stays.");
+    code = "no-own-record";
+    await removeLaptop();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Could not remove Laptop. Turn on Connect from my devices or Tailscale on this PC first.");
+    gone = true;
+    await removeLaptop();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(rows(host).map((row) => row.querySelector("[data-device-name]")?.textContent)).toEqual(["Home", "Den"]);
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the name in the title while the dialog fades out", async () => {
+    const { host, root } = await renderView();
+    await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Remove")!.click());
+    const dialog = document.querySelector('[role="dialog"], [role="alertdialog"]')!;
+    await act(async () => [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!.click());
+    expect(document.body.textContent).not.toContain("Remove ?");
+    if (document.querySelector('[role="dialog"], [role="alertdialog"]')) expect(document.body.textContent).toContain("Remove Laptop?");
+    await act(async () => root.unmount());
+  });
+
   it("asks in Korean", async () => {
     localStorage.setItem("omb-locale", "ko");
     const { host, root } = await renderView();

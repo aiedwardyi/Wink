@@ -14,7 +14,6 @@ import {
   loadDeviceName,
   namedDevicePeers,
   pickerDevices,
-  removableDevice,
   saveDeviceName,
   scanDevices,
   writeDeviceRecord,
@@ -183,21 +182,31 @@ describe("relay presence", () => {
     expect(listDevices(folder, "home", NOW + 3 * DEVICE_STALE_MS).map((d) => d.deviceId)).toEqual(["home", "laptop-new", "work"]);
   });
 
-  it("keeps two live ids on one host and never merges different hosts", () => {
+  it("shows a reinstalled PC once right away, by machine key or tailnet host", () => {
     const folder = freshDir();
-    writeDeviceRecord(folder, { ...rec("a"), host: "pc.tail1234.ts.net" }, NOW - 60_000);
-    writeDeviceRecord(folder, { ...rec("b"), host: "pc.tail1234.ts.net" }, NOW);
-    writeDeviceRecord(folder, { ...rec("copy"), host: "pc-1.tail1234.ts.net" }, NOW - 2 * 60 * 60_000);
-    expect(listDevices(folder, "x", NOW).map((d) => d.deviceId)).toEqual(["a", "b", "copy"]);
+    writeDeviceRecord(folder, { ...rec("lap-old", "laptop.tail1234.ts.net"), name: "LAPTOP" }, NOW - 3 * 60_000);
+    writeDeviceRecord(folder, { ...rec("lap-new", "laptop.tail1234.ts.net"), name: "LAPTOP", machine: "0123456789abcdef" }, NOW);
+    writeDeviceRecord(folder, { deviceId: "relay-old", name: "Den", host: relay("denold"), relayHost: relay("denold"), machine: "fedcba9876543210" }, NOW - 60_000);
+    writeDeviceRecord(folder, { deviceId: "relay-new", name: "Den", host: relay("dennew"), relayHost: relay("dennew"), machine: "fedcba9876543210" }, NOW);
+    writeDeviceRecord(folder, rec("home"), NOW);
+    expect(listDevices(folder, "lap-new", NOW).map((d) => d.deviceId)).toEqual(["relay-new", "home", "lap-new"]);
+    expect(listDevices(folder, "home", NOW).map((d) => d.deviceId)).toEqual(["relay-new", "home", "lap-new"]);
+  });
+
+  it("never merges different machines, even on one tailnet host, or different hosts", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("a", "pc.tail1234.ts.net"), machine: "aaaaaaaaaaaaaaaa" }, NOW - 60_000);
+    writeDeviceRecord(folder, { ...rec("b", "pc.tail1234.ts.net"), machine: "bbbbbbbbbbbbbbbb" }, NOW);
+    writeDeviceRecord(folder, { ...rec("copy", "pc-1.tail1234.ts.net") }, NOW - 2 * 60 * 60_000);
+    writeDeviceRecord(folder, { deviceId: "r1", name: "r1", host: relay("relayone"), relayHost: relay("relayone") }, NOW);
+    writeDeviceRecord(folder, { deviceId: "r2", name: "r2", host: relay("relaytwo"), relayHost: relay("relaytwo") }, NOW);
+    expect(listDevices(folder, "x", NOW).map((d) => d.deviceId)).toEqual(["a", "b", "copy", "r1", "r2"]);
   });
 
   it("hides a removed offline PC on every PC until it runs Wink again", () => {
     const folder = freshDir();
     writeDeviceRecord(folder, rec("laptop-old"), NOW - 2 * 60 * 60_000);
     writeDeviceRecord(folder, rec("work"), NOW);
-    expect(removableDevice(folder, "home", "laptop-old", NOW)).toBe(true);
-    expect(removableDevice(folder, "home", "work", NOW)).toBe(false);
-    expect(removableDevice(folder, "home", "home", NOW)).toBe(false);
     writeDeviceRecord(folder, { ...rec("home"), removed: heldRemovals(folder, { "laptop-old": NOW }) }, NOW);
     expect(listDevices(folder, "home", NOW).map((d) => d.deviceId)).toEqual(["home", "work"]);
     expect(listDevices(folder, "work", NOW).map((d) => d.deviceId)).toEqual(["home", "work"]);
