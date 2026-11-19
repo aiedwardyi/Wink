@@ -10,7 +10,7 @@
 // delete anything the bot believes.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
@@ -157,8 +157,8 @@ export function writeMemoryFile(botId: string, text: string): void {
  * overwrites notes it has not seen. No base writes as before, for older clients.
  * A second name pins the file it checked: a line another writer appends before
  * the new text lands is carried over, and a file changed in place goes back as
- * a conflict while nothing has touched the new text, else is parked as a
- * conflict copy, so a save never erases an edit it did not see. */
+ * a conflict on Windows while nothing has touched the new text, else is parked
+ * as a conflict copy, so a save never erases an edit it did not see. */
 export function saveMemoryFile(botId: string, text: string, baseRevision?: string) {
   const conflict = () => {
     const current = readMemoryFile(botId);
@@ -199,10 +199,12 @@ export function saveMemoryFile(botId: string, text: string, baseRevision?: strin
 type Swap = { landed: boolean; late?: string };
 
 /** Puts `next` at `path` while `holds` accepts the file there. A second name pins the file it replaces: a line
- * another writer appends to it before `next` lands is carried over, and any other change comes back as `late`.
+ * another writer appends to it before `next` lands is carried over, and any other change comes back as `late`,
+ * or off Windows, where that writer may not be done, the pinned file itself is parked as a conflict copy.
  * Null when the file cannot be pinned. */
 function swapPinned(path: string, next: string, holds: (current: string) => boolean): Swap | null {
-  const pin = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const id = randomUUID();
+  const pin = `${path}.${process.pid}.${id}.tmp`;
   try {
     linkSync(path, pin);
   } catch {
@@ -214,15 +216,20 @@ function swapPinned(path: string, next: string, holds: (current: string) => bool
     writeFileAtomic(path, next, { mode: 0o600 });
     const late = readFileSync(pin, "utf8");
     if (late === current) return { landed: true };
-    if (late.startsWith(current)) {
+    // only Windows refuses a rename over a file another process has open, so elsewhere `late` can be cut mid-write
+    const whole = process.platform === "win32";
+    if (late.startsWith(current) && (whole || late.endsWith("\n"))) {
       try {
         appendLines(path, late.slice(current.length));
         return { landed: true };
       } catch {
-        /* handed back whole, for the caller to keep */
+        /* kept below like any other change */
       }
     }
-    return { landed: true, late };
+    if (whole) return { landed: true, late };
+    // the file itself, never its bytes, so a writer still writing finishes into the copy
+    linkSync(pin, join(dirname(path), "memory", `MEMORY.conflict-${id.slice(0, 8)}.md`));
+    return { landed: true };
   } finally {
     try {
       rmSync(pin, { force: true });

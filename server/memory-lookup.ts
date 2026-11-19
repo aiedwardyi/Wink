@@ -1,7 +1,7 @@
 // Automatic recall: before a typed turn, up to 2 matching rows from the bot's
 // own memory and notes ride in the turn text. Off unless the bot is listed in
 // lookup-bots.json. The index is rebuilt after a reply settles, never at send.
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -306,9 +306,14 @@ function pastTheCut(botId: string): { text: string; firstLine: number } | null {
 
 async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile[]> {
   const files: NoteFile[] = [];
+  const over: Source[] = [];
   let bytes = 0;
-  for (const { source, tier, path, mtime, size } of sources) {
-    if (bytes + size > MAX_CORPUS_BYTES) continue;
+  for (const entry of sources) {
+    const { source, tier, path, mtime, size } = entry;
+    if (bytes + size > MAX_CORPUS_BYTES) {
+      over.push(entry);
+      continue;
+    }
     bytes += size;
     if (tier === 0 && source === "MEMORY.md") {
       const past = pastTheCut(botId);
@@ -319,7 +324,27 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
     // a replaced pick is history, never a recall hit
     if (text !== null) files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
   }
+  // a file past the budget still gives its first lines, so one note appended to it never drops the whole topic
+  for (const { source, tier, path, mtime } of over) {
+    const room = MAX_CORPUS_BYTES - bytes;
+    if (source === "MEMORY.md" || room <= 0) continue;
+    const text = await readStart(path, room).catch(() => "");
+    if (!text) continue;
+    bytes += Buffer.byteLength(text);
+    files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
+  }
   return files;
+}
+
+/** The whole lines within the first `limit` bytes of a file. */
+async function readStart(path: string, limit: number): Promise<string> {
+  const file = await open(path, "r");
+  try {
+    const { buffer, bytesRead } = await file.read(Buffer.alloc(limit), 0, limit, 0);
+    return buffer.subarray(0, buffer.subarray(0, bytesRead).lastIndexOf(10) + 1).toString("utf8");
+  } finally {
+    await file.close();
+  }
 }
 
 export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {

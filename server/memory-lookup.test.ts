@@ -135,6 +135,17 @@ describe("corpus", () => {
     expect(ask(lookup, botId, "parked llama")).toEqual([]);
   });
 
+  it("searches the start of a side file past the budget without dropping the files after it", async () => {
+    const botId = `bot-${randomUUID()}`;
+    writeMemoryFile(botId, "# Memory\n");
+    // one note appended at the end takes the file just past the budget
+    sideFile(botId, "auto-notes-overflow.md", `${`- COBALT WALRUS: invoice goes to the north office\n${FILLER}\n`.padEnd(2 * 1024 * 1024, " ")}\n- Likes tea (noted 2026-10-15)\n`);
+    sideFile(botId, "people.md", "- SAFFRON BADGER: sits by the window\n");
+    const { lookup } = await lookupFor(undefined, { botId });
+    expect(ask(lookup, botId, "cobalt walrus")[0]).toContain("north office");
+    expect(ask(lookup, botId, "saffron badger")[0]).toContain("by the window");
+  });
+
   it("never finds a replaced pick in the decision timeline", async () => {
     const botId = `bot-${randomUUID()}`;
     sideFile(botId, "decisions.md", [

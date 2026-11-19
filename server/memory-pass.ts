@@ -278,17 +278,6 @@ function liveNotes(text: string): string[] {
   return notes;
 }
 
-const LINK_WORDS = new Set(["in", "at", "from", "is", "are"]);
-
-/** What a later note on the same thing shares: the words before a colon or through a link word ("Lives in", "Works at"), else the whole note. */
-function noteTopic(line: string): string {
-  const colon = line.indexOf(":");
-  if (colon > 0) return `${words(line.slice(0, colon)).join(" ")}:`;
-  const all = words(line);
-  const link = all.findIndex((word, index) => index > 0 && index < all.length - 1 && LINK_WORDS.has(word));
-  return (link < 0 ? all : all.slice(0, link + 1)).join(" ") || squash(line);
-}
-
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
 function legacyLine(key: string, lines: string[], taken: Set<string>): string | undefined {
   const asked = pickKey(key);
@@ -313,6 +302,7 @@ function decisionSpan(lines: string[]): [number, number] | null {
 const contentWords = (text: string) =>
   words(text).filter((word) => (word.length >= 3 || /\d/.test(word) || /\P{ASCII}/u.test(word)) && !STOP_WORDS.has(word));
 const sameStem = (a: string, b: string) => a.startsWith(b.slice(0, 4)) || b.startsWith(a.slice(0, 4));
+const related = (a: string, b: string) => contentWords(a).some((word) => contentWords(b).some((other) => sameStem(word, other)));
 const LITERALS = [
   /\b(?:[a-z][\w+.-]*:\/\/|www\.)\S+/gi,
   /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,
@@ -608,6 +598,8 @@ interface Batch {
   source: UserLine[];
   // its picks are in the timeline, held only for MEMORY.md
   picked?: boolean;
+  // its lines already in the overflow file, so a retry never writes one twice
+  wrote?: string[];
 }
 
 /** Notes passing facts from new user lines into MEMORY.md once a 1:1 chat goes quiet. Never on the reply path. */
@@ -780,22 +772,24 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       : null;
     const saved = pointer ?? text ?? corrected;
     // before MEMORY.md drops a corrected line, so a failed write never loses the new value; a retry finds it written
+    const wrote = [...(batch.wrote ?? [])];
     if (overflow.length) {
       const path = join(ensureWorkspace(botId), "memory", OVERFLOW_FILE);
       try {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-        const latest = new Map(liveNotes(current).map((note) => [noteTopic(note), note] as const));
-        // a repeat is known only while it is the latest note on its topic, so a value back after a correction lands again
-        const fresh = overflow.filter(({ line }) => latest.get(noteTopic(line)) !== line);
+        const notes = liveNotes(current);
+        // a repeat stays out unless a later note shares a word with it, so a value back after a change lands again
+        const fresh = overflow.filter(({ line }) => !wrote.includes(line) && (!notes.includes(line) || notes.slice(notes.lastIndexOf(line) + 1).some((note) => related(note, line))));
         if (fresh.length) {
           // appended, never replaced: a line another writer lands after the read stays
           appendLines(path, `${current ? "" : OVERFLOW_HEAD}${fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("")}`);
+          wrote.push(...fresh.map(({ line }) => line));
           const prior = overflowed.get(botId);
           overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.length, since: prior?.since ?? now() });
         }
       } catch (error) {
-        held.set(threadId, { ...batch, picked });
+        held.set(threadId, { ...batch, picked, wrote });
         log({ botId, threadId, facts: accepted.length, ms, result: "error" });
         console.warn(`[memory-pass] ${OVERFLOW_FILE} write failed (${error instanceof Error ? error.name : "error"})`);
         return arm(botId, threadId);
@@ -809,17 +803,18 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (tail !== null && !conflict) appendLines(join(ensureWorkspace(botId), "MEMORY.md"), tail);
     } catch (error) {
       // the overflow notes are on disk; a retry finds them there, then finishes MEMORY.md and the receipt
-      held.set(threadId, { ...batch, picked });
+      held.set(threadId, { ...batch, picked, wrote });
       log({ botId, threadId, facts: accepted.length, ms, result: "error" });
       console.warn(`[memory-pass] MEMORY.md write failed (${error instanceof Error ? error.name : "error"})`);
       return arm(botId, threadId);
     }
     if (conflict) {
-      held.set(threadId, { ...batch, picked });
+      held.set(threadId, { ...batch, picked, wrote });
       log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
       return arm(botId, threadId);
     }
-    const kept = accepted.filter((note) => (note.pick ? picked : !note.kind));
+    // a repeat left out of the overflow file was not written, so it gets no receipt
+    const kept = accepted.filter((note) => (note.pick ? picked : !note.kind && (!overflow.includes(note) || wrote.includes(note.line))));
     if (!kept.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
@@ -827,7 +822,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     deps.store.appendMessage(sourceThread(threadId), {
       role: "bot",
       kind: "activity",
-      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: `${noteSummary(kept.map((note) => note.line))}${overflow.length ? ` (MEMORY.md is full, saved in memory/${OVERFLOW_FILE})` : ""}`, memoryBotId: botId },
+      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: `${noteSummary(kept.map((note) => note.line))}${kept.some((note) => overflow.includes(note)) ? ` (MEMORY.md is full, saved in memory/${OVERFLOW_FILE})` : ""}`, memoryBotId: botId },
     });
     log({
       botId, threadId, lines: batch.source.length, facts: noted.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
