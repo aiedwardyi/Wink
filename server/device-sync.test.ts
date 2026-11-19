@@ -170,6 +170,25 @@ describe("relay presence", () => {
     expect(scanDevices(folder).unreadable).toEqual([]);
   });
 
+  it("shows a reinstalled PC once: its stale old id on the same tailnet host drops out", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("laptop-old"), name: "Laptop", host: "laptop.tail1234.ts.net", laptop: true }, NOW - 2 * 60 * 60_000);
+    writeDeviceRecord(folder, { ...rec("laptop-new"), name: "LAPTOP-7Q2", host: "laptop.tail1234.ts.net", laptop: true }, NOW);
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, rec("work"), NOW - 2 * 60 * 60_000);
+    expect(listDevices(folder, "laptop-new", NOW).map((d) => [d.deviceId, d.current])).toEqual([["home", false], ["laptop-new", true], ["work", false]]);
+    expect(listDevices(folder, "home", NOW).map((d) => d.deviceId)).toEqual(["home", "laptop-new", "work"]);
+    expect(listDevices(folder, "home", NOW + 3 * DEVICE_STALE_MS).map((d) => d.deviceId)).toEqual(["home", "laptop-new", "work"]);
+  });
+
+  it("keeps two live ids on one host and never merges different hosts", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("a"), host: "pc.tail1234.ts.net" }, NOW - 60_000);
+    writeDeviceRecord(folder, { ...rec("b"), host: "pc.tail1234.ts.net" }, NOW);
+    writeDeviceRecord(folder, { ...rec("copy"), host: "pc-1.tail1234.ts.net" }, NOW - 2 * 60 * 60_000);
+    expect(listDevices(folder, "x", NOW).map((d) => d.deviceId)).toEqual(["a", "b", "copy"]);
+  });
+
   it("reads old records and drops a relay host that is not a relay label", () => {
     const folder = freshDir();
     const dir = join(folder, DEVICE_DIR);

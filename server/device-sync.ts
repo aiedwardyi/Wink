@@ -104,7 +104,15 @@ export function listDevices(folder: string, currentId: string, now: number, limi
       items.push({ ...parsed.data, current, offline: !current && !checking && now - parsed.data.lastSeen > DEVICE_STALE_MS, checking });
     } catch {}
   }
-  return items.sort((a, b) => a.name.localeCompare(b.name));
+  // A PC whose ~/.orbit was wiped comes back under a new id on the same tailnet host; its stale old record is the same PC.
+  const newest = new Map<string, DeviceListItem>();
+  for (const item of items) {
+    const kept = newest.get(item.host);
+    if (item.host !== item.relayHost && (!kept || item.current || (!kept.current && item.lastSeen > kept.lastSeen))) newest.set(item.host, item);
+  }
+  return items
+    .filter((item) => item.host === item.relayHost || newest.get(item.host) === item || now - item.lastSeen <= DEVICE_STALE_MS)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
