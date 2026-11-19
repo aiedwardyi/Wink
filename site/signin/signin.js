@@ -335,6 +335,7 @@
       box.setAttribute("autocapitalize", "characters");
       box.setAttribute("autocorrect", "off");
       box.spellcheck = false;
+      box.setAttribute("enterkeyhint", "go");
       box.addEventListener("focus", () => {
         if (i > value.length) focusAt(value.length);
         else box.select();

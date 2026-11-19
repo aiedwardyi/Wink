@@ -737,6 +737,7 @@ describe("entering a PC's code", () => {
     open("/signin", []);
     expect(boxes()).toHaveLength(6);
     expect(boxes().every((box) => box.autocomplete === "one-time-code" && box.maxLength !== 1)).toBe(true);
+    expect(boxes().every((box) => box.getAttribute("enterkeyhint") === "go")).toBe(true);
     expect(document.querySelector("#code button")).toBeNull();
     expect(boxes().map((box) => box.getAttribute("aria-label"))).toEqual([1, 2, 3, 4, 5, 6].map((n) => `Code ${n}`));
   });
