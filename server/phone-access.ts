@@ -2,14 +2,15 @@
 // sections 7 to 9): relay lifecycle, the gate in front of every relay request,
 // pairing by code or Google sign-in, and the PC-only management routes. Relay requests are known by
 // socket identity; no header can make a request look like one.
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { z } from "zod";
 
 import { googleDiscoveryKeySource, type GoogleKeySource } from "../shared/google-id-token.ts";
-import { PHONE_RELAY_OFF, SETUP_PREFIX, labelFromHost, parseSetupCode, type PhoneRelayStatus, type SetupCodeProblem, type TeamSnag } from "../shared/relay-protocol.ts";
+import { PHONE_RELAY_OFF, ROOM_CODE_RE, SETUP_PREFIX, labelFromHost, parseSetupCode, type PhoneRelayStatus, type SetupCodeProblem, type TeamSnag } from "../shared/relay-protocol.ts";
+import { writeFileAtomic } from "./atomic.ts";
 import type { HarnessHandler } from "./early-listen.ts";
 import { linkedFileGrant } from "./linked-files.ts";
 import {
@@ -31,11 +32,16 @@ import { realClock, type Clock } from "./phone-relay/clock.ts";
 import type { GoogleEnrollOptions, GoogleJoinResult } from "./phone-relay/google-enroll.ts";
 import type { PhoneRelay, PhoneRelayConfig, PhoneRelayEnrollOptions, PhoneRelayOptions } from "./phone-relay/index.ts";
 import { frontDoorHost, relayMode } from "./phone-relay/mode.ts";
+import { relayDir } from "./phone-relay/store.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import { parseJson } from "./schema.ts";
 import { removePhonePushSubscriptions } from "./web-push.ts";
 
 const MINUTE_MS = 60_000;
+/** A held short code with less than a day left is swapped for a fresh one. */
+const OPEN_CODE_REFRESH_MS = 24 * 60 * MINUTE_MS;
+const OPEN_CODE_FILE = "open-code.json";
+const openCodeSchema = z.object({ code: z.string().regex(ROOM_CODE_RE), exp: z.number(), host: z.string() });
 const MAX_BODY_BYTES = 4096;
 /** Room for a Google ID token, which runs to a few KB. */
 const GOOGLE_BODY_BYTES = 16 * 1024;
@@ -63,7 +69,7 @@ const GOOGLE_STATUS = {
   "key-source": 503,
 } satisfies Record<GoogleSignInError, number>;
 const DEVICE_ROUTE = /^\/api\/phone\/devices\/([\w-]{1,64})$/;
-const MANAGEMENT_ROUTES = new Set(["/api/phone-relay", "/api/phone-relay/status", "/api/phone-relay/enroll", "/api/phone-relay/setup", "/api/phone-relay/google-enroll", "/api/phone/pairing", "/api/phone/devices"]);
+const MANAGEMENT_ROUTES = new Set(["/api/phone-relay", "/api/phone-relay/status", "/api/phone-relay/enroll", "/api/phone-relay/setup", "/api/phone-relay/google-enroll", "/api/phone-relay/code", "/api/phone/pairing", "/api/phone/devices"]);
 
 const pairBodySchema = z.object({
   credential: z.string(),
@@ -152,7 +158,8 @@ type Reply =
   | { ok: true; phone?: Pick<PublicPhone, "id" | "name"> }
   | PhoneAccessStatus
   | { phones: PublicPhone[] }
-  | { url: string; code: string; expiresAt: number };
+  | { url: string; code: string; expiresAt: number }
+  | { code: string | null };
 
 function send(res: ServerResponse, status: number, body: Reply, headers: Record<string, string | string[]> = {}): void {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...headers });
@@ -205,6 +212,7 @@ export class PhoneAccess {
   private readonly google: PhoneGoogle | null;
   /** The Google sub last seen, so a new ID token does not drop a lost sign-in. */
   private seenGoogleSub: string | null | undefined;
+  private openCodeMint: Promise<string | null> | null = null;
 
   constructor(options: PhoneAccessOptions) {
     this.options = options;
@@ -324,6 +332,41 @@ export class PhoneAccess {
     this.relay?.sendActive?.();
   }
 
+  private get openCodeFile(): string {
+    return join(relayDir(this.options.dataDir), OPEN_CODE_FILE);
+  }
+
+  /** The short code saved for `host`, while it lives. */
+  private heldOpenCode(host: string): { code: string; exp: number } | null {
+    try {
+      const held = openCodeSchema.safeParse(parseJson(readFileSync(this.openCodeFile, "utf8")));
+      return held.success && held.data.host === host && held.data.exp > this.clock.now() ? held.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** This PC's short code for the sign-in page, minted like a room code; null while phone access is off or not connected. */
+  openCode(): Promise<string | null> {
+    const host = this.status().state === "connected" ? this.status().host : null;
+    if (!host || !this.describe().enabled) return Promise.resolve(null);
+    const held = this.heldOpenCode(host);
+    if (held && held.exp > this.clock.now() + OPEN_CODE_REFRESH_MS) return Promise.resolve(held.code);
+    this.openCodeMint ??= this.mintRoomCode().then((minted) => {
+      // Turned off or moved during the mint: that code never goes out.
+      if (!minted || !ROOM_CODE_RE.test(minted.code) || minted.exp <= this.clock.now() || !this.describe().enabled || this.status().host !== host) return held?.code ?? null;
+      writeFileAtomic(this.openCodeFile, JSON.stringify({ code: minted.code, exp: minted.exp, host }));
+      return minted.code;
+    }).catch(() => held?.code ?? null).finally(() => {
+      this.openCodeMint = null;
+    });
+    return this.openCodeMint;
+  }
+
+  private dropOpenCode(): void {
+    rmSync(this.openCodeFile, { force: true });
+  }
+
   /** The name phones see changed, so the relay authenticates again. */
   nameChanged(): void {
     this.relay?.reauth?.();
@@ -401,6 +444,9 @@ export class PhoneAccess {
       case "google":
         await this.googleSignIn(req, res, host);
         return HANDLED;
+      case "open-code":
+        this.checkOpenCode(req, res, host, own);
+        return HANDLED;
       case "room":
         if (this.options.room) await this.options.room(req, res, { host, peer: this.client?.peer(req) ?? null });
         else send(res, 404, { error: "not found" });
@@ -420,6 +466,17 @@ export class PhoneAccess {
       return HANDLED;
     }
     return { handled: false, phone: null };
+  }
+
+  /** 204 when `?c=` is this PC's live short code, else 404. Readable only by the sign-in page on this host's base. */
+  private checkOpenCode(req: IncomingMessage, res: ServerResponse, host: string, own: string): void {
+    const cors = { "access-control-allow-origin": `https://${host.slice(host.indexOf(".") + 1)}`, vary: "Origin" };
+    if (!this.startLimit.take(rateKey(this.client?.peer(req) ?? null))) return send(res, 429, { error: "rate-limited" }, cors);
+    const code = new URL(req.url ?? "/", "https://relay.invalid").searchParams.get("c")?.trim().toUpperCase();
+    const held = this.describe().enabled ? this.heldOpenCode(own) : null;
+    if (!code || code !== held?.code) return send(res, 404, { error: "not found" }, cors);
+    res.writeHead(204, { "cache-control": "no-store", ...cors });
+    res.end();
   }
 
   private session(req: IncomingMessage, res: ServerResponse): PublicPhone | null {
@@ -573,10 +630,12 @@ export class PhoneAccess {
     if (!bearerOk) return reply(403, { error: "manage phone access on this PC" });
 
     if (method === "GET" && path === "/api/phone-relay/status") return reply(200, this.describe());
+    if (method === "GET" && path === "/api/phone-relay/code") return reply(200, { code: await this.openCode() });
     if (method === "PUT" && path === "/api/phone-relay") {
       const body = await readBody(req, toggleBodySchema);
       if (!body) return reply(400, { error: "enabled must be a boolean" });
       if (!this.describe().configured) return reply(409, { error: "phone access is not set up on this PC" });
+      if (!body.enabled) this.dropOpenCode();
       this.options.saveEnabled(body.enabled);
       this.options.onChange?.();
       await this.restart();

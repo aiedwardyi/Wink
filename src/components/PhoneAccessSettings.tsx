@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DeviceRow, DevicesSection, PendingRow } from "./DeviceRows";
+import { RoomCode } from "./RoomCode";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { trackFeature, trackSetting } from "@/lib/usage-stats";
 
@@ -124,6 +125,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [openCode, setOpenCode] = useState<string | null>(null);
   const copiedTimer = useRef<number | undefined>(undefined);
   const [signingIn, setSigningIn] = useState(false);
   const signInAttempt = useRef(0);
@@ -363,6 +365,19 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
           ? t("settings.phoneAccess.setup.help")
           : t(`settings.phoneAccess.state.${state}`);
   const connected = enabled && state === "connected";
+  // Only app.getwink.dev has a page to type the code into.
+  const codeShown = connected && door;
+  useEffect(() => {
+    if (!codeShown) return;
+    let live = true;
+    void request("/api/phone-relay/code").then((body: { code: string | null }) => {
+      if (live) setOpenCode(body.code);
+    }, () => {});
+    return () => {
+      live = false;
+      setOpenCode(null);
+    };
+  }, [codeShown, request]);
   const needsInvite = enabled && (state === "enrolling" || status?.problem === "revoked" || status?.problem === "ticket-expired");
   // Off with an error: the relay client failed to load or start.
   const failed = enabled && state === "off" && status?.lastError !== null;
@@ -406,6 +421,11 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
                   </button>
                 </div>
                 <div className="mt-1.5 break-keep text-[11px] leading-[1.35] text-ink-secondary">{t("settings.devices.openAnywhereHelp")}</div>
+                {codeShown && openCode ? (
+                  <div data-open-code="" className="mt-2.5">
+                    <RoomCode code={openCode} short={openCode} label={t("settings.devices.openCode")} hint={t("settings.devices.openCodeHint", { site: FRONT_DOOR })} />
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>

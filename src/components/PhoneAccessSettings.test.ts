@@ -713,4 +713,40 @@ describe("This PC", () => {
     for (const label of labels) expect(host.textContent).toContain(label);
     await act(async () => root.unmount());
   });
+  describe("short code", () => {
+    const DOOR = "abcdefghijklmnop.app.getwink.dev";
+
+    it.each([
+      ["en", "Code", "Copy", "Or type this code at app.getwink.dev on any device."],
+      ["ko", "코드", "복사", "또는 아무 기기에서 app.getwink.dev에 이 코드를 입력하세요."],
+    ])("shows this PC's code beside the QR with its own Copy on app.getwink.dev, in %s", async (locale, label, copy, hint) => {
+      localStorage.setItem("omb-locale", locale);
+      serve({
+        "GET /api/phone-relay/status": () => status({ host: DOOR }),
+        "GET /api/phone-relay/code": () => ({ code: "ABCDEF" }),
+        "GET /api/google-account": signedIn,
+        "GET /api/phone/devices": () => ({ phones: [] }),
+      });
+      const { host, root } = await renderView();
+      await vi.waitFor(() => expect(host.querySelector("[data-open-code] [data-room-code-text]")?.textContent).toBe("ABCDEF"));
+      const box = host.querySelector("[data-open-code]")!;
+      expect(box.closest("[data-account-row]")?.querySelector("[data-relay-qr]")).not.toBeNull();
+      expect(box.textContent).toContain(label);
+      expect(box.textContent).toContain(hint);
+      expect(button(box, copy)).toBeDefined();
+      await act(async () => root.unmount());
+    });
+
+    it.each([
+      { on: "another relay base", relay: status() },
+      { on: "phone access off", relay: status({ host: DOOR, enabled: false, state: "off" }) },
+      { on: "not connected yet", relay: status({ host: DOOR, state: "reconnecting" }) },
+    ])("asks for no code on $on", async ({ relay }) => {
+      serve({ "GET /api/phone-relay/status": () => relay, "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [] }) });
+      const { host, root } = await renderView();
+      expect(request.mock.calls.map(([path]) => path)).not.toContain("/api/phone-relay/code");
+      expect(host.querySelector("[data-open-code]")).toBeNull();
+      await act(async () => root.unmount());
+    });
+  });
 });
