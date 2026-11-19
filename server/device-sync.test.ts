@@ -12,6 +12,7 @@ import {
   heldRemovals,
   listDevices,
   loadDeviceName,
+  machineKey,
   namedDevicePeers,
   pickerDevices,
   saveDeviceName,
@@ -191,6 +192,12 @@ describe("relay presence", () => {
     writeDeviceRecord(folder, rec("home"), NOW);
     expect(listDevices(folder, "lap-new", NOW).map((d) => d.deviceId)).toEqual(["relay-new", "home", "lap-new"]);
     expect(listDevices(folder, "home", NOW).map((d) => d.deviceId)).toEqual(["relay-new", "home", "lap-new"]);
+  });
+
+  it("keys a PC by machine and data dir", () => {
+    expect(machineKey("/a/.orbit")).toMatch(/^[0-9a-f]{16}$/);
+    expect(machineKey("/a/.orbit")).toBe(machineKey("/a/.orbit"));
+    expect(machineKey("/a/.orbit")).not.toBe(machineKey("/b/.orbit"));
   });
 
   it("never merges different machines, even on one tailnet host, or different hosts", () => {

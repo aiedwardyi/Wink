@@ -2382,7 +2382,7 @@ function scheduleProfilePublish(): void {
 let deviceName = loadDeviceName(DATA_DIR);
 let deviceLaptop = false;
 const removedPcs: Record<string, number> = {};
-const deviceMachine = machineKey();
+const deviceMachine = machineKey(DATA_DIR);
 
 function publishDeviceRecord(): void {
   const folder = profileSyncSettings.folder;

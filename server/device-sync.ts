@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import { z } from "zod";
 
@@ -126,13 +126,13 @@ function samePc(a: DeviceRecord, b: DeviceRecord): boolean {
   return a.host !== a.relayHost && a.host === b.host;
 }
 
-/** Stable across a reinstall on one PC and different on a PC that got a copied ~/.orbit. */
-export function machineKey(): string {
+/** Stable across a reinstall on one PC; different on a PC that got a copied ~/.orbit, or for a second data dir on one PC. */
+export function machineKey(dataDir: string): string {
   let user = "";
   try {
     user = userInfo().username;
   } catch {}
-  return createHash("sha256").update(["wink-device", hostname(), user, homedir()].join("\0")).digest("hex").slice(0, 16);
+  return createHash("sha256").update(["wink-device", hostname(), user, homedir(), resolve(dataDir)].join("\0")).digest("hex").slice(0, 16);
 }
 
 /** Removals still in force: one whose PC ran Wink again, or whose record is gone, drops out. */
