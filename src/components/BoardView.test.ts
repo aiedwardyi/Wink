@@ -196,6 +196,23 @@ describe("Forum", () => {
     expect([...document.body.querySelectorAll("[data-message-menu] [role=menuitem]")].map((item) => item.textContent)).toEqual(["Copy", "Delete"]);
   });
 
+  it("draws the person icon, not a letter, on the user's reply with no profile name", async () => {
+    posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
+    await render(BoardView);
+    await openRow("pbot");
+    for (const config of [undefined, { profile: { name: "" } }]) {
+      mock.state.config = config;
+      await render(BoardView);
+      const mine = host.querySelector('[data-board-post="pmine"]')!;
+      expect(mine.querySelector("svg.lucide-user")).not.toBeNull();
+      expect(mine.querySelector("[data-board-author]")!.textContent).toBe("You");
+    }
+    mock.state.config = { profile: { name: "Mina Park" } };
+    await render(BoardView);
+    expect(host.querySelector('[data-board-post="pmine"] svg.lucide-user')).toBeNull();
+    expect(host.querySelector('[data-board-post="pmine"]')!.textContent).toContain("MP");
+  });
+
   it("asks before deleting the user's own reply, and Cancel keeps it", async () => {
     posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
     const ok = globalThis.fetch;

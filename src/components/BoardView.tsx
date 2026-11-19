@@ -59,18 +59,19 @@ const EMPTY_MARK_SIZE = 30;
 const EMPTY_RING_RADIUS = 56;
 const EMPTY_RING_BOX = 2 * EMPTY_RING_RADIUS + EMPTY_MARK_SIZE;
 
-type UserLook = { name: string; avatarUrl?: string };
+type UserLook = { name: string; initials: string; avatarUrl?: string };
 
 function useUserLook(): UserLook {
   const { t } = useI18n();
   const { state } = useStore();
   const profile = shownProfile(state)?.profile;
   const name = profile?.name?.trim() || profile?.email?.trim() || t("chrome.you");
+  const initials = profileInitials(profile);
   const avatarUrl = profile?.avatarUrl;
-  return useMemo(() => ({ name, avatarUrl }), [name, avatarUrl]);
+  return useMemo(() => ({ name, initials, avatarUrl }), [name, initials, avatarUrl]);
 }
 
-const userFace = (user: UserLook) => (size: number) => <InitialsAvatar initials={profileInitials({ name: user.name })} imageUrl={user.avatarUrl} size={size} />;
+const userFace = (user: UserLook) => (size: number) => <InitialsAvatar initials={user.initials} imageUrl={user.avatarUrl} size={size} />;
 
 function useUserFace() {
   const user = useUserLook();
