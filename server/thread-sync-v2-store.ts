@@ -138,6 +138,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     return withMessageTransaction((db) => storedTaskSchema.optional().parse(db.prepare("SELECT * FROM sync_v2_store WHERE threadId = ?").get(threadId)));
   }
 
+  /** False once another pull filed this chat past `task`: paging on from its old cursor replays old heads and rewinds the chat. */
+  function current(task: StoredTask): boolean {
+    return stored(task.threadId)?.cursor === task.cursor;
+  }
+
   /** A cleared bot map mints new sync ids; chats stay on the old ones until this runs. */
   function followBotIds(): string[] {
     const wanted = new Map(host.bots().map((bot) => [bot.botId, bot.botSyncId]));
@@ -478,6 +483,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   function finishPull(task: StoredTask, target: Target, cursor: number, own: string | null | undefined, heads: Parameters<typeof syncHold.pulled>[2]): void {
+    if (!current(task)) return;
     resolveHeads(task, task.cursor !== cursor, own);
     notifyConflict(task);
     if (task.cursor !== cursor && !room(target)) host.store.applySyncImport(() => host.imported(target.botId));
@@ -606,7 +612,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   function adoptPage(task: StoredTask): boolean {
-    if (!host.enabled() || host.folder() !== workerFolder || host.running(task.threadId)) return false;
+    if (!host.enabled() || host.folder() !== workerFolder || host.running(task.threadId) || !current(task)) return false;
     const more = consume(task, 1);
     const result = more ? null : engine.applyPending(task);
     if (!more) consume(task, 1);

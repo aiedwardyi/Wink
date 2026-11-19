@@ -562,6 +562,73 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await poll;
   });
 
+  it("keeps a chat on its newest message when its own pull lands between the poll's pages", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const c = pc(folder, "c");
+    await a.call("seed", { threadId: "big" });
+    await a.call("append", { threadId: "big", text: "big" });
+    await a.call("flush", { threadId: "big" });
+    await c.call("poll");
+    await a.call("batch", { threadId: "big", count: 2000 });
+    await a.call("flush", { threadId: "big" });
+    const newest = (await a.call<Snapshot>("snapshot", { threadId: "big" })).leaf;
+    await c.call("open", { threadId: "big" });
+    const poll = c.call("poll");
+    let filed = 0;
+    await vi.waitFor(async () => {
+      filed = (await c.call<Snapshot>("snapshot", { threadId: "big" })).rows.length;
+      expect(filed).toBeGreaterThan(1);
+    }, { timeout: 30_000, interval: 5 });
+    expect(filed).toBeLessThan(2001);
+    await c.call("pull", { threadId: "big" });
+    expect((await c.call<Snapshot>("snapshot", { threadId: "big" })).leaf).toBe(newest);
+    const sent = await c.call<Message>("append", { threadId: "big", text: "sent mid-poll" });
+    expect(sent.parentId).toBe(newest);
+    await poll;
+    await c.call("flush", { threadId: "big" });
+    await a.call("poll");
+    for (const peer of [a, c]) {
+      const chat = await peer.call<Snapshot>("snapshot", { threadId: "big" });
+      expect(chat.leaf).toBe(sent.id);
+      expect(path(chat)).toHaveLength(2002);
+    }
+  });
+
+  it("keeps every row on both PCs when the home PC writes while the laptop files the chat", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const c = pc(folder, "c");
+    await a.call("seed", { threadId: "big" });
+    await a.call("append", { threadId: "big", text: "big" });
+    await a.call("flush", { threadId: "big" });
+    await c.call("poll");
+    await a.call("batch", { threadId: "big", count: 2000 });
+    await a.call("flush", { threadId: "big" });
+    await c.call("open", { threadId: "big" });
+    const poll = c.call("poll");
+    let filed = 0;
+    await vi.waitFor(async () => {
+      filed = (await c.call<Snapshot>("snapshot", { threadId: "big" })).rows.length;
+      expect(filed).toBeGreaterThan(1);
+    }, { timeout: 30_000, interval: 5 });
+    const home = await a.call<Message>("append", { threadId: "big", text: "home writes mid-poll" });
+    await a.call("flush", { threadId: "big" });
+    expect(filed).toBeLessThan(2001);
+    await c.call("pull", { threadId: "big" });
+    expect((await c.call<Snapshot>("snapshot", { threadId: "big" })).leaf).toBe(home.id);
+    const sent = await c.call<Message>("append", { threadId: "big", text: "laptop sends" });
+    expect(sent.parentId).toBe(home.id);
+    await poll;
+    await c.call("flush", { threadId: "big" });
+    await a.call("poll");
+    for (const peer of [a, c]) {
+      const chat = await peer.call<Snapshot>("snapshot", { threadId: "big" });
+      expect(chat.leaf).toBe(sent.id);
+      expect(path(chat)).toHaveLength(2003);
+    }
+  });
+
   it("files a chat opened mid-poll next, before the rest of the queue", async () => {
     const folder = temp();
     const a = pc(folder, "a");
