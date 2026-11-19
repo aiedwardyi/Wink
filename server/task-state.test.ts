@@ -718,8 +718,10 @@ describe("artifact overflow", () => {
     const sidecar = join(dir, "thread-1.artifacts.jsonl");
     const lines: string[] = [];
     let bytes = 0;
-    while (bytes < 8 * 1024 * 1024 - 750) {
+    // fill by bytes, not a fixed margin: temp paths differ by OS and the append must cross the cap on all of them
+    for (;;) {
       const line = `${JSON.stringify({ ref: join(dir, "history", `file-${lines.length}.md`), label: "p".repeat(185) })}\n`;
+      if (bytes + Buffer.byteLength(line) > 8 * 1024 * 1024 - 100) break;
       lines.push(line);
       bytes += Buffer.byteLength(line);
     }
