@@ -24,7 +24,7 @@ import { validateProjectNotes, type createProjectNotesCheck } from "./project-no
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { timelinePicks } from "./timeline-picks.ts";
-import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopicResult, saveMemoryFile, workspaceDir } from "./workspace.ts";
+import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 type BotRouteDeps = {
   cancelUsageWait?: (botId: string) => void;
@@ -527,9 +527,14 @@ export function createBotRoutes(deps: BotRouteDeps) {
         return json(res, 400, { error: "invalid topic name" });
       }
       if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
-      const text = readMemoryTopicResult(m[1], name);
-      if (text === undefined && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
-      if (text == null) return json(res, 404, { error: "no such topic file" });
+      let text: string | null;
+      try {
+        text = readMemoryTopic(m[1], name);
+      } catch {
+        return json(res, 500, { error: "internal error" });
+      }
+      if (text === null && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
+      if (text === null) return json(res, 404, { error: "no such topic file" });
       if (name !== PICKS_FILE) return json(res, 200, { name, text });
       const entries = timelinePicks(parseTimeline(text).entries, bot, store);
       return json(res, 200, { name, text, entries });

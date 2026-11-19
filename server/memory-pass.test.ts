@@ -19,6 +19,7 @@ import {
   type MemoryPass,
   type NoteGenerator,
 } from "./memory-pass.ts";
+import * as atomic from "./atomic.ts";
 import { memoryNotesEnabled } from "./config.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { replyTurns } from "./pick-sources.ts";
@@ -731,16 +732,20 @@ describe("memory pass", () => {
     const old = "- Repo uses spaces (noted 2026-10-01)";
     const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
     writeMemoryFile("bot-t1", notes);
-    // a folder where the timeline goes fails its write
     const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
-    mkdirSync(side, { recursive: true });
+    const write = atomic.writeFileAtomic;
+    const failWrite = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...args) => {
+      if (path === side) throw new Error("timeline write failed");
+      write(path, ...args);
+    });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
     say("t1", "tabs");
     generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs", replaces: old }]));
     await settle("t1", 3 * MINUTE);
+    expect(failWrite).toHaveBeenCalledWith(side, expect.any(String), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(notes);
-    rmSync(side, { recursive: true });
+    failWrite.mockRestore();
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
     expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n");
@@ -938,13 +943,13 @@ describe("memory pass filters", () => {
       expect(picked([decision("Repo password stays Tr0ub4dor", "yes")], [{ text: "yes", context: "Keep the repo password Tr0ub4dor?" }], "")).toEqual([]);
     });
 
-    it("keeps 3 per pass and one line per quote", () => {
+    it("keeps every decision in a pass and one line per quote", () => {
       const text = "dark, tabs, pnpm, vitest and npm";
       const context = "dark or light, tabs or spaces, pnpm or npm, vitest or jest, npm or yarn?";
       const own = [decision("Dark theme", "dark"), decision("Tabs for indent", "tabs"), decision("Pnpm for installs", "pnpm"), decision("Vitest for tests", "vitest")];
-      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       const shared = own.map((pick) => ({ ...pick, quote: text }));
-      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       expect(picked([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
         { line: "Npm for publishing", kind: "decision" },
       ]);

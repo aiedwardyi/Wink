@@ -30,7 +30,6 @@ const MAX_PENDING = 200;
 const QUOTE_MAX = 120;
 const FACT_MAX = 200;
 const DECISION_MAX = 100;
-const DECISIONS_PER_PASS = 3;
 const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
@@ -156,7 +155,7 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "- Skip one-off requests that are not tweaks, questions, task details, and anything CURRENT NOTES already says.",
     "- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.",
     "- CONTEXT and PICTURES clarify short answers. Quote the user's choice, never the bot's suggestion.",
-    `- kind: "decision", "tweak" or "fact". At most ${DECISIONS_PER_PASS} decisions, one per thing.`,
+    `- kind: "decision", "tweak" or "fact". One decision per thing.`,
     `- decision: key is the thing decided, never the option, in 2-6 chat words, copied exactly if CURRENT PICKS has it. fact is the pick, ${DECISION_MAX} characters max, with its letter or number, like "C - Reddit cards"; over: the options it beat; picture, over_pictures: copy paths from PICTURES, a continued <prior> or CURRENT PICKS.`,
     "- \"actually c\" moving a CURRENT PICKS pick to an option it beat is a new decision, same key, even with tweaks after it.",
     "- tweak: a change the user asked for on a pick, like \"make the header smaller\"; key: that pick's key. Never a new pick.",
@@ -398,7 +397,7 @@ function confirmed(sources: UserLine[], said: string, picked: string, before: Pi
   return sameOption(option, picked) ? answer : undefined;
 }
 
-/** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, on 3 questions at most, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
+/** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
 export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): Note[] {
   const sources = Array.isArray(userText) ? userText : [{ text: userText }];
   const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretValue(paragraph));
@@ -414,7 +413,6 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
   const live = new Set(current.keys());
   const seen = new Set<string>();
   const decided = new Set<string>();
-  const keys = new Set<string>();
   const taken = new Set<string>();
   const accept = (fact: Fact): Note | null => {
     const { kind, quote, replaces } = fact;
@@ -457,7 +455,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       if (before) known.push({ text: [before.key, before.picked, ...before.over].join("\n") });
       // a second pick on one question in the same lines is a change of mind: both land, in the order said
       const id = `pick ${pickKey(thing)} ${source.id ?? squash(said)}`;
-      if ((keys.size >= DECISIONS_PER_PASS && !keys.has(pickKey(thing))) || seen.has(id) || !grounded(named, said, known, line) || !userChose(line, said, [{ ...source, context }])) return null;
+      if (seen.has(id) || !grounded(named, said, known, line) || !userChose(line, said, [{ ...source, context }])) return null;
       // an older Auto Notes line on this question leaves MEMORY.md for the timeline, named by the note-taker or not
       const listed = replaceable(replaces, lines, claims) && (inSection(replaces) || legacyLine(thing, [replaces], taken) === replaces) && !taken.has(replaces) ? replaces : undefined;
       const target = listed ?? legacyLine(thing, lines, taken);
@@ -471,7 +469,6 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
       }, identified.length === 1 ? identified[0] : undefined, before);
       const old = target ? NOTED.exec(target) : null;
       seen.add(id);
-      keys.add(pickKey(thing));
       live.add(pickKey(thing));
       decided.add(squash(said));
       const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? (source.id ? 0 : source.at ?? 0), key: thing, picked: line, said };
@@ -660,7 +657,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const land = (botId: string, threadId: string, batch: Batch, memory: { text: string; revision: string }, raw: string, ms: number) => {
-    const timeline = readMemoryTopic(botId, PICKS_FILE) ?? "";
+    let timeline: string;
+    try {
+      timeline = readMemoryTopic(botId, PICKS_FILE) ?? "";
+    } catch (error) {
+      held.set(threadId, batch);
+      log({ botId, threadId, lines: batch.source.length, ms, result: "error" });
+      console.warn(`[memory-pass] ${PICKS_FILE} read failed (${error instanceof Error ? error.name : "error"})`);
+      return arm(botId, threadId);
+    }
     const accepted = acceptFacts(batch.facts, batch.source, memory.text, timeline);
     if (!accepted.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });

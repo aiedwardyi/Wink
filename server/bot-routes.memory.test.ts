@@ -212,11 +212,34 @@ it("resolves an untagged legacy thumbnail to its room's thread from direct chat"
   expect((await read()).body.entries[0]).toMatchObject({ thread: room.threadId, files: [path] });
 });
 
-it("returns 404 for a decisions.md read error and 200 for a fresh bot", async () => {
+it("returns 500 for a decisions.md read error and 200 for a fresh bot", async () => {
   const { file, read } = timelineRoute("bot-read-error");
   expect(await read()).toMatchObject({ status: 200, body: { text: "", entries: [] } });
   mkdirSync(file);
-  expect((await read()).status).toBe(404);
+  expect((await read()).status).toBe(500);
+});
+
+it.each([
+  ["a minute heading", "bot-stale-minute", () => ["- Files: /shots/menu.png"]],
+  ["a minute heading in its thread", "bot-stale-thread", (thread: string) => ["- Files: /shots/menu.png", `- Thread: ${thread}`]],
+  ["a text-only pick's At", "bot-stale-at", () => [`- At: ${MINUTE}`]],
+] as const)("prints no time when the quote is not at %s", async (_label, id, extra) => {
+  const { store, threadId, file, read } = timelineRoute(id);
+  store.appendMessage(threadId, { role: "user", kind: "text", at: MINUTE, text: "different work" });
+  store.appendMessage(threadId, { role: "user", kind: "text", at: MINUTE + 60_000, text: 'keep the red menu\n\n<attached-image path="/shots/menu.png"/>' });
+  writeFileSync(file, ["# Decision timeline", "", "## 2026-11-17 10:00 | Menu | current", "- Picked: Red menu", '- Said: "keep the red menu"', ...extra(threadId), ""].join("\n"));
+  const [entry] = (await read()).body.entries;
+  expect(entry).toMatchObject({ binding: "unbound", files: [] });
+  expect(entry?.at).toBeUndefined();
+});
+
+it("keeps the time of text-only picks quoted at their At, two from one line", async () => {
+  const { store, threadId, file, read } = timelineRoute("bot-text-at");
+  const line = store.appendMessage(threadId, { role: "user", kind: "text", at: MINUTE + 15_000, text: "dark theme and tabs" });
+  writeFileSync(file, ["# Decision timeline", "", ...["Theme", "Indent"].flatMap((key, i) => [
+    `## 2026-11-17 10:00${i ? " (2)" : ""} | ${key} | current`, `- Picked: ${key === "Theme" ? "Dark" : "Tabs"}`, `- Said: "${key === "Theme" ? "dark theme" : "tabs"}"`, `- At: ${line.at}`, "",
+  ])].join("\n"));
+  expect((await read()).body.entries.map(({ at, binding }) => [at, binding])).toEqual([[line.at, undefined], [line.at, undefined]]);
 });
 
 it("keeps the bound screenshot and At when the answer lands on the exact minute", async () => {
