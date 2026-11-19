@@ -182,23 +182,41 @@ describe("composer reply focus", () => {
     expect(document.activeElement).not.toBe(textarea);
   });
 
-  it("requests prewarm again on later focus and typing", async () => {
-    const textarea = await mount(null);
+  it("prewarms once per focus and again when the engine or working folder changes", async () => {
+    const textarea = await mount(null) as HTMLTextAreaElement;
     const bot: Bot = {
       id: "prewarm", threadId: "prewarm-thread", name: "Prewarm", title: "", description: "",
       notifications: false, color: "blue", unread: false, messages: [],
       modelSelection: { instanceId: "grok", model: "grok" },
     };
-    await act(async () => root!.render(createElement(Composer, { bot })));
+    const requests = () => vi.mocked(api).mock.calls.filter(([path]) => path.endsWith("/prewarm"));
+    const render = async (next: Bot) => act(async () => root!.render(createElement(Composer, { bot: next })));
+    await render(bot);
     await act(async () => textarea.focus());
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      for (const key of "a".repeat(40)) {
+        textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+        setValue.call(textarea, textarea.value + key);
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    expect(textarea.value).toBe("a".repeat(40));
+    expect(requests()).toHaveLength(1);
     expect(api).toHaveBeenCalledWith("/api/bots/prewarm/prewarm", { method: "POST" });
-    vi.mocked(api).mockClear();
-    await act(async () => { textarea.blur(); textarea.focus(); });
-    expect(api).toHaveBeenCalledTimes(1);
-    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })));
-    expect(api).toHaveBeenCalledTimes(2);
-    await act(async () => root!.render(createElement(Composer, { bot: { ...bot, id: "other" } })));
-    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true })));
+    await render({ ...bot, unread: true });
+    expect(requests()).toHaveLength(1);
+    const switched = { ...bot, modelSelection: { instanceId: "claude", model: "opus" } };
+    await render(switched);
+    expect(requests()).toHaveLength(2);
+    await render({ ...switched, cwd: "/work/folder" });
+    expect(requests()).toHaveLength(3);
+    await act(async () => textarea.blur());
+    await render(bot);
+    expect(requests()).toHaveLength(3);
+    await act(async () => textarea.focus());
+    expect(requests()).toHaveLength(4);
+    await render({ ...bot, id: "other" });
     expect(api).toHaveBeenLastCalledWith("/api/bots/other/prewarm", { method: "POST" });
   });
 
