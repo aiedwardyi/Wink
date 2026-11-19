@@ -370,6 +370,21 @@ describe("team rooms on the user's other PCs", () => {
     expect(joinSeat).toHaveBeenCalledTimes(1);
   });
 
+  it("upgrades only the live sync seat once when the host publishes its owner code", async () => {
+    const tk = hostTk();
+    serve("room-1", 1);
+    await rounds();
+    const ownerCode = `wkr1:abc.wink.test:seat_room-1.${secret(2)}`;
+    invites.set("room-1", ownerCode);
+    await rounds();
+    expect(joinSeat.mock.calls).toEqual([[code(1), "room-1"], [ownerCode, "room-1"]]);
+    expect(joinsOf(workDir)[tk.id]).toMatchObject({ state: "joined" });
+    expect(folderText()).not.toContain(secret(2));
+    expect(endJoined("room-1", "left")).toBe(true);
+    await rounds();
+    expect(joinSeat).toHaveBeenCalledTimes(2);
+  });
+
   it("puts no code in the folder that joins by itself", async () => {
     const tk = hostTk();
     serve("room-1", 1);

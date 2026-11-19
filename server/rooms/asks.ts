@@ -204,7 +204,7 @@ function askInvalid(ask: RoomAsk): { end: AskEnd; line?: string } | null {
   if (peopleOnlyRoom(ask.roomId)) return { end: "failed" };
   const group = need().store.groupByThread(ask.threadId);
   if (group?.hosted?.roomId !== ask.roomId || !group.memberIds.includes(ask.botId)) return { end: "cancelled" };
-  if (ask.asker.kind === "person" && !roomPeople(ask.roomId).some((person) => person.id === ask.asker.id)) return { end: "cancelled" };
+  if (ask.asker.kind === "person" && !roomPeople(ask.roomId, true).some((person) => person.id === ask.asker.id)) return { end: "cancelled" };
   return null;
 }
 
@@ -283,7 +283,7 @@ export function teammateAskTurn(roomId: string, threadId: string, botId: string)
 }
 
 /** The host, or a person the host turned "Can make bots work" on for. Keyed on who asked, never on the bot. */
-const askerWorks = (ask: RoomAsk) => ask.asker.kind === "host" || roomPeople(ask.roomId).some((person) => person.id === ask.asker.id && person.works);
+const askerWorks = (ask: RoomAsk) => ask.asker.kind === "host" || roomPeople(ask.roomId, true).some((person) => person.id === ask.asker.id && person.works);
 
 /** Every ask one turn answers may make the bot work; one read-only asker makes the whole turn read-only. */
 export function asksWork(asks: readonly RoomAsk[]): boolean {
@@ -393,7 +393,7 @@ export function revalidatePersonAsks(roomId: string, personId: string): Promise<
   const asks = roomAsks(roomId, ["held", "queued", "running"]).filter((ask) => ask.asker.kind === "person" && ask.asker.id === personId);
   return Promise.all(asks.map((ask) => {
     const invalid = ask.state === "held"
-      ? roomPeople(roomId).some((person) => person.id === personId) ? null : { end: "cancelled" as const }
+      ? roomPeople(roomId, true).some((person) => person.id === personId) ? null : { end: "cancelled" as const }
       : askInvalid(ask);
     return invalid ? endAsk(ask.id, invalid.end, invalid.line) : false;
   }));

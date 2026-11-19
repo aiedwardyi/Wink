@@ -16,7 +16,7 @@ import {
   type ProfileSyncSettings, type ProfileSyncState, type SyncedRoom,
 } from "./profile-sync.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
-import { isSeatKey, openSeat, sealSeat, seatKey } from "./rooms/seat-key.ts";
+import { isOwnerRoomCode, isSeatKey, openSeat, sealSeat, seatKey } from "./rooms/seat-key.ts";
 import { UNTITLED_TASK, type GroupDefaultResponder, type GroupRecord, type Store } from "./store.ts";
 
 export const ROOM_SYNC_FILE = "room-sync.json";
@@ -31,7 +31,7 @@ export interface RoomSyncHost {
   /** Chat sync holds this thread and has not taken its delete. */
   syncing?(threadId: string): boolean;
   /** The code of a team room this PC hosts, or null while it cannot be reached. */
-  invite?(roomId: string): string | null;
+  invite?(roomId: string, deviceId: string): string | null;
   /** Joins a team room as a guest seat, unless this PC has one there by then. */
   join?(code: string, roomId: string): Promise<{ ok: true } | { ok: false; status: number; error: string }>;
   /** Whether this PC has a guest seat in the room, left or removed too, or the user left it here by hand. */
@@ -225,19 +225,21 @@ export function publishRooms(host: RoomSyncHost, folder: string): number {
   for (const group of store.groups) {
     if (!group.hosted) continue;
     const roomId = group.hosted.roomId;
-    const code = host.invite?.(roomId) ?? null;
+    const available = host.invite?.(roomId, settings.deviceId);
     const sealed = { ...file.sealed[group.id] };
     const changes: Record<string, unknown> = {};
-    for (const [deviceId, key] of code ? Object.entries(file.seats[group.id] ?? {}) : []) {
+    for (const [deviceId, key] of available ? Object.entries(file.seats[group.id] ?? {}) : []) {
+      const code = host.invite?.(roomId, deviceId);
+      if (!code) continue;
       const mark = createHash("sha256").update(`${roomId}\n${code}\n${key}`).digest("base64url");
       if (sealed[deviceId] === mark) continue;
-      changes[`${SEAL}${deviceId}`] = sealSeat(key, code!, `${group.id}:${roomId}`);
+      changes[`${SEAL}${deviceId}`] = sealSeat(key, code, `${group.id}:${roomId}`);
       sealed[deviceId] = mark;
     }
     // a room turned team room leaves the other PCs; its threads stop syncing, so no delete would follow.
     // A pointer from an earlier build carried the code in the clear; the first one from here clears it.
     const pointed = file.pointers[group.id] === roomId && !marked.has(group.id);
-    if ((pointed || (!code && !marked.has(group.id))) && !Object.keys(changes).length) continue;
+    if ((pointed || (!available && !marked.has(group.id))) && !Object.keys(changes).length) continue;
     if (!write(group.id, { hosted: true, room: roomId, ...(pointed ? {} : { invite: null }), ...changes }, host.now())) continue;
     forget(file, marked, group.id);
     file.pointers[group.id] = roomId;
@@ -411,7 +413,8 @@ function point(host: RoomSyncHost, file: RoomSyncFile, groupId: string, room: st
   // an entry from before pointers named rooms is for the room the group has
   if (was && (!was.room || was.room === room)) {
     was.room = room;
-    if (was.state === "joined" || was.state === "left" || !code || code === was.code) return;
+    const upgrade = isOwnerRoomCode(code) && !isOwnerRoomCode(was.code);
+    if ((was.state === "joined" && !upgrade) || was.state === "left" || !code || code === was.code) return;
     file.joins[groupId] = { ...was, code, state: "waiting" };
     return;
   }
@@ -437,7 +440,7 @@ export function joinTeamRooms(host: RoomSyncHost, folder: string): void {
     const key = `${host.dataDir}\n${groupId}`;
     if (state !== "waiting" || !code || !room || joining.has(key)) continue;
     // a seat taken or left by hand stays as the user left it; a join would reset it
-    if (host.joined?.(room)) {
+    if (host.left?.(room) || (!isOwnerRoomCode(code) && host.joined?.(room))) {
       entry.state = host.left?.(room) ? "left" : "joined";
       continue;
     }

@@ -11,6 +11,9 @@ const KEY_FILE = "room-seat-key.json";
 const INFO = "wink room seat v1";
 const PUBLIC = /^[A-Za-z0-9_-]{43}$/;
 const SEALED = /^v1\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{24,700})$/;
+const CODE_ID = /^wkr1:[a-z0-9.-]+:([\w-]+)\./;
+export const OWNER_SEAT_PREFIX = "seat_";
+export const isOwnerRoomCode = (code?: string | null): boolean => CODE_ID.exec(code ?? "")?.[1]?.startsWith(OWNER_SEAT_PREFIX) === true;
 
 export const isSeatKey = (value: unknown): value is string => typeof value === "string" && PUBLIC.test(value);
 

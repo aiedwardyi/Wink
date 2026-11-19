@@ -13,6 +13,7 @@ export interface JoinedEntry {
   id: string;
   at: number;
   author: { kind: "host" | "person" | "bot"; id: string; name: string; owner?: string };
+  seat?: string;
   text: string;
   replyToId?: string;
   files?: JoinedFile[];
@@ -41,7 +42,8 @@ export interface JoinedState {
   roomName: string;
   instructions: string;
   host: string;
-  me: { id: string; name: string };
+  me: { id: string; name: string; host?: true };
+  hostSeats?: string[];
   /** `works` is the host's "Can make bots work" switch; absent from an older host. */
   people: Array<{ id: string; name: string; works?: boolean }>;
   bots: Array<{ id: string; name: string; color: string; mascotStyle?: string }>;
@@ -63,7 +65,7 @@ export type JoinedStatus = "joined" | "removed" | "left";
 export interface JoinedRoom {
   roomId: string;
   relayHost: string;
-  me: { id: string; name: string };
+  me: JoinedState["me"];
   status: JoinedStatus;
   state: JoinedState | null;
   joinedAt: number;
@@ -212,14 +214,14 @@ function transaction<T>(work: (database: DatabaseSync) => T): T {
 
 const COLUMNS = "room_id, relay_host, person_id, person_name, status, state, joined_at";
 
-const rowToRoom = (row: RoomRow): JoinedRoom => ({
-  roomId: row.room_id,
-  relayHost: row.relay_host,
-  me: { id: row.person_id, name: row.person_name },
-  status: row.status,
-  state: row.state ? ({ bots: [], ...JSON.parse(row.state) } as JoinedState) : null,
-  joinedAt: row.joined_at,
-});
+const rowToRoom = (row: RoomRow): JoinedRoom => {
+  const state = row.state ? ({ bots: [], ...JSON.parse(row.state) } as JoinedState) : null;
+  return {
+    roomId: row.room_id, relayHost: row.relay_host,
+    me: { id: row.person_id, name: row.person_name, ...(state?.me.host ? { host: true } : {}) },
+    status: row.status, state, joinedAt: row.joined_at,
+  };
+};
 
 /** A fresh join replaces any earlier copy of the room. */
 export function saveJoined(roomId: string, relayHost: string, me: { id: string; name: string }, key: string, code?: string): JoinedRoom {
@@ -356,8 +358,8 @@ export function joinedSummary(room: JoinedRoom): { unread: number; lastEntry?: J
   const { unread } = db().prepare(`
     SELECT COUNT(*) AS unread FROM entries
     WHERE room_id = ? AND seq > COALESCE((SELECT seq FROM room_reads WHERE room_id = ?), 0)
-      AND NOT (json_extract(body, '$.author.kind') = 'person' AND json_extract(body, '$.author.id') = ?)
-  `).get(room.roomId, room.roomId, room.me.id) as { unread: number };
+      AND NOT (json_extract(body, '$.author.kind') = ? AND json_extract(body, '$.author.id') = ?)
+  `).get(room.roomId, room.roomId, room.me.host ? "host" : "person", room.me.host ? "host" : room.me.id) as { unread: number };
   const lastEntry = joinedEntries(room.roomId, 1)[0];
   return { unread, ...(lastEntry ? { lastEntry } : {}) };
 }
@@ -413,8 +415,16 @@ export function joinedCursor(roomId: string): number {
 
 /** An equal-version state can fill a bot roster a previous build did not keep. */
 export function setJoinedState(roomId: string, state: JoinedState): boolean {
-  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND (json_extract(state, '$.bots') IS NULL OR (? = 1 AND json_extract(state, '$.teamBots') IS NULL))))")
-    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version, Number(state.teamBots !== undefined)).changes > 0;
+  return transaction((database) => {
+    const changed = database.prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND (json_extract(state, '$.bots') IS NULL OR (? = 1 AND json_extract(state, '$.teamBots') IS NULL))))")
+      .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version, Number(state.teamBots !== undefined)).changes > 0;
+    if (changed && state.hostSeats?.length) database.prepare(`
+      UPDATE entries SET body = json_set(body, '$.seat', json_extract(body, '$.author.id'), '$.author', json_object('kind', 'host', 'id', 'host', 'name', ?))
+      WHERE room_id = ? AND json_extract(body, '$.author.kind') = 'person'
+        AND json_extract(body, '$.author.id') IN (SELECT value FROM json_each(?))
+    `).run(state.host, roomId, JSON.stringify(state.hostSeats));
+    return changed;
+  });
 }
 
 /** Read-only from here on; the key is gone. A leave is the user's own, so it outlives Remove. */
@@ -438,6 +448,10 @@ export function leftByHand(roomId: string): boolean {
 
 export function joinedCode(roomId: string): string | null {
   return (db().prepare("SELECT code FROM joined_codes WHERE room_id = ?").get(roomId) as { code: string } | undefined)?.code ?? null;
+}
+
+export function saveJoinedCode(roomId: string, code: string): void {
+  db().prepare("INSERT OR REPLACE INTO joined_codes (room_id, code) VALUES (?, ?)").run(roomId, code);
 }
 
 export function removeJoined(roomId: string): boolean {

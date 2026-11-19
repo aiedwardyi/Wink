@@ -72,7 +72,7 @@ import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
 import { roomById } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
-import { roomCode } from "./rooms/invites.ts";
+import { ownerRoomCode } from "./rooms/invites.ts";
 import { joinedRooms, leftByHand, myRoomBotThreads, roomTaskThreads, seatTaken } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
@@ -3632,10 +3632,10 @@ let profileSyncPassed = false;
 const trashSyncHost = (): TrashSyncHost => ({ dataDir: DATA_DIR, store, trash: botTrash!, settings: () => profileSyncSettings, now: Date.now });
 const roomSyncHost = (): RoomSyncHost => ({
   dataDir: DATA_DIR, store, settings: () => profileSyncSettings, now: Date.now, working: groupIsWorking, syncing: (threadId) => threadSyncV2?.holds(threadId) ?? false,
-  invite: (roomId) => {
+  invite: (roomId, deviceId) => {
     const relayHost = phoneAccess.presenceHost();
     if (!relayHost || !roomById(roomId)) return null;
-    const code = roomCode(roomId);
+    const code = ownerRoomCode(roomId, deviceId);
     return `wkr1:${relayHost}:${code.id}.${code.secret}`;
   },
   join: (code, roomId) => guestClient.seat(code, roomId),
