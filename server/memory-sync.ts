@@ -244,6 +244,12 @@ export async function readMemorySnapshots(folder: string, botSyncId: string): Pr
   }
 }
 
+/** The idle tidy runs on one PC per bot, the one the user last messaged it on; a copy not read counts against this PC. */
+export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string, snapshots: SnapshotsRead): boolean {
+  const mine = ledger.talked?.[botSyncId] ?? 0;
+  return snapshots.every((group) => group !== undefined && !group.partial && group.every((copy) => copy.device === ledger.device || copy.talkedAt < mine));
+}
+
 let machineId: string | undefined;
 
 function machine(): string {

@@ -1,57 +1,49 @@
-// The idle tidy ("sleep"): once a bot has been quiet a while, merge duplicate notes and asks and move a note a newer one
+// The idle tidy ("sleep"): once a bot has been quiet a while, merge duplicate notes and move a note a newer one
 // replaced into a monthly history file. It only ever removes lines from MEMORY.md, so it cannot bring back what the user deleted.
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
-import { contentWords, decisionSpan, sameStem, type NoteGenerator } from "./memory-pass.ts";
+import { decisionSpan, type NoteGenerator } from "./memory-pass.ts";
 import { pickStamp } from "./picks.ts";
-import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
-import { ensureWorkspace, memoryFileRaw, readMemoryFile, readMemoryTopic, saveMemoryFile } from "./workspace.ts";
+import { loadedMemory, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 export const SLEEP_IDLE_MS = 30 * 60_000;
 export const SLEEP_GAP_MS = 6 * 60 * 60_000;
 export const SLEEP_TIMEOUT_MS = 120_000;
 const PROMPT_NOTES_MAX = 32_000;
-const PROMPT_ASKS_MAX = 32_000;
 const MOVES_MAX = 20;
-const SHARED = 0.5;
 const STATE_FILE = "memory-sleep.json";
+// beside memory/, so the history is never loaded, synced, listed or recalled
+const HISTORY_DIR = "memory-history";
 const HISTORY_HEAD =
-  "# Memory history\n\nLines the idle tidy moved out of MEMORY.md and asks it closed, oldest first. Nothing here loads into the prompt; copy a line back to MEMORY.md to restore it.\n";
+  "# Memory history\n\nLines the idle tidy moved out of MEMORY.md, oldest first. Nothing here loads into the prompt; copy a line back to MEMORY.md to restore it.\n";
 
 const refsSchema = z.array(z.string()).max(MOVES_MAX);
 const tidySchema = z.object({
   duplicates: z.array(z.object({ keep: z.string(), drop: refsSchema })).max(MOVES_MAX).nullish(),
   disagree: z.array(z.tuple([z.string(), z.string()])).max(MOVES_MAX).nullish(),
 });
-const botStateSchema = z.object({ digest: z.string().optional(), at: z.number().optional(), notice: z.string().optional(), flagged: z.array(z.string()).optional() });
+const botStateSchema = z.object({ digest: z.string().optional(), at: z.number().optional() });
 const stateSchema = z.object({ bots: z.record(z.string(), botStateSchema) });
 
 type BotState = z.infer<typeof botStateSchema>;
-export type NoteLine = { at: number; text: string; date?: string };
+/** section: the index of the heading the note sits under, -1 for none; alone: no line under it belongs to it. */
+export type NoteLine = { at: number; text: string; date?: string; section: number; alone: boolean };
 export type Why = "duplicate" | "replaced";
-export type Tidy = {
-  notes: Array<{ at: number; text: string; by: string; why: Why }>;
-  asks: Array<{ ask: TaskAsk; by: TaskAsk; why: Why }>;
-  flagged: Array<[string, string]>;
-};
+export type Move = { at: number; text: string; by: string; why: Why };
 
 interface SleepLog {
   botId: string;
   notes?: number;
   sentNotes?: number;
-  asks?: number;
-  sentAsks?: number;
   input?: number;
   output?: number;
   moved?: number;
-  closed?: number;
-  flagged?: number;
   ms: number;
-  result: "saved" | "none" | "conflict" | "error";
+  result: "saved" | "none" | "conflict" | "error" | "timeout" | "cancelled";
 }
 
 export interface MemorySleepDeps {
@@ -59,91 +51,119 @@ export interface MemorySleepDeps {
   /** Every bot at boot, so a tidy owed before a restart still runs. */
   bots(): string[];
   generate(botId: string): NoteGenerator | null;
-  /** The bot's Auto notes switch, read live. */
+  /** The bot's Auto notes switch, read live; false on a PC that does not tidy this bot. */
   enabled(botId: string): boolean;
   /** Any turn of the bot running. */
   busy(botId: string): boolean;
-  /** The open asks on the bot's own chat. */
-  asks(botId: string): { threadId: string; asks: readonly TaskAsk[] } | null;
-  /** Saves what change returns; null saves nothing. */
-  saveAsks(threadId: string, change: (asks: readonly TaskAsk[]) => TaskAsk[] | null): void;
+  /** MEMORY.md changed on disk, so an open Memory page reloads it. */
+  changed(botId: string): void;
   now?(): number;
 }
 
 export interface MemorySleep {
   /** Call when any turn of the bot settles: the tidy waits for SLEEP_IDLE_MS of quiet. */
   onSettled(botId: string): void;
-  /** What the last tidy changed, once; "" when nothing waits. */
-  take(botId: string): string;
+  /** Call when any turn of the bot starts: a tidy still waiting on the model stops. */
+  onTurn(botId: string): void;
   idle(): Promise<void>;
   dispose(): void;
 }
 
 const BULLET = /^[-*+]\s+\S/;
+const HEADING = /^#{1,6}\s/;
 const FENCE = /^\s*(?:```|~~~)/;
 const STAMP = /\(noted (\d{4}-\d{2}-\d{2})\)/;
-const DATE = /\b\d{4}-\d{2}-\d{2}\b/g;
-const NEGATION = /(?:^|[^\p{L}])(?:not|no|never|don't|dont|without|avoid|stop)(?![\p{L}])/iu;
-const PROMPT_TAGS = /<\/?(?:notes|asks)\b[^>]*>/gi;
-const STATUS_RANK = { building: 0, "waiting-for-user": 1, open: 2, done: 3, declined: 3 } satisfies Record<TaskAsk["status"], number>;
+const PROMPT_TAGS = /<\/?notes\b[^>]*>/gi;
+// quotes, brackets and closing punctuation around a word; anything inside it (C++, -5%, jo.smith@) counts
+const EDGE = /^["'`“‘([{«「『（]+|["'`”’)\]}»」』）,;:.!?。、，！？：；]+$/gu;
+// words that turn or qualify what the rest of a note says
+const NOT_WORDS = new Set(
+  (
+    "not no never none nothing nobody neither nor cannot without dont doesnt didnt isnt arent wasnt werent wont cant couldnt shouldnt wouldnt hasnt havent hadnt " +
+    "used formerly former previously anymore ex until except unless instead rather but however although though over than less versus vs " +
+    "avoid avoids avoided stop stops stopped quit quits maybe perhaps unsure wrong false cancelled canceled outdated " +
+    "nicht kein keine keinen keiner nie niemals ohne niet geen nooit zonder pas jamais sans aucun aucune nunca sin ni jamás tampoco " +
+    "não nao sem nem non mai senza né не нет без никогда ни 안 못 말고 아님 tidak bukan tanpa jangan belum không chưa chẳng değil yok hiç"
+  ).split(" "),
+);
+const NOT_PARTS = /n['’]t$|않|없|아니|못|ない|ません|ず$|ぬ$|不|没|沒|别|別|無|无|非|未|勿|莫|ไม่|नहीं|मत|बिना/u;
 
 const withoutStamp = (text: string) => text.replace(STAMP, " ");
-/** Same words in the same order, whatever the case, punctuation or Auto Notes stamp. */
-const plain = (text: string) => (withoutStamp(text).replace(/^\s*[-*+]\s+/, "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
-const literals = (text: string) =>
-  withoutStamp(text).toLowerCase().split(/\s+/).map((token) => token.replace(/^[("'`]+|[)"'`,;:.!?]+$/g, "")).filter((token) => token.length > 1 && /[\d\\/.@:]/.test(token));
+const body = (text: string) => withoutStamp(text).replace(/^\s*[-*+]\s+/, "").normalize("NFC");
+/** The same text but for case, spacing, a closing full stop and the Auto Notes stamp: symbols, digits, emoji and marks all count. */
+const twinKey = (text: string) => body(text).replace(/\s+/g, " ").trim().replace(/[\s.!。！]+$/u, "");
+const tokens = (text: string) => body(text).split(/\s+/).map((token) => token.replace(EDGE, "")).filter(Boolean);
+const negates = (token: string) => NOT_WORDS.has(token.toLowerCase()) || NOT_PARTS.test(token.toLowerCase());
 const ref = (line: NoteLine) => `L${line.at + 1}`;
 const day = (now: number) => pickStamp(now).slice(0, 10);
 
-/** MEMORY.md's top-level bullets outside code and the Auto Notes decisions, each with its date: the Auto Notes stamp, else the last date it names. */
+// an indented line under the bullet, or text straight after it, is part of the same note
+function alone(lines: string[], at: number): boolean {
+  const next = lines[at + 1];
+  if (next === undefined || BULLET.test(next) || HEADING.test(next)) return true;
+  if (next.trim()) return false;
+  const after = lines.slice(at + 2).find((line) => line.trim());
+  return after === undefined || !/^\s/.test(after);
+}
+
+/** MEMORY.md's top-level bullets outside code and the Auto Notes decisions, each with the date its Auto Notes stamp gives. */
 export function noteLines(raw: string): NoteLine[] {
-  const lines = raw.split("\n");
+  const lines = raw.split("\n").map((line) => line.replace(/\r$/, ""));
   const span = decisionSpan(lines);
   let fenced = false;
-  return lines.flatMap((line, at) => {
-    if (FENCE.test(line)) {
+  let section = -1;
+  return lines.flatMap((text, at) => {
+    if (FENCE.test(text)) {
       fenced = !fenced;
       return [];
     }
-    const text = line.replace(/\r$/, "");
-    if (fenced || !BULLET.test(text) || (span && at > span[0] && at < span[1])) return [];
-    const date = STAMP.exec(text)?.[1] ?? text.match(DATE)?.at(-1);
-    return [date ? { at, text, date } : { at, text }];
+    if (fenced) return [];
+    if (HEADING.test(text)) section = at;
+    if (!BULLET.test(text) || (span && at > span[0] && at < span[1])) return [];
+    const note: NoteLine = { at, text, section, alone: alone(lines, at) };
+    const date = STAMP.exec(text)?.[1];
+    if (date) note.date = date;
+    return [note];
   });
 }
 
-/** keep says all drop says: most of its words, every number, path and name in it, and the same yes or no. */
-export function covers(keep: string, drop: string): boolean {
-  const need = contentWords(withoutStamp(drop));
-  const have = contentWords(withoutStamp(keep));
-  if (!need.length) return false;
-  const hits = need.filter((word) => have.some((other) => sameStem(word, other))).length;
-  const kept = withoutStamp(keep).toLowerCase();
-  return hits / need.length >= SHARED && literals(drop).every((literal) => kept.includes(literal)) && NEGATION.test(drop) === NEGATION.test(keep);
+/** keep says all drop says: keep starts with drop's words, and what it adds turns none of them. */
+export function holds(keep: string, drop: string): boolean {
+  const [have, need] = [tokens(keep), tokens(drop)];
+  return need.length > 0 && need.length <= have.length && need.every((token, index) => have[index] === token) && !have.slice(need.length).some(negates);
 }
 
-const related = (a: string, b: string) => contentWords(withoutStamp(a)).some((word) => contentWords(withoutStamp(b)).some((other) => sameStem(word, other)));
-const better = (a: TaskAsk, b: TaskAsk) =>
-  STATUS_RANK[a.status] - STATUS_RANK[b.status] || Number(Boolean(b.ref)) - Number(Boolean(a.ref)) || a.at - b.at;
+/** newer replaced older: Auto Notes stamped both, newer later, and they differ in one word near the end that newer does not repeat. */
+function replaces(newer: NoteLine, older: NoteLine): boolean {
+  if (!newer.date || !older.date || newer.date <= older.date) return false;
+  const [before, after] = [tokens(older.text), tokens(newer.text)];
+  if (before.length !== after.length || before.length < 3) return false;
+  const differ = before.flatMap((token, index) => (token === after[index] ? [] : [index]));
+  const at = differ[0] ?? 0;
+  return (
+    differ.length === 1 &&
+    at > 0 &&
+    at >= before.length - 2 &&
+    !after.includes(before[at]!) &&
+    // a path that went would leave the file it points to unread
+    !/[\\/]|\.md$/i.test(before[at]!) &&
+    before.some((token, index) => index !== at && /\p{L}{3,}|\P{ASCII}/u.test(token))
+  );
+}
 
-export function tidyPrompt(notes: NoteLine[], asks: readonly TaskAsk[]): string {
+export function tidyPrompt(notes: NoteLine[]): string {
   const clean = (text: string) => text.replace(PROMPT_TAGS, " ");
   return [
-    "You tidy a bot's notes and its list of the user's open asks. Find only two things:",
-    "- duplicates: entries that say the same thing. keep is the one that says it best; drop lists the ones it fully covers.",
-    "- disagree: two entries about the same thing that cannot both be true now, like a preference the user later changed.",
-    "Compare notes with notes (L ids) and asks with asks (A ids). Entries that add different details are not duplicates. Never judge which side is right.",
+    "You tidy a bot's notes. Find only two things:",
+    "- duplicates: notes that say the same thing. keep is the one that says it best; drop lists the ones it fully covers.",
+    "- disagree: two notes about the same thing that cannot both be true now, like a preference the user later changed.",
+    "Notes that add different details are not duplicates, and two notes that can both be true do not disagree. When unsure, leave them out. Never judge which side is right.",
     'Reply with JSON only: {"duplicates": [{"keep": "L3", "drop": ["L9"]}], "disagree": [["L4", "L12"]]}, or {"duplicates": [], "disagree": []} when nothing qualifies.',
     "",
     "NOTES:",
     "<notes>",
     ...notes.map((line) => `${ref(line)}: ${clean(line.text)}`),
     "</notes>",
-    "",
-    "OPEN ASKS:",
-    "<asks>",
-    ...asks.map((ask) => `${ask.id}: ${clean(ask.ask)}`),
-    "</asks>",
   ].join("\n");
 }
 
@@ -159,71 +179,53 @@ export function parseTidy(output: string): z.infer<typeof tidySchema> {
   }
 }
 
-/** What to move: every same-word duplicate, then up to MOVES_MAX of the model's duplicates and disagreements that pass the checks. A disagreement moves the older line only when both are dated; otherwise both stay, flagged. */
-export function planTidy(raw: string, asks: readonly TaskAsk[], reply = ""): Tidy {
+/** What to move: exact twins, then up to MOVES_MAX of the model's duplicates and disagreements a strict check agrees with. Anything unsure stays. */
+export function planTidy(raw: string, reply = ""): Move[] {
   const lines = noteLines(raw);
   const notes = new Map(lines.map((line) => [ref(line), line] as const));
-  const open = new Map(asks.filter((ask) => isOpenAsk(ask) && ask.kind !== "question").map((ask) => [ask.id, ask] as const));
-  const tidy: Tidy = { notes: [], asks: [], flagged: [] };
-  const gone = new Set<string>();
-  const kept = new Set<string>();
+  const loads = loadedMemory(raw).text.split("\n").length;
+  const moves: Move[] = [];
+  const gone = new Set<NoteLine>();
+  const kept = new Set<NoteLine>();
   let guessed = 0;
-  // same-word merges are certain; a model's moves are capped per run
-  const move = (drop: string, keep: string, why: Why, model = true) => {
-    if ((model && guessed >= MOVES_MAX) || drop === keep || gone.has(drop) || gone.has(keep) || kept.has(drop)) return;
-    const [line, by] = [notes.get(drop), notes.get(keep)];
-    const [ask, over] = [open.get(drop), open.get(keep)];
-    if (line && by) tidy.notes.push({ at: line.at, text: line.text, by: by.text, why });
-    else if (ask && over) tidy.asks.push({ ask, by: over, why });
-    else return;
+  // a twin merge is certain; a model's moves are capped per run
+  const move = (line: NoteLine | undefined, by: NoteLine | undefined, why: Why, model = true) => {
+    if (!line || !by || line === by || (model && guessed >= MOVES_MAX) || gone.has(line) || gone.has(by) || kept.has(line)) return;
+    // only whole notes, under the same heading, and never in favor of a line the prompt does not load
+    if (!line.alone || !by.alone || line.section !== by.section || (line.at < loads && by.at >= loads)) return;
+    moves.push({ at: line.at, text: line.text, by: by.text, why });
     if (model) guessed += 1;
-    gone.add(drop);
-    kept.add(keep);
+    gone.add(line);
+    kept.add(by);
   };
-  const first = new Map<string, string>();
+  const twins = new Map<string, NoteLine[]>();
   for (const line of lines) {
-    const key = `L ${plain(line.text)}`;
-    if (key === "L ") continue;
-    const earlier = first.get(key);
-    if (earlier) move(ref(line), earlier, "duplicate", false);
-    else first.set(key, ref(line));
+    const text = twinKey(line.text);
+    const key = `${line.section} ${text}`;
+    if (text) twins.set(key, [...(twins.get(key) ?? []), line]);
   }
-  const sameAsk = new Map<string, TaskAsk>();
-  for (const ask of [...open.values()].sort(better)) {
-    const key = plain(ask.ask);
-    const earlier = sameAsk.get(key);
-    if (earlier) move(ask.id, earlier.id, "duplicate", false);
-    else if (key) sameAsk.set(key, ask);
+  for (const group of twins.values()) {
+    const loaded = group.filter((line) => line.at < loads);
+    const pool = loaded.length ? loaded : group;
+    // the user's own line, else the latest stamp
+    const keep = pool.find((line) => !line.date) ?? pool.reduce((best, line) => (line.date! > best.date! ? line : best));
+    for (const line of group) move(line, keep, "duplicate", false);
   }
   const { duplicates, disagree } = parseTidy(reply);
   for (const { keep, drop } of duplicates ?? []) {
+    const by = notes.get(keep);
     for (const each of drop) {
-      const [line, by] = [notes.get(each), notes.get(keep)];
-      if (line && by && covers(by.text, line.text)) move(each, keep, "duplicate");
-      const [ask, over] = [open.get(each), open.get(keep)];
-      if (ask && over && (covers(over.ask, ask.ask) || covers(ask.ask, over.ask))) {
-        const [win, lose] = better(over, ask) <= 0 ? [over, ask] : [ask, over];
-        move(lose.id, win.id, "duplicate");
-      }
+      const line = notes.get(each);
+      // only a later note folds in an earlier one: an older or undated line may narrow what the later one says
+      if (line?.date && by?.date && by.date > line.date && holds(by.text, line.text)) move(line, by, "duplicate");
     }
   }
   for (const [a, b] of disagree ?? []) {
     const [x, y] = [notes.get(a), notes.get(b)];
-    if (x && y && x !== y && related(x.text, y.text) && !gone.has(a) && !gone.has(b)) {
-      if (x.date && y.date && x.date !== y.date) {
-        const [older, newer] = x.date < y.date ? [a, b] : [b, a];
-        move(older, newer, "replaced");
-      } else if (!tidy.flagged.some(([p, q]) => (p === x.text && q === y.text) || (p === y.text && q === x.text))) {
-        tidy.flagged.push([x.text, y.text]);
-      }
-    }
-    const [p, q] = [open.get(a), open.get(b)];
-    if (p && q && p !== q && related(p.ask, q.ask)) {
-      const [older, newer] = p.at <= q.at ? [p, q] : [q, p];
-      move(older.id, newer.id, "replaced");
-    }
+    if (x && y && replaces(y, x)) move(x, y, "replaced");
+    else if (x && y && replaces(x, y)) move(y, x, "replaced");
   }
-  return tidy;
+  return moves.sort((p, q) => p.at - q.at);
 }
 
 /** raw without the lines at these indexes; nothing is ever added. */
@@ -232,53 +234,52 @@ export function withoutLines(raw: string, at: readonly number[]): string {
   return raw.split("\n").filter((_, index) => !drop.has(index)).join("\n");
 }
 
-export const historyFile = (now: number) => `history-${pickStamp(now).slice(0, 7)}.md`;
+export const historyPath = (botId: string, now: number) => join(workspaceDir(botId), HISTORY_DIR, `${pickStamp(now).slice(0, 7)}.md`);
 
 const quoted = (line: string) => JSON.stringify(line.replace(/^\s*[-*+]\s+/, ""));
-const askText = (ask: TaskAsk) => `${ask.id} ${JSON.stringify(ask.ask)}`;
 
-export function historyEntry(tidy: Tidy, now: number): string {
+export function historyEntry(moves: readonly Move[], now: number): string {
   const date = day(now);
-  const why = (reason: Why) => (reason === "duplicate" ? " (duplicate)" : "");
-  return [
-    `## ${pickStamp(now)}`,
-    ...tidy.notes.map(({ text, by, why: reason }) => `- ${quoted(text)} replaced by ${quoted(by)}, ${date}${why(reason)}`),
-    ...tidy.asks.map(({ ask, by, why: reason }) => `- Ask ${askText(ask)} (${ask.status}${ask.ref ? `, ${ask.ref}` : ""}) replaced by ${askText(by)}, ${date}${why(reason)}`),
-    ...tidy.flagged.map(([a, b]) => `- May disagree, both kept in MEMORY.md: ${quoted(a)} / ${quoted(b)}`),
-  ].join("\n");
+  return [`## ${pickStamp(now)}`, ...moves.map(({ text, by, why }) => `- ${quoted(text)} replaced by ${quoted(by)}, ${date}${why === "duplicate" ? " (duplicate)" : ""}`)].join("\n");
 }
 
-const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-
-export function tidyNotice(tidy: Tidy, file: string): string {
-  const notes = (why: Why) => tidy.notes.filter((move) => move.why === why).length;
-  const asks = (why: Why) => tidy.asks.filter((move) => move.why === why).map(({ ask, by }) => `${ask.id} into ${by.id}`);
-  const parts = [
-    notes("duplicate") ? `merged ${count(notes("duplicate"), "duplicate note")}` : "",
-    notes("replaced") ? `moved out ${count(notes("replaced"), "note")} a newer one replaced` : "",
-    asks("duplicate").length ? `closed duplicate asks ${asks("duplicate").join(", ")}` : "",
-    asks("replaced").length ? `closed replaced asks ${asks("replaced").join(", ")}` : "",
-    tidy.flagged.length ? `${count(tidy.flagged.length, "pair")} of notes may disagree, both kept; ask the user which is right` : "",
-  ].filter(Boolean);
-  return parts.length ? `[Memory tidied while idle: ${parts.join("; ")}. Old lines and pairs: memory/${file}.]` : "";
+// appended and never read back: a file that cannot be opened stops the tidy instead of being written over
+function appendHistory(path: string, entry: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    writeFileSync(path, `${HISTORY_HEAD}\n${entry}\n`, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    appendFileSync(path, `\n${entry}\n`);
+  }
 }
 
-/** Closes each planned ask still open with the same words, as merged into or replaced by one still open. */
-export function closeAsks(current: readonly TaskAsk[], moves: Tidy["asks"], now: number): TaskAsk[] | null {
-  const live = new Map(current.filter(isOpenAsk).map((ask) => [ask.id, ask] as const));
-  const closing = new Map(
-    moves.filter(({ ask, by }) => live.get(ask.id)?.ask === ask.ask && live.get(by.id)?.ask === by.ask).map((move) => [move.ask.id, move] as const),
-  );
-  if (!closing.size) return null;
-  return current.map((ask) => {
-    const move = closing.get(ask.id);
-    return move ? { ...ask, status: "declined" as const, ref: `${move.why === "duplicate" ? "merged into" : "replaced by"} ${move.by.id}`, changedAt: now } : ask;
-  });
+/** History first, then MEMORY.md without the moved lines; false when another writer got to MEMORY.md first. */
+function moveOut(botId: string, raw: string, revision: string, moves: readonly Move[], now: number): boolean {
+  const path = join(workspaceDir(botId), "MEMORY.md");
+  // a write that lands in place while the file is replaced goes to this link, which then goes back
+  const held = `${path}.${randomUUID()}.held`;
+  linkSync(path, held);
+  let keep = false;
+  try {
+    appendHistory(historyPath(botId, now), historyEntry(moves, now));
+    if (saveMemoryFile(botId, withoutLines(raw, moves.map(({ at }) => at)), revision).conflict) return false;
+    // until it is checked or back in place, the held link may be the only copy of that write
+    keep = true;
+    if (readFileSync(held, "utf8") !== raw) {
+      renameSync(held, path);
+      return false;
+    }
+    keep = false;
+    return true;
+  } finally {
+    if (!keep) rmSync(held, { force: true });
+  }
 }
 
-const pairKey = ([a, b]: [string, string]) => createHash("sha256").update(JSON.stringify([a, b].sort())).digest("hex").slice(0, 16);
+const stopped = (signal: AbortSignal) => (signal.reason === "cancelled" ? "cancelled" : "timeout");
 
-/** Tidies each bot's MEMORY.md and asks once it has been quiet SLEEP_IDLE_MS, only when either changed since its last tidy, at most once per SLEEP_GAP_MS. Never on the reply path. */
+/** Tidies each bot's MEMORY.md once it has been quiet SLEEP_IDLE_MS, only when it changed since its last tidy, at most once per SLEEP_GAP_MS. Never on the reply path. */
 export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
   const now = deps.now ?? Date.now;
   const statePath = join(deps.dataDir, STATE_FILE);
@@ -315,8 +316,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     timers.set(botId, timer);
   };
 
-  const digestOf = (raw: string, asks: readonly TaskAsk[], model: boolean) =>
-    createHash("sha256").update(JSON.stringify([raw, asks.filter(isOpenAsk).map(({ id, ask, status }) => [id, ask, status]), model])).digest("hex").slice(0, 16);
+  const digestOf = (raw: string, model: boolean) => createHash("sha256").update(JSON.stringify([raw, model])).digest("hex").slice(0, 16);
 
   const run = async (botId: string, signal: AbortSignal) => {
     if (!deps.enabled(botId)) return;
@@ -324,52 +324,44 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     const record = bots.get(botId) ?? {};
     const raw = memoryFileRaw(botId);
     const memory = readMemoryFile(botId);
-    const book = deps.asks(botId);
     const generate = deps.generate(botId);
-    const digest = digestOf(raw, book?.asks ?? [], Boolean(generate));
+    const digest = digestOf(raw, Boolean(generate));
     if (record.digest === digest) return;
-    if (record.at !== undefined && now() - record.at < SLEEP_GAP_MS) return arm(botId, record.at + SLEEP_GAP_MS - now());
+    const waited = now() - (record.at ?? -Infinity);
+    // a stamp ahead of the clock does not count: a wait past 2^31 ms fires at once, over and over
+    if (waited >= 0 && waited < SLEEP_GAP_MS) return arm(botId, SLEEP_GAP_MS - waited);
     const started = now();
+    // the gap counts from the start, so a run that fails or is cut short waits it out too
+    bots.set(botId, { ...record, at: started });
+    save();
     const lines = noteLines(raw);
-    const open = (book?.asks ?? []).filter((ask) => isOpenAsk(ask) && ask.kind !== "question");
     let used = 0;
     const shownNotes = lines.filter((line) => (used += Buffer.byteLength(line.text, "utf8") + 8) <= PROMPT_NOTES_MAX);
-    used = 0;
-    const shownAsks = open.filter((ask) => (used += Buffer.byteLength(ask.ask, "utf8") + 12) <= PROMPT_ASKS_MAX);
     const usage = { input: 0, output: 0 };
     let reply = "";
-    if (generate && shownNotes.length + shownAsks.length > 1) {
+    if (generate && shownNotes.length > 1) {
       try {
-        reply = await generate(tidyPrompt(shownNotes, shownAsks), signal, (spent) => {
+        reply = await generate(tidyPrompt(shownNotes), signal, (spent) => {
           usage.input += (spent?.input ?? 0) + (spent?.cachedInput ?? 0) + (spent?.cacheCreation ?? 0);
           usage.output += spent?.output ?? 0;
         });
       } catch {
-        if (!disposed && !signal.aborted) log({ botId, ms: now() - started, result: "error" });
+        if (!disposed) log({ botId, ms: now() - started, result: signal.aborted ? stopped(signal) : "error" });
         return;
       }
     }
-    if (disposed || signal.aborted || !deps.enabled(botId)) return;
-    const base = { botId, notes: lines.length, sentNotes: shownNotes.length, asks: open.length, sentAsks: shownAsks.length, ms: 0, ...usage };
+    if (disposed || !deps.enabled(botId)) return;
+    const base = { botId, notes: lines.length, sentNotes: shownNotes.length, ms: 0, ...usage };
+    if (signal.aborted) return log({ ...base, ms: now() - started, result: stopped(signal) });
     // a turn or an editor may have written while the model ran: theirs wins, the tidy waits for the next quiet spell
     if (deps.busy(botId) || readMemoryFile(botId).revision !== memory.revision) {
       log({ ...base, ms: now() - started, result: "conflict" });
       return arm(botId);
     }
-    const tidy = planTidy(raw, deps.asks(botId)?.asks ?? [], reply);
-    const known = new Set(record.flagged ?? []);
-    const flagged = tidy.flagged.map(pairKey);
-    const fresh: Tidy = { ...tidy, flagged: tidy.flagged.filter((pair) => !known.has(pairKey(pair))) };
-    const next: BotState = { ...record, at: now() };
-    if (flagged.length) next.flagged = flagged;
-    else delete next.flagged;
-    if (fresh.notes.length || fresh.asks.length || fresh.flagged.length) {
-      const file = historyFile(now());
+    const moves = planTidy(raw, reply);
+    if (moves.length) {
       try {
-        const history = readMemoryTopic(botId, file) ?? HISTORY_HEAD;
-        // history first: a line leaves MEMORY.md only once its copy is on disk
-        writeFileAtomic(join(ensureWorkspace(botId), "memory", file), `${history.trimEnd()}\n\n${historyEntry(fresh, now())}\n`, { mode: 0o600 });
-        if (fresh.notes.length && saveMemoryFile(botId, withoutLines(raw, fresh.notes.map(({ at }) => at)), memory.revision).conflict) {
+        if (!moveOut(botId, raw, memory.revision, moves, now())) {
           log({ ...base, ms: now() - started, result: "conflict" });
           return arm(botId);
         }
@@ -378,14 +370,11 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
         console.warn(`[memory-sleep] write failed (${error instanceof Error ? error.name : "error"})`);
         return;
       }
-      if (fresh.asks.length && book) deps.saveAsks(book.threadId, (current) => closeAsks(current, fresh.asks, now()));
-      const notice = tidyNotice(fresh, file);
-      next.notice = record.notice ? `${record.notice} ${notice}` : notice;
+      deps.changed(botId);
     }
-    next.digest = digestOf(memoryFileRaw(botId), deps.asks(botId)?.asks ?? [], Boolean(generate));
-    bots.set(botId, next);
+    bots.set(botId, { at: started, digest: digestOf(memoryFileRaw(botId), Boolean(generate)) });
     save();
-    log({ ...base, moved: fresh.notes.length, closed: fresh.asks.length, flagged: fresh.flagged.length, ms: now() - started, result: fresh.notes.length || fresh.asks.length || fresh.flagged.length ? "saved" : "none" });
+    log({ ...base, moved: moves.length, ms: now() - started, result: moves.length ? "saved" : "none" });
   };
 
   const pump = () => {
@@ -393,7 +382,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     const botId = queue.shift();
     if (!botId) return;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), SLEEP_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort("timeout"), SLEEP_TIMEOUT_MS);
     timer.unref?.();
     const pass = { botId, controller, done: Promise.resolve() };
     running = pass;
@@ -406,17 +395,14 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
       });
   };
 
-  for (const botId of deps.bots()) arm(botId);
+  // a restart spreads the bots over the gap rather than asking the model for every one of them at once
+  const all = deps.bots();
+  all.forEach((botId, index) => arm(botId, SLEEP_IDLE_MS + Math.floor((index * SLEEP_GAP_MS) / all.length)));
 
   return {
     onSettled: (botId) => arm(botId),
-    take(botId) {
-      const record = bots.get(botId);
-      if (!record?.notice) return "";
-      const { notice, ...rest } = record;
-      bots.set(botId, rest);
-      save();
-      return notice;
+    onTurn(botId) {
+      if (running?.botId === botId) running.controller.abort("cancelled");
     },
     async idle() {
       while (running) await running.done;

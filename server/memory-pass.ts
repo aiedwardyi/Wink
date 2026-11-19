@@ -336,9 +336,9 @@ export function decisionSpan(lines: string[]): [number, number] | null {
   return [start, next < 0 ? lines.length : next];
 }
 
-export const contentWords = (text: string) =>
+const contentWords = (text: string) =>
   words(text).filter((word) => (word.length >= 3 || /\d/.test(word) || /\P{ASCII}/u.test(word)) && !STOP_WORDS.has(word));
-export const sameStem = (a: string, b: string) => a.startsWith(b.slice(0, 4)) || b.startsWith(a.slice(0, 4));
+const sameStem = (a: string, b: string) => a.startsWith(b.slice(0, 4)) || b.startsWith(a.slice(0, 4));
 const LITERALS = [
   /\b(?:[a-z][\w+.-]*:\/\/|www\.)\S+/gi,
   /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,

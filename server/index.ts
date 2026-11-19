@@ -428,7 +428,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -2448,6 +2448,9 @@ function saveMemoryLedger(): void {
   }
 }
 
+// whether this PC is the one that tidies each synced bot, as of its last sync pass
+const memoryTidyHere = new Map<string, boolean>();
+
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
 async function syncMemoryPass(botId: string): Promise<boolean> {
   // a missing workspace is restored from Drive, so a deleted bot must not be a target
@@ -2459,6 +2462,7 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
+  memoryTidyHere.set(botId, tidiesHere(memorySyncLedger, botSyncId, snapshots));
   // the poll runs for every idle bot, so only pulled changes refresh the page and check
   if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
     memoryHealthCheck.refresh(botId);
@@ -3038,19 +3042,14 @@ const memorySleep = createMemorySleep({
   enabled: (botId) => {
     const bot = store.bot(botId);
     const instance = bot && registry.get(bot.modelSelection.instanceId);
-    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
+    const folder = profileSyncSettings.folder;
+    // two PCs tidying the same notes apart would leave parked copies, so a synced bot is tidied on one, and not while its folder is out of reach
+    const synced = Boolean(folder && chatSyncBotId(profileSyncSettings, botId));
+    const tidier = memoryTidyHere.get(botId) === true && Boolean(folder && existsSync(folder));
+    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot) && (!synced || tidier);
   },
   busy: (botId) => botHasActiveTurn(botId),
-  asks: (botId) => {
-    const threadId = store.bot(botId)?.threadId;
-    const packet = threadId ? taskPacketForWrite(threadId) : null;
-    return threadId && packet ? { threadId, asks: packet.asks ?? [] } : null;
-  },
-  saveAsks: (threadId, change) => {
-    const current = taskPacketForWrite(threadId);
-    const asks = current && change(current.asks ?? []);
-    if (current && asks) persistTaskPacket({ ...current, asks, updatedAt: Date.now(), updatedBy: "harness" });
-  },
+  changed: (botId) => broadcast({ kind: "memory.changed", botId }),
 });
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
@@ -3077,7 +3076,7 @@ startupTiming.afterPaint("unlanded", async () => {
 });
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
-const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId), tidied: (botId) => memorySleep.take(botId) });
+const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
 const roomTurnInstruction = new Map<string, string>();
@@ -3846,6 +3845,7 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       limitWaits.bind(event.threadId, event.turnId);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
+      if (turnOwnerId) memorySleep.onTurn(turnOwnerId);
       break;
     case "session.started":
       if (bot && event.sessionId && event.providerInstanceId && !staleTurnEvent(event.threadId, event.turnId)) {
