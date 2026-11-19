@@ -30,37 +30,33 @@ export function shellMade(command: string, cwd: string, since: number): string[]
   const seen = new Set<string>();
   const locations: string[] = [];
   let here = cwd;
-  let change: "set" | "push" | undefined;
+  let change = false;
   let end = 0;
   for (const match of [...command.matchAll(TOKEN)].slice(0, MAX_TOKENS)) {
     const first = end === 0 || /[;&|\n]/.test(command.slice(end, match.index));
     end = match.index + match[0].length;
     const token = match[1] ?? match[2] ?? match[3]!;
     if (first) {
-      change = undefined;
+      change = false;
       if (POP_DIR.test(token)) {
         here = locations.pop() ?? here;
         continue;
       }
+      if (PUSH_DIR.test(token)) locations.push(here);
       if (CHANGE_DIR.test(token) || PUSH_DIR.test(token)) {
-        change = PUSH_DIR.test(token) ? "push" : "set";
+        change = true;
         continue;
       }
     }
     if (!token || token.startsWith("-") || /[*?]/.test(token) || /^\w{2,}:\/\//.test(token) || isNetworkPath(token)) continue;
     const path = resolve(here, token);
     if (isNetworkPath(path)) continue;
-    if (!change && seen.has(path)) continue;
-    const stat = statOf(path);
-    if (change) {
-      if (stat?.isDirectory()) {
-        if (change === "push") locations.push(here);
-        here = path;
-      }
-      change = undefined;
-    }
+    // a folder the command went through may be gone by the scan, so the location comes from the text alone
+    if (change) here = path;
+    change = false;
     if (seen.has(path)) continue;
     seen.add(path);
+    const stat = statOf(path);
     if (stat?.isFile() && changed(stat, after)) made.add(path);
     if (stat?.isDirectory()) {
       try {

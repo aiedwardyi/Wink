@@ -79,6 +79,31 @@ it("follows a location the command pushed and popped back", () => {
   expect(shellMade(`pushd "${paste}" && popd && cp x/*.png real-shots`, outside, since)).toEqual([join(shots, "a.png")]);
 });
 
+it("follows a folder the command left and then removed", () => {
+  const { cwd, shots } = copied(0);
+  const since = Date.now() + 60_000;
+  const names = Array.from({ length: 11 }, (_, index) => `${String(index + 1).padStart(2, "0")}.png`);
+  const made = names.map((name) => join(shots, name));
+  for (const name of names) writeFileSync(join(cwd, "source", name), name);
+  for (const path of made) {
+    copyFileSync(join(cwd, "source", basename(path)), path);
+    utimesSync(path, new Date(since), new Date(since));
+  }
+  const command = [
+    `Set-Location -Path '${join(cwd, "launch outside task")}'`,
+    "New-Item -ItemType Directory -Path 'tmp-render' | Out-Null",
+    "Set-Location -Path 'tmp-render'",
+    `Copy-Item -Path '${join(cwd, "source")}\\*.png' -Destination '.'`,
+    "Set-Location -Path '..'",
+    "Copy-Item -Path 'tmp-render\\*.png' -Destination 'real-shots'",
+    "Remove-Item -LiteralPath 'tmp-render' -Recurse -Force",
+  ].join("\n");
+  const found = shellMade(command, cwd, since);
+  expect(found.slice().sort()).toEqual(made);
+  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  expect(memory).toContain(`${join("launch outside task", "real-shots")} 11 (`);
+});
+
 it("finds what a recursive copy put in a new folder", () => {
   const { cwd, shots, since } = copied();
   const day = join(shots, "nested", "day1");
