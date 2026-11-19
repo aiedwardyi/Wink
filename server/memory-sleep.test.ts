@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import type { NoteGenerator } from "./memory-pass.ts";
@@ -24,6 +25,7 @@ import { MEMORY_MAX_LINES, memoryFileRaw, memoryHealthOf, readMemoryFile, readMe
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const temps = createTempDirs();
+afterAll(() => temps.remove());
 const NOW = new Date(2026, 10, 19, 12).getTime();
 const HOUR = 60 * 60_000;
 
@@ -145,7 +147,7 @@ describe("memory sleep", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     vi.spyOn(console, "info").mockImplementation(() => {});
-    dataDir = temps.make("memory-sleep-");
+    dataDir = temps.make(join(tmpdir(), "memory-sleep-"));
     busy = new Set();
     on = true;
     asks = new Map();
