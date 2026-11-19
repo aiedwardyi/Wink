@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from "react";
-import { ArrowLeft, ChevronDown, FolderOpen, PanelRightClose, SquareX, TerminalSquare, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderOpen, PanelRightClose, SquareX, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -769,7 +769,6 @@ export function TerminalWorkspace({
           {phone ? <ArrowLeft size={18} /> : <PanelRightClose size={18} />}
         </button>
         <span className="h-5 border-l border-hairline" aria-hidden />
-        <TerminalSquare size={16} className="shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {pane !== null && <WorkerMark compact provider={paneProvider(workers, pane, panes.find((item) => item.id === pane)?.label)} />}{watched ?? bot.name}</span></h1>
           <div className="mt-0.5 flex min-w-0 items-center gap-2">
