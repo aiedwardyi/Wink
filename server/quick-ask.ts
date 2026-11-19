@@ -153,7 +153,7 @@ export function requeueDroppedAsk(store: AskStore, botId: string, threadId: stri
   drain();
 }
 
-/** The same for a call's order or ask: its row stays and the queue drains into it. */
+/** The same for a call's order or ask, or a promised order: its row stays and the queue drains into it. */
 export function requeueDroppedCall(store: AskStore, botId: string, threadId: string, row: Message, drain: () => void): void {
   if (stopped.has(row.id) || !store.activePath(threadId).some((message) => message.id === row.id && message.steered)) return;
   try {
@@ -324,7 +324,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   await land(store, instance, current, threadId, ask, result.text);
 }
 
-const repliedUnder = (path: Message[], ask: Message) => {
+export const repliedUnder = (path: Message[], ask: Message) => {
   const asked = path.findIndex((row) => row.id === ask.id);
   return asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim());
 };
