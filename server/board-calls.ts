@@ -50,16 +50,11 @@ export function createBoardCalls(deps: BoardCallDeps) {
   const episodeRef = (threadId: string, blocker: Blocker, episode: number) => {
     const legacy = `${callRef(threadId)}${episode}:${blocker.kind}:${blocker.note}`;
     // a longer legacy ref was cut before hashing, so another note may share its post
-    if (legacy.length <= BOARD_REF_MAX && deps.board.get(boardPostId(deps.board.ref(legacy)))) return legacy;
+    if (legacy.length <= BOARD_REF_MAX && deps.board.get(boardPostId(legacy))) return legacy;
     return `${callRef(threadId)}${episode}:${blocker.kind}:${createHash("sha256").update(keyOf(blocker)).digest("hex").slice(0, 24)}`;
   };
-  const episodePost = (threadId: string, blocker: Blocker, episode: number) => deps.board.get(boardPostId(deps.board.ref(episodeRef(threadId, blocker, episode))));
-  /** The call's current episode: the first whose post is not solved yet. */
-  const episodeOf = (threadId: string, blocker: Blocker) => {
-    let episode = 0;
-    while (episodePost(threadId, blocker, episode)?.status === "solved") episode++;
-    return episode;
-  };
+  /** The call's current ref: the first episode whose post was neither deleted nor solved. */
+  const currentRef = (threadId: string, blocker: Blocker) => deps.board.next((episode) => episodeRef(threadId, blocker, episode), (post) => post.status === "solved");
 
   return {
     /**
@@ -136,7 +131,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
         body: blocker.note,
         error_sig: errorSig(blocker.note),
         project_id: deps.projectOf(threadId),
-        source_ref: episodeRef(threadId, blocker, episodeOf(threadId, blocker)),
+        source_ref: currentRef(threadId, blocker),
       });
     },
     /** The bot cleared the one blocker it called on, with a note: that note is the fix. The user's chat is never the fix. */
@@ -144,7 +139,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
       if (deps.room(threadId) || !note.trim()) return [];
       const left = new Set(after.map(keyOf));
       const open = before.filter((blocker) => calls(blocker) && !left.has(keyOf(blocker))).flatMap((blocker) => {
-        const post = episodePost(threadId, blocker, episodeOf(threadId, blocker));
+        const post = deps.board.get(boardPostId(currentRef(threadId, blocker)));
         return post?.kind === "stuck" && post.status === "open" ? [post] : [];
       });
       // one note cannot say which of several calls it fixed

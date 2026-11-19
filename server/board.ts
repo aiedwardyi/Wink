@@ -28,7 +28,7 @@ const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const
 export const BOARD_REF_MAX = LIMITS.ref;
 
 const idSchema = z.string().regex(/^p[0-9a-f]{24}$/);
-const replyTombstoneSchema = z.object({ id: idSchema, parent_id: idSchema });
+const tombstoneSchema = z.object({ id: idSchema, parent_id: idSchema.nullable(), updated_at: z.number().optional(), fix_sha: z.string().optional() });
 /** The author as it looked when it posted, so another PC can show a bot it does not have. */
 const authorSchema = z.object({ name: z.string().max(LIMITS.id), model: z.string().max(LIMITS.id), color: z.string().max(32), mascot_style: z.string().max(64) });
 const postSchema = z.object({
@@ -120,16 +120,30 @@ function readPosts(dir: string): BoardPost[] {
   });
 }
 
-function readDeleted(dir: string): Map<string, string | null> {
-  const deleted = new Map<string, string | null>();
+/** A deleted reply names its parent, a deleted thread keeps the version it deleted; null, the original release's bare id, drops that post alone. */
+type Tombstone = { parent_id: string } | { parent_id: null; updated_at: number; fix_sha: string } | null;
+const CUT: Tombstone = { parent_id: null, updated_at: 0, fix_sha: "" };
+// a thread's delete outranks a reply's, which outranks a bare id; of two thread deletes, the later version wins
+const rank = (tombstone: Tombstone | undefined) => (!tombstone ? 0 : tombstone.parent_id === null ? 2 + tombstone.updated_at : 1);
+const fixSha = (fix: string) => (fix ? createHash("sha256").update(fix).digest("hex").slice(0, 16) : "");
+/** The digest of a fix the delete never saw: a deleted thread's post solved after the version that was deleted; else "". */
+const unseenFix = (post: BoardPost, tombstone: Tombstone) => {
+  const sha = fixSha(post.fix);
+  return tombstone?.parent_id === null && post.parent_id === null && post.status === "solved" && post.updated_at > tombstone.updated_at && sha !== tombstone.fix_sha ? sha : "";
+};
+
+function readDeleted(dir: string): Map<string, Tombstone> {
+  const deleted = new Map<string, Tombstone>();
   try {
     const ids: unknown = JSON.parse(readFileSync(join(dir, DELETED), "utf8"));
     if (Array.isArray(ids)) {
       for (const id of ids) if (typeof id === "string" && idSchema.safeParse(id).success) deleted.set(id, null);
       for (const entry of ids) {
         if (typeof entry === "string") continue;
-        const reply = replyTombstoneSchema.safeParse(entry);
-        if (reply.success && deleted.has(reply.data.id)) deleted.set(reply.data.id, reply.data.parent_id);
+        const held = tombstoneSchema.safeParse(entry);
+        if (!held.success || !deleted.has(held.data.id)) continue;
+        const { id, parent_id, updated_at = 0, fix_sha = "" } = held.data;
+        deleted.set(id, parent_id === null ? { parent_id, updated_at, fix_sha } : { parent_id });
       }
     }
   } catch {
@@ -138,22 +152,15 @@ function readDeleted(dir: string): Map<string, string | null> {
   return deleted;
 }
 
-function deletedJson(deleted: ReadonlyMap<string, string | null>): string {
+function deletedJson(deleted: ReadonlyMap<string, Tombstone>): string {
   const ids = [...deleted.keys()].sort();
   // Keep the bare ids for PCs that only understand the original tombstones.
-  const replies = ids.flatMap((id) => {
-    const parent = deleted.get(id);
-    return parent ? [{ id, parent_id: parent }] : [];
+  const kinds = ids.flatMap((id) => {
+    const tombstone = deleted.get(id);
+    return tombstone ? [{ id, ...tombstone }] : [];
   });
-  return `${JSON.stringify([...ids, ...replies])}\n`;
+  return `${JSON.stringify([...ids, ...kinds])}\n`;
 }
-
-/** The ref a deleted post's twin is written under: generation 0 is the ref itself. */
-const refGeneration = (sourceRef: string, generation: number) => {
-  if (!generation) return sourceRef.slice(0, LIMITS.ref);
-  const mark = `#${generation + 1}`;
-  return `${sourceRef.slice(0, LIMITS.ref - mark.length)}${mark}`;
-};
 
 const same = (left: BoardPost, right: BoardPost) => JSON.stringify(left) === JSON.stringify(right);
 
@@ -186,7 +193,7 @@ export function createBoard(options: BoardOptions) {
   let cache: Map<string, BoardPost> | null = null;
   const posts = () => (cache ??= new Map(readPosts(options.dir).map((post) => [post.id, post])));
   let view: Map<string, BoardPost> | null = null;
-  let deleted: Map<string, string | null> | null = null;
+  let deleted: Map<string, Tombstone> | null = null;
   const gone = () => (deleted ??= readDeleted(options.dir));
 
   // keyed by post id and checked against the text it was built from, so an edit never reads stale words
@@ -199,11 +206,9 @@ export function createBoard(options: BoardOptions) {
     return words;
   };
 
-  const drop = (id: string, parentId: string | null = null): boolean => {
-    const heldParent = gone().get(id);
-    const parent = heldParent ?? parentId;
-    if (heldParent !== parent) {
-      const next = new Map(gone()).set(id, parent);
+  const drop = (id: string, tombstone: Tombstone): boolean => {
+    if (!gone().has(id) || rank(tombstone) > rank(gone().get(id))) {
+      const next = new Map(gone()).set(id, tombstone);
       mkdirSync(options.dir, { recursive: true });
       writeFileAtomic(join(options.dir, DELETED), deletedJson(next));
       deleted = next;
@@ -229,15 +234,15 @@ export function createBoard(options: BoardOptions) {
       if (post.parent_id && !tombstones.has(post.id)) link(post.id, post.parent_id);
     }
     const doomed = new Set<string>();
-    for (const [id, parent] of tombstones) {
-      // A deleted reply still connects its children to the post they belong to.
-      if (parent) link(id, parent);
-      else doomed.add(id);
+    for (const [id, tombstone] of tombstones) {
+      // A deleted reply still connects its children to the post they belong to; a bare id drops its post alone.
+      if (tombstone?.parent_id) link(id, tombstone.parent_id);
+      else if (tombstone) doomed.add(id);
     }
     let removed = 0;
     for (const id of doomed) {
       for (const child of children.get(id) ?? []) doomed.add(child);
-      if (drop(id)) removed++;
+      if (drop(id, CUT)) removed++;
       candidates.delete(id);
     }
     return removed;
@@ -271,11 +276,14 @@ export function createBoard(options: BoardOptions) {
 
   const board = {
     dir: options.dir,
-    /** The ref an event writes under: its own, or the next free one when its post was deleted. */
-    ref(sourceRef: string): string {
-      let generation = 0;
-      while (gone().has(boardPostId(refGeneration(sourceRef, generation)))) generation++;
-      return refGeneration(sourceRef, generation);
+    /** The first of an event's refs whose post was not deleted and is not done: a repeat joins it, a new event after a delete moves on. */
+    next(refOf: (n: number) => string, done: (post: BoardPost) => boolean = () => false): string {
+      for (let n = 0; ; n++) {
+        const ref = refOf(n);
+        const id = boardPostId(ref);
+        const held = posts().get(id);
+        if (!gone().has(id) && (!held || !done(held))) return ref;
+      }
     },
     list(): BoardPost[] {
       return [...readable().values()].sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
@@ -283,9 +291,9 @@ export function createBoard(options: BoardOptions) {
     get(id: string): BoardPost | undefined {
       return readable().get(id);
     },
-    /** Writes the post the event names; the same event again updates that post. A fix also solves its parent. */
+    /** Writes the post the event names; the same event again updates that post, or writes nothing once it was deleted. A fix also solves its parent. */
     post(input: NewBoardPost): BoardPost {
-      const sourceRef = board.ref(input.source_ref);
+      const sourceRef = input.source_ref.slice(0, LIMITS.ref);
       const id = boardPostId(sourceRef);
       const at = now();
       const held = posts().get(id);
@@ -313,6 +321,7 @@ export function createBoard(options: BoardOptions) {
         pc_id: options.pcId(),
       };
       if (author) next.author = author;
+      if (gone().has(id)) return next;
       write(next);
       // a room's fix stays a note; it never solves a post a call would be held on
       const parent = next.kind === "fix" && next.parent_id && !fromRoom(next) ? posts().get(next.parent_id) : undefined;
@@ -332,12 +341,12 @@ export function createBoard(options: BoardOptions) {
       const held = posts().get(id);
       if (!held) return false;
       if (held.parent_id === null) {
-        drop(id);
+        drop(id, { parent_id: null, updated_at: held.updated_at, fix_sha: fixSha(held.fix) });
         prune(posts());
       } else {
         const at = now();
         for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: held.parent_id, updated_at: at, pc_id: options.pcId() });
-        drop(id, held.parent_id);
+        drop(id, { parent_id: held.parent_id });
       }
       options.changed?.();
       return true;
@@ -379,8 +388,8 @@ export function createBoard(options: BoardOptions) {
       const candidates = new Map(posts());
       for (const pc of pcs) {
         const dir = join(root, pc);
-        for (const [id, parent] of readDeleted(dir)) {
-          if (!tombstones.get(id)) tombstones.set(id, parent);
+        for (const [id, tombstone] of readDeleted(dir)) {
+          if (!tombstones.has(id) || rank(tombstone) > rank(tombstones.get(id))) tombstones.set(id, tombstone);
         }
         for (const post of readPosts(dir)) {
           const incoming = mapPost(post, ids.in);
@@ -388,10 +397,14 @@ export function createBoard(options: BoardOptions) {
           candidates.set(post.id, held ? mergeBoardPosts(held, incoming) : incoming);
         }
       }
-      for (const [id, parent] of tombstones) {
+      for (const [id, tombstone] of tombstones) {
         const post = candidates.get(id);
+        // a bot was told that fix was saved before the delete reached its PC, so it lives on as a new post
+        const sha = post ? unseenFix(post, tombstone) : "";
+        const twin = sha && boardPostId(JSON.stringify([id, sha]));
+        if (post && twin && !tombstones.has(twin) && !candidates.has(twin)) candidates.set(twin, { ...post, id: twin });
         const replyParent = post && ownReply(post) ? post.parent_id : null;
-        if (drop(id, parent ?? replyParent)) pulled++;
+        if (drop(id, tombstone ?? (replyParent ? { parent_id: replyParent } : null))) pulled++;
         candidates.delete(id);
       }
       pulled += prune(candidates);

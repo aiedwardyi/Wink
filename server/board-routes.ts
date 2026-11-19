@@ -54,7 +54,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       const { kind, title, body: text, parent_id, helped } = body.data;
       const parent = parent_id ? deps.board.get(parent_id) : undefined;
       if (parent_id && !parent) return json(res, 404, { error: `no Board post ${parent_id}` });
-      const event = createHash("sha256").update(JSON.stringify([kind, title, text, parent_id ?? ""])).digest("hex").slice(0, 16);
+      const event = (n: number) => createHash("sha256").update(JSON.stringify([kind, title, text, parent_id ?? "", ...(n ? [n] : [])])).digest("hex").slice(0, 16);
       const post = deps.board.post({
         author_bot_id: from.botId,
         kind,
@@ -64,7 +64,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         project_id: parent?.project_id ?? deps.projectOf(from.threadId),
         error_sig: parent?.error_sig,
         fix: kind === "fix" ? text : undefined,
-        source_ref: `${room ? ROOM_REF : "tool:"}${from.threadId}:${event}`,
+        source_ref: deps.board.next((n) => `${room ? ROOM_REF : "tool:"}${from.threadId}:${event(n)}`),
       });
       if (helped && parent && parent.author_bot_id !== from.botId) deps.board.helped([parent.id], from.botId);
       return json(res, 200, { id: post.id, text: `Posted to the Board as ${post.id}.` });
