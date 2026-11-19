@@ -290,6 +290,12 @@
     });
   }
 
+  function resetCode() {
+    $("code").querySelector("button").disabled = false;
+    $("code-input").value = "";
+    say("");
+  }
+
   // Back from turning on Devices on the PC, the empty list loads again with the same token.
   function refreshWhenBack(token, pick) {
     let loading = false;
@@ -500,6 +506,7 @@
   // Back from a PC restores this page from bfcache with the PC buttons still opening.
   addEventListener("pageshow", (event) => {
     if (event.persisted && !$("list").hidden) showList(listed);
+    if (event.persisted && !$("code").hidden) resetCode();
   });
 
   const ready = googleId();

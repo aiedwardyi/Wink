@@ -772,4 +772,15 @@ describe("entering a PC's code", () => {
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
     expect(asked.map((call) => call.url)).toEqual([LOOKUP, CHECK]);
   });
+
+  it("frees the code box when Back restores the page", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(submit().disabled).toBe(false);
+    expect(document.querySelector<HTMLInputElement>("#code-input")!.value).toBe("");
+    expect(status().textContent).toBe("");
+  });
 });
