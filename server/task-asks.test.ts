@@ -65,6 +65,10 @@ describe("task asks", () => {
     expect(TASK_ASKS_PROMPT).toContain("Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet.");
   });
 
+  it("tells every bot the plan, building asks and the asks list are its only lists", () => {
+    expect(TASK_ASKS_PROMPT).toContain("Keep three lists only: the plan is the to-do for now, asks marked building are the sprint, and the asks list is the full record; never start a separate list file.");
+  });
+
   it("keeps a decided ask not started under newer ones and reopens a declined one by id", () => {
     const decided = saved(mergeTaskAsks(undefined, [{ ask: "Fold decided work into asks", status: "open" }, { ask: "Old idea", status: "declined" }], NOW - 2 * HOUR));
     let asks: TaskAsk[] = decided.asks;
