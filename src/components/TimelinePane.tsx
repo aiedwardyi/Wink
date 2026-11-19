@@ -427,7 +427,10 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     show({ scale, x: x - (x - at.x) * ratio, y: y - (y - at.y) * ratio });
   }, [show]);
 
-  const redraw = useCallback(() => drawInk(sheet.current!, ink.current!), []);
+  // A resize can land after React detached the sheet, so the refs may be gone.
+  const redraw = useCallback(() => {
+    if (sheet.current && ink.current) drawInk(sheet.current, ink.current);
+  }, []);
 
   useLayoutEffect(() => {
     redraw();
