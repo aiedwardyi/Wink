@@ -2,18 +2,21 @@
 // it dispatches typed commands over HTTP and folds the one SSE event
 // stream from the harness server into local state. The reducer stays
 // pure; everything async lives in the wrapped dispatch + SSE fold.
-import { noteMemoryFrame } from "@/lib/memory-clean-events";
+import { noteMemoryFrame, noteMemorySnapshot } from "@/lib/memory-clean-events";
 import { request } from "@/lib/api-request";
 import { createErrorBanner } from "@/lib/error-banner";
+import { activeLocale } from "@/lib/i18n";
 import {
   createContext,
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { sameModelSelection } from "../../shared/model-selection";
@@ -1112,6 +1115,21 @@ export function useStreaming() {
   return useContext(StreamContext);
 }
 
+type StreamSource = { get: () => TurnStreamState; subscribe: (listener: () => void) => () => void };
+const StreamSourceContext = createContext<StreamSource>({ get: () => EMPTY_STREAM, subscribe: () => () => {} });
+
+/** Re-renders only when `select` gives a new value by `equal`, so a chat skips frames of other threads and of its own typed text. */
+export function useStreamSelect<T>(select: (stream: TurnStreamState) => T, equal: (a: T, b: T) => boolean = Object.is): T {
+  const source = useContext(StreamSourceContext);
+  const last = useRef<{ value: T } | null>(null);
+  return useSyncExternalStore(source.subscribe, () => {
+    const value = select(source.get());
+    if (last.current && equal(last.current.value, value)) return last.current.value;
+    last.current = { value };
+    return value;
+  });
+}
+
 const DispatchContext = createContext<React.Dispatch<Action> | null>(null);
 
 const StoreContext = createContext<{
@@ -1153,6 +1171,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [stream, setStream] = useState<TurnStreamState>(EMPTY_STREAM);
   const streamRef = useRef(stream);
   streamRef.current = stream;
+  const streamListeners = useRef(new Set<() => void>());
+  const streamSource = useMemo<StreamSource>(() => ({
+    get: () => streamRef.current,
+    subscribe: (listener) => {
+      streamListeners.current.add(listener);
+      return () => streamListeners.current.delete(listener);
+    },
+  }), []);
+  useLayoutEffect(() => {
+    for (const listener of streamListeners.current) listener();
+  }, [stream]);
   const deltaBuffer = useRef(new Map<string, PendingDeltas>());
   const deltaFlush = useRef<number | null>(null);
   // A settled reply waits for its live text to finish typing; the thread's
@@ -1480,6 +1509,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 deliver: action.after ? "after" : undefined,
                 queueId: action.queueId,
                 actedAt,
+                locale: activeLocale(),
               }),
             });
           const settle = async (body: any) => {
@@ -2235,6 +2265,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (receipt) api(receipt.path, { method: "PATCH", body: JSON.stringify(receipt.patch) }).catch(() => {});
         // Text held behind the snapshot is history now: it lands whole.
         flushDeltas();
+        // A chat snapshot can cover save frames, but it does not include memory files.
+        noteMemorySnapshot();
         return true;
       })().finally(() => {
         hydrationPromise = null;
@@ -2709,7 +2741,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   return (
     <StoreContext.Provider value={value}>
       <DispatchContext.Provider value={dispatch}>
-        <StreamContext.Provider value={stream}>{children}</StreamContext.Provider>
+        <StreamSourceContext.Provider value={streamSource}>
+          <StreamContext.Provider value={stream}>{children}</StreamContext.Provider>
+        </StreamSourceContext.Provider>
       </DispatchContext.Provider>
     </StoreContext.Provider>
   );

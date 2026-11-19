@@ -748,7 +748,7 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("offers Carbon, Argon and Hydrogen beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
+  it("offers Carbon, Neon, Hydrogen and Argon beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
     apiImpl = () => Promise.resolve({ bot: { id: `nb${++botSeq}`, name: "New bot" } });
     instances = [
       antigravity(
@@ -756,9 +756,10 @@ describe("GroupWizard members", () => {
         "Antigravity",
         [
           { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon Low" },
+          { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon XHigh" },
+          { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium" },
           { id: "gemini-4-argon-high", label: "Gemini 4 Argon High" },
           { id: "gemini-4-argon-low", label: "Gemini 4 Argon Low" },
-          { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium" },
           { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash High" },
           { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash Medium" },
           { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
@@ -776,9 +777,10 @@ describe("GroupWizard members", () => {
       const modelTrigger = menuTrigger(host, "Change model");
       expect((await menuOptions(modelTrigger)).map((option) => option.textContent)).toEqual([
         "Gemini 4 Carbon Low",
+        "Gemini 4 Neon XHigh",
+        "Gemini 4 Hydrogen Medium",
         "Gemini 4 Argon High",
         "Gemini 4 Argon Low",
-        "Gemini 4 Hydrogen Medium",
         "Gemini 3.8 Flash High",
         "Gemini 3.8 Flash Medium",
       ]);

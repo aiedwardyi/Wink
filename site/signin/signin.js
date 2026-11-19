@@ -9,6 +9,7 @@
   const CLIENT_RE = /^[0-9A-Za-z_-]+(?:\.[0-9A-Za-z_-]+)*\.apps\.googleusercontent\.com$/;
   const BASE_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
   const LAST_PC = "wink-signin-pc";
+  const ACCOUNT = "wink-signin-account";
   const EMPTY = "Sign in with Google in Wink on your PC first: Settings, Sync.";
   const OFFLINE = "Could not reach your PC. Check your connection and try again.";
   const BAD_LINK = "That PC link is not valid.";
@@ -19,6 +20,7 @@
   let gis = null;
   let config = null;
   let listed = [];
+  let account = "";
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
@@ -70,6 +72,33 @@
     } catch {}
   }
 
+  function subject(token) {
+    try {
+      const part = token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/");
+      return text(JSON.parse(atob(part.padEnd(Math.ceil(part.length / 4) * 4, "="))).sub);
+    } catch {
+      return "";
+    }
+  }
+
+  // The cold start's account, for the PC being opened: the token on the way back is asked for by name and must match.
+  function holdAccount(label) {
+    try {
+      if (account) sessionStorage.setItem(ACCOUNT, `${label}:${account}`);
+      else sessionStorage.removeItem(ACCOUNT);
+    } catch {}
+  }
+
+  function takeAccount(label) {
+    try {
+      const held = sessionStorage.getItem(ACCOUNT) || "";
+      sessionStorage.removeItem(ACCOUNT);
+      return held.startsWith(`${label}:`) ? held.slice(label.length + 1) : "";
+    } catch {
+      return "";
+    }
+  }
+
   function decodePcs(payload) {
     if (!Array.isArray(payload)) return null;
     const pcs = [];
@@ -104,6 +133,7 @@
       return;
     }
     remember(label);
+    holdAccount(label);
     location.assign(`https://${label}.${config.base}/pair${suffix}`);
   }
 
@@ -215,7 +245,7 @@
     drawn();
   }
 
-  function requestToken(nonce, autoSelect) {
+  function requestToken(nonce, autoSelect, account = "") {
     return new Promise((resolve, reject) => {
       let settled = false;
       let buttonShown = false;
@@ -244,16 +274,18 @@
         });
         revealWhenDrawn(slot);
       };
+      const options = {
+        client_id: config.clientId,
+        callback: (response) => finish(credentialFrom(response)),
+        nonce,
+        auto_select: autoSelect,
+        // popup returns the token to the callback. A redirect would post it to a URL.
+        ux_mode: "popup",
+      };
+      if (account) options.login_hint = account;
       try {
         gis.cancel();
-        gis.initialize({
-          client_id: config.clientId,
-          callback: (response) => finish(credentialFrom(response)),
-          nonce,
-          auto_select: autoSelect,
-          // popup returns the token to the callback. A redirect would post it to a URL.
-          ux_mode: "popup",
-        });
+        gis.initialize(options);
       } catch (error) {
         reject(error);
         return;
@@ -280,6 +312,7 @@
       return;
     }
     const token = await requestToken(randomNonce(), false);
+    account = subject(token);
     const listed = await loadPcs(token);
     if (!listed) {
       say(OFFLINE, "error");
@@ -290,13 +323,14 @@
 
   async function returnLeg(pc, m) {
     // One prompt: Google stays quiet on a second auto_select within minutes and asks for the account again.
-    const pcToken = await requestToken(await boundNonce(pc, m), true);
+    const held = takeAccount(pc);
+    const pcToken = await requestToken(await boundNonce(pc, m), true, held);
     const listed = await loadPcs(pcToken);
     if (!listed) {
       say(OFFLINE, "error");
       return;
     }
-    if (!listed.some((row) => row.label === pc)) {
+    if (!listed.some((row) => row.label === pc) || (held && subject(pcToken) !== held)) {
       say(NOT_YOURS, "error");
       return;
     }

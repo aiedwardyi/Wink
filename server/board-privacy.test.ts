@@ -14,7 +14,7 @@ const temps = createTempDirs();
 afterAll(() => temps.remove());
 
 /** One Wink: its own data folder, its own bots, and a caller token per running turn. */
-function wink(pc: string, bots: Record<string, string>) {
+function wink(pc: string, bots: Record<string, string>, room: "room" | null = null) {
   const board = createBoard({ dir: join(temps.make(join(tmpdir(), `orbit-${pc}-`)), "board"), pcId: () => pc });
   const routes = createBoardRoutes({
     board,
@@ -24,7 +24,7 @@ function wink(pc: string, bots: Record<string, string>) {
     },
     known: (botId) => Object.values(bots).includes(botId),
     projectOf: () => "",
-    roomTurn: () => null,
+    roomTurn: () => room,
   });
   return { board, routes };
 }
@@ -64,6 +64,18 @@ describe("board privacy", () => {
     const asked = await search(owner.routes, "tok-nova", "codex usage limit");
     expect(asked).toMatchObject({ status: 403 });
     expect(JSON.stringify(asked)).not.toContain("vault");
+  });
+
+  it("a room turn's board_search finds only that room's posts", async () => {
+    const { board, routes } = wink("home", { "tok-astra": "astra" }, "room");
+    const own = board.post({ author_bot_id: "astra", kind: "fix", title: "Codex usage limit in the room", body: "Wait for the reset.", source_ref: `${ROOM_REF}room-home:limit` });
+    const mine = board.post({ author_bot_id: "astra", kind: "fix", title: "Codex usage limit", body: "Use the owner's Claude account, password in the vault.", source_ref: "tool:ta:limit" });
+    const other = board.post({ author_bot_id: "astra", kind: "fix", title: "Codex usage limit elsewhere", body: "Use the other room's seat.", source_ref: `${ROOM_REF}other:limit` });
+    const found = await search(routes, "tok-astra", "codex usage limit");
+    expect(found).toMatchObject({ status: 200, count: 1 });
+    expect(found.text).toContain(own.id);
+    expect(found.text).not.toContain(mine.id);
+    expect(found.text).not.toContain(other.id);
   });
 
   it("chat answers saved before stay on disk but out of the list, the post, its replies and search, rooms too", async () => {

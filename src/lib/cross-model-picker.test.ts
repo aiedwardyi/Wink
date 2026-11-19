@@ -388,15 +388,16 @@ describe("picker catalogs", () => {
     });
   });
 
-  it("shows Gemini 4 Carbon, Argon and Hydrogen cells first, then 3.8 Flash", () => {
+  it("shows Gemini 4 Carbon, Neon, Hydrogen and Argon cells first, then 3.8 Flash", () => {
     const instance: InstanceInfo = {
       instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", snapshot: { state: "available" },
       models: {
         default: "gemini-3.1-pro-high",
         options: [
           "gemini-4-carbon-high", "gemini-4-carbon-medium", "gemini-4-carbon-low",
-          "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
+          "gemini-4-neon-high", "gemini-4-neon-medium", "gemini-4-neon-low", "gemini-4-neon-xhigh",
           "gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
+          "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
           "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
           "gemini-3.1-pro-high",
         ].map((id) => ({ id, label: id })),
@@ -404,14 +405,18 @@ describe("picker catalogs", () => {
     };
     const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-4-argon-low" })[0]!;
     expect(row.cells.filter((cell) => !cell.offList).map((cell) => cell.label)).toEqual([
-      "Gemini 4 Carbon", "Gemini 4 Argon", "Gemini 4 Hydrogen", "Gemini 3.8 Flash",
+      "Gemini 4 Carbon", "Gemini 4 Neon", "Gemini 4 Hydrogen", "Gemini 4 Argon", "Gemini 3.8 Flash",
     ]);
     expect(row.cells[0]!.options.map((option) => option.id)).toEqual(["gemini-4-carbon-high", "gemini-4-carbon-medium", "gemini-4-carbon-low"]);
+    expect(row.cells[1]!.options.map((option) => option.id)).toEqual(["gemini-4-neon-high", "gemini-4-neon-medium", "gemini-4-neon-low", "gemini-4-neon-xhigh"]);
+    expect(pickerEfforts(row, row.cells[1]!).map((effort) => effort.model)).toEqual(["gemini-4-neon-low", "gemini-4-neon-medium", "gemini-4-neon-high", "gemini-4-neon-xhigh"]);
     expect(row.cells[2]!.options.map((option) => option.id)).toEqual(["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"]);
+    expect(row.cells[3]!.options.map((option) => option.id)).toEqual(["gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"]);
     expect(row.cells.some((cell) => cell.offList)).toBe(false);
     expect(PICKER_MODEL_IDS).toContain("gemini-4-argon");
     expect(PICKER_MODEL_IDS).toContain("gemini-4-hydrogen");
     expect(PICKER_MODEL_IDS).toContain("gemini-4-carbon");
+    expect(PICKER_MODEL_IDS).toContain("gemini-4-neon");
   });
 
   it("keeps a 3.1 Pro pin working as one off-list cell with its tiers", () => {

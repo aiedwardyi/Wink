@@ -58,10 +58,10 @@ export function AccountHead({ name, email, control }: { name: ReactNode; email?:
 
 export function SignInRow({ instance, mark, name, after, onUpdated }: { instance: InstanceInfo; mark?: ReactNode; name?: ReactNode; after?: ReactNode; onUpdated?: (instance: InstanceInfo) => void }) {
   const { t } = useI18n();
-  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
-  const status = waiting ? t(copyFallback ? "engine.pasteAndEnter" : capture.code ? "engines.enterCode" : "engines.finishInBrowser")
+  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
+  const status = waiting ? t(capture.code ? "engines.enterCode" : "engines.finishInBrowser")
     : failed ? t(failed) : "";
-  const steps = waiting && (copyFallback || capture.code || capture.inputGeneration || failed);
+  const steps = waiting && (capture.code || capture.inputGeneration || failed);
   return (
     <div aria-live="polite">
       <ConnectionRow mark={mark}
@@ -72,7 +72,6 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
         </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>}>
         {(name && status || steps) && <>
           {name && status && <span>{status}</span>}
-          {waiting && copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}
           {waiting && capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
           {waiting && capture.inputGeneration && <form className="flex flex-wrap items-center gap-x-3 gap-y-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
             <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}

@@ -1540,6 +1540,47 @@ export function Sidebar({
     />
   );
 
+  const sidebarToggle = (!phone || showPhoneDrawerCollapse()) && (
+    <button
+      type="button"
+      onClick={toggleCollapsed}
+      aria-label={
+        density === "icons"
+          ? collapsedQuestion
+            ? t("ask.expandSidebar")
+            : collapsedRoutine
+              ? t("routine.expandSidebar")
+              : collapsedUnreadBadge != null
+                ? t("chrome.expandSidebarUnread", { count: collapsedUnreadBadge })
+                : t("chrome.expandSidebar")
+          : t("chrome.collapseSidebar")
+      }
+      data-sidebar-needs-you={collapsedAsking || undefined}
+      data-arrival-glow={collapsedArrival.playing || undefined}
+      onAnimationEnd={collapsedArrival.onAnimationEnd}
+      className={cn(
+        "relative flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink md:shrink-0",
+        collapsedAsking && "needs-you-glow",
+        collapsedArrival.playing && "arrival-glow",
+      )}
+      title={density === "icons" ? t("chrome.expandSidebar") : t("chrome.collapseSidebar")}
+    >
+      {density === "icons"
+        ? sidebarOnRight ? <PanelRightOpen size={20} /> : <PanelLeftOpen size={20} />
+        : sidebarOnRight ? <PanelRightClose size={20} /> : <PanelLeftClose size={20} />}
+      {sidebarCollapsed && collapsedUnreadBadge != null && (
+        <span
+          ref={collapsedBadgeRef}
+          data-sidebar-collapsed-unread
+          aria-hidden="true"
+          className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-accent-ink"
+        >
+          {collapsedUnreadBadge}
+        </span>
+      )}
+    </button>
+  );
+
   return (
     <aside
       ref={asideRef}
@@ -1597,7 +1638,7 @@ export function Sidebar({
       />
       {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
-        className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-4")}
+        className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : phone ? "justify-between px-4" : "justify-start px-2")}
         style={windowDragStyle}
       >
         {macInset ? (
@@ -1607,55 +1648,18 @@ export function Sidebar({
             <DeviceSwitcher labeled iconOnly={density === "icons"} drawerOpen={open} />
             <BoardButton onOpen={onClose} />
           </div>
-        ) : density === "icons" ? (
-          <div />
-        ) : (
-          <BrandMark />
-        )}
+        ) : phone ? (
+          density === "icons" ? <div /> : <BrandMark />
+        ) : null}
         <div
-          className={cn("relative flex items-center", density === "icons" ? "flex-col gap-1" : "gap-1")}
+          className={cn("relative flex items-center md:min-w-0", density === "icons" ? "flex-col gap-1" : "gap-1")}
           style={windowNoDragStyle}
         >
+          {!phone && sidebarToggle}
+          {!phone && !macInset && density !== "icons" && <BrandMark omitEmpty />}
           {density !== "icons" && <DeviceSwitcher />}
           {!(isPhone() && !window.ogb) && <BoardButton />}
-          {(!isPhone() || showPhoneDrawerCollapse()) && <button
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label={
-              density === "icons"
-                ? collapsedQuestion
-                  ? t("ask.expandSidebar")
-                  : collapsedRoutine
-                    ? t("routine.expandSidebar")
-                    : collapsedUnreadBadge != null
-                      ? t("chrome.expandSidebarUnread", { count: collapsedUnreadBadge })
-                      : t("chrome.expandSidebar")
-                : t("chrome.collapseSidebar")
-            }
-            data-sidebar-needs-you={collapsedAsking || undefined}
-            data-arrival-glow={collapsedArrival.playing || undefined}
-            onAnimationEnd={collapsedArrival.onAnimationEnd}
-            className={cn(
-              "relative flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink",
-              collapsedAsking && "needs-you-glow",
-              collapsedArrival.playing && "arrival-glow",
-            )}
-            title={density === "icons" ? t("chrome.expandSidebar") : t("chrome.collapseSidebar")}
-          >
-            {density === "icons"
-              ? sidebarOnRight ? <PanelRightOpen size={20} /> : <PanelLeftOpen size={20} />
-              : sidebarOnRight ? <PanelRightClose size={20} /> : <PanelLeftClose size={20} />}
-            {sidebarCollapsed && collapsedUnreadBadge != null && (
-              <span
-                ref={collapsedBadgeRef}
-                data-sidebar-collapsed-unread
-                aria-hidden="true"
-                className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-accent-ink"
-              >
-                {collapsedUnreadBadge}
-              </span>
-            )}
-          </button>}
+          {phone && sidebarToggle}
 
           <button
             ref={importReturnRef}
@@ -1672,7 +1676,7 @@ export function Sidebar({
                 {!closing && <div className="fixed inset-0 z-30" onMouseDown={() => setPlusOpen(false)} />}
                 <div data-closing={closing || undefined} inert={closing} className={cn(
                   "animate-pop-in absolute top-full z-40 mt-1 w-52 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
-                  density === "icons" && !sidebarOnRight ? "left-0" : "right-0",
+                  !sidebarOnRight && (density === "icons" || !phone) ? "left-0" : "right-0",
                 )}>
                   <button
                     onClick={() => {

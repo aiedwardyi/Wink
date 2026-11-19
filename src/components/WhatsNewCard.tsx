@@ -118,7 +118,8 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
   useEffect(() => {
     if (!visible) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing) onClose();
+      // a side pane the tour opened takes this Escape, and the card stays for the next tile
+      if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing && !document.querySelector(".show-pane:not([data-closing])")) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

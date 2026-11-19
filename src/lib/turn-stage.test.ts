@@ -455,13 +455,15 @@ describe("wiring", () => {
     }
     const roomPinDeps =
       groupView.match(
-          /useEffect\(\(\) => \{\s*const el = scrollRef\.current;\s*if \(!el \|\| !followRef\.current\) return;\s*el\.scrollTo\(\{\s*top:\s*el\.scrollHeight\s*\}\);\s*previousScrollTop\.current\s*=\s*el\.scrollTop;\s*\},\s*\[([^\]]*)\]\)/,
+          /const followTail = useCallback\(\(\) => \{\s*const el = scrollRef\.current;\s*if \(!el \|\| !followRef\.current\) return;\s*el\.scrollTo\(\{\s*top:\s*el\.scrollHeight\s*\}\);\s*previousScrollTop\.current\s*=\s*el\.scrollTop;\s*\}, \[\]\);\s*useEffect\(followTail, \[([^\]]*)\]\)/,
       )?.[1] ?? "";
     // the shown list, so a line held for the server pins like any other
     expect(roomPinDeps).toMatch(/(?<![\w.])messages\.length/);
     expect(roomPinDeps).not.toContain("group.messages.length");
-    expect(roomPinDeps).toContain("streaming");
     expect(roomPinDeps).toContain("group.busyBotId");
+    // live text pins from the transcript that draws it, so the room skips those frames
+    expect(groupView).toContain("onLiveText={followTail}");
+    expect(groupView).toContain("useEffect(() => onLiveText?.(), [streamingMessage?.text, onLiveText]);");
     expect(roomPinDeps).not.toMatch(/\bfollow\b/);
   });
 

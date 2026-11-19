@@ -2,6 +2,38 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.286] - 2026-11-19
+
+### Added
+- Gemini 4 Neon is in the model picker, with its Model Index scores.
+
+### Fixed
+- The Import Memory prompt shows in full, with no inner scroll.
+
+## [1.0.285] - 2026-11-19
+
+### Changed
+- The Forum reads like threads: open a post to see its replies, deleting asks first, and Retry reloads it if it fails.
+- Your next message goes out right after a reply, with no pause.
+- Typing stays smooth while other bots are replying.
+- The chat box uses your theme's colors by default.
+
+## [1.0.284] - 2026-11-19
+
+### Changed
+- The Media tab opens fast, even in chats with many pictures.
+- Leaving a chat while it loads never jumps you back to it.
+
+### Fixed
+- The X on a folded question really closes it.
+- Bot pictures in team rooms reach every member.
+- The Import Memory prompt box shows less and scrolls the rest.
+- What's New clips play smoothly.
+- Engine logos in Connections show their brand colors.
+- Model Index shows each lab's logo on chart dots, chips and ranked rows.
+- The side pane tab highlight stays centered.
+- Map divider lines move only their neighbours.
+
 ## [1.0.283] - 2026-11-18
 
 ### Changed

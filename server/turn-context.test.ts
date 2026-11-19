@@ -412,7 +412,7 @@ describe("buildTurnContext", () => {
 
 describe("asks in the task record", () => {
   const now = new Date(2026, 10, 12, 9, 0).getTime();
-  const old = now - 7 * 60 * 60 * 1000;
+  const old = now - 4 * 24 * 60 * 60 * 1000;
   const record = {
     goal: "Ship the release",
     plan: [],
@@ -420,20 +420,21 @@ describe("asks in the task record", () => {
     blockers: [],
     nextAction: "Run smoke tests",
     asks: [
-      { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user" as const, ref: "PR #1348", at: old, changedAt: old },
+      { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user" as const, at: old, changedAt: old },
       { id: "A2", ask: "Drop the old skin", status: "declined" as const, at: old, changedAt: old },
       { id: "A3", ask: "Fix the login redirect", status: "building" as const, at: now - 1_000, changedAt: now - 1_000 },
     ],
   };
-  const lines = "- A1 waiting-for-user stale 11-12: Review the model picker PR (PR #1348)\n- A3 building 11-12: Fix the login redirect";
-  const stale = `[Wink asks list - 2 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it.]\n${lines}`;
-  const listed = `[Wink asks list - 2 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it. Build any summary or status from this list.]\n${lines}`;
+  const lines = "- A1 waiting-for-user needs verdict 11-08: Review the model picker PR\n- A3 building 11-12: Fix the login redirect";
+  const verdict = "[Wink asks list - 2 open, 1 needs a verdict: no ref and no change in 3+ days, so build, park or close it yourself, and ask the user about at most 3 at a time.";
+  const stale = `${verdict}]\n${lines}`;
+  const listed = `${verdict} Build any summary or status from this list.]\n${lines}`;
   const plain = { text: "thanks", transcript, rewound: false, fresh: false, replaysNatively: false };
 
   it.each([
     ["a compaction", { recycled: true, recycleReason: "compaction" as const }],
     ["a new session", { fresh: true }],
-  ])("carries open asks across %s with the stale one flagged", (_, boundary) => {
+  ])("carries open asks across %s with the one needing a verdict flagged", (_, boundary) => {
     const out = buildTurnContext({ ...plain, ...boundary, taskRecordText: taskRecordBlock(record, 6_000, { now }) });
     expect(out.turnText).toContain(`Blockers: 0 total; none\n${stale}`);
     expect(out.turnText).not.toContain("Drop the old skin");
@@ -445,7 +446,7 @@ describe("asks in the task record", () => {
     expect(text).toContain(stale);
   });
 
-  it("puts the stale nudge on a resumed turn that carries no record", () => {
+  it("puts the verdict nudge on a resumed turn that carries no record", () => {
     const out = buildTurnContext({ ...plain, taskRecordText: taskRecordBlock(record, 6_000, { now }), asksText: stale });
     expect(out).toEqual({ turnText: `${stale}\n\nthanks`, resume: true });
   });

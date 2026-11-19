@@ -1290,7 +1290,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerEngine: managed ? worker.executable : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
-      outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
+      outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, rows: input.rows ?? 24, desktopSize: null, pendingInputEcho: "", truncated: false,
       workerReady: false, mail, compactSignal: paneEnv.ORBIT_COMPACT_SIGNAL ?? null, reportSignal: paneEnv.ORBIT_REPORT_SIGNAL ?? null, reportLost: null, teacher: folder.teacher ?? input.botId, worker: false, engine: null, stallArmedAt: 0, stallChangedAt: 0, stallScreenAt: 0, stallText: null,
       stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, blipNudge: null, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
       commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, idleCompacting: false, agentSeen: false, contextNote: null, contextCompactPending: false,
@@ -1514,12 +1514,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (pending.get(key) === operation) pending.delete(key);
     }
   };
-  const writeInput = (session, data) => {
+  const writeInput = (session, data, desktop = false) => {
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Reject non-text IPC payloads before passing them to the PTY.
     if (typeof data !== "string" || data.length > 64 * 1024) throw new Error("Invalid terminal input");
     if (session.exitCode !== null) throw new Error("Terminal has exited");
     const mouse = isMouseReport(data);
-    if (!mouse && !isTerminalReply(data)) cancelClaudeStartup(session);
+    const userInput = !mouse && !isTerminalReply(data);
+    if (userInput) cancelClaudeStartup(session);
     const echo = mouse ? "" : inputEchoText(data);
     const submit = mouse ? false : isSubmitInput(data);
     // Mouse and focus reports from a TUI are not the user taking over.
@@ -1546,6 +1547,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (!mouse) session.respawn.push(data);
       return undefined;
     }
+    const size = desktop && userInput && session.desktopSize;
+    if (size && (size.cols !== session.cols || size.rows !== session.rows)) {
+      // The typer reclaims its dimensions on the same ordered channel as input.
+      try { void Promise.resolve(resizePane(session, size.cols, size.rows)).catch(() => {}); } catch {}
+    }
     try {
       const result = session.pty.write(payload);
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
@@ -1563,6 +1569,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const result = session.pty.resize(cols, rows);
       session.screen.resize(cols, rows);
       session.cols = cols;
+      session.rows = rows;
       if (session.viewers.size) fanOut(session, { cols, rows });
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
       return result && typeof result.then === "function" ? result.catch((cause) => { fail(session, cause); throw cause; }) : result;
@@ -1618,7 +1625,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       return true;
     },
     write(event, id, data) {
-      return writeInput(owned(event, id), data);
+      return writeInput(owned(event, id), data, true);
     },
     acknowledge(event, id) {
       const session = owned(event, id);
@@ -1628,7 +1635,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.activityCooldownUntil = now() + attentionCooldownMs;
     },
     resize(event, id, cols, rows) {
-      return resizePane(owned(event, id), cols, rows);
+      const session = owned(event, id);
+      const resized = resizePane(session, cols, rows);
+      session.desktopSize = { cols, rows };
+      return resized;
     },
     read(event, id, options = {}) {
       const session = owned(event, id);
