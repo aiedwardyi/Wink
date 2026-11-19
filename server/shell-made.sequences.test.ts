@@ -222,6 +222,16 @@ const TABLE: [string, string[], string, Op[]][] = [
   ["push-pop", ["source/shot-*11", "phase-a/", "real-shots/"], "Push-Location -LiteralPath '{w}/phase-a'; Pop-Location; Copy-Item -Path '{w}/source/*.png' -Destination 'real-shots'", [["copy", "source", "real-shots"]]],
   ["flat-copy-513", ["source/shot-*513", "real-shots/"], "Copy-Item -Path '{w}/source/*.png' -Destination '{w}/real-shots'", [["copy", "source", "real-shots"]]],
   ["simple-relative", ["source/shot-*11", "real-shots/"], "Set-Location -LiteralPath '{w}/real-shots'; Copy-Item -Path '{w}/source/*.png' -Destination '.'", [["copy", "source", "real-shots"]]],
+  ["rebuild-ps", ["inputs/shot-*11", "real-shots/", "stage/"], "Remove-Item -LiteralPath 'stage' -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -Path '{w}/inputs' -Destination 'stage' -Recurse; Set-Location -Path 'stage'; Copy-Item -Path '*.png' -Destination '../real-shots'", [["remove", "stage"], ["copy", "inputs", "stage"], ["copy", "stage", "real-shots"]]],
+  ["rebuild-fresh-ps", ["inputs/shot-*11", "real-shots/"], "Remove-Item -LiteralPath 'stage' -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -Path '{w}/inputs' -Destination 'stage' -Recurse; Set-Location -Path 'stage'; Copy-Item -Path '*.png' -Destination '../real-shots'", [["copy", "inputs", "stage"], ["copy", "stage", "real-shots"]]],
+  ["rebuild-git-init-bash", ["inputs/shot-*11", "real-shots/", "stage/"], "rm -rf stage; git init -q stage; cd stage; cp {w}/inputs/*.png ../real-shots/", [["remove", "stage"], ["mkdir", "stage/.git"], ["cp", "inputs", "real-shots"]]],
+  ["clean-assign-ps", ["inputs/shot-*11", "real-shots/", "out/"], "Remove-Item 'out' -Recurse -Force -ErrorAction SilentlyContinue\n$null = New-Item -ItemType Directory -Path 'out'\nSet-Location 'out'\nCopy-Item -Path '{w}/inputs/*.png' -Destination '../real-shots'", [["remove", "out"], ["mkdir", "out"], ["copy", "inputs", "real-shots"]]],
+  ["remove-absolute-ps", ["inputs/shot-*11", "real-shots/", "phase-a/"], "Remove-Item '{w}/phase-a' -Recurse -Force; Copy-Item -Path '{w}/inputs' -Destination '{w}/phase-a' -Recurse; Set-Location 'phase-a'; Copy-Item -Path '*.png' -Destination '../real-shots'", [["remove", "phase-a"], ["copy", "inputs", "phase-a"], ["copy", "phase-a", "real-shots"]]],
+  ["remove-not-run-bash", ["inputs/shot-*11", "stage/real-shots/"], "[ -f stage/.stale ] && rm -rf stage\ncd stage\ncp {w}/inputs/*.png real-shots/", [["cp", "inputs", "stage/real-shots"]]],
+  ["case-arm-not-taken-bash", ["inputs/shot-*11", "phase-a/real-shots/"], 'case "$1" in\n  clean)\n    rm -rf phase-a\n    ;;\nesac\ncd phase-a\ncp {w}/inputs/*.png real-shots/', [["cp", "inputs", "phase-a/real-shots"]]],
+  ["remove-include-ps", ["inputs/shot-*11", "stage/real-shots/"], "Remove-Item -Path 'stage' -Include *.tmp -Recurse; Set-Location -Path 'stage'; Copy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["copy", "inputs", "stage/real-shots"]]],
+  ["rmdir-not-empty-bash", ["inputs/shot-*11", "stage/real-shots/"], "rmdir stage 2> /dev/null; cd stage; cp {w}/inputs/*.png real-shots/", [["cp", "inputs", "stage/real-shots"]]],
+  ["rename-fails-ps", ["inputs/shot-*11", "stage/real-shots/", "phase-b/"], "Rename-Item -Path 'stage' -NewName 'phase-b' -ErrorAction SilentlyContinue; Set-Location -Path 'stage'; Copy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["copy", "inputs", "stage/real-shots"]]],
 ];
 
 function row([name, old, command, ops]: (typeof TABLE)[number]): Sequence {
@@ -303,6 +313,27 @@ function generate(seed: number, count: number): Sequence[] {
       return q(text.replace(/[\\/]$/, "") + slash + "*.png");
     };
     const within = (parent: string, child: string) => child === parent || child.startsWith(parent + sep);
+    // a remake the replay cannot read, and a remove or rename it reads that leaves the folder in place
+    const remake = (target: string): [string, () => void] => {
+      const to = ref(target);
+      const made = () => mkdir(target);
+      const copied = () => copyAll(inputs, target, ps ? "ps" : "sh");
+      const git = () => mkdir(join(target, ".git"));
+      return pick<[string, () => void]>(ps
+        ? [[`Copy-Item -Path ${ref(inputs)} -Destination ${to} -Recurse`, copied], [`git init -q ${to} | Out-Null`, git], [`$null = New-Item -ItemType Directory -Path ${to}`, made], [`ni -ItemType Directory ${to} | Out-Null`, made], [`if (-not (Test-Path ${to})) { New-Item -ItemType Directory -Path ${to} | Out-Null }`, made], [`foreach ($d in ${to}) { mkdir $d | Out-Null }`, made]]
+        : [[`cp -r ${ref(inputs)} ${to}`, copied], [`git init -q ${to}`, git], [`if [ ! -d ${to} ]; then mkdir -p ${to}; fi`, made], [`for d in ${to}; do mkdir -p "$d"; done`, made]]);
+    };
+    const kept = (target: string) => {
+      const to = ref(target);
+      return pick(ps
+        ? [`Remove-Item -Path ${to} -Include *.tmp -Recurse`, `Rename-Item -Path ${to} -NewName notes.md -ErrorAction SilentlyContinue`, `if (Test-Path ${ref(join(target, ".stale"))}) { Remove-Item ${to} -Recurse -Force }`]
+        : [`[ -f ${ref(join(target, ".stale"))} ] && rm -rf ${to} || true`, `rmdir ${to} 2> /dev/null || true`, `mv ${to} ${ref(join(dirname(target), "notes.md"))} 2> /dev/null || true`, `case "$1" in\n  clean)\n    rm -rf ${to}\n    ;;\nesac`]);
+    };
+    const enter = (target: string) => {
+      add((ps ? "Set-Location " : "cd ") + ref(target));
+      previous = cwd;
+      cwd = target;
+    };
     const free = (dir: string) => !within(dir, cwd) && !stack.some((location) => within(dir, location));
     const targets = () => [...dirs].filter((dir) => dir !== cwd && dir !== inputs && dir !== album);
     const live = (set: Set<string>) => [...set].filter((dir) => dirs.has(dir));
@@ -344,7 +375,7 @@ function generate(seed: number, count: number): Sequence[] {
       } else if (roll < 0.57) {
         const target = pick([join(work, "notes.md"), join(outside, "notes.md"), join(inputs, SHOTS[0]!)]);
         add(ps ? pick(["Get-Content", "Get-Content -LiteralPath", "Test-Path"]) + " " + ref(target) + " | Out-Null" : pick(["cat", "head -1", "test -f"]) + " " + ref(target) + " > /dev/null");
-      } else if (roll < 0.78) {
+      } else if (roll < 0.72) {
         const local = join(cwd, "real-shots");
         let dest: string;
         if (shotsLike.has(cwd) && chance(0.5)) dest = cwd;
@@ -354,6 +385,19 @@ function generate(seed: number, count: number): Sequence[] {
         const copied = () => copyAll(inputs, dest, ps ? "ps" : "sh");
         if (ps) add(pick([`Copy-Item -Path ${glob(inputs)} -Destination ${to}`, `Copy-Item ${glob(inputs)} ${to}`, `Copy-Item -Destination ${to} -Path ${glob(inputs)}`, `cp ${glob(inputs)} ${to}`]), copied);
         else add(`cp ${spell(inputs).replace(/\/$/, "").replace(/ /g, "\\ ")}/*.png ${to}`, copied);
+      } else if (roll < 0.75) {
+        const reused = madeDirs.filter((dir) => dirs.has(dir) && free(dir));
+        const target = reused.length && chance(0.5) ? pick(reused) : join(cwd, `stage-${++serial}`);
+        add(ps ? `Remove-Item -LiteralPath ${ref(target)} -Recurse -Force -ErrorAction SilentlyContinue` : `rm -rf ${ref(target)}`, () => remove(target));
+        for (const set of [dirs, shotsLike]) for (const dir of set) if (within(target, dir)) set.delete(dir);
+        add(...remake(target));
+        for (const set of [dirs, shotsLike]) set.add(target);
+        madeDirs.push(target);
+        enter(target);
+      } else if (roll < 0.78) {
+        const target = pick([join(work, "phase-a"), join(work, "phase-b"), join(outside, "phase-c")]);
+        add(kept(target));
+        enter(target);
       } else if (roll < 0.84) {
         const dest = pick(live(shotsLike));
         add(ps ? `Copy-Item -Path ${ref(album)} -Recurse -Destination ${ref(dest)}` : `cp -r ${ref(album)} ${ref(dest)}`, () => copyTree(album, dest, ps ? "ps" : "sh"));
@@ -415,7 +459,15 @@ function generate(seed: number, count: number): Sequence[] {
       }
     }
     const joiner = ps ? pick(["; ", "; ", "\n"]) : pick(["; ", " && ", "\n"]);
-    return { name, cwd: work, command: steps.join(joiner), setup, effects };
+    // another bot writes beside the command; pops and variable cds keep a second walk that may list its files
+    const traced = !steps.some((step) => /^(?:push|pop|\$d |d=|cd - |set-location -$)/i.test(step));
+    const secondWriter = () => {
+      write(join(dirname(work), "their-notes.md"));
+      write(join(dirname(work), "other-bot-out", "their-001.png"));
+      write(join(dirname(work), "real-shots", "their-001.png"));
+      for (const folder of folders.flatMap((folder) => [folder, join(folder, "real-shots")])) write(join(folder, "their-002.png"));
+    };
+    return { name, cwd: work, command: steps.join(joiner), setup, effects, secondWriter: traced ? secondWriter : undefined };
   };
   return Array.from({ length: count }, (_, index) => sequence(`s${seed}-${String(index).padStart(4, "0")}`, index % 3 !== 2));
 }
@@ -499,8 +551,8 @@ const SECOND_WRITER = [
 const CONTROL_FLOW = generateControlFlow();
 const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)]), ["control flow", CONTROL_FLOW], ["second writers", SECOND_WRITER]];
 
-it("replays 4354 sequences", () => {
-  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4354);
+it("replays 4364 sequences", () => {
+  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4364);
 });
 
 it.each(GROUPS)("keeps base files and excludes extra files the command never touched in %s", (_, sequences) => {

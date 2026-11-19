@@ -11,10 +11,11 @@ const TOKEN = /"([^"\n]+)"|'([^'\n]+)'|([^\s"'|;&<>()]+)/g;
 const CHANGE_DIR = /^(?:cd|chdir|sl|set-location)$/i;
 const PUSH_DIR = /^(?:pushd|push-location)$/i;
 const POP_DIR = /^(?:popd|pop-location)$/i;
+const RECURSIVE = /^-(?:-?recursive|recurse|rec|rf?|fr)$/i;
 const EXITING_POP = /(?:\bif\b[^{}\r\n]*\{|\|\|\s*\{|[;\n][ \t]*then\b)\s*((?:(?:popd|pop-location)\b[^;\r\n{}]*[;\r\n]\s*)+)exit(?:[ \t]+\d+)?\s*;?\s*(?:\}|fi\b)/dgi;
 
 type DirectoryChange = [path: string, present: boolean];
-type Mutation = { kind: "create" | "remove" | "move" | "rename"; paths: string[]; directoryOnly?: boolean };
+type Mutation = { kind: "create" | "remove" | "move" | "rename"; paths: string[]; folder?: boolean };
 type Walk = { here: string; stack?: string[]; followMissing: boolean; changes: DirectoryChange[]; removed: Map<string, number> };
 
 const pathWord = (word: string) => word && !word.startsWith("-") && !/[*?]/.test(word) && !/^\w{2,}:\/\//.test(word) && !isNetworkPath(word);
@@ -51,7 +52,7 @@ function mutationOf([name, ...args]: string[]): Mutation | undefined {
   if (child && pathWord(child)) paths[0] = join(paths[0] ?? ".", child);
   if (!paths.length || !directory) return;
   if (command === "mkdir" || command === "md" || command === "new-item") return { kind: "create", paths };
-  return { kind: "remove", paths, directoryOnly: command === "rmdir" };
+  return { kind: "remove", paths, folder: command === "rmdir" || args.some((arg) => RECURSIVE.test(arg)) };
 }
 
 const statOf = (path: string): Stats | undefined => {
@@ -126,7 +127,7 @@ export function shellMade(command: string, cwd: string, since: number): string[]
           const key = pathKey(path);
           const stat = getStat(path);
           const laterRemoval = !stat && (walk.removed.get(key) ?? -1) > index;
-          const follow = presentAt(walk, key) ?? (stat?.isDirectory() || laterRemoval || walk.followMissing);
+          const follow = discover || stat?.isDirectory() || laterRemoval || (presentAt(walk, key) ?? walk.followMissing);
           if (follow) walk.here = path;
           else if (push) walk.stack?.pop();
         }
@@ -160,7 +161,7 @@ function recordMutation(walk: Walk, mutation: Mutation, index: number, getStat: 
   if (to && (mutation.kind === "move" || mutation.kind === "rename")) {
     const child = join(to, basename(from));
     const target = mutation.kind === "rename" ? resolve(dirname(from), mutation.paths[1]!) : getStat(child) ? child : to;
-    const directory = presentAt(walk, pathKey(from)) || getStat(target)?.isDirectory();
+    const directory = presentAt(walk, pathKey(from)) || !getStat(target)?.isFile();
     if (directory) walk.changes.push([pathKey(target), true]);
     walk.changes.push([pathKey(from), false]);
     if (discover && directory) walk.removed.set(pathKey(from), index);
@@ -168,7 +169,7 @@ function recordMutation(walk: Walk, mutation: Mutation, index: number, getStat: 
     const created = mutation.kind === "create";
     for (const path of paths.map(pathKey)) {
       walk.changes.push([path, created]);
-      if (discover && mutation.directoryOnly) walk.removed.set(path, index);
+      if (discover && mutation.folder) walk.removed.set(path, index);
     }
   }
 }
