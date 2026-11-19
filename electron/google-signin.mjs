@@ -4,6 +4,9 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
+import { DASHBOARD_URL, PAGE_CSP, signInPage } from "./google-signin-page.mjs";
+import { translate } from "./i18n.mjs";
+
 export const GOOGLE_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/drive.file", "profile"];
 const DRIVE_FILE = GOOGLE_SCOPES[2];
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -126,13 +129,13 @@ export function googleAuthUrl({ clientId, redirectUri, challenge, state }) {
   return url.toString();
 }
 
-function page(res, status, text) {
-  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-  res.end(`<!doctype html><title>Wink</title><p style="font:16px sans-serif">${text}</p>`);
+function page(res, status, locale, title, hint, next) {
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": PAGE_CSP });
+  res.end(signInPage({ locale, title: translate(locale, title), body: hint ? translate(locale, hint) : "", next }));
 }
 
 /** One sign-in. `onListening` sees the bound address (tests); `signal` cancels. */
-export async function runGoogleSignIn({ client, openExternal, fetch = globalThis.fetch, signal, timeoutMs = SIGN_IN_TIMEOUT_MS, onListening }) {
+export async function runGoogleSignIn({ client, openExternal, fetch = globalThis.fetch, signal, timeoutMs = SIGN_IN_TIMEOUT_MS, onListening, getLocale = () => "en", openAfter, persist }) {
   const { verifier, challenge } = pkcePair();
   const state = randomBytes(16).toString("base64url");
   const server = createServer();
@@ -144,6 +147,7 @@ export async function runGoogleSignIn({ client, openExternal, fetch = globalThis
   const redirectUri = `http://127.0.0.1:${address.port}`;
   onListening?.(address);
   let code;
+  let held;
   try {
     code = await new Promise((settle, fail) => {
       const done = () => {
@@ -161,18 +165,18 @@ export async function runGoogleSignIn({ client, openExternal, fetch = globalThis
         try {
           query = new URL(req.url ?? "/", redirectUri).searchParams;
         } catch {
-          return page(res, 400, "Bad request.");
+          return page(res, 400, getLocale(), "google.failed", "google.failedHint");
         }
-        if (!query.has("code") && !query.has("error")) return page(res, 404, "Not found.");
+        if (!query.has("code") && !query.has("error")) return page(res, 404, getLocale(), "google.failed", "google.failedHint");
         if (query.get("state") !== state) {
-          page(res, 400, "Sign-in failed. Go back to Wink and try again.");
+          page(res, 400, getLocale(), "google.failed", "google.failedHint");
           return reject(new GoogleSignInError("state-mismatch"));
         }
         if (query.has("error")) {
-          page(res, 200, "Sign-in was not completed. You can close this tab.");
+          page(res, 200, getLocale(), "google.notCompleted", "google.notCompletedHint");
           return reject(new GoogleSignInError(ERROR_CODES.get(query.get("error")) ?? "google-error"));
         }
-        page(res, 200, "You can close this tab.");
+        held = res;
         resolve(query.get("code"));
       });
       Promise.resolve(openExternal(googleAuthUrl({ clientId: client.id, redirectUri, challenge, state }))).catch(() =>
@@ -182,7 +186,19 @@ export async function runGoogleSignIn({ client, openExternal, fetch = globalThis
   } finally {
     server.close();
   }
-  return exchangeCode({ client, code, verifier, redirectUri, fetch, signal });
+  // The tab waits on the exchange and `persist`, so "signed in" is never shown for a sign-in that failed.
+  const locale = getLocale();
+  try {
+    const session = await exchangeCode({ client, code, verifier, redirectUri, fetch, signal });
+    await persist?.(session);
+    if (openAfter === "dashboard") {
+      page(held, 200, locale, "google.signedIn", "google.openingDashboard", { url: DASHBOARD_URL, label: translate(locale, "google.openDashboard") });
+    } else page(held, 200, locale, "google.signedIn", "google.signedInHint");
+    return session;
+  } catch (error) {
+    page(held, 200, locale, "google.failed", "google.failedHint");
+    throw error;
+  }
 }
 
 async function exchangeCode({ client, code, verifier, redirectUri, fetch, signal }) {
@@ -223,7 +239,7 @@ async function exchangeCode({ client, code, verifier, redirectUri, fetch, signal
 }
 
 /** The main-process side of the preload actions. Secrets stay in here and in saveSession. */
-export function createGoogleAccountController({ client, openExternal, saveSession, clearSession, fetch, log = () => {} }) {
+export function createGoogleAccountController({ client, openExternal, saveSession, clearSession, fetch, getLocale, log = () => {} }) {
   let active = null;
   let transition = Promise.resolve();
   const serialize = (work) => {
@@ -232,20 +248,20 @@ export function createGoogleAccountController({ client, openExternal, saveSessio
     return next;
   };
   return {
-    async signIn() {
+    async signIn({ openAfter } = {}) {
       if (!client) return { ok: false, error: "unavailable" };
       active?.abort();
       const controller = new AbortController();
       active = controller;
       try {
-        const { idToken, ...session } = await runGoogleSignIn({ client, openExternal, fetch, signal: controller.signal });
+        const persist = ({ idToken, ...stored }) =>
+          serialize(async () => {
+            if (controller.signal.aborted) throw new GoogleSignInError("cancelled");
+            await saveSession(stored, idToken);
+          });
+        const { email } = await runGoogleSignIn({ client, openExternal, fetch, getLocale, openAfter: openAfter === "dashboard" ? openAfter : undefined, signal: controller.signal, persist });
         if (controller.signal.aborted) return { ok: false, error: "cancelled" };
-        await serialize(async () => {
-          if (controller.signal.aborted) throw new GoogleSignInError("cancelled");
-          await saveSession(session, idToken);
-        });
-        if (controller.signal.aborted) return { ok: false, error: "cancelled" };
-        return { ok: true, email: session.email };
+        return { ok: true, email };
       } catch (error) {
         const code = error instanceof GoogleSignInError ? error.code : "store-failed";
         log(`google sign-in failed: ${code}`);
