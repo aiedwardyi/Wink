@@ -16,7 +16,7 @@ import { defaultComputerForNewBot } from "./local-routing.ts";
 import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
-import { THREAD_CACHE_CHARS, ThreadCache } from "./thread-cache.ts";
+import { THREAD_CACHE_CHARS, ThreadCache, type ThreadState } from "./thread-cache.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { removeWorkspace } from "./workspace.ts";
 import { readSessionSystem, SESSION_SYSTEM_DIR, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
@@ -156,6 +156,7 @@ export interface Message {
    * something — the UI offers setup instead of a retry that cannot work. */
   tool?: {
     name: string;
+    memoryBotId?: string;
     /** Claude Code tool name, when the engine said the kind. */
     verb?: string;
     ok?: boolean;
@@ -760,14 +761,6 @@ const onboardingCard = (): OptionCardData => ({
   options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"],
 });
 
-/** Messages form a tree (forks appear when a message is edited); the
- * visible conversation is the path from the root to activeLeafId. */
-interface ThreadState {
-  /** Written only through the thread cache, which weighs every row. */
-  readonly messages: readonly Message[];
-  activeLeafId: string | null;
-}
-
 export class Store {
   bots: BotRecord[] = [];
   /** "missing" is a lost file; "unreadable" is there but did not load, so it may still hold good bots. */
@@ -777,7 +770,7 @@ export class Store {
   readonly trash = new TrashList();
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
-  private threads: ThreadCache<ThreadState>;
+  private threads: ThreadCache;
   /** Threads a driver still owns after Stop marked its bot idle; the cache keeps them. */
   private heldThreads: () => Iterable<string> = () => [];
   private taskPackets = new Map<string, TaskResumePacket | null>();
@@ -1387,9 +1380,10 @@ export class Store {
     return this.threads.has(threadId);
   }
 
-  /** The visible conversation: root → activeLeafId. */
+  /** Stable projection of replace-on-write rows from the root to the active leaf. */
   activePath(threadId: string): Message[] {
     const t = this.thread(threadId);
+    if (t.path && t.path.leafId === t.activeLeafId) return t.path.rows;
     const byId = new Map(t.messages.map((m) => [m.id, m]));
     const path: Message[] = [];
     let cur = t.activeLeafId ? byId.get(t.activeLeafId) : undefined;
@@ -1397,7 +1391,10 @@ export class Store {
       path.push(cur);
       cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
-    return path.reverse();
+    path.reverse();
+    Object.freeze(path);
+    t.path = { leafId: t.activeLeafId, rows: path };
+    return path;
   }
 
   /** activePath newest first, read lazily from disk when the thread is not loaded. */

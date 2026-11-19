@@ -647,7 +647,7 @@ it("sizes the scroll thumb to grab: 44px to catch on a phone, a wider bar on a d
   expect(phone).toBeGreaterThanOrEqual(GRAB);
 });
 
-it("closing with X neither asks again nor touches the grid", async () => {
+it("closing with the pane toggle neither asks again nor touches the grid", async () => {
   media.t1 = shots(200);
   await act(async () => showMedia("t1"));
   await act(async () => root.render(createElement(Presence, { source: { threadId: "t1", messages: [] } })));
@@ -659,7 +659,7 @@ it("closing with X neither asks again nor touches the grid", async () => {
   const changes: MutationRecord[] = [];
   const watch = new MutationObserver((records) => changes.push(...records));
   watch.observe(grid, { subtree: true, childList: true, attributes: true, characterData: true });
-  await click(host.querySelector('button[aria-label="Close"]'));
+  await click(host.querySelector(".show-pane-head [data-show-pane-button]"));
   expect(host.querySelector("[data-closing]")).not.toBeNull();
   expect(host.querySelector("[data-media-grid] img")).toBe(img);
   await new Promise((resolve) => setTimeout(resolve, 0));

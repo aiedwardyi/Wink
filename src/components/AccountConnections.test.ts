@@ -455,7 +455,7 @@ it.each([
   await render(2);
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };
-  state.instances.push({ ...engine("gemini", false), accountOf: undefined, accountMain: undefined, accountState: undefined, driverKind: "antigravityAgent", displayName: "Gemini" });
+  state.instances.push({ ...engine("gemini", false), accountOf: undefined, accountMain: undefined, accountState: undefined, driverKind: "antigravityAgent", displayName: "Gemini", install: { login: { args: ["login"] } } });
   await update();
   for (const [id, label] of [["claude", add], ["gemini", signIn]] as const) {
     const group = host.querySelector(`[data-engine-row="${id}"]`)!;

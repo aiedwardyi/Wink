@@ -30,7 +30,7 @@ import { GPAIR_CLEAR_COOKIE, PhoneGoogle, gpairCookie, type GoogleSignInError } 
 import { realClock, type Clock } from "./phone-relay/clock.ts";
 import type { GoogleEnrollOptions, GoogleJoinResult } from "./phone-relay/google-enroll.ts";
 import type { PhoneRelay, PhoneRelayConfig, PhoneRelayEnrollOptions, PhoneRelayOptions } from "./phone-relay/index.ts";
-import { relayMode } from "./phone-relay/mode.ts";
+import { frontDoorHost, relayMode } from "./phone-relay/mode.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import { parseJson } from "./schema.ts";
 import { removePhonePushSubscriptions } from "./web-push.ts";
@@ -273,6 +273,7 @@ export class PhoneAccess {
         onStatus: () => {
           if (this.relay === relay) this.options.onChange?.();
         },
+        frontDoor: this.options.teamBase,
       };
       const google = this.options.google;
       if (this.google && google) {
@@ -369,11 +370,12 @@ export class PhoneAccess {
 
   /** Runs before any route for a relay request. `phone` is null only for public files and linked page grants. */
   async gate(req: IncomingMessage, res: ServerResponse): Promise<RelayGate> {
-    const host = this.relay?.status().host ?? null;
-    if (!host) {
+    const own = this.relay?.status().host ?? null;
+    if (!own) {
       send(res, 503, { error: "phone access is off" });
       return HANDLED;
     }
+    const host = this.servedHost(req, own);
     const verdict = relayVerdict(req, host);
     if ((verdict.kind === "pair-page" || verdict.kind === "google-start") && this.session(req, res)) {
       res.writeHead(302, { location: "/", "cache-control": "no-store" });
@@ -475,25 +477,32 @@ export class PhoneAccess {
     send(res, 200, { ok: true, phone: { id: result.phone.id, name: result.phone.name } }, { "set-cookie": phoneSetCookie(result.token) });
   }
 
+  /** The relay host a request names: this PC's own, or its front-door name. */
+  private servedHost(req: IncomingMessage, own: string): string {
+    const base = this.base();
+    const door = base ? frontDoorHost(own, base, this.options.teamBase) : null;
+    return door && req.headers.host?.trim().toLowerCase() === door ? door : own;
+  }
+
   /** This PC's label while it can take a Google sign-in: Web client, signed in, and listed in the relay directory. */
   private googleLabel(host: string): string | null {
     const base = this.base();
     if (!this.google?.configured() || !this.relay?.accountReady?.() || !base) return null;
-    return labelFromHost(host, base);
+    const door = this.options.teamBase;
+    return labelFromHost(host, base) ?? (door ? labelFromHost(host, door) : null);
   }
 
   /** GET sends the phone to the sign-in page with a fresh challenge; HEAD only says whether it would. */
   private googleStart(req: IncomingMessage, res: ServerResponse, host: string): void {
     const label = this.googleLabel(host);
-    const base = this.base();
-    if (!this.google || !label || !base) return send(res, 409, { error: "google-unavailable" });
+    if (!this.google || !label) return send(res, 409, { error: "google-unavailable" });
     if (req.method === "HEAD") {
       res.writeHead(204, { "cache-control": "no-store" });
       res.end();
       return;
     }
     if (!this.startLimit.take(rateKey(this.client?.peer(req) ?? null))) return send(res, 429, { error: "rate-limited" });
-    const { cookie, location } = this.google.start(label, `https://${base}/signin`);
+    const { cookie, location } = this.google.start(label, `https://${host.slice(label.length + 1)}/signin`);
     res.writeHead(302, { location, "set-cookie": cookie, "cache-control": "no-store", "referrer-policy": "no-referrer" });
     res.end();
   }

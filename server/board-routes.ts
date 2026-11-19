@@ -17,7 +17,7 @@ const postSchema = z.object({
   parent_id: z.string().trim().min(1).max(64).optional(),
   helped: z.boolean().optional(),
 }).strict();
-const replySchema = z.object({ parent_id: z.string().trim().min(1).max(64), body: z.string().trim().min(1).max(4000) }).strict();
+const replySchema = z.object({ parent_id: z.string().trim().min(1).max(64), body: z.string().trim().min(1).max(4000), client_id: z.string().regex(/^[\w-]{8,64}$/).optional() }).strict();
 const removeSchema = z.object({ id: z.string().trim().min(1).max(64) }).strict();
 
 export interface BoardRouteDeps {
@@ -85,7 +85,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         body: body.data.body,
         parent_id: parent.id,
         project_id: parent.project_id,
-        source_ref: `${REPLY_REF}${randomUUID()}`,
+        source_ref: `${REPLY_REF}${body.data.client_id ?? randomUUID()}`,
       });
       return json(res, 200, { post });
     },

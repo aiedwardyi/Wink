@@ -302,11 +302,11 @@ describe("message menu in 1:1 chats", () => {
     expect(menu?.textContent).not.toContain("Copy ID");
   });
 
-  it("hides Reply on a quick answer and keeps Copy", async () => {
+  it("shows Reply on a quick answer", async () => {
     const quick = botMsg("b1", "yes", { quick: { state: "answer", askId: "u1" } });
     const host = await mountChat(bot([userMsg("u1", "hi"), quick]));
     await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
-    expect(messageMenu()?.querySelector("[data-menu-reply]")).toBeNull();
+    expect(messageMenu()?.querySelector("[data-menu-reply]")?.textContent).toBe("Reply");
     expect(messageMenu()?.querySelector("[data-menu-copy]")).not.toBeNull();
   });
 
@@ -359,6 +359,15 @@ describe("message menu in 1:1 chats", () => {
     expect(cancel).not.toBeNull();
     expect(cancel?.parentElement?.textContent).toContain("hover target");
     expect(messageMenu()).toBeNull();
+  });
+
+  it("quotes a quick answer like any bot reply", async () => {
+    const quick = botMsg("b1", "quick words", { quick: { state: "answer", askId: "u1" } });
+    const host = await mountChat(bot([userMsg("u1", "hi"), quick]));
+    await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
+    await act(async () => { document.querySelector("[data-menu-reply]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+
+    expect(host.querySelector('button[aria-label="Cancel reply"]')?.parentElement?.textContent).toContain("quick words");
   });
 
   it("copies the same text the hover Copy button copies", async () => {

@@ -320,8 +320,9 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     }
     if (active?.threadId === threadId || queue.some((item) => item.threadId === threadId)) return;
     if (deps.busy(botId, threadId)) return;
-    if (!eligible(deps.store.activeLeaf(threadId))) return;
-    queue.push({ botId, threadId, messages: structuredClone(deps.store.activePath(threadId)), leafId: deps.store.activeLeaf(threadId), settledPrompt: deps.store.taskByThread(botId, threadId)?.nativePrompt });
+    const leafId = deps.store.activeLeaf(threadId);
+    if (!eligible(leafId)) return;
+    queue.push({ botId, threadId, messages: deps.store.activePath(threadId), leafId, settledPrompt: deps.store.taskByThread(botId, threadId)?.nativePrompt });
     pump();
   };
 

@@ -289,6 +289,40 @@ describe("worker list shortcut", () => {
     }
   });
 
+  it("holds the last committed desktop dock width through close", async () => {
+    const { host, press, unmount } = await mount();
+    const backquote = () => press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+    const measure = Element.prototype.getBoundingClientRect;
+    const widths: number[] = [];
+    let width = 715;
+    let onResize: (() => void) | undefined;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (!this.matches(".orbit-terminal-overlay")) return measure.call(this);
+      widths.push(width);
+      return new DOMRect(0, 0, width, 900);
+    });
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private readonly callback: () => void) {}
+      observe(target: Element) {
+        if (target.matches(".orbit-terminal-overlay")) onResize = this.callback;
+      }
+      disconnect() {}
+    });
+    try {
+      await backquote();
+      const overlay = host.querySelector<HTMLElement>('.orbit-terminal-overlay[data-open="true"]')!;
+      width = 632;
+      await act(async () => onResize?.());
+      width = 582;
+      await backquote();
+      expect(overlay.hasAttribute("data-closing")).toBe(true);
+      expect(widths).toEqual([715, 632]);
+      expect(overlay.style.getPropertyValue("--dock-exit-width")).toBe("632px");
+    } finally {
+      await unmount();
+    }
+  });
+
   it("shuts the terminal's own list when the docked terminal closes", async () => {
     const { host, press, unmount } = await mount();
     const backquote = () => press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
@@ -689,7 +723,7 @@ describe("terminal pane shortcuts", () => {
 describe("conversation layout", () => {
   it("clips the hidden terminal overlay instead of making the chat scrollable", () => {
     // overflow-hidden is still programmatically scrollable: a terminal tab scrollIntoView shifted the chat under the sidebar.
-    expect(app).toContain('ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip md:flex-row"');
+    expect(app).toMatch(/ref=\{conversationRef\} className=\{[^}]*\boverflow-clip md:flex-row /);
   });
 });
 

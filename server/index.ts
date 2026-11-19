@@ -135,6 +135,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
+import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -272,7 +273,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { asksNudge, isStatusTurn, TASK_ASKS_PROMPT } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import * as tts from "./tts/index.ts";
@@ -335,6 +336,7 @@ import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
 import { createUnlandedWork } from "./unlanded.ts";
+import { createAskPrs } from "./ask-prs.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -2408,6 +2410,7 @@ const serverServing = new Promise<void>((resolve) => { markServerServing = resol
 /** Tailnet detection and the relay both call this; the heartbeat starts once. */
 function startDevicePresence(): void {
   publishDeviceRecord();
+  void serverServing.then(() => devicePresence.probe(syncedDevices(), REMOTE_HOST));
   if (devicePresenceStarted) return;
   devicePresenceStarted = true;
   setInterval(publishDeviceRecord, DEVICE_HEARTBEAT_MS).unref();
@@ -2418,6 +2421,7 @@ function startDevicePresence(): void {
 }
 
 const devicePresence = createDevicePresence();
+const syncedDevices = () => profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
 const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
   if (host === REMOTE_HOST) return;
   ({ host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_DIR, console.log, host));
@@ -2941,6 +2945,22 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   }
 }
 
+// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time
+function stampShownAsks(threadId: string, sent: string): void {
+  const record = taskPacketForWrite(threadId);
+  const now = Date.now();
+  const ids = record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) : null;
+  if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
+}
+
+// a building ask closes as done once the PR in its ref merges
+function closeMergedAsks(botId: string, threadId: string, record: TaskResumePacket | null): TaskResumePacket | null {
+  const ids = record ? askPrs.take(botId, threadId, record.asks) : [];
+  if (!record || !ids.length) return record;
+  const now = Date.now();
+  return persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, status: "done" as const, changedAt: now } : ask) }) ?? record;
+}
+
 function queueTaskPacket(packet: TaskResumePacket): void {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) {
@@ -2997,7 +3017,7 @@ const summaryBuild = createSummaryBuild({
     if (!bot || !task) return null;
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
-    if (!instance) return null;
+    if (!instance?.generateText) return null;
     const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
@@ -3046,6 +3066,10 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
+const askPrs = createAskPrs({ repoDir: (botId, threadId) => {
+  const pinned = store.taskByThread(botId, threadId)?.cwd;
+  return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+} });
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
 startupTiming.afterPaint("unlanded", async () => {
   // the worker read each chat's reports; a chat loaded since then has them in memory
@@ -5302,7 +5326,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  let taskRecord = taskPacketForWrite(threadId);
+  let taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
   const selectionChanged = task.lastInstanceId !== undefined && (
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
@@ -5640,6 +5664,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     currentRequestText: recoveryLatestUserText,
     asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
   });
+  stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
     driverKind: instance.driverKind,
     model,
@@ -6462,6 +6487,12 @@ routines = new RoutineManager({
     notify(buildNotification("routine-failed", bot, routineSourceThread(run) ?? run.threadId ?? bot.threadId, detail));
   },
 });
+// wake rows written before the card carried the flag
+try {
+  routines.flagWakeCards(store);
+} catch (error) {
+  console.error("routine: flagging earlier wake cards failed, retrying next boot", error);
+}
 const recoveryOwners = routines.routineRequestReceiptOwners();
 if (recoveryOwners.length > 0) {
   // A normal launch has no crash-gap receipts, so it must not eagerly load
@@ -6992,7 +7023,7 @@ async function runClaimedGroupMemberTurn(
     return true;
   }
   startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
-  const taskRecord = taskPacketForWrite(threadId);
+  const taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
   const taskRecordToFlush = taskRecord;
   const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
   // A room replays Wink's context every turn, so no native session ever compacts it.
@@ -7067,6 +7098,7 @@ async function runClaimedGroupMemberTurn(
     ...roomMail.map((part) => part.text),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
   ].filter((value) => value !== null).join("\n\n");
+  stampShownAsks(threadId, roomContext);
   // One turn per bot at a time, across BOTH engines. Without this a bot
   // could run its 1:1 turn and a room turn concurrently, creating two provider
   // processes, interleaved token spend, and an interrupt that only ever
@@ -8586,8 +8618,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "POST" && path === BOARD_ROUTES.reply) return await boardRoutes.reply(req, res);
     if (method === "POST" && path === BOARD_ROUTES.remove) return await boardRoutes.remove(req, res);
     if (method === "GET" && path === "/api/devices") {
-      const folder = profileSyncSettings.folder;
-      const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
+      const listed = syncedDevices();
       const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
     }
@@ -9174,19 +9205,34 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return install ? json(res, 200, install) : json(res, 404, { error: "Unknown engine install" });
     }
     const engineSignIn = /^\/api\/instances\/([^/]+)\/sign-in$/.exec(path);
-    if (engineSignIn && !isInstanceId(engineSignIn[1])) return json(res, 400, { error: "Invalid instance id" });
-    if (method === "POST" && engineSignIn) {
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
+    if (engineSignIn) {
+      const id = engineSignIn[1];
+      const refuse = (status: number, error: string, code?: string) => {
+        logSignInRefusal(status, code);
+        return json(res, status, { error });
+      };
+      if (!isInstanceId(id)) return refuse(400, "Invalid instance id");
+      try {
+        if (method === "POST") {
+          if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+            return refuse(415, "content-type must be application/json");
+          }
+          const body = await readBody(req);
+          if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
+          const capture = await registry.startSignIn(id, body?.device === true);
+          return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        }
+        if (method === "DELETE") return await registry.cancelSignIn(id)
+          ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        if (method === "GET") {
+          const signIn = registry.signIn(id);
+          return signIn ? json(res, 200, signIn) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        }
+      } catch (error) {
+        const failure = requestError(error, () => {});
+        logSignInRefusal(failure.status, error instanceof LoginBusyError ? error.code : undefined);
+        return json(res, failure.status, failure.body);
       }
-      const body = await readBody(req);
-      if (body?.device !== undefined && typeof body.device !== "boolean") return json(res, 400, { error: "device must be a boolean" });
-      const capture = await registry.startSignIn(engineSignIn[1], body?.device === true);
-      return capture ? json(res, 200, capture) : json(res, 404, { error: "Unknown engine sign-in" });
-    }
-    if (method === "DELETE" && engineSignIn) {
-      return await registry.cancelSignIn(engineSignIn[1])
-        ? json(res, 200, {}) : json(res, 404, { error: "Unknown engine sign-in" });
     }
     const engineSignOut = /^\/api\/instances\/([^/]+)\/sign-out$/.exec(path);
     if (engineSignOut && !isInstanceId(engineSignOut[1])) return json(res, 400, { error: "Invalid instance id" });
@@ -9197,10 +9243,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const signedOut = await registry.signOut(engineSignOut[1]);
       return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
         : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });
-    }
-    if (method === "GET" && engineSignIn) {
-      const signIn = registry.signIn(engineSignIn[1]);
-      return signIn ? json(res, 200, signIn) : json(res, 404, { error: "Unknown engine sign-in" });
     }
 
     if (method === "GET" && path === "/api/usage/board") {

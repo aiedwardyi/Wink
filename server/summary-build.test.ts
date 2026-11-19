@@ -50,15 +50,16 @@ function setup(generateText?: (prompt: string, opts?: { signal?: AbortSignal }) 
       return added;
     },
   };
-  const build = createSummaryBuild({
-    store,
-    sendInputs: async () => ({
+  const sendInputs = vi.fn(async (_botId: string, _threadId: string, _messages: Message[]) => ({
       instance: { driverKind: "claude", generateText: state.generateText, textModel: "claude-haiku-5-5", textTimeoutMs: 90_000 },
       contextWindow: state.window,
       taskRecordText: state.record,
       nativeAt: state.nativeAt,
       cursor: state.cursor,
-    }),
+  }));
+  const build = createSummaryBuild({
+    store,
+    sendInputs,
     busy: () => state.busy,
     userName: () => "User",
   });
@@ -73,7 +74,7 @@ function setup(generateText?: (prompt: string, opts?: { signal?: AbortSignal }) 
       summaryGrace: inline?.summaryGrace,
     }).then((prepared) => ({ prepared, summarize }));
   };
-  return { threads, appended, state, build, store, sendPrepares };
+  return { threads, appended, state, build, store, sendInputs, sendPrepares };
 }
 
 function deferred() {
@@ -134,6 +135,47 @@ describe("summary build after settle", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it.each([true, false])("does not clone on a settle with no summary call (engine available: %s)", async (available) => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const generateText = vi.fn(async () => "SUMMARY\nbuilt");
+    const { threads, appended, build } = setup(available ? generateText : undefined);
+    threads.set("t", available ? [message("u", "short request")] : overBudgetThread("a"));
+
+    build.onSettled("bot", "t");
+    await build.idle();
+
+    expect(generateText).not.toHaveBeenCalled();
+    expect(appended).toEqual([]);
+    expect(clone).not.toHaveBeenCalled();
+  });
+
+  it("uses the settled branch's row references across queued writes and rejects a stale summary", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, build, sendInputs } = setup(generateText);
+    threads.set("other", overBudgetThread("o"));
+    const rows = overBudgetThread("a");
+    threads.set("t", rows);
+    const captured = rows.slice();
+
+    build.onSettled("bot", "other");
+    await tick();
+    build.onSettled("bot", "t");
+    rows[0] = { ...rows[0]!, text: "edited after settle" };
+    rows.push(message("later", "appended after settle"));
+    calls[0]!.resolve("SUMMARY\nother");
+    await tick();
+    expect(calls).toHaveLength(2);
+    calls[1]!.resolve("SUMMARY\ncaptured");
+    await build.idle();
+
+    const input = sendInputs.mock.calls.find(([, threadId]) => threadId === "t")![2];
+    expect(input).toEqual(captured);
+    for (const [index, row] of input.entries()) expect(row).toBe(captured[index]);
+    expect(calls[1]!.prompt).toContain("request 0");
+    expect(calls[1]!.prompt).not.toMatch(/(edited|appended) after settle/);
+    expect(appended.map((row) => row.threadId)).toEqual(["other"]);
   });
 
   it("builds after settle when over budget", async () => {

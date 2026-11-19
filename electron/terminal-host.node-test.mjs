@@ -81,6 +81,34 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+test("desktop input reclaims its size from a browser on the same PTY without waiting for the resize reply", async (t) => {
+  const f = fixture();
+  t.after(() => f.host.dispose());
+  const { id, generation } = await f.host.open(f.event, f.input);
+  await f.host.resize(f.event, id, 85, 34);
+  const remote = { sessionId: id, generation, cols: 47, rows: 25 };
+  await f.host.resizeBot("bot-1", remote);
+  await f.host.inputBot("bot-1", { ...remote, data: "remote" });
+
+  const calls = [];
+  let ack;
+  f.children[0].resize = (...size) => {
+    calls.push(["size", ...size]);
+    return new Promise((resolve) => { ack = resolve; });
+  };
+  f.children[0].write = (data) => calls.push(["input", data]);
+  try {
+    await f.host.write(f.event, id, "\x1b[?1;2c");
+    await f.host.write(f.event, id, "ls\r");
+    await f.host.write(f.event, id, "pwd\r");
+    assert.deepEqual(calls, [["input", "\x1b[?1;2c"], ["size", 85, 34], ["input", "ls\r"], ["input", "pwd\r"]]);
+    assert.equal(f.host.read(f.event, id).cols, 85);
+    assert.equal(f.host.read(f.event, id).rows, 34);
+  } finally {
+    ack?.();
+  }
+});
+
 test("retired panes leave one owner listener and destruction closes every live pane", async (t) => {
   let owner;
   const f = fixture({ owner: () => owner });

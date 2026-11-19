@@ -108,17 +108,17 @@ it("keeps the names cursor alone for the comparison, only when the check really 
   expect(after(20)).toEqual(["none"]);
 });
 
-it("keeps reading a live chunk until its done mark, then lands what the reply found and leaves", () => {
+it("reads a live chunk once, rests on the last spot until its done mark, then lands what the reply found and leaves", () => {
   const show = new VerifyDocShow(true);
   let moves = 0;
   show.feed(text(22));
   show.feed(band(5, 1, 22, "start"));
   for (let ms = 0; ms < 30_000; ms += 20) {
     const step = show.advance(20);
-    moves += step.moved.length;
+    if (ms > 8_000) moves += step.moved.length;
     if (ms > 3_000) expect([...show.cursors.keys()].sort()).toEqual(["1:grammar", "1:names", "1:spelling", "1:translation"]);
-    if (ms > 3_000 && ms % 1_000 === 0) expect(moves).toBeGreaterThan(0), moves = 0;
   }
+  expect(moves).toBe(0);
   show.feed(hit(30_000, "spelling", 5));
   show.feed(band(30_001, 1, 22, "done"));
   show.finish(30_002, false);
@@ -128,6 +128,33 @@ it("keeps reading a live chunk until its done mark, then lands what the reply fo
   expect(show.clock).toBeGreaterThan(30_200);
   expect(show.cursors.size).toBe(0);
   expect(show.due()).toBe(Infinity);
+});
+
+it("reads a live two-page chunk once in order, never starting over, then rests with no lag", () => {
+  const show = new VerifyDocShow(true), seen = new Map<string, number[]>(), rest = new Map<string, number>();
+  let last = 0, gap = 0;
+  show.feed(text(27));
+  show.feed(band(41, 1, 26, "start"));
+  for (let ms = 0; ms < 16_000; ms += 20) {
+    const step = show.advance(20);
+    for (const c of step.moved) {
+      seen.set(c.id, [...seen.get(c.id) ?? [], c.line]);
+      if (c.duration) {
+        expect(c.duration).toBeGreaterThanOrEqual(220);
+        expect(c.duration).toBeLessThanOrEqual(320);
+      }
+      if (c.kind !== "numbering") gap = Math.max(gap, ms - (rest.get(c.id) ?? ms));
+      if (c.duration) rest.set(c.id, ms + c.duration);
+      last = ms;
+    }
+  }
+  for (const [id, line] of seen) if (!id.endsWith(":numbering")) {
+    expect(line, id).toEqual([...line].sort((a, b) => a - b));
+    expect(line.at(-1)!, id).toBeGreaterThan(18);
+  }
+  expect(gap).toBeLessThanOrEqual(40);
+  expect(last).toBeLessThan(6_000);
+  expect([...show.cursors.keys()].sort()).toEqual(["1:grammar", "1:names", "1:spelling", "1:translation"]);
 });
 
 it("shows marks that were waiting when a live watch joined at once", () => {
