@@ -142,6 +142,7 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
   "1.0.283": { tile: "none", reason: "Speed and fixes; no feature tile this release." },
   "1.0.284": { tile: "none", reason: "Speed and fixes; no feature tile this release." },
   "1.0.285": { tile: "none", reason: "Forum redesign, speed and fixes; no feature tile this release." },
+  "1.0.286": { tile: "none", reason: "Gemini 4 Neon and a fix; no feature tile this release." },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */
