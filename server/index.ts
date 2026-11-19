@@ -428,7 +428,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -3050,6 +3050,13 @@ const memorySleep = createMemorySleep({
   },
   busy: (botId) => botHasActiveTurn(botId),
   changed: (botId) => broadcast({ kind: "memory.changed", botId }),
+  // saved now, so a restart before the next sync pass still knows the tidy alone made this change
+  tidied: (botId, before, after) => {
+    const botSyncId = chatSyncBotId(profileSyncSettings, botId);
+    if (!botSyncId) return;
+    markTidied(memorySyncLedger, botSyncId, before, after);
+    saveMemoryLedger();
+  },
 });
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,

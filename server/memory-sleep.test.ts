@@ -18,7 +18,7 @@ import {
   noteLines,
   type MemorySleep,
 } from "./memory-sleep.ts";
-import { markTalked, memorySyncDir, readMemorySnapshots, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
+import { markTalked, markTidied, memorySyncDir, readMemorySnapshots, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
 import { listMemoryTopics, loadMemory, MEMORY_MAX_LINES, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
@@ -43,6 +43,7 @@ const temps = createTempDirs();
 afterAll(() => temps.remove());
 const NOW = new Date(2026, 10, 19, 12).getTime();
 const MIN = 60_000;
+const DAY = 24 * 60 * MIN;
 const OLD_HISTORY = '# Memory history\n\n## 2026-11-03 09:00\n- "Lives in Busan" replaced by "Lives in Seoul (noted 2026-11-03)", 2026-11-03\n';
 
 const memory = (...lines: string[]) => `# Memory\n\n${lines.join("\n")}\n`;
@@ -90,9 +91,21 @@ describe("planTidy", () => {
     expect(planTidy(raw).map(({ at, by }) => [at, by])).toEqual([[2, "- Uses  pnpm. (noted 2026-11-09)"], [6, "- 東京に住んでいる。"]]);
   });
 
-  it("keeps the last of undated twins, and a newer stamped twin over an undated one", () => {
-    expect(planTidy(memory("- Prefers dark mode", "- Prefers light mode", "- Prefers dark mode")).map(({ at }) => at)).toEqual([2]);
+  it("keeps a newer stamped twin over an undated one wherever they sit, and the last of undated twins side by side", () => {
     expect(planTidy(memory("- Prefers dark mode", "- Prefers light mode (noted 2026-11-01)", "- Prefers dark mode (noted 2026-11-12)")).map(({ at }) => at)).toEqual([2]);
+    expect(planTidy(memory("- Uses pnpm", "", "- Uses  pnpm.", "- Lives in Seoul")).map(({ at, by }) => [at, by])).toEqual([[2, "- Uses  pnpm."]]);
+  });
+
+  it("keeps undated twins apart from each other as written", () => {
+    for (const lines of [
+      ["- Prefers dark mode", "- Prefers light mode", "- Prefers dark mode"],
+      ["## Deploy steps", "- Run tests", "- Push to staging", "- Run tests", "- Push to prod"],
+      ["- **Project Alpha**", "- Deploys on Fridays", "- **Project Beta**", "- Deploys on Fridays"],
+      ["- Project Alpha", "- Deploys on Fridays", "- Project Beta", "- Deploys on Fridays"],
+      ["- 프로젝트 알파：", "- 금요일에 배포", "- 프로젝트 베타：", "- 금요일에 배포"],
+    ]) {
+      expect(planTidy(memory(...lines))).toEqual([]);
+    }
   });
 
   it("keeps twins under two labels, and lines that differ in a closing ! or the dot after a dotted word", () => {
@@ -175,6 +188,7 @@ describe("memory sleep", () => {
   let generator: NoteGenerator | null;
   let generate: ReturnType<typeof vi.fn<NoteGenerator>>;
   let perBot: Map<string, NoteGenerator>;
+  let ledgers: Map<string, MemorySyncLedger>;
   let bots: string[];
   let sleep: MemorySleep;
   let seq = 0;
@@ -188,6 +202,10 @@ describe("memory sleep", () => {
       enabled: (botId) => on && !away.has(botId),
       busy: (botId) => busy.has(botId),
       changed: (botId) => void changed.push(botId),
+      tidied: (botId, before, after) => {
+        const ledger = ledgers.get(botId);
+        if (ledger) markTidied(ledger, "bot-1", before, after);
+      },
     });
     sleeps.push(created);
     return created;
@@ -212,6 +230,7 @@ describe("memory sleep", () => {
     generator = reply({});
     generate = vi.fn<NoteGenerator>((...args) => generator!(...args));
     perBot = new Map();
+    ledgers = new Map();
     bots = [`sleep-bot-${++seq}`];
     sleep = start();
   });
@@ -677,11 +696,12 @@ describe("memory sleep", () => {
         mkdirSync(folder);
         const ledger: MemorySyncLedger = { bots: {} };
         const legacy: LegacyMemoryLedger = {};
-        return { bot, folder, workspace: workspaceDir(bot), ledger, legacy, host: `host-${index}` };
+        ledgers.set(bot, ledger);
+        return { bot, folder, workspace: workspaceDir(bot), ledger, legacy, host: `host-${index}`, syncBotMemory };
       };
       type Pc = ReturnType<typeof pc>;
       const [a, b] = [pc(botA, 0), pc(botB, 1)];
-      const sync = (pc: Pc) => syncBotMemory(pc.folder, "bot-1", pc.workspace, pc.ledger, { legacy: pc.legacy, host: pc.host });
+      const sync = (pc: Pc) => pc.syncBotMemory(pc.folder, "bot-1", pc.workspace, pc.ledger, { legacy: pc.legacy, host: pc.host });
       const receive = (from: Pc, to: Pc) => {
         mkdirSync(memorySyncDir(to.folder, "bot-1"), { recursive: true });
         writeFileSync(join(memorySyncDir(to.folder, "bot-1"), `${from.ledger.device}.json`), readFileSync(join(memorySyncDir(from.folder, "bot-1"), `${from.ledger.device}.json`), "utf8"));
@@ -699,7 +719,7 @@ describe("memory sleep", () => {
           sync(a);
         }
       };
-      return { a, b, share, settle };
+      return { a, b, sync, receive, share, settle };
     };
     const parked = (...botIds: string[]) => botIds.flatMap((botId) => listMemoryTopics(botId).map(({ name }) => name).filter((name) => name.includes(".conflict-")));
 
@@ -737,6 +757,88 @@ describe("memory sleep", () => {
       settle();
       for (const bot of [botA, botB]) expect(memoryFileRaw(bot)).toContain("- Phone is 555-0100");
       expect(parked(botA, botB)).toEqual([]);
+    });
+
+    it("park no copy when a routine turn on the other PC corrects a line while one of them tidied", async () => {
+      const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
+      const { a, share, settle } = twoPcs(botA, botB);
+      markTalked(a.ledger, "bot-1");
+      writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Busan"));
+      share();
+      away.add(botB);
+      writeMemoryFile(botB, memoryFileRaw(botB).replace("- Lives in Busan", "- Lives in Seoul"));
+      generator = null;
+      await quiet();
+      expect(noteLines(memoryFileRaw(botA))).toHaveLength(2);
+      settle();
+      for (const bot of [botA, botB]) expect(memoryFileRaw(bot)).toBe(memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
+      expect(parked(botA, botB)).toEqual([]);
+    });
+
+    it("park no note from the other PC when Wink restarts between the tidy and its next sync pass", async () => {
+      const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
+      const { a, share, settle } = twoPcs(botA, botB);
+      markTalked(a.ledger, "bot-1");
+      writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
+      share();
+      away.add(botB);
+      writeMemoryFile(botB, `${memoryFileRaw(botB)}- Phone is 555-0100\n`);
+      generator = null;
+      await quiet();
+      expect(noteLines(memoryFileRaw(botA))).toHaveLength(2);
+      // the restart: the ledger as saved, and memory sync loaded afresh
+      const dir = temps.make(join(tmpdir(), "memory-sleep-ledger-"));
+      vi.resetModules();
+      const fresh = await import("./memory-sync.ts");
+      fresh.saveMemorySyncLedger(dir, a.ledger);
+      a.ledger = fresh.loadMemorySyncLedger(dir);
+      a.syncBotMemory = fresh.syncBotMemory;
+      settle();
+      for (const bot of [botA, botB]) expect(memoryFileRaw(bot)).toContain("- Phone is 555-0100");
+      expect(parked(botA, botB)).toEqual([]);
+    });
+
+    // A tidies after chats there; B saved a note on an older copy while offline and syncs it later
+    const offline = async (talkedOnB: number) => {
+      const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
+      const { a, b, sync, receive, settle } = twoPcs(botA, botB);
+      markTalked(a.ledger, "bot-1", NOW - 6 * DAY);
+      markTalked(b.ledger, "bot-1", NOW - 7 * DAY);
+      writeMemoryFile(botA, memory("- Uses pnpm", "- Lives in Seoul"));
+      settle();
+      markTalked(b.ledger, "bot-1", talkedOnB);
+      writeMemoryFile(botB, `${memoryFileRaw(botB)}- Flight to Jeju is on 2026-12-03 (noted 2026-11-17)\n`);
+      sync(b);
+      markTalked(a.ledger, "bot-1", NOW - 90 * MIN);
+      writeMemoryFile(botA, `${memoryFileRaw(botA)}- Daughter Mina starts school 2027-03-02 (noted 2026-11-18)\n- Uses pnpm (noted 2026-11-19)\n`);
+      sync(a);
+      away.add(botB);
+      generator = null;
+      await quiet();
+      expect(memoryFileRaw(botA)).toBe(memory("- Lives in Seoul", "- Daughter Mina starts school 2027-03-02 (noted 2026-11-18)", "- Uses pnpm (noted 2026-11-19)"));
+      sync(a);
+      receive(a, b);
+      sync(b);
+      receive(b, a);
+      sync(a);
+      settle();
+      expect(memoryFileRaw(botA)).toBe(memoryFileRaw(botB));
+      const copies = parked(botA).map((name) => readFileSync(join(workspaceDir(botA), "memory", name), "utf8"));
+      expect(copies).toHaveLength(1);
+      return { kept: memoryFileRaw(botA), copy: copies[0]! };
+    };
+
+    it("keep the newer notes of the PC that tidied when the other PC syncs a note saved on an older copy", async () => {
+      const { kept, copy } = await offline(NOW - 2 * DAY);
+      expect(kept).toContain("- Daughter Mina starts school");
+      expect(copy).toContain("- Flight to Jeju");
+    });
+
+    it("date a tidied copy set aside for a later chat on the other PC", async () => {
+      const { kept, copy } = await offline(NOW - 10 * MIN);
+      expect(kept).toContain("- Flight to Jeju");
+      expect(copy).toContain("- Daughter Mina starts school");
+      expect(copy.split("\n")[0]).toMatch(/, last edited \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC -->$/);
     });
 
     it("make the same merge on both PCs and park no copy", async () => {

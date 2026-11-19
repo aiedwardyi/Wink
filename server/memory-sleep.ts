@@ -7,7 +7,6 @@ import { z } from "zod";
 
 import { renameRetrying, writeFileAtomic } from "./atomic.ts";
 import { decisionSpan, type NoteGenerator } from "./memory-pass.ts";
-import { markTidied } from "./memory-sync.ts";
 import { pickStamp } from "./picks.ts";
 import { loadedMemory, memoryFileRaw, readMemoryFile, workspaceDir } from "./workspace.ts";
 
@@ -58,6 +57,8 @@ export interface MemorySleepDeps {
   busy(botId: string): boolean;
   /** MEMORY.md changed on disk, so an open Memory page reloads it. */
   changed(botId: string): void;
+  /** The tidy saved MEMORY.md as `after`, `before` without some lines, for memory sync to rank. */
+  tidied?(botId: string, before: string, after: string): void;
   now?(): number;
 }
 
@@ -201,7 +202,9 @@ export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<strin
     const pool = loaded.length ? loaded : group;
     // the newest: notes are appended, so the last copy, unless an earlier one carries a later stamp
     const keep = pool.reduce((best, line) => (best.date && line.date && best.date > line.date ? best : line));
-    for (const line of group) move(line, keep, "duplicate", false);
+    // an undated copy away from the others may mean something where it sits, like a step done twice or a note under a bullet used as a label
+    const together = (line: NoteLine) => lines.every((each) => each.at < Math.min(line.at, keep.at) || each.at > Math.max(line.at, keep.at) || group.includes(each));
+    for (const line of group) if (line.date || keep.date || together(line)) move(line, keep, "duplicate", false);
   }
   const { duplicates, disagree } = parseTidy(reply);
   for (const { keep, drop } of duplicates ?? []) {
@@ -282,7 +285,7 @@ function historyKeys(botId: string): Set<string> {
 }
 
 /** History first, then MEMORY.md without the moved lines; false, with the record taken back, when another writer got to MEMORY.md first. */
-function moveOut(botId: string, raw: string, revision: string, moves: readonly Move[], now: number): boolean {
+function moveOut(botId: string, raw: string, revision: string, moves: readonly Move[], now: number, tidied: MemorySleepDeps["tidied"]): boolean {
   const path = join(workspaceDir(botId), "MEMORY.md");
   if (readMemoryFile(botId).revision !== revision) return false;
   const undo = appendHistory(historyPath(botId, now), historyEntry(moves, now));
@@ -308,7 +311,7 @@ function moveOut(botId: string, raw: string, revision: string, moves: readonly M
     undo();
     return false;
   }
-  markTidied(workspaceDir(botId), raw, text);
+  tidied?.(botId, raw, text);
   rmSync(held, { force: true });
   return true;
 }
@@ -398,7 +401,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     try {
       // only a plan that moves something reads the history, for the lines someone put back
       if (moves.length) moves = planTidy(raw, reply, historyKeys(botId));
-      if (moves.length && !moveOut(botId, raw, memory.revision, moves, now())) {
+      if (moves.length && !moveOut(botId, raw, memory.revision, moves, now(), deps.tidied)) {
         log({ ...base, ms: now() - started, result: "conflict" });
         return arm(botId);
       }
