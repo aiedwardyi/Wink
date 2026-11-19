@@ -70,6 +70,8 @@ type Google = { state: string; email?: string };
 const needsSignIn = (google: Google | null) => google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
 // The dashboard lists only PCs on its own relay base.
 const onFrontDoor = (relay: RelayStatus | null) => (relay?.host ? relay.host.endsWith(`.${FRONT_DOOR}`) : !relay?.base || relay.base === FRONT_DOOR);
+// PUT answers 200 enabled for a PC with no ticket (enrolling) or a dead one (rejected): that PC is not on.
+const live = (relay: RelayStatus) => relay.enabled && !relay.problem && ["connected", "certifying", "reconnecting"].includes(relay.state);
 type Saved = { status: RelayStatus | null; google: Google | null; phones: Phone[] | null };
 const KEY = "omb-phone-relay";
 let last: Saved | null = null;
@@ -281,9 +283,9 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     // On first open the account read can still be out: wait for it, so a signed-out PC signs in first.
     if (!account || !needsSignIn(google ?? (await loadGoogle()))) return void turnOn();
     if (!(await signIn())) return;
-    // The Google tab waits here: it opens the dashboard only once that dashboard can list this PC.
+    // The Google tab waits here: it opens this PC's relay dashboard only once the PC is on it.
     const on = await turnOn();
-    void account.finish(on && onFrontDoor(on) ? "dashboard" : null);
+    void account.finish(on && live(on) && on.base ? on.base : null);
   };
   const link = status?.host ? `https://${status.host}/` : null;
   const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;

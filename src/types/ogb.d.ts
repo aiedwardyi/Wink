@@ -114,7 +114,8 @@ declare global {
       googleAccount?: {
         /** `hold` keeps the signed-in tab waiting until `finish`. */
         signIn(options?: { hold?: true }): Promise<{ ok: true; email: string } | { ok: false; error: import("@/lib/google-signin-error").GoogleSignInCode }>;
-        finish(next: "dashboard" | null): Promise<void>;
+        /** Sends the held tab to the dashboard at this relay base, or leaves it signed in. */
+        finish(base: string | null): Promise<void>;
         cancel(): Promise<void>;
         signOut(): Promise<{ ok: true }>;
       };

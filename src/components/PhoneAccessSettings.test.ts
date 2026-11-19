@@ -22,7 +22,8 @@ const status = (over: Partial<RelayStatus> = {}): RelayStatus => ({
   ...over,
 });
 const joinable = () => status({ available: true, configured: false, enabled: false, state: "off", host: null, joinable: true });
-const DOOR_HOST = "abcdefghijklmnop.app.getwink.dev";
+const DOOR = "app.getwink.dev";
+const DOOR_HOST = `abcdefghijklmnop.${DOOR}`;
 
 type Route = (init?: RequestInit) => Awaited<ReturnType<typeof api>>;
 
@@ -561,7 +562,7 @@ describe("This PC", () => {
       });
       const finish = vi.fn(async () => {});
       vi.stubGlobal("ogb", { googleAccount: { signIn, finish, cancel: vi.fn(), signOut: vi.fn() } });
-      const put = vi.fn((_init?: RequestInit) => status({ host: DOOR_HOST }));
+      const put = vi.fn((_init?: RequestInit) => status({ host: DOOR_HOST, base: DOOR }));
       serve({
         "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }),
         "GET /api/google-account": () => (google === "signed-in" ? { state: "signed-in", email: EMAIL } : { state: "signed-out" }),
@@ -584,8 +585,23 @@ describe("This PC", () => {
       expect(dialog()).toBeNull();
       expect(put).toHaveBeenCalledTimes(1);
       expect(put).toHaveBeenCalledWith(expect.objectContaining({ body: JSON.stringify({ enabled: true }) }));
-      expect(finish).toHaveBeenCalledExactlyOnceWith("dashboard");
+      expect(finish).toHaveBeenCalledExactlyOnceWith(DOOR);
       expect(finish.mock.invocationCallOrder[0]).toBeGreaterThan(put.mock.invocationCallOrder[0]!);
+      await act(async () => root.unmount());
+    });
+
+    it.each([
+      ["an expired ticket", { state: "rejected" as const, problem: "ticket-expired" as const, lastError: "ticket expired, enter an invite", host: DOOR_HOST }],
+      ["no ticket yet", { state: "enrolling" as const, host: null }],
+    ])("with %s, Turn On answers enabled but the tab stays off the dashboard", async (_name, answer) => {
+      const { finish, put } = setUp({ ok: true, email: EMAIL });
+      put.mockImplementation(() => status({ base: DOOR, ...answer }));
+      const { host, root } = await renderView();
+      await act(async () => click(button(host, "Sign In")));
+      await act(async () => click(button(document.body, "Turn On")));
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(host.querySelector("[data-phone-access-setup]")).not.toBeNull();
+      expect(finish).toHaveBeenCalledExactlyOnceWith(null);
       await act(async () => root.unmount());
     });
 
@@ -615,9 +631,9 @@ describe("This PC", () => {
       await act(async () => root.unmount());
     });
 
-    it("on a private relay, never sends the tab to the public dashboard", async () => {
+    it("on a private relay, sends the tab to that relay's own dashboard", async () => {
       const { signIn, finish, put } = setUp({ ok: true, email: EMAIL });
-      put.mockImplementation(() => status());
+      put.mockImplementation(() => status({ base: "wink.test" }));
       serve({
         "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null, base: "wink.test" }),
         "GET /api/google-account": () => (google === "signed-in" ? { state: "signed-in", email: EMAIL } : { state: "signed-out" }),
@@ -629,7 +645,7 @@ describe("This PC", () => {
       await act(async () => click(button(document.body, "Turn On")));
       expect(signIn).toHaveBeenCalledTimes(1);
       expect(put).toHaveBeenCalledTimes(1);
-      expect(finish).toHaveBeenCalledExactlyOnceWith(null);
+      expect(finish).toHaveBeenCalledExactlyOnceWith("wink.test");
       expect(host.querySelector("[data-relay-qr]")?.getAttribute("data-url")).toBe(`https://${HOST}/`);
       await act(async () => root.unmount());
     });
@@ -645,7 +661,7 @@ describe("This PC", () => {
       let answer: (body: { state: string }) => void = () => {};
       const first = new Promise<{ state: string }>((resolve) => (answer = resolve));
       let answered = false;
-      const enroll = vi.fn(() => status({ host: DOOR_HOST }));
+      const enroll = vi.fn(() => status({ host: DOOR_HOST, base: DOOR, state: "reconnecting" }));
       serve({
         "GET /api/phone-relay/status": joinable,
         "GET /api/google-account": () => (!answered ? first : signed ? { state: "signed-in", email: EMAIL } : { state: "signed-out" }),
@@ -663,7 +679,7 @@ describe("This PC", () => {
       expect(signIn).toHaveBeenCalledExactlyOnceWith({ hold: true });
       expect(enroll).toHaveBeenCalledTimes(1);
       expect(enroll.mock.invocationCallOrder[0]).toBeGreaterThan(signIn.mock.invocationCallOrder[0]!);
-      expect(finish).toHaveBeenCalledExactlyOnceWith("dashboard");
+      expect(finish).toHaveBeenCalledExactlyOnceWith(DOOR);
       const row = host.querySelector("[data-this-pc]")?.textContent ?? "";
       expect(row).not.toContain("Sign in with Google to turn this on.");
       expect(row).not.toContain("Not available on this PC yet.");

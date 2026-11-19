@@ -289,14 +289,14 @@ describe("google sign-in", () => {
     const ok = browser();
     const session = await runGoogleSignIn({ client: CLIENT, openExternal: ok.openExternal, fetch: tokenEndpoint().fetch, hold: true });
     expect(ok.seen.pages).toHaveLength(1);
-    session.finish(true);
+    session.finish("https://app.getwink.dev/");
     await ok.openExternal.mock.results[0].value;
     expect(ok.seen.pages[1].text).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
     expect(ok.seen.pages[1].text).toContain('<a href="https://app.getwink.dev/">Open dashboard</a>');
     expect(ok.seen.pages[1].text).toContain("Opening your Wink dashboard...");
 
     const stays = browser();
-    (await runGoogleSignIn({ client: CLIENT, openExternal: stays.openExternal, fetch: tokenEndpoint().fetch, hold: true })).finish(false);
+    (await runGoogleSignIn({ client: CLIENT, openExternal: stays.openExternal, fetch: tokenEndpoint().fetch, hold: true })).finish();
     await stays.openExternal.mock.results[0].value;
     expect(stays.seen.pages[1].text).toContain("signed in");
     expect(stays.seen.pages[1].text).not.toMatch(/refresh|app\.getwink\.dev/);
@@ -351,14 +351,17 @@ describe("google sign-in", () => {
       await openExternal.mock.results[0].value;
       return seen.pages[1].text;
     };
-    expect(await run((google) => google.finish("dashboard"))).toContain("refresh");
-    expect(await run((google) => google.finish("https://evil.example/"))).not.toMatch(/refresh|evil/);
+    expect(await run((google) => google.finish("app.getwink.dev"))).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
+    expect(await run((google) => google.finish("wink.test"))).toContain('<meta http-equiv="refresh" content="1;url=https://wink.test/">');
+    for (const bad of ["https://evil.example/", "evil.example/x", "evil.example?x", "user@evil.example", "localhost", ""]) {
+      expect(await run((google) => google.finish(bad))).not.toMatch(/refresh|evil/);
+    }
     expect(await run((google) => google.finish(null))).not.toContain("refresh");
     expect(await run((google) => google.cancel())).not.toContain("refresh");
     expect(await run((google) => google.signOut())).not.toContain("refresh");
     expect(await run(async (google) => {
       await google.signIn().catch(() => {});
-      google.finish("dashboard");
+      google.finish("app.getwink.dev");
     })).not.toContain("refresh");
   });
 

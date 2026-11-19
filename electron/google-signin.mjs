@@ -4,7 +4,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
-import { DASHBOARD_URL, PAGE_CSP, signInPage } from "./google-signin-page.mjs";
+import { PAGE_CSP, signInPage } from "./google-signin-page.mjs";
+
+// A relay base is a bare hostname; its dashboard is served at its root.
+const RELAY_BASE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 import { translate } from "./i18n.mjs";
 
 export const GOOGLE_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/drive.file", "profile"];
@@ -134,7 +137,7 @@ function page(res, status, locale, title, hint, next) {
   res.end(signInPage({ locale, title: translate(locale, title), body: hint ? translate(locale, hint) : "", next }));
 }
 
-/** One sign-in. `onListening` sees the bound address (tests); `signal` cancels. With `hold`, the signed-in tab waits for the returned `finish(dashboard)`. */
+/** One sign-in. `onListening` sees the bound address (tests); `signal` cancels. With `hold`, the signed-in tab waits for the returned `finish(url)`. */
 export async function runGoogleSignIn({ client, openExternal, fetch = globalThis.fetch, signal, timeoutMs = SIGN_IN_TIMEOUT_MS, onListening, getLocale = () => "en", hold, persist }) {
   const { verifier, challenge } = pkcePair();
   const state = randomBytes(16).toString("base64url");
@@ -192,14 +195,14 @@ export async function runGoogleSignIn({ client, openExternal, fetch = globalThis
     const session = await exchangeCode({ client, code, verifier, redirectUri, fetch, signal });
     await persist?.(session);
     let open = true;
-    const finish = (dashboard) => {
+    const finish = (url) => {
       if (!open) return;
       open = false;
-      if (dashboard) page(held, 200, locale, "google.signedIn", "google.openingDashboard", { url: DASHBOARD_URL, label: translate(locale, "google.openDashboard") });
+      if (url) page(held, 200, locale, "google.signedIn", "google.openingDashboard", { url, label: translate(locale, "google.openDashboard") });
       else page(held, 200, locale, "google.signedIn", "google.signedInHint");
     };
     if (hold) return { ...session, finish };
-    finish(false);
+    finish();
     return session;
   } catch (error) {
     page(held, 200, locale, "google.failed", "google.failedHint");
@@ -249,10 +252,10 @@ export function createGoogleAccountController({ client, openExternal, saveSessio
   let active = null;
   // The tab of a held sign-in, waiting for the caller to say where it goes.
   let waiting = null;
-  const release = (dashboard = false) => {
+  const release = (url) => {
     const finish = waiting;
     waiting = null;
-    finish?.(dashboard);
+    finish?.(url);
   };
   let transition = Promise.resolve();
   const serialize = (work) => {
@@ -275,7 +278,7 @@ export function createGoogleAccountController({ client, openExternal, saveSessio
           });
         const { email, finish } = await runGoogleSignIn({ client, openExternal, fetch, getLocale, hold: hold === true, signal: controller.signal, persist });
         if (controller.signal.aborted) {
-          finish?.(false);
+          finish?.();
           return { ok: false, error: "cancelled" };
         }
         waiting = finish ?? null;
@@ -288,8 +291,8 @@ export function createGoogleAccountController({ client, openExternal, saveSessio
         if (active === controller) active = null;
       }
     },
-    finish(next) {
-      release(next === "dashboard");
+    finish(base) {
+      release(RELAY_BASE.test(base ?? "") ? `https://${base}/` : undefined);
     },
     cancel() {
       active?.abort();

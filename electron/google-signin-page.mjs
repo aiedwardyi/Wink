@@ -16,8 +16,6 @@ a{display:inline-block;margin-top:16px;color:var(--accent);font-size:13px}
 h1{margin:0 0 6px;font-size:20px;font-weight:600;letter-spacing:-.02em}
 p{margin:0;color:var(--ink-secondary);font-size:13px}`;
 
-export const DASHBOARD_URL = "https://app.getwink.dev/";
-
 export const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'";
 
 /** `next` = { url, label }: meta refresh needs no script, so the CSP stays script-free. */
