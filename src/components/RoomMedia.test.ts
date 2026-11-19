@@ -32,7 +32,7 @@ beforeEach(() => {
       return Response.json({ ok: true });
     }
     if (url.endsWith("/files")) return Response.json(room);
-    if (new URL(url, "http://x").pathname.endsWith("/media")) return Response.json({ v: "1", ids: [], at: [], kind: "", name: [], ref: [], size: [] });
+    if (url.endsWith("/media")) return Response.json({ v: "1", ids: [], at: [], kind: "", name: [], ref: [], size: [] });
     return new Response(null, { status: 206 });
   }));
   // happy-dom has no layout, and Media draws only the cells that fit its measured pane

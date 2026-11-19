@@ -48,7 +48,9 @@ posixOnly("mid-turn steering e2e", () => {
     chmodSync(FAKE_CLAUDE, 0o755);
     chmodSync(FAKE_MSP, 0o755);
     home = mkdtempSync(join(tmpdir(), "omb-steer-"));
-    mkdirSync(join(home, ".orbit"), { recursive: true });
+    mkdirSync(join(home, ".orbit", "about-you"), { recursive: true });
+    // the user already said no to importing memory, so the first turn carries no import offer
+    writeFileSync(join(home, ".orbit", "about-you", "declined"), "");
     steerGate = join(home, "delayed-steer.gate");
     writeFileSync(
       join(home, ".orbit", "config.json"),

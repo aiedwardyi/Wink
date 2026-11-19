@@ -239,6 +239,17 @@ describe("private team reporting", () => {
     expect(await f.service.handle({ ...f.args, action: "send" })).toHaveProperty("error");
   });
 
+  it("is a team member only while enrolled on the owner relay, kept through a reconnect", async () => {
+    const f = await fixture();
+    expect(f.service.member()).toBe(true);
+    f.link({ ...PHONE_RELAY_OFF, state: "reconnecting" });
+    expect(f.service.member()).toBe(true);
+    f.enroll(false);
+    expect(f.service.member()).toBe(false);
+    f.link({ ...status, reportOwner: "b".repeat(64) });
+    expect(f.service.member()).toBe(false);
+  });
+
   it("redacts secrets before truncation and refuses escaped/oversized/secret-bearing image paths", async () => {
     const f = await fixture();
     const outside = join(f.root, "outside.png"); writeFileSync(outside, png);

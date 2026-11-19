@@ -68,7 +68,7 @@ type InternalRouteDeps = {
   answeredLine: (threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
-  boardCalls?: Pick<BoardCalls, "hold">;
+  boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -233,7 +233,14 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       // the record stays on this PC; the call's chat row syncs, so another PC still knows these files
       const row = saved && artifacts.length ? recordedArtifactsPatch(store.messagesFor(body.fromThreadId), artifacts) : null;
       if (row) store.patchMessage(body.fromThreadId, row.id, { tool: row.tool });
-      if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+      if (saved && body.blockers !== undefined) {
+        deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+        try {
+          deps.boardCalls?.cleared(body.fromThreadId, current.blockers, saved.blockers, body.completed_note);
+        } catch (cause) {
+          console.warn(`board: ${cause}`);
+        }
+      }
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
@@ -486,14 +493,15 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           appendMessage: (threadId, message) => store.appendMessage(threadId, message),
           activePath: (threadId) => store.activePath(threadId),
           patchMessage: (threadId, messageId, patch) => store.patchMessage(threadId, messageId, patch),
-          cancelHeld: (botId, threadId, question) => askHold.cancel(botId, threadId, question),
+          cancelHeld: (botId, threadId, question, forumOnly) => askHold.cancel(botId, threadId, question, forumOnly),
           alertThread: (bot, threadId) => {
             // A routine run's alert opens the conversation that owns the routine.
             const run = routines?.activeRunForBot(bot.id);
             return (run?.threadId === threadId && routineSourceThread(run)) || threadId;
           },
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
-          whenSettled: (botId, threadId, post, question) => askHold.whenSettled(botId, threadId, post, question),
+          whenSettled: (botId, threadId, post, question, forum) => askHold.whenSettled(botId, threadId, post, question, forum),
+          forum: (botId, threadId, question, choices) => deps.boardCalls?.ask(botId, threadId, question, choices) ?? "",
         },
         askUserRequestSchema.parse(body),
       );

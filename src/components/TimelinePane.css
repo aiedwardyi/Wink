@@ -1,5 +1,8 @@
 .timeline-pane { position: relative; }
 .timeline-pane > .show-media-empty:not(:only-child) { padding-top: 56px; }
+.timeline-sample { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 14px; }
+.timeline-sample > .show-media-empty { padding: 0 8px; }
+.timeline-pane[data-sample] .timeline-sheet { opacity: .5; }
 .timeline-search { position: absolute; top: 8px; right: 8px; left: 8px; z-index: 3; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--color-raised); box-shadow: 0 1px 3px rgb(0 0 0 / .25); color: var(--color-ink-secondary); font-size: 13px; }
 .timeline-search input { flex: 1; min-width: 0; background: transparent; color: var(--color-ink); outline: none; }
 .timeline-search input::placeholder { color: var(--color-ink-secondary); }

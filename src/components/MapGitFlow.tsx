@@ -47,6 +47,10 @@ const person = (login: string) => BOTS[login] ?? login;
 
 const same = (a: MapFlow | undefined, b: MapFlow) => JSON.stringify(a) === JSON.stringify(b);
 
+// Every row is asked at once and set in one state change, so rows never pop in one at a time.
+const readFlows = (base: string, ids: string[], signal: AbortSignal, cached = false) => Promise.all(ids.map(id =>
+  request(`${base}/flow?${new URLSearchParams(cached ? { worker: id, cached: "1" } : { worker: id })}`, { signal }).then((flow: MapFlow | null) => flow && Array.isArray(flow.commits) ? flow : null, () => null)));
+
 function useFlows(base: string | undefined, key: string, open: boolean, active: boolean) {
   const [flows, setFlows] = useState<Record<string, MapFlow>>({});
   // The rows this checkout showed last paint with the tree; the read after the tree and the code swaps in only what changed.
@@ -54,9 +58,11 @@ function useFlows(base: string | undefined, key: string, open: boolean, active: 
     const ids = key ? key.split("\0") : [];
     if (!base || !open || !ids.length) return;
     const controller = new AbortController();
-    for (const id of ids) void request(`${base}/flow?${new URLSearchParams({ worker: id, cached: "1" })}`, { signal: controller.signal }).then((flow: MapFlow | null) => {
-      if (!controller.signal.aborted && flow && Array.isArray(flow.commits)) setFlows(current => current[id] ? current : { ...current, [id]: flow });
-    }, () => {});
+    void readFlows(base, ids, controller.signal, true).then(last => {
+      // A checkout with no last rows would leave a gap the read fills later, so the last rows paint only all together.
+      if (controller.signal.aborted || last.some(flow => !flow)) return;
+      setFlows(current => ids.some(id => current[id]) ? current : Object.fromEntries(ids.map((id, at) => [id, last[at]!])));
+    });
     return () => controller.abort();
   }, [base, key, open]);
   useEffect(() => {
@@ -69,12 +75,16 @@ function useFlows(base: string | undefined, key: string, open: boolean, active: 
     const poll = async () => {
       timer = undefined;
       running = true;
-      await Promise.all(ids.filter(id => !finished.has(id)).map(id => request(`${base}/flow?${new URLSearchParams({ worker: id })}`, { signal: controller.signal }).then((flow: MapFlow) => {
-        if (controller.signal.aborted || !Array.isArray(flow?.commits)) return;
-        if (ended(flow.pr)) finished.add(id);
-        setFlows(current => same(current[id], flow) ? current : { ...current, [id]: flow });
-      }, () => {})));
+      const asked = ids.filter(id => !finished.has(id));
+      const read = await readFlows(base, asked, controller.signal);
       running = false;
+      if (controller.signal.aborted) return;
+      asked.forEach((id, at) => { if (ended(read[at]?.pr ?? null)) finished.add(id); });
+      setFlows(current => {
+        const next = { ...current };
+        asked.forEach((id, at) => { const flow = read[at]; if (flow && !same(current[id], flow)) next[id] = flow; });
+        return asked.some(id => next[id] !== current[id]) ? next : current;
+      });
       if (!controller.signal.aborted && !document.hidden && ids.some(id => !finished.has(id))) timer = setTimeout(poll, EVERY);
     };
     const visible = () => {

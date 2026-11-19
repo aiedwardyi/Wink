@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { BOARD_DIR, BOARD_USER, boardPostId, createBoard, errorSig, mergeBoardPosts, projectIdOf, type BoardPost } from "./board.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
@@ -75,6 +75,53 @@ describe("board posts", () => {
     const solved = { ...base, status: "solved" as const, fix: "do x", helped_bot_ids: [], updated_at: 20, pc_id: "pc-b" };
     const later = { ...base, title: "t2", helped_bot_ids: ["b2"], updated_at: 30 };
     expect(mergeBoardPosts(mergeBoardPosts(base, solved), later)).toMatchObject({ title: "t2", status: "solved", fix: "do x", helped_bot_ids: ["b1", "b2"], created_at: 5 });
+  });
+});
+
+describe("board word sets", () => {
+  const fixes = (board: ReturnType<typeof home>["board"], count: number) => {
+    for (let i = 0; i < count; i++) board.post({ author_bot_id: "b", kind: "fix", title: `fix ${i} sprocket lathe`, body: `body ${i} inventory bench`, fix: `shelf ${i}`, source_ref: `ref:${i}` });
+  };
+
+  it("builds each post's words once, not on every search", () => {
+    const { board } = home("pc-a");
+    fixes(board, 20);
+    const words = vi.spyOn(String.prototype, "normalize");
+    try {
+      board.search({ query: "sprocket lathe inventory bench" });
+      const first = words.mock.calls.length;
+      board.search({ query: "sprocket lathe inventory bench" });
+      board.search({ query: "something else entirely here" });
+      expect(words.mock.calls.length - first).toBe(2);
+      expect(first).toBeLessThanOrEqual(21);
+    } finally {
+      words.mockRestore();
+    }
+  });
+
+  it("an edited post matches its new words, not its old ones", () => {
+    const { board } = home("pc-a");
+    const ref = "ref:edit";
+    board.post({ author_bot_id: "b", kind: "fix", title: "gearbox shim", body: "gearbox shim sizing", fix: "use the thin shim", source_ref: ref });
+    expect(board.search({ query: "gearbox shim sizing", minShare: 1 })).toHaveLength(1);
+    board.post({ author_bot_id: "b", kind: "fix", title: "bearing press", body: "bearing press tonnage", fix: "use the small press", source_ref: ref });
+    expect(board.search({ query: "gearbox shim sizing", minShare: 1 })).toHaveLength(0);
+    expect(board.search({ query: "bearing press tonnage", minShare: 1 })).toHaveLength(1);
+  });
+
+  it("a solved post matches the words of its fix", () => {
+    const { board } = home("pc-a");
+    const stuck = board.post({ ...STUCK, source_ref: "ref:solve" });
+    expect(board.search({ query: "rotate credential", minShare: 1 })).toHaveLength(0);
+    board.solve(stuck.id, "rotate credential");
+    expect(board.search({ query: "rotate credential", minShare: 1 })).toHaveLength(1);
+  });
+
+  it("a removed post stops matching and a repost under its ref uses the new words", () => {
+    const { board } = home("pc-a");
+    const post = board.post({ author_bot_id: "b", kind: "fix", title: "kiln schedule", body: "kiln schedule slots", fix: "book early", source_ref: "ref:gone" });
+    board.remove(post.id);
+    expect(board.search({ query: "kiln schedule slots", minShare: 1 })).toHaveLength(0);
   });
 });
 
