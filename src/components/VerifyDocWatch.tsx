@@ -254,14 +254,14 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   leadLine.current = lead?.from ?? 0;
   const target = lead?.from ?? (show.ended ? show.findings[0]?.line : undefined);
   // A replay's camera follows its cursors every frame until the end; the hops below are for live and reduced motion.
-  const glide = !live && phase === "play" && !show.ended && !reducedMotion();
+  const camera = !live && !reducedMotion(), glide = camera && phase === "play" && !show.ended;
   useEffect(() => {
     if (!glide || !gate) return;
     return docCamera(stageRef.current!, now => cursorsRef.current?.view(now) ?? {}, () => follow.current, () => { follow.current = false; });
   }, [glide, gate]);
   useEffect(() => {
     const stage = stageRef.current, row = target === undefined ? null : stage?.querySelector<HTMLElement>(`[data-n="${target}"]`);
-    if (!stage || !row || !follow.current || glide) return;
+    if (!stage || !row || !follow.current || camera) return;
     stage.scrollTo({ top: Math.max(0, row.getBoundingClientRect().top - stage.getBoundingClientRect().top + stage.scrollTop - stage.clientHeight / 3), behavior: reducedMotion() ? "auto" : "smooth" });
   }, [target, show.lines]);
 

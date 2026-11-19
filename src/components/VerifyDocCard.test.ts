@@ -205,6 +205,7 @@ it.each([0, 32])("keeps cursor visibility exceptions narrow with a %i ms animati
     chunk(0, { runId: "run-123456", site: "ADEMARK.md", page: "" }),
     chunk(2, { ms: 0, kind: "doc-text", lines, pageStarts: [] }),
     chunk(2, { ms: 24, kind: "doc-chunk", from: 1, to: n, state: "start" }),
+    chunk(2, { ms: 600, kind: "doc-finding", finding: { kind: "grammar", line: 12, page: 1, quote: "Line 12", fix: "x" } }),
     chunk(2, { ms: 3_000, kind: "doc-finding", finding: { kind: "spelling", line: 190, page: 1, quote: "Line 190", fix: "x" } }),
     chunk(2, { ms: 16_008, kind: "doc-chunk", from: 1, to: n, state: "done" }),
     chunk(2, { ms: 19_960, kind: "doc-finding", finding: { kind: "names", line: 5, page: 1, quote: "Line 5", fix: "x" } }),
@@ -253,12 +254,13 @@ it.each([0, 32])("keeps cursor visibility exceptions narrow with a %i ms animati
     else stage.scrollTop = to;
   }) as typeof stage.scrollTo;
   let reading = 0, out = 0, named = 0, above = 0, returned = 0, bodyOut = 0, previous = 0;
-  for (let ms = 0; ms < 6_000; ms += 16) {
+  for (let ms = 0; ms < 7_000; ms += 16) {
     await act(async () => { await vi.advanceTimersByTimeAsync(16); });
-    const cursors = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => !leaving.has(el));
-    if (!cursors.length) continue;
+    // Down, then still: the end must not hop back up to the first finding.
     expect(scrolled()).toBeGreaterThanOrEqual(previous);
     previous = scrolled();
+    const cursors = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => !leaving.has(el));
+    if (!cursors.length) continue;
     const positions = cursors.map(el => {
       const glide = drawn.get(el), k = glide ? Math.max(0, Math.min(1, (performance.now() - glide.at) / glide.ms)) * (glide.frames.length - 1) : 0;
       if (!glide || k >= glide.frames.length - 1) return yOf(el.style.transform);
