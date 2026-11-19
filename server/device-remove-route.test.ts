@@ -110,7 +110,7 @@ const listed = z.object({ devices: z.array(z.object({ deviceId: z.string(), chec
 async function devices(port: number, token: string): Promise<string[]> {
   for (let tries = 0; ; tries += 1) {
     const list = listed.parse(JSON.parse((await call(port, "GET", "/api/devices", { authorization: `Bearer ${token}` })).body)).devices;
-    if (tries >= 40 || !list.some((item) => item.checking)) return list.map((item) => item.deviceId);
+    if (tries >= 40 || !list.some((item) => item.checking)) return list.map((item) => item.deviceId).sort();
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
