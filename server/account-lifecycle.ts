@@ -152,7 +152,7 @@ export class AccountLifecycle {
         let capture;
         try {
           capture = await this.registry.startSignIn(id, device);
-          if (!capture) throw new AccountError("Unknown engine sign-in", 404);
+          if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
         } catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
         if (this.registry.accountBlocked(id)) {
           const finished = this.registry.logins.wait(id).then(async () => {
@@ -362,7 +362,7 @@ export class AccountLifecycle {
     let capture;
     try {
       capture = await this.registry.startSignIn(account.id, device);
-      if (!capture) throw new AccountError("Unknown engine sign-in", 404);
+      if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
     } catch (error) {
       this.jobs.delete(account.id);
       throw error;
@@ -488,7 +488,7 @@ export class AccountLifecycle {
   private exclusive<T>(run: () => Promise<T>, checkConfig = true): Promise<T> {
     this.mutations += 1;
     const pending = this.queue.then(async () => {
-      if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated");
+      if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated", 409, "provider-config-busy");
       const before = this.hooks.onMainChanged && this.mains();
       try { return await run(); }
       finally { if (before) this.reportMains(before); }
