@@ -221,9 +221,9 @@ describe("phone sign-in page", () => {
     expect(policy).not.toMatch(/(frame-ancestors|report-uri|sandbox)/);
   });
 
-  it("allows Google and relay requests, with PC images limited to the relay base", () => {
+  it("allows Google and relay requests, with PC images and code checks limited to the relay base", () => {
     const policy =
-      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.app.getwink.dev; connect-src https://relay.app.getwink.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'";
+      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.app.getwink.dev; connect-src https://relay.app.getwink.dev https://*.app.getwink.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'";
     expect(HTML).toContain(policy);
     const relay = "https://relay.example.dev";
     const shipped = HTML.replaceAll("https://relay.app.getwink.dev", relay).replaceAll("https://*.app.getwink.dev", "https://*.example.dev");
@@ -675,5 +675,112 @@ describe("phone sign-in page", () => {
     await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe(GOOGLE_DOWN));
     expect(document.getElementById("status")?.className).toBe("status error");
     expect(document.body.textContent).not.toContain(GIS_BOOM);
+  });
+});
+
+describe("entering a PC's code", () => {
+  const BAD_CODE = "That code did not work. Check it in Wink on your PC: Settings, Devices.";
+  const LOOKUP = `https://relay.${BASE}/v1/room-codes/ABCDEF`;
+  const CHECK = `https://${LABEL_A}.${BASE}/api/phone/open-code?c=ABCDEF`;
+  type Answer = { status: number; body?: unknown } | "fail";
+  let asked: Array<{ url: string; credentials?: string }> = [];
+
+  function answer(routes: Record<string, Answer>): void {
+    asked = [];
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+      asked.push({ url, credentials: init.credentials });
+      const route = routes[url] ?? { status: 404, body: { error: "not-found" } };
+      if (route === "fail") return Promise.reject(new TypeError("offline"));
+      return Promise.resolve(new Response(route.status === 204 ? null : JSON.stringify(route.body ?? {}), { status: route.status }));
+    });
+  }
+
+  function enter(value: string): void {
+    const input = document.querySelector<HTMLInputElement>("#code-input")!;
+    input.value = value;
+    document.getElementById("code")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  }
+
+  const status = () => document.getElementById("status")!;
+  const submit = () => document.querySelector<HTMLButtonElement>("#code button")!;
+
+  it("shows the code box on a cold start only", () => {
+    open("/signin", []);
+    expect(document.getElementById("code")?.hidden).toBe(false);
+    open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_A, name: "Ada" }]);
+    expect(document.getElementById("code")?.hidden).toBe(true);
+  });
+
+  it.each(["ABCDEF", " abc-def "])("opens the PC a live code names, through the same Google check as the PC list (%s)", async (typed) => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter(typed);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(asked).toEqual([{ url: LOOKUP, credentials: "omit" }, { url: CHECK, credentials: "omit" }]);
+  });
+
+  it("remembers no PC for a typed code, so the next visit sends this browser nowhere until Google signs in", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(localStorage.getItem(LAST_PC)).toBeNull();
+    open("/signin", []);
+    expect(probes).toEqual([]);
+    expect(location.href).not.toContain("/pair");
+    expect(inits).toHaveLength(1);
+  });
+
+  it.each<[string, string, Record<string, Answer>]>([
+    ["no such code", "ABCDEF", {}],
+    ["a code the PC no longer holds", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } } }],
+    ["a PC that is off", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: "fail" }],
+    ["the PC's rate limit", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 429 } }],
+    ["a relay that answers nonsense", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: "../evil" } } }],
+    ["a relay that cannot be reached", "ABCDEF", { [LOOKUP]: "fail" }],
+  ])("says the same plain words for %s", async (_, typed, routes) => {
+    open("/signin", []);
+    answer(routes);
+    enter(typed);
+    await vi.waitFor(() => expect(status().textContent).toBe(BAD_CODE));
+    expect(status().className).toBe("status error");
+    expect(location.href).not.toContain("/pair");
+    expect(submit().disabled).toBe(false);
+  });
+
+  it.each(["", "ABCDE", "ABCDE0", "ABCDEFG", "OOOOOO"])("refuses %j without asking anyone", (typed) => {
+    open("/signin", []);
+    answer({});
+    enter(typed);
+    expect(status().textContent).toBe(BAD_CODE);
+    expect(asked).toEqual([]);
+  });
+
+  it("asks the person to wait on the relay's rate limit", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 429, body: { error: "rate-limited" } } });
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(status().textContent).toBe("Too many tries. Wait a minute and try again."));
+    expect(asked.map((call) => call.url)).toEqual([LOOKUP]);
+  });
+
+  it("sends one lookup for a double submit", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter("ABCDEF");
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(asked.map((call) => call.url)).toEqual([LOOKUP, CHECK]);
+  });
+
+  it("frees the code box when Back restores the page", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(submit().disabled).toBe(false);
+    expect(document.querySelector<HTMLInputElement>("#code-input")!.value).toBe("");
+    expect(status().textContent).toBe("");
   });
 });

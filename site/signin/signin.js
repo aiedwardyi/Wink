@@ -17,6 +17,10 @@
   const NOT_YOURS = "That PC is not signed in to this Google account.";
   const UNCONFIGURED = "Sign-in is not configured.";
   const GOOGLE_DOWN = "Could not load Google sign-in. Check your connection and try again.";
+  const CODE_RE = /^[2-9A-HJ-NP-Z]{6}$/;
+  // One message for every miss, so a wrong code never tells whether a PC is behind it.
+  const BAD_CODE = "That code did not work. Check it in Wink on your PC: Settings, Devices.";
+  const TOO_MANY = "Too many tries. Wait a minute and try again.";
 
   let gis = null;
   let config = null;
@@ -241,6 +245,57 @@
     showList(pcs);
   }
 
+  // The relay names the PC; the PC then confirms the code is still its own, so turning phone access off ends it.
+  async function codeLabel(code) {
+    try {
+      const found = await fetch(`https://relay.${config.base}/v1/room-codes/${code}`, { method: "GET", cache: "no-store", credentials: "omit" });
+      if (found.status === 429) return "busy";
+      if (!found.ok) return "";
+      const label = text((await found.json())?.label);
+      if (!LABEL_RE.test(label)) return "";
+      const live = await fetch(`https://${label}.${config.base}/api/phone/open-code?c=${code}`, { method: "GET", cache: "no-store", credentials: "omit" });
+      return live.status === 204 ? label : "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function enterCode() {
+    const submit = $("code").querySelector("button");
+    if (submit.disabled) return;
+    const code = $("code-input").value.replace(/[\s-]/g, "").toUpperCase();
+    if (!CODE_RE.test(code)) {
+      say(BAD_CODE, "error");
+      return;
+    }
+    submit.disabled = true;
+    say("");
+    const label = await codeLabel(code);
+    // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
+    if (LABEL_RE.test(label)) {
+      holdAccount(label);
+      location.assign(`https://${label}.${config.base}/pair?g=1`);
+      return;
+    }
+    submit.disabled = false;
+    say(label === "busy" ? TOO_MANY : BAD_CODE, "error");
+  }
+
+  function showCode() {
+    const form = $("code");
+    form.hidden = false;
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void enterCode();
+    });
+  }
+
+  function resetCode() {
+    $("code").querySelector("button").disabled = false;
+    $("code-input").value = "";
+    say("");
+  }
+
   // Back from turning on Devices on the PC, the empty list loads again with the same token.
   function refreshWhenBack(token, pick) {
     let loading = false;
@@ -432,6 +487,7 @@
     const pc = params.get("pc");
     const m = params.get("m");
     if (pc === null && m === null) {
+      showCode();
       void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
@@ -450,6 +506,7 @@
   // Back from a PC restores this page from bfcache with the PC buttons still opening.
   addEventListener("pageshow", (event) => {
     if (event.persisted && !$("list").hidden) showList(listed);
+    if (event.persisted && !$("code").hidden) resetCode();
   });
 
   const ready = googleId();
