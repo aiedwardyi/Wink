@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import { z } from "zod";
 
+import { aboutYouPrompt, aboutYouSources, addToAboutYou, removeAboutYouSource, syncAboutYou, type AboutYouSource } from "../about-you.ts";
 import { BotTrash, trashedWorkspaceDir } from "../bot-trash.ts";
 import { createBotTrashActions, trashDaysLeft } from "../bot-trash-actions.ts";
 import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "../bot-trash-sync.ts";
@@ -35,7 +36,8 @@ export interface PlaceRoom { id: string; threadId: string; name: string; members
 export interface RoomRow { id: string; role: string; text?: string; from?: string; parentId?: string | null }
 export interface RoomChat { active: string; busy: boolean; threads: Array<{ id: string; title: string; rows: RoomRow[] }>; written: string[] }
 export interface TestArgs { bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean; skew?: number; old?: boolean; room?: string; members?: string[]; dm?: boolean; hosted?: boolean; title?: string }
-export type TestResult = ReportBot[] | Places | PlaceRoom[] | RoomChat | Record<string, string> | string | number | boolean | undefined;
+export interface AboutYouView { prompt: string; sources: AboutYouSource[]; files: string[] }
+export type TestResult = ReportBot[] | Places | PlaceRoom[] | RoomChat | AboutYouView | Record<string, string> | string | number | boolean | undefined;
 
 const { dataDir } = z.object({ dataDir: z.string() }).parse(workerData);
 const DAY = 86_400_000;
@@ -158,6 +160,7 @@ function syncProfile(folder: string): void {
   if (!old) publishRooms(roomHost, folder);
   finishRevive(host, marks.revive, (botId) => v2?.rebuild(botId));
   for (const bot of store.bots) if (settings.botMap[bot.id]) syncBotMemory(folder, settings.botMap[bot.id]!, workspaceDir(bot.id), ledger);
+  syncAboutYou(folder, ledger);
   writeDeviceRecord(folder, { deviceId: settings.deviceId, name: "Test PC", host: "test.example.ts.net", chatSync: 2 }, Date.now());
   save();
 }
@@ -208,6 +211,11 @@ function report(): ReportBot[] {
 function fileCount(dir: string): number {
   if (!existsSync(dir)) return 0;
   return readdirSync(dir, { withFileTypes: true }).reduce((n, entry) => n + (entry.isDirectory() ? fileCount(join(dir, entry.name)) : 1), 0);
+}
+
+function fileList(dir: string, prefix = ""): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? fileList(join(dir, entry.name), `${prefix}${entry.name}/`) : [`${prefix}${entry.name}`]).sort();
 }
 
 function place(bot: BotRecord, dir: string): PlaceBot {
@@ -440,6 +448,18 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
     case "old":
       old = args.old!;
       return;
+    case "importMemory": {
+      const result = addToAboutYou(args.text!, "2026-11-19");
+      if ("error" in result) throw new Error(result.error);
+      return;
+    }
+    case "forgetMemory":
+      removeAboutYouSource(args.text!);
+      return;
+    case "aboutYou": {
+      const dir = join(dataDir, "about-you");
+      return { prompt: aboutYouPrompt(), sources: aboutYouSources(), files: fileList(dir) };
+    }
     case "close":
       await v2?.close();
       closeMessageDb();

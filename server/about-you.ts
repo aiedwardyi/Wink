@@ -1,7 +1,7 @@
 // About You: what the user's other AI knew about them, kept once for every bot.
 // Code splits the paste into fact lines, drops repeats and secret-looking lines,
 // and notes where each came from; no model reads or rewrites it.
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
@@ -11,6 +11,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { secretLike } from "./memory-pass.ts";
+import { syncBotMemory, type MemorySyncLedger, type MemorySyncOptions, type MemorySyncResult } from "./memory-sync.ts";
 import { MEMORY_LINE_MAX_BYTES, MEMORY_MAX_BYTES, MEMORY_MAX_LINES } from "./workspace.ts";
 
 /** A bigger paste is refused whole, never trimmed. */
@@ -21,7 +22,11 @@ const SOURCE = /^[ \t]*Source:[ \t]*(.*?)\s*$/im;
 const SENTENCE = /(?<=[.!?。])\s+/;
 
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
-const aboutYouFile = () => join(DATA_DIR, "about-you", "MEMORY.md");
+export const aboutYouDir = () => join(DATA_DIR, "about-you");
+const aboutYouFile = () => join(aboutYouDir(), "MEMORY.md");
+/** Import Memory's id in memory sync, beside the bots' UUIDs. */
+export const ABOUT_YOU_SYNC_ID = "about-you";
+const SET_ASIDE = /^MEMORY\.conflict-[0-9a-f]{8}\.md$/;
 
 // a saved line comes from text another AI wrote, so nothing in it may read as markup or as Wink's own framing
 function clean(text: string): string {
@@ -160,6 +165,32 @@ export function removeAboutYouSource(source: string): void {
   const kept = savedLines(readSaved()).filter((line) => (TAG.exec(line)?.[1] ?? "") !== source);
   if (kept.length) writeFileAtomic(aboutYouFile(), `${kept.join("\n")}\n`, { mode: 0o600 });
   else rmSync(aboutYouFile(), { force: true });
+}
+
+/** Syncs Import Memory as memory sync does a bot's; facts only add up, so a copy two PCs set aside is folded back in. */
+export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?: MemorySyncOptions): Record<string, MemorySyncResult> {
+  const results = syncBotMemory(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), ledger, options);
+  const dir = join(aboutYouDir(), "memory");
+  let copies: string[];
+  try {
+    copies = readdirSync(dir).filter((name) => SET_ASIDE.test(name));
+  } catch {
+    return results;
+  }
+  for (const name of copies) {
+    const lines = savedLines(readSaved());
+    const seen = new Set(lines.map((line) => keyOf(clean(line))));
+    for (const line of savedLines(readFileSync(join(dir, name), "utf8")).filter((line) => TAG.test(line))) {
+      const key = keyOf(clean(line));
+      if (!key || seen.has(key)) continue;
+      lines.push(line);
+      seen.add(key);
+    }
+    if (lines.length) writeFileAtomic(aboutYouFile(), `${lines.join("\n")}\n`, { mode: 0o600 });
+    // the next pass publishes the merged file and the copy's delete
+    rmSync(join(dir, name), { force: true });
+  }
+  return results;
 }
 
 /** The saved facts as every bot reads them, one per line; empty until something is added. */
