@@ -75,7 +75,6 @@ function mightShowMedia({ image, kind, role, text }: MediaRow): boolean {
   return Boolean(image || (kind === "text" && text && (role === "user" ? text.includes("<attached-") : text.includes("](") || text.includes("![") || (text.includes("`") && text.includes("(")))));
 }
 
-type Rows = Pick<Store, "loaded" | "activePath">;
 const pathAt = new WeakMap<readonly Message[], Map<string, number>>();
 
 /** readMediaRows from a chat already in memory, or undefined when the cursor left its active path. */
@@ -86,10 +85,9 @@ function pathRows(path: readonly Message[], cursor: string, limit: number): { ro
   return end === undefined ? undefined : { rows: path.slice(Math.max(0, end - limit + 1), end + 1).reverse(), next: path[end - limit]?.id ?? null };
 }
 
-function readPage(store: Rows, threadId: string, cached: HeldIndex, limit: number, database?: DatabaseSync): MediaIndex {
+function readPage(path: readonly Message[] | undefined, threadId: string, cached: HeldIndex, limit: number, database?: DatabaseSync): MediaIndex {
   const start = cached.cursor;
-  // An open chat is in memory already; walking a big one on disk took 12 s over 127 pages.
-  const { rows, next } = (start && store.loaded(threadId) && pathRows(store.activePath(threadId), start, limit)) || readMediaRows(threadId, start, limit, database);
+  const { rows, next } = (start && path && pathRows(path, start, limit)) || readMediaRows(threadId, start, limit, database);
   if (start) cached.cursors.add(start);
   cached.cursor = next && !cached.cursors.has(next) ? next : null;
   const page: MediaIndex = { v: cached.v, ...buildMediaIndex(threadId, rows, cached.seen) };
@@ -117,9 +115,11 @@ function readSize(cached: HeldIndex, n: number, slot: number, page = cached.page
   return size;
 }
 
-export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange"> & Rows) {
+export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange" | "loaded" | "activePath">) {
   const held = new Map<string, HeldIndex>();
   let count = 0;
+  // An open chat is in memory already; walking a big one on disk took 12 s over 127 pages.
+  const loadedPath = (threadId: string) => store.loaded(threadId) ? store.activePath(threadId) : undefined;
   store.onChange((change) => {
     if (!("threadId" in change) || change.type === "task.packet") return;
     if (change.type === "thread.deleted") { held.delete(change.threadId); return; }
@@ -145,7 +145,7 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange"> &
       const next: HeldIndex = {
         v: `${boot}.${++count}`, leaf, cursor: leaf, cursors: new Set(), pages: [], seen: new Set(), sizes: new Map(), legacy: cached?.legacy,
       };
-      const page = readPage(store, threadId, next, FIRST_ROWS);
+      const page = readPage(loadedPath(threadId), threadId, next, FIRST_ROWS);
       const prior = cached?.pages[0];
       if (cached && prior && !prior.next && !page.next && same(prior, page)) {
         cached.dirty = undefined;
@@ -161,12 +161,13 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange"> &
 
   async function readRemaining(threadId: string, cached: HeldIndex): Promise<MediaIndex[]> {
     const full = { ...cached, pages: cached.pages.slice(), cursors: new Set(cached.cursors), seen: new Set(cached.seen) };
+    const path = loadedPath(threadId);
     const database = new DatabaseSync(messageDbFile(), { readOnly: true });
     try {
       // Pin the rows to one revision while chat writes run between pages.
       database.exec("BEGIN");
       while (full.cursor) {
-        readPage(store, threadId, full, OLDER_ROWS, database);
+        readPage(path, threadId, full, OLDER_ROWS, database);
         if (full.cursor) await yieldLoop();
       }
       return full.pages;
@@ -196,7 +197,7 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange"> &
     page(threadId: string, v: string | null, n: number): MediaIndex | null {
       const cached = held.get(threadId);
       if (!cached || cached.dirty || cached.v !== v) return null;
-      return cached.pages[n] ?? (n === cached.pages.length && cached.cursor ? readPage(store, threadId, cached, OLDER_ROWS) : null);
+      return cached.pages[n] ?? (n === cached.pages.length && cached.cursor ? readPage(loadedPath(threadId), threadId, cached, OLDER_ROWS) : null);
     },
     snapshot(threadId: string): Promise<MediaIndex[]> {
       return complete(threadId, current(threadId));
