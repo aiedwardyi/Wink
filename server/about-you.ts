@@ -164,6 +164,9 @@ function save(state: AboutYouState, before: string, keepEditTime = false): void 
   if (editTime) utimesSync(file, editTime.atime, editTime.mtime);
 }
 
+// dead once a removal names it, or once an older build's count for it is odd
+const live = ({ removes, legacy }: AboutYouState, id: string) => !removes.has(id) && (legacy.get(id) ?? 0) % 2 === 0;
+
 function rememberRemovals(state: AboutYouState, other: AboutYouState): void {
   for (const id of other.removes) state.removes.add(id);
   for (const [hash, count] of other.legacy) state.legacy.set(hash, Math.max(state.legacy.get(hash) ?? 0, count));
@@ -175,7 +178,7 @@ function fold(states: AboutYouState[]): AboutYouState {
   const facts = new Map<string, string>();
   for (const state of states) for (const line of state.lines) {
     const hash = markOf(line);
-    const ids = [...(state.adds.get(hash) ?? [hash])].filter((id) => !merged.removes.has(id) && (merged.legacy.get(id) ?? 0) % 2 === 0);
+    const ids = [...(state.adds.get(hash) ?? [hash])].filter((id) => live(merged, id));
     if (!ids.length) continue;
     const source = TAG.exec(line)?.[1];
     const fact = source && keyOf(clean(line));
@@ -201,8 +204,9 @@ function localEdits(raw: string): AboutYouState {
   rememberRemovals(state, last);
   const hashes = new Set(state.lines.map(markOf));
   for (const hash of hashes) {
-    const ids = last.adds.get(hash);
-    if (ids) rememberIds(state, hash, ids);
+    // a line typed back after its removal is a new add, so it never takes a removed ID back
+    const ids = [...(last.adds.get(hash) ?? [])].filter((id) => live(state, id));
+    if (ids.length) rememberIds(state, hash, ids);
   }
   const presentIds = new Set([...hashes].flatMap((hash) => [...(state.adds.get(hash) ?? [])]));
   for (const previous of [last, state]) for (const [hash, ids] of previous.adds) {

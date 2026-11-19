@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 
-import { ABOUT_YOU_SYNC_ID, aboutYouSources, addToAboutYou, removeAboutYouSource, syncAboutYou } from "./about-you.ts";
-import { memorySyncDir, type MemorySyncLedger } from "./memory-sync.ts";
+import { ABOUT_YOU_SYNC_ID, aboutYouPrompt, aboutYouSources, addToAboutYou, removeAboutYouSource, syncAboutYou } from "./about-you.ts";
+import { loadMemorySyncLedger, memorySyncDir, saveMemorySyncLedger, type MemorySyncLedger } from "./memory-sync.ts";
 
 const pc = vi.hoisted(() => ({ dir: "" }));
 vi.mock("./config.ts", async (original) => ({
@@ -91,6 +91,104 @@ it.each(["import", "hand", "stale", "legacy"] as const)("converges in all 120 sy
       const onA = hasFact();
       if (onA !== keepsFact || onB !== keepsFact) failures.push(`${order.join(" → ")}: expected ${keepsFact}, got ${onA}/${onB}`);
     }
+    expect(failures).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 240_000);
+
+const typed = "Writes notes by hand.";
+const retypeSteps = ["erase", "import", "remove", "retype", "syncA", "syncB"] as const;
+
+// A typed a line and imported a fact, and B has both.
+function retypeWorld(dir: string) {
+  const [a, b, shared] = ["a", "b", "shared"].map((name) => join(dir, name));
+  // each pass reloads its ledger from disk, as after a restart
+  const pass = (data: string) => {
+    pc.dir = data;
+    const ledger = loadMemorySyncLedger(data);
+    syncAboutYou(shared, ledger, { host: data });
+    saveMemorySyncLedger(data, ledger);
+  };
+  const type = () => appendFileSync(file(a), `- ${typed}\n`);
+  const erase = () => writeFileSync(file(a), readFileSync(file(a), "utf8").split("\n").filter((line) => line !== `- ${typed}`).join("\n"));
+  const importBeacon = () => {
+    pc.dir = a;
+    addToAboutYou("- Plays the flute.\nSource: Beacon", "2026-11-20");
+  };
+  const view = (data: string) => {
+    pc.dir = data;
+    const listed = aboutYouSources().flatMap(({ source, facts }) => facts.map((fact) => `${source || "hand"}: ${fact}`)).sort();
+    const lines = existsSync(file(data)) ? readFileSync(file(data), "utf8").split("\n") : [];
+    return `${listed.join(", ")} | prompt ${aboutYouPrompt().includes(`- ${typed}\n`)} | file ${lines.includes(`- ${typed}`)}`;
+  };
+  const shown = (kept: boolean) => `${["Beacon: Plays the flute.", "Control: Control stays here.", ...(kept ? [`hand: ${typed}`] : [])].join(", ")} | prompt ${kept} | file ${kept}`;
+  mkdirSync(join(a, "about-you"), { recursive: true });
+  type();
+  pc.dir = a;
+  addToAboutYou("- Control stays here.\nSource: Control", "2026-11-20");
+  pass(a);
+  pass(b);
+  return { a, b, pass, type, erase, importBeacon, view, shown };
+}
+
+it("keeps a line typed back after an import saved its erase, on both PCs", () => {
+  const root = mkdtempSync(join(tmpdir(), "orbit-about-you-retype-"));
+  try {
+    const w = retypeWorld(root);
+    w.erase();
+    w.importBeacon();
+    w.type();
+    expect(w.view(w.a)).toBe(w.shown(true));
+    for (let round = 0; round < 6; round++) {
+      w.pass(w.a);
+      w.pass(w.b);
+    }
+    expect([w.view(w.a), w.view(w.b)]).toEqual([w.shown(true), w.shown(true)]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("keeps a line typed back unless a later hand Remove took it, in all 360 orders of erase, import, Remove, retype and syncs", () => {
+  const root = mkdtempSync(join(tmpdir(), "orbit-about-you-retype-order-"));
+  const failures: string[] = [];
+  try {
+    const all = orders([...retypeSteps]).filter((order) => order.indexOf("erase") < order.indexOf("retype"));
+    for (const [i, order] of all.entries()) {
+      const w = retypeWorld(join(root, String(i)));
+      for (const step of order) {
+        switch (step) {
+          case "erase":
+            w.erase();
+            break;
+          case "import":
+            w.importBeacon();
+            break;
+          case "remove":
+            pc.dir = w.a;
+            removeAboutYouSource("");
+            break;
+          case "retype":
+            w.type();
+            break;
+          case "syncA":
+            w.pass(w.a);
+            break;
+          case "syncB":
+            w.pass(w.b);
+            break;
+        }
+      }
+      for (let round = 0; round < 4; round++) {
+        w.pass(w.a);
+        w.pass(w.b);
+      }
+      const want = w.shown(order.indexOf("remove") < order.indexOf("retype"));
+      const got = [w.view(w.a), w.view(w.b)];
+      if (got.some((view) => view !== want)) failures.push(`${order.join(" → ")}: expected ${want}, got ${got.join(" / ")}`);
+    }
+    expect(all).toHaveLength(360);
     expect(failures).toEqual([]);
   } finally {
     rmSync(root, { recursive: true, force: true });
