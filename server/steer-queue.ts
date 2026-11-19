@@ -95,7 +95,8 @@ const savedQueueSchema = z.array(z.object({
     call: z.object({ id: z.string(), voice: z.literal(true).optional(), order: z.literal(true).optional(), ask: z.literal(true).optional() }).optional(),
     answersCard: z.string().optional(),
     actedAt: z.number().finite().nonnegative().optional(),
-    waited: z.boolean().optional(),
+    // a send saved before waited was recorded drew where it landed
+    waited: z.boolean().default(true),
     sendSeq: z.number().int().positive().optional(),
   })),
 }));
@@ -146,8 +147,7 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
     const messages = store.messagesFor(entry.threadId);
     const items = entry.items.filter((item) => !messages.some((message) =>
       (item.sendId && message.sendId === item.sendId) || (message.queueId === item.messageId && message.quick?.state !== "handoff")));
-    // a send saved before waited was recorded drew where it landed
-    if (items.length) queues.set(entryKey(entry.botId, entry.threadId), { ...entry, items: items.map((item) => ({ ...item, waited: item.waited ?? true })) });
+    if (items.length) queues.set(entryKey(entry.botId, entry.threadId), { ...entry, items });
   }
   if (pending.length) saveQueuedSends();
   store.onChange((change) => {
