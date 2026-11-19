@@ -70,7 +70,7 @@ type BotChatRouteDeps = {
   turnStartClaims: Map<string, string | undefined>;
   botHasActiveTurn: (botId: string, threadId?: string) => boolean;
   taskResumes: TaskResumeScheduler;
-  startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string; call?: CallTag; answersCard?: string; actedAt?: number }) => Promise<StartedTurn>;
+  startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string; call?: CallTag; answersCard?: string; actedAt?: number; waited?: boolean }) => Promise<StartedTurn>;
   resolveAndSendRoutine: (res: ServerResponse, args: { botId: string; botName?: string; threadId: string; requestId: string; behavior: string }) => boolean;
   approvalBus: ApprovalBus;
   startGroupCardContinuation: (groupId: string, threadId: string, botId: string, prompt: string, owedLine?: string) => void;
@@ -142,7 +142,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     bot: BotRecord,
     threadId: string,
     text: string,
-    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number },
+    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt, waited }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number; waited?: boolean },
   ) => {
     let steered = false;
     let dropped = false;
@@ -223,6 +223,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           call,
           answersCard,
           actedAt,
+          waited,
         });
       if (call) callRow = message;
       peerInput?.accept(message);
@@ -236,7 +237,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     if (!current.busy && !botHasActiveTurn(bot.id, threadId)) {
       // an idle bot takes the ask as an ordinary turn
       const userMessage = (ask && store.patchMessage(threadId, ask.id, { quick: undefined })) || undefined;
-      const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, userMessage, call, answersCard, actedAt });
+      const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, userMessage, call, answersCard, actedAt, waited });
       return sendPostReceipt(started, threadId);
     }
     const queued = queueId ? { id: queueId, skipped: false } : queueSteeredMessage(current.id, threadId, text, {
@@ -246,6 +247,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       call,
       answersCard,
       actedAt,
+      waited: after || adapter?.capabilities.queueing !== true,
       // Reply quote only - startTurn wraps reactions when this drains.
       prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
     });
@@ -332,7 +334,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
       // Send now on a held send: the user acted when they queued it
-      const actedAt = (queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId)?.actedAt : undefined) ?? sentAt;
+      const queuedSend = queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId) : null;
+      const actedAt = queuedSend?.actedAt ?? sentAt;
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
@@ -400,7 +403,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             }
             // a call line is spoken back, so only a typed send gets the reply beside it
             const ack = Boolean(quick && gate && !call && routesAck(gate));
-            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt });
+            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, waited: queuedSend?.waited });
             if (quick && ack && "steered" in sent && sent.steered) startAck(quick, bot.id, threadId, sent.message);
             return sent;
           }
@@ -428,13 +431,13 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           const syncUntil = !queueId && threadSyncGate.enabled ? syncHold.until(threadId) : undefined;
           if (syncUntil !== undefined) {
             const held = queueSteeredMessage(bot.id, threadId, text, {
-              replyToId: replyTo?.id, sendId, syncUntil, call, answersCard, actedAt,
+              replyToId: replyTo?.id, sendId, syncUntil, call, answersCard, actedAt, waited: true,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             markChatLatency({ sendId, threadId }, "queue.decided", { queueId: held.id });
             return { ok: true as const, queued: true as const, reason: "sync" as const, queueId: held.id, threadId };
           }
-          const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, call, answersCard, actedAt });
+          const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, call, answersCard, actedAt, waited: queuedSend?.waited });
           return sendPostReceipt(started, threadId);
         }),
       ).finally(() => { if (queueId) drainQueuedSends(); });

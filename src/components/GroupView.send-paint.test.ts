@@ -57,12 +57,12 @@ type Frame = { kind: "hello"; resumed: boolean; cursor: string } | { kind: "mess
 const frame = (value: Frame) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 const shown = (text: string) => host.querySelector('[role="log"]')?.textContent?.split(text).length ?? 0;
 
-async function mount(idle = false) {
+async function mount(idle = false, messages = room.messages) {
   // the send POST never answers, as when the server holds it for sync
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url) === "/api/bots?messages=200"
     ? Response.json(idle
-      ? { bots: [{ ...bot, busy: false, activity: undefined }], groups: [{ ...room, busyBotId: undefined }], computerControl: {} }
-      : { bots: [bot], groups: [room], computerControl: {} })
+      ? { bots: [{ ...bot, busy: false, activity: undefined }], groups: [{ ...room, messages, busyBotId: undefined }], computerControl: {} }
+      : { bots: [bot], groups: [{ ...room, messages }], computerControl: {} })
     : String(url).includes("/messages")
       ? new Promise<Response>(() => {})
       : Response.json({}, { status: 404 })));
@@ -118,5 +118,44 @@ describe("GroupView sent lines", () => {
     await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "one more thing", sendId: "s1" }));
     await frame({ kind: "message", threadId: "gt", message: line("u2", "one more thing", "s1") });
     expect(shown("one more thing")).toBe(2);
+  });
+
+  it("keeps every line where it was sent while a member replies, live and after reload", async () => {
+    await mount();
+    const names: Record<string, string> = { u1: "U", s1: "L1", g1: "L1", s2: "L2", g2: "L2", s3: "L3", g3: "L3", m1: "M1", m2: "M2" };
+    const order = () => [...host.querySelectorAll("[data-mid]")].map((el) => names[el.getAttribute("data-mid") ?? ""]).filter(Boolean);
+    const landed: Message[] = [];
+    let seen: string[] = [];
+    const at = async (time: number, run: () => unknown) => {
+      vi.setSystemTime(time);
+      await act(async () => {
+        await run();
+      });
+      const now = order();
+      expect(now.slice(0, seen.length), `moved at ${time}`).toEqual(seen);
+      seen = now;
+    };
+    const send = (sendId: string, text: string) => store.dispatch({ type: "sendGroup", groupId: "g1", text, sendId });
+    const land = (message: Message) => {
+      landed.push(message);
+      return frame({ kind: "message", threadId: "gt", message });
+    };
+    const member = (id: string, text: string, at: number): Message => ({ id, at, role: "bot", kind: "text", text, from: { botId: "b1", name: "Atlas", color: "blue" } });
+    const mine = (id: string, sendId: string, text: string, sent: number, at: number): Message => ({ ...line(id, text, sendId), at, steered: true, actedAt: sent });
+
+    await at(100_000, () => send("s1", "이거 이상해"));
+    await at(100_600, () => land(member("m1", "답장 1", 100_600)));
+    await at(100_900, () => land(mine("g1", "s1", "이거 이상해", 100_000, 100_900)));
+    await at(101_500, () => send("s2", "메시지들"));
+    await at(102_000, () => send("s3", "한 번 더"));
+    await at(102_300, () => land(member("m2", "답장 2", 102_300)));
+    await at(102_600, () => land(mine("g2", "s2", "메시지들", 101_500, 102_600)));
+    await at(102_900, () => land(mine("g3", "s3", "한 번 더", 102_000, 102_900)));
+    expect(seen).toEqual(["U", "L1", "M1", "L2", "L3", "M2"]);
+
+    const live = seen;
+    await unmount?.();
+    await mount(false, [...room.messages, ...landed]);
+    expect(order()).toEqual(live);
   });
 });

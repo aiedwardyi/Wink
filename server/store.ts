@@ -215,6 +215,8 @@ export interface Message {
   answersCard?: string;
   /** When the person acted, before card persistence or a queue delayed delivery. */
   actedAt?: number;
+  /** Waited below the turn (after this turn, sync hold, Send now): drawn where it landed, not by actedAt. */
+  waited?: boolean;
   origin?: string;
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;

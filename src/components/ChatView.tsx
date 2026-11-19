@@ -46,7 +46,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
-import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
+import { composerIsBusy, inSendOrder, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { useNoReply } from "@/lib/no-reply";
@@ -1045,7 +1045,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const accepted = state.acceptedSends[bot.threadId];
   const pending = state.pendingQueued[bot.threadId];
   const canonicalMessages = visibleMessages(bot);
-  const messages = useMemo(() => withAcceptedMessages(canonicalMessages, accepted, pending), [canonicalMessages, accepted, pending]);
+  const messages = useMemo(() => inSendOrder(withAcceptedMessages(canonicalMessages, accepted, pending)), [canonicalMessages, accepted, pending]);
 
   // Windowed transcript: only a tail of the thread mounts (screenshots make
   // full threads DOM-heavy). The boundary is anchored per bot+task; a
@@ -1055,7 +1055,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const transcriptKey = `${bot.id}:${bot.threadId}`;
   // an old jump shows its own window; the live pages below keep taking arrivals
   const jump = useJumpWindow(dispatch, transcriptKey, bot.threadId, bot.messages, bot.activeLeafId, state.olderPatches[bot.threadId], state.snapshots, state.focusMessage);
-  const shown = jump.messages ?? messages;
+  const shown = useMemo(() => (jump.messages ? inSendOrder(jump.messages) : messages), [jump.messages, messages]);
   const runs = useMemo(() => workerRuns(messages), [messages]);
   const sessionKey = runs.map((run) => run.sessionId).filter(Boolean).sort().join("\n");
   const livePanes = useLivePanes(bot.id, !preview && (runs.length > 0 || (state.terminalPanes[bot.id]?.length ?? 0) > 0), paneLabelsKey(state.terminalPanes[bot.id]), sessionKey, dispatch, runs);

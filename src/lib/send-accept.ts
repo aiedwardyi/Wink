@@ -49,15 +49,39 @@ export function withAcceptedMessages(
   return added.length ? [...messages, ...added] : messages;
 }
 
+/** A person's line keeps the place it was sent from: rows that landed after it draw below it, live and on reload. */
+export function inSendOrder(messages: Message[]): Message[] {
+  let ordered: Message[] | undefined;
+  for (let i = 1; i < messages.length; i++) {
+    const message = messages[i]!;
+    const sent = sentAt(message);
+    if (sent === undefined) continue;
+    const list = ordered ?? messages;
+    let to = i;
+    while (to > 0 && (sentAt(list[to - 1]!) ?? list[to - 1]!.at) > sent) to--;
+    if (to === i) continue;
+    ordered ??= messages.slice();
+    ordered.splice(i, 1);
+    ordered.splice(to, 0, message);
+  }
+  return ordered ?? messages;
+}
+
+function sentAt(message: Message): number | undefined {
+  if (message.role !== "user" || !message.sendId || message.waited) return undefined;
+  return (message.placeholder ? message.at : message.actedAt) || undefined;
+}
+
 /** Sends that run after the reply render below the turn; a steering engine reads an accepted send mid-turn. */
 export function splitQueuedSends(
   messages: Message[],
   accepted: readonly AcceptedSend[] = [],
-  pending: readonly { queueId: string }[] = [],
+  pending: readonly { queueId: string; waited?: boolean; reason?: "sync" }[] = [],
   canSteer = false,
 ) {
   const ids = new Set([
-    ...pending.map((entry) => entry.queueId),
+    // a plain send the engine could not take that instant stays where it was sent
+    ...pending.filter((entry) => !canSteer || entry.waited || entry.reason === "sync").map((entry) => entry.queueId),
     ...accepted.filter((entry) => entry.kind === "sends-next" && (!canSteer || entry.after)).map((entry) => entry.sendId),
   ]);
   const queued = messages.filter((message) => message.placeholder && ids.has(message.id));
@@ -67,6 +91,11 @@ export function splitQueuedSends(
 
 export function acceptedSendPaint(input: { alreadyBusy: boolean }): { kind: AcceptedSendKind } {
   return { kind: input.alreadyBusy ? "sends-next" : "thinking" };
+}
+
+/** A send is never older than the newest row on screen, whatever this device's clock says. */
+export function sendClock(messages: readonly { at: number }[] = [], now = Date.now()): number {
+  return Math.max(now, messages.at(-1)?.at ?? 0);
 }
 
 export function hasAcceptedThinking(accepted?: readonly AcceptedSend[]): boolean {

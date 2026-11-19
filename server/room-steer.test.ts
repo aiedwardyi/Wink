@@ -51,6 +51,11 @@ describe("steerRoomSend", () => {
     expect(row).toMatchObject({ text: "Sure", steered: true, answersCard: "ask", actedAt: 5_000 });
   });
 
+  it("keeps a held line's waited mark on the row it steers", async () => {
+    const { deps, group } = setup();
+    expect(await steerRoomSend(deps, group, "later", undefined, "send-3", undefined, [], 5_000, true)).toMatchObject({ steered: true, actedAt: 5_000, waited: true });
+  });
+
   it("leaves the line to the room's next turn when it can't steer", async () => {
     for (const opts of [{ queueing: false }, { steered: false }]) {
       const { deps, group, rows } = setup(opts);

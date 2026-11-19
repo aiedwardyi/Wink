@@ -280,6 +280,6 @@ describe("room records over profile sync", () => {
     const res = { writeHead: vi.fn(), end: vi.fn() };
     await routes.postMessage(req, res as unknown as ServerResponse, ["", "room-1"] as RegExpMatchArray);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
-    expect(startGroupTurn).toHaveBeenCalledWith("room-1", "hi", undefined, undefined, undefined, undefined, [], undefined);
+    expect(startGroupTurn).toHaveBeenCalledWith("room-1", "hi", undefined, undefined, undefined, undefined, [], undefined, undefined);
   });
 });

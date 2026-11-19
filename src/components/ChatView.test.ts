@@ -1364,7 +1364,7 @@ describe("ChatView queued sends", () => {
     send = dispatch;
     useEffect(() => {
       dispatch({ type: "instances", instances: [instance(queueing)] });
-      dispatch({ type: "pendingQueued", threadId: "thread-a", queueId: "q1", text: "waiting B", at: 2 });
+      dispatch({ type: "pendingQueued", threadId: "thread-a", queueId: "q1", text: "waiting B", at: 2, waited: true });
     }, [dispatch, queueing]);
     return createElement(ChatView, { bot });
   }
@@ -1430,7 +1430,7 @@ describe("ChatView queued sends", () => {
     }
   });
 
-  it("puts a send a steering engine queued below the thinking row", async () => {
+  it("puts a send that waits for a steering engine's turn below the thinking row", async () => {
     const { host, root, order, row } = await mount(true);
     try {
       expect(order()).toEqual(["ua", "thinking", "q1"]);

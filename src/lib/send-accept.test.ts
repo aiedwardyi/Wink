@@ -10,8 +10,10 @@ import {
   composerIsBusy,
   dropIdleAcceptedThinking,
   forgetAcceptedSend,
+  inSendOrder,
   receiptRejectsAcceptedSend,
   rememberAcceptedSend,
+  sendClock,
   settleAcceptedSend,
   shouldDropQueueChip,
   splitQueuedSends,
@@ -77,12 +79,19 @@ describe("splitQueuedSends", () => {
     expect(queued.map((message) => message.id)).toEqual(["q1", "s1"]);
   });
 
-  it("keeps a steering engine's accepted send in the list but moves its confirmed queue entry", () => {
+  it("keeps a steering engine's accepted send in the list but moves its queue entry that waits for the turn", () => {
     const accepted = [{ sendId: "s1", kind: "sends-next" as const, text: "steer" }];
     const messages = withAcceptedMessages([settledReply], accepted, [{ queueId: "q1", text: "queued" }]);
-    const { listed, queued } = splitQueuedSends(messages, accepted, [{ queueId: "q1" }], true);
+    const { listed, queued } = splitQueuedSends(messages, accepted, [{ queueId: "q1", waited: true }], true);
     expect(listed.map((message) => message.id)).toEqual(["a1", "s1"]);
     expect(queued.map((message) => message.id)).toEqual(["q1"]);
+  });
+
+  it("keeps a plain send the server held for a steering engine where it was sent", () => {
+    const messages = withAcceptedMessages([settledReply], [], [{ queueId: "q1", text: "plain" }, { queueId: "q2", text: "synced" }]);
+    const { listed, queued } = splitQueuedSends(messages, [], [{ queueId: "q1" }, { queueId: "q2", reason: "sync" }], true);
+    expect(listed.map((message) => message.id)).toEqual(["a1", "q1"]);
+    expect(queued.map((message) => message.id)).toEqual(["q2"]);
   });
 
   it("moves a steering engine's after-this-turn send out of the list", () => {
@@ -100,6 +109,42 @@ describe("splitQueuedSends", () => {
     const landed: Message = { id: "q1", role: "user", kind: "text", text: "queued", at: 2 };
     const messages = [settledReply, landed];
     expect(splitQueuedSends(messages, [], [{ queueId: "q1" }])).toEqual({ listed: messages, queued: [] });
+  });
+});
+
+describe("inSendOrder", () => {
+  const row = (id: string, at: number, extra: Partial<Message> = {}): Message => ({ id, role: "bot", kind: "text", text: id, at, ...extra });
+  const line = (id: string, sent: number, at: number, extra: Partial<Message> = {}) => row(id, at, { role: "user", sendId: `send-${id}`, actedAt: sent, ...extra });
+  const ids = (messages: Message[]) => messages.map((message) => message.id);
+
+  it("draws a landed line where it was sent, above what landed after it", () => {
+    // recorded timings: the line sent at 26.694 was appended at 28.366, after the reply (28.023) and a quick answer (28.339)
+    const messages = [line("weird", 24_509, 25_485), row("quick-0", 25_906), row("reply", 28_023), row("quick-1", 28_339), line("mine", 26_694, 28_366), row("quick-2", 28_979)];
+    expect(ids(inSendOrder(messages))).toEqual(["weird", "quick-0", "mine", "reply", "quick-1", "quick-2"]);
+  });
+
+  it("draws a line still on its way where it was sent", () => {
+    const sending: Message = { ...line("s1", 0, 2_000), actedAt: undefined, placeholder: true };
+    expect(ids(inSendOrder([row("a", 1_000), row("b", 3_000), sending]))).toEqual(["a", "s1", "b"]);
+  });
+
+  it("leaves a line that waited for the turn, and rows with no send time, where they landed", () => {
+    const messages = [row("a", 1_000), row("reply", 3_000), line("after", 2_000, 4_000, { waited: true }), row("peer", 5_000, { role: "user" }), line("old", 0, 6_000, { actedAt: undefined })];
+    expect(inSendOrder(messages)).toBe(messages);
+  });
+
+  it("hands back a heavy chat untouched when every line is in place", () => {
+    const messages = Array.from({ length: 5_000 }, (_, i) => i % 2 ? row(`r${i}`, i * 10) : line(`u${i}`, i * 10 - 5, i * 10));
+    expect(inSendOrder(messages)).toBe(messages);
+    expect(ids(inSendOrder([...messages, row("reply", 50_010), line("mine", 50_005, 50_020)])).slice(-3)).toEqual(["r4999", "mine", "reply"]);
+  });
+});
+
+describe("sendClock", () => {
+  it("never stamps a send older than the newest row on screen", () => {
+    expect(sendClock([{ at: 5_000 }], 4_000)).toBe(5_000);
+    expect(sendClock([{ at: 3_000 }], 4_000)).toBe(4_000);
+    expect(sendClock([], 4_000)).toBe(4_000);
   });
 });
 

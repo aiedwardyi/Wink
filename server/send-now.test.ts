@@ -280,3 +280,25 @@ describe("a model switch during a busy turn", () => {
     expect(startQuick).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a send the server holds", () => {
+  it.each([
+    ["a plain line the steering engine could not take", true, undefined, undefined],
+    ["a line sent after this turn", true, "after", true],
+    ["a line for an engine that cannot steer", false, undefined, true],
+  ])("marks whether %s waits for the turn", async (_name, queueing, deliver, waited) => {
+    const h = harness(vi.fn(async () => false), queueing);
+    const sendId = `send-now-${"held".padEnd(16, "0")}`;
+    expect((await h.post({ text: "held", sendId, threadId: h.bot.threadId, deliver, actedAt: 1_000 })).body).toMatchObject({ queued: true });
+    expect(queue.queuedSteeredMessage(h.bot.id, h.bot.threadId, sendId)).toMatchObject({ actedAt: 1_000 });
+    expect(queue.queuedSteeredMessage(h.bot.id, h.bot.threadId, sendId)?.waited).toBe(waited);
+  });
+
+  it("keeps a promoted after-turn send marked as waited", async () => {
+    const h = harness();
+    const sendId = "send-now-waited000000000";
+    const held = queue.queueSteeredMessage(h.bot.id, h.bot.threadId, "later", { sendId, after: true, waited: true, actedAt: 1_000 });
+    const receipt = await h.post({ text: "later", sendId, queueId: held.id, threadId: h.bot.threadId, actedAt: 3_000 });
+    expect(receipt.body).toMatchObject({ steered: true, message: { sendId, actedAt: 1_000, waited: true } });
+  });
+});

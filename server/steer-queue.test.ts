@@ -134,6 +134,24 @@ describe("steer-queue module", () => {
     });
   });
 
+  it("tells a window when each waiting send was sent and which ones wait for the turn", () => {
+    const plain = queueSteeredMessage("bot-w", "thread-w", "plain", { sendId: "send_1234567890123456", actedAt: 1_000 });
+    const after = queueSteeredMessage("bot-w", "thread-w", "after", { sendId: "send_abcdefghijklmnop", after: true, waited: true, actedAt: 2_000 });
+    expect(waitingSends()["thread-w"]).toEqual([
+      { queueId: plain.id, text: "plain", sendId: "send_1234567890123456", at: 1_000 },
+      { queueId: after.id, text: "after", sendId: "send_abcdefghijklmnop", at: 2_000, waited: true },
+    ]);
+    expect(queuedSteeredMessage("bot-w", "thread-w", "send_abcdefghijklmnop")).toMatchObject({ actedAt: 2_000, waited: true });
+  });
+
+  it("lands a drained send with when it was sent and that it waited", () => {
+    const bot = fakeBot("bot-wd", "thread-wd", false);
+    const store = fakeStore([bot]);
+    queueSteeredMessage(bot.id, bot.threadId, "after", { after: true, waited: true, actedAt: 1_000 });
+    drainSteeredMessages(store, vi.fn());
+    expect(store.messages[0]).toMatchObject({ text: "after", actedAt: 1_000, waited: true });
+  });
+
   it("does not append a queued user message until drain", () => {
     const bot = fakeBot("bot-a", "thread-a", true);
     const store = fakeStore([bot]);
@@ -580,6 +598,17 @@ describe("steer-queue module", () => {
       { role: "user", text: "two", sendId: "send_plain_1234567890", queueId: queued.id, steered: true },
     ]);
     expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
+  it("folds held sends with when they were sent and whether they waited", () => {
+    const bot = fakeBot("bot-fold-wait", "thread-fold-wait", false);
+    const store = fakeStore([bot]);
+    const claim = queueMark();
+    queueSteeredMessage(bot.id, bot.threadId, "plain", { sendId: "send_plain_0987654321", prompt: "plain", actedAt: 2_000 });
+    queueSteeredMessage(bot.id, bot.threadId, "blind", { sendId: "send_blind_0987654321", prompt: "blind", actedAt: 3_000, waited: true });
+    expect(foldQueuedSends(store, bot.id, bot.threadId, claim)).toEqual(["plain", "blind"]);
+    expect(store.messages).toMatchObject([{ text: "plain", actedAt: 2_000 }, { text: "blind", actedAt: 3_000, waited: true }]);
+    expect(store.messages[0]!.waited).toBeUndefined();
   });
 
   it("folds sends queued during turn setup into the dispatching turn in send order", () => {

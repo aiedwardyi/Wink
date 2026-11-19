@@ -4938,6 +4938,7 @@ type StartTurnOptions = {
   call?: CallTag;
   answersCard?: string;
   actedAt?: number;
+  waited?: boolean;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -5253,6 +5254,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           call: opts?.call,
           answersCard: opts?.answersCard,
           actedAt: opts?.actedAt,
+          waited: opts?.waited,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -7415,12 +7417,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number, waited?: boolean) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
   const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
-  const shared = hosted && (answersCard || actedAt !== undefined) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt }) ?? hosted : hosted;
+  const shared = hosted && (answersCard || actedAt !== undefined || waited) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt, waited }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group, store.messagesFor(group.threadId).length)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7437,6 +7439,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     ...(askerId ? { askedBy: askerId } : {}),
     answersCard,
     actedAt,
+    waited,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);

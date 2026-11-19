@@ -63,6 +63,7 @@ import {
   hasAcceptedThinking,
   receiptRejectsAcceptedSend,
   rememberAcceptedSend,
+  sendClock,
   settleAcceptedSend,
   shouldDropQueueChip,
 } from "@/lib/send-accept";
@@ -770,7 +771,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         pendingQueued: {
           ...state.pendingQueued,
-          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason }],
+          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason, waited: action.waited }],
         },
       };
     }
@@ -816,7 +817,7 @@ export function reducer(state: AppState, action: Action): AppState {
           sendId,
           kind: paint.kind,
           text: action.text,
-          at: Date.now(),
+          at: sendClock(bot.messages),
           after: action.after,
         }),
       };
@@ -840,7 +841,7 @@ export function reducer(state: AppState, action: Action): AppState {
           sendId,
           kind: paint.kind,
           text: action.text,
-          at: Date.now(),
+          at: sendClock(group.messages),
           replyToId: action.replyToId,
           posting: true,
         }),
@@ -1477,7 +1478,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "send": {
-          const actedAt = Date.now();
+          const actedAt = sendClock(stateRef.current.bots.find((bot) => bot.id === action.botId)?.messages);
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
@@ -1554,6 +1555,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 sendId,
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
+                waited: action.after,
               });
               if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId });
             }
@@ -1839,7 +1841,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? Date.now() }),
+            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? sendClock(stateRef.current.groups.find((group) => group.id === action.groupId)?.messages), waited: action.waited }),
           })
             .then((body) => {
               if (receiptRejectsAcceptedSend(body)) {
@@ -2078,6 +2080,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         replyToId,
         threadId,
         actedAt: at,
+        waited: true,
         onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments }),
       });
     }
