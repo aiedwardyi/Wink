@@ -489,14 +489,14 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           appendMessage: (threadId, message) => store.appendMessage(threadId, message),
           activePath: (threadId) => store.activePath(threadId),
           patchMessage: (threadId, messageId, patch) => store.patchMessage(threadId, messageId, patch),
-          cancelHeld: (botId, threadId, question) => askHold.cancel(botId, threadId, question),
+          cancelHeld: (botId, threadId, question, forumOnly) => askHold.cancel(botId, threadId, question, forumOnly),
           alertThread: (bot, threadId) => {
             // A routine run's alert opens the conversation that owns the routine.
             const run = routines?.activeRunForBot(bot.id);
             return (run?.threadId === threadId && routineSourceThread(run)) || threadId;
           },
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
-          whenSettled: (botId, threadId, post, question) => askHold.whenSettled(botId, threadId, post, question),
+          whenSettled: (botId, threadId, post, question, forum) => askHold.whenSettled(botId, threadId, post, question, forum),
           forum: (botId, threadId, question, choices) => deps.boardCalls?.ask(botId, threadId, question, choices) ?? "",
         },
         askUserRequestSchema.parse(body),

@@ -107,7 +107,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
     },
     /**
      * Before an ask_user card the bot marked as a fact posts: a solved fix in the same project that covers it goes back
-     * to the bot instead, each post once. The next ask, in any words or turn, posts. A held ask earns no Helped.
+     * to the bot first, each post once. The next ask, in any words or turn, is not held. A held ask earns no Helped.
      */
     ask(botId: string, threadId: string, question: string, choices: readonly string[] = []): string {
       if (deps.room(threadId) || !mayHoldAsk(question, choices)) return "";
@@ -124,7 +124,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
       for (const post of posts) seen.postIds.add(post.id);
       asked.set(key, seen);
       deps.held?.({ kind: "ask", botId, threadId, postIds: posts.map((post) => post.id) });
-      return `Not asked yet: the Forum may answer this:\n${posts.map((post) => boardLine(post, HIT_CHARS)).join("\n")}\nIf it doesn't, ask again.`;
+      return `Not asked yet: the Forum may answer this:\n${posts.map((post) => boardLine(post, HIT_CHARS)).join("\n")}\nIf it answers you, close this question with ask_user close:true. If not, it posts when your turn ends.`;
     },
     /** A call went out: the blocker becomes an open stuck post, a fresh one once the last call was solved. */
     called(botId: string, threadId: string, blocker: Blocker): BoardPost | undefined {

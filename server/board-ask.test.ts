@@ -1,10 +1,10 @@
-// The ask hold: an ask_user card posts unless the bot marked it as a plain fact that a solved fix in the same project
-// already covers; then the fix goes back to the bot once and its next ask posts. No model calls.
+// The ask hold: when the bot marked an ask_user card as a plain fact that a solved fix in the same project already
+// covers, the fix goes back to the bot first and the card waits for the turn to settle, posting unless the bot closes it.
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { watchAskHold } from "./ask-hold.ts";
+import { AskHold, watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser, type AskUserDeps } from "./ask-user.ts";
 import { BOARD_USER, createBoard, errorSig, type Board, type NewBoardPost } from "./board.ts";
 import { createBoardCalls, type BoardCalls } from "./board-calls.ts";
@@ -30,6 +30,26 @@ const PROBES = [
   ["a reworded retry", REBOOT],
   ["a production ask on a staging fix", "Which port does the production preview worker listen on?"],
 ];
+const MUST = [
+  "Can I restart the preview worker?",
+  "Sign off on the preview worker restart?",
+  "OK to restart the preview worker now?",
+  "Should I delete the stale worktree folder?",
+  "Which account should the Codex worker use after the usage limit?",
+  "May I delete the stale worktree folder?",
+  "Do I have permission to read the shared Drive folder?",
+  "Log in to Claude on the work PC?",
+  "Can you re-authenticate Claude on the work PC with the device code?",
+  "Claude needs a fresh log-in on the work PC with the device code",
+  "Can I pay for a Pro plan seat for the preview worker?",
+  "What does the preview worker cost?",
+  "OK to buy one Pro plan seat for the preview worker?",
+  "Push the preview worker fix to main?",
+  "Merge the preview worker fix?",
+  "Release the preview worker fix?",
+  "Deploy the preview worker to production now?",
+  "Ship the preview worker to production?",
+];
 
 let board: Board;
 let calls: BoardCalls;
@@ -37,9 +57,13 @@ let appended: Array<Omit<Message, "id" | "at">>;
 let alerts: string[];
 let deps: AskUserDeps<Bot>;
 let holds: unknown[];
+let running: boolean;
+let askHold: AskHold;
 
 beforeEach(() => {
   holds = [];
+  running = false;
+  askHold = new AskHold(() => running);
   board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-board-ask-")), "board"), pcId: () => "home" });
   calls = createBoardCalls({ board, projectOf: () => "wink", room: (threadId) => threadId === "room", held: (row) => holds.push(row) });
   appended = [];
@@ -50,14 +74,19 @@ beforeEach(() => {
     appendMessage: (_threadId, message) => (appended.push(message), { ...message, id: `m-${appended.length}`, at: 1 }),
     activePath: () => [],
     patchMessage: () => null,
-    cancelHeld: () => false,
+    cancelHeld: (botId, threadId, question, forumOnly) => askHold.cancel(botId, threadId, question, forumOnly),
     alertThread: (_bot, threadId) => threadId,
     notifyQuestion: (_bot, _target, question) => void alerts.push(question),
-    whenSettled: (_botId, _threadId, post) => post(),
+    whenSettled: (botId, threadId, post, question, forum) => askHold.whenSettled(botId, threadId, post, question, forum),
     forum: (botId, threadId, question, choices) => calls.ask(botId, threadId, question, choices),
   };
 });
 
+const settle = () => {
+  running = false;
+  askHold.settled("ada");
+};
+const cards = () => appended.map((message) => message.card!.subtitle);
 const ask = (question = QUESTION, threadId = "ta", choices: string[] = [], fact = true) => postAskUser(deps, askUserRequestSchema.parse({ fromBotId: "ada", fromThreadId: threadId, question, choices, fact }));
 const solvedFix = (title: string, body: string, fix: string, extra: Partial<NewBoardPost> = {}) => {
   const stuck = board.post({ author_bot_id: "wink", kind: "stuck", title, body, project_id: "wink", source_ref: `call:t:0:engine:${title}`, ...extra });
@@ -69,19 +98,89 @@ const workerFixes = () => {
   solvedFix("Reboot the preview worker", REBOOT, "Reboot it with the worker script.");
   solvedFix("Staging preview worker port", "Which port does the staging preview worker listen on?", "The staging preview worker listens on port 4801.");
 };
+const mustFixes = () => {
+  solvedFix("Restart the preview worker", RESTART, "Restart it from the worker panel.");
+  solvedFix("Delete the stale worktree folder", "Should I delete the stale worktree folder?", "Deleted it once the branch merged.");
+  solvedFix("Deploy the preview worker to production", "Deploy the preview worker to production once CI is green.", "Ran the deploy script for the preview worker.");
+  solvedFix("Claude authentication expired on the work PC", "Re-authenticate Claude on the work PC with the device code.", "Re-authenticated Claude on the work PC with the device code.");
+  solvedFix("Buy a Pro plan seat for the preview worker", "Upgrade the preview worker to a Pro plan seat.", "Bought one Pro plan seat for the preview worker.");
+  solvedFix("Use the work account for the Codex worker", "Which account should the Codex worker use after the usage limit?", "The Codex worker uses the work account after the usage limit.");
+  solvedFix("Grant the worker access to the Drive folder", "Give the worker permission to read the shared Drive folder.", "Granted the worker read access to the shared Drive folder.");
+  solvedFix("Preview worker money and shipping notes", MUST.filter((question) => /pay|Push|Merge|Release|Log in|cost/.test(question)).join(" "), "Read the preview worker notes.");
+};
 
 // Known miss: a question worded apart from the post that answers it (1 of 5 words shared) is not held; exact words at 0.6 cannot reach it.
 describe("ask hold", () => {
-  it("holds a later ask about an error a solved fix already covers, once", () => {
+  it("holds a later ask about an error a solved fix already covers until the turn settles", () => {
     gitFix();
+    running = true;
     const held = ask(GIT);
     expect(held.status).toBe(200);
     const notice = (held.body as { notice: string }).notice;
     expect(notice).toMatch(/^Not asked yet: the Forum may answer this:\n/);
     expect(notice).toContain(GIT_FIX);
-    expect(notice).toMatch(/\nIf it doesn't, ask again\.$/);
+    expect(notice).toMatch(/\nIf it answers you, close this question with ask_user close:true\. If not, it posts when your turn ends\.$/);
     expect(appended).toEqual([]);
-    expect(ask(GIT)).toEqual({ status: 201, body: { messageId: "m-1" } });
+    settle();
+    expect(cards()).toEqual([GIT]);
+    expect(alerts).toEqual([GIT]);
+  });
+
+  it.each(MUST)("a must-answer ask wrongly marked as a fact still reaches the user once: %s", (question) => {
+    mustFixes();
+    running = true;
+    ask(question);
+    settle();
+    expect(cards()).toEqual([question]);
+    expect(alerts).toEqual([question]);
+  });
+
+  it("a held ask the bot closes never posts", () => {
+    workerFixes();
+    running = true;
+    expect(ask(RESTART).status).toBe(200);
+    expect(postAskUser(deps, askUserRequestSchema.parse({ fromBotId: "ada", fromThreadId: "ta", question: RESTART, close: true }))).toEqual({ status: 200, body: { closed: true } });
+    settle();
+    expect(appended).toEqual([]);
+    expect(alerts).toEqual([]);
+  });
+
+  it.each([true, false])("a held ask asked again, marked %s, posts one card and one alert", (fact) => {
+    workerFixes();
+    running = true;
+    expect(ask(RESTART).status).toBe(200);
+    expect(ask(RESTART, "ta", [], fact)).toEqual({ status: 202, body: { held: true } });
+    settle();
+    expect(cards()).toEqual([RESTART]);
+    expect(alerts).toEqual([RESTART]);
+  });
+
+  it("a held ask still posts beside another question asked after it", () => {
+    workerFixes();
+    running = true;
+    expect(ask(RESTART).status).toBe(200);
+    expect(ask(REBOOT).status).toBe(202);
+    settle();
+    expect(cards()).toEqual([RESTART, REBOOT]);
+    expect(alerts).toEqual([RESTART, REBOOT]);
+  });
+
+  it("a held ask posts when the app shuts down mid-turn, and after the restart its ask posts again", () => {
+    workerFixes();
+    running = true;
+    expect(ask(RESTART).status).toBe(200);
+    askHold.flush();
+    expect(cards()).toEqual([RESTART]);
+    calls = createBoardCalls({ board, projectOf: () => "wink", room: () => false });
+    askHold = new AskHold(() => running);
+    ask(RESTART);
+    settle();
+    expect(cards()).toEqual([RESTART, RESTART]);
+    expect(alerts).toEqual([RESTART, RESTART]);
+  });
+
+  it.each([[true, true], ["true", true], [1, true], [false, false], ["false", false], [0, false], ["yes", false]])("reads a fact mark of %j as %s", (mark, fact) => {
+    expect(Boolean(askUserRequestSchema.parse({ fromBotId: "ada", fromThreadId: "ta", question: GIT, fact: mark }).fact)).toBe(fact);
   });
 
   it("posts the card unchanged when the Forum has nothing", () => {
@@ -96,16 +195,6 @@ describe("ask hold", () => {
     expect(appended.map((message) => message.card!.subtitle)).toEqual([question]);
     expect(alerts).toEqual([question]);
     expect(search).not.toHaveBeenCalled();
-  });
-
-  it("delivers the ask after a hold as one card and one alert, reworded or next turn, even on another post", () => {
-    workerFixes();
-    expect(ask(RESTART).status).toBe(200);
-    expect(ask(REBOOT)).toEqual({ status: 201, body: { messageId: "m-1" } });
-    expect(ask(RESTART, "tb").status).toBe(200);
-    calls.turnEnded("tb", true);
-    expect(ask(REBOOT, "tb")).toEqual({ status: 201, body: { messageId: "m-2" } });
-    expect(alerts).toEqual([REBOOT, REBOOT]);
   });
 
   it("delivers an unmarked ask from a running turn once the turn settles, with one alert", () => {
@@ -133,6 +222,7 @@ describe("ask hold", () => {
     solvedFix("Preview worker notes", [...vetoed, port].join(" "), "Read the preview worker notes in the repo.");
     for (const question of vetoed) expect(ask(question).status).toBe(201);
     expect(ask(port, "ta", ["4801", "4802"]).status).toBe(201);
+    running = true;
     expect(ask(port, "tb").status).toBe(200);
     expect(alerts).toEqual([...vetoed, port]);
   });

@@ -503,6 +503,8 @@ describe("agents-proxy MCP surface", () => {
     expect(tool.inputSchema.properties.fact).toMatchObject({ type: "boolean" });
     await callTool("ask_user", { question: " Which port? ", fact: true });
     expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Which port?", fact: true });
+    await callTool("ask_user", { question: "Which port?", fact: "true" });
+    expect(lastAskUserBody).toMatchObject({ fact: "true" });
   });
 
   it("surfaces ask_user rejections and an empty question as tool errors", async () => {

@@ -980,7 +980,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (!question) return { text: "ask_user needs a question.", isError: true };
     if (!THREAD_ID) return { text: "Couldn't ask: no active thread.", isError: true };
     // the harness trims, dedupes and caps the choices
-    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }), ...(args.fact === true && { fact: true }) });
+    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }), fact: args.fact });
     try {
       const result = await api("/api/internal/ask-user", { method: "POST", body });
       if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };
