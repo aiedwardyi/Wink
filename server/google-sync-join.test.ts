@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -13,6 +13,7 @@ import { ensureMemorySyncDevice, type MemorySyncLedger } from "./memory-sync.ts"
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
 import type { BotRecord, Message, TaskRecord } from "./store.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
+import { isConflictNotice } from "./thread-sync.ts";
 import type { Snapshot, TestArgs, TestResult } from "./testing/thread-sync-v2-pc.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
@@ -214,7 +215,11 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     ["a renamed older chat that lands after the selected one", { text: "continue our conversation", renamed: true, selectedFirst: true }],
     ["a repeated prompt after the hold runs out", { text: "row 2000", slow: true }],
     ["a send 11 minutes after start after the hold runs out", { text: "continue our conversation", slow: true, late: true }],
-  ])("keeps an early send at the end of the bot's chat on both PCs: %s", async (_name, { text, renamed, selectedFirst, slow, late }: { text: string; renamed?: boolean; selectedFirst?: boolean; slow?: boolean; late?: boolean }) => {
+    ["a two-row chat the bot answers after the hold runs out", { text: "continue our conversation", count: 2, slow: true, reply: true }],
+    ["a six-row chat the bot answers after the hold runs out", { text: "continue our conversation", count: 6, slow: true, reply: true }],
+    ["a renamed older chat after the hold runs out", { text: "continue our conversation", renamed: true, slow: true }],
+    ["a renamed older chat dropped before a restart", { text: "continue our conversation", renamed: true, restart: true }],
+  ])("keeps an early send at the end of the bot's chat on both PCs: %s", async (_name, { text, renamed, selectedFirst, slow, late, count = 2001, reply, restart }: { text: string; renamed?: boolean; selectedFirst?: boolean; slow?: boolean; late?: boolean; count?: number; reply?: boolean; restart?: boolean }) => {
     const home = makePC("home", [{ ...bot("Counsel"), syncId: "bot" }]);
     await startOn(home);
     const source = engine(home.folder!, "home");
@@ -225,7 +230,7 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
       await settle(home);
     }
     const { threadId } = await source<TaskRecord>("create");
-    await source("batch", { threadId, count: 2001 });
+    await source("batch", { threadId, count });
     await source("flush", { threadId });
     const tip = (await source<Snapshot>("snapshot", { threadId })).leaf;
     await settle(home);
@@ -258,12 +263,21 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     const opened = await laptop<BotRecord>("join", { heads });
     await laptop("poll");
     if (late) await laptop("tick", { at: 11 * 60_000 });
-    await laptop("send", { threadId: opened.threadId, text });
+    await laptop("send", { threadId: opened.threadId, text, value: reply });
     if (slow) await laptop("tick", { at: 10_001 });
     resume();
     await joined;
     await work.sync.idle();
     if (selectedFirst) await laptop("pull", { threadId });
+    if (restart) {
+      // Drive delivered the selected chat first, so the empty chat the send was typed in is dropped before Wink restarts.
+      const typedIn = join(work.folder!, "threads-v2", "bot", opened.threadId);
+      const away = join(root, "typed-in");
+      renameSync(typedIn, away);
+      await laptop("poll");
+      await laptop("boot", { heads });
+      renameSync(away, typedIn);
+    }
     await laptop("poll");
     await laptop("pull", { threadId });
     for (const id of new Set([threadId, opened.threadId])) await laptop("flush", { threadId: id });
@@ -278,10 +292,16 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
       const path: Message[] = [];
       for (let row = byId.get(chat.leaf ?? ""); row; row = byId.get(row.parentId ?? "")) if (row.kind === "text") path.unshift(row);
       expect(shown.threadId).toBe(threadId);
-      expect(path).toHaveLength(2002);
-      expect(path.at(-1)?.text).toBe(text);
-      expect(path.at(-1)?.parentId).toBe(tip);
-      if (!slow) expect(chat.leaf).toBe(path.at(-1)?.id);
+      expect(path).toHaveLength(count + (reply ? 2 : 1));
+      expect(path[count]?.text).toBe(text);
+      expect(path[count]?.parentId).toBe(tip);
+      expect(chat.leaf).toBe(path.at(-1)?.id);
+      expect(chat.rows.filter(isConflictNotice)).toEqual([]);
+      expect(chat.tasks.find((task) => task.threadId === threadId)?.title).toBe("Other");
+      if (older) {
+        expect(chat.tasks.find((task) => task.threadId === older)?.title).toBe("Renamed");
+        expect((await call<Snapshot>("snapshot", { threadId: older })).rows.map((row) => row.text)).toEqual(["an older chat"]);
+      }
     }
   });
 });

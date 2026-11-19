@@ -155,7 +155,10 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         const [{ createBotChatRoutes }, { SendSequencer }, { startedTurn }, queue] = await Promise.all([
           import("../bot-chat-routes.ts"), import("../send-idempotency.ts"), import("../send-receipt.ts"), import("../steer-queue.ts"),
         ]);
-        queue.initializeSteerQueue(store, () => queue.drainSteeredMessages(store, () => {}));
+        // A drained send starts the bot's turn; value asks for its reply.
+        queue.initializeSteerQueue(store, () => queue.drainSteeredMessages(store, (_bot, thread) => {
+          if (args.value) store.appendMessage(thread, { role: "bot", kind: "text", text: "reply" });
+        }));
         const noop = () => {};
         // SAFETY: an idle bot's send reads only these deps.
         const routes = createBotChatRoutes({
@@ -265,6 +268,19 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         transports.clear();
         if (!doomed.length) throw new Error("no sync worker");
         await Promise.all(doomed.map((worker) => worker.close()));
+        break;
+      }
+      case "boot": {
+        const [queue, botId] = [await import("../steer-queue.ts"), bot.id];
+        await sync?.close();
+        closeMessageDb();
+        syncHold.reset();
+        store = new Store(selection);
+        bot = store.bot(botId)!;
+        traceQueries();
+        sync = createThreadSyncV2Store(host(), true);
+        queue.initializeSteerQueue(store, () => queue.drainSteeredMessages(store, () => {}));
+        syncHold.feed(input.folder, new Map(args.heads), { profileDeviceId: input.deviceId, writerId: input.writer!, memoryDeviceId: "a".repeat(12) });
         break;
       }
       case "restart":

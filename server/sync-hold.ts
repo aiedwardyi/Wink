@@ -93,9 +93,9 @@ export const syncHold = {
     drain = onDrain;
     enabled = isEnabled;
   },
-  watch(entries: Array<{ threadId: string; items: Array<{ messageId: string; syncUntil?: number }> }>): void {
+  watch(entries: Array<{ threadId: string; items: Array<{ messageId: string; syncUntil?: number; early?: boolean }> }>): void {
     waiting = entries.flatMap((entry) => entry.items.filter((item) => item.syncUntil !== undefined)
-      .map((item) => ({ messageId: item.messageId, threadId: entry.threadId, syncUntil: item.syncUntil })));
+      .map((item) => ({ messageId: item.messageId, threadId: entry.threadId, syncUntil: item.early ? Infinity : item.syncUntil })));
     schedule();
   },
   google(folder: string): void {
@@ -158,10 +158,10 @@ export const syncHold = {
     const until = syncHold.until(threadId);
     while (until !== undefined && syncHold.waiting(threadId, until)) await new Promise((done) => setTimeout(done, 100));
   },
-  /** An early send also waits for the bot's other listed chats, so it lands in the chat the bot selects. */
+  /** An early send never runs out: it waits for all the bot's listed chats, so it lands after their history in the chat the bot selects. */
   waiting(threadId: string, until?: number, early = false): boolean {
     expire();
-    return !released.has(threadId) && until !== undefined && until > Date.now() && (behind(threadId) !== false || (early && botBehind(threadId)));
+    return !released.has(threadId) && until !== undefined && (early || until > Date.now()) && (behind(threadId) !== false || (early && botBehind(threadId)));
   },
   reset(): void {
     clearTimeout(timer);

@@ -135,6 +135,16 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
     pending = [];
   }
   queues.clear();
+  // An early send whose chat was dropped follows its bot to the chat that replaced it.
+  const kept = new Map<string, (typeof pending)[number]>();
+  for (const entry of pending) {
+    const bot = store.bot(entry.botId);
+    const moved = bot && !store.taskByThread(entry.botId, entry.threadId) ? { ...entry, threadId: bot.threadId, items: entry.items.filter((item) => item.early) } : entry;
+    const key = entryKey(moved.botId, moved.threadId);
+    const prior = kept.get(key);
+    kept.set(key, prior ? { ...moved, items: [...prior.items, ...moved.items].sort((a, b) => a.seq - b.seq) } : moved);
+  }
+  pending = [...kept.values()];
   for (const entry of pending) {
     for (const item of entry.items) queueSeq = Math.max(queueSeq, item.seq);
     if (!store.bot(entry.botId) || !store.taskByThread(entry.botId, entry.threadId)) continue;
