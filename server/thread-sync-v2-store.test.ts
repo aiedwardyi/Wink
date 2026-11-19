@@ -2113,6 +2113,35 @@ async function pass(drive: FakeDrive, target: Box): Promise<void> {
   }
 }
 
+// pass() the way google-sync pulls mid-pass: each head in `order` downloads only after the one before it landed and was pulled.
+async function livePass(drive: FakeDrive, target: Box, order: string[]): Promise<void> {
+  const writer = identity(target.peer.dataDir);
+  const chatHead = (path: string) => /^threads-v2\/([^/]+)\/([^/]+)\/([^/]+)\/head\.json$/.exec(path);
+  const done = new Map<string, () => void>();
+  const pulled = new Map(order.map((threadId) => [threadId, new Promise<void>((resolve) => done.set(threadId, resolve))]));
+  let pulls: Promise<unknown> = Promise.resolve();
+  drive.onDownload = async (file) => {
+    const head = chatHead(decodeURIComponent(file.name));
+    const index = head?.[3] === writer ? order.indexOf(head[2]) : -1;
+    if (index > 0) await pulled.get(order[index - 1]);
+  };
+  try {
+    await createDriveMirror({
+      owner: { issuer: "https://accounts.google.com", sub: "account-a" }, mirrorPath: target.folder, statePath: target.statePath, hashes: target.hashes,
+      ownIds: { profileDeviceId: `device-${target.device}`, writerId: writer, memoryDeviceId: target.device.repeat(12) },
+      client: createDriveClient({ getAccessToken: async () => "test-access", fetch: driveFetch(drive) }),
+      downloaded: (path) => {
+        const head = chatHead(path);
+        if (!head) return;
+        pulls = pulls.then(() => target.peer.call("pull", { threadId: head[2], botSyncId: head[1] })).then(() => { if (head[3] === writer) done.get(head[2])?.(); });
+      },
+    }).syncOnce();
+  } finally {
+    drive.onDownload = undefined;
+  }
+  await pulls;
+}
+
 async function cycle(drive: FakeDrive, boxes: Box[], threads = ["thread"], count = 3): Promise<void> {
   for (let round = 0; round < count; round++) {
     for (const target of boxes) {
@@ -2379,6 +2408,40 @@ describe("copied installs syncing separate folders", { timeout: 240_000 }, () =>
     for (const target of [a, b, c]) {
       expect(await shown(target, chat)).toMatchObject({ task: "Renamed on A", hold: "free" });
       expect((await shown(target, gone)).task).toBeNull();
+    }
+  });
+
+  it.each([[2, "first"], [2, "last"], [9, "last"]] as const)("gives every PC both installs' rows in %i chats both wrote while apart when the %s chat's head is pulled before the others land", async (count, first) => {
+    const drive = new FakeDrive();
+    const a = box("a", LOW);
+    const c = box("c", HIGH);
+    const chats = ["thread"];
+    for (let index = 1; index < count; index++) chats.push((await a.peer.call<TaskRecord>("create")).threadId);
+    const write = async (target: Box, text: string) => {
+      const ids: string[] = [];
+      for (const [index, threadId] of chats.entries()) {
+        ids.push((await target.peer.call<Message>("append", { threadId, text: `chat${index + 1} ${text}` })).id);
+        await target.peer.call("flush", { threadId });
+      }
+      return ids;
+    };
+    const base = await write(a, "base");
+    await pass(drive, a);
+    await pass(drive, c);
+    const b = await copyBox(a);
+    const apart = [await write(a, "from A"), await write(b, "from B")];
+    await pass(drive, b);
+    // Every head after the first lands once the original already moved to a new writer id.
+    await livePass(drive, a, first === "first" ? chats : [...chats].reverse());
+    expect(identity(a.peer.dataDir)).not.toBe(LOW);
+    await cycle(drive, [a, b, c], chats);
+    const later = [await write(a, "later on A"), await write(b, "later on B")];
+    await cycle(drive, [a, b, c], chats);
+    await cycle(drive, [b, a, c], chats, 2);
+    for (const [index, threadId] of chats.entries()) {
+      const forks = [0, 1].map((install) => [base[index], apart[install][index], later[install][index]]);
+      const texts = await converged([a, b, c], 5, threadId, forks);
+      expect([...texts].sort()).toEqual(["base", "from A", "from B", "later on A", "later on B"].map((text) => `chat${index + 1} ${text}`));
     }
   });
 });
