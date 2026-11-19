@@ -90,6 +90,11 @@ export const KEPT_LIMITS: Limits = {
   "server/rooms/invites.ts": { MAX_CREDENTIAL_LENGTH: OUTSIDER, MAX_PEOPLE: `${JOINER} 100 people loaded, 101 went blank (measured).` },
   "server/routines.ts": { MAX_RUNS: STATE },
   "server/self-wake.ts": { MAX_AHEAD_MS: AUTO },
+  "server/shell-made.ts": {
+    MAX_FILES: STATE,
+    MAX_ENTRIES: "Crash: a named folder is listed on the event loop after each shell command; a huge folder would stall the server. Nothing is refused.",
+    MAX_TOKENS: "Crash: each path a command names costs a stat on the event loop; a long script would stall the server. Nothing is refused.",
+  },
   "server/side-chat.ts": {
     MAX_MS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",
     MAX_CHARS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",
