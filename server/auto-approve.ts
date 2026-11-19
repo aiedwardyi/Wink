@@ -160,7 +160,12 @@ const argWords = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/
 const CMD_SWITCH = /^\/[A-Za-z](?::\S*)?$/;
 const looksLikePath = (word: string) => /^(?:[A-Za-z]:[\\/]|[\\/]|~(?:[\\/]|$))/.test(word) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(word);
 
-const CD_PROGRAMS = new Set(["cd", "chdir", "pushd", "set-location", "sl"]);
+const CD_PROGRAMS = new Set(["cd", "chdir", "pushd", "push-location", "set-location", "sl", "popd", "pop-location"]);
+const PUSH_PROGRAMS = new Set(["pushd", "push-location"]);
+const POP_PROGRAMS = new Set(["popd", "pop-location"]);
+// switches that keep a move where the path says: cmd /d, cd -L, PowerShell -Path
+const CD_SWITCHES = new Set(["/d", "-l", "-path", "-literalpath", "-passthru"]);
+const movesDir = (word: string) => CD_PROGRAMS.has(programName(word)) || /^(?:cd|chdir)[.\\/]/i.test(word);
 const expandHome = (path: string) => path.replace(/^~(?=[\\/]|$)/, homedir());
 const isRooted = (path: string) => isAbsolute(path) || /^~(?:[\\/]|$)/.test(path);
 
@@ -250,15 +255,31 @@ function checkDeletes(tool: string, summary: string, workspace: string): { outsi
     segments.push({ text: summary, paths: argWords(summary).filter(looksLikePath).map((word) => ({ word, at: place(word, root) })) });
   } else if (COMMAND_TOOLS.has(bare)) {
     let dir: string | null = root;
+    const stack: (string | null)[] = [];
     for (const text of summary.split(/[;&|\n\r]+/)) {
       const words = argWords(text);
       let i = 0;
       while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]) || ELEVATORS.has(programName(words[i])))) i += 1;
       const program = programName(words[i] ?? "");
       const args = words.slice(i + 1).filter((word) => !word.startsWith("-") && !CMD_SWITCH.test(word));
+      const switches = words.slice(i + 1).filter((word) => word.startsWith("-") || CMD_SWITCH.test(word));
       if (CD_PROGRAMS.has(program)) {
         const target = args[0];
-        dir = target === undefined ? homedir() : /[$%]/.test(target) || words[i + 1] === "-" ? null : isRooted(target) ? resolve(expandHome(target)) : dir && resolve(dir, target);
+        if (switches.some((word) => !CD_SWITCHES.has(word.toLowerCase())) || /[$%]/.test(target ?? "")) dir = null;
+        else if (POP_PROGRAMS.has(program)) dir = target === undefined && stack.length ? (stack.pop() ?? null) : null;
+        else if (PUSH_PROGRAMS.has(program) && target === undefined) dir = null;
+        else {
+          if (PUSH_PROGRAMS.has(program)) stack.push(dir);
+          dir = target === undefined ? homedir() : isRooted(target) ? resolve(expandHome(target)) : dir && resolve(dir, target);
+        }
+      } else if (
+        // a move in a group, subshell or nested shell, or glued as cd.., is one we can't follow
+        words.some((word, j) => {
+          const bare = word.replace(/^[$`"'({]+/, "");
+          return movesDir(bare) && (bare !== word || j === i || /^(?:[({]|-c|-command|\/c)$/i.test(words[j - 1] ?? ""));
+        })
+      ) {
+        dir = null;
       }
       segments.push({ text, paths: DELETE_PROGRAMS.has(program) ? args.map((word) => ({ word, at: place(word, dir) })) : [] });
     }

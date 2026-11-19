@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { approvalKey, autoDecision, autoVerdict, looksDestructive, looksSensitive } from "./auto-approve.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -275,7 +275,7 @@ describe("unattended turns", () => {
   const away = { unattended: true, workspace };
 
   beforeAll(() => {
-    for (const path of ["build/output.js", "tmp/out.log", "build/out.js", "my notes/old.md", "src/old.ts"]) {
+    for (const path of ["build/output.js", "tmp/out.log", "build/out.js", "my notes/old.md", "src/old.ts", "notes.md", "sub/deeper/keep"]) {
       const file = join(workspace, path);
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, "keep");
@@ -328,12 +328,43 @@ describe("unattended turns", () => {
       ["Bash", `rm "${join(workspace, "my notes", "old.md")}"`],
       ["Bash", "cd src && rm old.ts"],
       ["Bash", `cd "${join(workspace, "build")}"; rm out.js`],
+      ["Bash", `cd /d "${join(workspace, "build")}" & del out.js`],
+      ["Bash", "pushd src; rm old.ts; popd"],
+      ["Bash", "pushd src; pushd ../build; popd; rm old.ts"],
+      ["powershell", "Push-Location src; Remove-Item old.ts; Pop-Location"],
+      ["powershell", "Set-Location -Path src; Remove-Item old.ts"],
       ["Write", JSON.stringify({ file_path: "/work/project/cleanup.sh", content: "rm -rf dist\ngit reset --hard\n" })],
       ["Edit", JSON.stringify({ file_path: "src/docs.md", old_string: "a", new_string: "run rm -rf node_modules" })],
       ["edit", "Edit src/a.ts"],
       ["WebFetch", "https://example.com/docs"],
     ]) {
       expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ source: "auto-mode" });
+    }
+  });
+
+  it("denies a delete outside the workspace after a move it cannot follow", () => {
+    // home inside the workspace, so reading cd - as cd ~ would pass
+    vi.stubEnv("HOME", workspace);
+    vi.stubEnv("USERPROFILE", workspace);
+    try {
+      for (const [tool, summary] of [
+        ["Bash", "pushd sub; popd; rm ../notes.md"],
+        ["powershell", "pushd sub; popd; Remove-Item ..\\notes.md"],
+        ["powershell", "Push-Location sub; Pop-Location; Remove-Item ../notes.md"],
+        ["powershell", "Push-Location ../other; Remove-Item notes.md"],
+        ["Bash", "popd; rm notes.md"],
+        ["Bash", "pushd sub; pushd deeper; popd; rm ../../notes.md"],
+        ["Bash", "pushd -n sub; rm ../notes.md"],
+        ["Bash", "cd -; rm notes.md"],
+        ["powershell", "Set-Location -; Remove-Item notes.md"],
+        ["powershell", "cd..; Remove-Item notes.md"],
+        ["Bash", "{ cd ../other; }; rm notes.md"],
+        ["Bash", "bash -c 'cd ../other; rm notes.md; true'"],
+      ]) {
+        expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ approve: null, source: "unattended-deny" });
+      }
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
