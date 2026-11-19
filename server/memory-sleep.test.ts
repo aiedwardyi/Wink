@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,15 +22,19 @@ import { markTalked, memorySyncDir, readMemorySnapshots, syncBotMemory, tidiesHe
 import { listMemoryTopics, loadMemory, MEMORY_MAX_LINES, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
-const hooks = vi.hoisted(() => ({ beforeWrite: (_path: string) => {} }));
+const hooks = vi.hoisted(() => ({ beforeWrite: (_path: string) => {}, beforeRename: (_from: string) => {} }));
 
 vi.mock("./atomic.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("./atomic.ts")>();
   return {
     ...real,
-    writeFileAtomic: (path: string, data: string, options?: { mode?: number }) => {
+    writeFileAtomic: (path: string, data: string, options?: { mode?: number; keep?: string }) => {
       hooks.beforeWrite(path);
       real.writeFileAtomic(path, data, options);
+    },
+    renameRetrying: (from: string, to: string) => {
+      hooks.beforeRename(from);
+      real.renameRetrying(from, to);
     },
   };
 });
@@ -57,21 +61,21 @@ const filler = (length: number) => Array.from({ length }, (_, n) => `- Filler ke
 
 describe("planTidy", () => {
   it("keeps the newer of two dated lines that disagree", () => {
-    const raw = memory("- Prefers light mode (noted 2026-10-01)", "- Uses pnpm", "- Prefers dark mode (noted 2026-11-12)");
+    const raw = memory("- Prefers light mode (noted 2026-10-01)", "- Uses pnpm", "- Prefers dark mode, not light mode (noted 2026-11-12)");
     expect(planTidy(raw, JSON.stringify({ disagree: [["L5", "L3"]] }))).toEqual([
-      { at: 2, text: "- Prefers light mode (noted 2026-10-01)", by: "- Prefers dark mode (noted 2026-11-12)", why: "replaced" },
+      { at: 2, text: "- Prefers light mode (noted 2026-10-01)", by: "- Prefers dark mode, not light mode (noted 2026-11-12)", why: "replaced" },
     ]);
   });
 
-  it("keeps both lines of a disagreement unless Auto Notes dated both and one word near the end changed", () => {
+  it("keeps both lines of a disagreement unless Auto Notes dated both and the newer one turns the older one's words", () => {
     const disagree = (raw: string) => planTidy(raw, JSON.stringify({ disagree: [["L3", "L4"]] }));
     expect(disagree(memory("- Prefers light mode", "- Prefers dark mode"))).toEqual([]);
     expect(disagree(memory("- Owner of Alpha is Dana (noted 2026-10-01)", "- Owner of Beta is Lee (noted 2026-11-12)"))).toEqual([]);
     expect(disagree(memory("- Alice's phone is 555-1111 (noted 2026-10-01)", "- Bob's phone is 555-1111 (noted 2026-11-12)"))).toEqual([]);
-    expect(disagree(memory("- Lives in Seoul (noted 2026-10-01)", "- Lives in Busan (noted 2026-11-12)"))).toHaveLength(1);
+    expect(disagree(memory("- Lives in Seoul (noted 2026-10-01)", "- Lives in Busan, not Seoul (noted 2026-11-12)"))).toHaveLength(1);
   });
 
-  it("merges exact twins without a model, keeping the user's own line or the latest stamp", () => {
+  it("merges exact twins without a model, keeping the newest copy", () => {
     const raw = memory(
       "- Uses pnpm (noted 2026-11-01)",
       "- 커피를 좋아함",
@@ -83,7 +87,38 @@ describe("planTidy", () => {
       "- Knows C++",
       "- Knows C#",
     );
-    expect(planTidy(raw).map(({ at, by }) => [at, by])).toEqual([[2, "- Uses  pnpm. (noted 2026-11-09)"], [5, "- 커피를 좋아함"], [7, "- 東京に住んでいる"]]);
+    expect(planTidy(raw).map(({ at, by }) => [at, by])).toEqual([[2, "- Uses  pnpm. (noted 2026-11-09)"], [6, "- 東京に住んでいる。"]]);
+  });
+
+  it("keeps the last of undated twins, and a newer stamped twin over an undated one", () => {
+    expect(planTidy(memory("- Prefers dark mode", "- Prefers light mode", "- Prefers dark mode")).map(({ at }) => at)).toEqual([2]);
+    expect(planTidy(memory("- Prefers dark mode", "- Prefers light mode (noted 2026-11-01)", "- Prefers dark mode (noted 2026-11-12)")).map(({ at }) => at)).toEqual([2]);
+  });
+
+  it("keeps twins under two labels, and lines that differ in a closing ! or the dot after a dotted word", () => {
+    for (const lines of [
+      ["**Project Alpha**", "- Deploys on Fridays", "", "**Project Beta**", "- Deploys on Fridays"],
+      ["Alpha:", "- Deploys on Fridays", "", "Beta:", "- Deploys on Fridays"],
+      ["- Alpha:", "- Deploys on Fridays", "- Beta:", "- Deploys on Fridays"],
+      ["- Wi-Fi password is Summer2024", "- Wi-Fi password is Summer2024!"],
+      ["- Company site is acme.co", "- Company site is acme.co."],
+    ]) {
+      expect(planTidy(memory(...lines))).toEqual([]);
+    }
+  });
+
+  it("keeps both lines a model calls disagreeing when the newer one only swaps a word", () => {
+    const disagree = (older: string, newer: string) => planTidy(memory(`- ${older} (noted 2026-10-01)`, `- ${newer} (noted 2026-11-12)`), JSON.stringify({ disagree: [["L3", "L4"]] }));
+    for (const [older, newer] of [
+      ["Allergic to peanuts", "Allergic to shellfish"],
+      ["Has a son named Leo", "Has a son named Max"],
+      ["Works on Project Alpha", "Works on Project Beta"],
+      ["Writes code in Rust", "Writes code in Go"],
+      ["Writes code in Rust", "Writes code in Go and Rust"],
+    ]) {
+      expect(disagree(older!, newer!)).toEqual([]);
+    }
+    expect(disagree("Allergic to peanuts", "No longer allergic to peanuts")).toHaveLength(1);
   });
 
   it("takes a model duplicate only when the kept line says everything the dropped one does", () => {
@@ -168,6 +203,7 @@ describe("memory sleep", () => {
     vi.setSystemTime(NOW);
     vi.spyOn(console, "info").mockImplementation(() => {});
     hooks.beforeWrite = () => {};
+    hooks.beforeRename = () => {};
     dataDir = temps.make(join(tmpdir(), "memory-sleep-"));
     busy = new Set();
     on = true;
@@ -188,16 +224,16 @@ describe("memory sleep", () => {
 
   it("moves the older of two disagreeing lines to history with what replaced it", async () => {
     const bot = bots[0]!;
-    writeMemoryFile(bot, memory("- Prefers light mode (noted 2026-10-01)", "- Uses pnpm", "- Prefers dark mode (noted 2026-11-12)"));
+    writeMemoryFile(bot, memory("- Prefers light mode (noted 2026-10-01)", "- Uses pnpm", "- Prefers dark mode, not light mode (noted 2026-11-12)"));
     generator = reply({ disagree: [["L3", "L5"]] });
     await quiet();
-    expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Prefers dark mode (noted 2026-11-12)"));
-    expect(history(bot)).toContain('- "Prefers light mode (noted 2026-10-01)" replaced by "Prefers dark mode (noted 2026-11-12)", 2026-11-19');
+    expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Prefers dark mode, not light mode (noted 2026-11-12)"));
+    expect(history(bot)).toContain('- "Prefers light mode (noted 2026-10-01)" replaced by "Prefers dark mode, not light mode (noted 2026-11-12)", 2026-11-19');
   });
 
   it("merges exact twins and model duplicates, and a rerun changes nothing and calls no model", async () => {
     const bot = bots[0]!;
-    writeMemoryFile(bot, memory("- Uses pnpm, not npm", "- Uses pnpm,  not npm.", "- Wants short replies with bullets (noted 2026-11-10)", "- Wants short replies (noted 2026-11-01)"));
+    writeMemoryFile(bot, memory("- Uses pnpm,  not npm.", "- Uses pnpm, not npm", "- Wants short replies with bullets (noted 2026-11-10)", "- Wants short replies (noted 2026-11-01)"));
     generator = reply({ duplicates: [{ keep: "L5", drop: ["L6"] }] });
     await quiet();
     const tidied = memoryFileRaw(bot);
@@ -214,11 +250,11 @@ describe("memory sleep", () => {
 
   it("lets a user edit made while the model runs win, writing nothing", async () => {
     const bot = bots[0]!;
-    writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm.", "- Lives in Seoul"));
+    writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
     let finish!: (text: string) => void;
     generator = () => new Promise<string>((resolve) => (finish = resolve));
     await vi.advanceTimersByTimeAsync(SLEEP_IDLE_MS);
-    const edited = memory("- Uses pnpm", "- Uses  pnpm.", "- Lives in Busan");
+    const edited = memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Busan");
     expect(saveMemoryFile(bot, edited, readMemoryFile(bot).revision).conflict).toBe(false);
     finish(JSON.stringify({}));
     await sleep.idle();
@@ -231,7 +267,7 @@ describe("memory sleep", () => {
 
   it("never brings back a line the user deleted", async () => {
     const bot = bots[0]!;
-    writeMemoryFile(bot, memory("- Prefers light mode (noted 2026-10-01)", "- Prefers dark mode (noted 2026-11-12)", "- Uses pnpm"));
+    writeMemoryFile(bot, memory("- Prefers light mode (noted 2026-10-01)", "- Prefers dark mode, not light mode (noted 2026-11-12)", "- Uses pnpm"));
     generator = reply({ disagree: [["L3", "L4"]] });
     await quiet();
     writeMemoryFile(bot, memory("- Uses pnpm"));
@@ -242,9 +278,23 @@ describe("memory sleep", () => {
     expect(history(bot)).toContain("Prefers light mode");
   });
 
+  it("never moves a line again once someone puts it back from the history", async () => {
+    const bot = bots[0]!;
+    const lines = memory("- Uses pnpm", "- Uses  pnpm.", "- Wants short replies with bullets (noted 2026-11-10)", "- Wants short replies (noted 2026-11-01)");
+    writeMemoryFile(bot, lines);
+    generator = reply({ duplicates: [{ keep: "L5", drop: ["L6"] }] });
+    await quiet();
+    expect(count(history(bot), "replaced by")).toBe(2);
+    writeMemoryFile(bot, lines);
+    sleep.onSettled(bot);
+    await quiet(SLEEP_GAP_MS);
+    expect(memoryFileRaw(bot)).toBe(lines);
+    expect(count(history(bot), "replaced by")).toBe(2);
+  });
+
   it("waits while the bot is busy, its Auto notes are off, or a tidy ran within the gap", async () => {
     const bot = bots[0]!;
-    writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
+    writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm"));
     busy.add(bot);
     await quiet();
     expect(generate).not.toHaveBeenCalled();
@@ -256,7 +306,7 @@ describe("memory sleep", () => {
     sleep.onSettled(bot);
     await quiet();
     expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm"));
-    writeMemoryFile(bot, memory("- Uses pnpm", "- Lives in Seoul", "- Lives in  Seoul."));
+    writeMemoryFile(bot, memory("- Uses pnpm", "- Lives in  Seoul.", "- Lives in Seoul"));
     sleep.onSettled(bot);
     await quiet();
     expect(generate).toHaveBeenCalledTimes(1);
@@ -268,7 +318,7 @@ describe("memory sleep", () => {
   it("still merges exact twins when no Claude is set up", async () => {
     const bot = bots[0]!;
     generator = null;
-    writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
+    writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm"));
     await quiet();
     expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm"));
   });
@@ -426,6 +476,72 @@ describe("memory sleep", () => {
       expect(memoryFileRaw(bot)).toContain("- Phone is 555-0100");
     });
 
+    it("puts back a save another program made by renaming its own file over MEMORY.md", async () => {
+      const bot = bots[0]!;
+      generator = null;
+      writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
+      let landed = false;
+      hooks.beforeWrite = (path) => {
+        if (landed || !path.endsWith("MEMORY.md")) return;
+        landed = true;
+        writeFileSync(`${path}.editor~`, `${readFileSync(path, "utf8")}- Phone is 555-0100\n`);
+        renameSync(`${path}.editor~`, path);
+      };
+      await quiet();
+      expect(landed).toBe(true);
+      expect(memoryFileRaw(bot)).toContain("- Phone is 555-0100");
+      expect(readdirSync(workspaceDir(bot)).filter((name) => name.endsWith(".held"))).toEqual([]);
+    });
+
+    it("names the file a save made during the tidy is in when it cannot go back", async () => {
+      const bot = bots[0]!;
+      generator = null;
+      writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let landed = false;
+      hooks.beforeWrite = (path) => {
+        if (landed || !path.endsWith("MEMORY.md")) return;
+        landed = true;
+        appendFileSync(path, "- Phone is 555-0100\n");
+      };
+      hooks.beforeRename = (from) => {
+        if (from.endsWith(".held")) throw Object.assign(new Error("locked"), { code: "EPERM" });
+      };
+      await quiet();
+      const held = readdirSync(workspaceDir(bot)).find((name) => name.endsWith(".held"));
+      expect(held && readFileSync(join(workspaceDir(bot), held), "utf8")).toContain("- Phone is 555-0100");
+      expect(warn.mock.calls.flat().join("\n")).toContain(held);
+    });
+
+    it.each([
+      ["another writer saved first", (path: string) => appendFileSync(path, "- Phone is 555-0100\n")],
+      [
+        "MEMORY.md is locked",
+        () => {
+          throw Object.assign(new Error("locked"), { code: "EBUSY" });
+        },
+      ],
+    ])("records no move when %s, and one when the next tidy moves it", async (_, write) => {
+      const bot = bots[0]!;
+      generator = null;
+      writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      let landed = false;
+      hooks.beforeWrite = (path) => {
+        if (landed || !path.endsWith("MEMORY.md")) return;
+        landed = true;
+        write(path);
+      };
+      await quiet();
+      expect(landed).toBe(true);
+      expect(memoryFileRaw(bot)).toContain("- Uses  pnpm.");
+      expect(history(bot)).not.toContain("replaced by");
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(memoryFileRaw(bot)).not.toContain("- Uses  pnpm.");
+      expect(count(history(bot), '"Uses  pnpm." replaced by')).toBe(1);
+    });
+
     it("calls the model once while MEMORY.md cannot be written", async () => {
       const bot = bots[0]!;
       writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm.", "- Lives in Seoul"));
@@ -443,7 +559,7 @@ describe("memory sleep", () => {
     it("never writes over earlier history", async () => {
       const bot = bots[0]!;
       generator = null;
-      writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
+      writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm"));
       mkdirSync(join(workspaceDir(bot), "memory-history"), { recursive: true });
       writeFileSync(historyFile(bot), OLD_HISTORY);
       await quiet();
@@ -591,7 +707,7 @@ describe("memory sleep", () => {
       const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
       const { a, b, share, settle } = twoPcs(botA, botB);
       markTalked(a.ledger, "bot-1");
-      writeMemoryFile(botA, memory("- Uses pnpm", "- Uses  pnpm.", "- Wants short replies with bullets (noted 2026-11-10)", "- Wants short replies (noted 2026-11-01)", "- Lives in Seoul"));
+      writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Wants short replies with bullets (noted 2026-11-10)", "- Wants short replies (noted 2026-11-01)", "- Lives in Seoul"));
       share();
       for (const pc of [a, b]) if (!tidiesHere(pc.ledger, "bot-1", await readMemorySnapshots(pc.folder, "bot-1"))) away.add(pc.bot);
       expect([...away]).toEqual([botB]);
@@ -606,10 +722,27 @@ describe("memory sleep", () => {
       expect(parked(botA, botB)).toEqual([]);
     });
 
+    it("park no note a routine turn on the other PC added while one of them tidied", async () => {
+      const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
+      const { a, b, share, settle } = twoPcs(botA, botB);
+      markTalked(a.ledger, "bot-1");
+      writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
+      share();
+      for (const pc of [a, b]) if (!tidiesHere(pc.ledger, "bot-1", await readMemorySnapshots(pc.folder, "bot-1"))) away.add(pc.bot);
+      expect([...away]).toEqual([botB]);
+      writeMemoryFile(botB, `${memoryFileRaw(botB)}- Phone is 555-0100\n`);
+      generator = null;
+      await quiet();
+      expect(noteLines(memoryFileRaw(botA))).toHaveLength(2);
+      settle();
+      for (const bot of [botA, botB]) expect(memoryFileRaw(bot)).toContain("- Phone is 555-0100");
+      expect(parked(botA, botB)).toEqual([]);
+    });
+
     it("make the same merge on both PCs and park no copy", async () => {
       const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
       const { share, settle } = twoPcs(botA, botB);
-      writeMemoryFile(botA, memory("- Uses pnpm", "- Uses  pnpm.", "- Lives in Seoul"));
+      writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
       share();
       generator = null;
       await quiet();
@@ -645,7 +778,7 @@ describe("memory sleep", () => {
     it("no history file among the bot's memory topics", async () => {
       const bot = bots[0]!;
       generator = null;
-      writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
+      writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm"));
       const before = listMemoryTopics(bot).map(({ name }) => name);
       await quiet();
       expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm"));
@@ -655,7 +788,7 @@ describe("memory sleep", () => {
     it("an open Memory page the new file once it saves", async () => {
       const bot = bots[0]!;
       generator = null;
-      writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm.", "- Lives in Seoul"));
+      writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
       await quiet();
       expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Lives in Seoul"));
       expect(changed).toEqual([bot]);
@@ -664,17 +797,17 @@ describe("memory sleep", () => {
     it("no moved-out line in recall", async () => {
       const bot = bots[0]!;
       const lines = filler(120);
-      writeMemoryFile(bot, memory("- Cobalt walrus invoices go to the north office (noted 2026-10-01)", ...lines, "- Cobalt walrus invoices go to the south office (noted 2026-11-12)"));
+      writeMemoryFile(bot, memory("- Cobalt walrus invoices go to the north office (noted 2026-10-01)", ...lines, "- Cobalt walrus invoices go to the south office, no longer the north office (noted 2026-11-12)"));
       generator = reply({ disagree: [["L3", `L${lines.length + 4}`]] });
       await quiet();
-      expect(memoryFileRaw(bot)).not.toContain("north office");
+      expect(memoryFileRaw(bot)).not.toContain("2026-10-01");
       vi.useRealTimers();
       mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(join(DATA_DIR, "lookup-bots.json"), JSON.stringify([bot]));
       try {
         const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
         await lookup.refresh(bot);
-        expect(lookup.take(bot, "t1", undefined, "where do cobalt walrus invoices go, north office?").join("\n")).not.toContain("north office");
+        expect(lookup.take(bot, "t1", undefined, "where do cobalt walrus invoices go, north office?").join("\n")).not.toContain("2026-10-01");
       } finally {
         rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
       }

@@ -250,6 +250,14 @@ export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string, snapshot
   return snapshots.every((group) => group !== undefined && !group.partial && group.every((copy) => copy.device === ledger.device || copy.talkedAt < mine));
 }
 
+// per workspace, the last MEMORY.md change the idle tidy made, as text hashes
+const tidied = new Map<string, { from: string | null; to: string | null }>();
+
+/** The idle tidy changed MEMORY.md from `before` to `after`: if the next pass finds only that change, it loses every tie, so no note another PC added is set aside for it. */
+export function markTidied(workspace: string, before: string, after: string): void {
+  tidied.set(workspace, { from: hash(before), to: hash(after) });
+}
+
 let machineId: string | undefined;
 
 function machine(): string {
@@ -459,8 +467,12 @@ export function syncBotMemory(
     if (state ? state.hash !== localHash : localHash !== null) {
       // a copy unchanged since the older build agreed on it is no new edit: a pulled one gives way, and none wins a tie on talkedAt
       const legacyCopy = !state && firstSync && legacy?.[`${botSyncId}/${file}`] === localHash;
+      const tidy = file === MEMORY_FILE ? tidied.get(workspace) : undefined;
+      if (tidy) tidied.delete(workspace);
+      // edited-at 0 too: a routine turn's copy also ranks talked-at 0, and the tidy's later edit time would win that tie
+      const tidyOnly = Boolean(state && tidy?.from === state.hash && tidy.to === localHash);
       const vv = legacyCopy && settled(legacy, botSyncId, file, localHash) ? {} : { ...state?.vv, [me]: tick(ledger) };
-      state = bot.files[file] = { vv, hash: localHash, at: editedAt(path, now), by: legacyCopy ? { device: me, talkedAt: 0 } : undefined };
+      state = bot.files[file] = { vv, hash: localHash, at: tidyOnly ? 0 : editedAt(path, now), by: legacyCopy || tidyOnly ? { device: me, talkedAt: 0 } : undefined };
       result = "pushed";
     } else if (!state && deletes.has(file)) {
       state = bot.files[file] = { vv: { [me]: tick(ledger) }, hash: null, at: deletes.get(file)!, by: { device: me, talkedAt: 0 } };

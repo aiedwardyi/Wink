@@ -1,14 +1,15 @@
 // The idle tidy ("sleep"): once a bot has been quiet a while, merge duplicate notes and move a note a newer one
 // replaced into a monthly history file. It only ever removes lines from MEMORY.md, so it cannot bring back what the user deleted.
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
-import { writeFileAtomic } from "./atomic.ts";
+import { renameRetrying, writeFileAtomic } from "./atomic.ts";
 import { decisionSpan, type NoteGenerator } from "./memory-pass.ts";
+import { markTidied } from "./memory-sync.ts";
 import { pickStamp } from "./picks.ts";
-import { loadedMemory, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir } from "./workspace.ts";
+import { loadedMemory, memoryFileRaw, readMemoryFile, workspaceDir } from "./workspace.ts";
 
 export const SLEEP_IDLE_MS = 30 * 60_000;
 export const SLEEP_GAP_MS = 6 * 60 * 60_000;
@@ -30,7 +31,7 @@ const botStateSchema = z.object({ digest: z.string().optional(), at: z.number().
 const stateSchema = z.object({ bots: z.record(z.string(), botStateSchema) });
 
 type BotState = z.infer<typeof botStateSchema>;
-/** section: the index of the heading the note sits under, -1 for none; alone: no line under it belongs to it. */
+/** section: the index of the heading or label the note sits under, -1 for none; alone: no line under it belongs to it. */
 export type NoteLine = { at: number; text: string; date?: string; section: number; alone: boolean };
 export type Why = "duplicate" | "replaced";
 export type Move = { at: number; text: string; by: string; why: Why };
@@ -90,8 +91,8 @@ const NOT_PARTS = /n['’]t$|않|없|아니|못|ない|ません|ず$|ぬ$|不|�
 
 const withoutStamp = (text: string) => text.replace(STAMP, " ");
 const body = (text: string) => withoutStamp(text).replace(/^\s*[-*+]\s+/, "").normalize("NFC");
-/** The same text but for case, spacing, a closing full stop and the Auto Notes stamp: symbols, digits, emoji and marks all count. */
-const twinKey = (text: string) => body(text).replace(/\s+/g, " ").trim().replace(/[\s.!。！]+$/u, "");
+/** The same text but for spacing, a full stop that ends it and the Auto Notes stamp: symbols, digits, emoji, marks, case and a closing ! all count. */
+const twinKey = (text: string) => body(text).replace(/\s+/g, " ").trim().replace(/(?<=(?:^|\s)[^\s.]+)[.。]+$/u, "");
 const tokens = (text: string) => body(text).split(/\s+/).map((token) => token.replace(EDGE, "")).filter(Boolean);
 const negates = (token: string) => NOT_WORDS.has(token.toLowerCase()) || NOT_PARTS.test(token.toLowerCase());
 const ref = (line: NoteLine) => `L${line.at + 1}`;
@@ -118,7 +119,8 @@ export function noteLines(raw: string): NoteLine[] {
       return [];
     }
     if (fenced) return [];
-    if (HEADING.test(text)) section = at;
+    // a heading or a label (**Name**, Name:, - Name:): what the bullets after it belong to
+    if (/^\S/.test(text) && (!BULLET.test(text) || /:\s*$/.test(text))) section = at;
     if (!BULLET.test(text) || (span && at > span[0] && at < span[1])) return [];
     const note: NoteLine = { at, text, section, alone: alone(lines, at) };
     const date = STAMP.exec(text)?.[1];
@@ -133,22 +135,12 @@ export function holds(keep: string, drop: string): boolean {
   return need.length > 0 && need.length <= have.length && need.every((token, index) => have[index] === token) && !have.slice(need.length).some(negates);
 }
 
-/** newer replaced older: Auto Notes stamped both, newer later, and they differ in one word near the end that newer does not repeat. */
+/** newer replaced older: Auto Notes stamped both, newer is later, and it says every word of older again with a word that turns it. A swapped word (peanuts, shellfish) is two notes that can both hold. */
 function replaces(newer: NoteLine, older: NoteLine): boolean {
   if (!newer.date || !older.date || newer.date <= older.date) return false;
-  const [before, after] = [tokens(older.text), tokens(newer.text)];
-  if (before.length !== after.length || before.length < 3) return false;
-  const differ = before.flatMap((token, index) => (token === after[index] ? [] : [index]));
-  const at = differ[0] ?? 0;
-  return (
-    differ.length === 1 &&
-    at > 0 &&
-    at >= before.length - 2 &&
-    !after.includes(before[at]!) &&
-    // a path that went would leave the file it points to unread
-    !/[\\/]|\.md$/i.test(before[at]!) &&
-    before.some((token, index) => index !== at && /\p{L}{3,}|\P{ASCII}/u.test(token))
-  );
+  const words = (line: NoteLine) => tokens(line.text).map((token) => token.toLowerCase());
+  const [before, after] = [words(older), words(newer)];
+  return before.length > 0 && before.every((word) => after.includes(word)) && after.some((word) => negates(word) && !before.includes(word));
 }
 
 export function tidyPrompt(notes: NoteLine[]): string {
@@ -179,8 +171,8 @@ export function parseTidy(output: string): z.infer<typeof tidySchema> {
   }
 }
 
-/** What to move: exact twins, then up to MOVES_MAX of the model's duplicates and disagreements a strict check agrees with. Anything unsure stays. */
-export function planTidy(raw: string, reply = ""): Move[] {
+/** What to move: exact twins, then up to MOVES_MAX of the model's duplicates and disagreements a strict check agrees with. Anything unsure stays, and so does a line in `movedBefore`, the twin keys history records as moved out: someone put it back. */
+export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<string> = new Set()): Move[] {
   const lines = noteLines(raw);
   const notes = new Map(lines.map((line) => [ref(line), line] as const));
   const loads = loadedMemory(raw).text.split("\n").length;
@@ -190,7 +182,7 @@ export function planTidy(raw: string, reply = ""): Move[] {
   let guessed = 0;
   // a twin merge is certain; a model's moves are capped per run
   const move = (line: NoteLine | undefined, by: NoteLine | undefined, why: Why, model = true) => {
-    if (!line || !by || line === by || (model && guessed >= MOVES_MAX) || gone.has(line) || gone.has(by) || kept.has(line)) return;
+    if (!line || !by || line === by || (model && guessed >= MOVES_MAX) || gone.has(line) || gone.has(by) || kept.has(line) || movedBefore.has(twinKey(line.text))) return;
     // only whole notes, under the same heading, and never in favor of a line the prompt does not load
     if (!line.alone || !by.alone || line.section !== by.section || (line.at < loads && by.at >= loads)) return;
     moves.push({ at: line.at, text: line.text, by: by.text, why });
@@ -207,8 +199,8 @@ export function planTidy(raw: string, reply = ""): Move[] {
   for (const group of twins.values()) {
     const loaded = group.filter((line) => line.at < loads);
     const pool = loaded.length ? loaded : group;
-    // the user's own line, else the latest stamp
-    const keep = pool.find((line) => !line.date) ?? pool.reduce((best, line) => (line.date! > best.date! ? line : best));
+    // the newest: notes are appended, so the last copy, unless an earlier one carries a later stamp
+    const keep = pool.reduce((best, line) => (best.date && line.date && best.date > line.date ? best : line));
     for (const line of group) move(line, keep, "duplicate", false);
   }
   const { duplicates, disagree } = parseTidy(reply);
@@ -243,38 +235,82 @@ export function historyEntry(moves: readonly Move[], now: number): string {
   return [`## ${pickStamp(now)}`, ...moves.map(({ text, by, why }) => `- ${quoted(text)} replaced by ${quoted(by)}, ${date}${why === "duplicate" ? " (duplicate)" : ""}`)].join("\n");
 }
 
-// appended and never read back: a file that cannot be opened stops the tidy instead of being written over
-function appendHistory(path: string, entry: string): void {
+// appended, never written over: a file that cannot be opened stops the tidy; the returned undo takes the entry back off the end
+function appendHistory(path: string, entry: string): () => void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  let undo: () => void;
   try {
     writeFileSync(path, `${HISTORY_HEAD}\n${entry}\n`, { flag: "wx", mode: 0o600 });
+    undo = () => rmSync(path, { force: true });
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    const size = statSync(path).size;
     appendFileSync(path, `\n${entry}\n`);
+    undo = () => truncateSync(path, size);
   }
+  return () => {
+    try {
+      undo();
+    } catch {
+      // a record left behind repeats a move, it loses nothing
+    }
+  };
 }
 
-/** History first, then MEMORY.md without the moved lines; false when another writer got to MEMORY.md first. */
+const MOVED = /^- ("(?:[^"\\\n]|\\.)*") replaced by /gm;
+
+/** The twin key of every line the history records as moved out. */
+function historyKeys(botId: string): Set<string> {
+  const dir = join(workspaceDir(botId), HISTORY_DIR);
+  const keys = new Set<string>();
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
+  for (const name of names.filter((each) => /^\d{4}-\d{2}\.md$/.test(each))) {
+    for (const [, json] of readFileSync(join(dir, name), "utf8").matchAll(MOVED)) {
+      try {
+        keys.add(twinKey(JSON.parse(json!)));
+      } catch {
+        // a line someone edited by hand
+      }
+    }
+  }
+  return keys;
+}
+
+/** History first, then MEMORY.md without the moved lines; false, with the record taken back, when another writer got to MEMORY.md first. */
 function moveOut(botId: string, raw: string, revision: string, moves: readonly Move[], now: number): boolean {
   const path = join(workspaceDir(botId), "MEMORY.md");
-  // a write that lands in place while the file is replaced goes to this link, which then goes back
+  if (readMemoryFile(botId).revision !== revision) return false;
+  const undo = appendHistory(historyPath(botId, now), historyEntry(moves, now));
+  const text = withoutLines(raw, moves.map(({ at }) => at));
+  // the file the save replaces: another program's save that landed first, in place or by a rename of its own, is in it
   const held = `${path}.${randomUUID()}.held`;
-  linkSync(path, held);
-  let keep = false;
   try {
-    appendHistory(historyPath(botId, now), historyEntry(moves, now));
-    if (saveMemoryFile(botId, withoutLines(raw, moves.map(({ at }) => at)), revision).conflict) return false;
-    // until it is checked or back in place, the held link may be the only copy of that write
-    keep = true;
-    if (readFileSync(held, "utf8") !== raw) {
-      renameSync(held, path);
-      return false;
-    }
-    keep = false;
-    return true;
-  } finally {
-    if (!keep) rmSync(held, { force: true });
+    writeFileAtomic(path, text, { mode: 0o600, keep: held });
+  } catch (error) {
+    rmSync(held, { force: true });
+    undo();
+    throw error;
   }
+  let landed: boolean;
+  try {
+    landed = readFileSync(held, "utf8") !== raw;
+    if (landed) renameRetrying(held, path);
+  } catch (error) {
+    console.warn(`[memory-sleep] could not check or put back a save made during the tidy; it is in ${held}`);
+    throw error;
+  }
+  if (landed) {
+    undo();
+    return false;
+  }
+  markTidied(workspaceDir(botId), raw, text);
+  rmSync(held, { force: true });
+  return true;
 }
 
 const stopped = (signal: AbortSignal) => (signal.reason === "cancelled" ? "cancelled" : "timeout");
@@ -358,20 +394,20 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
       log({ ...base, ms: now() - started, result: "conflict" });
       return arm(botId);
     }
-    const moves = planTidy(raw, reply);
-    if (moves.length) {
-      try {
-        if (!moveOut(botId, raw, memory.revision, moves, now())) {
-          log({ ...base, ms: now() - started, result: "conflict" });
-          return arm(botId);
-        }
-      } catch (error) {
-        log({ ...base, ms: now() - started, result: "error" });
-        console.warn(`[memory-sleep] write failed (${error instanceof Error ? error.name : "error"})`);
-        return;
+    let moves = planTidy(raw, reply);
+    try {
+      // only a plan that moves something reads the history, for the lines someone put back
+      if (moves.length) moves = planTidy(raw, reply, historyKeys(botId));
+      if (moves.length && !moveOut(botId, raw, memory.revision, moves, now())) {
+        log({ ...base, ms: now() - started, result: "conflict" });
+        return arm(botId);
       }
-      deps.changed(botId);
+    } catch (error) {
+      log({ ...base, ms: now() - started, result: "error" });
+      console.warn(`[memory-sleep] write failed (${error instanceof Error ? error.name : "error"})`);
+      return;
     }
+    if (moves.length) deps.changed(botId);
     bots.set(botId, { at: started, digest: digestOf(memoryFileRaw(botId), Boolean(generate)) });
     save();
     log({ ...base, moved: moves.length, ms: now() - started, result: moves.length ? "saved" : "none" });
