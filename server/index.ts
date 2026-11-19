@@ -272,7 +272,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { asksNudge, isStatusTurn, TASK_ASKS_PROMPT } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import * as tts from "./tts/index.ts";
@@ -2939,6 +2939,14 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
     console.error("task state: write failed", error);
     return null;
   }
+}
+
+// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time
+function stampShownAsks(threadId: string, sent: string): void {
+  const record = taskPacketForWrite(threadId);
+  const now = Date.now();
+  const ids = record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) : null;
+  if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
 function queueTaskPacket(packet: TaskResumePacket): void {
@@ -5637,6 +5645,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     currentRequestText: recoveryLatestUserText,
     asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
   });
+  stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
     driverKind: instance.driverKind,
     model,
@@ -7064,6 +7073,7 @@ async function runClaimedGroupMemberTurn(
     ...roomMail.map((part) => part.text),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
   ].filter((value) => value !== null).join("\n\n");
+  stampShownAsks(threadId, roomContext);
   // One turn per bot at a time, across BOTH engines. Without this a bot
   // could run its 1:1 turn and a room turn concurrently, creating two provider
   // processes, interleaved token spend, and an interrupt that only ever
