@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from "react";
-import { ArrowLeft, ChevronDown, FolderOpen, SquareX, TerminalSquare, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderOpen, PanelRightClose, SquareX, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -28,6 +28,7 @@ type BotPane = { id: string; label: string | null; exited?: boolean; changedAt?:
 const TERMINAL_FONT_MIN = 8;
 const TERMINAL_FONT_MAX = 128;
 const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink";
+const HEADER_ICON = `flex shrink-0 items-center justify-center rounded-md p-1.5 ${HEADER_CONTROL}`;
 
 function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a && !b) return true;
@@ -762,6 +763,7 @@ export function TerminalWorkspace({
     return () => onPaneOrder?.(bot.id, null);
   }, [bot.id, visible, onPaneOrder, paneOrder]);
   const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
+  const leaveLabel = phone ? t("terminal.chat") : `${t("terminal.closeDocked")} (${window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}\`)`;
   const hotkeyOf = (sessionId: string | null) => {
     if (sessionId === null) return undefined;
     const index = paneOrder.indexOf(sessionId);
@@ -771,11 +773,10 @@ export function TerminalWorkspace({
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-inset text-ink" aria-label={t("terminal.title")}>
       <header className={`@container/chathead flex h-[72px] shrink-0 items-center gap-3 border-b border-hairline bg-panel px-5 max-md:h-[60px] ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
-        <button type="button" onClick={onClose} className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] ${HEADER_CONTROL}`}>
-          {phone ? <><ArrowLeft size={15} /> {t("terminal.chat")}</> : t("terminal.closeDocked")} <kbd className="text-[10px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>
+        <button type="button" onClick={onClose} aria-label={leaveLabel} title={leaveLabel} className={HEADER_ICON}>
+          {phone ? <ArrowLeft size={18} /> : <PanelRightClose size={18} />}
         </button>
         <span className="h-5 border-l border-hairline" aria-hidden />
-        <TerminalSquare size={16} className="shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {pane !== null && <WorkerMark compact provider={paneProvider(workers, pane, panes.find((item) => item.id === pane)?.label)} />}{watched ?? bot.name}</span></h1>
           <div className="mt-0.5 flex min-w-0 items-center gap-2">
@@ -805,12 +806,12 @@ export function TerminalWorkspace({
         </div>
         {bot.busy && <span className="shrink-0 text-[11px] text-accent-text" role="status">{t("terminal.agentWorking")}</span>}
         {pane !== null && !webBridge && (
-          <button type="button" onClick={() => requestClosePane(pane)} aria-label={t("terminal.closePane")} title={t("terminal.closePane")} className={`flex shrink-0 items-center justify-center rounded-md p-1.5 ${HEADER_CONTROL}`}>
-            <SquareX size={16} />
+          <button type="button" onClick={() => requestClosePane(pane)} aria-label={t("terminal.closePane")} title={t("terminal.closePane")} className={HEADER_ICON}>
+            <SquareX size={18} />
           </button>
         )}
         {/* A docked terminal hides without the close broadcast, which would also shut the Workers pane taking its spot. */}
-        <WorkerChip key={String(visible)} name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
+        <WorkerChip key={String(visible)} name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`h-7.5 rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
       </header>
       {showProjectBanner && (
         <div role="status" className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline bg-inset px-5 py-1.5 text-[12px] text-ink">
