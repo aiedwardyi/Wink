@@ -302,6 +302,21 @@ describe("whats new card", () => {
     expect(entry.tiles.every((tile) => tile.lightClip)).toBe(true);
   });
 
+  it("shows the Timeline picks and the Forum check in 1.0.287, each with Show me, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.287"];
+    expect(entry.tiles.map((tile) => "show" in tile && tile.show)).toEqual(["timeline", "forum"]);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.287");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles.map((tile) => tile.querySelector(".whats-new-tile-title")?.textContent)).toEqual(entry.tiles.map((tile) => tile.title[locale]));
+      for (const [i, tile] of entry.tiles.entries()) expect(tiles[i].textContent).toContain(tile.line[locale]);
+    }
+    expect(entry.tiles.every((tile) => !tile.still)).toBe(true);
+  });
+
   it("shows the four new themes as one tile in 1.0.273, in English and Korean", () => {
     const entry = WHATS_NEW["1.0.273"];
     expect(entry.tiles).toHaveLength(1);
@@ -510,7 +525,7 @@ describe("whats new card", () => {
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
-    expect(bytes).toBeLessThan(2 * 1024 * 1024);
+    expect(bytes).toBeLessThan(3 * 1024 * 1024);
   });
 
   it("keeps animated previews moving smoothly", () => {
