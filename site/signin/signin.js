@@ -247,12 +247,15 @@
     const again = async () => {
       if (loading || document.visibilityState === "hidden") return;
       loading = true;
-      const pcs = await loadPcs(token);
-      loading = false;
-      if (!pcs || pcs.length === 0) return;
-      removeEventListener("focus", again);
-      document.removeEventListener("visibilitychange", again);
-      choose(pcs, pick);
+      try {
+        const pcs = await loadPcs(token);
+        if (!pcs || pcs.length === 0) return;
+        removeEventListener("focus", again);
+        document.removeEventListener("visibilitychange", again);
+        choose(pcs, pick);
+      } finally {
+        loading = false;
+      }
     };
     addEventListener("focus", again);
     document.addEventListener("visibilitychange", again);

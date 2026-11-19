@@ -630,6 +630,19 @@ describe("phone sign-in page", () => {
     expect(calls.every((call) => call.authorization === `Bearer ${DIR_TOKEN}`)).toBe(true);
   });
 
+  it("loads the list on a later return after one failed load", async () => {
+    open("/signin", []);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe(EMPTY));
+    installFetch("fail");
+    dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    installFetch([{ label: LABEL_A, name: "Home" }]);
+    dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Home")));
+  });
+
   it("keeps the list and says a PC is offline instead of sending the browser to its dead host", async () => {
     open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }], undefined, "down");
     inits[0]!.callback({ credential: DIR_TOKEN });
