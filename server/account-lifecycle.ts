@@ -445,13 +445,19 @@ export class AccountLifecycle {
       return;
     }
     this.clearRetry(account.id);
-    if (force && snapshot.authenticated === true && this.registry.get(account.id)?.driverKind === "codex") clearCodexPromo(account.home);
-    if (force || snapshot.authenticated !== true || !snapshot.accountIdentity || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
-    const next = await this.accounts.identify(account.id, snapshot.authenticated === true ? snapshot.accountIdentity : undefined, force);
-    if (snapshot.authenticated !== true) await this.accounts.stop(account.id);
-    if (next.generation !== account.generation || snapshot.authenticated !== true) await this.hooks.reload();
-    this.registry.blockAccount(account.id, snapshot.authenticated !== true);
-    this.hooks.changed?.(snapshot.authenticated === true ? account.id : undefined);
+    // A sign-out only stops the account, as signedOut() does: identity, generation and sessions wait for the next sign-in.
+    if (snapshot.authenticated === false) {
+      await this.accounts.stop(account.id);
+      this.registry.blockAccount(account.id, true);
+      this.hooks.changed?.();
+      return;
+    }
+    if (force && this.registry.get(account.id)?.driverKind === "codex") clearCodexPromo(account.home);
+    if (force || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
+    const next = await this.accounts.identify(account.id, snapshot.accountIdentity, force);
+    if (next.generation !== account.generation) await this.hooks.reload();
+    this.registry.blockAccount(account.id, false);
+    this.hooks.changed?.(account.id);
   }
 
   private promoHome(id: string) {
