@@ -12,7 +12,7 @@ import { WORKSPACES_DIR } from "./workspace.ts";
 
 const WEB = new Set([".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico"]);
 const SKIP = new Set(["node_modules", "coverage"]);
-const OPT_OUT = /(?:^|[.!?,;:\n]|\b(?:but|and|then)\b)\s*(?:please\s+)?(?:(?:don['’]?t|do\s+not|never)\s+(?:(?:check|verify|test)(?:\s*[/,]\s*(?:check|verify|test))*|run\s+(?:checks?|verification|tests?))|(?:skip|no)\s+(?:checks?|verification|tests?|testing))\b|(?:확인|검사|검증|테스트)\s*(?:하지\s*마|하지\s*말|빼고|없이|안\s*해도\s*(?:돼|되))/i;
+export const OPT_OUT = /(?:^|[.!?,;:\n]|\b(?:but|and|then)\b)\s*(?:please\s+)?(?:(?:don['’]?t|do\s+not|never)\s+(?:(?:check|verify|test)(?:\s*[/,]\s*(?:check|verify|test))*|run\s+(?:checks?|verification|tests?))|(?:skip|no)\s+(?:checks?|verification|tests?|testing))\b|(?:확인|검사|검증|테스트)\s*(?:하지\s*마|하지\s*말|빼고|없이|안\s*해도\s*(?:돼|되))/i;
 const READ_ONLY = /^(?:Read|Grep|Glob|LS|WebFetch|WebSearch|TodoWrite|verify_site)$|^mcp__/i;
 const DOC_ASK = /\b(?:translat|proofread)\w*|번역|교정|맞춤법|\b(?:write|draft|rewrite|revise|edit|check|review)\b[^.!?\n]{0,40}?\b(?:docs?|documents?|essays?|reports?|letters?|articles?|resumes?|memos?|proposals?)\b|(?:문서|보고서|에세이|편지|대본|이력서|자기소개서)[^.!?\n]{0,20}?(?:써|작성|검토|확인|고쳐|다듬)/i;
 
@@ -95,14 +95,14 @@ export async function scanVerifyWrites(root: string, since: number): Promise<str
   return paths;
 }
 
-async function entryFor(paths: string[], turn: VerifyAutoTurn): Promise<string | undefined> {
-  const roots = (await Promise.all(turn.roots.map(root => realpath(root).catch(() => null)))).filter(root => root !== null);
+export async function entryFor(paths: string[], given: string[]): Promise<string | undefined> {
+  const roots = (await Promise.all(given.map(root => realpath(root).catch(() => null)))).filter(root => root !== null);
   const owned = (path: string) => roots.some(root => {
     const rel = relative(root, path);
     return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
   });
   const candidates = (await Promise.all(paths.filter(path => WEB.has(extname(path).toLowerCase())).map(async path => {
-    const full = await realpath(resolve(turn.roots[0]!, path)).catch(() => null);
+    const full = await realpath(resolve(given[0]!, path)).catch(() => null);
     if (!full || !owned(full)) return null;
     const info = await stat(full).catch(() => null);
     return info?.isFile() ? { path: full, mtime: info.mtimeMs } : null;
@@ -111,11 +111,11 @@ async function entryFor(paths: string[], turn: VerifyAutoTurn): Promise<string |
   const tried = new Set<string>();
   for (const candidate of candidates) {
     if (/\.html?$/i.test(candidate.path) && !/^index\.html?$/i.test(candidate.path.split(/[\\/]/).at(-1)!)) {
-      if (typeof await resolveVerifySite(candidate.path, turn.roots) !== "string") return candidate.path;
+      if (typeof await resolveVerifySite(candidate.path, given) !== "string") return candidate.path;
     }
     for (let folder = dirname(candidate.path); owned(folder) && !tried.has(folder);) {
       tried.add(folder);
-      if ((await stat(join(folder, "index.html")).catch(() => null))?.isFile() && typeof await resolveVerifySite(folder, turn.roots) !== "string") return join(folder, "index.html");
+      if ((await stat(join(folder, "index.html")).catch(() => null))?.isFile() && typeof await resolveVerifySite(folder, given) !== "string") return join(folder, "index.html");
       const parent = dirname(folder);
       if (parent === folder) break;
       folder = parent;
@@ -167,7 +167,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
     try {
       const paths = [...turn.writes], scanned = turn.opaque ? (await (deps.scan ?? scanVerifyWrites)(input.roots[0], input.startedAt)).filter(path => !turn.writes.has(path)) : [];
       paths.push(...scanned);
-      const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input);
+      const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input.roots);
       if (latest.get(input.threadId) !== token) return;
       const found = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()) && !internal(resolve(input.roots[0]!, path)));
       const asked = DOC_ASK.test(input.humanText);

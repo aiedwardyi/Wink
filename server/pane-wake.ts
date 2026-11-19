@@ -28,7 +28,7 @@ export const endsNoteWindow = (message: Message) =>
   message.role === "user" && message.kind === "text" && Boolean(message.text?.trim()) && !message.steered && !message.quick && !message.from?.botId;
 
 export function isWakeNote(message: Message): boolean {
-  return (!message.quiet || isReportNote(message)) && !message.comm?.read && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));
+  return !message.hold && (!message.quiet || isReportNote(message)) && !message.comm?.read && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));
 }
 
 export function paneNoteWaiting(store: Pick<Store, "bot" | "taskByThread" | "activePath">, botId: string, threadId: string): boolean {

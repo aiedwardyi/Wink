@@ -603,7 +603,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   };
   const botSessions = (botId) => [...sessions.values()].filter((candidate) => candidate.botId === botId && !candidate.retired && active.get(candidate.key) === candidate.id);
   const paneSummary = (session) => {
-    const summary = { sessionId: session.id, generation: session.generation, label: session.label ?? null, cwd: session.cwd, baseHead: session.baseHead, main: !session.botPane, exited: session.exitCode !== null, changedAt: session.stallScreenAt,
+    const summary = { sessionId: session.id, generation: session.generation, label: session.label ?? null, cwd: session.cwd, baseHead: session.baseHead, spawnedAt: session.spawnedAt, main: !session.botPane, exited: session.exitCode !== null, changedAt: session.stallScreenAt,
       ...(session.botPane && session.workerAccount ? { account: session.workerAccount } : {}) };
     if (session.remote) summary.host = session.remote.host;
     return summary;

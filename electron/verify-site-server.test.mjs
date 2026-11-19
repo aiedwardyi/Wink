@@ -282,13 +282,22 @@ describe("verify static server", () => {
     for (const path of ["\\\\server\\share", "\\\\?\\C:\\site", "C:relative"]) {
       await expect(startSiteServer({ root: path, entry: "index.html", revision: "0".repeat(64) })).rejects.toThrow();
     }
-    for (const file of [".env", "package.json", "secret.pem", "payload.exe"]) {
+    for (const file of [".env", "package.json", "secret.pem"]) {
       await writeFile(join(root, file), "private");
       await expect(start()).rejects.toThrow();
       await rm(join(root, file));
     }
     await writeFile(join(root, "big.png"), Buffer.alloc(8 * 1024 * 1024 + 1));
     await expect(start()).rejects.toThrow();
+  });
+
+  it("serves a real build and leaves its robots.txt, sitemap.xml and webmanifest out", async () => {
+    const before = await siteRevision({ root, entry: "index.html" });
+    for (const file of ["robots.txt", "sitemap.xml", "manifest.webmanifest", "payload.exe"]) await writeFile(join(root, file), "extra");
+    expect(await siteRevision({ root, entry: "index.html" })).toBe(before);
+    await start();
+    expect((await get("/")).status).toBe(200);
+    for (const file of ["robots.txt", "sitemap.xml", "manifest.webmanifest", "payload.exe"]) expect((await get(`/${file}`)).status).toBe(404);
   });
 
   it("rejects junction escapes and link swaps", async () => {

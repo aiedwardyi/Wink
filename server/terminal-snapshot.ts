@@ -220,6 +220,32 @@ export async function paneLabel(
   }
 }
 
+/** A worker pane's folder and spawn time, if the desktop bridge knows them. */
+export async function paneInfo(
+  access: TerminalBridgeAccess | null,
+  botId: string,
+  paneId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ cwd: string; spawnedAt?: number } | null> {
+  if (!access) return null;
+  const paneSchema = z.object({ sessionId: z.literal(paneId), cwd: z.string().min(1), spawnedAt: z.number().int().nonnegative().optional() });
+  try {
+    const res = await fetchImpl(`${access.url}/v1/bots/${encodeURIComponent(botId)}/terminal`, {
+      headers: { authorization: `Bearer ${terminalReadGrant(access.token, botId)}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json().catch(() => ({}))) as { panes?: unknown };
+    for (const row of Array.isArray(body.panes) ? body.panes : []) {
+      const pane = paneSchema.safeParse(row);
+      if (pane.success) return { cwd: pane.data.cwd, ...(pane.data.spawnedAt === undefined ? {} : { spawnedAt: pane.data.spawnedAt }) };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const closedPanesSchema = z.object({ closedPanes: z.array(z.string()) });
 
 /** Panes the bot closed with terminal_close; null when the bridge can't say. User closes are never listed. */

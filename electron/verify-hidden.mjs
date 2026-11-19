@@ -16,6 +16,8 @@ const fatal = new Set(["resource-limit", "isolation-failed", "cancelled", "timeo
 const SHOT_MS = 2000;
 const plain = (value, cap) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, cap);
 const fault = code => Object.assign(new Error(code), { code });
+const PAGE_FACTS = `(() => ({ text: (document.body?.innerText ?? "").replace(/\\s+/g, "").length, images: document.images.length, password: [...document.querySelectorAll("input[type=password]")].some(n => n.getClientRects().length > 0), path: location.pathname }))()`;
+const pageFacts = v => v && Number.isSafeInteger(v.text) && Number.isSafeInteger(v.images) && typeof v.password === "boolean" && typeof v.path === "string" ? { text: v.text, images: v.images, password: v.password, path: plain(v.path, 200) } : null;
 
 export function runHiddenVerify(input) {
   const started = Date.now(), adapters = {}, disposers = [], problems = [], notChecked = new Set(), details = [];
@@ -23,7 +25,7 @@ export function runHiddenVerify(input) {
   // [done, planned] per checker and tile; planned grows when a rule's list is known, so it rides on the next progress.
   const by = {}, tally = (checker, tile) => (by[checker] ??= {})[tile] ??= [0, 0];
   const casts = {};
-  let batch = [];
+  let batch = [], page = null, blockedErrors = false;
   let rejectFailure, ended = false, seq = 0, eventBytes = 0, runFailure;
   const failed = new Promise((_, reject) => { rejectFailure = reject; });
   failed.catch(() => {});
@@ -165,6 +167,7 @@ export function runHiddenVerify(input) {
     const statuses = await head([...new Set(aborted.map(r => r.url))]);
     for (const r of aborted) if (errorsRule.failedLoad({ ...r, status: statuses.get(r.url) ?? 0 }, origin)) state.loads.push({ where: plain(new URL(r.url).pathname, 120), measured: `HTTP ${statuses.get(r.url)}; reload the page` });
     Object.assign(data, { origin, scriptsBlocked, errors: [...new Map(state.events.splice(0).map(e => [e.where, e])).values()] });
+    if (scriptsBlocked && data.errors.length) blockedErrors = true;
     data.loads = [...new Map(state.loads.splice(0).filter(e => !data.images.some(img => img.broken && img.src && new URL(img.src).pathname === e.where)).map(e => [e.where, e])).values()];
   }
   async function interact(cdp, tile) {
@@ -200,6 +203,10 @@ export function runHiddenVerify(input) {
     emit({ kind: "start", scan: null, clock: { t0: started, holds: 0 } });
     const tiles = await race(Promise.all([setup("desktop"), setup("phone")]));
     emit({ kind: "part", part: "loads" });
+    page = pageFacts(await race(tiles[0].cdp.ev(PAGE_FACTS)).catch(error => {
+      if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
+      return null;
+    }));
     const nav = {};
     for (const [i, tile] of ["desktop", "phone"].entries()) {
       const { cdp, blocked, requests, hmr } = tiles[i];
@@ -299,6 +306,7 @@ export function runHiddenVerify(input) {
     const unique = [...distinct.values()];
     const result = { v: 1, runId: input.runId, site: input.site, counts: { ...counts }, issues: unique.slice(0, 40), issueTotal: unique.length, durationMs: Date.now() - started, notChecked: [...notChecked].sort().slice(0, 20), details: [...new Map(details.map(row => [JSON.stringify([row.checker, row.rule, row.where, row.measured]), row])).values()].slice(0, 40) };
     if (errorCode) result.errorCode = errorCode;
+    if (page) result.page = { ...page, blockedErrors };
     try { emit({ kind: "end", result }); } catch {}
     return result;
   }).finally(() => {

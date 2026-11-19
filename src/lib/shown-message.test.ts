@@ -9,4 +9,8 @@ describe("isShownMessage", () => {
     expect(isShownMessage({ role: "bot", summarized: false })).toBe(true);
     expect(isShownMessage({ role: "user", summarized: true })).toBe(true);
   });
+
+  it("hides Wink's delivery copy of a held worker report", () => {
+    expect(isShownMessage({ role: "bot", heldFrom: "n1" })).toBe(false);
+  });
 });

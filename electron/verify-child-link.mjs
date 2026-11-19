@@ -38,6 +38,7 @@ export function validResult(v) {
     })),
     issueTotal: integer, errorCode: optional(error), durationMs: integer,
     notChecked: optional(v => Array.isArray(v) && v.length <= 20 && v.every(s => text(s, 200))),
+    page: optional(v => shape(v, { text: integer, images: integer, password: bool, path: s => text(s, 200), blockedErrors: bool })),
     details: optional(v => Array.isArray(v) && v.length <= 40 && v.every(row => validResult({ v: 1, runId: "detail-123", site: "", counts: { planned: 1, completed: 1, passed: 0, failed: 1, blocked: 0, notRun: 0 }, issues: [row], issueTotal: 1, durationMs: 0 }))),
   }) && v.issueTotal >= v.issues.length && v.issueTotal <= v.counts.failed;
 }

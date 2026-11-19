@@ -16,6 +16,7 @@ import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
 import { hasLocalUndeliveredPaneNote, isWakeNote } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
+import { siteRevision } from "../electron/verify-site-server.mjs";
 import { createVerifySite, type VerifyBridge } from "./verify-site.ts";
 
 const flags = vi.hoisted(() => ({ on: true, limits: {} as Record<string, number>, original: {} as Record<string, number> }));
@@ -204,6 +205,37 @@ it("bounds waiting runs to two in FIFO order", async () => {
   completions.shift()!(); await second; await until(() => bridge!.starts.length === 3);
   expect(bridge!.starts[2]!.entry).toBe("third.html");
   completions.shift()!(); await third;
+});
+
+describe("worker checks", () => {
+  const worker = (target: string, extra: { signal?: AbortSignal } = {}) => verify.startWorker({
+    botId, threadId, root: work, target, episode: `worker:${target}`, slotBy: Date.now() + 5_000, runBy: Date.now() + 10_000,
+    signal: extra.signal ?? new AbortController().signal, onCard() {},
+  });
+
+  it("checks a real build with robots.txt, sitemap.xml and a webmanifest on the engine's revision, on a worker card", async () => {
+    mkdirSync(join(work, "dist"));
+    for (const [file, body] of [["index.html", "<h1>Built</h1>"], ["robots.txt", "User-agent: *"], ["sitemap.xml", "<urlset/>"], ["manifest.webmanifest", "{}"]]) writeFileSync(join(work, "dist", file!), body!);
+    bridge!.states = finalStates(result());
+    const reply = await worker(join(work, "dist", "index.html"));
+    expect(reply.status).toBe("completed");
+    expect(bridge!.starts[0]!.revision).toBe(await siteRevision({ root: join(await realpath(work), "dist"), entry: "index.html" }));
+    expect(reply.site).toMatchObject({ files: 1, site: "dist/index.html" });
+    expect(card()).toMatchObject({ worker: true, status: "completed" });
+  });
+
+  it("never takes the waiting room's last place", async () => {
+    const completions: Array<() => void> = [];
+    bridge!.poll = async (run, _since, _wait, signal) => {
+      await new Promise<void>((resolve, reject) => { completions.push(resolve); signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }); });
+      return { runId: run.runId, revision: 2, state: "completed", counts: counts(10), result: result([], { runId: run.runId }) };
+    };
+    const first = tool({ entry: "site" }); await until(() => bridge!.starts.length === 1);
+    const second = tool({ entry: "site" }); await until(() => card()?.status === "waiting");
+    expect((await worker(join(work, "site", "index.html"))).errorCode).toBe("busy");
+    completions.shift()!(); await first; await until(() => bridge!.starts.length === 2);
+    completions.shift()!(); await second;
+  });
 });
 
 it("includes waiting inside the tool deadline", async () => {

@@ -23,6 +23,14 @@ const report = (status: string, nick: string, body = "") => `${status} ${nick} b
 const STALLED = "STALLED: no screen change for 2 min and no report. terminal_read its pane.";
 const LIMIT = "LIMIT: Codex hit its usage limit (resets 5:49 AM). Its work so far stays in C:\\repo. Send \"continue\" after the reset, or move the job to another engine.";
 
+describe("workerRuns with a held report", () => {
+  it("keeps the report on its original row, not Wink's delivery copy", () => {
+    const messages = [launch("l1", 1, "A | Opus 5.5 | high"), { ...note("n1", 2, report("DONE", "A"), "A | Opus 5.5 | high"), hold: { until: 9, to: "n2" } }];
+    const copy = { ...note("n2", 3, report("DONE", "A"), "A | Opus 5.5 | high"), heldFrom: "n1" };
+    expect(workerRuns([...messages, copy])).toEqual(workerRuns(messages));
+  });
+});
+
 describe("workerAnchors", () => {
   it("uses the same newest message in short and long mounted windows", () => {
     const messages = [launch("l1", 1, "A | Opus 5.5 | high"), note("n1", 2, STALLED, "A | Opus 5.5 | high")];

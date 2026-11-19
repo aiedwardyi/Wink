@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { redactVerifyCard, verifyCardText, verifyReplyText } from "./verify-message.ts";
+import { redactVerifyCard, tokenCost, verifyCardText, verifyNoteText, verifyReplyText, WORKER_CHECK_LABEL } from "./verify-message.ts";
 import type { VerifyResult } from "../shared/live-verify.ts";
 
 it("caps bot feedback and excludes design details from defects", () => {
@@ -45,4 +45,13 @@ it("keeps a doc card's fix state through redaction and says what is left", () =>
   const card = redactVerifyCard({ v: 1, runId: "run-123456", owner: "bot", site: "script.md", entry: "C:\docs\script.md", status: "completed", mode: "auto", decisionNonce: "nonce", offeredAt: 1, fixed: 1, doc: { pages: 2, lines: 60, chunks: [1, 1], by: { numbering: 1 }, findings: [{ ...finding, kind: "numbering", quote: "제7조", fix: "" }], findingTotal: 1, fixing: true, fixedFindings: [finding] } })!;
   expect(card.doc).toMatchObject({ fixing: true, fixedFindings: [finding] });
   expect(verifyCardText(card)).toBe("Live Verify checked script.md: fixed 1 problem, 1 left (1 numbering).");
+});
+
+it.each(["a", "한"])("caps a worker check block at 1200 chars and 390 cost with %s page text", char => {
+  const issues = Array.from({ length: 40 }, (_, i) => ({ checker: "LINKS" as const, tile: "phone" as const, rule: "missing target", where: `a#link-${i} ${char.repeat(90)}`, measured: char.repeat(120) }));
+  const text = `${WORKER_CHECK_LABEL}\n${verifyNoteText({ outcome: "problems (40)", checked: "dist/index.html in site", issues, notChecked: ["form delivery"] })}`;
+  expect(text.length).toBeLessThanOrEqual(1200);
+  expect(tokenCost(text)).toBeLessThanOrEqual(390);
+  expect(text).toMatch(/and \d+ more problems/);
+  expect(text.endsWith("Verify it yourself, then hand fixes to the worker or fix them.")).toBe(true);
 });
