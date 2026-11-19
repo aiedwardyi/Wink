@@ -42,6 +42,7 @@ beforeEach(() => {
   const owner = (threadId: string) => Object.values(BOTS).find((bot) => bot.threadId === threadId)!;
   boardCalls = createBoardCalls({ board, projectOf: (threadId) => owner(threadId).cwd!.split("\\").at(-1)!.toLowerCase(), rings: () => true });
   const botCalls = createBotCalls({
+    calls: () => true,
     send: (payload) => sent.push(payload),
     current: (threadId) => packets.get(threadId)!.blockers,
     chat: () => undefined,
