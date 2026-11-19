@@ -39,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   layer.remove();
+  document.body.replaceChildren();
   if (getContext) Object.defineProperty(HTMLCanvasElement.prototype, "getContext", getContext);
   vi.unstubAllGlobals();
 });
@@ -194,4 +195,94 @@ describe("a swipe's peeked chat", () => {
     start().dispose();
     expect(backdrop).toHaveBeenCalledTimes(3);
   });
+});
+
+function rig() {
+  let failPaper = false;
+  let failShader = false;
+  const callbacks = new Map<HTMLElement, () => void>();
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(private cb: () => void) {}
+    layer!: HTMLElement;
+    observe(layer: HTMLElement) {
+      this.layer = layer;
+      callbacks.set(layer, this.cb);
+    }
+    disconnect() { callbacks.delete(this.layer); }
+  });
+  const uploads = new Map<HTMLCanvasElement, unknown[]>();
+  Object.defineProperty(HTMLCanvasElement.prototype, "getContext", { configurable: true, value: function (this: HTMLCanvasElement, kind: string) {
+    if (kind === "2d") {
+      if (failPaper) {
+        failPaper = false;
+        return null;
+      }
+      return { scale() {} };
+    }
+    const sent: unknown[] = [];
+    uploads.set(this, sent);
+    return new Proxy({}, { get: (_, key) => {
+      if (key === "getProgramParameter") return () => true;
+      if (key === "createShader") return () => failShader ? null : {};
+      if (key === "shaderSource") return (shader: unknown) => { if (!shader) throw new TypeError("shaderSource requires a WebGLShader"); };
+      if (key === "texImage2D") return (...args: unknown[]) => sent.push(args.at(-1));
+      return () => null;
+    } });
+  } });
+  const backdrop = vi.fn();
+  const extra = vi.fn((): ImageData | null => new ImageData(1, 1));
+  const skin = () => flowScene({ frag: "", colors: {}, period: 60, backdrop, extra });
+  const module = skin();
+  const start = (which = module) => {
+    const main = document.createElement("main");
+    const layer = document.createElement("div");
+    main.append(layer);
+    document.body.append(main);
+    Object.defineProperty(layer, "clientWidth", { configurable: true, value: 390 });
+    Object.defineProperty(layer, "clientHeight", { configurable: true, value: 844 });
+    const scene = which.create({ layer, wake() {}, time: () => 0, reduced: () => false, skin: () => "", dark: () => false, rectIn: () => ({ x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0 }), after() {} });
+    const resize = (w: number, h: number) => {
+      Object.defineProperty(layer, "clientWidth", { configurable: true, value: w });
+      Object.defineProperty(layer, "clientHeight", { configurable: true, value: h });
+      callbacks.get(layer)!();
+    };
+    resize(390, 844);
+    return { sent: uploads.get(layer.querySelector("canvas")!)!, stop: () => { scene.dispose(); main.remove(); } };
+  };
+  return { start, extra, setPaperFailure: () => { failPaper = true; }, failShader: (value: boolean) => { failShader = value; } };
+}
+
+it("recovers a temporarily unavailable 2D canvas on the very next healthy peek", () => {
+  const r = rig();
+  r.setPaperFailure();
+  const open = r.start();
+  const peek = r.start();
+  expect(peek.sent.some((x) => x instanceof HTMLCanvasElement)).toBe(true);
+  peek.stop();
+  open.stop();
+});
+
+it("does not cache a plate until the requested extra exists", () => {
+  const r = rig();
+  r.extra.mockReturnValueOnce(null);
+  const open = r.start();
+  const peek = r.start();
+  expect(r.extra).toHaveBeenCalledTimes(2);
+  expect(peek.sent.some((x) => x instanceof ImageData)).toBe(true);
+  peek.stop();
+  open.stop();
+});
+
+it("repaints after the last successful scene is disposed following failed shader allocation", () => {
+  const r = rig();
+  const open = r.start();
+  const first = open.sent[0];
+  r.failShader(true);
+  expect(() => r.start()).toThrow(/WebGLShader/);
+  r.failShader(false);
+  open.stop();
+  const fresh = r.start();
+  const retained = fresh.sent[0] === first;
+  expect(retained).toBe(false);
+  fresh.stop();
 });

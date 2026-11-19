@@ -27,7 +27,6 @@ export function flowScene(spec: FlowSpec): SceneModule {
   let plates: { key: string; paper: HTMLCanvasElement | null; extra: ImageData | null } | null = null;
   let live = 0;
   function create(api: SceneApi) {
-    live++;
     const canvas = document.createElement("canvas");
     api.layer.append(canvas);
     const main = api.layer.parentElement;
@@ -103,7 +102,8 @@ export function flowScene(spec: FlowSpec): SceneModule {
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       const key = `${width}x${height}@${dpr}`;
-      if (gl && ready && (spec.backdrop || spec.extra) && plates?.key !== key) {
+      let current = plates?.key === key ? plates : null;
+      if (gl && ready && (spec.backdrop || spec.extra) && !current) {
         let paper: HTMLCanvasElement | null = null;
         if (spec.backdrop) {
           const sheet = document.createElement("canvas");
@@ -116,12 +116,13 @@ export function flowScene(spec: FlowSpec): SceneModule {
             paper = sheet;
           }
         }
-        plates = { key, paper, extra: spec.extra?.(width, height, dpr) ?? null };
+        current = { key, paper, extra: spec.extra?.(width, height, dpr) ?? null };
+        plates = (!spec.backdrop || current.paper) && (!spec.extra || current.extra) ? current : null;
       }
-      if (gl && ready && plates?.paper) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, plates.paper);
-      if (gl && ready && plates?.extra) {
+      if (gl && ready && current?.paper) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, current.paper);
+      if (gl && ready && current?.extra) {
         gl.activeTexture(gl.TEXTURE1);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, plates.extra);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, current.extra);
         gl.activeTexture(gl.TEXTURE0);
       }
       render();
@@ -135,6 +136,7 @@ export function flowScene(spec: FlowSpec): SceneModule {
       api.wake();
     };
 
+    live++;
     return {
       frame(t: number, dt: number) {
         const k = dt / 1000;
