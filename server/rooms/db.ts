@@ -311,7 +311,7 @@ export function committedRoomText(author: RoomAuthor["kind"], text: string): str
 
 /** The only insert into the room log. Entries are never updated. `at` is set only for carried history. */
 export function appendRoomEntry(roomId: string, draft: RoomEntryDraft, at = Date.now()): RoomEntry {
-  const text = committedRoomText(draft.author.kind, draft.text);
+  const text = committedRoomText(draft.seat ? "person" : draft.author.kind, draft.text);
   if (!text && !draft.files?.length) throw new RoomError(400, "message is empty");
   if (!roomById(roomId)) throw new RoomError(404, "no such room");
   if (draft.replyToId !== undefined && !roomEntry(roomId, draft.replyToId)) throw new RoomError(404, "no such message in this room");

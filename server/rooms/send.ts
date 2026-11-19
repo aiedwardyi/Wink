@@ -46,10 +46,9 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   const roomBots = teamBots(roomId);
   const quotesRoomBot = roomBots.some((roomBot) => roomBot.id === quote?.author.id) || Boolean(quote?.author.owner);
   const nonWaking = [hostName(), ...people.filter((candidate) => !candidate.host).map((candidate) => candidate.name)];
-  const words = person?.host ? committedRoomText("person", text) : text;
-  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, words), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot, roomBots.map((roomBot) => roomBot.name));
+  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText("person", text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot, roomBots.map((roomBot) => roomBot.name));
   const ended = author.kind === "host" && liveBotChain(group) > 0;
-  const { entry, message } = writeRoomEntry(store, group, { author, text: words, ...(person?.host ? { seat: person.id } : {}), ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
+  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(person?.host ? { seat: person.id } : {}), ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
   stopped.delete(roomId);
   // the host's line ends a handoff; republish the group so its strip clears
   if (ended) store.patchGroup(group.id, {});

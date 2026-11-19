@@ -18,7 +18,7 @@ import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store, type BotRecord, type Message } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
-import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
+import { appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
 import { listRoomFiles } from "./files.ts";
@@ -292,6 +292,20 @@ describe("teammate and the real door", () => {
     await until(() => texts(roomId).includes("live from Home"));
     expect(c.rooms()[0]?.unread).toBe(0);
     expect(guestAlert).not.toHaveBeenCalled();
+  });
+
+  it("retries a capped owner-seat send with the same committed text and entry", async () => {
+    const { roomId } = teamRoom().hosted;
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    const capped = `${"a".repeat(PERSON_TEXT_MAX - 1)} `;
+    const text = `${capped}b`;
+    const sendId = "seat-retry-capped-text";
+    const first = await c.send(roomId, text, undefined, sendId);
+    expect(await c.send(roomId, text, undefined, sendId)).toEqual(first);
+    expect(first).toMatchObject({ ok: true, value: { text: capped } });
+    expect(recentRoomEntries(roomId, 10)).toHaveLength(1);
   });
 
   it("delivers @Edward only on the host PC", async () => {
