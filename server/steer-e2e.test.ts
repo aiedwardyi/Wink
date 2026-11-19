@@ -120,7 +120,7 @@ posixOnly("mid-turn steering e2e", () => {
         "user:first",
         "bot:hello from fake claude",
         "user:and also this",
-        expect.stringMatching(/^bot:reply to: first \+ steered: \[Wink note: [^\]]+\]\n\nand also this$/),
+        expect.stringMatching(/^bot:reply to: first \+ steered: \[Wink note: [^\]]+\]\n\n\[Wink note, automated, not from the person\. A fast reply in your voice answers the message below[^\]]+\]\n\nand also this \| \[Wink note, automated, not from the person\. No fast reply reached the person for "and also this"; reply to it now in one short visible line, then continue\.\]$/),
       ]);
       const steered = bot.messages.find((m: any) => m.text === "and also this");
       expect(steered.steered).toBe(true);
