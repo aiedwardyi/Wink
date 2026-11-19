@@ -24,6 +24,8 @@ export const askUserRequestSchema = z
     question: z.string().catch(""),
     choices: z.array(z.string().catch("")).catch([]),
     close: z.boolean().optional().catch(undefined),
+    // models also send the mark as "true" or 1
+    fact: z.preprocess((value) => (value === "true" || value === 1 ? true : value), z.boolean()).optional().catch(undefined),
   })
   .catch({ fromBotId: "", fromThreadId: "", question: "", choices: [] });
 export type AskUserRequest = z.infer<typeof askUserRequestSchema>;
@@ -56,17 +58,19 @@ export interface AskUserDeps<B extends Sender> {
   appendMessage(threadId: string, message: Omit<Message, "id" | "at">): Message;
   activePath: Store["activePath"];
   patchMessage: Store["patchMessage"];
-  cancelHeld(botId: string, threadId: string, question: string): boolean;
+  cancelHeld(botId: string, threadId: string, question: string, forumOnly?: boolean): boolean;
   /** The thread the alert opens, read when the bot asks: a routine run is over by release. */
   alertThread(bot: B, threadId: string): string;
   notifyQuestion(bot: B, target: string, question: string): void;
   /** Runs `post` now, or once the asking turn has replied. */
-  whenSettled(botId: string, threadId: string, post: () => void, question: string): void;
+  whenSettled(botId: string, threadId: string, post: () => void, question: string, forum?: boolean): void;
+  /** Forum posts that may answer a question the bot marked as a fact, sent to the bot while its card waits for the turn to settle; "" for none. */
+  forum?(botId: string, threadId: string, question: string, choices: readonly string[]): string;
 }
 
 export interface AskUserResult {
   status: number;
-  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean };
+  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean } | { notice: string };
 }
 
 export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: AskUserRequest): AskUserResult {
@@ -86,22 +90,34 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     }
     return { status: 200, body: { closed } };
   }
+  const choices = askUserChoices(request.choices);
+  const notice = request.fact && (() => {
+    try {
+      return deps.forum?.(from.id, request.fromThreadId, question, choices);
+    } catch (cause) {
+      console.warn(`board: ${cause}`);
+      return "";
+    }
+  })();
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",
     kind: "options",
-    card: { title: ASK_USER_TITLE, subtitle: question, options: askUserChoices(request.choices), askUser: true, staysOpen: true },
+    card: { title: ASK_USER_TITLE, subtitle: question, options: choices, askUser: true, staysOpen: true },
   };
   // rooms attribute the question to the member who asked, like show_image
   if (owner.group) message.from = { botId: from.id, name: from.name, color: from.color };
   const threadId = request.fromThreadId;
   const target = deps.alertThread(from, threadId);
+  // a Forum-held card asked again posts once
+  if (!notice) deps.cancelHeld(from.id, threadId, question, true);
   let posted: Message | undefined;
   deps.whenSettled(from.id, threadId, () => {
     // a bot deleted or removed from the room while its card waited has nobody to ask for
     if (!deps.conversation(from.id, threadId)) return;
     posted = deps.appendMessage(threadId, message);
     deps.notifyQuestion(from, target, question);
-  }, question);
+  }, question, Boolean(notice));
+  if (notice) return { status: 200, body: { notice } };
   return posted ? { status: 201, body: { messageId: posted.id } } : { status: 202, body: { held: true } };
 }
 

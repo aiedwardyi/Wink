@@ -46,12 +46,12 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
     ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
-    noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery,
+    noteTalked: noop, noteSendLocale: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery,
     ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: (_thread: string, id?: string) => messages.find((m) => m.id === id),
     botHasActiveTurn: () => false, registry: new Map([["fake", { adapter: { capabilities: { queueing }, steer, interruptTurn } }]]),
     instanceForBot: () => ({ adapter: { capabilities: { queueing }, steer, interruptTurn } }),
     beginPeerUserReply, cfg: {},
-    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [],
+    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [], ACK_COVERED: "[covered]",
     userTurnReactionKeys: () => [], hasPeerWatch, clearUnattended: noop,
     resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain, quick: undefined,
     ...extra,
@@ -217,7 +217,7 @@ describe("a line typed while the bot works", () => {
   it("steers into a turn a pane note started in this chat", async () => {
     const h = working("thread");
     expect((await h.post({ text: "tldr pls ?" })).body).toMatchObject({ steered: true });
-    expect(h.steer).toHaveBeenCalledWith("thread", "tldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
+    expect(h.steer).toHaveBeenCalledWith("thread", "[covered]\n\ntldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
     expect(h.startQuick).not.toHaveBeenCalled();
   });
 

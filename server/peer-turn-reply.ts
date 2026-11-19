@@ -6,6 +6,7 @@ import { peerReplyText } from "./peer-user-reply.ts";
 import { ownTurnReply } from "./turn-reply.ts";
 
 export interface PeerTurnReply {
+  readonly engine?: string;
   /** The turn's text so far; undefined until it wrote some. */
   text(): string | undefined;
   /** Stops collecting; the text stays readable. */
@@ -19,6 +20,7 @@ export function peerTurnReplies(stale: (threadId: string, turnId: string | undef
     start(threadId: string): PeerTurnReply {
       const reply = ownTurnReply(stale);
       let text: string | undefined;
+      let engine: string | undefined;
       let done = false;
       const release = () => {
         const observers = live.get(threadId);
@@ -32,10 +34,13 @@ export function peerTurnReplies(stale: (threadId: string, turnId: string | undef
         if (step === "completed") {
           done = true;
           release();
-        } else if (step) text = step.replace || text === undefined ? step.text : `${text}\n${step.text}`;
+        } else if (step) {
+          text = step.replace || text === undefined ? step.text : `${text}\n${step.text}`;
+          engine = event.provider;
+        }
       };
       live.set(threadId, (live.get(threadId) ?? new Set()).add(observe));
-      return { text: () => text, release };
+      return { text: () => text, get engine() { return engine; }, release };
     },
     observe(event: RuntimeEvent): void {
       for (const observe of live.get(event.threadId) ?? []) observe(event);

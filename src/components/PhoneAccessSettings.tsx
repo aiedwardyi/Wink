@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DeviceRow, DevicesSection, PendingRow } from "./DeviceRows";
+import { RoomCode } from "./RoomCode";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { trackFeature, trackSetting } from "@/lib/usage-stats";
 
@@ -124,6 +125,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [openCode, setOpenCode] = useState<string | null>(null);
   const copiedTimer = useRef<number | undefined>(undefined);
   const [signingIn, setSigningIn] = useState(false);
   const signInAttempt = useRef(0);
@@ -249,25 +251,32 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   // A second press reopens the browser: the desktop app drops the attempt before it.
   const signIn = async () => {
     const account = window.ogb?.googleAccount;
-    if (!account) return;
+    if (!account) return false;
     const attempt = ++signInAttempt.current;
     setSigningIn(true);
     setError(null);
-    const result = await account.signIn().catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
-    if (attempt !== signInAttempt.current) return;
+    const result = await account.signIn({ openAfter: "dashboard" }).catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
+    if (attempt !== signInAttempt.current) return false;
     setSigningIn(false);
-    if (result.ok) return void (await loadGoogle());
+    if (result.ok) {
+      await loadGoogle();
+      return attempt === signInAttempt.current;
+    }
     const failure = googleSignInError(result.error);
     if (failure) setError(t(failure));
+    return false;
   };
   const configured = status?.configured === true;
   const joinable = !configured && status?.joinable === true;
+  const turnOn = () => (joinable ? joinWithGoogle() : save(true));
   const confirm = () => {
     setAsking(false);
-    void (joinable ? joinWithGoogle() : save(true));
+    if (signedOut && window.ogb?.googleAccount) void signIn().then((ok) => void (ok && turnOn()));
+    else void turnOn();
   };
   const link = status?.host ? `https://${status.host}/` : null;
   const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;
+  const frontDoorLists = door || (!status?.host && (!status?.base || status.base === FRONT_DOOR));
   const shown = door ? FRONT_DOOR : status?.host?.replace(/^(.{4}).{12}\./, "$1….");
   const copy = async () => {
     if (!link) return;
@@ -331,7 +340,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     </button>
   );
   const signInButton = window.ogb?.googleAccount ? (
-    <button type="button" onClick={() => void signIn()} className={ROW_BUTTON}>
+    <button type="button" onClick={() => setAsking(true)} className={ROW_BUTTON}>
       {t("settings.devices.signIn")}
     </button>
   ) : null;
@@ -356,6 +365,19 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
           ? t("settings.phoneAccess.setup.help")
           : t(`settings.phoneAccess.state.${state}`);
   const connected = enabled && state === "connected";
+  // Only app.getwink.dev has a page to type the code into.
+  const codeShown = connected && door;
+  useEffect(() => {
+    if (!codeShown) return;
+    let live = true;
+    void request("/api/phone-relay/code").then((body: { code: string | null }) => {
+      if (live) setOpenCode(body.code);
+    }, () => {});
+    return () => {
+      live = false;
+      setOpenCode(null);
+    };
+  }, [codeShown, request]);
   const needsInvite = enabled && (state === "enrolling" || status?.problem === "revoked" || status?.problem === "ticket-expired");
   // Off with an error: the relay client failed to load or start.
   const failed = enabled && state === "off" && status?.lastError !== null;
@@ -399,6 +421,11 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
                   </button>
                 </div>
                 <div className="mt-1.5 break-keep text-[11px] leading-[1.35] text-ink-secondary">{t("settings.devices.openAnywhereHelp")}</div>
+                {codeShown && openCode ? (
+                  <div data-open-code="" className="mt-2.5">
+                    <RoomCode code={openCode} short={openCode} label={t("settings.devices.openCode")} hint={t("settings.devices.openCodeHint", { site: FRONT_DOOR })} />
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -427,7 +454,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       {asking ? (
         <ConfirmDialog
           title={t("settings.devices.reachConfirm")}
-          body={t("settings.devices.reachConfirmBody")}
+          body={frontDoorLists ? t("settings.devices.reachConfirmBody", { door: FRONT_DOOR }) : t("settings.devices.reachConfirmBodyOther")}
           confirmLabel={t("settings.devices.turnOn")}
           cancelLabel={t("settings.phoneAccess.cancel")}
           danger={false}

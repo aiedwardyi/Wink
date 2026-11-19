@@ -9,19 +9,27 @@
   const CLIENT_RE = /^[0-9A-Za-z_-]+(?:\.[0-9A-Za-z_-]+)*\.apps\.googleusercontent\.com$/;
   const BASE_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
   const LAST_PC = "wink-signin-pc";
-  const EMPTY = "Sign in with Google in Wink on your PC first: Settings, Sync.";
+  const ACCOUNT = "wink-signin-account";
+  const OPENING = "wink-signin-opening";
+  const EMPTY = "Sign in with Google in Wink on your PC first: Settings, Devices.";
   const OFFLINE = "Could not reach your PC. Check your connection and try again.";
   const BAD_LINK = "That PC link is not valid.";
   const NOT_YOURS = "That PC is not signed in to this Google account.";
   const UNCONFIGURED = "Sign-in is not configured.";
   const GOOGLE_DOWN = "Could not load Google sign-in. Check your connection and try again.";
+  const CODE_RE = /^[2-9A-HJ-NP-Z]{6}$/;
+  // One message for every miss, so a wrong code never tells whether a PC is behind it.
+  const BAD_CODE = "That code did not work. Check it in Wink on your PC: Settings, Devices.";
+  const TOO_MANY = "Too many tries. Wait a minute and try again.";
 
   let gis = null;
   let config = null;
   let listed = [];
+  let account = "";
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
+    if (tone === "error" && $("title").querySelector(".spinner")) $("title").textContent = "Sign in";
     const status = $("status");
     status.textContent = text;
     status.className = tone ? `status ${tone}` : "status";
@@ -70,6 +78,61 @@
     } catch {}
   }
 
+  function subject(token) {
+    try {
+      const part = token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/");
+      return text(JSON.parse(atob(part.padEnd(Math.ceil(part.length / 4) * 4, "="))).sub);
+    } catch {
+      return "";
+    }
+  }
+
+  // The cold start's account, for the PC being opened: the token on the way back is asked for by name and must match.
+  function holdAccount(label) {
+    try {
+      if (account) sessionStorage.setItem(ACCOUNT, `${label}:${account}`);
+      else sessionStorage.removeItem(ACCOUNT);
+    } catch {}
+  }
+
+  function takeAccount(label) {
+    try {
+      const held = sessionStorage.getItem(ACCOUNT) || "";
+      sessionStorage.removeItem(ACCOUNT);
+      return held.startsWith(`${label}:`) ? held.slice(label.length + 1) : "";
+    } catch {
+      return "";
+    }
+  }
+
+  // The PC being opened, by name, for this page's return leg and the PC's own page.
+  function holdName(label, name) {
+    try {
+      if (name) sessionStorage.setItem(OPENING, `${label}:${name}`);
+      else sessionStorage.removeItem(OPENING);
+    } catch {}
+  }
+
+  function heldName(label) {
+    try {
+      const held = sessionStorage.getItem(OPENING) || "";
+      return held.startsWith(`${label}:`) ? held.slice(label.length + 1) : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function spinner() {
+    const spin = document.createElement("span");
+    spin.className = "spinner";
+    spin.setAttribute("aria-hidden", "true");
+    return spin;
+  }
+
+  function opening(name) {
+    $("title").replaceChildren(spinner(), `Opening ${name || "Wink"}…`);
+  }
+
   function decodePcs(payload) {
     if (!Array.isArray(payload)) return null;
     const pcs = [];
@@ -98,13 +161,15 @@
     }
   }
 
-  function go(label, suffix) {
+  function go(label, suffix, name = "") {
     if (!LABEL_RE.test(label)) {
       say(BAD_LINK, "error");
       return;
     }
     remember(label);
-    location.assign(`https://${label}.${config.base}/pair${suffix}`);
+    holdAccount(label);
+    holdName(label, name);
+    location.assign(`https://${label}.${config.base}/pair${suffix}${name ? `&n=${encodeURIComponent(name)}` : ""}`);
   }
 
   function reachable(label) {
@@ -126,15 +191,18 @@
     });
   }
 
-  function openPc(button, pc) {
+  async function openPc(button, pc) {
     if (button.disabled) return;
     for (const other of $("list").children) other.disabled = true;
-    const spinner = document.createElement("span");
-    spinner.className = "spinner";
-    spinner.setAttribute("aria-hidden", "true");
-    button.replaceChildren(spinner, `Opening ${pc.name}…`);
+    button.replaceChildren(spinner(), `Opening ${pc.name}…`);
     button.setAttribute("aria-busy", "true");
-    go(pc.label, "?g=1");
+    // A PC that left the relay has no certificate, so the browser would land on a raw TLS error page.
+    if (await reachable(pc.label)) {
+      go(pc.label, "?g=1", pc.name);
+      return;
+    }
+    showList(listed);
+    say(`${pc.name} is offline.`, "error");
   }
 
   function showList(pcs) {
@@ -166,15 +234,86 @@
       return;
     }
     if (pcs.length === 1) {
-      go(pcs[0].label, "?g=1");
+      go(pcs[0].label, "?g=1", pcs[0].name);
       return;
     }
     const hit = pcs.find((pc) => pc.label === remembered());
     if (hit) {
-      go(hit.label, "?g=1");
+      go(hit.label, "?g=1", hit.name);
       return;
     }
     showList(pcs);
+  }
+
+  // The relay names the PC; the PC then confirms the code is still its own, so turning phone access off ends it.
+  async function codeLabel(code) {
+    try {
+      const found = await fetch(`https://relay.${config.base}/v1/room-codes/${code}`, { method: "GET", cache: "no-store", credentials: "omit" });
+      if (found.status === 429) return "busy";
+      if (!found.ok) return "";
+      const label = text((await found.json())?.label);
+      if (!LABEL_RE.test(label)) return "";
+      const live = await fetch(`https://${label}.${config.base}/api/phone/open-code?c=${code}`, { method: "GET", cache: "no-store", credentials: "omit" });
+      return live.status === 204 ? label : "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function enterCode() {
+    const submit = $("code").querySelector("button");
+    if (submit.disabled) return;
+    const code = $("code-input").value.replace(/[\s-]/g, "").toUpperCase();
+    if (!CODE_RE.test(code)) {
+      say(BAD_CODE, "error");
+      return;
+    }
+    submit.disabled = true;
+    say("");
+    const label = await codeLabel(code);
+    // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
+    if (LABEL_RE.test(label)) {
+      holdAccount(label);
+      location.assign(`https://${label}.${config.base}/pair?g=1`);
+      return;
+    }
+    submit.disabled = false;
+    say(label === "busy" ? TOO_MANY : BAD_CODE, "error");
+  }
+
+  function showCode() {
+    const form = $("code");
+    form.hidden = false;
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void enterCode();
+    });
+  }
+
+  function resetCode() {
+    $("code").querySelector("button").disabled = false;
+    $("code-input").value = "";
+    say("");
+  }
+
+  // Back from turning on Devices on the PC, the empty list loads again with the same token.
+  function refreshWhenBack(token, pick) {
+    let loading = false;
+    const again = async () => {
+      if (loading || document.visibilityState === "hidden") return;
+      loading = true;
+      try {
+        const pcs = await loadPcs(token);
+        if (!pcs || pcs.length === 0) return;
+        removeEventListener("focus", again);
+        document.removeEventListener("visibilitychange", again);
+        choose(pcs, pick);
+      } finally {
+        loading = false;
+      }
+    };
+    addEventListener("focus", again);
+    document.addEventListener("visibilitychange", again);
   }
 
   function credentialFrom(response) {
@@ -215,7 +354,7 @@
     drawn();
   }
 
-  function requestToken(nonce, autoSelect) {
+  function requestToken(nonce, autoSelect, account = "") {
     return new Promise((resolve, reject) => {
       let settled = false;
       let buttonShown = false;
@@ -230,6 +369,7 @@
         const slot = $("google");
         if (!slot) return;
         buttonShown = true;
+        $("title").textContent = "Sign in";
         slot.hidden = false;
         slot.classList.remove("ready");
         slot.classList.toggle("last", LABEL_RE.test(remembered()));
@@ -244,16 +384,18 @@
         });
         revealWhenDrawn(slot);
       };
+      const options = {
+        client_id: config.clientId,
+        callback: (response) => finish(credentialFrom(response)),
+        nonce,
+        auto_select: autoSelect,
+        // popup returns the token to the callback. A redirect would post it to a URL.
+        ux_mode: "popup",
+      };
+      if (account) options.login_hint = account;
       try {
         gis.cancel();
-        gis.initialize({
-          client_id: config.clientId,
-          callback: (response) => finish(credentialFrom(response)),
-          nonce,
-          auto_select: autoSelect,
-          // popup returns the token to the callback. A redirect would post it to a URL.
-          ux_mode: "popup",
-        });
+        gis.initialize(options);
       } catch (error) {
         reject(error);
         return;
@@ -279,28 +421,34 @@
       go(last, "?g=1");
       return;
     }
-    const token = await requestToken(randomNonce(), false);
+    // From a PC the account is usually known to Google, so try its quiet sign-in before drawing the button.
+    if (pick) $("title").textContent = "Choose a PC";
+    const token = await requestToken(randomNonce(), pick);
+    account = subject(token);
     const listed = await loadPcs(token);
     if (!listed) {
       say(OFFLINE, "error");
       return;
     }
     choose(listed, pick || saved);
+    if (listed.length === 0) refreshWhenBack(token, pick || saved);
   }
 
   async function returnLeg(pc, m) {
     // One prompt: Google stays quiet on a second auto_select within minutes and asks for the account again.
-    const pcToken = await requestToken(await boundNonce(pc, m), true);
+    const held = takeAccount(pc);
+    const name = heldName(pc);
+    const pcToken = await requestToken(await boundNonce(pc, m), true, held);
     const listed = await loadPcs(pcToken);
     if (!listed) {
       say(OFFLINE, "error");
       return;
     }
-    if (!listed.some((row) => row.label === pc)) {
+    if (!listed.some((row) => row.label === pc) || (held && subject(pcToken) !== held)) {
       say(NOT_YOURS, "error");
       return;
     }
-    go(pc, `#g=${encodeURIComponent(pcToken)}`);
+    go(pc, `#g=${encodeURIComponent(pcToken)}`, name);
   }
 
   function googleId() {
@@ -339,6 +487,7 @@
     const pc = params.get("pc");
     const m = params.get("m");
     if (pc === null && m === null) {
+      showCode();
       void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
@@ -352,9 +501,12 @@
   }
 
   if (PHONE_RE.test(navigator.userAgent)) $("subtitle").textContent = "Reach Wink on your PC from this phone.";
+  const leg = new URLSearchParams(location.search);
+  if (LABEL_RE.test(leg.get("pc") || "") && M_RE.test(leg.get("m") || "")) opening(heldName(leg.get("pc")));
   // Back from a PC restores this page from bfcache with the PC buttons still opening.
   addEventListener("pageshow", (event) => {
     if (event.persisted && !$("list").hidden) showList(listed);
+    if (event.persisted && !$("code").hidden) resetCode();
   });
 
   const ready = googleId();

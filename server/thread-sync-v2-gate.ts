@@ -5,6 +5,7 @@ import { z } from "zod";
 import { writeFileAtomic } from "./atomic.ts";
 import { scanDevices } from "./device-sync.ts";
 
+export const THREAD_SYNC_V2_CUTOVER_FILE = "thread-sync-v2-cutover.json";
 const journalSchema = z.object({ version: z.literal(2), cutoverAt: z.number() });
 const ACTIVE_MS = 3 * 24 * 60 * 60_000;
 
@@ -19,7 +20,7 @@ function readCutover(path: string): boolean {
 }
 
 export function createThreadSyncV2Gate(dataDir: string, override = process.env.OMB_THREAD_SYNC_V2) {
-  const path = join(dataDir, "thread-sync-v2-cutover.json");
+  const path = join(dataDir, THREAD_SYNC_V2_CUTOVER_FILE);
   let cutover = override !== "0" && existsSync(path) && readCutover(path);
   let waitingFor: string[] = [];
   let started = false;

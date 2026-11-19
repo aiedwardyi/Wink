@@ -40,7 +40,8 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       if (!from) return json(res, 403, { error: "unknown sender" });
       const body = searchSchema.safeParse(await readBody(req));
       if (!body.success) return json(res, 400, { error: "board_search needs a query" });
-      const found = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId), limit: Infinity });
+      const room = deps.roomTurn(from);
+      const found = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId), ...(room ? { roomThread: from.threadId } : {}), limit: Infinity });
       const posts = found.slice(0, SEARCH_SHOWN);
       const more = found.length - posts.length;
       const lines = [...posts.map((post) => boardLine(post)), ...(more ? [`+${more} more match${more === 1 ? "" : "es"}, search more specifically.`] : [])];

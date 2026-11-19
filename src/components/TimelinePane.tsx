@@ -3,6 +3,7 @@ import { ChevronRight, History, Paperclip, Pencil, Search } from "lucide-react";
 import { z } from "zod";
 
 import { request } from "@/lib/api-request";
+import { DEMO_CHIP } from "@/lib/chip-style";
 import { attachmentImageUrl } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import { adjacentMedia, type MediaReference, type PreviewImage } from "@/lib/media-viewer";
@@ -98,6 +99,23 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     else days.set(key, [row]);
   }
   return [...days].map(([day, list]) => ({ day, rows: list }));
+}
+
+// Drawn only while the bot has no picks: never saved, sent or counted.
+function sampleDays(t: (key: MessageKey) => string) {
+  const now = new Date();
+  // two local calendar days, so a demo opened just after midnight still reads yesterday and today
+  const yesterday = (hour: number, minute: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, hour, minute).getTime();
+  const today = (ago: number, order: number) => Math.max(now.getTime() - ago * 60_000, new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() + order);
+  const pick = (id: string, at: number, key: string, picked: string, over: string[]): Entry => ({ id, at, key, picked, over, overPictures: [], files: [], tweaks: [] });
+  return timelineDays([
+    pick("sample-name", yesterday(15, 20), t("timeline.sampleName"), "Wink", ["Nova", "Pilot"]),
+    pick("sample-settings", yesterday(15, 55), t("timeline.sampleSettings"), t("timeline.sampleSidePanel"), [t("timeline.sampleFullPage")]),
+    pick("sample-font", yesterday(16, 25), t("timeline.sampleFont"), t("timeline.sampleMedium"), [t("timeline.sampleSmall"), t("timeline.sampleLarge")]),
+    pick("sample-theme", today(40, 0), t("timeline.sampleTheme"), t("timeline.sampleDark"), [t("timeline.sampleLight")]),
+    pick("sample-tour", today(12, 1), t("timeline.sampleTour"), t("timeline.sampleShortTour"), [t("timeline.sampleSkip")]),
+    pick("sample-ship", today(2, 2), t("timeline.sampleShip"), t("timeline.sampleToday"), [t("timeline.sampleTomorrow")]),
+  ]);
 }
 
 function dayLabel(day: string, now: Date, t: (key: MessageKey) => string, locale: LocaleId): [string, string] {
@@ -307,17 +325,26 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
     return () => { alive = false; };
   }, [botId, saves]);
 
-  const days = useMemo(() => timelineDays(entries ?? []), [entries]);
+  const sample = entries?.length === 0;
+  const days = useMemo(() => (entries?.length === 0 ? sampleDays(t) : timelineDays(entries ?? [])), [entries, t]);
   const needle = query.trim().toLowerCase();
   const shown = useMemo(() => (needle ? days.map((day) => ({ ...day, rows: day.rows.filter((row) => row.hay.includes(needle)) })).filter((day) => day.rows.length > 0) : days), [days, needle]);
   const you = profileName || t("chrome.you");
 
   return (
-    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined}>
+    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined} data-sample={sample || undefined}>
       {failed && !entries
         ? <p role="status" className="show-media-empty">{t("errors.request")}</p>
-        : entries?.length === 0
-          ? <p className="show-media-empty">{t("timeline.empty")}</p>
+        : sample
+          ? (
+            <>
+              <div className="timeline-sample">
+                <small className={DEMO_CHIP}>{t("timeline.sample")}</small>
+                <p className="show-media-empty">{t("timeline.empty")}</p>
+              </div>
+              <Canvas key="sample" days={days} needle="" botId={botId} threadId={threadId} you={you} closing={closing} />
+            </>
+          )
           : entries && (
             <>
               <label className="timeline-search">
@@ -400,7 +427,10 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     show({ scale, x: x - (x - at.x) * ratio, y: y - (y - at.y) * ratio });
   }, [show]);
 
-  const redraw = useCallback(() => drawInk(sheet.current!, ink.current!), []);
+  // A resize can land after React detached the sheet, so the refs may be gone.
+  const redraw = useCallback(() => {
+    if (sheet.current && ink.current) drawInk(sheet.current, ink.current);
+  }, []);
 
   useLayoutEffect(() => {
     redraw();

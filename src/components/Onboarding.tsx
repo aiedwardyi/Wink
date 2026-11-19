@@ -217,7 +217,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               ) : (
                 <>
                   <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
-                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue", disabled: !hasReadyEngine, skip: hasReadyEngine ? undefined : onDone }} />
+                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue" }} />
                   <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>
                 </>
               )}

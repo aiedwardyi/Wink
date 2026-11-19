@@ -11,7 +11,7 @@ export function turnRunsIn(bot: Pick<BotRecord, "busy" | "activeThreadId"> | nul
   return Boolean(bot?.busy) && bot?.activeThreadId === threadId;
 }
 
-type Held = { botId: string; threadId: string; question?: string; post: () => void; timer: ReturnType<typeof setTimeout> };
+type Held = { botId: string; threadId: string; question?: string; forum: boolean; post: () => void; timer: ReturnType<typeof setTimeout> };
 
 export class AskHold {
   private held: Held[] = [];
@@ -23,16 +23,16 @@ export class AskHold {
     this.capMs = capMs;
   }
 
-  /** Runs `post` now unless the asker's turn in that thread is running. */
-  whenSettled(botId: string, threadId: string, post: () => void, question?: string): void {
+  /** Runs `post` now unless the asker's turn in that thread is running. `forum`: a card the Forum held back. */
+  whenSettled(botId: string, threadId: string, post: () => void, question?: string, forum = false): void {
     if (!this.running(botId, threadId)) return post();
-    const entry: Held = { botId, threadId, question, post, timer: setTimeout(() => this.release((h) => h === entry), this.capMs) };
+    const entry: Held = { botId, threadId, question, forum, post, timer: setTimeout(() => this.release((h) => h === entry), this.capMs) };
     entry.timer.unref?.();
     this.held.push(entry);
   }
 
-  cancel(botId: string, threadId: string, question: string): boolean {
-    const due = this.held.filter((h) => h.botId === botId && h.threadId === threadId && h.question === question);
+  cancel(botId: string, threadId: string, question: string, forumOnly = false): boolean {
+    const due = this.held.filter((h) => h.botId === botId && h.threadId === threadId && h.question === question && (h.forum || !forumOnly));
     this.held = this.held.filter((h) => !due.includes(h));
     for (const h of due) clearTimeout(h.timer);
     return due.length > 0;

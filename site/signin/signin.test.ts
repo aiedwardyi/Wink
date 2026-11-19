@@ -20,7 +20,7 @@ const M = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const NONCE = "B63Cih-MfFXEza9EFx1F5hxPxyw7HsmG35Odfsi7nG0";
 const DIR_TOKEN = "dir-token";
 const PC_TOKEN = "pc-token";
-const EMPTY = "Sign in with Google in Wink on your PC first: Settings, Sync.";
+const EMPTY = "Sign in with Google in Wink on your PC first: Settings, Devices.";
 const OFFLINE = "Could not reach your PC. Check your connection and try again.";
 const GOOGLE_DOWN = "Could not load Google sign-in. Check your connection and try again.";
 const GIS_BOOM = "gis-initialize-blew-up";
@@ -41,6 +41,7 @@ interface GisInit {
   nonce: string;
   auto_select: boolean;
   ux_mode: string;
+  login_hint?: string;
 }
 
 interface GisMoment {
@@ -153,6 +154,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
   document.body.innerHTML = "";
   history.replaceState(null, "", "/");
 });
@@ -219,9 +221,9 @@ describe("phone sign-in page", () => {
     expect(policy).not.toMatch(/(frame-ancestors|report-uri|sandbox)/);
   });
 
-  it("allows Google and relay requests, with PC images limited to the relay base", () => {
+  it("allows Google and relay requests, with PC images and code checks limited to the relay base", () => {
     const policy =
-      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.app.getwink.dev; connect-src https://relay.app.getwink.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'";
+      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.app.getwink.dev; connect-src https://relay.app.getwink.dev https://*.app.getwink.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'";
     expect(HTML).toContain(policy);
     const relay = "https://relay.example.dev";
     const shipped = HTML.replaceAll("https://relay.app.getwink.dev", relay).replaceAll("https://*.app.getwink.dev", "https://*.example.dev");
@@ -253,6 +255,7 @@ describe("phone sign-in page", () => {
 
   it.each(["/signin", "/?pick=1"])("keeps Google's button hidden until its frame draws, then fades it in once (%s)", async (url) => {
     open(url, []);
+    if (url.includes("pick")) prompts[0]!(hiddenMoment());
     const slot = document.getElementById("google")!;
     expect(slot.querySelector("iframe")).not.toBeNull();
     expect(googleReady()).toBe(false);
@@ -286,7 +289,7 @@ describe("phone sign-in page", () => {
     expect(ada!.querySelector(".spinner")).not.toBeNull();
     expect(ada!.getAttribute("aria-busy")).toBe("true");
     expect([ada!.disabled, zed!.disabled]).toEqual([true, true]);
-    expect(location.href).toBe(pair(LABEL_A, "?g=1"));
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Ada")));
   });
 
   it("rings only the last-used PC, with no glow animation under reduced motion", async () => {
@@ -312,6 +315,7 @@ describe("phone sign-in page", () => {
   it.each([[LABEL_B, true], ["", false], ["short", false]])("rings Google's button only for a remembered PC (%s)", (label, ringed) => {
     if (label) localStorage.setItem(LAST_PC, label);
     open("/?pick=1", []);
+    prompts[0]!(hiddenMoment());
     expect(document.getElementById("google")!.classList.contains("last")).toBe(ringed);
   });
 
@@ -323,7 +327,7 @@ describe("phone sign-in page", () => {
     ada!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     ada!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     zed!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(location.href).toBe(pair(LABEL_A, "?g=1"));
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Ada")));
     expect(localStorage.getItem(LAST_PC)).toBe(LABEL_A);
     expect(zed!.textContent).toBe("Zed");
   });
@@ -346,7 +350,7 @@ describe("phone sign-in page", () => {
     expect(inits[0]?.client_id).toBe(CLIENT);
     expect(inits[0]?.nonce).toMatch(/^[A-Za-z0-9_-]{22}$/);
     inits[0]?.callback({ credential: DIR_TOKEN });
-    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Home")));
     expect(calls).toEqual([
       {
         url: `https://relay.${BASE}/v1/pcs`,
@@ -370,7 +374,7 @@ describe("phone sign-in page", () => {
     const buttons = [...document.querySelectorAll("#list button")];
     expect(buttons.map((button) => button.textContent)).toEqual(["Ada", "Zed"]);
     buttons[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(location.href).toBe(pair(LABEL_A, "?g=1"));
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Ada")));
     expect(localStorage.getItem(LAST_PC)).toBe(LABEL_A);
   });
 
@@ -414,6 +418,7 @@ describe("phone sign-in page", () => {
 
   it.each(["/signin", "/?pick=1"])("offers no link back to itself while signed out (%s)", (url) => {
     open(url, [{ label: LABEL_A, name: "Ada" }]);
+    if (url.includes("pick")) prompts[0]!(hiddenMoment());
     expect(document.querySelector("h1")?.textContent).toBe("Sign in");
     expect(document.getElementById("pick")?.hidden).toBe(true);
   });
@@ -462,6 +467,7 @@ describe("phone sign-in page", () => {
     await vi.waitFor(() => expect(inits).toHaveLength(1));
     expect(inits[0]?.nonce).toBe(NONCE);
     expect(inits[0]?.auto_select).toBe(true);
+    expect(inits[0]?.login_hint).toBeUndefined();
     expect(prompts).toHaveLength(1);
     expect(renders).toBe(0);
     inits[0]?.callback({ credential: PC_TOKEN });
@@ -470,6 +476,102 @@ describe("phone sign-in page", () => {
     expect(prompts).toHaveLength(1);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.authorization).toBe(`Bearer ${PC_TOKEN}`);
+  });
+
+  it("asks Google for the cold start's account on the return leg, so a first sign-in picks the account once", async () => {
+    const idToken = ["e30", Buffer.from(JSON.stringify({ sub: "1234567890" })).toString("base64url"), "sig"].join(".");
+    open("/signin", [
+      { label: LABEL_A, name: "Ada" },
+      { label: LABEL_B, name: "Zed" },
+    ]);
+    expect(inits[0]?.login_hint).toBeUndefined();
+    inits[0]!.callback({ credential: idToken });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button:last-child")!.click();
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1&n=Zed")));
+    open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]).toMatchObject({ nonce: NONCE, auto_select: true, login_hint: "1234567890" });
+  });
+
+  it("refuses a return leg token for another account than the cold start picked, and asks by name only once for that PC", async () => {
+    const token = (sub: string) => ["e30", Buffer.from(JSON.stringify({ sub })).toString("base64url"), "sig"].join(".");
+    const twoPcs = [
+      { label: LABEL_A, name: "Ada" },
+      { label: LABEL_B, name: "Zed" },
+    ];
+    open("/signin", twoPcs);
+    inits[0]!.callback({ credential: token("1234567890") });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button:last-child")!.click();
+    await vi.waitFor(() => expect(location.href).toContain("/pair"));
+    open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_A, name: "Ada" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]?.login_hint).toBeUndefined();
+
+    open("/signin?pick=1", twoPcs);
+    inits[0]!.callback({ credential: token("1234567890") });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button:last-child")!.click();
+    await vi.waitFor(() => expect(location.href).toContain("/pair"));
+    open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]?.login_hint).toBe("1234567890");
+    inits[0]!.callback({ credential: token("999") });
+    await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe("That PC is not signed in to this Google account."));
+    expect(location.href).not.toContain("#g=");
+
+    open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]?.login_hint).toBeUndefined();
+  });
+
+  it("titles the return leg Opening <PC name>… with the spinner and hands the name to the PC", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button:last-child")!.click();
+    await vi.waitFor(() => expect(location.href).toContain("/pair"));
+    open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    const title = document.querySelector("h1")!;
+    expect(title.textContent).toBe("Opening Zed…");
+    expect(title.querySelector(".spinner")).not.toBeNull();
+    expect(document.querySelector("main")?.textContent).not.toMatch(/sign in|pair/i);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    inits[0]!.callback({ credential: PC_TOKEN });
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, `#g=${PC_TOKEN}&n=Zed`)));
+    expect(title.textContent).toBe("Opening Zed…");
+  });
+
+  it("says Opening Wink… on a return leg with no PC name, and Sign in once Google needs a click", async () => {
+    open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    expect(document.querySelector("h1")?.textContent).toBe("Opening Wink…");
+    await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    prompts[0]!(hiddenMoment());
+    expect(document.querySelector("h1")?.textContent).toBe("Sign in");
+    expect(document.querySelector("h1 .spinner")).toBeNull();
+  });
+
+  it.each<[string, Pc[] | "fail"]>([[LABEL_A, [{ label: LABEL_B, name: "Zed" }]], [LABEL_B, "fail"]])("goes back to Sign in when the return leg fails (%s)", async (label, body) => {
+    open(`/signin?pc=${label}&m=${M}`, body);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    inits[0]!.callback({ credential: PC_TOKEN });
+    await vi.waitFor(() => expect(document.getElementById("status")?.className).toBe("status error"));
+    expect(document.querySelector("h1")?.textContent).toBe("Sign in");
+  });
+
+  it("asks Google quietly first when coming from a PC, and draws the button only if Google shows nothing", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    expect(inits[0]?.auto_select).toBe(true);
+    expect(prompts).toHaveLength(1);
+    expect(renders).toBe(0);
+    expect(document.querySelector("main")?.textContent).not.toMatch(/sign in/i);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    expect(renders).toBe(0);
+    open("/?pick=1", []);
+    prompts[0]!(hiddenMoment());
+    expect(renders).toBe(1);
   });
 
   it("shows the button when auto_select does not fire", async () => {
@@ -517,6 +619,43 @@ describe("phone sign-in page", () => {
     expect(location.href).not.toContain("/pair");
   });
 
+  it("loads the empty list again when the person comes back, and opens the PC that turned on", async () => {
+    open("/signin", []);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe(EMPTY));
+    installFetch([{ label: LABEL_A, name: "Home" }]);
+    dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Home")));
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => call.authorization === `Bearer ${DIR_TOKEN}`)).toBe(true);
+  });
+
+  it("loads the list on a later return after one failed load", async () => {
+    open("/signin", []);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe(EMPTY));
+    installFetch("fail");
+    dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    installFetch([{ label: LABEL_A, name: "Home" }]);
+    dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Home")));
+  });
+
+  it("keeps the list and says a PC is offline instead of sending the browser to its dead host", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }], undefined, "down");
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button")!.click();
+    await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe("Ada is offline."));
+    expect(document.getElementById("status")?.className).toBe("status error");
+    expect(location.href).not.toContain("/pair");
+    expect(new URL(probes[0]!).hostname).toBe(`${LABEL_A}.${BASE}`);
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>("#list button")];
+    expect(buttons.map((button) => [button.textContent, button.disabled])).toEqual([["Ada", false], ["Zed", false]]);
+  });
+
   it("shows the offline copy when the relay cannot be reached", async () => {
     open("/signin", "fail");
     inits[0]?.callback({ credential: DIR_TOKEN });
@@ -536,5 +675,112 @@ describe("phone sign-in page", () => {
     await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe(GOOGLE_DOWN));
     expect(document.getElementById("status")?.className).toBe("status error");
     expect(document.body.textContent).not.toContain(GIS_BOOM);
+  });
+});
+
+describe("entering a PC's code", () => {
+  const BAD_CODE = "That code did not work. Check it in Wink on your PC: Settings, Devices.";
+  const LOOKUP = `https://relay.${BASE}/v1/room-codes/ABCDEF`;
+  const CHECK = `https://${LABEL_A}.${BASE}/api/phone/open-code?c=ABCDEF`;
+  type Answer = { status: number; body?: unknown } | "fail";
+  let asked: Array<{ url: string; credentials?: string }> = [];
+
+  function answer(routes: Record<string, Answer>): void {
+    asked = [];
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+      asked.push({ url, credentials: init.credentials });
+      const route = routes[url] ?? { status: 404, body: { error: "not-found" } };
+      if (route === "fail") return Promise.reject(new TypeError("offline"));
+      return Promise.resolve(new Response(route.status === 204 ? null : JSON.stringify(route.body ?? {}), { status: route.status }));
+    });
+  }
+
+  function enter(value: string): void {
+    const input = document.querySelector<HTMLInputElement>("#code-input")!;
+    input.value = value;
+    document.getElementById("code")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  }
+
+  const status = () => document.getElementById("status")!;
+  const submit = () => document.querySelector<HTMLButtonElement>("#code button")!;
+
+  it("shows the code box on a cold start only", () => {
+    open("/signin", []);
+    expect(document.getElementById("code")?.hidden).toBe(false);
+    open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_A, name: "Ada" }]);
+    expect(document.getElementById("code")?.hidden).toBe(true);
+  });
+
+  it.each(["ABCDEF", " abc-def "])("opens the PC a live code names, through the same Google check as the PC list (%s)", async (typed) => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter(typed);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(asked).toEqual([{ url: LOOKUP, credentials: "omit" }, { url: CHECK, credentials: "omit" }]);
+  });
+
+  it("remembers no PC for a typed code, so the next visit sends this browser nowhere until Google signs in", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(localStorage.getItem(LAST_PC)).toBeNull();
+    open("/signin", []);
+    expect(probes).toEqual([]);
+    expect(location.href).not.toContain("/pair");
+    expect(inits).toHaveLength(1);
+  });
+
+  it.each<[string, string, Record<string, Answer>]>([
+    ["no such code", "ABCDEF", {}],
+    ["a code the PC no longer holds", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } } }],
+    ["a PC that is off", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: "fail" }],
+    ["the PC's rate limit", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 429 } }],
+    ["a relay that answers nonsense", "ABCDEF", { [LOOKUP]: { status: 200, body: { label: "../evil" } } }],
+    ["a relay that cannot be reached", "ABCDEF", { [LOOKUP]: "fail" }],
+  ])("says the same plain words for %s", async (_, typed, routes) => {
+    open("/signin", []);
+    answer(routes);
+    enter(typed);
+    await vi.waitFor(() => expect(status().textContent).toBe(BAD_CODE));
+    expect(status().className).toBe("status error");
+    expect(location.href).not.toContain("/pair");
+    expect(submit().disabled).toBe(false);
+  });
+
+  it.each(["", "ABCDE", "ABCDE0", "ABCDEFG", "OOOOOO"])("refuses %j without asking anyone", (typed) => {
+    open("/signin", []);
+    answer({});
+    enter(typed);
+    expect(status().textContent).toBe(BAD_CODE);
+    expect(asked).toEqual([]);
+  });
+
+  it("asks the person to wait on the relay's rate limit", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 429, body: { error: "rate-limited" } } });
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(status().textContent).toBe("Too many tries. Wait a minute and try again."));
+    expect(asked.map((call) => call.url)).toEqual([LOOKUP]);
+  });
+
+  it("sends one lookup for a double submit", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter("ABCDEF");
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(asked.map((call) => call.url)).toEqual([LOOKUP, CHECK]);
+  });
+
+  it("frees the code box when Back restores the page", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(submit().disabled).toBe(false);
+    expect(document.querySelector<HTMLInputElement>("#code-input")!.value).toBe("");
+    expect(status().textContent).toBe("");
   });
 });

@@ -5,6 +5,7 @@ import { connect } from "node:net";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { signInPage } from "./google-signin-page.mjs";
 import { createGoogleAccountController, createGoogleSessionPush, googleClient, googleServerEnv, pkcePair, runGoogleSignIn, watchDevServer } from "./google-signin.mjs";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
@@ -115,12 +116,27 @@ describe("google sign-in", () => {
     await openExternal.mock.results[0].value;
     expect(seen.pages[0].status).toBe(404);
     expect(seen.pages[1]).toMatchObject({ status: 200 });
-    expect(seen.pages[1].text).toContain("You can close this tab.");
+    expect(seen.pages[1].text).toContain("You can close this tab and go back to Wink.");
+    expect(seen.pages[1].text).toContain('<main><div class="panel"><svg class="logo"');
+    expect(seen.pages[1].text).not.toMatch(/auth-code|refresh-SECRET|me@example.com|https?:\/\/(?!www\.w3\.org)/);
 
     const form = endpoint.calls[0].form;
     expect(form).toMatchObject({ code: "auth-code", grant_type: "authorization_code", client_id: CLIENT.id, client_secret: CLIENT.secret, redirect_uri: `http://127.0.0.1:${address.port}` });
     expect(createHash("sha256").update(form.code_verifier).digest("base64url")).toBe(seen.auth.searchParams.get("code_challenge"));
     await closed(address);
+  });
+
+  it("renders the not-completed page in the UI language", async () => {
+    const { openExternal, seen } = browser((query) => query.set("error", "access_denied"));
+    await expect(runGoogleSignIn({ client: CLIENT, openExternal, fetch: tokenEndpoint().fetch, getLocale: () => "ko" })).rejects.toMatchObject({ code: "access-denied" });
+    await openExternal.mock.results[0].value;
+    expect(seen.pages[1].text).toContain('<html lang="ko">');
+    expect(seen.pages[1].text).toContain("로그인을 마치지 못했어요");
+    expect(seen.pages[1].text).toContain('class="panel"');
+  });
+
+  it("escapes page text", () => {
+    expect(signInPage({ title: "<b>&", body: '"x"' })).toContain("<h1>&#60;b&#62;&#38;</h1><p>&#34;x&#34;</p>");
   });
 
   it("rejects a state mismatch and closes", async () => {
@@ -267,6 +283,67 @@ describe("google sign-in", () => {
     expect(await google.signIn()).toEqual({ ok: true, email: "me@example.com" });
     // The ID token goes beside the stored session, never inside it.
     expect(saveSession).toHaveBeenCalledExactlyOnceWith({ refreshToken: "refresh-SECRET", sub: "sub-1", email: "me@example.com" }, expect.stringMatching(/^ey/));
+  });
+
+  it("sends the tab to the dashboard only on success with openAfter", async () => {
+    const ok = browser();
+    await runGoogleSignIn({ client: CLIENT, openExternal: ok.openExternal, fetch: tokenEndpoint().fetch, openAfter: "dashboard" });
+    await ok.openExternal.mock.results[0].value;
+    expect(ok.seen.pages[1].text).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
+    expect(ok.seen.pages[1].text).toContain('<a href="https://app.getwink.dev/">Open dashboard</a>');
+    expect(ok.seen.pages[1].text).toContain("Opening your Wink dashboard...");
+
+    const plain = browser();
+    await runGoogleSignIn({ client: CLIENT, openExternal: plain.openExternal, fetch: tokenEndpoint().fetch });
+    await plain.openExternal.mock.results[0].value;
+    expect(plain.seen.pages[1].text).not.toContain("refresh");
+
+    const denied = browser((query) => query.set("error", "access_denied"));
+    await expect(runGoogleSignIn({ client: CLIENT, openExternal: denied.openExternal, fetch: tokenEndpoint().fetch, openAfter: "dashboard" })).rejects.toMatchObject({ code: "access-denied" });
+    await denied.openExternal.mock.results[0].value;
+    expect(denied.seen.pages[1].text).not.toMatch(/refresh|app\.getwink\.dev/);
+
+    const forged = browser((query) => {
+      query.set("state", "forged");
+      query.set("code", "auth-code");
+    });
+    await expect(runGoogleSignIn({ client: CLIENT, openExternal: forged.openExternal, fetch: tokenEndpoint().fetch, openAfter: "dashboard" })).rejects.toMatchObject({ code: "state-mismatch" });
+    await forged.openExternal.mock.results[0].value;
+    expect(forged.seen.pages[1].text).not.toMatch(/refresh|app\.getwink\.dev/);
+  });
+
+  it("shows success only after the exchange and the save worked", async () => {
+    const exchangeFails = browser();
+    await expect(runGoogleSignIn({ client: CLIENT, openExternal: exchangeFails.openExternal, fetch: tokenEndpoint({ error: "invalid_grant" }).fetch, openAfter: "dashboard" })).rejects.toMatchObject({ code: "exchange-failed" });
+    await exchangeFails.openExternal.mock.results[0].value;
+    expect(exchangeFails.seen.pages[1].text).toContain("Sign-in failed");
+    expect(exchangeFails.seen.pages[1].text).not.toMatch(/signed in|refresh|app\.getwink\.dev/);
+
+    const saveFails = browser();
+    const google = createGoogleAccountController({
+      client: CLIENT,
+      openExternal: saveFails.openExternal,
+      fetch: tokenEndpoint().fetch,
+      saveSession: vi.fn().mockRejectedValue(new Error("store down")),
+      clearSession: vi.fn(),
+    });
+    expect(await google.signIn({ openAfter: "dashboard" })).toEqual({ ok: false, error: "store-failed" });
+    await saveFails.openExternal.mock.results[0].value;
+    expect(saveFails.seen.pages[1].text).toContain("Sign-in failed");
+    expect(saveFails.seen.pages[1].text).not.toMatch(/signed in|refresh|app\.getwink\.dev/);
+  });
+
+  it("passes openAfter from signIn through, and drops any other value", async () => {
+    const run = async (options) => {
+      const { openExternal, seen } = browser();
+      const google = createGoogleAccountController({ client: CLIENT, openExternal, fetch: tokenEndpoint().fetch, saveSession: vi.fn(), clearSession: vi.fn() });
+      await google.signIn(options);
+      await openExternal.mock.results[0].value;
+      return seen.pages[1].text;
+    };
+    expect(await run({ openAfter: "dashboard" })).toContain("refresh");
+    expect(await run({ openAfter: "https://evil.example/" })).not.toContain("refresh");
+    expect(await run()).not.toContain("refresh");
   });
 
   it("keeps tokens out of logs and results", async () => {

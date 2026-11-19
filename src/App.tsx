@@ -52,7 +52,7 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { answerOnThread } from "@/lib/live-call/active";
+import { answerOnThread, useEndCallUnlessAllowed } from "@/lib/live-call/active";
 import { syncWebPushRooms, webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
 import { isPhone, swipeChatIds } from "@/lib/phone-swipe";
@@ -534,9 +534,11 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     pushOpenTarget.current = null;
     window.history.replaceState(window.history.state, "", window.location.pathname);
     openNotificationTarget(dispatch, target, latestState.current, true);
-    answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
+    answerOnThread(latestState.current.bots, latestState.current.config?.features?.voiceCalls === true, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
   }, [dispatch, hydratedBots]);
-  useEffect(() => void answerOnThread(state.bots), [state.bots]);
+  const voiceCalls = state.config?.features?.voiceCalls === true;
+  useEffect(() => void answerOnThread(state.bots, voiceCalls), [state.bots, voiceCalls]);
+  useEndCallUnlessAllowed(voiceCalls);
   useEffect(() => {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
@@ -551,7 +553,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       setTerminalViews((views) => ({ ...views, [target.botId]: false }));
       startWarmOpenTiming(Number(event.data.t0), target.threadId);
       openNotificationTarget(dispatch, target, latestState.current);
-      answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
+      answerOnThread(latestState.current.bots, latestState.current.config?.features?.voiceCalls === true, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
     };
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
@@ -636,6 +638,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [terminalCovers, dispatch]);
 
   const botsUnreadable = state.botsUnreadable && state.bots.length === 0;
+  // a phone keeps the Forum as a full page with no exit, as before
+  const board = usePresence(forum && !noEngines && !botsUnreadable);
+  const boardShown = phoneMenuVisible ? forum && !noEngines && !botsUnreadable : board.mounted;
+  const boardClosing = !phoneMenuVisible && board.closing;
   const createBotRequired = !noEngines && state.bots.length === 0 && !botsUnreadable;
   const createBotSheetOpen = !onboardingOpen && state.connected && state.hydrated && (state.createBotOpen || createBotRequired);
   const secondaryViewOpen =
@@ -839,6 +845,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         folded={slotShown}
         onUnfold={() => slotPanels.forEach(closeSlot)}
       />
+      {boardShown && <BoardView hidden={nativeViewOverlayOpen} closing={boardClosing} />}
       {noEngines ? (
         <LazyView fallback={<BootFallback />}>
           <NoEngines />
@@ -848,9 +855,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
-      ) : forum ? (
-        <BoardView hidden={nativeViewOverlayOpen} />
-      ) : swipeChatId ? (
+      ) : forum ? null : swipeChatId ? (
         <div ref={conversationRef} className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip md:flex-row ${watchDock}`}>
           <PhoneChatPages id={swipeChatId} enabled={!terminalCovers && !nativeViewOverlayOpen} menuVisible={phoneMenuVisible} hidden={terminalCovers} rider={menuButtonRef} order={swipeOrder} onSelect={selectSwipe}>
             {(id, preview) => {

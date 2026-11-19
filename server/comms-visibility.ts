@@ -161,12 +161,14 @@ export function mirrorReply(
   target: BotRecord,
   reply: string,
   channel: GroupRecord | undefined,
+  engine?: string,
 ): void {
   if (!channel || !reply.trim()) return;
   linkRoomEntry(bus.store, channel, bus.store.appendMessage(channel.threadId, {
     role: "bot",
     kind: "text",
     text: reply,
+    engine,
     from: { botId: target.id, name: target.name, color: target.color },
   }));
   bus.store.patchGroup(channel.id, { unread: true });

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { translate } from "@/lib/i18n";
 import { sidebarWorkerStatus } from "@/lib/worker-status";
@@ -32,7 +32,7 @@ beforeEach(() => {
   host = document.createElement("div");
   root = createRoot(host);
 });
-afterEach(() => { workers = undefined; act(() => root.unmount()); act(() => { closeShow(); closeVerifyWatch(); }); applyLocale("en"); saveSidebarSide("left"); });
+afterEach(() => { workers = undefined; act(() => root.unmount()); host.remove(); act(() => { closeShow(); closeVerifyWatch(); }); applyLocale("en"); saveSidebarSide("left"); vi.restoreAllMocks(); });
 
 const render = (threadId: string) => act(async () => root.render(createElement(Probe, { threadId })));
 const press = () => act(async () => host.querySelector("button")!.click());
@@ -56,6 +56,15 @@ it.each(["left", "right"] as const)("opens Media, then closes, with the bot list
   expect(button.querySelector("svg")!.classList.contains("lucide-panel-right-open")).toBe(true);
 });
 
+it("stays the sidebar toggle's gray when open", async () => {
+  await render("b7");
+  const button = host.querySelector("button")!;
+  await press();
+  expect(button.getAttribute("aria-pressed")).toBe("true");
+  expect(button.classList.contains("text-ink-secondary")).toBe(true);
+  expect(button.classList.contains("text-accent")).toBe(false);
+});
+
 it("opens Show when this chat has shown a file", async () => {
   await render("b2");
   await act(async () => showItem({ threadId: "b2", path: "C:\\w\\a.png", kind: "image" }));
@@ -72,6 +81,30 @@ it("closes the checker when it holds the pane", async () => {
   expect(host.querySelector(".lucide-panel-right-close")).not.toBeNull();
   await press();
   expect(state).toEqual([null, null, false]);
+});
+
+it("keeps one worker shortcut when the open pane has its own toggle", async () => {
+  document.body.append(host);
+  workers = { name: "Ada", runs: [], onOpenTerminal: () => {} };
+  let crew: string | null = null;
+  function Pair() {
+    crew = useWorkersThread();
+    return createElement("div", null,
+      createElement(ShowPaneButton, { threadId: "b6", workers }),
+      createElement("div", { "data-side-panel": "" }, createElement(ShowPaneButton, { threadId: "b6", workers, inPane: true })),
+    );
+  }
+  await act(async () => root.render(createElement(Pair)));
+  await act(async () => showWorkers("b6"));
+  const buttons = host.querySelectorAll("[data-show-pane-button]");
+  expect(buttons[0].classList.contains("md:hidden")).toBe(true);
+  expect(buttons[1].classList.contains("md:hidden")).toBe(false);
+  const header = buttons[0] as HTMLButtonElement;
+  const focus = vi.spyOn(header, "focus").mockImplementation(() => { expect(header.getAttribute("aria-pressed")).toBe("false"); });
+  (buttons[1] as HTMLButtonElement).focus();
+  await act(async () => window.dispatchEvent(new Event("orbit:toggle-worker-menu")));
+  expect(crew).toBeNull();
+  expect(focus).toHaveBeenCalledOnce();
 });
 
 it("speaks Korean", async () => {

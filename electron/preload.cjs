@@ -93,7 +93,7 @@ contextBridge.exposeInMainWorld("ogb", {
   },
   /** Google sign-in for Drive sync. Tokens stay in the main process; status comes from GET /api/google-account. */
   googleAccount: {
-    signIn: () => ipcRenderer.invoke("google-account:sign-in"),
+    signIn: (options) => ipcRenderer.invoke("google-account:sign-in", options),
     cancel: () => ipcRenderer.invoke("google-account:cancel"),
     signOut: () => ipcRenderer.invoke("google-account:sign-out"),
   },
