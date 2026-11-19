@@ -249,22 +249,28 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   // A second press reopens the browser: the desktop app drops the attempt before it.
   const signIn = async () => {
     const account = window.ogb?.googleAccount;
-    if (!account) return;
+    if (!account) return false;
     const attempt = ++signInAttempt.current;
     setSigningIn(true);
     setError(null);
-    const result = await account.signIn().catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
-    if (attempt !== signInAttempt.current) return;
+    const result = await account.signIn({ openAfter: "dashboard" }).catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
+    if (attempt !== signInAttempt.current) return false;
     setSigningIn(false);
-    if (result.ok) return void (await loadGoogle());
+    if (result.ok) {
+      await loadGoogle();
+      return attempt === signInAttempt.current;
+    }
     const failure = googleSignInError(result.error);
     if (failure) setError(t(failure));
+    return false;
   };
   const configured = status?.configured === true;
   const joinable = !configured && status?.joinable === true;
+  const turnOn = () => (joinable ? joinWithGoogle() : save(true));
   const confirm = () => {
     setAsking(false);
-    void (joinable ? joinWithGoogle() : save(true));
+    if (signedOut && window.ogb?.googleAccount) void signIn().then((ok) => void (ok && turnOn()));
+    else void turnOn();
   };
   const link = status?.host ? `https://${status.host}/` : null;
   const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;
@@ -331,7 +337,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     </button>
   );
   const signInButton = window.ogb?.googleAccount ? (
-    <button type="button" onClick={() => void signIn()} className={ROW_BUTTON}>
+    <button type="button" onClick={() => setAsking(true)} className={ROW_BUTTON}>
       {t("settings.devices.signIn")}
     </button>
   ) : null;
@@ -427,7 +433,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       {asking ? (
         <ConfirmDialog
           title={t("settings.devices.reachConfirm")}
-          body={t("settings.devices.reachConfirmBody")}
+          body={t("settings.devices.reachConfirmBody", { door: FRONT_DOOR })}
           confirmLabel={t("settings.devices.turnOn")}
           cancelLabel={t("settings.phoneAccess.cancel")}
           danger={false}

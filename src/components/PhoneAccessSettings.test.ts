@@ -178,6 +178,7 @@ describe("PhoneAccessSettings", () => {
     expect(host.querySelector('[role="switch"]')).toBeNull();
     expect(host.textContent).toContain("Sign in with Google to turn this on.");
     await act(async () => click(button(host, "Sign In")));
+    await act(async () => click(button(document.body, "Turn On")));
     expect(signIn).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
   });
@@ -398,7 +399,7 @@ describe("This PC", () => {
     const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
     await act(async () => click(toggle));
     expect(dialog()?.textContent).toContain("Connect to this PC from your devices?");
-    expect(dialog()?.textContent).toContain("Full access for your Google account, like SSH.");
+    expect(dialog()?.textContent).toContain("Full access to this PC, like SSH.");
     await act(async () => click(button(dialog()!, "Cancel")));
     expect(dialog()).toBeNull();
     expect(put).not.toHaveBeenCalled();
@@ -526,6 +527,7 @@ describe("This PC", () => {
     expect(host.querySelector('[role="switch"]')).toBeNull();
     expect(host.textContent).toContain("Sign in with Google to turn this on.");
     await act(async () => click(button(host, "Sign In")));
+    await act(async () => click(button(document.body, "Turn On")));
     expect(signIn).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
     vi.unstubAllGlobals();
@@ -538,6 +540,7 @@ describe("This PC", () => {
     serve({ "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }), "GET /api/google-account": () => ({ state: "signed-out" }) });
     const { host, root } = await renderView();
     await act(async () => click(button(host, "Sign In")));
+    await act(async () => click(button(document.body, "Turn On")));
     expect(host.textContent).toContain("Waiting for Google…");
     expect(button(host, "Sign In").disabled).toBe(false);
     await act(async () => finish({ ok: false, error: "drive-permission-missing" }));
@@ -545,6 +548,75 @@ describe("This PC", () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toBe("Tick the Google Drive box on Google's page, then sign in again.");
     await act(async () => root.unmount());
     vi.unstubAllGlobals();
+  });
+
+  describe("signing in from the This PC row", () => {
+    let google = "signed-out";
+    const setUp = (result: { ok: true; email: string } | { ok: false; error: string }) => {
+      google = "signed-out";
+      const signIn = vi.fn(async () => {
+        if (result.ok) google = "signed-in";
+        return result;
+      });
+      vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
+      const put = vi.fn((_init?: RequestInit) => status());
+      serve({
+        "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }),
+        "GET /api/google-account": () => (google === "signed-in" ? { state: "signed-in", email: EMAIL } : { state: "signed-out" }),
+        "GET /api/phone/devices": () => ({ phones: [] }),
+        "PUT /api/phone-relay": put,
+      });
+      return { signIn, put };
+    };
+    const dialog = () => document.querySelector('[role="dialog"]');
+
+    it("asks first, then signs in, then turns on without a second dialog", async () => {
+      const { signIn, put } = setUp({ ok: true, email: EMAIL });
+      const { host, root } = await renderView();
+      await act(async () => click(button(host, "Sign In")));
+      expect(dialog()?.textContent).toContain("Connect to this PC from your devices?");
+      expect(dialog()?.textContent).toContain("Then open app.getwink.dev on your phone or another PC and sign in with this Google account.");
+      expect(signIn).not.toHaveBeenCalled();
+      await act(async () => click(button(document.body, "Turn On")));
+      expect(signIn).toHaveBeenCalledExactlyOnceWith({ openAfter: "dashboard" });
+      expect(dialog()).toBeNull();
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(put).toHaveBeenCalledWith(expect.objectContaining({ body: JSON.stringify({ enabled: true }) }));
+      await act(async () => root.unmount());
+    });
+
+    it("cancel signs nobody in and leaves it off", async () => {
+      const { signIn, put } = setUp({ ok: true, email: EMAIL });
+      const { host, root } = await renderView();
+      await act(async () => click(button(host, "Sign In")));
+      await act(async () => click(button(document.body, "Cancel")));
+      expect(dialog()).toBeNull();
+      expect(signIn).not.toHaveBeenCalled();
+      expect(put).not.toHaveBeenCalled();
+      await act(async () => root.unmount());
+    });
+
+    it("a sign-in made elsewhere does not open the dialog or turn it on", async () => {
+      const { put } = setUp({ ok: true, email: EMAIL });
+      const { host, root } = await renderView();
+      google = "signed-in";
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(PhoneAccessSettings, { request, onNoRelay: () => {}, refresh: 1 }))));
+      expect(dialog()).toBeNull();
+      expect(put).not.toHaveBeenCalled();
+      expect(host.querySelector('[role="switch"][aria-checked="true"]')).toBeNull();
+      await act(async () => root.unmount());
+    });
+
+    it("a failed sign-in stays off with the error", async () => {
+      const { put } = setUp({ ok: false, error: "drive-permission-missing" });
+      const { host, root } = await renderView();
+      await act(async () => click(button(host, "Sign In")));
+      await act(async () => click(button(document.body, "Turn On")));
+      expect(put).not.toHaveBeenCalled();
+      expect(dialog()).toBeNull();
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe("Tick the Google Drive box on Google's page, then sign in again.");
+      await act(async () => root.unmount());
+    });
   });
 
   it("keeps the switch off for an account the relay does not take", async () => {
