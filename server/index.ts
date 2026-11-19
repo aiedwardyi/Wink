@@ -364,8 +364,10 @@ import {
   detectLaptop,
   deviceDisplayName,
   deviceNameSchema,
+  heldRemovals,
   listDevices,
   loadDeviceName,
+  machineKey,
   namedDevicePeers,
   pickerDevices,
   saveDeviceName,
@@ -2385,13 +2387,16 @@ function scheduleProfilePublish(): void {
 
 let deviceName = loadDeviceName(DATA_DIR);
 let deviceLaptop = false;
+const removedPcs: Record<string, number> = {};
+const deviceMachine = machineKey(DATA_DIR);
 
 function publishDeviceRecord(): void {
   const folder = profileSyncSettings.folder;
   if (!folder) return;
   try {
     const relayHost = phoneAccess.presenceHost() ?? undefined;
-    const previous = REMOTE_HOST ? undefined : listDevices(folder, profileSyncSettings.deviceId, Date.now()).find((record) => record.current);
+    const own = listDevices(folder, profileSyncSettings.deviceId, Date.now()).find((record) => record.current);
+    const previous = REMOTE_HOST ? undefined : own;
     // A relay-only PC repeats its relay host as host, so older PCs still read the record.
     const host = REMOTE_HOST ?? (previous?.host !== previous?.relayHost ? previous?.host : undefined) ?? relayHost;
     if (!host) return;
@@ -2404,6 +2409,8 @@ function publishDeviceRecord(): void {
         relayHost,
         laptop: deviceLaptop,
         chatSync: 2,
+        machine: deviceMachine,
+        removed: heldRemovals(folder, { ...own?.removed, ...removedPcs }),
       },
       Date.now(),
     );
@@ -8694,6 +8701,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const listed = syncedDevices();
       const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
+    }
+    if (method === "DELETE" && path.startsWith("/api/devices/")) {
+      if (!credentials.bearerOk || !isLoopbackHost(req.headers.host)) return json(res, 403, { error: "Manage devices on this PC" });
+      const deviceId = decodeURIComponent(path.slice("/api/devices/".length));
+      // The same presence the list showed, so a PC shown offline can be removed.
+      const shown = devicePresence(syncedDevices(), REMOTE_HOST, remoteRetry.status().state === "checking").find((device) => device.deviceId === deviceId);
+      if (!shown) return json(res, 409, { error: "PC is no longer listed", code: "pc-gone" });
+      if (shown.current || !shown.offline || shown.checking) return json(res, 409, { error: "Only an offline PC can be removed", code: "pc-online" });
+      removedPcs[deviceId] = Date.now();
+      publishDeviceRecord();
+      // A PC with no tailnet or relay host has no record of its own to hold the removal.
+      if (syncedDevices().some((device) => device.deviceId === deviceId)) return json(res, 409, { error: "This PC cannot hold a removal yet", code: "no-own-record" });
+      return json(res, 200, { ok: true });
     }
     if (method === "PUT" && path === "/api/devices/name") {
       const body = await readBody(req);
