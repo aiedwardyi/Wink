@@ -110,8 +110,11 @@ describe("pair page", () => {
 
   it("draws none of its own sign-in on ?g=1 and hands to the Google sign-in page once", async () => {
     const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
-    const page = open("/pair?g=1", googlePc());
-    expect(document.getElementById("title").textContent).toBe("");
+    const page = open("/pair?g=1&n=Home", googlePc());
+    const title = document.getElementById("title");
+    expect(title.textContent).toBe("Opening Home…");
+    expect(title.querySelector(".spinner")).not.toBeNull();
+    expect(title.textContent + page.status.textContent).not.toMatch(/sign in|pair/i);
     expect(page.help.hidden).toBe(true);
     expect(page.form.hidden).toBe(true);
     await vi.waitFor(() => expect(assign).toHaveBeenCalledExactlyOnceWith("/api/phone/google/start"));
@@ -145,7 +148,35 @@ describe("pair page", () => {
     expect(posted).toHaveLength(1);
     expect(posted[0]).toMatchObject({ method: "POST", credentials: "same-origin" });
     expect(JSON.parse(posted[0].body)).toEqual({ credential: "id.token.sig", name: "Phone" });
-    expect(page.status.textContent).toBe("Paired. Opening Wink...");
+    expect(page.status.textContent).toBe("");
+  });
+
+  it.each([
+    ["en", "/pair?g=1", "Opening Wink…"],
+    ["en", "/pair#g=id.token.sig&n=Home", "Opening Home…"],
+    ["ko", "/pair?g=1&n=Home", "Home 여는 중…"],
+    ["ko", "/pair#g=id.token.sig", "Wink 여는 중…"],
+  ])("titles the automatic Google path Opening <PC name>… with no pairing words (%s %s)", async (locale, url, text) => {
+    localStorage.setItem("omb-locale", locale);
+    vi.spyOn(location, "assign").mockImplementation(() => {});
+    vi.spyOn(location, "replace").mockImplementation(() => {});
+    const page = open(url, googlePc());
+    const title = document.getElementById("title");
+    expect(title.textContent).toBe(text);
+    expect(title.querySelector(".spinner")).not.toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(title.textContent).toBe(text);
+    expect(page.status.textContent).not.toMatch(/pair|연결/i);
+    expect(page.help.hidden).toBe(true);
+    expect(page.form.hidden).toBe(true);
+  });
+
+  it("keeps Pair this phone and the green Paired line for a QR link", async () => {
+    vi.spyOn(location, "replace").mockImplementation(() => {});
+    const page = open("/pair#k=wkp_token", async () => new Response("{}", { status: 200 }));
+    expect(document.getElementById("title").textContent).toBe("Pair this phone");
+    await vi.waitFor(() => expect(page.status.textContent).toBe("Paired. Opening Wink..."));
+    expect(page.status.className).toBe("status ok");
   });
 
   it("names a wrong account and offers the code field after a refused Google sign-in", async () => {
