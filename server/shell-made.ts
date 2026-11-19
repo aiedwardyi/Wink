@@ -27,6 +27,7 @@ export function shellMade(command: string, cwd: string, since: number): string[]
   // cd, pushd and popd are not replayed: a path is read against the newest folder named before it, then older ones, and kept at the first place something changed
   const bases = [cwd];
   const found = new Map<string, boolean>();
+  const folders = new Set<string>();
   for (const match of [...command.matchAll(TOKEN)].slice(0, MAX_TOKENS)) {
     const token = match[1] ?? match[2] ?? match[3]!;
     if (!token || token.startsWith("-") || /[*?]/.test(token) || /^\w{2,}:\/\//.test(token) || isNetworkPath(token)) continue;
@@ -37,13 +38,19 @@ export function shellMade(command: string, cwd: string, since: number): string[]
         let refs: string[] = [];
         if (stat?.isFile() && changed(stat, after)) refs = [path];
         if (stat?.isDirectory()) {
-          if (bases.length <= MAX_TOKENS) bases.push(path);
+          folders.add(path);
           try {
             refs = listed(path, stat, after);
           } catch {}
         }
         for (const ref of refs) made.add(ref);
         found.set(path, refs.length > 0);
+      }
+      // a folder named again is the newest again, so a later relative path reads against the folder current at that point
+      if (folders.has(path)) {
+        const at = bases.indexOf(path);
+        if (at >= 0) bases.splice(at, 1);
+        if (bases.length <= MAX_TOKENS) bases.push(path);
       }
       if (found.get(path)) break;
     }
