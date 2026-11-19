@@ -132,16 +132,16 @@ function samePc(a: DeviceRecord, b: DeviceRecord): boolean {
 }
 
 function readOsMachineId(): string | undefined {
-  const options = { encoding: "utf8", stdio: "pipe", timeout: 1_000, windowsHide: true } as const;
+  const options = { encoding: "utf8", stdio: "pipe", timeout: 1_000 } as const;
   let value: string | undefined;
   try {
     switch (platform()) {
       case "win32":
-        value = execFileSync("reg.exe", ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"], options)
+        value = execFileSync("reg.exe", ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"], { ...options, windowsHide: true })
           .match(/\bMachineGuid\s+REG_SZ\s+(\S+)/i)?.[1];
         break;
       case "darwin":
-        value = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], options)
+        value = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { ...options, windowsHide: true })
           .match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/)?.[1];
         break;
       case "linux":
