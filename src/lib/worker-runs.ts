@@ -33,7 +33,7 @@ const PROVIDERS: Array<[RegExp, string]> = [
   [/^script\b/i, "script"],
   [/\b(opus|sonnet|haiku|fable|claude)(?=\b|\d)/i, "claudeAgent"],
   [/\b(gpt|codex|astra|sol|terra|luna)(?=\b|\d)/i, "codex"],
-  [/\b(gemini|carbon|argon|hydrogen|flash)(?=\b|\d)/i, "geminiAgent"],
+  [/\b(gemini|carbon|neon|argon|hydrogen|flash)(?=\b|\d)/i, "geminiAgent"],
   [/\bgrok(?=\b|\d)/i, "grokAgent"],
   [/\b(muse|meta|llama|ember)(?=\b|\d)/i, "museAgent"],
   [/\bkimi(?=\b|\d)/i, "kimiAgent"],
