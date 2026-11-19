@@ -16,9 +16,10 @@ function enter(gate, take) {
   }
 }
 
-/** Any number of terminals start together; a waiting launch goes before the next one. */
+// ConPTY crashes the process (0xC0000005) when two terminals start on different threads at once.
+/** One terminal starts at a time; a waiting launch goes before the next one. */
 export function startTerminal(gate, run) {
-  const entered = gate && enter(gate, (count) => count >= 0 && !Atomics.load(gate, LAUNCHES) && Atomics.compareExchange(gate, TERMINALS, count, count + 1) === count);
+  const entered = gate && enter(gate, (count) => count === 0 && !Atomics.load(gate, LAUNCHES) && Atomics.compareExchange(gate, TERMINALS, count, count + 1) === count);
   try {
     return run();
   } finally {
