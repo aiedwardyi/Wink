@@ -519,9 +519,12 @@ export function Composer({
   const prewarmKey = JSON.stringify([botId, threadId, selection?.instanceId, selection?.model, selection?.effort, folder]);
   const prepared = useRef<string | null>(null);
   const requestBotPrewarm = useCallback(() => {
+    if (busy) {
+      prepared.current = null;
+      return;
+    }
     if (!botId || prepared.current === prewarmKey) return;
     prepared.current = prewarmKey;
-    if (busy) return;
     void api(`/api/bots/${botId}/prewarm`, { method: "POST" }).catch(() => {});
   }, [botId, busy, prewarmKey]);
 

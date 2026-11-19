@@ -208,20 +208,45 @@ describe("composer reply focus", () => {
     expect(requests()).toHaveLength(1);
     const pinned = { ...bot, tasks: [{ threadId: bot.threadId, title: "", createdAt: 1, cwd: "/private/prewarm" }] };
     await render({ ...pinned, busy: true });
-    await render(pinned);
     expect(requests()).toHaveLength(1);
+    await render(pinned);
+    expect(requests()).toHaveLength(2);
     const switched = { ...bot, modelSelection: { instanceId: "claude", model: "opus" } };
     await render(switched);
-    expect(requests()).toHaveLength(2);
-    await render({ ...switched, cwd: "/work/folder" });
     expect(requests()).toHaveLength(3);
+    await render({ ...switched, cwd: "/work/folder" });
+    expect(requests()).toHaveLength(4);
     await act(async () => textarea.blur());
     await render(bot);
-    expect(requests()).toHaveLength(3);
-    await act(async () => textarea.focus());
     expect(requests()).toHaveLength(4);
+    await act(async () => textarea.focus());
+    expect(requests()).toHaveLength(5);
     await render({ ...bot, id: "other" });
     expect(api).toHaveBeenLastCalledWith("/api/bots/other/prewarm", { method: "POST" });
+  });
+
+  it.each(["before", "during"])("prewarms once when retyping after Stop with focus held since %s the turn", async (focusTime) => {
+    const textarea = await mount(null) as HTMLTextAreaElement;
+    const bot: Bot = {
+      id: "stopped", threadId: "stopped-thread", name: "Stopped", title: "", description: "",
+      notifications: false, color: "blue", unread: false, messages: [],
+      modelSelection: { instanceId: "claude", model: "opus" },
+    };
+    const render = (busy: boolean) => act(async () => root!.render(createElement(Composer, { bot: { ...bot, busy } })));
+    const requests = () => vi.mocked(api).mock.calls.filter(([path]) => path === "/api/bots/stopped/prewarm");
+    await render(focusTime === "during");
+    await act(async () => textarea.focus());
+    expect(requests()).toHaveLength(focusTime === "before" ? 1 : 0);
+    vi.mocked(api).mockClear();
+
+    await render(true);
+    await act(async () => host!.querySelector<HTMLButtonElement>("[data-orbit-composer-stop]")!.click());
+    expect(focusState.dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "interrupt", botId: bot.id }));
+    expect(requests()).toHaveLength(0);
+    await render(false);
+    await typeDraft(textarea);
+    expect(document.activeElement).toBe(textarea);
+    expect(requests()).toHaveLength(1);
   });
 
   it("focuses the input when a reply target is selected", async () => {
