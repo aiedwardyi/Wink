@@ -970,4 +970,46 @@ describe("auto start after sign-in", { timeout: 60_000 }, () => {
     expect(work.activations).toHaveLength(1);
     expect(readGoogleBinding(work.dataDir)).toEqual(binding);
   });
+
+  it("joins the new account's sync when another account lands without a sign-out", async () => {
+    const homeA = await homeOnA();
+    const homeB = makePC("home-b", { bots: [bot("Notes")] });
+    await startOn(homeB, B);
+    const work = makePC("work");
+    work.account.setSession(A);
+    work.account.setSession(B);
+    expect(await work.sync.read()).toMatchObject({ state: "joining", email: B.email, boundEmail: B.email });
+    await work.sync.idle();
+    importPeers(work);
+    expect(readGoogleBinding(work.dataDir)).toMatchObject({ kind: "ok", binding: { owner: { sub: B.sub }, phase: "ready" } });
+    expect(work.workspaceId).toBe(homeB.workspaceId);
+    expect(work.workspaceId).not.toBe(homeA.workspaceId);
+    expect(work.bots.map((item) => item.name)).toEqual(["Notes"]);
+    expect(drivePaths(driveA()).some((path) => path.includes(work.deviceId))).toBe(false);
+  });
+
+  it("keeps Start when the account that lands has no sync yet", async () => {
+    await homeOnA();
+    const work = makePC("work");
+    work.account.setSession(A);
+    work.account.setSession(B);
+    expect(await work.sync.read()).toMatchObject({ state: "ready", email: B.email, join: { first: true, pcs: 0 } });
+    expect(readGoogleBinding(work.dataDir).kind).toBe("none");
+    expect(work.activations).toHaveLength(0);
+  });
+
+  it("leaves a PC bound to one account alone when another lands without a sign-out", async () => {
+    await homeOnA();
+    const homeB = makePC("home-b", { bots: [bot("Notes")] });
+    await startOn(homeB, B);
+    const work = makePC("work");
+    await startOn(work);
+    const binding = readGoogleBinding(work.dataDir);
+    work.account.setSession(B);
+    expect(await work.sync.read()).toMatchObject({ state: "other-account", boundEmail: A.email });
+    await work.sync.idle();
+    expect(work.activations).toHaveLength(1);
+    expect(readGoogleBinding(work.dataDir)).toEqual(binding);
+    expect(work.logs).toEqual([]);
+  });
 });
