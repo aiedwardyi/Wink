@@ -68,6 +68,11 @@ const input = "min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py
 const note = "mt-2 break-words text-[12px] leading-relaxed text-ink-secondary";
 
 type Google = { state: string; email?: string };
+const needsSignIn = (google: Google | null) => google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+// The dashboard lists only PCs on its own relay base.
+const onFrontDoor = (relay: RelayStatus | null) => (relay?.host ? relay.host.endsWith(`.${FRONT_DOOR}`) : !relay?.base || relay.base === FRONT_DOOR);
+// PUT answers 200 enabled for a PC with no ticket (enrolling) or a dead one (rejected): that PC is not on.
+const live = (relay: RelayStatus) => relay.enabled && !relay.problem && ["connected", "certifying", "reconnecting"].includes(relay.state);
 type Saved = { status: RelayStatus | null; google: Google | null; phones: Phone[] | null };
 const KEY = "omb-phone-relay";
 let last: Saved | null = null;
@@ -134,7 +139,8 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     () => request("/api/google-account").then((body: Google) => {
       keep({ google: body });
       setGoogle(body);
-    }, () => {}),
+      return body;
+    }, () => null),
     [request],
   );
 
@@ -186,12 +192,12 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   // Unknown until the first answer: the row paints at once, a placeholder where the switch goes, never a false Off.
   const known = status !== null || refused;
 
-  const run = async (work: () => Promise<void>, failure: (cause: unknown) => string) => {
+  const run = async <T,>(work: () => Promise<T>, failure: (cause: unknown) => string) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      await work();
+      return await work();
     } catch (cause) {
       setError(failure(cause));
     } finally {
@@ -202,8 +208,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const save = (on: boolean) =>
     run(
       async () => {
-        setStatus(await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) }));
+        const next: RelayStatus = await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) });
+        setStatus(next);
         trackSetting("phoneAccess", on ? "off" : "on", on ? "on" : "off");
+        return next;
       },
       () => t("settings.phoneAccess.saveError"),
     );
@@ -231,7 +239,9 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const joinWithGoogle = () =>
     run(
       async () => {
-        setStatus(await request("/api/phone-relay/google-enroll", { method: "POST" }));
+        const next: RelayStatus = await request("/api/phone-relay/google-enroll", { method: "POST" });
+        setStatus(next);
+        return next;
       },
       (cause) => {
         onNoRelay();
@@ -255,7 +265,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     const attempt = ++signInAttempt.current;
     setSigningIn(true);
     setError(null);
-    const result = await account.signIn({ openAfter: "dashboard" }).catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
+    const result = await account.signIn({ hold: true }).catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
     if (attempt !== signInAttempt.current) return false;
     setSigningIn(false);
     if (result.ok) {
@@ -269,14 +279,18 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const configured = status?.configured === true;
   const joinable = !configured && status?.joinable === true;
   const turnOn = () => (joinable ? joinWithGoogle() : save(true));
-  const confirm = () => {
+  const confirm = async () => {
     setAsking(false);
-    if (signedOut && window.ogb?.googleAccount) void signIn().then((ok) => void (ok && turnOn()));
-    else void turnOn();
+    const account = window.ogb?.googleAccount;
+    // On first open the account read can still be out: wait for it, so a signed-out PC signs in first.
+    if (!account || !needsSignIn(google ?? (await loadGoogle()))) return void turnOn();
+    if (!(await signIn())) return;
+    // The Google tab waits here: it opens this PC's relay dashboard only once the PC is on it.
+    const on = await turnOn();
+    void account.finish(on && live(on) && on.base ? on.base : null);
   };
   const link = status?.host ? `https://${status.host}/` : null;
   const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;
-  const frontDoorLists = door || (!status?.host && (!status?.base || status.base === FRONT_DOOR));
   const shown = door ? FRONT_DOOR : status?.host?.replace(/^(.{4}).{12}\./, "$1….");
   const copy = async () => {
     if (!link) return;
@@ -319,7 +333,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   );
 
   // Without a relay a sign-in cannot turn this on: the switch opens the other ways instead.
-  const signedOut = known && (configured || joinable) && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+  const signedOut = known && (configured || joinable) && needsSignIn(google);
   const unavailable = known && ((refused && !status) || status?.available === false || (!configured && status?.available !== true));
   const toggle = (
     <button
@@ -454,12 +468,12 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       {asking ? (
         <ConfirmDialog
           title={t("settings.devices.reachConfirm")}
-          body={frontDoorLists ? t("settings.devices.reachConfirmBody", { door: FRONT_DOOR }) : t("settings.devices.reachConfirmBodyOther")}
+          body={onFrontDoor(status) ? t("settings.devices.reachConfirmBody", { door: FRONT_DOOR }) : t("settings.devices.reachConfirmBodyOther")}
           confirmLabel={t("settings.devices.turnOn")}
           cancelLabel={t("settings.phoneAccess.cancel")}
           danger={false}
           confirmDisabled={busy}
-          onConfirm={confirm}
+          onConfirm={() => void confirm()}
           onCancel={() => {
             setAsking(false);
             setError(null);
