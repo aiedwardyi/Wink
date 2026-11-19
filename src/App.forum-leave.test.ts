@@ -19,22 +19,20 @@ import App from "./App";
 import { FORUM_SELECTION } from "@/lib/board";
 import { closeShow } from "@/lib/show-pane";
 import { closeVerifyWatch } from "@/lib/verify-watch";
-import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 let host: HTMLDivElement;
 let root: Root;
 
-const wait = (ms: number) => act(() => new Promise<void>(done => setTimeout(done, ms)));
-const settle = () => wait(PRESENCE_EXIT_MS + 60);
+const forumGone = () => until(() => !document.querySelector("[data-board-view]"));
 const selected = () => store.state!.selectedId;
 const paneButton = () => document.querySelector<HTMLButtonElement>("button[data-show-pane-button]");
 const pane = () => document.querySelector("aside[data-verify-watch]:not([data-closing])");
 const forumButton = () => act(async () => document.querySelector<HTMLButtonElement>("[data-board-button]")!.click());
 const esc = (target: EventTarget = document.body) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
 
-async function until(found: () => unknown) {
-  for (let tries = 0; tries < 100 && !found(); tries++) await wait(20);
+async function until<T>(found: () => T) {
+  for (let tries = 0; tries < 100 && !found(); tries++) await act(() => new Promise<void>(done => setTimeout(done, 20)));
   return found();
 }
 async function openPane() {
@@ -43,9 +41,8 @@ async function openPane() {
 }
 async function openForum() {
   await forumButton();
-  await settle();
+  expect(await until(() => document.querySelector("[data-board-view]:not([data-closing])"))).toBeTruthy();
   expect(selected()).toBe(FORUM_SELECTION);
-  expect(document.querySelector("[data-board-view]")).not.toBeNull();
 }
 
 beforeEach(async () => {
@@ -84,7 +81,7 @@ describe("leaving the Forum on desktop", () => {
     await openForum();
     for (const press of presses) await (press === "esc" ? esc() : forumButton());
     expect(document.querySelector("[data-board-view]")?.hasAttribute("data-closing")).toBe(true);
-    await settle();
+    await forumGone();
     expect(selected()).toBe("b2");
     expect(document.querySelector("[data-board-view]")).toBeNull();
   });
@@ -93,7 +90,7 @@ describe("leaving the Forum on desktop", () => {
     await openPane();
     await openForum();
     await (how === "Esc" ? esc() : forumButton());
-    await settle();
+    await forumGone();
     expect(selected()).toBe("b2");
     expect(await until(pane)).toBeTruthy();
   });
@@ -101,7 +98,7 @@ describe("leaving the Forum on desktop", () => {
   it("a closed side pane stays closed", async () => {
     await openForum();
     await esc();
-    await settle();
+    await forumGone();
     expect(selected()).toBe("b2");
     expect(pane()).toBeNull();
   });
@@ -110,7 +107,7 @@ describe("leaving the Forum on desktop", () => {
     await openPane();
     await openForum();
     await act(async () => document.querySelector<HTMLElement>('[data-sidebar-row-id="b1"] [role=button]')!.click());
-    await settle();
+    await forumGone();
     expect(selected()).toBe("b1");
     expect(pane()).toBeNull();
   });
@@ -118,7 +115,7 @@ describe("leaving the Forum on desktop", () => {
   it("Esc in the sidebar search stays in the Forum", async () => {
     await openForum();
     await esc(document.querySelector("[data-sidebar-search] input")!);
-    await settle();
+    await forumGone();
     expect(selected()).toBe(FORUM_SELECTION);
   });
 });
