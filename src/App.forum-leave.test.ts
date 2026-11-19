@@ -27,6 +27,7 @@ let root: Root;
 const forumGone = () => until(() => !document.querySelector("[data-board-view]"));
 const selected = () => store.state!.selectedId;
 const paneButton = () => document.querySelector<HTMLButtonElement>("button[data-show-pane-button]");
+const overlay = () => document.querySelector('.orbit-terminal-overlay[data-open="true"]');
 const pane = () => document.querySelector("aside[data-verify-watch]:not([data-closing])");
 const forumButton = () => act(async () => document.querySelector<HTMLButtonElement>("[data-board-button]")!.click());
 const esc = (target: EventTarget = document.body) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
@@ -110,6 +111,27 @@ describe("leaving the Forum on desktop", () => {
     await forumGone();
     expect(selected()).toBe("b1");
     expect(pane()).toBeNull();
+  });
+
+  it("a pane kept for another chat does not close the terminal of the chat picked from the Forum", async () => {
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { code: "Backquote", key: "`", ctrlKey: true })));
+    expect(await until(overlay)).toBeTruthy();
+    await act(async () => document.querySelector<HTMLElement>('[data-sidebar-row-id="b1"] [role=button]')!.click());
+    await openPane();
+    await openForum();
+    await act(async () => document.querySelector<HTMLElement>('[data-sidebar-row-id="b2"] [role=button]')!.click());
+    await forumGone();
+    expect(selected()).toBe("b2");
+    expect(overlay()).toBeTruthy();
+  });
+
+  it("Esc with the sidebar's New or share menu open stays in the Forum", async () => {
+    await openForum();
+    await act(async () => document.querySelector<HTMLButtonElement>('button[title="New or share"]')!.click());
+    expect(document.querySelector("[data-new-menu]")).toBeTruthy();
+    await esc();
+    expect(selected()).toBe(FORUM_SELECTION);
+    expect(document.querySelector("[data-board-view]:not([data-closing])")).toBeTruthy();
   });
 
   it("Esc in the sidebar search stays in the Forum", async () => {

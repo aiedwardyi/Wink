@@ -474,7 +474,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
       if (event.target instanceof Element && event.target.closest('[aria-modal="true"], [data-sidebar-search]')) return;
       if ([...document.querySelectorAll<HTMLInputElement>("[data-board-view] [data-board-reply-box] input")].some((input) => input.value)) return;
       // the open menu takes this Escape
-      if (document.querySelector("[data-message-menu], [data-selection-menu], [data-bot-menu], [data-room-menu], [data-section-picker]")) return;
+      if (document.querySelector("[data-message-menu], [data-selection-menu], [data-bot-menu], [data-room-menu], [data-section-picker], [data-new-menu]")) return;
       event.preventDefault();
       if (isOpen) setOpenId(null);
       else leaveRef.current();
