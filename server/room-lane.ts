@@ -46,10 +46,10 @@ const ASK_CHARS = 600;
 const said = (message: Message) => message.kind === "text" && !message.summarized && Boolean(message.text?.trim());
 
 /** The ask a lane turn may hand off: only when every asker may make bots work, a teammate's only under the host's Auto setting; null when no ask is found. */
-export function laneHandoff(turn: { lane: boolean; hop: number; works: boolean; autoApprove?: boolean; rows: readonly Message[]; botId: string; owner: string; instructionId?: string; teammate?: { asker: string; ask: string } | null }): { asker: string; ask: string } | null {
+export function laneHandoff(turn: { lane: boolean; hop: number; works: boolean; autoApprove?: boolean; rows: readonly Message[]; botId: string; owner: string; instructionId?: string; teammate?: { asker: string; ask: string } | null; ownerAsk?: boolean }): { asker: string; ask: string } | null {
   if (!turn.lane || turn.hop || !turn.works) return null;
   if (turn.teammate !== undefined) {
-    return turn.teammate && turn.autoApprove ? { asker: turn.teammate.asker, ask: turn.teammate.ask.trim().slice(0, ASK_CHARS) } : null;
+    return turn.teammate && (turn.ownerAsk || turn.autoApprove) ? { asker: turn.teammate.asker, ask: turn.teammate.ask.trim().slice(0, ASK_CHARS) } : null;
   }
   const own = (message: Message) => message.role === "bot" && message.from?.botId === turn.botId;
   const asked = turn.rows.find((message) => message.id === turn.instructionId && said(message)) ?? turn.rows.findLast((message) => said(message) && !own(message));

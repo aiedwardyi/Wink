@@ -3,6 +3,7 @@
 // stream from the harness server into local state. The reducer stays
 // pure; everything async lives in the wrapped dispatch + SSE fold.
 import { noteMemoryFrame, noteMemorySnapshot } from "@/lib/memory-clean-events";
+import { forgetMemory } from "@/lib/memory-last";
 import { request } from "@/lib/api-request";
 import { createErrorBanner } from "@/lib/error-banner";
 import { activeLocale } from "@/lib/i18n";
@@ -1423,7 +1424,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const bot = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
         return bot && !bot.busy ? (action.threadId ?? bot.threadId) : undefined;
       })();
-      if (action.type === "deleteBot") botPatchQueue.cancel(action.botId);
+      if (action.type === "deleteBot") {
+        botPatchQueue.cancel(action.botId);
+        forgetMemory(action.botId);
+      }
       if (action.type === "interrupt" && stateRef.current.stoppingBots[action.botId]) {
         action.onSettled?.();
         action.onFailure?.();
@@ -2515,6 +2519,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "bot.deleted":
           botPatchQueue.cancel(frame.botId);
+          forgetMemory(frame.botId);
           rawDispatch({ type: "deleteBot", botId: frame.botId });
           break;
         case "bots.order":

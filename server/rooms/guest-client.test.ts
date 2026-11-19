@@ -11,7 +11,7 @@ import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, roomCodeHost, uploadDeadline, type GuestClientDeps } from "./guest-client.ts";
 import * as joinedFiles from "./joined-files.ts";
-import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedKey, joinedRoom, saveJoined, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, endJoined, joinedEntries, joinedKey, joinedRoom, removeJoined, saveJoined, seatTaken, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
 
 const BASE = "wink.test";
@@ -250,6 +250,44 @@ describe("join", () => {
     }
     expect(result).toEqual({ ok: false, status: 409, error: "room is busy" });
     await until(() => c.rooms()[0]?.link === "live");
+  });
+
+  it("joins one at a time, so the key kept is the last one the door gave this PC", async () => {
+    const issued: string[] = [];
+    route = (req, res) => {
+      if (req.url !== "/room/v1/join") return quietDoor(req, res);
+      // the door reuses the seat and replaces the key; the first reply is the slow one
+      const key = `wkg_${String(issued.length + 1).repeat(43)}`;
+      issued.push(key);
+      const answer = () => reply(res, 200, { roomId: "r1", person: { id: "p1", name: "Mina" }, key });
+      if (issued.length === 1) setTimeout(answer, 200);
+      else answer();
+    };
+    const c = guest();
+    const results = await Promise.all([c.join(CODE), c.join(CODE)]);
+    expect(results.map((result) => result.ok)).toEqual([true, true]);
+    expect(issued).toHaveLength(2);
+    expect(joinedKey("r1")?.key).toBe(issued.at(-1));
+  });
+
+  it("seats sync's join only where this PC has no seat and never left one by hand", async () => {
+    route = quietDoor;
+    const c = guest();
+    const together = await Promise.all([c.join(CODE), c.seat(CODE, "r1")]);
+    expect(together[1]).toEqual({ ok: false, status: 409, error: "seated" });
+    expect(seen.filter((request) => request.url === "/room/v1/join")).toHaveLength(1);
+    expect(endJoined("r1", "left")).toBe(true);
+    expect(removeJoined("r1")).toBe(true);
+    expect(await c.seat(CODE, "r1")).toEqual({ ok: false, status: 409, error: "seated" });
+    expect(seen.filter((request) => request.url === "/room/v1/join")).toHaveLength(1);
+    // a join by hand is the user's own choice again, and clears the leave
+    expect((await c.join(CODE)).ok).toBe(true);
+    expect(seatTaken("r1")).toBe(true);
+    expect(endJoined("r1", "removed")).toBe(true);
+    expect(removeJoined("r1")).toBe(true);
+    expect(seatTaken("r1")).toBe(false);
+    expect((await c.seat(CODE, "r1")).ok).toBe(true);
+    expect(JSON.parse(seen.filter((request) => request.url === "/room/v1/join").at(-1)!.body)).toMatchObject({ code: CODE, roomId: "r1" });
   });
 
   it("is one call with the pasted code: the door gets the code and this PC's own name, nothing typed", async () => {

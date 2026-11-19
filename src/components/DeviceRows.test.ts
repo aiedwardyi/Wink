@@ -56,7 +56,7 @@ describe("Your PCs", () => {
     const check = home.querySelector('[aria-label="Online"]')!;
     expect(check.closest(".usage-control")).toBeNull();
     expect(check.compareDocumentPosition(nameText(home, "Home")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(rows(host).map((row) => row.textContent)).toEqual(["HomeOpen", "LaptopOffline", "DenChecking"]);
+    expect(rows(host).map((row) => row.textContent)).toEqual(["HomeOpen", "LaptopOfflineRemove", "DenChecking"]);
     await act(async () => root.unmount());
   });
 
@@ -66,7 +66,7 @@ describe("Your PCs", () => {
     const { host, root } = await renderView();
     const [home, laptop, den] = rows(host);
     expect(home!.querySelector("button")?.className).toContain("bg-accent");
-    expect(laptop!.querySelector("button")).toBeNull();
+    expect(laptop!.querySelector("button")?.className).not.toContain("bg-accent");
     expect(den!.querySelector("button")).toBeNull();
     await act(async () => home!.querySelector("button")!.click());
     expect(open).toHaveBeenCalledWith("home.wink.test", "Home");
@@ -81,6 +81,104 @@ describe("Your PCs", () => {
     await act(async () => root.unmount());
   });
 
+  it("removes only an offline pc, after confirming, then reloads the list", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    let devices = DEVICES;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? "GET" });
+      if (init?.method === "DELETE") devices = DEVICES.filter((device) => device.deviceId !== "c");
+      return Response.json(init?.method === "DELETE" ? { ok: true } : { devices });
+    }));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(YourPcs))));
+    const removeButtons = [...host.querySelectorAll("button")].filter((button) => button.textContent === "Remove");
+    expect(removeButtons.map((button) => button.getAttribute("aria-label"))).toEqual(["Remove Laptop"]);
+    await act(async () => removeButtons[0]!.click());
+    const dialog = document.querySelector('[role="dialog"], [role="alertdialog"]')!;
+    expect(dialog.textContent).toContain("Remove Laptop?");
+    expect(dialog.textContent).toContain("If that PC opens Wink again, it shows up again.");
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    const confirm = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Remove")!;
+    await act(async () => confirm.click());
+    expect(calls.filter((call) => call.method === "DELETE").map((call) => call.url)).toEqual(["/api/devices/c"]);
+    expect(rows(host).map((row) => row.querySelector("[data-device-name]")?.textContent)).toEqual(["Home", "Den"]);
+    await act(async () => root.unmount());
+  });
+
+  it("says why a refused remove failed, and stays quiet when another tab removed it", async () => {
+    let gone = false;
+    let code = "pc-online";
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") return Response.json({ error: "refused", code }, { status: 409 });
+      return Response.json({ devices: gone ? DEVICES.filter((device) => device.deviceId !== "c") : DEVICES });
+    }));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(YourPcs))));
+    const removeLaptop = async () => {
+      await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Remove")!.click());
+      const dialog = document.querySelector('[role="dialog"], [role="alertdialog"]')!;
+      await act(async () => [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Remove")!.click());
+    };
+    await removeLaptop();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Laptop is online again, so it stays.");
+    code = "no-own-record";
+    await removeLaptop();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Could not remove Laptop. Turn on Connect from my devices or Tailscale on this PC first.");
+    gone = true;
+    code = "pc-gone";
+    await removeLaptop();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(rows(host).map((row) => row.querySelector("[data-device-name]")?.textContent)).toEqual(["Home", "Den"]);
+    await act(async () => root.unmount());
+  });
+
+  it.each([
+    ["pc-online", "Laptop is online again, so it stays."],
+    ["no-own-record", "Could not remove Laptop. Turn on Connect from my devices or Tailscale on this PC first."],
+  ])("shows a %s refusal even if the refresh no longer lists that PC", async (code, message) => {
+    let refused = false;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        refused = true;
+        return Response.json({ error: "refused", code }, { status: 409 });
+      }
+      return Response.json({ devices: refused ? [DEVICES[0]] : [DEVICES[0], DEVICES[2]] });
+    }));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(YourPcs))));
+      await act(async () => host.querySelector("button")!.click());
+      const dialog = document.querySelector('[role="dialog"], [role="alertdialog"]')!;
+      await act(async () => [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Remove")!.click());
+      expect(rows(host)).toHaveLength(0);
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe(message);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps the name in the title while the dialog fades out", async () => {
+    const { host, root } = await renderView();
+    await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Remove")!.click());
+    const dialog = document.querySelector('[role="dialog"], [role="alertdialog"]')!;
+    await act(async () => [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!.click());
+    expect(document.body.textContent).not.toContain("Remove ?");
+    if (document.querySelector('[role="dialog"], [role="alertdialog"]')) expect(document.body.textContent).toContain("Remove Laptop?");
+    await act(async () => root.unmount());
+  });
+
+  it("asks in Korean", async () => {
+    localStorage.setItem("omb-locale", "ko");
+    const { host, root } = await renderView();
+    await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "삭제")!.click());
+    expect(document.body.textContent).toContain("Laptop을(를) 삭제할까요?");
+    expect(document.body.textContent).toContain("그 PC에서 Wink를 다시 열면 다시 나타나요.");
+    await act(async () => root.unmount());
+  });
+
   it("paints the last list before the PC answers, then updates it in place", async () => {
     localStorage.setItem("omb-devices", JSON.stringify(DEVICES));
     let answer = (_: Response) => {};
@@ -88,7 +186,7 @@ describe("Your PCs", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
     await act(async () => root.render(createElement(I18nProvider, null, createElement(YourPcs))));
-    expect(rows(host).map((row) => row.textContent)).toEqual(["HomeOpen", "LaptopOffline", "DenChecking"]);
+    expect(rows(host).map((row) => row.textContent)).toEqual(["HomeOpen", "LaptopOfflineRemove", "DenChecking"]);
     const first = rows(host)[0];
     await act(async () => answer(Response.json({ devices: DEVICES.map((device) => ({ ...device, offline: false, checking: false })) })));
     expect(rows(host).map((row) => row.textContent)).toEqual(["HomeOpen", "LaptopOpen", "DenOpen"]);

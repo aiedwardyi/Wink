@@ -60,6 +60,21 @@ it("keeps a bound sign-out card until that account is ready, then offers Retry",
   expect(ready).not.toContain("Sign In Again");
 });
 
+it("puts Retry left of Sign In on one row, and leaves the card alone without onRetry", () => {
+  const card = (onRetry?: () => void) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(I18nProvider, null,
+      createElement(ErrorRow, { botId: "bot", message: "Codex is not signed in", signIn: true, onRetry,
+        setupInstance: instance({ state: "available", authenticated: false }) })));
+    return host.querySelector<HTMLElement>("[data-sign-in-card] > :last-child > :first-child")!;
+  };
+  const group = card(() => {});
+  expect(Array.from(group.children, (el) => el.textContent)).toEqual(["Retry", "Sign In"]);
+  expect(group.className).toContain("items-center");
+  expect(group.className).not.toContain("flex-col");
+  expect(Array.from(card().children, (el) => el.textContent)).toEqual(["Sign In"]);
+});
+
 it("stacks the computer-only instruction under the text instead of squeezing it beside", () => {
   const original = window.matchMedia;
   window.matchMedia = (() => ({ matches: true, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;

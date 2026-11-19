@@ -9,6 +9,8 @@
   --danger: #a5211a;
   --edge: #929fff;
   --edge-glow: #929fff40;
+  /* The app's own token: Wink Day's 18px here, Precision's 6px in dark. */
+  --radius-lg: 18px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -21,6 +23,7 @@
     --accent: #929fff;
     --danger: #ff8c98;
     --edge-glow: #929fff80;
+    --radius-lg: 6px;
   }
 }
 * {
@@ -118,8 +121,34 @@ h1 {
   color: var(--danger);
 }
 .list,
-#google {
+#google,
+.code {
   margin-top: 24px;
+}
+.boxes {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+.boxes input {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--hairline) 60%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--inset);
+  color: var(--ink);
+  font: 600 18px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  text-align: center;
+  text-transform: uppercase;
+  outline: none;
+}
+.boxes input:focus {
+  border-color: var(--accent);
+}
+.boxes input:disabled {
+  opacity: 0.6;
 }
 .list {
   display: flex;
@@ -226,6 +255,11 @@ h1 {
 .list button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+h1 .spinner {
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: -1px;
 }
 .spinner {
   flex: none;

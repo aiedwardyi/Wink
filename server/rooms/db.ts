@@ -32,6 +32,7 @@ export interface RoomPerson {
   joinedAt: number;
   /** The host's "Can make bots work" switch: off, their requests run read-only. */
   works: boolean;
+  host?: true;
 }
 
 /** A picture or file on a room entry; the bytes live in room-files. */
@@ -49,6 +50,7 @@ export interface RoomEntry {
   id: string;
   at: number;
   author: RoomAuthor;
+  seat?: string;
   text: string;
   replyToId?: string;
   askId?: string;
@@ -100,6 +102,12 @@ function open(): DatabaseSync {
       joined_at INTEGER NOT NULL,
       PRIMARY KEY (room_id, id)
     );
+    CREATE TABLE IF NOT EXISTS room_host_seats (
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      person_id TEXT NOT NULL,
+      host_name TEXT NOT NULL,
+      PRIMARY KEY (room_id, person_id)
+    );
     CREATE TABLE IF NOT EXISTS translations (
       room_id TEXT NOT NULL,
       entry_id TEXT NOT NULL,
@@ -139,6 +147,7 @@ function open(): DatabaseSync {
   const columns = (db.prepare("PRAGMA table_info(log)").all() as Array<{ name: string }>).map((column) => column.name);
   if (!columns.includes("files")) db.exec("ALTER TABLE log ADD COLUMN files TEXT");
   if (!columns.includes("author_owner")) db.exec("ALTER TABLE log ADD COLUMN author_owner TEXT");
+  if (!columns.includes("author_seat")) db.exec("ALTER TABLE log ADD COLUMN author_seat TEXT");
   // DEFAULT 1 keeps everyone already in a room at full power; every join inserts 0.
   if (!(db.prepare("PRAGMA table_info(people)").all() as Array<{ name: string }>).some((column) => column.name === "works")) {
     db.exec("ALTER TABLE people ADD COLUMN works INTEGER NOT NULL DEFAULT 1");
@@ -180,10 +189,17 @@ export function roomById(id: string): RoomRecord | null {
   return row ? { id: row.id, name: row.name, createdAt: row.created_at } : null;
 }
 
-export function roomPeople(roomId: string): RoomPerson[] {
-  const rows = db().prepare("SELECT id, name, joined_at, works FROM people WHERE room_id = ? ORDER BY joined_at, rowid").all(roomId) as
-    Array<{ id: string; name: string; joined_at: number; works: number }>;
-  return rows.map((row) => ({ id: row.id, name: row.name, joinedAt: row.joined_at, works: row.works === 1 }));
+export function roomHostSeats(roomId: string): string[] {
+  return (db().prepare("SELECT person_id FROM room_host_seats WHERE room_id = ? ORDER BY person_id").all(roomId) as Array<{ person_id: string }>).map((row) => row.person_id);
+}
+
+export function roomPeople(roomId: string, includeHostSeats = false): RoomPerson[] {
+  const rows = db().prepare(`
+    SELECT p.id, p.name, p.joined_at, p.works, h.person_id AS host FROM people p
+    LEFT JOIN room_host_seats h ON h.room_id = p.room_id AND h.person_id = p.id
+    WHERE p.room_id = ? AND (? OR h.person_id IS NULL) ORDER BY p.joined_at, p.rowid
+  `).all(roomId, Number(includeHostSeats)) as Array<{ id: string; name: string; joined_at: number; works: number; host: string | null }>;
+  return rows.map((row) => ({ id: row.id, name: row.name, joinedAt: row.joined_at, works: row.works === 1, ...(row.host ? { host: true as const } : {}) }));
 }
 
 /** Host only: whether this person's requests may make the room's bots work. */
@@ -219,15 +235,19 @@ export function addPerson(roomId: string, name: unknown, taken: readonly string[
 type LogRow = {
   seq: number; id: string; at: number; author_kind: RoomAuthor["kind"]; author_id: string; author_name: string; text: string;
   reply_to_id: string | null; ask_id: string | null; grant_kind: RoomGrant | null; clean: number | null; files: string | null; author_owner: string | null;
+  host_name?: string | null;
+  author_seat: string | null;
 };
 
-const LOG_COLUMNS = "seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files, author_owner";
+const LOG_COLUMNS = "seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files, author_owner, author_seat";
+const READ_LOG_COLUMNS = `${LOG_COLUMNS}, (SELECT host_name FROM room_host_seats WHERE room_id = log.room_id AND person_id = log.author_id AND log.author_kind = 'person') AS host_name`;
 
 const rowToEntry = (row: LogRow): RoomEntry => ({
   seq: row.seq,
   id: row.id,
   at: row.at,
-  author: { kind: row.author_kind, id: row.author_id, name: row.author_name, ...(row.author_owner ? { owner: row.author_owner } : {}) },
+  author: row.host_name ? { kind: "host", id: "host", name: row.host_name } : { kind: row.author_kind, id: row.author_id, name: row.author_name, ...(row.author_owner ? { owner: row.author_owner } : {}) },
+  ...(row.host_name ? { seat: row.author_id } : row.author_seat ? { seat: row.author_seat } : {}),
   text: row.text,
   ...(row.reply_to_id ? { replyToId: row.reply_to_id } : {}),
   ...(row.ask_id ? { askId: row.ask_id } : {}),
@@ -240,7 +260,7 @@ const rowToEntry = (row: LogRow): RoomEntry => ({
 });
 
 export function roomEntry(roomId: string, id: string): RoomEntry | null {
-  const row = db().prepare(`SELECT ${LOG_COLUMNS} FROM log WHERE room_id = ? AND id = ?`).get(roomId, id) as LogRow | undefined;
+  const row = db().prepare(`SELECT ${READ_LOG_COLUMNS} FROM log WHERE room_id = ? AND id = ?`).get(roomId, id) as LogRow | undefined;
   return row ? rowToEntry(row) : null;
 }
 
@@ -262,13 +282,13 @@ export function saveRoomTranslation(roomId: string, entryId: string, lang: strin
 
 /** The newest `limit` entries, oldest first. */
 export function recentRoomEntries(roomId: string, limit: number, before = Number.MAX_SAFE_INTEGER): RoomEntry[] {
-  const rows = db().prepare(`SELECT ${LOG_COLUMNS} FROM log WHERE room_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`).all(roomId, before, limit) as LogRow[];
+  const rows = db().prepare(`SELECT ${READ_LOG_COLUMNS} FROM log WHERE room_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`).all(roomId, before, limit) as LogRow[];
   return rows.reverse().map(rowToEntry);
 }
 
 /** Entries after `after`, oldest first, at most `limit`. */
 export function roomEntriesAfter(roomId: string, after: number, limit: number): RoomEntry[] {
-  const rows = db().prepare(`SELECT ${LOG_COLUMNS} FROM log WHERE room_id = ? AND seq > ? ORDER BY seq LIMIT ?`).all(roomId, after, limit) as LogRow[];
+  const rows = db().prepare(`SELECT ${READ_LOG_COLUMNS} FROM log WHERE room_id = ? AND seq > ? ORDER BY seq LIMIT ?`).all(roomId, after, limit) as LogRow[];
   return rows.map(rowToEntry);
 }
 
@@ -291,18 +311,18 @@ export function committedRoomText(author: RoomAuthor["kind"], text: string): str
 
 /** The only insert into the room log. Entries are never updated. `at` is set only for carried history. */
 export function appendRoomEntry(roomId: string, draft: RoomEntryDraft, at = Date.now()): RoomEntry {
-  const text = committedRoomText(draft.author.kind, draft.text);
+  const text = committedRoomText(draft.seat ? "person" : draft.author.kind, draft.text);
   if (!text && !draft.files?.length) throw new RoomError(400, "message is empty");
   if (!roomById(roomId)) throw new RoomError(404, "no such room");
   if (draft.replyToId !== undefined && !roomEntry(roomId, draft.replyToId)) throw new RoomError(404, "no such message in this room");
   const row = db().prepare(`
-    INSERT INTO log (room_id, seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files, author_owner)
-    VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM log WHERE room_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO log (room_id, seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files, author_owner, author_seat)
+    VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM log WHERE room_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING ${LOG_COLUMNS}
   `).get(
     roomId, roomId, newId(), at, draft.author.kind, draft.author.id, draft.author.name, text,
     draft.replyToId ?? null, draft.askId ?? null, draft.grant ?? null, draft.clean === undefined ? null : Number(draft.clean),
-    draft.files?.length ? JSON.stringify(draft.files) : null, draft.author.owner ?? null,
+    draft.files?.length ? JSON.stringify(draft.files) : null, draft.author.owner ?? null, draft.seat ?? null,
   ) as LogRow;
   return rowToEntry(row);
 }

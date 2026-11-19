@@ -10,6 +10,8 @@
 import { createHash, createPublicKey, sign, verify, randomBytes, type KeyObject } from "node:crypto";
 import { z } from "zod";
 
+import { RELAY_BASE_RE } from "./relay-host.mjs";
+
 // ---------------------------------------------------------------------------
 // ALPN ids
 
@@ -511,8 +513,7 @@ export function verifyInvite(
  * relay's base domain so no build has to name one. Neither part contains ":".
  */
 export const SETUP_PREFIX = "wks1";
-/** A relay base domain, lowercase: at least two dot-separated DNS labels. */
-export const RELAY_BASE_RE = /^(?=.{3,200}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+export { RELAY_BASE_RE };
 const SETUP_INVITE_RE = new RegExp(`^${INVITE_PREFIX}\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$`);
 
 export interface SetupCode {

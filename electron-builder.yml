@@ -31,6 +31,7 @@ files:
   - shared/claude-launch-env.mjs
   - shared/error-report.mjs
   - shared/map-empty-tree.mjs
+  - shared/relay-host.mjs
   - shared/update-error.mjs
   - "!electron/**/*.test.*"
   - "!electron/terminal-*.node-test.mjs"

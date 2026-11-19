@@ -140,11 +140,26 @@ export async function replayThread(value: string, root = VERIFY_REPLAYS_DIR): Pr
   return key ? key.slice(0, key.indexOf("/")) : null;
 }
 
+const playable = (info: { mtimeMs: number; size: number }) => Date.now() - info.mtimeMs <= 7 * 86400_000 && info.size <= REPLAY_LIMIT;
+
 export async function readReplay(threadId: string, value: string, root = VERIFY_REPLAYS_DIR): Promise<Buffer | null> {
   if (!id(threadId) || !runId(value)) return null;
   try {
     const path = join(root, threadId, `${value}.lvr`), info = await stat(path);
-    if (Date.now() - info.mtimeMs > 7 * 86400_000 || info.size > REPLAY_LIMIT) return null;
+    if (!playable(info)) return null;
     return await readFile(path);
   } catch { return null; }
+}
+
+/** The run ids whose replay this PC can still play: a card synced from another PC lists runs that are not here. */
+export async function listReplays(threadId: string, root = VERIFY_REPLAYS_DIR): Promise<string[]> {
+  if (!id(threadId)) return [];
+  const runs: string[] = [], index = await readIndex(root);
+  for (const name of await readdir(join(root, threadId)).catch(() => [])) {
+    const run = name.slice(0, -4);
+    if (!name.endsWith(".lvr") || !runId(run) || !index[`${threadId}/${run}`]) continue;
+    const info = await stat(join(root, threadId, name)).catch(() => null);
+    if (info && playable(info)) runs.push(run);
+  }
+  return runs;
 }

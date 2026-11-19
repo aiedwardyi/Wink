@@ -56,6 +56,15 @@ it.each(["left", "right"] as const)("opens Media, then closes, with the bot list
   expect(button.querySelector("svg")!.classList.contains("lucide-panel-right-open")).toBe(true);
 });
 
+it("stays the sidebar toggle's gray when open", async () => {
+  await render("b7");
+  const button = host.querySelector("button")!;
+  await press();
+  expect(button.getAttribute("aria-pressed")).toBe("true");
+  expect(button.classList.contains("text-ink-secondary")).toBe(true);
+  expect(button.classList.contains("text-accent")).toBe(false);
+});
+
 it("opens Show when this chat has shown a file", async () => {
   await render("b2");
   await act(async () => showItem({ threadId: "b2", path: "C:\\w\\a.png", kind: "image" }));
