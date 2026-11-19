@@ -3,8 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
-import { spawnGate, startProcess } from "./spawn-gate.mjs";
+import { isMainThread, parentPort, workerData } from "node:worker_threads";
+import { gatedWorker, startProcess } from "./spawn-gate.mjs";
 import { writeWorkerHostRecord } from "./worker-host-identity.mjs";
 
 const SOURCES = ["worker-host-entry.mjs", "worker-host-protocol.mjs", "worker-host-identity.mjs", "terminal-pty.mjs", "spawn-gate.mjs"];
@@ -115,7 +115,7 @@ async function startOutside(gate, runtime, args, env) {
 export async function launchWorkerHost({ root, executable, ptyModule, slot, launch, env }) {
   const sources = await Promise.all(SOURCES.map(async (name) => [name, await fs.promises.readFile(fileURLToPath(new URL(name, import.meta.url)), "utf8")]));
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL(import.meta.url), { workerData: { workerHostLaunch: { root, executable, ptyModule, slot, launch, env, sources, gate: spawnGate } } });
+    const worker = gatedWorker(new URL(import.meta.url), { workerData: { workerHostLaunch: { root, executable, ptyModule, slot, launch, env, sources } } });
     worker.once("message", (message) => message.error ? reject(new Error(message.error)) : resolve(message));
     worker.once("error", reject);
     worker.once("exit", () => reject(new Error("Worker host launch stopped")));
@@ -123,7 +123,8 @@ export async function launchWorkerHost({ root, executable, ptyModule, slot, laun
 }
 
 if (!isMainThread && workerData?.workerHostLaunch) {
-  const { root, slot, launch, env, gate, ...input } = workerData.workerHostLaunch;
+  const { root, slot, launch, env, ...input } = workerData.workerHostLaunch;
+  const { gate } = workerData;
   try {
     const runtime = await stageWorkerHostRuntime({ root, ...input });
     writeWorkerHostRecord(path.join(slot, "launch.json"), { ...launch, ptyModule: runtime.ptyModule });

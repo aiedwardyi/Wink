@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { defer } from "./node-test-cleanup.mjs";
-import { spawnGate } from "./spawn-gate.mjs";
+import { gatedWorker, spawnGate, startProcess, startTerminal } from "./spawn-gate.mjs";
 import { terminalEnvironment } from "./terminal-host.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createWorkerHostClient } from "./worker-host-client.mjs";
@@ -173,7 +173,7 @@ test("the host is not created while a terminal is inside its start", { ...window
   const warm = client.prewarm();
   await until(() => fs.existsSync(path.join(root, "data", `v${WORKER_HOST_PROTOCOL}`, "launch.json")));
   // The launch has counted itself in at the gate and the held terminal keeps it there.
-  await until(() => Atomics.load(spawnGate, 1) === 1);
+  await until(() => Atomics.load(spawnGate, 1) !== 0);
   const early = [...order];
   Atomics.store(hold, 0, 1);
   Atomics.notify(hold, 0);
@@ -182,6 +182,37 @@ test("the host is not created while a terminal is inside its start", { ...window
   client.close();
   await until(() => !alive(host), 15_000);
   assert.deepEqual([early, order], [[], ["terminal", "host"]]);
+});
+
+const timed = (run) => {
+  const started = performance.now();
+  run();
+  return performance.now() - started;
+};
+
+test("a terminal worker that ends inside its start lets the next terminal and launch in at once", async (t) => {
+  const root = scratch(t);
+  const dies = path.join(root, "dies-pty.cjs");
+  const quick = path.join(root, "quick-pty.cjs");
+  fs.writeFileSync(dies, "exports.spawn = () => process.exit(0);");
+  fs.writeFileSync(quick, "exports.spawn = () => ({ pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {} });");
+  const lost = spawnTerminalPty(dies, "", [], {});
+  await assert.rejects(lost.ready);
+  await lost.exited;
+  assert.deepEqual([...spawnGate], [0, 0]);
+  const next = spawnTerminalPty(quick, "", [], {});
+  defer(t, () => next.terminate());
+  await next.ready;
+  assert.ok(timed(() => startTerminal(spawnGate, () => {})) < 1_000);
+  assert.ok(timed(() => startProcess(spawnGate, () => {})) < 1_000);
+});
+
+test("a launch worker that ends inside its start lets the next terminal and launch in at once", async () => {
+  const worker = gatedWorker(`import(${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "spawn-gate.mjs")).href)}).then(({ startProcess }) => startProcess(require("node:worker_threads").workerData.gate, () => process.exit(0)));`, { eval: true });
+  assert.equal(await new Promise((resolve) => worker.once("exit", resolve)), 0);
+  assert.deepEqual([...spawnGate], [0, 0]);
+  assert.ok(timed(() => startTerminal(spawnGate, () => {})) < 1_000);
+  assert.ok(timed(() => startProcess(spawnGate, () => {})) < 1_000);
 });
 
 test("a terminal opened as the host starts ends when it is stopped", { ...windows, timeout: 120_000 }, async (t) => {
