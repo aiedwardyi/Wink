@@ -4,8 +4,9 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
-import { answerCall, answerOnThread, dropCall } from "@/lib/live-call/active";
+import { answerCall, answerOnThread, dropCall, placeCall, useActiveCall, useEndCallUnlessAllowed } from "@/lib/live-call/active";
 
+import { callAudio } from "@/lib/live-call/warm-audio";
 import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 
@@ -82,4 +83,22 @@ it("a tapped call push still rings once the PC reports it is a team member", () 
   const placed = answerOnThread(bots, true);
   if (placed) dropCall(placed);
   expect(placed).not.toBeNull();
+});
+
+it("hangs up a live call when the PC stops being a team member", async () => {
+  vi.stubGlobal("AudioContext", class { state = "running"; resume() { return Promise.resolve(); } close() { return Promise.resolve(); } });
+  let live: unknown = null;
+  function Probe({ voiceCalls }: { voiceCalls: boolean }) {
+    useEndCallUnlessAllowed(voiceCalls);
+    live = useActiveCall();
+    return null;
+  }
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  await act(async () => root.render(createElement(Probe, { voiceCalls: true })));
+  await act(async () => { placeCall(atlas, callAudio()); });
+  expect(live).not.toBeNull();
+  await act(async () => root.render(createElement(Probe, { voiceCalls: false })));
+  expect(live).toBeNull();
+  await act(async () => root.unmount());
 });

@@ -1,5 +1,5 @@
 // The live call outlives the chat it started in: a host above every view owns it, chats and the widget only read it.
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
 import type { CallRoom } from "../../../shared/live-call";
@@ -69,6 +69,13 @@ export function answerOnThread(bots: readonly Bot[], voiceCalls: boolean, next?:
   if (!voiceCalls) return null;
   rung = null;
   return answerCall(bot, want.opener, voiceCalls);
+}
+
+/** A call must not outlive the right to place one: losing team membership mid-call hangs it up, mic included. */
+export function useEndCallUnlessAllowed(voiceCalls: boolean) {
+  useEffect(() => {
+    if (!voiceCalls && call) dropCall(call);
+  }, [voiceCalls]);
 }
 
 /** Only drops this call: a late teardown of an old one never hangs up a newer one. */

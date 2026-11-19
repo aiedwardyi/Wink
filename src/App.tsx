@@ -52,7 +52,7 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { answerOnThread } from "@/lib/live-call/active";
+import { answerOnThread, useEndCallUnlessAllowed } from "@/lib/live-call/active";
 import { syncWebPushRooms, webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
 import { isPhone, swipeChatIds } from "@/lib/phone-swipe";
@@ -525,6 +525,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [dispatch, hydratedBots]);
   const voiceCalls = state.config?.features?.voiceCalls === true;
   useEffect(() => void answerOnThread(state.bots, voiceCalls), [state.bots, voiceCalls]);
+  useEndCallUnlessAllowed(voiceCalls);
   useEffect(() => {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
