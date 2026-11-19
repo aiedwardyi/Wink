@@ -16,7 +16,7 @@
 // approves everything. Real per-action approval cards are a future path via
 // native ACP, which would reuse acp/core.ts like grok/gemini.
 //
-// MCP: agy has no per-turn MCP flag, so Wink's servers (agents, terminal, and
+// MCP: agy has no per-turn MCP flag, so Wink's servers (agents, terminal, web link reader, and
 // the bot's computer: cloud box / Local VM / VPS) are mounted into the global
 // `~/.gemini/config/mcp_config.json` around each child - see
 // ensureAntigravityComputerMcp below. Computer use is full-auto instances
@@ -197,6 +197,7 @@ export function readAntigravityModelCatalog(env: Record<string, string | undefin
 export const ANTIGRAVITY_COMPUTER_MCP_KEY = "openmausbot-computer";
 export const ANTIGRAVITY_AGENTS_MCP_KEY = "openmausbot-agents";
 export const ANTIGRAVITY_TERMINAL_MCP_KEY = "openmausbot-terminal";
+export const ANTIGRAVITY_WEB_MCP_KEY = "openmausbot-web";
 const WINK_MCP_KEY_PREFIX = "openmausbot-";
 
 type TurnUsage = { input: number; output: number; cachedInput?: number };
@@ -345,6 +346,7 @@ export function ensureAntigravityComputerMcp(
     ...userServers,
     [ANTIGRAVITY_AGENTS_MCP_KEY]: winkProxyMcpServer(SPAWNED_PROXIES.agents),
     [ANTIGRAVITY_TERMINAL_MCP_KEY]: winkProxyMcpServer(SPAWNED_PROXIES.terminal),
+    [ANTIGRAVITY_WEB_MCP_KEY]: winkProxyMcpServer(SPAWNED_PROXIES.web),
     ...(server ? { [ANTIGRAVITY_COMPUTER_MCP_KEY]: { command: server.command, args: server.args, env: server.env } } : {}),
   };
   const directory = dirname(path);
@@ -745,11 +747,15 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
 
       // spawnCli resolves npm .cmd shims / shebang scripts on Windows and
       // owns the process-group vs windowsHide difference (see procs.ts)
+      // The link reader reads this to refuse private addresses on a turn another person started.
+      const childEnv: Record<string, string | undefined> = { ...env, ...identity };
+      if (turn.readOnly) childEnv.OMB_READ_ONLY_TURN = "1";
+      else delete childEnv.OMB_READ_ONLY_TURN;
       let child: ReturnType<typeof spawnCli>;
       try {
         child = spawnCli(config.cli, args, {
           cwd,
-          env: { ...env, ...identity },
+          env: childEnv,
           stdio: ["pipe", "pipe", "pipe"], // prompt on stdin as stream-json NDJSON
         });
       } catch (error) {

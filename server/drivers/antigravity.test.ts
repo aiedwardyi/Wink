@@ -1203,6 +1203,7 @@ describe("Antigravity computer MCP config", () => {
   const staticEntries = {
     "openmausbot-agents": { command: process.execPath, args: [SPAWNED_PROXIES.agents], env: { ELECTRON_RUN_AS_NODE: "1" } },
     "openmausbot-terminal": { command: process.execPath, args: [SPAWNED_PROXIES.terminal], env: { ELECTRON_RUN_AS_NODE: "1" } },
+    "openmausbot-web": { command: process.execPath, args: [SPAWNED_PROXIES.web], env: { ELECTRON_RUN_AS_NODE: "1" } },
   };
   const botIntegrations = (bot: string) => ({
     agents: {
@@ -1523,6 +1524,27 @@ describe("Antigravity computer MCP config", () => {
       await recorder.until((event) => event.type === "turn.completed");
       const { env } = JSON.parse(readFileSync(join(home, "token.json"), "utf8"));
       expect(env).toMatchObject({ OMB_COMMS_TOKEN: "agents-tok", OMB_TERMINAL_TOKEN: "grant-python", OMB_TERMINAL_URL: "http://127.0.0.1:9" });
+    } finally {
+      recorder.stop();
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("tells the link reader when another person started the turn, and only then", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-readonly-env-"));
+    const instance = await createIn(home, "readonly-env", { FAKE_AGY_DUMP: join(home, "env.json"), OMB_READ_ONLY_TURN: "1" });
+    const recorder = recordEvents(instance.adapter);
+    const dumped = () => JSON.parse(readFileSync(join(home, "env.json"), "utf8")).env.OMB_READ_ONLY_TURN;
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-own", text: "one" });
+      await recorder.until((event) => event.type === "turn.completed");
+      expect(dumped()).toBeUndefined();
+      await instance.adapter.sendTurn({ threadId: "t-guest", text: "two", readOnly: true });
+      await recorder.until((event) => event.type === "turn.completed" && event.threadId === "t-guest");
+      expect(dumped()).toBe("1");
     } finally {
       recorder.stop();
       await instance.dispose();
