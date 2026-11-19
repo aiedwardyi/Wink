@@ -477,6 +477,30 @@ describe("Memory tab on a phone whose memory read never answers", () => {
   });
 });
 
+describe("Memory page on a slow read", () => {
+  it("paints the last read at once and the fresh read replaces it", async () => {
+    width(1440);
+    await open();
+    await toMemory();
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    const held: (() => void)[] = [];
+    vi.mocked(fetch).mockImplementation((url, init) => String(url) !== `/api/bots/${bot.id}/memory` || init?.method
+      ? answer(url, init)
+      : new Promise((done) => held.push(() => done(new Response(JSON.stringify({ text: "- Uses Windows\n- Drinks tea", truncated: false, revision: "fresh", topics: [{ name: "prefs.md", bytes: 3 }] }))))));
+    const count = (kind: string) => fold(kind).querySelector(".mm-count b")!.textContent;
+    await open();
+    await toMemory();
+    expect(held.length).toBeGreaterThan(0);
+    expect([count("long"), count("knowledge")]).toEqual(["1", "2"]);
+    expect(host.querySelector(".mm")!.textContent).toContain("Uses Windows");
+    await act(async () => { for (const each of held) each(); });
+    await settle();
+    expect([count("long"), count("knowledge")]).toEqual(["2", "1"]);
+  });
+});
+
 describe("Knowledge and Edit", () => {
   it("reads a topic file from its Knowledge row and has no second list", async () => {
     await open();
