@@ -283,8 +283,15 @@
     const boxes = [];
     let value = "";
     let busy = false;
+    // Back from a typed code lands where the person was typing; from a listed PC it does not pull focus into the boxes.
+    let typed = false;
 
-    const render = () => boxes.forEach((box, i) => (box.value = (value[i] || "").trim()));
+    // Only the boxes up to the next empty one are tab stops, so Tab walks forward out of the boxes rather than being pulled back by the focus rule.
+    const render = () =>
+      boxes.forEach((box, i) => {
+        box.value = (value[i] || "").trim();
+        box.tabIndex = i <= value.length ? 0 : -1;
+      });
     const focusAt = (i) => boxes[Math.min(i, CODE_LENGTH - 1)].focus();
     const lock = (on) => {
       busy = on;
@@ -295,7 +302,6 @@
       value = "";
       render();
       lock(false);
-      focusAt(0);
     };
 
     async function open(code) {
@@ -305,10 +311,12 @@
       // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
       if (LABEL_RE.test(label)) {
         holdAccount(label);
+        typed = true;
         location.assign(`https://${label}.${config.base}/pair?g=1`);
         return;
       }
       reset();
+      focusAt(0);
       say(label === "busy" ? TOO_MANY : BAD_CODE, "error");
     }
 
@@ -356,11 +364,14 @@
       });
       boxes.push(box);
     }
+    render();
     $("boxes").replaceChildren(...boxes);
     // Back from the PC's page can restore this one as it was left: locked on a code that already went.
     addEventListener("pageshow", (event) => {
       if (!event.persisted) return;
       reset();
+      if (typed) focusAt(0);
+      typed = false;
       say("");
     });
   }

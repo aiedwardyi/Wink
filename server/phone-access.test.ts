@@ -1042,6 +1042,21 @@ describe("short code for the sign-in page", () => {
     expect(minted).toEqual(["ABCDEF", "GHJKLM"]);
   });
 
+  it("keeps the held code when the relay fails a refresh", async () => {
+    let fail = false;
+    const w: World = await world({
+      mint: async () => {
+        if (fail) throw new Error("relay down");
+        return { code: "ABCDEF", exp: w.clock.now() + ROOM_CODE_TTL_MS };
+      },
+    });
+    const code = async () => codeSchema.parse(JSON.parse((await w.local("/api/phone-relay/code")).body)).code;
+    expect(await code()).toBe("ABCDEF");
+    fail = true;
+    w.clock.advance(ROOM_CODE_TTL_MS - 24 * 60 * 60_000 + 1);
+    expect(await code()).toBe("ABCDEF");
+  });
+
   it("shows no code when the relay mints none, and keeps it from relay phones and other local callers", async () => {
     const { w, code } = await codeWorld();
     expect(await code()).toBeNull();

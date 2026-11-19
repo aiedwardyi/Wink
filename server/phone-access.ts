@@ -357,7 +357,7 @@ export class PhoneAccess {
       if (!minted || !ROOM_CODE_RE.test(minted.code) || minted.exp <= this.clock.now() || !this.describe().enabled || this.status().host !== host) return held?.code ?? null;
       writeFileAtomic(this.openCodeFile, JSON.stringify({ code: minted.code, exp: minted.exp, host }));
       return minted.code;
-    }).catch(() => null).finally(() => {
+    }).catch(() => held?.code ?? null).finally(() => {
       this.openCodeMint = null;
     });
     return this.openCodeMint;

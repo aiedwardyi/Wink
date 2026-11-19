@@ -745,8 +745,29 @@ describe("entering a PC's code", () => {
     const tsx = readFileSync(join(ROOT, "src/components/CodeBoxes.tsx"), "utf8");
     expect(tsx).toContain("size-11 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold");
     const rule = CSS.match(/\.boxes input \{([^}]*)\}/)?.[1] ?? "";
-    for (const part of ["width: 44px", "height: 44px", "border-radius: 8px", "var(--hairline) 60%", "var(--inset)", "text-align: center", "font: 600 18px ui-monospace"]) expect(rule).toContain(part);
+    for (const part of ["width: 44px", "height: 44px", "border-radius: var(--radius-lg)", "var(--hairline) 60%", "var(--inset)", "text-align: center", "font: 600 18px ui-monospace"]) expect(rule).toContain(part);
     expect(CSS).toMatch(/\.boxes \{[^}]*gap: 8px/);
+  });
+
+  it("rounds the boxes like the app's group join boxes in the skin this page matches", () => {
+    const app = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+    const radius = (selector: string, css: string) => css.match(new RegExp(`${selector.replace(/[[\]"=\-^]/g, "\\$&")} \\{[^}]*?--radius-lg: (\\d+px)`))?.[1];
+    const light = CSS.match(/:root \{[^}]*--radius-lg: (\d+px)/)?.[1];
+    const dark = CSS.match(/@media \(prefers-color-scheme: dark\) \{\s*:root \{[^}]*--radius-lg: (\d+px)/)?.[1];
+    expect(light).toBe(radius('[data-skin="wink-day"]', app));
+    expect(dark).toBe(radius('[data-skin="precision"]', app));
+    expect([light, dark]).toEqual(["18px", "6px"]);
+  });
+
+  it("lets Tab leave the boxes forward instead of back into the next empty one", () => {
+    open("/signin", []);
+    answer({});
+    const stops = () => boxes().map((box) => box.tabIndex);
+    expect(stops()).toEqual([0, -1, -1, -1, -1, -1]);
+    enter("AB");
+    expect(stops()).toEqual([0, 0, 0, -1, -1, -1]);
+    enter("CDEF");
+    expect(stops()).toEqual([0, 0, 0, 0, 0, 0]);
   });
 
   it("types like the group boxes for any text, Korean keyboard included", () => {
@@ -924,10 +945,11 @@ describe("entering a PC's code", () => {
     expect(boxes().every((box) => !box.disabled)).toBe(true);
   });
 
-  it("starts over when the page comes back from the back-forward cache", () => {
+  it("starts over, on the first box, when Back restores the page after a typed code", async () => {
     open("/signin", []);
-    vi.stubGlobal("fetch", () => new Promise<Response>(() => {}));
+    answer(live);
     enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
     expect(boxes().every((box) => box.disabled)).toBe(true);
     status().textContent = BAD_CODE;
     status().className = "status error";
@@ -937,6 +959,20 @@ describe("entering a PC's code", () => {
     expect(focused()).toBe(0);
     expect(status().textContent).toBe("");
     expect(status().className).toBe("status");
+  });
+
+  it("does not pull focus into the boxes when Back restores the page after a listed PC", async () => {
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button")!.click();
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Ada")));
+    enter("AB");
+    boxes()[2]!.blur();
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(focused()).toBe(-1);
+    expect(shown()).toBe("|||||");
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
   });
 
   it("leaves a fresh page load alone on pageshow", () => {

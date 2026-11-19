@@ -9,6 +9,8 @@
   --danger: #a5211a;
   --edge: #929fff;
   --edge-glow: #929fff40;
+  /* The app's own token: Wink Day's 18px here, Precision's 6px in dark. */
+  --radius-lg: 18px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -21,6 +23,7 @@
     --accent: #929fff;
     --danger: #ff8c98;
     --edge-glow: #929fff80;
+    --radius-lg: 6px;
   }
 }
 * {
@@ -133,7 +136,7 @@ h1 {
   height: 44px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--hairline) 60%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--inset);
   color: var(--ink);
   font: 600 18px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
