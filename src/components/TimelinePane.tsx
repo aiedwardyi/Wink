@@ -371,6 +371,9 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
   );
 }
 
+// where the sheet sits with its newest pick at the bottom of the pane, or at the top if it is shorter
+const pinY = (box: HTMLElement, sheet: HTMLElement, scale: number) => Math.min(START.y, box.clientHeight - sheet.offsetHeight * scale);
+
 function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: string; rows: Row[] }[]; needle: string; botId: string; threadId: string; you: string; closing: boolean }) {
   const { t, locale } = useI18n();
   const frame = useRef<HTMLDivElement>(null);
@@ -449,7 +452,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     const first = drawn[0]?.rows[0]?.id ?? "";
     const rows = `${first}\n${drawn.at(-1)?.rows.at(-1)?.id}\n${drawn.reduce((sum, day) => sum + day.rows.length, 0)}`;
     // the newest pick is at the bottom, so a view left there follows new picks down
-    const floor = (scale: number) => Math.min(START.y, box.clientHeight - height * scale);
+    const floor = (scale: number) => pinY(box, sheet.current!, scale);
     let next: View;
     if (!at || reopened || changed) {
       const scale = !at || reopened || !needle ? fit : at.scale;
@@ -466,8 +469,14 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
 
   useEffect(() => {
     const box = frame.current!;
-    const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(redraw);
+    // a pane resize while the view sits on the newest pick keeps it there
+    const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      redraw();
+      const at = view.current;
+      if (at && pinned.current && sheet.current) show({ ...at, y: pinY(box, sheet.current, at.scale) }, true);
+    });
     resized?.observe(sheet.current!);
+    resized?.observe(box);
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? box.clientHeight : 1;

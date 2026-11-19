@@ -525,7 +525,7 @@ it("draws the bot's picks on the Timeline canvas, oldest day first, each pick ci
   expect(strokes("replaced")).toBe(1);
   expect(strokes("route")).toBe(1);
   expect([...forum.querySelectorAll(".timeline-tweaks q")].map((tweak) => tweak.textContent)).toEqual(["im wondering if it should have a small title up top so ppl know what it is", "humans can reply too if they want, but its made for the bots"]);
-  expect(host.querySelector(".timeline-hint")?.textContent).toMatch(/^Newest at bottom · Scroll to move · Ctrl\+scroll to zoom\d+%$/);
+  expect(host.querySelector(".timeline-hint")?.textContent).toMatch(/^Scroll to move · Ctrl\+scroll to zoom\d+%$/);
   const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
   expect(search.placeholder).toBe("Search picks and your words");
   await type(search, "reddit");
@@ -653,6 +653,32 @@ it("opens at the newest pick at the bottom, and keeps it there as picks land unl
   await openTimeline("b-bottom-2");
   await until(() => picked().length === 7);
   expect(y()).toBeCloseTo(bottom(7));
+});
+
+it("keeps the newest pick at the bottom when the pane resizes, unless scrolled up", async () => {
+  let tall = 600;
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-canvas") ? tall : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-sheet") ? 100 + 300 * this.querySelectorAll("[data-timeline-pick]").length : 0; });
+  const watchers: (() => void)[] = [];
+  vi.stubGlobal("ResizeObserver", class { constructor(run: () => void) { watchers.push(run); } observe() {} disconnect() {} });
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(timeline).entries }), { status: 200 }));
+  const y = () => Number(/translate\(4px, (-?[\d.]+)px\) scale\(0\.86\)/.exec(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform)![1]);
+  const bottom = (count: number) => tall - (100 + 300 * count) * 0.86;
+  const resize = (to: number) => act(async () => { tall = to; for (const run of watchers) run(); });
+
+  await openTimeline("b-resize");
+  await until(() => picked().length === 5);
+  await resize(400);
+  expect(y()).toBeCloseTo(bottom(5));
+  await resize(800);
+  expect(y()).toBeCloseTo(bottom(5));
+
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -300 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  const up = y();
+  await resize(500);
+  expect(y()).toBe(up);
 });
 
 it("orders days and picks by the current pick, even when a newer tap lost to it", async () => {
