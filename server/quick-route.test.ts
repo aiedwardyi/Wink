@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { nominate } from "./quick-route.ts";
+import { isOrder, nominate } from "./quick-route.ts";
 
 // Busy-time asks, redacted; the label is the probe rules' decision.
 const LABELED: Array<[string, "quick" | "ack" | "main"]> = [
@@ -166,7 +166,119 @@ const SENT_MIDTURN: Array<[string, "quick" | "ack" | "main"]> = [
   ["no stop", "main"],
 ];
 
+const ORDERS: Array<[string, boolean]> = [
+  ["merge both", true],
+  ["both", true],
+  ["2", true],
+  ["the second one", true],
+  ["option b", true],
+  ["also update the docs when you are done", true],
+  ["can u save these on my work pc desktop", true],
+  ["can we do the world swipe now please? i would love that we can deploy today", true],
+  ["yea use 3080", true],
+  ["둘 다", true],
+  ["2번", true],
+  ["PR 머지해줘", true],
+  ["둘 다 머지해줘", true],
+  ["squash both", true],
+  ["그냥 머지하면 어때?", true],
+  ["what port is in the server config, please?", false],
+  ["how do I run this, pls", false],
+  ["Does it support Windows, please?", false],
+  ["성능은 어때?", false],
+  ["Can it support Windows, please?", false],
+  ["Could it run on Linux, please?", false],
+  ["Will the release include the fix, pls?", false],
+  ["Do the tests pass on Windows, please?", false],
+  ["Do both builds support Windows, please?", false],
+  ["Have the tests passed, please?", false],
+  ["Should I send it now, please?", false],
+  ["Could you tell me which port it uses, please?", false],
+  ["Do you know if it supports Windows, please?", false],
+  ["Can you merge it, please?", true],
+  ["Can we deploy today, please?", true],
+  ["do both, please", true],
+  ["do the migration, please", true],
+  ["do both PRs now, please?", true],
+  ["have it ready by noon, please", true],
+  ["성능 어때?", false],
+  ["속도 어때?", false],
+  ["이거 어때?", false],
+  ["화면 어때?", false],
+  ["새로 만든 게 어때?", false],
+  ["빌드 상태 어때요?", false],
+  ["성능 어떨까?", false],
+  ["윈도우에서도 돼?", false],
+  ["맥에서도 되나요?", false],
+  ["머지하는 게 어때?", true],
+  ["해보는 건 어때?", true],
+  ["내일 하면 어떨까?", true],
+  ["배포해도 돼?", true],
+  ["그걸로 해도 돼?", true],
+  ["please install node", true],
+  ["switched to the new branch", false],
+  ["done", false],
+  ["done. now push it", true],
+  ["says 57%", false],
+  ["GetWinkDev is available", false],
+  ["what port is in the server config?", false],
+  ["dark mode?", false],
+  ["when can we do that. i want to keep developing", false],
+  ["Csn i give feedback.", false],
+  ["다 했어", false],
+  ["지금 뭐 하고 있어?", false],
+  ["Do these work, please?", false],
+  ["Do those look right, please?", false],
+  ["Could you explain why it failed, please?", false],
+  ["Can you confirm whether it supports Windows, please?", false],
+  ["Can you please clarify what changed, pls?", false],
+  ["Would you describe the setup, please?", false],
+  ["Could you remind me which port it uses, please?", false],
+  ["Can you summarize the error, please?", false],
+  ["Could you let me know if the build passed, please?", false],
+  ["do these first, please", true],
+  ["do those two, please?", true],
+  ["Can you confirm the order, please?", true],
+  ["Can you squash the two commits?", true],
+  ["squash the two commits", true],
+  ["윈도우 지원하는지 알려줄래?", false],
+  ["왜 실패했는지 설명해 줄래요?", false],
+  ["포트가 뭔지 알려줘", false],
+  ["어떻게 설치하는지 말해 줄래?", false],
+  ["빌드 통과했는지 알려주세요", false],
+  ["어디서 설정하는지 설명해 줄 수 있어?", false],
+  ["PR 머지하고 알려줘", true],
+  ["테스트 통과하는지 확인해 줘", true],
+  ["", false],
+];
+
+describe("isOrder", () => {
+  it.each(ORDERS)("%s", (text, want) => {
+    expect(isOrder(text)).toBe(want);
+  });
+
+  it.each(["squash", "rebase", "keep", "revert", "skip", "drop", "approve", "finish", "close", "publish", "switch to", "apply", "commit", "share", "pick", "split"])("takes %s as an order, bare and after can you", (verb) => {
+    expect(isOrder(`${verb} the two commits`)).toBe(true);
+    expect(isOrder(`Can you ${verb} the two commits?`)).toBe(true);
+  });
+});
+
+// "do both" approves whatever follows; a "do" question with its own verb and a "?" asks.
+const DO_BOTH: Array<[string, "quick" | "ack" | "main"]> = [
+  ["Do both builds support Windows, please?", "ack"],
+  ["Do all tests pass on CI?", "quick"],
+  ["do both", "main"],
+  ["do both PRs?", "main"],
+  ["do both PRs now?", "main"],
+  ["do all of them?", "main"],
+  ["do it?", "main"],
+];
+
 describe("nominate", () => {
+  it.each(DO_BOTH)("do: %s", (text, want) => {
+    expect(nominate(text)).toBe(want);
+  });
+
   it.each(SENT_MIDTURN)("sent mid-turn: %s", (text, want) => {
     expect(nominate(text)).toBe(want);
   });

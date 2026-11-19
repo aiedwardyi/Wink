@@ -312,6 +312,27 @@ describe("google sign-in", () => {
     expect(forged.seen.pages[1].text).not.toMatch(/refresh|app\.getwink\.dev/);
   });
 
+  it("shows success only after the exchange and the save worked", async () => {
+    const exchangeFails = browser();
+    await expect(runGoogleSignIn({ client: CLIENT, openExternal: exchangeFails.openExternal, fetch: tokenEndpoint({ error: "invalid_grant" }).fetch, openAfter: "dashboard" })).rejects.toMatchObject({ code: "exchange-failed" });
+    await exchangeFails.openExternal.mock.results[0].value;
+    expect(exchangeFails.seen.pages[1].text).toContain("Sign-in failed");
+    expect(exchangeFails.seen.pages[1].text).not.toMatch(/signed in|refresh|app\.getwink\.dev/);
+
+    const saveFails = browser();
+    const google = createGoogleAccountController({
+      client: CLIENT,
+      openExternal: saveFails.openExternal,
+      fetch: tokenEndpoint().fetch,
+      saveSession: vi.fn().mockRejectedValue(new Error("store down")),
+      clearSession: vi.fn(),
+    });
+    expect(await google.signIn({ openAfter: "dashboard" })).toEqual({ ok: false, error: "store-failed" });
+    await saveFails.openExternal.mock.results[0].value;
+    expect(saveFails.seen.pages[1].text).toContain("Sign-in failed");
+    expect(saveFails.seen.pages[1].text).not.toMatch(/signed in|refresh|app\.getwink\.dev/);
+  });
+
   it("passes openAfter from signIn through, and drops any other value", async () => {
     const run = async (options) => {
       const { openExternal, seen } = browser();
