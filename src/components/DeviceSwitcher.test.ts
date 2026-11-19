@@ -38,6 +38,7 @@ afterEach(async () => {
   roots.clear();
   store.api.mockReset();
   store.dispatch.mockReset();
+  localStorage.clear();
   delete window.ogb;
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
@@ -129,6 +130,17 @@ describe("DeviceSwitcher", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("paints the saved PCs before /api/devices answers", async () => {
+    setDesktop();
+    localStorage.setItem("omb-devices", JSON.stringify([device("home", { current: true }), device("work")]));
+    store.api.mockReturnValue(new Promise(() => {}));
+    const host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => renderRoot(host).render(createElement(I18nProvider, null, createElement(DeviceSwitcher))));
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    expect(document.querySelector('[data-device-id="work"]')?.textContent).toBe("work");
   });
 
   it("opens Devices from the final Connect a Device row", async () => {

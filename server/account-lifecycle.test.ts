@@ -84,7 +84,7 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
     referenced: async (id) => references.has(id), invalidate, changed, configBusy: () => configBusy,
   });
   controllers.push(controller);
-  return { dir, accounts, registry, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
+  return { dir, accounts, registry, drivers, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
     busy: (value: boolean) => { configBusy = value; }, failLogout: () => { logoutFails = true; },
     state: (value: typeof state) => { state = value; }, wait: (value: Promise<void>) => { waiting = value; },
     add: async (of = "claude") => { const result = await controller.add(of); await controller.settled(result.id); return accounts.get(result.id)!; },
@@ -740,6 +740,63 @@ describe("account lifecycle", () => {
       state: "stopped", snapshot: { state: "available", authenticated: false },
     });
     expect(f.registry.accountAvailable(account.id)).toBe(false);
+  });
+
+  it.each(["observe", "restore", "refresh", "observe while a pane uses it"])("keeps a signed-out account's identity, generation and sessions after a %s read, and the other accounts as they were", async (path) => {
+    const f = await fixture();
+    const added = [await f.add(), await f.add(), await f.add(), await f.add()];
+    const [account] = added;
+    expect(account.identity).toBeTruthy();
+    f.invalidate.mockClear();
+    if (path.includes("pane")) f.references.add(account.id);
+    f.statuses.set(account.id, { state: "available", authenticated: false });
+    if (path === "restore") await f.controller.restore();
+    else if (path === "refresh") await f.registry.describe({ refresh: true });
+    else await f.controller.observe(account.id, f.statuses.get(account.id)!);
+    expect(f.accounts.get(account.id)).toEqual({ ...account, state: "stopped" });
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+    expect(f.invalidate).not.toHaveBeenCalled();
+    for (const other of added.slice(1)) expect(f.accounts.get(other.id)).toEqual(other);
+  });
+
+  it("keeps showing the address a signed-out account was signed in as", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.statuses.set(account.id, { state: "available", authenticated: true, accountIdentity: account.identity, account: "fixture@example.test" });
+    await f.registry.describe({ refresh: true });
+    f.statuses.set(account.id, { state: "available", authenticated: false });
+    await f.registry.describe({ refresh: true });
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot).toMatchObject({ authenticated: false, account: "fixture@example.test" });
+  });
+
+  it("keeps a login's identity on the PC that reads it signed out, leaving the other PC's accounts file as it was", async () => {
+    const pcs = [await fixture(), await fixture()];
+    const [, work] = [await pcs[0].add(), await pcs[1].add()];
+    const other = readFileSync(join(pcs[0].dir, "accounts.json"), "utf8");
+    pcs[1].invalidate.mockClear();
+    pcs[1].statuses.set(work.id, { state: "available", authenticated: false });
+    await pcs[1].controller.observe(work.id, pcs[1].statuses.get(work.id)!);
+    expect(pcs[1].accounts.get(work.id)).toEqual({ ...work, state: "stopped" });
+    expect(pcs[1].invalidate).not.toHaveBeenCalled();
+    expect(readFileSync(join(pcs[0].dir, "accounts.json"), "utf8")).toBe(other);
+  });
+
+  it("offers the normal Sign In on an account stopped before a restart", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.statuses.set(account.id, { state: "available", authenticated: false });
+    await f.controller.observe(account.id, f.statuses.get(account.id)!);
+    const bases = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" } };
+    const accounts = new core!.AccountService(f.dir, () => bases);
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: bases }, accounts.snapshot));
+    controllers.push(new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    }));
+    expect(accounts.get(account.id)).toEqual({ ...account, state: "stopped" });
+    // Settled as signed out, the row shows Sign In; unsettled, it waits on a check a stopped account never runs.
+    expect((await registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot).toEqual({ state: "unavailable", authChecked: true });
   });
 
   it("keeps the prior identity when a re-login probe is unknown", async () => {

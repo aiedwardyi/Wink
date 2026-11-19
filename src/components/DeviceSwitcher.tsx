@@ -125,7 +125,7 @@ export function DeviceSwitcher({
   const remoteWindow = !window.ogb && /\bElectron\//.test(navigator.userAgent);
   const visible = labeled || Boolean(deviceWindow) || (!window.ogb && !isPhone());
   const [open, setOpen] = useState(false);
-  const [devices, reload] = useDevices(visible, open);
+  const [devices, reload] = useDevices(visible, open, true);
   // The drawer is transformed, so a phone menu pinned inside it would clip. Portal it instead.
   const [pinned, setPinned] = useState<CSSProperties>();
   const [renaming, setRenaming] = useState(false);

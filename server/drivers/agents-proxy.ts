@@ -333,15 +333,16 @@ const TOOLS = [
         },
         asks: {
           type: "array",
-          description: "The user's asks. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
+          description: "The user's asks. Add each new ask without an id in the turn the user makes it; one that matches an open ask merges into it. Send its id with a new status to update it. Close with done or declined, never drop one; park one with until to bring it back on that date. Asks you leave out stay as they are.",
           items: {
             type: "object",
             additionalProperties: false,
             properties: {
               id: { type: "string", minLength: 1, maxLength: 12, pattern: "\\S", description: "Wink's id for the ask, like A3. Omit to add a new one." },
               ask: { type: "string", minLength: 1, maxLength: 80, pattern: "\\S", description: "The ask in a few words, at most 80 characters. Needed to add one." },
-              status: { type: "string", enum: ["open", "building", "waiting-for-user", "done", "declined"] },
+              status: { type: "string", enum: ["open", "building", "waiting-for-user", "parked", "done", "declined"] },
               ref: { type: "string", maxLength: 80, pattern: "^$|\\S", description: "The PR, card or pane it points to, at most 80 characters. Empty string clears it." },
+              until: { type: "string", maxLength: 40, pattern: "\\S", description: "Needed with parked: the date it comes back as open, like 2026-12-01." },
             },
             required: ["status"],
           },
