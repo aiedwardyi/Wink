@@ -526,7 +526,7 @@ function replayPreamble(input: TurnContextInput): string {
 
 const MEMORY_FOLDERS = 4;
 const MEMORY_NAMES = 2;
-const DOC_PATH = /(?:[A-Za-z]:)?[\w.\\/-]*\.(?:md|txt|docx?|pdf)\b/gi;
+const DOC_PATH = /(?:[A-Za-z]:)?[\w.~\\/-]*\.(?:md|txt|docx?|pdf)\b/gi;
 const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
 
 function localPath(ref: string, cwd: string | undefined): string | null {

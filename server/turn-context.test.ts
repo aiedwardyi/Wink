@@ -1306,9 +1306,9 @@ describe("fresh-session memory block", () => {
   it("finds the plan from labeled artifacts and paths the goal or plan cite", () => {
     expect(planFiles({
       goal: "Post the Reddit launch from paste/03-thursday.md, see https://x.com/plan.md",
-      plan: [{ step: `Follow ${join(home, "launch", "order.md")}`, status: "active" }],
+      plan: [{ step: `Follow ${join(home, "launch", "order.md")} and ${join(home, "RUNNER~1", "a.md")}`, status: "active" }],
       artifacts: [{ ref: shots[0]!, label: "Shot 1" }, { ref: join(home, "brief.md"), label: "Launch plan" }, { ref: "paste/03-thursday.md", label: "Thursday post" }],
-    }, cwd)).toEqual([join(home, "brief.md"), join(cwd, "paste", "03-thursday.md"), join(home, "launch", "order.md")]);
+    }, cwd)).toEqual([join(home, "brief.md"), join(cwd, "paste", "03-thursday.md"), join(home, "launch", "order.md"), join(home, "RUNNER~1", "a.md")]);
   });
 
   it("rides every turn it is given, and the search hint rides only the fresh-session preamble", () => {

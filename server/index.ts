@@ -6234,7 +6234,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             seed.cursor = undefined;
             resumeCursor = undefined;
             // the next turn adds search_my_chats; adding it now keeps that turn on this CLI
-            if (searchable && integrations.agents) integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, true, readOnly);
+            if (searchable && integrations.agents) integrations.agents.env = { ...integrations.agents.env, OMB_OWNER_CHATS: "1" };
             text = withLate(systemRecycleText(!systemRecycle));
           } else text = [latestCompactionId === sessionCompactionId ? text : withTaskRecord(text, durableTaskRecordText), ...late.slice(lateCount)].join("\n\n");
           console.info(`[session] ${JSON.stringify({ threadId, reason: recycleDeferred ? "recycle-deferred-background" : systemRecycle ? "system" : "compaction", lastTurnToolRounds, sessionToolRounds })}`);
