@@ -39,9 +39,9 @@ const STOP_RELEASE_MS = 6_000;
 // The bot acks a send mid-turn unless the helper's reply beside it does.
 const ACK_COVERED =
   "[Wink note, automated, not from the person. A fast reply in your voice answers the message below beside your work, so write no line of your own for it; continue, and put anything new in your final reply.]";
-// Only the bot can tell whether its own reply under the send already answered it.
-const ackMissed = (text: string, replied: boolean) =>
-  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(text)}"; ${replied ? "if your reply after it already answers it, write nothing for it; otherwise " : ""}reply to it now in one short visible line, then continue.]`;
+// Only the bot can tell whether its own reply under the send already answered it; built at each use, since that reply can land between steer and queue.
+const ackMissed = (path: Message[], sent: Message) =>
+  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(sent.text ?? "")}"; ${repliedUnder(path, sent) ? "if your reply after it already answers it, write nothing for it; otherwise " : ""}reply to it now in one short visible line, then continue.]`;
 
 type BotChatRouteDeps = {
   cancelUsageWait?: (botId: string, waitId?: string, preserveTurn?: boolean) => void;
@@ -293,14 +293,14 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       .then(async () => {
         const current = owed();
         if (!current) return;
-        const note = ackMissed(sent.text ?? "", !current.busy && repliedUnder(store.activePath(threadId), sent));
         const adapter = instanceForBot(current, threadId)?.adapter;
         if (current.busy && (current.activeThreadId ?? current.threadId) === threadId && adapter?.steer) {
+          const note = ackMissed(store.activePath(threadId), sent);
           if (await (steerUntilTaken(adapter, threadId, note) ?? adapter.steer(threadId, note)).catch(() => false)) return;
           if (!owed()) return;
         }
         // a turn that ended or refused the note, or a switch to another task, leaves it for the bot's next turn in this task, drained into the send's own row
-        queueAsk(store, botId, threadId, sent, note);
+        queueAsk(store, botId, threadId, sent, ackMissed(store.activePath(threadId), sent));
         drainQueuedSends();
       })
       .catch((error) => console.warn(`[quick] owed ack failed: ${error instanceof Error ? error.message : String(error)}`));

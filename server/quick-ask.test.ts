@@ -295,7 +295,7 @@ describe("quick route", () => {
     await vi.waitFor(() => expect(drops).toHaveLength(2));
     if (stopped) await h.stop();
     drops.forEach((drop) => drop(false));
-    drops[0]!(false);
+    drops[0]!(false); // second call verifies requeueDroppedCall is idempotent
     h.store.setActivity(h.bot.id, "idle");
     const run = vi.fn();
     drainSteeredMessages(h.store, run);
@@ -323,6 +323,38 @@ describe("quick route", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(run.mock.calls[0]![2]).toMatch(/No fast reply reached the person for "Does it support Windows, please\?"; if your reply after it already answers it, write nothing for it; otherwise reply to it now/);
     expect(botLines(h)).toEqual([final]);
+  });
+
+  it("lets the bot stay silent when its reply already stands under the send while it still works", async () => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 20 } });
+    await h.send({ text: "Does it support Windows, please?" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Yes, Windows is supported." });
+    await h.settled();
+    const note = h.steer.mock.calls.map((call) => call[1]).find((text) => text.includes("No fast reply reached the person"));
+    expect(note).toMatch(/; if your reply after it already answers it, write nothing for it; otherwise reply to it now/);
+  });
+
+  it("lets the bot stay silent when the turn ends with its reply before it takes the note", async () => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 20 } });
+    h.steer.mockImplementation(async (_threadId, text, consumed) => {
+      if (text.includes("No fast reply reached the person")) {
+        h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Yes, Windows is supported." });
+        h.store.setActivity(h.bot.id, "idle");
+        consumed?.(false);
+        return true;
+      }
+      consumed?.(true);
+      return true;
+    });
+    await h.send({ text: "Does it support Windows, please?" });
+    await h.settled();
+    const steered = h.steer.mock.calls.map((call) => call[1]).find((text) => text.includes("No fast reply reached the person"));
+    expect(steered).not.toMatch(/; if your reply after it already answers it, write nothing for it; otherwise reply to it now/);
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]![2]).toMatch(/; if your reply after it already answers it, write nothing for it; otherwise reply to it now/);
+    expect(botLines(h)).toEqual(["Yes, Windows is supported."]);
   });
 
   it.each([["send-288-restart-0001"], [undefined]])("runs a promised order requeued at quit once after a restart, sendId: %s", async (sendId) => {
