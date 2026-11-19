@@ -4,8 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { closeMessageDb, insertMessage, messageDatabase } from "./message-db.ts";
+import { loadProfileSyncSettings } from "./profile-sync.ts";
 import { replyActivity } from "./reply-activity.ts";
 import type { Message } from "./store.ts";
+import { disconnectSyncFolder, hasJoinedSync } from "./sync-history.ts";
+import { createSyncEngine } from "./thread-sync-v2-engine.ts";
 
 let seq = 0;
 const reply = (at: number, extra: Partial<Message> = {}) =>
@@ -73,18 +76,61 @@ describe("replyActivity", () => {
     expect(replyActivity(local(11, 4)).workers).toBe(0);
   });
 
-  it("counts replies by their engine, else the bot's current engine, biggest first", () => {
+  it("counts tagged replies by their engine, biggest first", () => {
     for (let n = 0; n < 3; n++) reply(local(11, 1), { engine: "codex" } as Partial<Message>);
-    reply(local(11, 1));
+    reply(local(11, 1), { engine: "museAgent" });
     reply(local(11, 2));
     insertMessage("room", { id: `m${seq++}`, role: "bot", kind: "text", text: "hi", at: local(11, 2), from: { botId: "b2", name: "B2", color: "#000" } });
     insertMessage("gone", { id: `m${seq++}`, role: "bot", kind: "text", text: "hi", at: local(11, 2) });
     reply(local(11, 3), { kind: "activity", engine: "grokAgent" } as Partial<Message>);
-    const engineOf = (threadId: string, botId: string | null) => (botId === "b2" ? "museAgent" : threadId === "t1" ? "claudeAgent" : null);
-    const activity = replyActivity(local(11, 4), engineOf);
-    expect(activity.engines).toEqual([{ engine: "codex", count: 3 }, { engine: "claudeAgent", count: 2 }, { engine: "museAgent", count: 1 }]);
+    const activity = replyActivity(local(11, 4));
+    expect(activity.engines).toEqual([{ engine: "codex", count: 3 }, { engine: "museAgent", count: 1 }]);
     expect(activity.total).toBe(7);
   });
+
+  it("keeps the local 90/10 estimate until the PC joins sync", () => {
+    const now = local(11, 14);
+    for (let i = 0; i < 90; i++) reply(now);
+    for (let i = 0; i < 10; i++) reply(now, { engine: "codex" });
+    const standalone = replyActivity(now, () => "claudeAgent");
+    const joined = replyActivity(now);
+    expect(standalone.engines).toEqual([{ engine: "claudeAgent", count: 90 }, { engine: "codex", count: 10 }]);
+    expect(joined.engines).toEqual([{ engine: "codex", count: 10 }]);
+    expect(standalone.total).toBe(100);
+    expect({ ...joined, engines: standalone.engines }).toEqual(standalone);
+  });
+
+  it("remembers a folder after disconnect and restart even before chats are enabled", () => {
+    const settings = loadProfileSyncSettings(DATA_DIR);
+    expect(hasJoinedSync(settings)).toBe(false);
+    expect(hasJoinedSync(disconnectSyncFolder(DATA_DIR, settings))).toBe(false);
+    settings.folder = join(DATA_DIR, "mirror");
+    expect(hasJoinedSync(settings)).toBe(true);
+    disconnectSyncFolder(DATA_DIR, settings);
+    const restarted = loadProfileSyncSettings(DATA_DIR);
+    expect(restarted.folder).toBeNull();
+    expect(hasJoinedSync(restarted)).toBe(true);
+  });
+
+  it("recognizes a disconnected legacy profile from its sync checkpoint", () => {
+    const settings = loadProfileSyncSettings(DATA_DIR);
+    expect(hasJoinedSync({ ...settings, seenCheckpoint: "remote-op" })).toBe(true);
+  });
+
+  it("recognizes a restored peer receipt even when only the transcript database remains", () => {
+    const settings = loadProfileSyncSettings(DATA_DIR);
+    createSyncEngine({ dataDir: DATA_DIR, folder: join(DATA_DIR, "mirror"), deviceId: settings.deviceId });
+    expect(hasJoinedSync(settings)).toBe(false);
+    messageDatabase().prepare("INSERT INTO sync_v2_heads VALUES (?, ?, ?, ?, ?, ?)").run("t1", "peer", 1, 0, 1, "hash");
+    expect(hasJoinedSync(settings)).toBe(true);
+  });
+
+  it.each(["google-binding.json", "google-drive-table.json", "thread-sync.json", "thread-sync-v2-cutover.json"])(
+    "recognizes sync history from %s without a current folder", (name) => {
+      writeFileSync(join(DATA_DIR, name), "{}");
+      expect(hasJoinedSync(loadProfileSyncSettings(DATA_DIR))).toBe(true);
+    },
+  );
 
   it("names the busiest day, the latest on a tie", () => {
     for (const hour of [9, 10, 11]) reply(local(10, 13, hour));
@@ -104,13 +150,13 @@ describe("replyActivity", () => {
       const role = index % 3 ? "bot" : "user";
       const kind = index % 4 ? "text" : "activity";
       const at = now - Math.floor((index / 200_000) * 365 * 86_400_000);
-      insert.run(`t${index % 50}`, `r${index}`, at, role, kind, body, JSON.stringify({ id: `r${index}`, role, kind, text: body, at }));
+      insert.run(`t${index % 50}`, `r${index}`, at, role, kind, body, JSON.stringify({ id: `r${index}`, role, kind, text: body, at, engine: "claudeAgent" }));
     }
     messageDatabase().exec("COMMIT");
     closeMessageDb();
     messageDatabase();
     const started = performance.now();
-    const activity = replyActivity(now, () => "claudeAgent");
+    const activity = replyActivity(now);
     const ms = performance.now() - started;
     expect(activity.total).toBeGreaterThan(40_000);
     expect(activity.engines).toEqual([{ engine: "claudeAgent", count: activity.total }]);

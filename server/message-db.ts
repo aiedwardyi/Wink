@@ -384,7 +384,7 @@ export function firstBotReplyAt(): number | null {
 
 /** Bot text replies grouped by thread, room speaker and engine tag, all time. */
 export function botRepliesByEngine(): Array<{ threadId: string; botId: string | null; engine: string | null; count: number }> {
-  // SAFETY: This SELECT list is three TEXT keys and one COUNT.
+  // SAFETY: This SELECT list is three text keys and one COUNT.
   return db().prepare(
     "SELECT thread_id AS threadId, json_extract(json, '$.from.botId') AS botId, json_extract(json, '$.engine') AS engine, COUNT(*) AS count " +
       "FROM messages WHERE role = 'bot' AND kind = 'text' GROUP BY 1, 2, 3",

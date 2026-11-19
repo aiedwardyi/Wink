@@ -270,6 +270,11 @@ h1 {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+h1 .spinner {
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: -1px;
+}
 .spinner {
   flex: none;
   width: 14px;
