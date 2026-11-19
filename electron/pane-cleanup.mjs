@@ -12,6 +12,7 @@ const FOLLOW_MS = 10 * 60_000;
 const NICK_RE = /^[A-Z0-9][A-Z0-9-]{0,63}$/;
 const KEEP_RE = /^(?:rel-|nm-)|^(?:relay-deploy|release-gate)$/i;
 const BACKUP_RE = /^\.pane-cleanup-/i;
+const MARK = ".wink-scratch";
 const RECHECK = new Set(["dirty", "unpushed"]);
 const SETTLE_MS = 50;
 // Past this many waiting changes of its own a busy folder is walked again instead of remembered change by change.
@@ -344,6 +345,13 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     for (const pane of await panes()) if ((label && nick(pane.label) === label) || contains(target, await normalizeAsync(pane.cwd, parents)) || contains(target, await normalizeAsync(await resolvePin(pane.cwd), parents))) return true;
     return false;
   };
+  // A mark names the Wink and the folder it was made for, so a copied mark or another Wink's is not this one's.
+  const ours = async (scratch, norm) => {
+    try {
+      const mark = JSON.parse(await fsp.readFile(path.join(scratch, MARK), "utf8"));
+      return mark.instance === instance && await norm(mark.scratch) === await norm(scratch);
+    } catch { return false; }
+  };
   const finishScratch = async (target, owner, norm) => {
     const normalized = await norm(target);
     for (const entry of entries.slice(0, entries.indexOf(owner) + 1)) if (!entry.scratchDone && entry.scratch && await norm(entry.scratch) === normalized) entry.scratchDone = true;
@@ -378,7 +386,8 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         return;
       }
       if (!await directory(target)) return;
-      // A folder no pane owned is only done once nothing wrote to it for a day.
+      // A folder no pane owned goes only if this Wink made it and nothing wrote to it for a day.
+      if (entry.orphan && !await ours(target, context.norm)) { entry.scratchDone = true; return; }
       if (entry.orphan && await writtenSince(target, now() - DAY_MS, context.stats, { left: Infinity })) { entry.closedAt = now(); return; }
       const linked = await linkedInto(target, context);
       if (linked) return kept(entry, target, linked.reason, linked);
@@ -832,14 +841,14 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   };
   // A worktree no pane ever opened in has no row; the repos the ledger knows list them.
   const discover = async ({ norm }) => {
-    // Scratch no row owns, such as a release build's, waits a day like a closed pane.
+    // Scratch this Wink made that no row owns waits a day like a closed pane.
     const owned = new Set();
     for (const entry of entries) if (entry.scratch) owned.add(await norm(entry.scratch));
     let found = [];
     try { found = await fsp.readdir(tempRoot, { withFileTypes: true }); } catch (error) { if (error.code !== "ENOENT") throw error; }
     for (const { name } of found.filter((item) => item.isDirectory() && item.name.startsWith("wink-"))) {
       const scratch = path.join(tempRoot, name);
-      if (!owned.has(await norm(scratch))) entries.push({ id: `scratch:${scratch}`, instance, cwd: scratch, tempRoot, scratch, label: name.slice(5), openedAt: now(), closedAt: now(), keep: false, reported: false, worktreeDone: true, orphan: true });
+      if (!owned.has(await norm(scratch)) && await ours(scratch, norm)) entries.push({ id: `scratch:${scratch}`, instance, cwd: scratch, tempRoot, scratch, label: name.slice(5), openedAt: now(), closedAt: now(), keep: false, reported: false, worktreeDone: true, orphan: true });
     }
     const repos = new Set(entries.map((entry) => entry.repo).filter(Boolean));
     if (!repos.size) return;
@@ -910,6 +919,9 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       entries.push({ id: session.id, instance, botId: session.botId, label: session.label, cwd: session.cwd, tempRoot: root, scratch: nick(session.label) ? path.resolve(root, `wink-${nick(session.label)}`) : null, openedAt: now(), closedAt: null, keep: false, reported: false });
       save();
       peak?.live(entries.filter((entry) => !entry.closedAt && entry.instance === instance).length);
+    },
+    mark(scratch) {
+      try { fs.writeFileSync(path.join(scratch, MARK), JSON.stringify({ instance, scratch }), { mode: 0o600 }); } catch (error) { warn(error); }
     },
     exited(session) {
       const entry = entries.findLast((candidate) => candidate.id === session.id);
@@ -997,6 +1009,7 @@ export function createPaneCleanupWorker({ warn = () => {}, instance = process.de
   worker.unref();
   return {
     opened: (session) => post({ type: "opened", session: pick(session) }),
+    mark: (scratch) => post({ type: "mark", scratch }),
     exited: (session) => post({ type: "exited", session: pick(session) }),
     closed: (session, keep = false) => call("closed", { session: pick(session), keep }),
     start(openPanes) {
@@ -1024,13 +1037,14 @@ if (!isMainThread && workerData?.paneCleanup) {
   // The worker has its thread to itself, so that thread's CPU at rest is what the watchers cost.
   const cpu = () => { const { user, system } = process.threadCpuUsage(); return (user + system) / 1_000; };
   const cleanup = createPaneCleanup({ ...options, cpu, peakFile: path.join(dataDir, "worker-peak.json"), pinned: () => readCleanupPins(dataDir), warn: (error) => parentPort.postMessage({ type: "warn", error: error?.stack || String(error) }) });
-  parentPort.on("message", async ({ type, id, session, keep, panes: open }) => {
+  parentPort.on("message", async ({ type, id, session, keep, scratch, panes: open }) => {
     if (type === "panes") {
       asks.get(id)?.(open);
       asks.delete(id);
       return;
     }
     if (type === "opened") cleanup.opened(session);
+    else if (type === "mark") cleanup.mark(scratch);
     else if (type === "exited") cleanup.exited(session);
     else if (type === "start") cleanup.start(panes);
     else if (type === "closed") await cleanup.closed(session, keep);

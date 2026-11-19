@@ -1265,7 +1265,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (nick) {
       const scratch = path.resolve(scratchRoot, `wink-${nick}`);
       try {
-        await fs.promises.mkdir(scratch, { recursive: true });
+        // Only a folder Wink makes gets its mark: one already there may be a user's.
+        if (await fs.promises.mkdir(scratch, { recursive: true })) paneCleanup?.mark?.(scratch);
         for (const key of Object.keys(paneEnv)) if (/^(?:TEMP|TMP|TMPDIR)$/i.test(key)) delete paneEnv[key];
         Object.assign(paneEnv, { ORBIT_SCRATCH: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
       } catch {}
