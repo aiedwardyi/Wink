@@ -1,7 +1,7 @@
 // About You: what the user's other AI knew about them, kept once for every bot.
 // Code splits the paste into fact lines, drops repeats and secret-looking lines,
 // and notes where each came from; no model reads or rewrites it.
-import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
@@ -26,7 +26,9 @@ export const aboutYouDir = () => join(DATA_DIR, "about-you");
 const aboutYouFile = () => join(aboutYouDir(), "MEMORY.md");
 /** Import Memory's id in memory sync, beside the bots' UUIDs. */
 export const ABOUT_YOU_SYNC_ID = "about-you";
-const SET_ASIDE = /^MEMORY\.conflict-[0-9a-f]{8}\.md$/;
+// a copy set aside again while PCs changed it nests (MEMORY.conflict-X.conflict-Y.md); a deep one is cut short
+const SET_ASIDE = /^MEMORY\.conflict-[0-9a-f]{8}[\w.-]*\.md$/;
+const SET_ASIDE_NOTE = "<!-- memory sync:";
 
 // a saved line comes from text another AI wrote, so nothing in it may read as markup or as Wink's own framing
 function clean(text: string): string {
@@ -107,6 +109,8 @@ function readSaved(): string {
 }
 
 const savedLines = (raw: string) => raw.split(/\r?\n/).filter((line) => line.trim());
+// the 200-line / 24 KB cap an import stops at
+const full = (count: number, size: number, line: string) => count >= MEMORY_MAX_LINES || size + bytes(line) + 1 > MEMORY_MAX_BYTES;
 
 export type AboutYouAdd = { source: string; found: number; added: number; duplicates: number; hidden: number; full: number };
 export type AboutYouError = { error: "empty" | "too-large" | "failed" };
@@ -129,7 +133,7 @@ export function addToAboutYou(paste: string, date: string): AboutYouAdd | AboutY
         continue;
       }
       const line = `- ${fact} (from ${source}, ${date})`;
-      if (lines.length >= MEMORY_MAX_LINES || size + bytes(line) + 1 > MEMORY_MAX_BYTES) {
+      if (full(lines.length, size, line)) {
         result.full++;
         continue;
       }
@@ -165,30 +169,57 @@ export function removeAboutYouSource(source: string): void {
   const kept = savedLines(readSaved()).filter((line) => (TAG.exec(line)?.[1] ?? "") !== source);
   if (kept.length) writeFileAtomic(aboutYouFile(), `${kept.join("\n")}\n`, { mode: 0o600 });
   else rmSync(aboutYouFile(), { force: true });
+  // a set-aside copy still waiting for room would bring the source back
+  const dir = join(aboutYouDir(), "memory");
+  for (const name of existsSync(dir) ? readdirSync(dir).filter((name) => SET_ASIDE.test(name)) : []) {
+    const raw = readFileSync(join(dir, name), "utf8");
+    const lines = savedLines(raw).filter((line) => (TAG.exec(line)?.[1] ?? "") !== source);
+    if (!lines.some((line) => !line.startsWith(SET_ASIDE_NOTE))) rmSync(join(dir, name), { force: true });
+    else if (lines.length < savedLines(raw).length) writeFileAtomic(join(dir, name), `${lines.join("\n")}\n`, { mode: 0o600 });
+  }
 }
 
-/** Syncs Import Memory as memory sync does a bot's; facts only add up, so a copy two PCs set aside is folded back in. */
+/**
+ * Syncs Import Memory as memory sync does a bot's; facts only add up, so a copy two PCs set aside is folded back in.
+ * Every line folds, hand-added ones too, up to the import cap; a line past the cap stays in the copy until there is room.
+ */
 export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?: MemorySyncOptions): Record<string, MemorySyncResult> {
   const results = syncBotMemory(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), ledger, options);
   const dir = join(aboutYouDir(), "memory");
   let copies: string[];
   try {
-    copies = readdirSync(dir).filter((name) => SET_ASIDE.test(name));
+    copies = readdirSync(dir).filter((name) => SET_ASIDE.test(name)).sort();
   } catch {
     return results;
   }
+  if (!copies.length) return results;
+  const lines = savedLines(readSaved());
+  const before = lines.length;
+  const seen = new Set(lines.map((line) => keyOf(clean(line))));
+  let size = lines.reduce((sum, line) => sum + bytes(line) + 1, 0);
+  const left: Array<{ name: string; raw: string; over: string[] }> = [];
   for (const name of copies) {
-    const lines = savedLines(readSaved());
-    const seen = new Set(lines.map((line) => keyOf(clean(line))));
-    for (const line of savedLines(readFileSync(join(dir, name), "utf8")).filter((line) => TAG.test(line))) {
+    const raw = readFileSync(join(dir, name), "utf8");
+    const over: string[] = [];
+    // every line but the set-aside note, so a fact added by hand is never lost
+    for (const line of savedLines(raw).filter((line) => !line.startsWith(SET_ASIDE_NOTE))) {
       const key = keyOf(clean(line));
       if (!key || seen.has(key)) continue;
-      lines.push(line);
       seen.add(key);
+      if (full(lines.length, size, line)) over.push(line);
+      else {
+        lines.push(line);
+        size += bytes(line) + 1;
+      }
     }
-    if (lines.length) writeFileAtomic(aboutYouFile(), `${lines.join("\n")}\n`, { mode: 0o600 });
-    // the next pass publishes the merged file and the copy's delete
-    rmSync(join(dir, name), { force: true });
+    left.push({ name, raw, over });
+  }
+  if (lines.length > before) writeFileAtomic(aboutYouFile(), `${lines.join("\n")}\n`, { mode: 0o600 });
+  // the next pass publishes the merged file and each copy's delete, or the lines it still holds
+  for (const { name, raw, over } of left) {
+    const text = [...savedLines(raw).filter((line) => line.startsWith(SET_ASIDE_NOTE)), ...over].join("\n") + "\n";
+    if (!over.length) rmSync(join(dir, name), { force: true });
+    else if (text !== raw) writeFileAtomic(join(dir, name), text, { mode: 0o600 });
   }
   return results;
 }
