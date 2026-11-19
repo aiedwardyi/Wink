@@ -949,6 +949,6 @@ it("says so in one line when the bot has no picks yet", async () => {
   picks(() => new Response(JSON.stringify({ name: "decisions.md", text: "", entries: [] }), { status: 200 }));
   await openTimeline();
   await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
-  expect(host.querySelector(".timeline-pane")!.textContent).toBe("No picks yet");
+  expect(host.querySelector(".timeline-pane")!.textContent).toBe("When you pick an option in a chat, it lands here.");
   expect(host.querySelector(".timeline-search")).toBeNull();
 });
