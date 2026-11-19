@@ -103,16 +103,18 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
 
 // Drawn only while the bot has no picks: never saved, sent or counted.
 function sampleDays(t: (key: MessageKey) => string) {
-  const now = Date.now();
-  const pick = (id: string, ago: number, key: string, picked: string, over: string[]): Entry => ({ id, at: now - ago * 60_000, key, picked, over, overPictures: [], files: [], tweaks: [] });
-  const day = 24 * 60;
+  const now = new Date();
+  // two local calendar days, so a demo opened just after midnight still reads yesterday and today
+  const yesterday = (hour: number, minute: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, hour, minute).getTime();
+  const today = (ago: number, order: number) => Math.max(now.getTime() - ago * 60_000, new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() + order);
+  const pick = (id: string, at: number, key: string, picked: string, over: string[]): Entry => ({ id, at, key, picked, over, overPictures: [], files: [], tweaks: [] });
   return timelineDays([
-    pick("sample-name", day + 95, t("timeline.sampleName"), "Wink", ["Nova", "Pilot"]),
-    pick("sample-settings", day + 60, t("timeline.sampleSettings"), t("timeline.sampleSidePanel"), [t("timeline.sampleFullPage")]),
-    pick("sample-font", day + 30, t("timeline.sampleFont"), t("timeline.sampleMedium"), [t("timeline.sampleSmall"), t("timeline.sampleLarge")]),
-    pick("sample-theme", 40, t("timeline.sampleTheme"), t("timeline.sampleDark"), [t("timeline.sampleLight")]),
-    pick("sample-tour", 12, t("timeline.sampleTour"), t("timeline.sampleShortTour"), [t("timeline.sampleSkip")]),
-    pick("sample-ship", 2, t("timeline.sampleShip"), t("timeline.sampleToday"), [t("timeline.sampleTomorrow")]),
+    pick("sample-name", yesterday(15, 20), t("timeline.sampleName"), "Wink", ["Nova", "Pilot"]),
+    pick("sample-settings", yesterday(15, 55), t("timeline.sampleSettings"), t("timeline.sampleSidePanel"), [t("timeline.sampleFullPage")]),
+    pick("sample-font", yesterday(16, 25), t("timeline.sampleFont"), t("timeline.sampleMedium"), [t("timeline.sampleSmall"), t("timeline.sampleLarge")]),
+    pick("sample-theme", today(40, 0), t("timeline.sampleTheme"), t("timeline.sampleDark"), [t("timeline.sampleLight")]),
+    pick("sample-tour", today(12, 1), t("timeline.sampleTour"), t("timeline.sampleShortTour"), [t("timeline.sampleSkip")]),
+    pick("sample-ship", today(2, 2), t("timeline.sampleShip"), t("timeline.sampleToday"), [t("timeline.sampleTomorrow")]),
   ]);
 }
 

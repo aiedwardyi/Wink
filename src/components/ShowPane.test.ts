@@ -946,6 +946,20 @@ it.each([503, 404])("keeps the loaded Timeline rows when a save refresh fails wi
   expect(host.querySelector(".timeline-pane .show-media-empty")).toBeNull();
 });
 
+it("keeps the demo on yesterday and today when opened just after midnight", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 10, 19, 0, 45));
+  try {
+    picks(() => new Response(JSON.stringify({ name: "decisions.md", text: "", entries: [] }), { status: 200 }));
+    await openTimeline("b-sample-midnight");
+    await until(() => sampled().length > 0);
+    const days = [...host.querySelectorAll<HTMLElement>(".timeline-pane[data-sample] section")];
+    expect(days.map((day) => [day.querySelector("[data-timeline-day]")?.getAttribute("data-timeline-day"), day.querySelectorAll("[data-timeline-pick]").length])).toEqual([["2026-11-19", 3], ["2026-11-18", 3]]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("never flashes the demo while a bot's picks are still loading", async () => {
   let reply!: (response: Response) => void;
   vi.mocked(fetch).mockImplementation((url) => (String(url).endsWith("/memory/topics/decisions.md") ? new Promise<Response>((resolve) => { reply = resolve; }) : Promise.resolve(new Response(null, { status: 404 }))));
