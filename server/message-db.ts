@@ -382,13 +382,15 @@ export function firstBotReplyAt(): number | null {
   return row?.at ?? null;
 }
 
-/** Bot text replies grouped by thread, room speaker and engine tag, all time. */
-export function botRepliesByEngine(): Array<{ threadId: string; botId: string | null; engine: string | null; count: number }> {
-  // SAFETY: This SELECT list is three TEXT keys and one COUNT.
+/** Count each index group before summing by engine to avoid scanning message bodies. */
+export function botRepliesByEngine(): Array<{ engine: string; count: number }> {
+  // SAFETY: The outer query selects a text engine and a sum of integer counts.
   return db().prepare(
-    "SELECT thread_id AS threadId, json_extract(json, '$.from.botId') AS botId, json_extract(json, '$.engine') AS engine, COUNT(*) AS count " +
-      "FROM messages WHERE role = 'bot' AND kind = 'text' GROUP BY 1, 2, 3",
-  ).all() as Array<{ threadId: string; botId: string | null; engine: string | null; count: number }>;
+    "SELECT engine, SUM(n) AS count FROM (" +
+      "SELECT json_extract(json, '$.engine') AS engine, COUNT(*) AS n FROM messages WHERE role = 'bot' AND kind = 'text' " +
+      "GROUP BY thread_id, json_extract(json, '$.from.botId'), engine" +
+    ") WHERE typeof(engine) = 'text' AND trim(engine) <> '' GROUP BY engine ORDER BY count DESC, engine",
+  ).all() as Array<{ engine: string; count: number }>;
 }
 
 export function deleteThread(threadId: string): void {

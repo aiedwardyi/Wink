@@ -32,18 +32,8 @@ function workerPeak(): number {
   }
 }
 
-/** Untagged replies, from before engines were stamped, count for their bot's current engine. */
-function engineCounts(engineOf: (threadId: string, botId: string | null) => string | null) {
-  const counts = new Map<string, number>();
-  for (const row of botRepliesByEngine()) {
-    const engine = row.engine ?? engineOf(row.threadId, row.botId);
-    if (engine) counts.set(engine, (counts.get(engine) ?? 0) + row.count);
-  }
-  return [...counts].map(([engine, count]) => ({ engine, count })).sort((a, b) => b.count - a.count);
-}
-
 /** Bot replies per local day over the last 26 weeks, oldest first, with totals since the first reply. */
-export function replyActivity(now = Date.now(), engineOf: (threadId: string, botId: string | null) => string | null = () => null): ReplyActivity {
+export function replyActivity(now = Date.now()): ReplyActivity {
   const today = new Date(now);
   const grid = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay() - (WEEKS - 1) * 7);
   const firstAt = firstBotReplyAt();
@@ -66,6 +56,6 @@ export function replyActivity(now = Date.now(), engineOf: (threadId: string, bot
     busiest: total ? { day: dayOf(busy), count: all[busy]! } : null,
     total,
     workers: workerPeak(),
-    engines: total ? engineCounts(engineOf) : [],
+    engines: total ? botRepliesByEngine() : [],
   };
 }

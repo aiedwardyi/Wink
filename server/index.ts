@@ -847,7 +847,7 @@ function askBotAndWait(
       peerTurnSource.delete(threadId);
       collected?.release();
     }
-    return reply;
+    return reply.replied && collected?.engine ? { ...reply, engine: collected.engine } : reply;
   });
 }
 
@@ -4555,7 +4555,7 @@ function finalizeDelegationWatch(
   watched.endPeerWatch?.();
   watched.reply.release();
   settlePeerUserReplies(threadId);
-  return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
+  return finishDelegatedTurn(commsBus, { ...watched, engine: watched.reply.engine }, ok, reply, failureName);
 }
 
 /** Watch a peer turn on `targetThreadId` until it ends: a drained handoff, or an ask that outlived its wait. */
@@ -8587,12 +8587,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/activity") {
-      // A shadow (driver missing or failed to start) still knows its engine.
-      const kinds = new Map(registry.entries().map((entry) => [entry.instanceId, entry.live?.driverKind ?? entry.shadow?.driverKind]));
-      return json(res, 200, replyActivity(Date.now(), (threadId, botId) => {
-        const bot = botId ? store.bot(botId) : store.botByThread(threadId);
-        return bot ? kinds.get(bot.modelSelection.instanceId) ?? null : null;
-      }));
+      return json(res, 200, replyActivity());
     }
 
     if (method === "GET" && path === "/api/analytics") {

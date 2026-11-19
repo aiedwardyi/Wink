@@ -73,16 +73,15 @@ describe("replyActivity", () => {
     expect(replyActivity(local(11, 4)).workers).toBe(0);
   });
 
-  it("counts replies by their engine, else the bot's current engine, biggest first", () => {
+  it("counts tagged replies by their engine, biggest first", () => {
     for (let n = 0; n < 3; n++) reply(local(11, 1), { engine: "codex" } as Partial<Message>);
-    reply(local(11, 1));
+    reply(local(11, 1), { engine: "museAgent" });
     reply(local(11, 2));
     insertMessage("room", { id: `m${seq++}`, role: "bot", kind: "text", text: "hi", at: local(11, 2), from: { botId: "b2", name: "B2", color: "#000" } });
     insertMessage("gone", { id: `m${seq++}`, role: "bot", kind: "text", text: "hi", at: local(11, 2) });
     reply(local(11, 3), { kind: "activity", engine: "grokAgent" } as Partial<Message>);
-    const engineOf = (threadId: string, botId: string | null) => (botId === "b2" ? "museAgent" : threadId === "t1" ? "claudeAgent" : null);
-    const activity = replyActivity(local(11, 4), engineOf);
-    expect(activity.engines).toEqual([{ engine: "codex", count: 3 }, { engine: "claudeAgent", count: 2 }, { engine: "museAgent", count: 1 }]);
+    const activity = replyActivity(local(11, 4));
+    expect(activity.engines).toEqual([{ engine: "codex", count: 3 }, { engine: "museAgent", count: 1 }]);
     expect(activity.total).toBe(7);
   });
 
@@ -104,13 +103,13 @@ describe("replyActivity", () => {
       const role = index % 3 ? "bot" : "user";
       const kind = index % 4 ? "text" : "activity";
       const at = now - Math.floor((index / 200_000) * 365 * 86_400_000);
-      insert.run(`t${index % 50}`, `r${index}`, at, role, kind, body, JSON.stringify({ id: `r${index}`, role, kind, text: body, at }));
+      insert.run(`t${index % 50}`, `r${index}`, at, role, kind, body, JSON.stringify({ id: `r${index}`, role, kind, text: body, at, engine: "claudeAgent" }));
     }
     messageDatabase().exec("COMMIT");
     closeMessageDb();
     messageDatabase();
     const started = performance.now();
-    const activity = replyActivity(now, () => "claudeAgent");
+    const activity = replyActivity(now);
     const ms = performance.now() - started;
     expect(activity.total).toBeGreaterThan(40_000);
     expect(activity.engines).toEqual([{ engine: "claudeAgent", count: activity.total }]);
