@@ -52,7 +52,8 @@ interface Probe {
 }
 
 const CHECKING: Probe = { snapshot: { state: "checking" }, cliCandidates: [] };
-const BLOCKED: Probe = { snapshot: { state: "unavailable" }, cliCandidates: [] };
+// Settled: a stopped account offers Sign In instead of waiting on a check that never runs.
+const BLOCKED: Probe = { snapshot: { state: "unavailable", authChecked: true }, cliCandidates: [] };
 
 const savedProbeSchema = z.object({
   key: z.string(),
@@ -302,13 +303,18 @@ export class ProviderRegistry {
   }
   recordAccountCheck(id: string, snapshot: ProviderSnapshot) {
     if (!this.accounts.has(id) || this.probing.has(id)) return;
-    const probe = { snapshot, cliCandidates: [] };
+    const probe = { snapshot: this.keepAddress(id, snapshot), cliCandidates: [] };
     // A blocked account's last check only describes its row.
     if (snapshot.authenticated !== true && this.accountStopped(id)) this.blockedChecks.set(id, probe);
     else if (snapshot.authenticated === true && !this.accountBlocked(id)) this.probed.set(id, probe);
     else return;
     this.probeVersion += 1;
     for (const listener of this.probedListeners) listener(id);
+  }
+  // A signed-out account keeps showing the address it was signed in as.
+  private keepAddress(id: string, snapshot: ProviderSnapshot): ProviderSnapshot {
+    const account = this.probed.get(id)?.snapshot.account;
+    return this.accounts.has(id) && snapshot.authenticated === false && !snapshot.account && account ? { ...snapshot, account } : snapshot;
   }
   // An account under a check never shows an earlier probe: its sign-in may have changed since.
   private known(id: string) { return this.checkingAccounts.has(id) ? CHECKING : this.blockedChecks.get(id) ?? this.probed.get(id); }
@@ -377,11 +383,10 @@ export class ProviderRegistry {
     const config = this.loginConfig(instanceId);
     if (!config || this.signingOut.has(instanceId)) return null;
     this.holdIdentity(instanceId, "sign-in");
-    if (config.engine === "antigravityAgent" && !device) return this.logins.waitExternal(instanceId);
     const login = config.install?.login;
     const args = device ? login?.deviceArgs : login?.args;
     if (!args) return null;
-    const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts, { scope: config.engine, account: config.account });
+    const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true });
     return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
       ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
     };
@@ -701,7 +706,7 @@ export class ProviderRegistry {
     }
     if (snapshot.state === "available") snapshot = { ...snapshot, authChecked: true };
     return {
-      snapshot,
+      snapshot: this.keepAddress(entry.instanceId, snapshot),
       // every copy of the driver's default binary on the augmented PATH -
       // the dropdown's "detected" entries. Snapshotted per probe so a
       // newly installed CLI shows up on the next refresh.

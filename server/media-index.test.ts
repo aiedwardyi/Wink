@@ -5,8 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { buildMediaIndex, createMediaIndex } from "./media-index.ts";
+import { readMediaRows } from "./media-rows.ts";
 import { closeMessageDb, replaceThread } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
+
+vi.mock("./media-rows.ts", { spy: true });
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const HOUR = 3_600_000;
@@ -96,6 +99,21 @@ describe("media index", () => {
     expect(media.page(threadId, first.v, 1)).toBe(older);
     expect(activePath).not.toHaveBeenCalled();
     expect(store.loaded(threadId)).toBe(false);
+  });
+
+  it("pages an open chat from memory instead of walking the database", () => {
+    const store = new Store(selection);
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[old.png](C:\\w\\old.png)" });
+    for (let n = 0; n < 300; n++) store.appendMessage(threadId, { role: "user", kind: "text", text: "no media" });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[new.png](C:\\w\\new.png)" });
+    vi.mocked(readMediaRows).mockClear();
+
+    const media = createMediaIndex(store);
+    const first = media.list(threadId);
+    expect(first).toMatchObject({ name: ["new.png"], next: 1 });
+    expect(media.page(threadId, first.v, 1)).toMatchObject({ name: ["old.png"] });
+    expect(readMediaRows).not.toHaveBeenCalled();
   });
 
   it("imports a flat legacy thread and follows its insertion order", () => {

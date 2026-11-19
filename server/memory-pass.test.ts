@@ -16,15 +16,16 @@ import {
   noteSummary,
   parseFacts,
   pendingRows,
-  replyPictures,
   secretLike,
   userTyping,
   type MemoryPass,
   type NoteGenerator,
 } from "./memory-pass.ts";
+import * as atomic from "./atomic.ts";
 import { memoryNotesEnabled } from "./config.ts";
 import { memoryNotice } from "./memory-health.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import { replyTurns } from "./pick-sources.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { MEMORY_MAX_BYTES, MEMORY_SEED, memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
@@ -146,18 +147,18 @@ describe("memory pass", () => {
       { instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText: defaultGenerateText },
       { instanceId: "claude-bound", driverKind: "claudeAgent", enabled: true, generateText },
     ], { instanceId: "claude-bound", available: true });
-    say("t1", "I prefer concise replies.");
-    say("t1", "I use pnpm for my projects.");
+    const first = say("t1", "I prefer concise replies.");
+    const second = say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
     expect(defaultGenerateText).not.toHaveBeenCalled();
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ text: "I prefer concise replies." }, { text: "I use pnpm for my projects." }]), {
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ id: first.id, text: first.text! }, { id: second.id, text: second.text! }]), {
       signal: expect.any(AbortSignal), timeoutMs: 120_000, ephemeral: true, lean: true,
     });
     expect(memoryFileRaw("bot-t1")).toBe(
       `${MEMORY_SEED}- Prefers concise replies (noted 2026-10-15)\n- Uses pnpm for projects (noted 2026-10-15)\n`,
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects", memoryBotId: "bot-t1" });
     expect(stored()).toEqual({ threads: {} });
   });
 
@@ -165,16 +166,16 @@ describe("memory pass", () => {
     const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
     const generateText = vi.fn(async () => recorded.reply.text);
     generator = noteGenerator([{ instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText }]);
-    store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
-    say("t1", "the second one");
+    const question = store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    const answer = say("t1", "the second one");
     say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, expect.anything());
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(`<source message_id="${answer.id}" question_id="${question.id}" />\n<context>${question.text}</context>\nthe second one`), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | model picker look | current\n- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n- Said: "the second one"\n',
     );
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects", memoryBotId: "bot-t1" });
   });
 
   it("attributes a helper batch once when its write waits for a busy turn", async () => {
@@ -329,7 +330,7 @@ describe("memory pass", () => {
       "# Memory\n- Prefers pnpm\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n- Hates drama (noted 2026-10-15)\n",
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama", memoryBotId: "bot-t1" });
   });
 
   it("starts an empty file from the seed", async () => {
@@ -882,13 +883,28 @@ describe("memory pass", () => {
     await settle("t1", 3 * MINUTE);
     const prompt = generate.mock.calls[0]![0];
     expect(prompt).toContain("<context>");
-    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\nI use pnpm for my projects\.\n<\/user_lines>/);
+    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\n<source [^>]+>/);
+    expect(prompt).toContain("\nI use pnpm for my projects.\n</user_lines>");
     expect(prompt).not.toContain("Some setup. ".repeat(40));
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | Picker look follows the app theme | current\n- Picked: Picker look follows the app theme\n- Said: "the first one"\n',
     );
     expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("keeps a tweak said after an unbound pick in the same pass", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Should the picker follow the app theme, or stay dark always?" });
+    say("t1", "the first one");
+    say("t1", "and make the header smaller");
+    generate.mockResolvedValue(JSON.stringify([
+      { kind: "decision", fact: "Picker look follows the app theme", quote: "the first one", message_id: "not-a-message" },
+      { kind: "tweak", key: "Picker look follows the app theme", fact: "Make the header smaller", quote: "and make the header smaller" },
+    ]));
+    await settle("t1", 3 * MINUTE);
+    const timeline = readMemoryTopic("bot-t1", "decisions.md") ?? "";
+    expect(timeline).toContain("- Binding: unbound");
+    expect(timeline).toContain('"and make the header smaller"');
   });
 
   it("takes context from the bot's reply over a later options card, and from the card when no reply names the options", async () => {
@@ -954,16 +970,20 @@ describe("memory pass", () => {
     const old = "- Repo uses spaces (noted 2026-10-01)";
     const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
     writeMemoryFile("bot-t1", notes);
-    // a folder where the timeline goes fails its write
     const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
-    mkdirSync(side, { recursive: true });
+    const write = atomic.writeFileAtomic;
+    const failWrite = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...args) => {
+      if (path === side) throw new Error("timeline write failed");
+      write(path, ...args);
+    });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
     say("t1", "tabs");
     generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs", replaces: old }]));
     await settle("t1", 3 * MINUTE);
+    expect(failWrite).toHaveBeenCalledWith(side, expect.any(String), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(notes);
-    rmSync(side, { recursive: true });
+    failWrite.mockRestore();
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
     expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n");
@@ -971,11 +991,11 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(1);
   });
 
-  it("keeps the root of a picture path a bot names", () => {
+  it("does not offer files only named in a bot reply as saved pictures", () => {
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Mocks: /tmp/mock/C.png, ~/mock/B.png and C:\\mocks\\A.png. Which one?" });
     const { id } = say("t1", "c");
-    const shown = replyPictures(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
-    expect(shown?.map(({ path }) => path)).toEqual(["/tmp/mock/C.png", "~/mock/B.png", "C:\\mocks\\A.png"]);
+    const shown = replyTurns(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
+    expect(shown?.pictures).toEqual([]);
   });
 
   it("never lands the same pick twice", async () => {
@@ -1161,13 +1181,13 @@ describe("memory pass filters", () => {
       expect(picked([decision("Repo password stays Tr0ub4dor", "yes")], [{ text: "yes", context: "Keep the repo password Tr0ub4dor?" }], "")).toEqual([]);
     });
 
-    it("keeps 3 per pass and one line per quote", () => {
+    it("keeps every decision in a pass and one line per quote", () => {
       const text = "dark, tabs, pnpm, vitest and npm";
       const context = "dark or light, tabs or spaces, pnpm or npm, vitest or jest, npm or yarn?";
       const own = [decision("Dark theme", "dark"), decision("Tabs for indent", "tabs"), decision("Pnpm for installs", "pnpm"), decision("Vitest for tests", "vitest")];
-      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       const shared = own.map((pick) => ({ ...pick, quote: text }));
-      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       expect(picked([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
         { line: "Npm for publishing", kind: "decision" },
       ]);

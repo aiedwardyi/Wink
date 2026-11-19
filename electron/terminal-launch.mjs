@@ -104,6 +104,8 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
   const agy = driverKind === "antigravityAgent";
   if (platform === "win32") {
     const refreshPath = "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path', 'Machine')+';'+[Environment]::GetEnvironmentVariable('Path', 'User')";
+    const signInEnv = agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; "
+      : driverKind === "claudeAgent" ? "$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; " : "";
     return [
       "$ErrorActionPreference='Stop'",
       ...(needsNode && /^\s*npm(?:\s|$)/.test(command) ? [
@@ -117,7 +119,7 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
       `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${command}`, "utf16le").toString("base64")}`,
       "if ($LASTEXITCODE -ne 0) { return }",
       refreshPath,
-      ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; " : ""}${signIn}`, "utf16le").toString("base64")}`] : []),
+      ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${signInEnv}${signIn}`, "utf16le").toString("base64")}`] : []),
     ].join("\n");
   }
   return signIn ? `{\n${command}\n} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command;

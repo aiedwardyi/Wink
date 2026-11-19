@@ -135,6 +135,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
+import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -2408,6 +2409,7 @@ const serverServing = new Promise<void>((resolve) => { markServerServing = resol
 /** Tailnet detection and the relay both call this; the heartbeat starts once. */
 function startDevicePresence(): void {
   publishDeviceRecord();
+  void serverServing.then(() => devicePresence.probe(syncedDevices(), REMOTE_HOST));
   if (devicePresenceStarted) return;
   devicePresenceStarted = true;
   setInterval(publishDeviceRecord, DEVICE_HEARTBEAT_MS).unref();
@@ -2418,6 +2420,7 @@ function startDevicePresence(): void {
 }
 
 const devicePresence = createDevicePresence();
+const syncedDevices = () => profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
 const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
   if (host === REMOTE_HOST) return;
   ({ host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_DIR, console.log, host));
@@ -6459,6 +6462,12 @@ routines = new RoutineManager({
     notify(buildNotification("routine-failed", bot, routineSourceThread(run) ?? run.threadId ?? bot.threadId, detail));
   },
 });
+// wake rows written before the card carried the flag
+try {
+  routines.flagWakeCards(store);
+} catch (error) {
+  console.error("routine: flagging earlier wake cards failed, retrying next boot", error);
+}
 const recoveryOwners = routines.routineRequestReceiptOwners();
 if (recoveryOwners.length > 0) {
   // A normal launch has no crash-gap receipts, so it must not eagerly load
@@ -8583,8 +8592,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "POST" && path === BOARD_ROUTES.reply) return await boardRoutes.reply(req, res);
     if (method === "POST" && path === BOARD_ROUTES.remove) return await boardRoutes.remove(req, res);
     if (method === "GET" && path === "/api/devices") {
-      const folder = profileSyncSettings.folder;
-      const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
+      const listed = syncedDevices();
       const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
     }
@@ -9171,19 +9179,34 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return install ? json(res, 200, install) : json(res, 404, { error: "Unknown engine install" });
     }
     const engineSignIn = /^\/api\/instances\/([^/]+)\/sign-in$/.exec(path);
-    if (engineSignIn && !isInstanceId(engineSignIn[1])) return json(res, 400, { error: "Invalid instance id" });
-    if (method === "POST" && engineSignIn) {
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
+    if (engineSignIn) {
+      const id = engineSignIn[1];
+      const refuse = (status: number, error: string, code?: string) => {
+        logSignInRefusal(status, code);
+        return json(res, status, { error });
+      };
+      if (!isInstanceId(id)) return refuse(400, "Invalid instance id");
+      try {
+        if (method === "POST") {
+          if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+            return refuse(415, "content-type must be application/json");
+          }
+          const body = await readBody(req);
+          if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
+          const capture = await registry.startSignIn(id, body?.device === true);
+          return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        }
+        if (method === "DELETE") return await registry.cancelSignIn(id)
+          ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        if (method === "GET") {
+          const signIn = registry.signIn(id);
+          return signIn ? json(res, 200, signIn) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
+        }
+      } catch (error) {
+        const failure = requestError(error, () => {});
+        logSignInRefusal(failure.status, error instanceof LoginBusyError ? error.code : undefined);
+        return json(res, failure.status, failure.body);
       }
-      const body = await readBody(req);
-      if (body?.device !== undefined && typeof body.device !== "boolean") return json(res, 400, { error: "device must be a boolean" });
-      const capture = await registry.startSignIn(engineSignIn[1], body?.device === true);
-      return capture ? json(res, 200, capture) : json(res, 404, { error: "Unknown engine sign-in" });
-    }
-    if (method === "DELETE" && engineSignIn) {
-      return await registry.cancelSignIn(engineSignIn[1])
-        ? json(res, 200, {}) : json(res, 404, { error: "Unknown engine sign-in" });
     }
     const engineSignOut = /^\/api\/instances\/([^/]+)\/sign-out$/.exec(path);
     if (engineSignOut && !isInstanceId(engineSignOut[1])) return json(res, 400, { error: "Invalid instance id" });
@@ -9194,10 +9217,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const signedOut = await registry.signOut(engineSignOut[1]);
       return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
         : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });
-    }
-    if (method === "GET" && engineSignIn) {
-      const signIn = registry.signIn(engineSignIn[1]);
-      return signIn ? json(res, 200, signIn) : json(res, 404, { error: "Unknown engine sign-in" });
     }
 
     if (method === "GET" && path === "/api/usage/board") {
