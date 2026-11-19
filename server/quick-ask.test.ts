@@ -362,6 +362,24 @@ describe("quick route", () => {
     expect(failed).toMatchObject({ role: "bot", kind: "activity", tool: { name: "error: queued message could not start - disk full", ok: false } });
   });
 
+  it("shows the failed-send row when the owed ack cannot queue either", async () => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 12000 } });
+    h.steer.mockImplementation(async (threadId, prompt, consumed) => {
+      consumed?.(true);
+      if (!COVERED.test(prompt)) h.store.appendMessage(threadId, { role: "bot", kind: "text", text: "Main ack" });
+      return true;
+    });
+    expect(await h.send({ text: "switched to the new branch", sendId: "send-quick-0000000009" })).toMatchObject({ status: 202, data: { steered: true } });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Finished the original task." });
+    h.store.setActivity(h.bot.id, "idle");
+    queueFails.on = true;
+    await h.settled();
+    queueFails.on = false;
+    const outcomes = h.rows().filter((row) => row.role === "bot" && (row.text === "Main ack" || row.tool?.ok === false));
+    expect(outcomes.map((row) => row.text ?? row.tool?.name)).toEqual(["error: queued message could not start - disk full"]);
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+  });
+
   it("lands a late answer in the ask's own task after a switch, without a steer", async () => {
     const h = harness({ consumed: true });
     await h.send({ text: QUESTION });

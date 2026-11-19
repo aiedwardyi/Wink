@@ -17,7 +17,7 @@ import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
+import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, replyExcerpt, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -295,8 +295,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           if (!owed()) return;
         }
         // a turn that ended or refused the note, or a switch to another task, leaves it for the bot's next turn in this task, drained into the send's own row
-        const queued = queueSteeredMessage(botId, threadId, sent.text ?? "", { prompt: note });
-        store.patchMessage(threadId, sent.id, { quick: { state: "handoff" }, queueId: queued.id });
+        queueAsk(store, botId, threadId, sent, note);
         drainQueuedSends();
       })
       .catch((error) => console.warn(`[quick] owed ack failed: ${error instanceof Error ? error.message : String(error)}`));

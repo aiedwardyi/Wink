@@ -119,9 +119,9 @@ export const pending = (store: Pick<Store, "activePath">, threadId: string, ask:
   store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && !row.steered && row.quick?.state !== "handoff");
 
 /** The ask as the bot's ordinary next turn in its own thread, else the failed-send row. */
-function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message): void {
+export function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message, prompt?: string): void {
   try {
-    const queued = queueSteeredMessage(botId, threadId, ask.text ?? "");
+    const queued = queueSteeredMessage(botId, threadId, ask.text ?? "", { prompt });
     store.patchRow(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
   } catch (error) {
     store.patchRow(threadId, ask.id, { quick: undefined });
