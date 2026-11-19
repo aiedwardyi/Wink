@@ -362,7 +362,7 @@ describe("google sign-in", () => {
       expect(await run((google) => google.finish(bad))).not.toMatch(/refresh|evil/);
     }
     // The saved spelling can differ from the one the server reports; both name the same relay.
-    for (const [saved, base] of [["Relay.Example", "relay.example"], [" relay.example ", "relay.example"], ["relay.example.", "relay.example"], ["relay.xn--p1ai", "relay.xn--p1ai"], ["relay.рф", "relay.xn--p1ai"]]) {
+    for (const [saved, base] of [["Relay.Example", "relay.example"], [" relay.example ", "relay.example"], ["relay.example.", "relay.example"], ["relay.xn--p1ai", "relay.xn--p1ai"], ["relay.рф", "relay.xn--p1ai"], ["relay.lab2", "relay.lab2"]]) {
       expect(await run((google) => google.finish(base), saved)).toContain(`<meta http-equiv="refresh" content="1;url=https://${base}/">`);
     }
     for (const bad of ["other.test", "child.relay.example", "name@relay.example", "relay.example:443", "xn--rel-7cd.example", "relay.example.", "//relay.example", "Relay.Example"]) {

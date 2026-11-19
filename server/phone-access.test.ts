@@ -1252,10 +1252,16 @@ describe("no relay configured", () => {
   });
 
   it("reports the saved base in the one spelling the desktop checks", async () => {
-    for (const [saved, base] of [["Relay.Example", "relay.example"], [" relay.example ", "relay.example"], ["relay.example.", "relay.example"], ["relay.xn--p1ai", "relay.xn--p1ai"], ["relay.рф", "relay.xn--p1ai"]]) {
+    for (const [saved, base] of [["Relay.Example", "relay.example"], [" relay.example ", "relay.example"], ["relay.example.", "relay.example"], ["relay.xn--p1ai", "relay.xn--p1ai"], ["relay.рф", "relay.xn--p1ai"], ["relay.lab2", "relay.lab2"]]) {
       const world = idle({ base: saved });
       expect((await ask(world.access, "GET", "/api/phone-relay/status")).body).toMatchObject({ configured: true, base });
       expect(relayMode({ base: saved, enabled: true }, {})).toEqual({ kind: "on", base });
+    }
+  });
+
+  it("keeps a saved base with a path, query or escape a domain error", () => {
+    for (const saved of ["relay.example/", "relay.example/x", "relay.example?x", "relay.example#x", "relay.example\\", "relay.exa%41mple", "relay.рф/"]) {
+      expect(relayMode({ base: saved, enabled: true }, {})).toEqual({ kind: "invalid", reason: "phoneRelay.base is not a domain name" });
     }
   });
 
