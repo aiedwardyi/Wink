@@ -332,9 +332,23 @@ describe("ModelDial", () => {
     expect(document.querySelector('[data-dial-lab="grok"]')?.hasAttribute("data-locked")).toBe(true);
     await key("ArrowUp");
     expect(selected()).toBe("grok-4.7");
-    expect((document.querySelector("[data-dial-pick]") as HTMLButtonElement).disabled).toBe(true);
+    expect((document.querySelector("[data-pick]") as HTMLButtonElement).disabled).toBe(true);
     await key("Enter");
     expect(saved()).toBeUndefined();
+  });
+
+  it("offers sign-in in place of Pick for a signed-out engine", async () => {
+    media();
+    await mount({ grokSignedIn: false });
+    await key("ArrowUp");
+    expect(selected()).toBe("grok-4.7");
+    const signIn = document.querySelector<HTMLButtonElement>(".dial-stats [data-sign-in]");
+    expect(signIn?.textContent).toBe("Sign In");
+    expect(signIn?.disabled).toBe(false);
+    expect(document.querySelector("[data-dial-pick]")).toBeNull();
+    await key("ArrowDown");
+    expect(document.querySelector(".dial-stats [data-sign-in]")).toBeNull();
+    expect((document.querySelector("[data-dial-pick]") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("switches between dial, list and chart from the Style strip", async () => {
@@ -992,10 +1006,9 @@ describe("ModelDial confirm", () => {
     media({ phone: true });
     await mount({ grokSignedIn: false });
     await key("ArrowUp");
-    const button = document.querySelector("[data-dial-pick]")!;
+    const button = document.querySelector("[data-pick]")!;
     vibrate.mockClear();
     animate.mockClear();
-    await click("[data-dial-pick]");
     await click("[data-pick]");
     await click('.dial-card[aria-pressed="true"]');
     await key("Enter");
