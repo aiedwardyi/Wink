@@ -91,7 +91,14 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     return { status: 200, body: { closed } };
   }
   const choices = askUserChoices(request.choices);
-  const notice = request.fact && deps.forum?.(from.id, request.fromThreadId, question, choices);
+  const notice = request.fact && (() => {
+    try {
+      return deps.forum?.(from.id, request.fromThreadId, question, choices);
+    } catch (cause) {
+      console.warn(`board: ${cause}`);
+      return "";
+    }
+  })();
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",
     kind: "options",

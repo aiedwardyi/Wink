@@ -155,6 +155,16 @@ describe("ask hold", () => {
     expect(alerts).toEqual([RESTART]);
   });
 
+  it("an ask posts when the Forum check throws", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    deps.forum = () => {
+      throw new Error("disk");
+    };
+    expect(ask(GIT)).toEqual({ status: 201, body: { messageId: "m-1" } });
+    expect(cards()).toEqual([GIT]);
+    expect(alerts).toEqual([GIT]);
+  });
+
   it("a held ask still posts beside another question asked after it", () => {
     workerFixes();
     running = true;
