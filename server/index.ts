@@ -8658,6 +8658,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!folder || !removableDevice(folder, profileSyncSettings.deviceId, deviceId, Date.now())) return json(res, 409, { error: "Only an offline PC can be removed" });
       removedPcs[deviceId] = Date.now();
       publishDeviceRecord();
+      // A PC with no tailnet or relay host has no record of its own to hold the removal.
+      if (removableDevice(folder, profileSyncSettings.deviceId, deviceId, Date.now())) return json(res, 409, { error: "This PC cannot hold a removal yet" });
       return json(res, 200, { ok: true });
     }
     if (method === "PUT" && path === "/api/devices/name") {
