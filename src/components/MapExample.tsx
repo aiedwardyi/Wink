@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import type { MapDiffLine, MapWorker } from "../../shared/map-pane";
+import { DEMO_CHIP } from "@/lib/chip-style";
 import { useI18n } from "@/lib/i18n";
 import { treeIndex } from "@/lib/map-tree";
 import { MapTree } from "./MapTree";
@@ -34,7 +35,7 @@ export function MapExample({ labels, active }: { labels: ComponentProps<typeof M
   return <div className="map-example">
     <p>{c.line}</p>
     <div inert>
-      <small className="flex h-4 items-center rounded-full bg-accent px-1.5 text-[10px] font-semibold leading-none text-accent-ink">{c.label}</small>
+      <small className={DEMO_CHIP}>{c.label}</small>
       <MapTree index={INDEX} workers={workers} team={false} slots={SLOTS} clashes={NONE} current={current} selected={null} follow labels={labels} onOpen={open} />
       <div className="map-code">{edit.lines.map((line, index) => <div key={index} className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{line.text}</code></div>)}</div>
     </div>

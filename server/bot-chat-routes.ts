@@ -11,6 +11,7 @@ import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { noteSendLocale } from "./memory-import-offer.ts";
 import { callLinesSinceLastUserTurn, parseCallTag } from "./live-call.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -336,6 +337,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         return json(res, 400, { error: "threadId must be a task id" });
       }
       noteTalked(bot.id);
+      noteSendLocale(body.locale);
       // A retry carries its original task. That lets us return the canonical
       // receipt after a task switch, while a genuinely new send still has to
       // target the task that is active now.
@@ -425,8 +427,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               startQuick(quick, bot.id, threadId, message);
               return { ok: true as const, quick: true as const, threadId, message };
             }
-            // a call line is spoken back, so only a typed send gets the reply beside it
-            const ack = Boolean(quick && gate && !call && routesAck(gate));
+            // a call line is spoken back and a peer-watched turn owes the person its own tagged line, so only other typed sends get the reply beside them
+            const ack = Boolean(quick && gate && !call && !hasPeerWatch(threadId) && routesAck(gate));
             const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, covered: ack });
             if (quick && ack && "steered" in sent && sent.steered) startAck(quick, bot.id, threadId, sent.message);
             return sent;

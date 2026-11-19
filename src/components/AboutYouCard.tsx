@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { aboutYouNote } from "../../shared/about-you-note";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
@@ -59,11 +60,7 @@ export function AboutYouCard() {
       if (seq === listSeq.current) setSources(body.sources);
       setText("");
       setMore(false);
-      setNote([
-        body.added ? t("aboutYou.added", { count: body.added }) : body.found ? t("aboutYou.nothingNew") : t("aboutYou.noFacts"),
-        body.hidden ? t("aboutYou.hidden", { count: body.hidden }) : "",
-        body.full ? t("aboutYou.full", { count: body.full }) : "",
-      ].filter(Boolean).join(" "));
+      setNote(aboutYouNote(body, t));
     } catch (error) {
       setNote((error as { status?: number }).status === 413 ? t("aboutYou.tooLarge") : t("aboutYou.failed"));
     } finally {

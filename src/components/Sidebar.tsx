@@ -1676,7 +1676,7 @@ export function Sidebar({
                 {!closing && <div className="fixed inset-0 z-30" onMouseDown={() => setPlusOpen(false)} />}
                 <div data-closing={closing || undefined} inert={closing} className={cn(
                   "animate-pop-in absolute top-full z-40 mt-1 w-52 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
-                  density === "icons" && !sidebarOnRight ? "left-0" : "right-0",
+                  (density === "icons" ? !sidebarOnRight : !phone) ? "left-0" : "right-0",
                 )}>
                   <button
                     onClick={() => {

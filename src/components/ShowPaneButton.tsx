@@ -54,7 +54,7 @@ export function ShowPaneButton({ threadId, map, workers, className, inPane = fal
       aria-label={workerTab ? t("workers.stripAria", counts) : t("show.pane")}
       title={t("show.pane")}
       onClick={() => open ? closePane() : togglePane(threadId, map, hasWorkers ? "listed" : workerTab ? "tab" : undefined)}
-      className={cn("relative shrink-0 rounded-md p-1.5 hover:text-ink md:hover:bg-raised", open ? "text-accent" : "text-ink-secondary", !inPane && "md:translate-x-3.5 md:-translate-y-[11px]", open && !inPane && "md:hidden", className)}
+      className={cn("relative shrink-0 rounded-md p-1.5 hover:text-ink md:hover:bg-raised text-ink-secondary", !inPane && "md:translate-x-3.5 md:-translate-y-[11px]", open && !inPane && "md:hidden", className)}
     >
       {open ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
       {badge && (
