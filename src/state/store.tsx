@@ -1561,7 +1561,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 sendId,
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
-                waited: action.after,
+                waited: action.after || undefined,
               });
               if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId });
             }
