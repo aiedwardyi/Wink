@@ -5,7 +5,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { approvalKey, autoDecision, autoVerdict, looksDestructive, looksSensitive } from "./auto-approve.ts";
@@ -360,6 +360,22 @@ describe("unattended turns", () => {
         ["powershell", "cd..; Remove-Item notes.md"],
         ["Bash", "{ cd ../other; }; rm notes.md"],
         ["Bash", "bash -c 'cd ../other; rm notes.md; true'"],
+        ["Bash", "pushd sub; pushd -n ../../other; popd; rm notes.md"],
+        ["Bash", "pushd ..; pushd; popd; rm notes.md"],
+        ["Bash", "pushd ..; dirs -c; popd; rm notes.md"],
+        ["powershell", "pushd ..; pushd; popd; Remove-Item notes.md"],
+        ["Bash", "pushd sub; pushd missing; popd; rm ../notes.md"],
+        ["Bash", "cd missing; rm ../notes.md"],
+        ["Bash", "false && cd sub; rm ../notes.md"],
+        ["Bash", "builtin cd ..; rm notes.md"],
+        ["Bash", "if cd ..; then rm notes.md; fi"],
+        ["Bash", 'eval "cd .."; rm notes.md'],
+        ["Bash", 'cd "sub"/..; rm ../notes.md'],
+        ["Bash", "cd `pwd`/..; rm notes.md"],
+        ["Bash", `cd .. # ; cd ${basename(workspace)}\nrm notes.md`],
+        ["Bash", "env -C .. rm notes.md"],
+        ["powershell", "Remove-Item -Path:..\\notes.md"],
+        ["shell", "call cd .. & del notes.md"],
       ]) {
         expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ approve: null, source: "unattended-deny" });
       }
