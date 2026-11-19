@@ -15,7 +15,7 @@ import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, reco
 import { bootRowsNow } from "./testing/boot-rows.ts";
 import type { QuickResult } from "./side-chat.ts";
 import { SendSequencer } from "./send-idempotency.ts";
-import { drainSteeredMessages, foldQueuedSends, queueMark, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
+import { drainSteeredMessages, foldQueuedSends, initializeSteerQueue, queueMark, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
 import { Store, type Message } from "./store.ts";
 import { turnAddedMessage } from "./turn-reply.ts";
 
@@ -306,16 +306,64 @@ describe("quick route", () => {
     expect(run.mock.calls[0]![2]).toContain(text);
   });
 
-  it("asks for no second reply when the bot's final reply already answered the send", async () => {
+  it.each([["Yes, Windows is supported.", true], ["Settings page is done.", true], ["Settings page is done.", false]])("asks the bot once, free to stay silent, when its final reply %j stands under the send, read: %s", async (final, read) => {
     const h = harness({ consumed: true, result: { route: "answer", text: "Yes, Windows is supported.", ms: 20 } });
+    const drops: Array<(taken: boolean) => void> = [];
+    h.steer.mockImplementation(async (_threadId, _text, consumed) => {
+      if (consumed) drops.push(consumed);
+      return true;
+    });
     await h.send({ text: "Does it support Windows, please?" });
-    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Yes, Windows is supported." });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: final });
+    drops.forEach((drop) => drop(read));
     h.store.setActivity(h.bot.id, "idle");
     await h.settled();
     const run = vi.fn();
     drainSteeredMessages(h.store, run);
-    expect(run).not.toHaveBeenCalled();
-    expect(botLines(h)).toEqual(["Yes, Windows is supported."]);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]![2]).toMatch(/No fast reply reached the person for "Does it support Windows, please\?"; if your reply after it already answers it, write nothing for it; otherwise reply to it now/);
+    expect(botLines(h)).toEqual([final]);
+  });
+
+  it.each([["send-288-restart-0001"], [undefined]])("runs a promised order requeued at quit once after a restart, sendId: %s", async (sendId) => {
+    const h = harness({ consumed: true });
+    const drops: Array<(taken: boolean) => void> = [];
+    h.steer.mockImplementation(async (_threadId, _text, consumed) => {
+      if (consumed) drops.push(consumed);
+      return true;
+    });
+    const text = "also update the docs when you are done";
+    await h.send({ text, sendId });
+    await vi.waitFor(() => expect(drops).toHaveLength(2));
+    drops.forEach((drop) => drop(false));
+    initializeSteerQueue(h.store);
+    h.store.setActivity(h.bot.id, "idle");
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]![2]).toContain(text);
+    expect(h.rows().filter((row) => row.text === text)).toHaveLength(1);
+    initializeSteerQueue(h.store);
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+  });
+
+  it("clears the queued flag when a requeued promised order folds into the next turn", async () => {
+    const h = harness({ consumed: true });
+    const drops: Array<(taken: boolean) => void> = [];
+    h.steer.mockImplementation(async (_threadId, _text, consumed) => {
+      if (consumed) drops.push(consumed);
+      return true;
+    });
+    const text = "also update the docs when you are done";
+    await h.send({ text });
+    await vi.waitFor(() => expect(drops).toHaveLength(2));
+    const claim = queueMark();
+    drops.forEach((drop) => drop(false));
+    expect(foldQueuedSends(h.store, h.bot.id, h.bot.threadId, claim + 1, undefined, true)).toEqual([text]);
+    const rows = h.rows().filter((row) => row.text === text);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ steered: true });
+    expect(rows[0]!.queued).toBeUndefined();
   });
 
   it("still asks the bot once for a line when its turn ended with none and the helper had none", async () => {

@@ -324,7 +324,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   await land(store, instance, current, threadId, ask, result.text);
 }
 
-const repliedUnder = (path: Message[], ask: Message) => {
+export const repliedUnder = (path: Message[], ask: Message) => {
   const asked = path.findIndex((row) => row.id === ask.id);
   return asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim());
 };
@@ -340,21 +340,20 @@ async function land(store: QuickDeps["store"], instance: ProviderInstance | null
   })?.catch(() => false);
 }
 
-/** One short helper reply under a send the bot already took as the person's own words; none when the helper has none. True when the send needs no other reply. */
-export async function ackQuick(deps: HelperDeps, botId: string, threadId: string, sent: Message): Promise<boolean> {
+/** One short helper reply under a send the bot already took as the person's own words; none when the helper has none. */
+export async function ackQuick(deps: HelperDeps, botId: string, threadId: string, sent: Message): Promise<void> {
   const { store } = deps;
   const bot = store.bot(botId);
   const instance = bot ? deps.instance(bot, threadId) : null;
-  if (!instance) return false;
+  if (!instance) return;
   const text = sent.text ?? "";
   const result: QuickResult = isOrder(text)
     ? { route: "answer", text: orderAck(text), ms: 0 }
     : await askHelper(deps, instance, botId, threadId, sent, true);
   const current = store.bot(botId);
-  if (!current || result.route === "handoff" || !result.text) return false;
+  if (!current || result.route === "handoff" || !result.text) return;
   const path = store.activePath(threadId);
   // an edit or rewind dropped the send, or the finished turn already replied to it
-  if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return true;
+  if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return;
   await land(store, instance, current, threadId, sent, result.text);
-  return true;
 }

@@ -18,7 +18,7 @@ import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
+import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, repliedUnder, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
 import { isOrder } from "./quick-route.ts";
 import { composeUserTurnPrompt, promptWithReply, replyExcerpt, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
@@ -39,8 +39,9 @@ const STOP_RELEASE_MS = 6_000;
 // The bot acks a send mid-turn unless the helper's reply beside it does.
 const ACK_COVERED =
   "[Wink note, automated, not from the person. A fast reply in your voice answers the message below beside your work, so write no line of your own for it; continue, and put anything new in your final reply.]";
-const ackMissed = (text: string) =>
-  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(text)}"; reply to it now in one short visible line, then continue.]`;
+// Only the bot can tell whether its own reply under the send already answered it.
+const ackMissed = (text: string, replied: boolean) =>
+  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(text)}"; ${replied ? "if your reply after it already answers it, write nothing for it; otherwise " : ""}reply to it now in one short visible line, then continue.]`;
 
 type BotChatRouteDeps = {
   cancelUsageWait?: (botId: string, waitId?: string, preserveTurn?: boolean) => void;
@@ -289,10 +290,10 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     };
     void ackQuick({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent)
       .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`))
-      .then(async (settled) => {
-        const current = !settled && owed();
+      .then(async () => {
+        const current = owed();
         if (!current) return;
-        const note = ackMissed(sent.text ?? "");
+        const note = ackMissed(sent.text ?? "", !current.busy && repliedUnder(store.activePath(threadId), sent));
         const adapter = instanceForBot(current, threadId)?.adapter;
         if (current.busy && (current.activeThreadId ?? current.threadId) === threadId && adapter?.steer) {
           if (await (steerUntilTaken(adapter, threadId, note) ?? adapter.steer(threadId, note)).catch(() => false)) return;
