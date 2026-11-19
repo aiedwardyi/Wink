@@ -1,8 +1,12 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
   buildResumeFallback,
   buildTurnContext,
+  builtListPath,
   countLastTurnToolRounds,
   countSessionToolRounds,
   engineIsFresh,
@@ -12,6 +16,8 @@ import {
   replayMessageText,
   PRE_COMPACT_SESSION_TOOL_ROUND_LIMIT,
   PRE_COMPACT_TOOL_ROUND_LIMIT,
+  memoryBlock,
+  planFiles,
   resumeSessionUnseeded,
   sessionPromptFor,
   shouldRecycleProviderSession,
@@ -1251,5 +1257,77 @@ describe("replay engine provenance", () => {
     expect(replayMessageText(message, engine)).toBe(message.text);
     expect(replayMessageText({ ...message, engine: undefined }, driverKind)).toBe(message.text);
     expect(replayMessageText({ ...message, role: "user" }, driverKind)).toBe(message.text);
+  });
+});
+
+describe("fresh-session memory block", () => {
+  const home = join(tmpdir(), "marketing");
+  const cwd = join(home, "workspace");
+  const shots = Array.from({ length: 11 }, (_, index) => join(home, "launch", "real-shots", `workers-${String(index + 1).padStart(2, "0")}.png`));
+  const plan = join(home, "launch", "paste", "03-thursday.md");
+  const tokens = (text: string) => Math.ceil(Buffer.byteLength(text, "utf8") / 3);
+
+  it("names the plan first, then each folder with its count and newest files, newest folder first", () => {
+    expect(memoryBlock({ files: [...shots, shots[0]!, "notes/a.md"], cwd, plans: [plan], builtList: join(home, "built.md"), work: "Your work: #12 merged" })).toBe([
+      "[Wink memory - open these before answering about the plan or what is built or merged, or starting new work:]",
+      `Read first, your plan: ${plan}`,
+      `Built list: ${join(home, "built.md")}`,
+      `Files, newest 4 folders: notes 1 (a.md); ${join(home, "launch", "real-shots")} 11 (workers-01.png, workers-11.png)`,
+      "Your work: #12 merged",
+    ].join("\n"));
+    expect(memoryBlock({ files: [] })).toBe("");
+    expect(memoryBlock({ files: ["notes/a.md"] })).toBe("");
+    expect(memoryBlock({ files: ["MEMORY.md"], cwd })).toContain("Files, newest 4 folders: task folder 1 (MEMORY.md)");
+  });
+
+  it("lists four folders and counts the rest, and never cuts a plan", () => {
+    const files = Array.from({ length: 7 }, (_, index) => join(home, `dir-${index}`, "a.md")).concat(join(home, "dir-6", "b.md"));
+    const plans = Array.from({ length: 6 }, (_, index) => join(home, "plans", `plan-${index}.md`));
+    const text = memoryBlock({ files, plans });
+    expect(text).toContain(`${join(home, "dir-6")} 2 (b.md, a.md); ${join(home, "dir-5")} 1`);
+    expect(text).not.toContain("dir-2");
+    expect(text).toContain("; +3 older folders (3 files)");
+    for (const path of plans) expect(text).toContain(path);
+  });
+
+  it("stays small", () => {
+    const someone = "C:\\Users\\someone";
+    const real = `${someone}\\Desktop\\launch`;
+    const typical = memoryBlock({
+      files: [...shots.map((path) => path.replace(join(home, "launch"), real)), `${real}\\paste\\03-thursday.md`, `${real}\\paste\\02-wednesday.md`],
+      plans: [`${real}\\paste\\03-thursday.md`],
+      builtList: `${real}\\built.md`,
+      home: someone,
+      work: "Your work, newest 4: #1842 fix: show the plan (open PR); #1841 fix: name the shots (merged); fix/launch-post abc1234 (unfinished branch)",
+    });
+    expect(tokens(typical)).toBeLessThanOrEqual(180);
+  });
+
+  it("finds the plan from labeled artifacts and paths the goal or plan cite", () => {
+    expect(planFiles({
+      goal: "Post the Reddit launch from paste/03-thursday.md, see https://x.com/plan.md",
+      plan: [{ step: `Follow ${join(home, "launch", "order.md")}`, status: "active" }],
+      artifacts: [{ ref: shots[0]!, label: "Shot 1" }, { ref: join(home, "brief.md"), label: "Launch plan" }, { ref: "paste/03-thursday.md", label: "Thursday post" }],
+    }, cwd)).toEqual([join(home, "brief.md"), join(cwd, "paste", "03-thursday.md"), join(home, "launch", "order.md")]);
+  });
+
+  it("rides every turn it is given, and the search hint rides only the fresh-session preamble", () => {
+    const memoryText = memoryBlock({ files: [], plans: [plan] });
+    const transcript = [{ role: "user" as const, text: "plan it" }, { role: "assistant" as const, text: "done" }];
+    const recycled = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: true, recycleReason: "session-fat", replaysNatively: false, memoryText, chatSearch: true });
+    expect(recycled.turnText).toContain("03-thursday.md");
+    expect(recycled.turnText).toContain("Your full earlier chat is still saved; search_my_chats finds anything this replay leaves out. The conversation so far:]");
+    const resumed = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false, memoryText, chatSearch: true });
+    expect(resumed.turnText).toBe(`${memoryText}\n\npost it`);
+    expect(buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false }).turnText).toBe("post it");
+    expect(buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: true, recycleReason: "compaction", replaysNatively: false }).turnText).not.toContain("search_my_chats");
+  });
+
+  it("finds the built list path in the bot's notes, only when the file exists", () => {
+    const built = join(home, "My Drive", "Orbit", "built.md");
+    const notes = `- Feature list: ${built} (one line per feature)\n- other: built.md is in the vault`;
+    expect(builtListPath(notes, (path) => path === built)).toBe(built);
+    expect(builtListPath(notes, () => false)).toBeNull();
+    expect(builtListPath("no list here", () => true)).toBeNull();
   });
 });

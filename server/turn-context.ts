@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+
 import { redactSecretsInText } from "./redact.ts";
 import { asksBlock, type TaskAsk } from "./task-asks.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
@@ -87,6 +91,10 @@ export interface TurnContextInput {
   currentRequestText?: string;
   /** the asks list for a turn the record does not ride */
   asksText?: string;
+  /** memoryBlock text; rides every turn once the chat has had a fresh session */
+  memoryText?: string;
+  /** search_my_chats is on this turn, so a fresh-session preamble names it */
+  chatSearch?: boolean;
 }
 
 export interface TaskRecordContext {
@@ -504,14 +512,89 @@ const SESSION_FAT_PREAMBLE =
 const SYSTEM_CHANGED_PREAMBLE =
   "[Wink started a fresh provider session because your instructions changed. The conversation so far:]";
 
+const CHAT_SEARCH_HINT = " Your full earlier chat is still saved; search_my_chats finds anything this replay leaves out.";
+
 function replayPreamble(input: TurnContextInput): string {
   if (input.rewound) return REWOUND_PREAMBLE;
-  if (input.recycled) {
-    return input.recycleReason === "compaction"
+  const preamble = !input.recycled
+    ? FRESH_PREAMBLE
+    : input.recycleReason === "compaction"
       ? RECYCLED_PREAMBLE
       : input.recycleReason === "system" ? SYSTEM_CHANGED_PREAMBLE : SESSION_FAT_PREAMBLE;
+  return input.chatSearch ? preamble.replace(" The conversation so far:]", `${CHAT_SEARCH_HINT} The conversation so far:]`) : preamble;
+}
+
+const MEMORY_FOLDERS = 4;
+const MEMORY_NAMES = 2;
+const DOC_PATH = /(?:[A-Za-z]:)?[\w.\\/-]*\.(?:md|txt|docx?|pdf)\b/gi;
+const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
+
+function localPath(ref: string, cwd: string | undefined): string | null {
+  const path = ref.trim();
+  if (!path || /^\w{2,}:\/\//.test(path)) return null;
+  if (isAbsolute(path)) return resolve(path);
+  return cwd ? resolve(cwd, path) : null;
+}
+
+/** Files the record names as its plan: artifacts labeled or named plan, and any document path the goal or plan steps cite. */
+export function planFiles(record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts">, cwd?: string): string[] {
+  const refs = (record.artifacts ?? []).filter((item) => /plan/i.test(item.label) || /plan/i.test(basename(item.ref))).map((item) => item.ref);
+  const cited = [record.goal, ...record.plan.map((item) => item.step)].join("\n").replace(/\w{2,}:\/\/\S+/g, "");
+  for (const match of cited.matchAll(DOC_PATH)) refs.push(match[0]);
+  return [...new Set(refs.map((ref) => localPath(ref, cwd)).filter((path): path is string => path !== null))];
+}
+
+/** The first path in the bot's notes that ends in built.md and exists. */
+export function builtListPath(notes: string, exists: (path: string) => boolean = existsSync): string | null {
+  for (const match of notes.matchAll(BUILT_PATH)) {
+    const path = match[0].startsWith("~") ? join(homedir(), match[0].slice(2)) : match[0];
+    if (exists(path)) return path;
   }
-  return FRESH_PREAMBLE;
+  return null;
+}
+
+export interface MemoryBlockInput {
+  /** saved or recorded file paths, oldest first */
+  files: readonly string[];
+  cwd?: string;
+  plans?: readonly string[];
+  builtList?: string | null;
+  /** the open-work line unlanded.ts built */
+  work?: string;
+  home?: string;
+}
+
+/** Paths only, never file contents: plans and the built list in full, the newest MEMORY_FOLDERS folders, then a count of the rest. */
+export function memoryBlock(input: MemoryBlockInput): string {
+  const newest = new Map<string, true>();
+  for (const ref of input.files) {
+    const path = localPath(ref, input.cwd);
+    if (!path) continue;
+    newest.delete(path);
+    newest.set(path, true);
+  }
+  const folders = new Map<string, string[]>();
+  for (const path of [...newest.keys()].reverse()) {
+    const names = folders.get(dirname(path)) ?? [];
+    folders.set(dirname(path), [...names, basename(path)]);
+  }
+  const shown = [...folders].slice(0, MEMORY_FOLDERS).map(([dir, names]) => {
+    const label = input.cwd && resolve(input.cwd) === dir ? "task folder" : [input.cwd, input.home ?? homedir()].map((root) => root ? relative(root, dir) : "")
+      .map((inside, index) => inside && !inside.startsWith("..") && !isAbsolute(inside) ? (index ? join("~", inside) : inside) : "")
+      .find(Boolean) ?? dir;
+    return `${label} ${names.length} (${names.slice(0, MEMORY_NAMES).join(", ")})`;
+  });
+  const rest = [...folders.values()].slice(MEMORY_FOLDERS);
+  if (rest.length) shown.push(`+${rest.length} older folders (${rest.flat().length} files)`);
+  const plans = input.plans ?? [];
+  const lines = [
+    ...(plans.length ? [`Read first, your plan: ${plans.join("; ")}`] : []),
+    ...(input.builtList ? [`Built list: ${input.builtList}`] : []),
+    ...(shown.length ? [`Files, newest ${MEMORY_FOLDERS} folders: ${shown.join("; ")}`] : []),
+    ...(input.work ? [input.work] : []),
+  ];
+  if (!lines.length) return "";
+  return redactSecretsInText(["[Wink memory - open these before answering about the plan or what is built or merged, or starting new work:]", ...lines].join("\n"));
 }
 
 export const TASK_RESUME_PROMPT =
@@ -661,7 +744,7 @@ export function buildTurnContext(input: TurnContextInput): {
   /** false when the native session must not be resumed */
   resume: boolean;
 } {
-  const { text, transcript, rewound, fresh, recycled = false, replaysNatively, taskRecord, taskRecordText, contextCapped = false, recovering = false, currentRequestText, asksText = "" } = input;
+  const { text, transcript, rewound, fresh, recycled = false, replaysNatively, taskRecord, taskRecordText, contextCapped = false, recovering = false, currentRequestText, asksText = "", memoryText = "" } = input;
   const resume = !rewound && !fresh && !recycled;
   const replay = !resume && !replaysNatively && transcript.length > 0;
   // The caller already sized its block for the model window and knows this
@@ -677,9 +760,9 @@ export function buildTurnContext(input: TurnContextInput): {
         : undefined)
       : ""
   );
-  const record = durableRecord && (rewound || fresh || recycled || contextCapped || recovering)
+  const record = [durableRecord && (rewound || fresh || recycled || contextCapped || recovering)
     ? durableRecord
-    : asksText;
+    : asksText, memoryText].filter(Boolean).join("\n");
   if (!replay && !record) return { turnText: text, resume };
   if (!replay) return { turnText: `${record}\n\n${text}`, resume };
   return {

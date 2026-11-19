@@ -7,6 +7,7 @@ import { ghRun, type MapGh } from "./map-pr.ts";
 
 export const UNLANDED_REFRESH_MS = 10 * 60_000;
 const SHOWN = 8;
+const WORK_SHOWN = 4;
 const REPORTS_READ = 40;
 const TITLE_MAX = 40;
 const HOUR = 60 * 60_000;
@@ -16,6 +17,7 @@ export const APP_REPO = "aiedwardyi/wink";
 const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/gi;
 const PR_REF = /\bPR\s*#?(\d{1,6})\b/gi;
 const BRANCH = / branch=(\S+)/;
+const SHA = / sha=([0-9a-f]{7,40})/;
 const NOT_PR_BRANCH = new Set(["none", "HEAD", "main", "master"]);
 const NOT_FOUND = /no pull requests found|Could not resolve to a PullRequest|HTTP 404/i;
 
@@ -24,7 +26,7 @@ const viewSchema = z.object({
   isDraft: z.boolean().optional(), mergeCommit: z.object({ oid: z.string() }).nullish(),
 });
 
-export interface ReportedPr { at: number; repo?: string; number?: number; branch?: string }
+export interface ReportedPr { at: number; repo?: string; number?: number; branch?: string; sha?: string }
 
 export interface UnlandedPr {
   repo: string;
@@ -60,7 +62,7 @@ export function reportedPrs(newestFirst: Iterable<ReportRow>): ReportedPr[] {
     for (const match of note.body.matchAll(PR_URL)) found.push({ at, repo: match[1]!.toLowerCase(), number: Number(match[2]) });
     for (const match of note.body.replace(PR_URL, "").matchAll(PR_REF)) found.push({ at, number: Number(match[1]) });
     const branch = BRANCH.exec(message.text!.split("\n", 1)[0]!)?.[1];
-    if (!found.length && branch && !NOT_PR_BRANCH.has(branch)) found.push({ at, branch });
+    if (!found.length && branch && !NOT_PR_BRANCH.has(branch)) found.push({ at, branch, sha: SHA.exec(message.text!.split("\n", 1)[0]!)?.[1] });
     refs.push(...found);
   }
   return refs;
@@ -103,17 +105,31 @@ export interface UnlandedWorkDeps {
 export interface UnlandedWork {
   /** The header this task's own reports built, "" when none. No I/O. */
   take(threadId: string): string;
+  /** Each change its reports name, newest first: merged, open PR, or unfinished branch. No I/O. */
+  work(threadId: string): string;
   /** `reports`: rows boot's worker already read (reportNotes), used in place of reportsBack for this pass. */
   refresh(botId: string, threadId: string, reports?: Iterable<ReportRow>): Promise<void>;
 }
 
-type Lookup = { at: number; final: boolean; pr: Omit<UnlandedPr, "at"> | null };
+type Landed = { repo: string; number: number; title: string };
+// landed: merged and in the build, so off the unlanded header but still the bot's own work
+type Lookup = { at: number; final: boolean; pr: Omit<UnlandedPr, "at"> | null; landed?: Landed; noPr?: true };
+type WorkItem = { at: number; text: string };
+
+/** Newest first, WORK_SHOWN of them, then a count of the rest. */
+export function workLine(items: readonly WorkItem[]): string {
+  if (!items.length) return "";
+  const ordered = items.toSorted((left, right) => right.at - left.at);
+  const more = ordered.length > WORK_SHOWN ? `; +${ordered.length - WORK_SHOWN} older` : "";
+  return `Your work, newest ${WORK_SHOWN}: ${ordered.slice(0, WORK_SHOWN).map((item) => item.text).join("; ")}${more}`;
+}
 
 export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
   const gh = deps.gh ?? ghRun;
   const now = deps.now ?? Date.now;
   const lookups = new Map<string, Lookup>();
   const unlanded = new Map<string, UnlandedPr[]>();
+  const works = new Map<string, WorkItem[]>();
   const running = new Map<string, Promise<void>>();
   // asked again mid-run: the running pass read the reports before the new one landed
   const stale = new Set<string>();
@@ -133,10 +149,13 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
       const base = { repo, number: view.number, title: view.title };
       if (view.state === "OPEN") return { at, final: false, pr: { ...base, state: view.isDraft ? "draft" : "open" } };
       const { build, final } = await inBuild(repo, view.mergeCommit?.oid);
-      return { at, final, pr: build === true ? null : { ...base, state: build === false ? "merged, not in your build" : "merged, not released" } };
+      return build === true ? { at, final, pr: null, landed: base } : { at, final, pr: { ...base, state: build === false ? "merged, not in your build" : "merged, not released" } };
     } catch (error) {
       // a branch can get its PR after the report; a number that names no PR never will
-      return { at, final: Boolean(ref.number) && NOT_FOUND.test(String(error)), pr: null };
+      const missing = NOT_FOUND.test(String(error));
+      const failed: Lookup = { at, final: Boolean(ref.number) && missing, pr: null };
+      if (!ref.number && missing) failed.noPr = true;
+      return failed;
     }
   }
 
@@ -156,6 +175,7 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
   async function run(botId: string, threadId: string, reports?: Iterable<ReportRow>) {
     const dir = deps.repoDir(botId, threadId);
     const found = new Map<string, UnlandedPr>();
+    const work = new Map<string, WorkItem>();
     for (const ref of reportedPrs(reports ?? deps.reportsBack(threadId))) {
       if (!ref.repo && !dir) continue;
       const key = `${ref.repo ?? dir}|${ref.number ?? ref.branch}`;
@@ -163,12 +183,18 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
       // a branch can open a new PR after its last one settles; only a PR number stays settled
       const settled = entry?.final === true && Boolean(ref.number);
       if (!entry || (!settled && now() - entry.at >= UNLANDED_REFRESH_MS)) lookups.set(key, entry = await lookup(ref, dir));
+      const pr = entry.pr ?? entry.landed;
+      const id = pr ? `${pr.repo}#${pr.number}` : `branch ${ref.branch}`;
+      if (!work.has(id) && (pr || entry.noPr)) {
+        const state = !entry.pr ? "merged" : entry.pr.state.startsWith("merged") ? entry.pr.state : "open PR";
+        work.set(id, { at: ref.at, text: pr ? `#${pr.number} ${clip(pr.title)} (${state})` : `${ref.branch}${ref.sha ? ` ${ref.sha.slice(0, 7)}` : ""} (unfinished branch, no PR)` });
+      }
       if (!entry.pr) continue;
-      const id = `${entry.pr.repo}#${entry.pr.number}`;
       const seen = found.get(id);
       if (!seen || ref.at < seen.at) found.set(id, { ...entry.pr, at: ref.at });
     }
     unlanded.set(threadId, [...found.values()]);
+    works.set(threadId, [...work.values()]);
   }
 
   function refresh(botId: string, threadId: string, reports?: Iterable<ReportRow>): Promise<void> {
@@ -192,6 +218,9 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
   return {
     take(threadId) {
       return unlandedHeader(unlanded.get(threadId) ?? [], now());
+    },
+    work(threadId) {
+      return workLine(works.get(threadId) ?? []);
     },
     refresh,
   };

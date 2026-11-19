@@ -22,6 +22,7 @@ import {
   assignTaskNextAction,
   deleteTaskResumePacket,
   groundTaskArtifacts,
+  readTaskArtifactOverflow,
   readTaskResumePacket,
   settleTaskResumePacket,
   stageTaskResumePacket,
@@ -662,9 +663,9 @@ describe("task state clipping", () => {
     expect(parsed.data.plan?.map((item) => item.step)).toEqual(Array.from({ length: 20 }, (_, index) => `step ${index}`));
     expect(parsed.data.plan?.filter((item) => item.status === "active")).toHaveLength(1);
     expect(parsed.data.blockers?.[0]?.note).toBe("blocker 2");
-    expect(parsed.data.artifacts).toHaveLength(20);
+    expect(parsed.data.artifacts).toHaveLength(22);
     expect(parsed.data.asks).toHaveLength(30);
-    expect(clipped).toEqual(["plan (25 > 20)", "plan (2 active > 1, later ones set to pending)", "blockers (12 > 10)", "artifacts (22 > 20)"]);
+    expect(clipped).toEqual(["plan (25 > 20)", "plan (2 active > 1, later ones set to pending)", "blockers (12 > 10)"]);
   });
 
   it("keeps every plan step and leaves only the first active one active", () => {
@@ -679,5 +680,31 @@ describe("task state clipping", () => {
       { step: "a", status: "done" }, { step: "b", status: "active" }, { step: "c", status: "pending" }, { step: "d", status: "pending" },
     ]);
     expect(clipped).toEqual(["plan (3 active > 1, later ones set to pending)"]);
+  });
+});
+
+describe("artifact overflow", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "task-overflow-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("moves artifacts past the cap to the overflow file instead of deleting them", () => {
+    const shots = Array.from({ length: 25 }, (_, index) => ({ ref: join(dir, "shots", `shot-${index}.png`), label: `Shot ${index}` }));
+    const saved = writeTaskResumePacket(packet({ artifacts: shots }), { dir });
+    expect(saved.artifacts.map((item) => item.label)).toEqual(shots.slice(5).map((item) => item.label));
+    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual(shots.slice(0, 5));
+    writeTaskResumePacket(saved, { dir });
+    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual(shots.slice(0, 5));
+    expect(deleteTaskResumePacket("thread-1", { dir })).toBe(true);
+    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual([]);
+  });
+
+  it("keeps artifacts the byte budget prunes", () => {
+    const long = Array.from({ length: 20 }, (_, index) => ({ ref: join(dir, "x".repeat(380), `file-${index}.md`), label: "l".repeat(200) }));
+    const completed = Array.from({ length: 30 }, (_, index) => ({ note: `${index} ${"n".repeat(290)}`, at: index }));
+    const saved = writeTaskResumePacket(packet({ artifacts: long, completed }), { dir });
+    expect(saved.artifacts.length).toBeLessThan(20);
+    const kept = new Set(saved.artifacts.map((item) => item.ref));
+    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual(long.filter((item) => !kept.has(item.ref)));
   });
 });
