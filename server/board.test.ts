@@ -223,6 +223,42 @@ describe("board Drive sync", () => {
     expect(createBoard({ dir: a.board.dir, pcId: () => "pc-a" }).list().map((post) => post.id)).toEqual([keep.id]);
   });
 
+  it("a reply written before its post's delete arrives is dropped on every PC, never a standalone post", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const c = home("pc-c");
+    const ids = { out: (id: string) => id, in: (id: string) => id };
+    const stuck = a.board.post(STUCK);
+    a.board.sync(folder, ids);
+    b.board.sync(folder, ids);
+    c.board.sync(folder, ids);
+    const late = b.board.post({ author_bot_id: "carbon", parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Late.", source_ref: "tool:tc:late" });
+    const deeper = b.board.post({ author_bot_id: "scout", parent_id: late.id, kind: "tip", title: STUCK.title, body: "Later.", source_ref: "tool:tc:later" });
+    b.board.sync(folder, ids);
+    a.board.remove(stuck.id);
+    for (let pass = 0; pass < 2; pass++) for (const side of [a, c, b]) side.board.sync(folder, ids);
+    for (const side of [a, b, c]) expect(side.board.list()).toEqual([]);
+    for (const side of [a, b, c]) expect(createBoard({ dir: side.board.dir, pcId: () => "x" }).get(deeper.id)).toBeUndefined();
+    expect(readdirSync(join(folder, BOARD_DIR, "pc-b"))).not.toContain(`${late.id}.json`);
+  });
+
+  it("a PC that wrote a reply offline drops it when it hears its post was deleted", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const ids = { out: (id: string) => id, in: (id: string) => id };
+    const keep = a.board.post({ ...STUCK, source_ref: "call:t2:engine:other" });
+    const stuck = a.board.post(STUCK);
+    a.board.sync(folder, ids);
+    b.board.sync(folder, ids);
+    const late = b.board.post({ author_bot_id: "carbon", parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Late.", source_ref: "tool:tc:late" });
+    b.board.post({ author_bot_id: "scout", parent_id: late.id, kind: "tip", title: STUCK.title, body: "Later.", source_ref: "tool:tc:later" });
+    a.board.remove(stuck.id);
+    for (let pass = 0; pass < 2; pass++) for (const side of [a, b]) side.board.sync(folder, ids);
+    for (const side of [a, b]) expect(side.board.list().map((post) => post.id)).toEqual([keep.id]);
+  });
+
   it("removing a reply still moves the replies under it up to its parent", () => {
     const { board } = home("pc-a");
     const stuck = board.post(STUCK);

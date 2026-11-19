@@ -183,6 +183,13 @@ export function createBoard(options: BoardOptions) {
     writeFileAtomic(join(options.dir, DELETED), `${JSON.stringify([...gone()].sort())}\n`);
   };
 
+  /** A post and every reply under it, however deep. */
+  const thread = (id: string) => {
+    const doomed = [id];
+    for (const next of doomed) for (const child of posts().values()) if (child.parent_id === next) doomed.push(child.id);
+    return doomed;
+  };
+
   const write = (post: BoardPost) => {
     view = null;
     mkdirSync(options.dir, { recursive: true });
@@ -276,9 +283,7 @@ export function createBoard(options: BoardOptions) {
       if (!held) return false;
       const at = now();
       if (held.parent_id === null) {
-        const doomed = [id];
-        for (const next of doomed) for (const child of posts().values()) if (child.parent_id === next) doomed.push(child.id);
-        for (const gone of doomed) drop(gone);
+        for (const dead of thread(id)) drop(dead);
         options.changed?.();
         return true;
       }
@@ -320,13 +325,30 @@ export function createBoard(options: BoardOptions) {
       }
       let pulled = 0;
       let pushed = 0;
-      for (const pc of pcs) {
-        for (const id of readDeleted(join(root, pc))) {
-          if (posts().has(id)) pulled++;
-          drop(id);
+      const tombstones = pcs.flatMap((pc) => readDeleted(join(root, pc)));
+      // a deleted top-level post also takes the replies this PC wrote before it heard
+      for (const id of tombstones.filter((tomb) => posts().get(tomb)?.parent_id === null)) {
+        for (const dead of thread(id)) {
+          pulled++;
+          drop(dead);
         }
-        for (const post of readPosts(join(root, pc))) if (take(mapPost(post, ids.in))) pulled++;
       }
+      for (const id of tombstones) {
+        if (posts().has(id)) pulled++;
+        drop(id);
+      }
+      const incoming = pcs.flatMap((pc) => readPosts(join(root, pc)).map((post) => mapPost(post, ids.in)));
+      // a reply a PC wrote before it heard its post was deleted is dropped the same way, deeper replies too
+      const orphaned = new Set<string>();
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const post of incoming) {
+          if (!post.parent_id || orphaned.has(post.id) || posts().has(post.id) || !(gone().has(post.parent_id) || orphaned.has(post.parent_id))) continue;
+          orphaned.add(post.id);
+          grew = true;
+        }
+      }
+      for (const post of incoming) if (!orphaned.has(post.id) && take(post)) pulled++;
       const ownDir = join(root, mine);
       if (gone().size) {
         const list = `${JSON.stringify([...gone()].sort())}\n`;

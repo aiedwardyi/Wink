@@ -600,8 +600,8 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
       {confirm.value && (
         <ConfirmDialog
           closing={confirm.closing}
-          title={t("board.deleteTitle")}
-          body={t("board.deleteBody")}
+          title={t(confirm.value.parent_id === null ? "board.deletePostTitle" : "board.deleteTitle")}
+          body={t(confirm.value.parent_id === null ? "board.deletePostBody" : "board.deleteBody")}
           confirmLabel={t("chrome.delete")}
           onConfirm={() => {
             void remove(confirm.value!);

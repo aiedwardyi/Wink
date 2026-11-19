@@ -768,6 +768,8 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     expect(host.querySelector("article")).not.toBeNull();
     await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    expect(document.body.querySelector("[role=dialog] h2")!.textContent).toBe("Delete this post?");
+    expect(document.body.querySelector("[role=dialog]")!.textContent).toContain("replies");
     await dialogButton("Delete");
     await settle();
     expect(deletes).toEqual(["pbot"]);
