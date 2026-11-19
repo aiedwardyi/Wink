@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { PHONE_RELAY_OFF, buildSetupCode, hostFor, mintInvite } from "../shared/relay-protocol.ts";
+import { PHONE_RELAY_OFF, ROOM_CODE_TTL_MS, buildSetupCode, hostFor, mintInvite } from "../shared/relay-protocol.ts";
 import * as atomic from "./atomic.ts";
 import { linkedFileGrant, PC_HOLDER, serveLinkedFile } from "./linked-files.ts";
 import { PhoneAccess, loadRelayClient, type PhoneAccessOptions } from "./phone-access.ts";
@@ -168,7 +168,7 @@ function staticFiles(): string {
   return dir;
 }
 
-async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (invite: string) => Promise<void>; google?: GoogleWorld; terminal?: TerminalBridgeAccess; teamBase?: string } = {}): Promise<World> {
+async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (invite: string) => Promise<void>; google?: GoogleWorld; terminal?: TerminalBridgeAccess; teamBase?: string; mint?: () => Promise<{ code: string; exp: number } | null> } = {}): Promise<World> {
   const r = await rig();
   if (options.teamBase) r.relay.otherBases.push(options.teamBase);
   const issuer = new FakeGoogle();
@@ -195,8 +195,11 @@ async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (in
     onChange: () => statuses.push(access.status()),
     clock,
     teamBase: options.teamBase,
-    start: (relayOptions) =>
-      createPhoneRelay(relayOptions, { clock: new FakeClock(), env: {}, connector: r.relay.connector(), ctSource: null, acmeInsecureDirectories: true }),
+    start: (relayOptions) => {
+      const relay = createPhoneRelay(relayOptions, { clock: new FakeClock(), env: {}, connector: r.relay.connector(), ctSource: null, acmeInsecureDirectories: true });
+      if (options.mint) relay.mintRoomCode = options.mint;
+      return relay;
+    },
     enroll: options.enroll ? (enrollOptions) => options.enroll!(enrollOptions.invite) : undefined,
     google: options.google && {
       webClientId: options.google.webClientId === undefined ? WEB_CLIENT : options.google.webClientId,
@@ -1007,6 +1010,81 @@ describe("phone management", () => {
     expect(enrolled.status).toBe(400);
     expect(enrolled.body).not.toContain("I".repeat(60));
     expect(enrolled.body).not.toContain("wki1.");
+  });
+});
+
+describe("short code for the sign-in page", () => {
+  const codeSchema = z.object({ code: z.string().nullable() });
+
+  async function codeWorld(...codes: string[]) {
+    const minted: string[] = [];
+    const w: World = await world({
+      mint: async () => {
+        const code = codes.shift();
+        if (!code) return null;
+        minted.push(code);
+        return { code, exp: w.clock.now() + ROOM_CODE_TTL_MS };
+      },
+    });
+    const code = async () => codeSchema.parse(JSON.parse((await w.local("/api/phone-relay/code")).body)).code;
+    const check = (value: string, origin = `https://${BASE}`) => viaRelay(w.r, `/api/phone/open-code?c=${value}`, { headers: { origin } });
+    return { w, minted, code, check };
+  }
+
+  it("mints one like a room code, keeps it across calls and a PC restart, and swaps it with a day left", async () => {
+    const { w, minted, code } = await codeWorld("ABCDEF", "GHJKLM");
+    expect(await Promise.all([code(), code()])).toEqual(["ABCDEF", "ABCDEF"]);
+    const again = new PhoneAccess({ dataDir: w.r.dataDir, env: {}, staticDir: null, config: () => w.config, saveEnabled: () => {}, clock: w.clock });
+    vi.spyOn(again, "status").mockReturnValue(w.access.status());
+    expect(await again.openCode()).toBe("ABCDEF");
+    w.clock.advance(ROOM_CODE_TTL_MS - 24 * 60 * 60_000 + 1);
+    expect(await code()).toBe("GHJKLM");
+    expect(minted).toEqual(["ABCDEF", "GHJKLM"]);
+  });
+
+  it("shows no code when the relay mints none, and keeps it from relay phones and other local callers", async () => {
+    const { w, code } = await codeWorld();
+    expect(await code()).toBeNull();
+    expect((await w.local("/api/phone-relay/code", { bearer: false })).status).toBe(401);
+    expect((await viaRelay(w.r, "/api/phone-relay/code", { headers: { origin: w.origin } })).status).toBe(404);
+  });
+
+  it("tells the sign-in page yes only for the live code, readable only by its own base", async () => {
+    const { w, code, check } = await codeWorld("ABCDEF");
+    expect((await check("ABCDEF")).status).toBe(404);
+    await code();
+    const yes = await check("abcdef");
+    expect(yes.status).toBe(204);
+    expect(yes.headers["access-control-allow-origin"]).toBe(`https://${BASE}`);
+    expect((await check("ABCDEF", "https://evil.test")).headers["access-control-allow-origin"]).toBe(`https://${BASE}`);
+    for (const wrong of ["GHJKLM", "ABCDE", ""]) {
+      const no = await check(wrong);
+      expect([no.status, no.headers["access-control-allow-origin"]]).toEqual([404, `https://${BASE}`]);
+    }
+    expect((await viaRelay(w.r, "/api/phone/open-code?c=ABCDEF", { method: "POST", headers: { origin: w.origin } })).status).toBe(404);
+    w.clock.advance(ROOM_CODE_TTL_MS);
+    expect((await check("ABCDEF")).status).toBe(404);
+  });
+
+  it("kills the code when phone access is turned off, and mints a new one once it is on again", async () => {
+    const { w, minted, code, check } = await codeWorld("ABCDEF", "GHJKLM");
+    await code();
+    await w.local("/api/phone-relay", { method: "PUT", body: { enabled: false } });
+    expect(await code()).toBeNull();
+    const back = w.statuses.next((s) => s.state === "connected");
+    await w.local("/api/phone-relay", { method: "PUT", body: { enabled: true } });
+    await back;
+    expect((await check("ABCDEF")).status).toBe(404);
+    expect(await code()).toBe("GHJKLM");
+    expect((await check("GHJKLM")).status).toBe(204);
+    expect(minted).toEqual(["ABCDEF", "GHJKLM"]);
+  });
+
+  it("rate-limits the check per relay peer", async () => {
+    const { code, check } = await codeWorld("ABCDEF");
+    await code();
+    for (let i = 0; i < 10; i++) expect((await check("GHJKLM")).status).toBe(404);
+    expect((await check("ABCDEF")).status).toBe(429);
   });
 });
 
