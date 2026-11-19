@@ -82,6 +82,18 @@ describe("shared motion tokens", () => {
 });
 
 describe("collapse and expand", () => {
+  it("snaps dock layout and moves it with transform instead of transitioning width", () => {
+    const docks = [styles, read("components/VerifyWatch.css"), read("components/ShowPane.css")];
+    for (const css of docks) {
+      const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+      for (const [, selector, declarations] of rules) {
+        if (!/\.verify-watch\b|\.show-pane\b|\.orbit-terminal-overlay\b/.test(selector)) continue;
+        expect(declarations, `${selector.trim()}: snap the dock width and slide with transform or translate`)
+          .not.toMatch(/transition(?:-property)?:(?:[^;]*[\s,])?(?:all|width|margin-left)(?=[\s,;]|$)/);
+      }
+    }
+  });
+
   it("slides the terminal in from the right and back out in 120ms, instant under reduced motion", () => {
     const closed = styles.match(/\.orbit-terminal-overlay \{([^}]*)\}/)?.[1] ?? "";
     const open = styles.match(/\.orbit-terminal-overlay\[data-open="true"\] \{([^}]*)\}/)?.[1] ?? "";

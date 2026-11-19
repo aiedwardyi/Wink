@@ -1,17 +1,16 @@
+@property --dock-overhang { syntax: "<length>"; inherits: false; initial-value: 0px; }
 .verify-watch-dock { container: verify-watch / inline-size; }
-.verify-watch { --dock: clamp(380px, min(44cqi, 100cqi - 960px), 560px); position: relative; z-index: 0; flex-shrink: 0; width: var(--dock); min-height: 0; display: flex; align-items: flex-start; border-left: 1px solid var(--color-hairline); background: var(--color-app); transition: width var(--motion-large) var(--ease-standard), margin-left var(--motion-large) var(--ease-standard), border-left-width var(--motion-large) var(--ease-standard), z-index 0s var(--motion-large); }
+.verify-watch { --dock: clamp(380px, min(44cqi, 100cqi - 960px), 560px); position: relative; z-index: 0; flex-shrink: 0; width: calc(var(--dock) + var(--dock-overhang)); margin-left: calc(-1 * var(--dock-overhang)); min-height: 0; display: flex; align-items: flex-start; border-left: 1px solid var(--color-hairline); background: var(--color-app); transition: --dock-overhang var(--motion-large) var(--ease-standard), border-left-width var(--motion-large) var(--ease-standard), z-index 0s var(--motion-large); }
 @container verify-watch (max-width: 659px) {
-  .verify-watch { --dock: min(380px, calc(100cqi - 56px)); position: absolute; top: 0; right: 0; bottom: 0; z-index: 15; box-shadow: -12px 0 28px rgb(0 0 0 / .28); }
+  .verify-watch { --dock: min(380px, calc(100cqi - 56px)); position: absolute; top: 0; right: 0; bottom: 0; margin-left: 0; z-index: 15; box-shadow: -12px 0 28px rgb(0 0 0 / .28); }
 }
 /* A closing docked panel gives its column back on the first frame, like the other side panels, and slides out over the chat. */
 @container verify-watch (min-width: 660px) {
-  .verify-watch[data-closing] { margin-left: calc(-1 * var(--dock)); transition: none; }
+  .verify-watch[data-wide] { --dock: max(380px, 46cqi); }
+  .verify-watch[data-closing] { position: absolute; inset: 0 0 0 auto; transition: none; }
 }
 /* Maximized, the panel grows leftward over the chat without taking its column, so the chat never reflows. */
-.verify-watch:has(> .verify-watch-frame[data-maximized]) { z-index: 15; width: 100cqi; margin-left: calc(var(--dock) - 100cqi); border-left-width: 0; transition-property: width, margin-left, border-left-width; }
-@container verify-watch (max-width: 659px) {
-  .verify-watch:has(> .verify-watch-frame[data-maximized]) { width: 100%; margin-left: 0; }
-}
+.verify-watch:not([data-closing]):has(> .verify-watch-frame[data-maximized]) { --dock-overhang: calc(100cqi - var(--dock)); z-index: 15; border-left-width: 0; transition-property: --dock-overhang, border-left-width; }
 
 .verify-watch-frame { flex: 1; min-width: 0; min-height: 0; max-height: calc(100% - 24px); display: flex; flex-direction: column; margin: 12px; border: 1px solid var(--color-hairline); border-radius: 10px; overflow: hidden; background: var(--color-panel); color: var(--color-ink); font-size: 12px; transition: min-height var(--motion-large) var(--ease-standard); }
 .verify-watch-frame[data-maximized] { min-height: calc(100% - 24px); }
