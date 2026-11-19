@@ -99,7 +99,7 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     else days.set(key, [row]);
   }
   // built newest first so replaced picks list newest first; drawn oldest first, down to the newest
-  return [...days].reverse().map(([day, list]) => ({ day, rows: list.reverse() }));
+  return [...days].reverse().map(([day, list]) => ({ day, rows: list.toReversed() }));
 }
 
 // Drawn only while the bot has no picks: never saved, sent or counted.
@@ -136,7 +136,8 @@ const ARROWS = new Map<string, [number, number]>([["ArrowLeft", [1, 0]], ["Arrow
 const FIRST = 8;
 const BATCH = 24;
 // The sheet stops at its own edges, so a fling never leaves an empty canvas.
-const START = { x: 4, y: 44 };
+// the sheet keeps this much room at the left and top, clear of the Oldest pill
+const PAD = { x: 4, y: 44 };
 const edge = (size: number, room: number, at: number, start: number) => Math.min(start, Math.max(Math.min(start, room - size), at));
 const LINE = "color-mix(in srgb, var(--color-ink-secondary) 80%, transparent)";
 const WON = "var(--color-success)";
@@ -372,7 +373,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
 }
 
 // where the sheet sits with its newest pick at the bottom of the pane, or at the top if it is shorter
-const pinY = (box: HTMLElement, sheet: HTMLElement, scale: number) => Math.min(START.y, box.clientHeight - sheet.offsetHeight * scale);
+const pinY = (box: HTMLElement, sheet: HTMLElement, scale: number) => Math.min(PAD.y, box.clientHeight - sheet.offsetHeight * scale);
 
 function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: string; rows: Row[] }[]; needle: string; botId: string; threadId: string; you: string; closing: boolean }) {
   const { t, locale } = useI18n();
@@ -382,7 +383,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   const zoom = useRef<HTMLElement>(null);
   const view = useRef<View | null>(null);
   const pinned = useRef(false);
-  const laid = useRef({ rows: "", first: "", height: 0 });
+  const laid = useRef({ rows: "", first: "", height: 0, opened: null as ReadonlySet<string> | null });
   const searched = useRef(needle);
   const wasClosing = useRef(closing);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
@@ -420,7 +421,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     const width = sheet.current!.offsetWidth * next.scale;
     const height = sheet.current!.offsetHeight * next.scale;
     const kept = box.clientWidth && !free
-      ? { scale: next.scale, x: edge(width, box.clientWidth, next.x, START.x), y: edge(height, box.clientHeight, next.y, START.y) }
+      ? { scale: next.scale, x: edge(width, box.clientWidth, next.x, PAD.x), y: edge(height, box.clientHeight, next.y, PAD.y) }
       : next;
     view.current = kept;
     pinned.current = kept.y <= box.clientHeight - height + 1;
@@ -456,12 +457,13 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     let next: View;
     if (!at || reopened || changed) {
       const scale = !at || reopened || !needle ? fit : at.scale;
-      next = { x: START.x, y: floor(scale), scale };
-    } else if (was.rows === rows) next = at;
+      next = { x: PAD.x, y: floor(scale), scale };
+    // the same picks keep the view, unless one grew (a tweak landed) while it sat on the newest pick
+    } else if (was.rows === rows && (was.height === height || was.opened !== opened)) next = at;
     else if (pinned.current) next = { ...at, y: floor(at.scale) };
     // older picks mounting above keep a scrolled-up view on what it shows
     else next = first === was.first ? at : { ...at, y: at.y - (height - was.height) * at.scale };
-    laid.current = { rows, first, height };
+    laid.current = { rows, first, height, opened };
     wasClosing.current = closing;
     searched.current = needle;
     show(next, true);
@@ -572,7 +574,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
         if (!(event.target instanceof HTMLElement) || !event.target.matches(":focus-visible")) return;
         const to = event.target.getBoundingClientRect();
         const box = frame.current!.getBoundingClientRect();
-        if (to.top >= box.top + START.y && to.bottom <= box.bottom && to.left >= box.left && to.right <= box.right) return;
+        if (to.top >= box.top + PAD.y && to.bottom <= box.bottom && to.left >= box.left && to.right <= box.right) return;
         const at = view.current!;
         show({ ...at, x: at.x + box.left + box.width / 2 - (to.left + to.width / 2), y: at.y + box.top + box.height / 2 - (to.top + to.height / 2) });
       }}

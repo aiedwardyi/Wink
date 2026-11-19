@@ -640,6 +640,7 @@ it("opens at the newest pick at the bottom, and keeps it there as picks land unl
 
   const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
   await type(search, "forum");
+  // one result is shorter than the pane, so it rests at the top padding
   expect(y()).toBe(44);
   await type(search, "");
   expect(y()).toBeCloseTo(bottom(5));
@@ -653,6 +654,37 @@ it("opens at the newest pick at the bottom, and keeps it there as picks land unl
   await openTimeline("b-bottom-2");
   await until(() => picked().length === 7);
   expect(y()).toBeCloseTo(bottom(7));
+});
+
+it("follows the newest pick down when a tweak grows it, unless scrolled up", async () => {
+  let extra = 0;
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-canvas") ? 600 : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-sheet") ? 100 + 300 * this.querySelectorAll("[data-timeline-pick]").length + extra : 0; });
+  let text = timeline;
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  const y = () => Number(/translate\(4px, (-?[\d.]+)px\) scale\(0\.86\)/.exec(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform)![1]);
+  const bottom = (count: number) => 600 - (100 + 300 * count + extra) * 0.86;
+  const tweak = async (said: string, grew: number) => {
+    extra += grew;
+    text += `\n- Tweak 2026-11-17 12:3${extra / 100}: "${said}"`;
+    await act(async () => noteMemoryFrame({ kind: "memory.changed", botId: "b-tweak" }, { hydrated: true, bots: [{ id: "b-tweak", threadId: "t1" }] }));
+    await until(() => host.querySelectorAll(".timeline-tweaks q").length > 0 && picked().at(-1)?.textContent?.includes(said) === true);
+  };
+
+  await openTimeline("b-tweak");
+  await until(() => picked().length === 5);
+  expect(y()).toBeCloseTo(bottom(5));
+  await tweak("one more thing", 100);
+  expect(y()).toBeCloseTo(bottom(5));
+  await tweak("and another", 100);
+  expect(y()).toBeCloseTo(bottom(5));
+
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -300 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  const up = y();
+  await tweak("a third", 100);
+  expect(y()).toBe(up);
 });
 
 it("keeps the newest pick at the bottom when the pane resizes, unless scrolled up", async () => {
