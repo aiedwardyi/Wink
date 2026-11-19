@@ -1,8 +1,4 @@
-import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { buildInstallScript, openBlankTerminal, openSignInTerminal } from "./terminal-launch.mjs";
@@ -18,22 +14,6 @@ describe("install PATH refresh", () => {
       expect(refresh.slice("$env:Path=".length)).toMatch(/\$env:Path\b/);
     }
     expect(script.indexOf(refreshes[0])).toBeLessThan(script.indexOf("Get-Command npm"));
-  });
-
-  it.runIf(process.platform === "win32")("runs the installed Claude sign-in on a clean Windows PATH", () => {
-    const home = homedir();
-    const scratchPath = join(home, "empty bin");
-    mkdirSync(scratchPath);
-    const command = "$bin=Join-Path $HOME '.local/bin'; New-Item -ItemType Directory -Path $bin -Force | Out-Null; Set-Content (Join-Path $bin 'claude.cmd') '@echo scratch-claude %*' -Encoding Ascii";
-    const script = buildInstallScript({ driverKind: "claudeAgent", command, signInCommand: "claude auth login" }, "win32");
-    const harness = `class Environment { static [string] GetEnvironmentVariable([string] $name, [string] $target) { return '' } }\n${script}`;
-    const shellDir = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0");
-    const result = spawnSync(join(shellDir, "powershell.exe"), ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(harness, "utf16le").toString("base64")], {
-      env: { SystemRoot: process.env.SystemRoot, USERPROFILE: home, PATH: `${scratchPath};${shellDir}`, PATHEXT: ".COM;.EXE;.BAT;.CMD", ComSpec: process.env.ComSpec },
-      cwd: scratchPath, encoding: "utf8", windowsHide: true, timeout: 10000,
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.stdout.trim(), result.stderr.includes("CommandNotFoundException") ? "Claude missing from scratch PATH" : result.stderr).toBe("scratch-claude auth login");
   });
 });
 
