@@ -112,6 +112,20 @@ describe("Layout Widths", () => {
     portal?.parentElement?.remove();
   });
 
+  it("desktop New menu opens toward the window, not past the left edge", async () => {
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(Sidebar, { open: true, onClose: () => {} })));
+    });
+    const plusButton = host.querySelector('button[aria-label="' + translate("en", "chrome.newOrShare") + '"]');
+    await act(async () => {
+      if (plusButton instanceof HTMLElement) plusButton.click();
+    });
+    const newBot = [...host.querySelectorAll("button")].find((btn) => btn.textContent?.includes(translate("en", "chrome.newBot")));
+    const menu = newBot?.parentElement;
+    expect(menu?.className).toContain("left-0");
+    expect(menu?.className).not.toContain("right-0");
+  });
+
   it("archived bots panel uses two columns only when there are two or more archived bots", async () => {
     mockState.bots = [
       {
