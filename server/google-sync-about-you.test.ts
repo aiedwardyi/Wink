@@ -175,7 +175,7 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     for (const pc of [a, b]) {
       const view = await pc.aboutYou();
       expect(view.sources.map(({ source }) => source).sort()).toEqual(["ChatGPT", "Claude"]);
-      expect(facts(view)).toEqual(["Goes by Dana.", "Lives in Seoul.", "Writes TypeScript."]);
+      expect(facts(view)).toEqual(["Goes by Dana.", "Goes by Dana.", "Lives in Seoul.", "Writes TypeScript."]);
     }
     expect((await b.aboutYou()).sources).toEqual((await a.aboutYou()).sources);
 
@@ -185,7 +185,7 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     for (const pc of [a, b]) {
       const view = await pc.aboutYou();
       expect(shown(view).filter((line) => /Gemini|Grok/.test(line))).toEqual(["Gemini · 1", "Grok · 1"]);
-      expect(facts(view)).toEqual(["Drinks tea.", "Goes by Dana.", "Lives in Seoul.", "Runs at dawn.", "Writes TypeScript."]);
+      expect(facts(view)).toEqual(["Drinks tea.", "Goes by Dana.", "Goes by Dana.", "Lives in Seoul.", "Runs at dawn.", "Writes TypeScript."]);
       expect(view.files).toEqual(ALONE);
     }
     expect((await b.aboutYou()).sources).toEqual((await a.aboutYou()).sources);
@@ -360,7 +360,11 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
       await start(a);
       await start(b);
       await rounds(4);
-      for (const pc of [a, b]) expect(handFacts(await pc.aboutYou())).toEqual(["Goes by Dana.", "!!!"]);
+      for (const pc of [a, b]) {
+        const view = await pc.aboutYou();
+        expect(handFacts(view)).toEqual(["Goes by Dana.", "!!!"]);
+        expect(facts(view)).toEqual(["!!!", "Goes by Dana.", "Lives in Seoul.", "Writes TypeScript."]);
+      }
       await b.call("forgetMemory", { text: "Claude" });
       await rounds(4);
       for (const pc of [a, b]) {
@@ -369,6 +373,71 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
         expect(handFacts(view)).toEqual(["Goes by Dana.", "!!!"]);
         expect(view.prompt).toContain("- Goes by Dana.\n");
       }
+    });
+  }
+
+  for (const other of ["Atlas", ""]) {
+    it(`keeps a fact imported from Beacon and ${other ? "from Atlas" : "typed by hand"} on another PC until both are gone`, async () => {
+      const a = makePC("a");
+      const b = makePC("b");
+      await a.call("seed", { bots: BOTS });
+      if (other) await a.call("importMemory", { text: paste(other, "Allergic to sesame.", "Keeps a paper diary.") });
+      else byHand(a, "Allergic to sesame.");
+      await b.call("importMemory", { text: paste("Beacon", "Allergic to sesame.", "Uses a blue pen.") });
+      age(a, 20);
+      age(b, 120);
+      await start(a);
+      await start(b);
+      await rounds(4);
+      for (const pc of [a, b]) {
+        const view = await pc.aboutYou();
+        expect(view.sources).toEqual(other
+          ? [{ source: "Atlas", facts: ["Allergic to sesame.", "Keeps a paper diary."] }, { source: "Beacon", facts: ["Allergic to sesame.", "Uses a blue pen."] }]
+          : [{ source: "", facts: ["Allergic to sesame."] }, { source: "Beacon", facts: ["Uses a blue pen."] }]);
+        expect(view.prompt.split("Allergic to sesame.")).toHaveLength(2);
+      }
+      await a.call("forgetMemory", { text: other });
+      await rounds(4);
+      for (const pc of [a, b]) {
+        const view = await pc.aboutYou();
+        expect(view.sources).toEqual([{ source: "Beacon", facts: ["Allergic to sesame.", "Uses a blue pen."] }]);
+        expect(view.prompt).toContain("- Allergic to sesame. (noted ");
+      }
+    });
+  }
+
+  for (const how of ["import", "hand"] as const) {
+    it(`a reinstalled PC that adds back a removed ${how} line keeps it on every PC`, async () => {
+      const a = makePC("a");
+      let b = makePC("b");
+      const addBack = async (pc: PC) => {
+        if (how === "hand") byHand(pc, "Allergic to sesame.");
+        else await pc.call("importMemory", { text: paste("Atlas", "Allergic to sesame.") });
+      };
+      await a.call("seed", { bots: BOTS });
+      await addBack(a);
+      await a.call("importMemory", { text: paste("Control", "Writes in blue ink.") });
+      await start(a);
+      await start(b);
+      await rounds(4);
+      await a.call("forgetMemory", { text: how === "hand" ? "" : "Atlas" });
+      await rounds(4);
+      for (const pc of [a, b]) expect(facts(await pc.aboutYou())).toEqual(["Writes in blue ink."]);
+
+      await b.close();
+      pcs = pcs.filter((pc) => pc !== b);
+      rmSync(b.dataDir, { recursive: true, force: true });
+      b = makePC("b");
+      await addBack(b);
+      await start(b);
+      await rounds(6);
+      for (const pc of [a, b]) {
+        const view = await pc.aboutYou();
+        expect(facts(view)).toEqual(["Allergic to sesame.", "Writes in blue ink."]);
+        expect(view.prompt).toContain("- Allergic to sesame.");
+        expect(view.files).toEqual(ALONE);
+      }
+      expect(saved(b)).toBe(saved(a));
     });
   }
 

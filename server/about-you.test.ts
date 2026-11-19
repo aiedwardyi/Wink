@@ -108,6 +108,20 @@ describe("About You save", () => {
     expect(aboutYouSources().map(({ source, facts }) => [source, facts.length])).toEqual([["Claude", 105], ["", 2], ["ChatGPT", 100]]);
   });
 
+  it("past the byte cap the prompt skips a line that does not fit and keeps filling with ones that do", () => {
+    mkdirSync(join(DATA_DIR, "about-you"), { recursive: true });
+    const line = (fact: string) => `- ${fact} (from Atlas, 2026-11-16)`;
+    // 99 prompt lines of 240 bytes leave 240 of the 24,000
+    const filler = Array.from({ length: 99 }, (_, i) => `Filler fact ${String(i).padStart(3, "0")}. `).map((head) => head + "x".repeat(218 - head.length));
+    const big = `Big fact ${"y".repeat(222)}`;
+    writeFileSync(file, [line("Likes tea."), line(big), ...filler.map(line), "- Personal history " + "my past workplace ".repeat(1400), ""].join("\n"));
+    const shown = aboutYouFacts().split("\n");
+    expect(shown).toHaveLength(100);
+    expect(shown).toContain("- Likes tea. (noted 2026-11-16)");
+    expect(shown.some((fact) => fact.includes("Big fact") || fact.includes("Personal history"))).toBe(false);
+    expect(aboutYouSources().map(({ source, facts }) => [source, facts.length])).toEqual([["Atlas", 101], ["", 1]]);
+  });
+
   it("refuses an empty or oversized paste and saves nothing", () => {
     expect(addToAboutYou("  \n", "2026-11-16")).toEqual({ error: "empty" });
     expect(addToAboutYou("x".repeat(4 * 1024 * 1024 + 1), "2026-11-16")).toEqual({ error: "too-large" });

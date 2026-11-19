@@ -184,8 +184,12 @@ export type AboutYouSource = { source: string; facts: string[] };
 /** What every bot reads, grouped by where it came from. */
 export function aboutYouSources(): AboutYouSource[] {
   const groups = new Map<string, string[]>();
-  for (const line of parse(readSaved()).lines) {
+  const { lines } = parse(readSaved());
+  const hand = new Set(lines.filter((line) => !TAG.test(line)).map((line) => keyOf(clean(line))));
+  for (const line of lines) {
     const source = TAG.exec(line)?.[1] ?? "";
+    // a hand line shows once; its imported twin stays in the file for when the hand line goes
+    if (source && hand.has(keyOf(clean(line)))) continue;
     groups.set(source, [...(groups.get(source) ?? []), clean(line)]);
   }
   return [...groups].map(([source, facts]) => ({ source, facts }));
@@ -226,6 +230,8 @@ function markEdits(): void {
  */
 export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?: MemorySyncOptions): Record<string, MemorySyncResult> {
   markEdits();
+  // a PC that never synced (fresh install) saw no remove, so each line it holds was added after any remove another PC made
+  const fresh = existsSync(lastSyncFile()) ? undefined : parse(readSaved()).lines.map(markOf);
   const results = syncBotMemory(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), ledger, options);
   const dir = join(aboutYouDir(), "memory");
   let copies: string[];
@@ -239,26 +245,27 @@ export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?:
     const { lines: kept, marks } = parse(raw);
     const texts = copies.map((name) => parse(readFileSync(join(dir, name), "utf8")));
     for (const text of texts) for (const [hash, count] of text.marks) marks.set(hash, Math.max(marks.get(hash) ?? 0, count));
+    for (const hash of fresh ?? []) if (removed(marks, hash)) marks.set(hash, marks.get(hash)! + 1);
     const live = kept.filter((line) => !removed(marks, markOf(line)));
-    const keys = new Set(live.map((line) => keyOf(clean(line))));
+    // an imported line repeats only its own source's line, so a twin from another source or by hand keeps it
+    const twin = (line: string) => `${TAG.exec(line)?.[1] ?? ""}\n${keyOf(clean(line))}`;
+    const keys = new Set(live.map(twin));
     const exact = new Set(live);
     const older: string[] = [];
     for (const line of texts.flatMap((text) => text.lines)) {
       if (line.startsWith(SET_ASIDE_NOTE) || exact.has(line) || removed(marks, markOf(line))) continue;
-      const key = keyOf(clean(line));
-      if (TAG.test(line) && (!key || keys.has(key))) continue;
-      keys.add(key);
+      if (TAG.test(line) && (!keyOf(clean(line)) || keys.has(twin(line)))) continue;
+      keys.add(twin(line));
       exact.add(line);
       older.push(line);
     }
-    // a set-aside copy is the older edit (no PC talks to Import Memory, so the later edit wins), so its lines rank older in the prompt
-    const lines = [...older, ...live];
+    const lines = [...live, ...older];
     if (render(lines, marks) !== raw) save(lines, marks);
     // the next pass publishes the merged file and each copy's delete
     for (const name of copies) rmSync(join(dir, name), { force: true });
   }
-  // a wiped folder stays absent, so memory sync still restores it
-  if (existsSync(aboutYouDir())) {
+  // a wiped folder stays absent, so memory sync still restores it; a fresh PC stays fresh until a pass reads its file
+  if (existsSync(aboutYouDir()) && (!fresh || (results["MEMORY.md"] ?? "skipped") !== "skipped")) {
     const last = `${parse(readSaved()).lines.map(markOf).join("\n")}\n`;
     if (!existsSync(lastSyncFile()) || readFileSync(lastSyncFile(), "utf8") !== last) writeFileAtomic(lastSyncFile(), last, { mode: 0o600 });
   }
@@ -279,10 +286,16 @@ export function aboutYouFacts(): string {
   const ranked = parse(raw).lines.map((line, at) => ({ at, fact: clean(line), date: TAG.exec(line)?.[2] })).filter(({ fact }) => fact)
     .sort((a, b) => Number(Boolean(a.date)) - Number(Boolean(b.date)) || (b.date ?? "").localeCompare(a.date ?? "") || (a.date ? b.at - a.at : a.at - b.at));
   let size = 0;
+  const seen = new Set<string>();
   const shown: Array<{ at: number; line: string }> = [];
   for (const { at, fact, date } of ranked) {
+    if (shown.length >= MEMORY_MAX_LINES) break;
     const line = `- ${fact}${date ? ` (noted ${date})` : ""}`;
-    if (shown.length >= MEMORY_MAX_LINES || (size += bytes(line) + 1) > MEMORY_MAX_BYTES) break;
+    // a line too big for what is left is skipped, so a smaller one after it still fits
+    const key = keyOf(fact);
+    if ((key && seen.has(key)) || size + bytes(line) + 1 > MEMORY_MAX_BYTES) continue;
+    seen.add(key);
+    size += bytes(line) + 1;
     shown.push({ at, line });
   }
   return shown.sort((a, b) => a.at - b.at).map(({ line }) => line).join("\n");
