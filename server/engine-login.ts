@@ -41,6 +41,8 @@ function logCliExit(code: string, line?: string): void {
   console.warn(`sign-in CLI exit code=${code} stderr=${line ? JSON.stringify(line) : "-"}`);
 }
 
+const VERSION_PROBE_MS = 10_000;
+
 type LoginState = "pending" | "complete" | "failed" | "cancelled";
 interface LoginJob {
   scope: string;
@@ -122,7 +124,13 @@ export class EngineLogin {
         // A cold Windows sign-in can beat the status check that selects the usable Claude binary.
         if (process.platform === "win32" && scope === "claudeAgent" && cli === "claude" && args[0] === "auth" && args[1] === "login" && findCliCandidates(cli).length > 1) {
           const probeEnv = accountLaunch(options.account, scope, [], { PATH: augmentedPath(), ...env }).env;
-          await new Promise((resolve) => cliVersion(cli, { timeout: 8000, env: probeEnv }, resolve));
+          // execFile's timeout can't fire its callback while a shim descendant holds the pipes open, so bound the wait and let cancel end it.
+          await new Promise<void>((resolve) => {
+            const stop = () => { clearTimeout(bound); job!.changed.delete(stop); resolve(); };
+            const bound = setTimeout(stop, VERSION_PROBE_MS);
+            job!.changed.add(stop);
+            cliVersion(cli, { timeout: 8000, env: probeEnv }, stop);
+          });
           if (job.state !== "pending") return { ...job.capture };
         }
         const resolved = resolveCliSpawn(cli, args);
@@ -139,7 +147,7 @@ export class EngineLogin {
         let spawnError: string | undefined;
         child.once("error", (error) => { spawnError = launchErrorCode(error); job!.finish("failed"); });
         child.once("close", (code, signal) => {
-          if (options.logExit) logCliExit(spawnError ?? signal ?? String(code), job!.lastStderr);
+          if (options.logExit && (spawnError || signal || code !== 0)) logCliExit(spawnError ?? signal ?? String(code), job!.lastStderr);
           job!.finish(code === 0 ? "complete" : "failed");
         });
       } catch (error) {
