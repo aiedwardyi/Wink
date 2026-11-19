@@ -15,6 +15,7 @@ import {
   reducedMotion,
   sheetSwipeCloses,
   swipeBlocked,
+  swipeBlockedInput,
   swipeStep,
   type SwipeAxis,
   type SwipeStep,
@@ -421,6 +422,7 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       drag = null;
       const touch = e.touches[0];
       if (e.touches.length !== 1 || !touch || !(e.target instanceof Element)) return;
+      if (swipeBlockedInput(e.target)) return;
       for (let node: Element | null = e.target; node && node !== sheet.parentElement; node = node.parentElement) {
         if (node.scrollTop > 0) return;
       }
