@@ -80,11 +80,12 @@ export class VerifyDocShow {
     const lines = [...chunks.values()].reduce((n, c) => n + c.to - c.from + 1, 0), order = [...chunks.values()].sort((x, y) => x.from - y.from);
     // Too long to read in the show: one front sweeps down at an even pace and the readers ride just below it.
     const skim = !this.still && body > 0 && lines * GLIDE_MS / body > SKIM_ROWS;
+    // Every chunk read in the show gets at least room, the slots scaled back to fit body so each closes before the next opens.
+    const least = skim ? 0 : room / body * lines, width = (c: Chunk) => Math.max(c.to - c.from + 1, least), sum = order.reduce((n, c) => n + width(c), 0);
     let before = 0;
     for (const c of order) {
-      const s = before / lines * body, e = (before += c.to - c.from + 1) / lines * body;
-      c.s = skim ? s : Math.min(s, body - room);
-      c.e = skim ? e : Math.max(e, c.s + room);
+      c.s = before / sum * body;
+      c.e = (before += width(c)) / sum * body;
     }
     this.sweep = skim ? order : [];
     const found = new Map<string, VerifyReplayMark[]>(), merged: VerifyReplayMark[] = [];

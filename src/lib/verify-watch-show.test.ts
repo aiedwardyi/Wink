@@ -656,6 +656,20 @@ it("plays a busy page in one pass down: a late click never sends the view back u
   expect(returns).toEqual([]);
 });
 
+it("moves a resting cursor with its spot when the page scrolls under it", () => {
+  const show = replay(frame(0), result(0, 100, 100), result(1, 100, 510), result(2, 300, 560), mark(3, "scroll", { tile: "desktop", y: 300 }), frame(3), result(4, 300, 300, { scrollY: 300 }), end(10));
+  const spots = [110, 310, 520, 570], off: string[] = [];
+  while (show.phase === "play") {
+    show.advance(16);
+    for (const [id, c] of show.cursors) {
+      if (show.clock < c.at + c.duration || c.to.y < 0 || c.to.y > 704) continue;
+      const y = c.to.y + show.scroll[c.tile];
+      if (!spots.some(s => Math.abs(s - y) < 1)) off.push(`${id}@${show.clock} ${y}`);
+    }
+  }
+  expect(off).toEqual([]);
+});
+
 it("labels only a checker's own cursor, never its spares", () => {
   const show = replay(frame(0), ...boxes("LINKS", 2), ...boxes("TEXT_A", 29), ...boxes("FIT", 19), end(90));
   toClock(show, 1000);

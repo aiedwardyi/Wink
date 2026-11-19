@@ -46,6 +46,16 @@ it("reads a replay's chunks top to bottom, one after another, though the run rea
   at.slice(1).forEach((ms, i) => expect(ms - at[i]!).toBeGreaterThanOrEqual(600));
 });
 
+it("closes each chunk before the next one opens, even a short chunk after a long one", () => {
+  const show = new VerifyDocShow(false), opened = new Map<number, number>(), closed = new Map<number, number>();
+  show.plan([text(420), band(4, 1, 400, "start"), band(5, 401, 410, "start"), band(6, 411, 420, "start"), band(9_000, 1, 400, "done"), band(9_001, 401, 410, "done"), band(9_002, 411, 420, "done")], 9_002, false);
+  play(show, step => {
+    for (const mark of step.marks) if (mark.kind === "doc-chunk") (mark.state === "done" ? closed : opened).set(mark.from as number, show.clock);
+  });
+  expect(opened.get(401)!).toBeGreaterThanOrEqual(closed.get(1)!);
+  expect(opened.get(411)!).toBeGreaterThanOrEqual(closed.get(401)!);
+});
+
 it("glides each cursor quickly and rests only on a quote it marked", () => {
   const show = new VerifyDocShow(false), last = new Map<string, { end: number; quote: boolean }>();
   let reading = 0, quote = 0;

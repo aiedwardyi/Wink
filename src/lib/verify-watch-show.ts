@@ -152,7 +152,7 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
   // A spare cursor needs boxes of its own to visit, so a check with no box (or a few) lends none.
   const spare = Math.min(CURSOR_EXTRA, CURSOR_MAX - lanes.length, Math.floor(richest.n / CURSOR_ROOM));
   for (let extra = 1; extra <= spare; extra++) lanes.push({ id: `+${extra}`, checker: richest.checker, extra });
-  const now = new Map<string, { x: number; y: number }>(), arrived = new Map<string, number>(), last = new Map<string, Spot>(), recent = new Map<string, Spot[]>();
+  const now = new Map<string, { x: number; y: number }>(), arrived = new Map<string, number>(), last = new Map<string, { spot: Spot; x: number }>(), recent = new Map<string, Spot[]>();
   const aim = (lane: Lane, at: number) => {
     const top = scrollAt(at), lit = slot ? Math.floor(at / slot) : 0, others = [...now].filter(([id]) => id !== lane.id).map(([, p]) => p), from = now.get(lane.id);
     if (lane.extra) {
@@ -175,13 +175,18 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
     }
     if (best) {
       best.spot.visits++;
-      last.set(lane.id, best.spot);
+      last.set(lane.id, { spot: best.spot, x: best.x });
       recent.set(lane.id, [...recent.get(lane.id) ?? [], best.spot].slice(-CURSOR_FRESH));
       return { x: best.x, y: best.y };
     }
-    if (held && last.has(lane.id) && shown(last.get(lane.id)!, top)) return null;
+    const rest = last.get(lane.id);
+    // It rests on its last spot, and follows it when the page moves under it.
+    if (held && rest && shown(rest.spot, top)) {
+      const y = rest.spot.y - (rest.spot.top ?? top);
+      return from && from.x === rest.x && from.y === y ? null : { x: rest.x, y };
+    }
     // Nothing free of its own in this view: it waits just off the page, on the side its last check went.
-    const gone = last.get(lane.id) ?? spots.get(lane.checker)![0]!;
+    const gone = rest?.spot ?? spots.get(lane.checker)![0]!;
     return { x: gone.x, y: gone.y - (gone.top ?? top) < 0 ? -40 : h + 8 };
   };
   const cursor = (lane: Lane, fields: Pick<Cursor, "from" | "to" | "at" | "duration">): Cursor => ({ checker: lane.checker, tile, ...(lane.extra ? { extra: lane.extra } : {}), ...fields });
