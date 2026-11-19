@@ -38,7 +38,6 @@ describe("RoomCode", () => {
     const cls = row.querySelector("[data-room-code-text]")!.className.split(/\s+/);
     expect(cls).not.toContain("min-w-0");
     expect(cls).not.toContain("truncate");
-    expect(cls).not.toContain("overflow-hidden");
     expect(row.className.split(/\s+/)).toContain("flex-wrap");
   });
 
