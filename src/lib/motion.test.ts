@@ -58,7 +58,7 @@ describe("shared motion tokens", () => {
 
   it("lands a docked panel with the fold, its shell opaque from the first frame", () => {
     expect(token("animate-panel-slide")).toBe("panel-slide var(--motion-large) var(--ease-standard)");
-    expect(motionCss).toMatch(/@keyframes panel-slide \{\s*from \{ translate: 28px 0; \}\s*\}/);
+    expect(motionCss).toMatch(/@keyframes panel-slide \{\s*from \{ translate: var\(--panel-dx, 28px\) 0; \}\s*\}/);
     expect(read("components/SettingsPanel.tsx")).toContain("md:animate-panel-slide md:*:animate-fade-in");
   });
 
@@ -110,7 +110,8 @@ describe("collapse and expand", () => {
 
   it("slides a closing side panel out toward its edge while the chat takes its width back at once", () => {
     expect(rule("[data-side-panel][data-closing]")).toContain("animation-name: panel-out;");
-    expect(motionCss).toMatch(/@keyframes panel-out \{\s*to \{ transform: translateX\(28px\); opacity: 0; \}/);
+    expect(rule("[data-board-view][data-closing]")).toContain("animation-name: panel-out;");
+    expect(motionCss).toMatch(/@keyframes panel-out \{\s*to \{ transform: translateX\(var\(--panel-dx, 28px\)\); opacity: 0; \}/);
     expect(rule("[data-closing]")).toContain("fade-out var(--motion-fast) var(--ease-exit) forwards");
     expect(styles).not.toMatch(/\[data-settings-panel\]\[data-closing\] \{\s*display: none/);
     expect(read("components/SettingsPanel.tsx")).toMatch(/<aside [^>]*data-side-panel=""[^>]*md:data-closing:-ml-\[400px\]/);
