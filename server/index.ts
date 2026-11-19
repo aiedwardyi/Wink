@@ -6459,6 +6459,8 @@ routines = new RoutineManager({
     notify(buildNotification("routine-failed", bot, routineSourceThread(run) ?? run.threadId ?? bot.threadId, detail));
   },
 });
+// wake rows written before the card carried the flag
+routines.flagWakeCards(store);
 const recoveryOwners = routines.routineRequestReceiptOwners();
 if (recoveryOwners.length > 0) {
   // A normal launch has no crash-gap receipts, so it must not eagerly load

@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { Message } from "./store.ts";
+
 import {
   nextOccurrence,
   RoutineManager,
@@ -971,6 +973,36 @@ describe("RoutineManager", () => {
       summary: "Built 3 pages.",
       instruction: "Build on the VM",
     });
+  });
+
+  it("marks a wake's card so the chat can leave it out", () => {
+    const run = (wake?: true) => ({ id: "r", routineId: "x", routineName: "Wake", botId: "b", runOn: "maus", scheduledFor: 1, status: "completed", manual: false, createdAt: 1, ...(wake ? { wake } : {}) }) as Parameters<typeof routineRunCard>[0];
+    expect(routineRunCard(run(true)).wake).toBe(true);
+    expect(routineRunCard(run()).wake).toBeUndefined();
+  });
+
+  const firedIn = async (h: ReturnType<typeof harness>, threadId: string) => {
+    const routine = h.manager.create({ name: "Wake", prompt: "Check it", botId: "maus-1", schedule: { type: "once", at: new Date(2026, 7, 17, 8, 1).getTime() } }, undefined, { threadId });
+    h.setNow(routine.nextRunAt!);
+    await h.manager.tick();
+    h.manager.handleRuntimeEvent({ eventId: "done", provider: "fake", threadId, createdAt: new Date().toISOString(), type: "turn.completed", ok: true }, "maus-1");
+    return h.manager.listRuns()[0]!;
+  };
+
+  it("flags the chat cards of earlier wakes once, then never loads a thread at boot again", async () => {
+    const h = harness();
+    const run = await firedIn(h, "bot-chat");
+    const card = { id: "card-1", role: "bot", kind: "routine.run", at: 1, text: "", routineRun: { runId: run.id, routineId: run.routineId, routineName: "Wake", status: "completed" } } as Message;
+    const patched: unknown[] = [];
+    const chats = { messagesFor: vi.fn(() => [card]), patchMessage: vi.fn((...args: unknown[]) => patched.push(args)) };
+
+    h.manager.flagWakeCards(chats);
+    expect(patched).toEqual([["bot-chat", "card-1", { routineRun: { ...card.routineRun, wake: true } }]]);
+
+    const reloaded = new RoutineManager(h.options);
+    reloaded.flagWakeCards(chats);
+    h.manager.flagWakeCards(chats);
+    expect(chats.messagesFor).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the bot's chat when the source is deleted", async () => {
