@@ -135,6 +135,8 @@ export const VERIFY_ROUTES = {
   live: "/api/verify/runs/:runId/live",
   /** UI -> server. App auth. The replay file; 404 once pruned. */
   replay: "/api/verify/runs/:runId/replay",
+  /** UI -> server. App auth. 200 { runs } - the run ids of this chat whose replay is on this PC. */
+  replays: "/api/verify/threads/:threadId/replays",
 } as const;
 
 /** .lvr kind 0 */

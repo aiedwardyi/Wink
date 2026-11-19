@@ -113,7 +113,7 @@ export function HostPeople({ group }: { group: Group }) {
   return (
     <>
       <ul className={DETAILS_BOX} aria-label={t("teamRoom.people")}>
-        <RoomOwnName name={state.config?.profile?.name || t("teamRoom.host")} />
+        <RoomOwnName name={state.config?.profile?.name ?? ""} fallback={t("teamRoom.host")} />
         {people.map((person) => (
           <PersonRow
             key={person.id}

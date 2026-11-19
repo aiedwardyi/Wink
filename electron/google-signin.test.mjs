@@ -285,13 +285,21 @@ describe("google sign-in", () => {
     expect(saveSession).toHaveBeenCalledExactlyOnceWith({ refreshToken: "refresh-SECRET", sub: "sub-1", email: "me@example.com" }, expect.stringMatching(/^ey/));
   });
 
-  it("sends the tab to the dashboard only on success with openAfter", async () => {
+  it("holds the tab until finish, then opens the dashboard only when told", async () => {
     const ok = browser();
-    await runGoogleSignIn({ client: CLIENT, openExternal: ok.openExternal, fetch: tokenEndpoint().fetch, openAfter: "dashboard" });
+    const session = await runGoogleSignIn({ client: CLIENT, openExternal: ok.openExternal, fetch: tokenEndpoint().fetch, hold: true });
+    expect(ok.seen.pages).toHaveLength(1);
+    session.finish("https://app.getwink.dev/");
     await ok.openExternal.mock.results[0].value;
     expect(ok.seen.pages[1].text).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
     expect(ok.seen.pages[1].text).toContain('<a href="https://app.getwink.dev/">Open dashboard</a>');
     expect(ok.seen.pages[1].text).toContain("Opening your Wink dashboard...");
+
+    const stays = browser();
+    (await runGoogleSignIn({ client: CLIENT, openExternal: stays.openExternal, fetch: tokenEndpoint().fetch, hold: true })).finish();
+    await stays.openExternal.mock.results[0].value;
+    expect(stays.seen.pages[1].text).toContain("signed in");
+    expect(stays.seen.pages[1].text).not.toMatch(/refresh|app\.getwink\.dev/);
 
     const plain = browser();
     await runGoogleSignIn({ client: CLIENT, openExternal: plain.openExternal, fetch: tokenEndpoint().fetch });
@@ -299,7 +307,7 @@ describe("google sign-in", () => {
     expect(plain.seen.pages[1].text).not.toContain("refresh");
 
     const denied = browser((query) => query.set("error", "access_denied"));
-    await expect(runGoogleSignIn({ client: CLIENT, openExternal: denied.openExternal, fetch: tokenEndpoint().fetch, openAfter: "dashboard" })).rejects.toMatchObject({ code: "access-denied" });
+    await expect(runGoogleSignIn({ client: CLIENT, openExternal: denied.openExternal, fetch: tokenEndpoint().fetch, hold: true })).rejects.toMatchObject({ code: "access-denied" });
     await denied.openExternal.mock.results[0].value;
     expect(denied.seen.pages[1].text).not.toMatch(/refresh|app\.getwink\.dev/);
 
@@ -307,14 +315,14 @@ describe("google sign-in", () => {
       query.set("state", "forged");
       query.set("code", "auth-code");
     });
-    await expect(runGoogleSignIn({ client: CLIENT, openExternal: forged.openExternal, fetch: tokenEndpoint().fetch, openAfter: "dashboard" })).rejects.toMatchObject({ code: "state-mismatch" });
+    await expect(runGoogleSignIn({ client: CLIENT, openExternal: forged.openExternal, fetch: tokenEndpoint().fetch, hold: true })).rejects.toMatchObject({ code: "state-mismatch" });
     await forged.openExternal.mock.results[0].value;
     expect(forged.seen.pages[1].text).not.toMatch(/refresh|app\.getwink\.dev/);
   });
 
   it("shows success only after the exchange and the save worked", async () => {
     const exchangeFails = browser();
-    await expect(runGoogleSignIn({ client: CLIENT, openExternal: exchangeFails.openExternal, fetch: tokenEndpoint({ error: "invalid_grant" }).fetch, openAfter: "dashboard" })).rejects.toMatchObject({ code: "exchange-failed" });
+    await expect(runGoogleSignIn({ client: CLIENT, openExternal: exchangeFails.openExternal, fetch: tokenEndpoint({ error: "invalid_grant" }).fetch, hold: true })).rejects.toMatchObject({ code: "exchange-failed" });
     await exchangeFails.openExternal.mock.results[0].value;
     expect(exchangeFails.seen.pages[1].text).toContain("Sign-in failed");
     expect(exchangeFails.seen.pages[1].text).not.toMatch(/signed in|refresh|app\.getwink\.dev/);
@@ -327,23 +335,55 @@ describe("google sign-in", () => {
       saveSession: vi.fn().mockRejectedValue(new Error("store down")),
       clearSession: vi.fn(),
     });
-    expect(await google.signIn({ openAfter: "dashboard" })).toEqual({ ok: false, error: "store-failed" });
+    expect(await google.signIn({ hold: true })).toEqual({ ok: false, error: "store-failed" });
     await saveFails.openExternal.mock.results[0].value;
     expect(saveFails.seen.pages[1].text).toContain("Sign-in failed");
     expect(saveFails.seen.pages[1].text).not.toMatch(/signed in|refresh|app\.getwink\.dev/);
   });
 
-  it("passes openAfter from signIn through, and drops any other value", async () => {
-    const run = async (options) => {
+  it("a held sign-in opens only the dashboard, and only on finish", async () => {
+    const run = async (release, saved = "wink.test") => {
       const { openExternal, seen } = browser();
-      const google = createGoogleAccountController({ client: CLIENT, openExternal, fetch: tokenEndpoint().fetch, saveSession: vi.fn(), clearSession: vi.fn() });
-      await google.signIn(options);
+      const google = createGoogleAccountController({ client: CLIENT, openExternal, fetch: tokenEndpoint().fetch, saveSession: vi.fn(), clearSession: vi.fn(), relayBase: () => saved });
+      expect(await google.signIn({ hold: true })).toEqual({ ok: true, email: "me@example.com" });
+      expect(seen.pages).toHaveLength(1);
+      await release(google);
       await openExternal.mock.results[0].value;
       return seen.pages[1].text;
     };
-    expect(await run({ openAfter: "dashboard" })).toContain("refresh");
-    expect(await run({ openAfter: "https://evil.example/" })).not.toContain("refresh");
-    expect(await run()).not.toContain("refresh");
+    expect(await run((google) => google.finish("app.getwink.dev"))).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
+    expect(await run((google) => google.finish("wink.test"))).toContain('<meta http-equiv="refresh" content="1;url=https://wink.test/">');
+    expect(await run((google) => google.finish("wink.edwardyi.dev"), "wink.edwardyi.dev")).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
+    expect(await run((google) => google.finish("app.getwink.dev"), null)).toContain('<meta http-equiv="refresh" content="1;url=https://app.getwink.dev/">');
+    expect(await run((google) => google.finish("evil.example"))).not.toMatch(/refresh|evil/);
+    expect(await run((google) => google.finish("wink.test"), null)).not.toContain("refresh");
+    expect(await run((google) => google.finish(["app.getwink.dev"]))).not.toContain("refresh");
+    for (const bad of ["https://evil.example/", "evil.example/x", "evil.example?x", "user@evil.example", "localhost", ""]) {
+      expect(await run((google) => google.finish(bad))).not.toMatch(/refresh|evil/);
+    }
+    // The saved spelling can differ from the one the server reports; both name the same relay.
+    for (const [saved, base] of [["Relay.Example", "relay.example"], [" relay.example ", "relay.example"], ["relay.example.", "relay.example"], ["relay.xn--p1ai", "relay.xn--p1ai"], ["relay.рф", "relay.xn--p1ai"], ["relay.lab2", "relay.lab2"]]) {
+      expect(await run((google) => google.finish(base), saved)).toContain(`<meta http-equiv="refresh" content="1;url=https://${base}/">`);
+    }
+    for (const bad of ["other.test", "child.relay.example", "name@relay.example", "relay.example:443", "xn--rel-7cd.example", "relay.example.", "//relay.example", "Relay.Example"]) {
+      expect(await run((google) => google.finish(bad), "relay.example")).not.toContain("refresh");
+    }
+    expect(await run((google) => google.finish(null))).not.toContain("refresh");
+    expect(await run((google) => google.cancel())).not.toContain("refresh");
+    expect(await run((google) => google.signOut())).not.toContain("refresh");
+    expect(await run(async (google) => {
+      await google.signIn().catch(() => {});
+      google.finish("app.getwink.dev");
+    })).not.toContain("refresh");
+  });
+
+  it("serves the tab at once without hold", async () => {
+    const { openExternal, seen } = browser();
+    const google = createGoogleAccountController({ client: CLIENT, openExternal, fetch: tokenEndpoint().fetch, saveSession: vi.fn(), clearSession: vi.fn() });
+    await google.signIn({ hold: "yes" });
+    await openExternal.mock.results[0].value;
+    expect(seen.pages[1].text).toContain("signed in");
+    expect(seen.pages[1].text).not.toContain("refresh");
   });
 
   it("keeps tokens out of logs and results", async () => {

@@ -95,6 +95,11 @@ export function loadMemory(
     return null;
   }
   if (!raw.trim() || raw === MEMORY_SEED) return null;
+  return loadedMemory(raw);
+}
+
+/** raw cut the way loadMemory cuts it for the prompt. */
+export function loadedMemory(raw: string) {
   let truncated = false;
   let text = raw;
   const lines = text.split("\n");

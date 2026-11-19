@@ -5,10 +5,24 @@
 // ones. Without this, an interrupted writeFileSync produces half-written JSON
 // that fails to parse on next boot and is silently treated as empty state.
 import { randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, linkSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { extname } from "node:path";
 
-export function writeFileAtomic(path: string, data: string, options: { mode?: number } = {}): void {
+/** renameSync, retried a few times while a brief Windows lock holds either file. */
+export function renameRetrying(from: string, to: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (e) {
+      if (!(e instanceof Error && "code" in e && (e.code === "EPERM" || e.code === "EBUSY")) || attempt === 5) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+    }
+  }
+}
+
+/** keep: the file this replaces stays there, linked just before the rename, so the caller can see a save that landed in it; none to replace throws. */
+export function writeFileAtomic(path: string, data: string, options: { mode?: number; keep?: string } = {}): void {
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   let fd: number | null = null;
   try {
@@ -20,16 +34,8 @@ export function writeFileAtomic(path: string, data: string, options: { mode?: nu
     fsyncSync(fd);
     closeSync(fd);
     fd = null;
-    // A brief Windows lock fails the rename, so retry it a few times.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        renameSync(tmp, path);
-        break;
-      } catch (e) {
-        if (!(e instanceof Error && "code" in e && (e.code === "EPERM" || e.code === "EBUSY")) || attempt === 5) throw e;
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
-      }
-    }
+    if (options.keep) linkSync(path, options.keep);
+    renameRetrying(tmp, path);
   } catch (e) {
     if (fd !== null) {
       try {

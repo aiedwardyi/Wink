@@ -5,12 +5,12 @@ import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 
 import { botChain, CHAIN_LINES, handoffTarget, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
-import { roomResponder } from "../../shared/room-routing.ts";
+import { roomMentionsHost, roomResponder } from "../../shared/room-routing.ts";
 import { sharableLocalFile } from "../attachments.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
 import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
 import { broadcastDoorEntry, broadcastDoorStop } from "./door-streams.ts";
-import { appendRoomEntry, committedRoomText, recentRoomEntries, roomById, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
+import { appendRoomEntry, committedRoomText, recentRoomEntries, roomById, roomEntry, roomHostSeats, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
 import { copyRoomFile, discardUnpostedRoomFile, MAX_MESSAGE_FILES, ownRoomFiles } from "./files.ts";
 import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
@@ -34,10 +34,10 @@ const groupBots = (group: HostedGroup) => group.memberIds.flatMap((id) => {
 export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = [], local?: LocalRow) {
   const { store, hostName } = roomAskDeps();
   const roomId = group.hosted.roomId;
-  const people = roomPeople(roomId);
+  const people = roomPeople(roomId, true);
   const person = sender.kind === "person" ? people.find((candidate) => candidate.id === sender.id) : undefined;
   if (sender.kind === "person" && !person) throw new RoomError(404, "you're not in this room");
-  const author: RoomAuthor = person ? { kind: "person", id: person.id, name: person.name } : { kind: "host", id: "host", name: hostName() };
+  const author: RoomAuthor = person && !person.host ? { kind: "person", id: person.id, name: person.name } : { kind: "host", id: "host", name: hostName() };
   const quote = replyToId === undefined ? null : roomEntry(roomId, replyToId);
   if (replyToId !== undefined && !quote) throw new RoomError(404, "no such message in this room");
   const files = fileIds.length ? ownRoomFiles(roomId, person?.id ?? "host", fileIds) : [];
@@ -45,14 +45,14 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   // Teammates' bots answer only on their owners' PCs, so their names and lines wake none here.
   const roomBots = teamBots(roomId);
   const quotesRoomBot = roomBots.some((roomBot) => roomBot.id === quote?.author.id) || Boolean(quote?.author.owner);
-  const nonWaking = [hostName(), ...people.map((candidate) => candidate.name)];
-  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot, roomBots.map((roomBot) => roomBot.name));
-  const ended = !person && liveBotChain(group) > 0;
-  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
+  const nonWaking = [hostName(), ...people.filter((candidate) => !candidate.host).map((candidate) => candidate.name)];
+  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText("person", text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot, roomBots.map((roomBot) => roomBot.name));
+  const ended = author.kind === "host" && liveBotChain(group) > 0;
+  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(person?.host ? { seat: person.id } : {}), ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
   stopped.delete(roomId);
   // the host's line ends a handoff; republish the group so its strip clears
   if (ended) store.patchGroup(group.id, {});
-  if (person) markPersonLine(group, entry, person.name);
+  if (person && !person.host) markPersonLine(group, entry, person.name);
   if (!bot || !person) return { entry, message, ask: null };
   const ask = createAsk({
     roomId,
@@ -73,6 +73,16 @@ function markPersonLine(group: HostedGroup, entry: RoomEntry, name: string, ping
   store.patchGroup(group.id, { unread: true });
   const line = { chat: group.id, threadId: group.threadId, room: group.name, name, text: roomLineText(entry.text, entry.files) };
   if (ping) alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert, undefined, alerts);
+}
+
+function hostMentioned(group: HostedGroup, entry: RoomEntry): boolean {
+  const roomId = group.hosted.roomId;
+  return roomHostSeats(roomId).length > 0 && roomMentionsHost(entry.text, roomAskDeps().hostName(),
+    [...roomPeople(roomId), ...groupBots(group), ...teamBots(roomId)].map((member) => member.name));
+}
+
+export function alertHostMention(group: HostedGroup, entry: RoomEntry): void {
+  if (hostMentioned(group, entry)) markPersonLine(group, entry, entry.author.name);
 }
 
 /** Room Stop ends a bot chain here and on every joined PC. */
@@ -118,7 +128,7 @@ export function teamBotSend(group: HostedGroup, owner: RoomPerson, bot: TeamBot,
   const bots = groupBots(group);
   const tagged = handoffTarget(entry, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)]);
   // a handoff pings no one; the line that closes it does
-  markPersonLine(group, entry, bot.name, !tagged);
+  markPersonLine(group, entry, bot.name, !tagged || hostMentioned(group, entry));
   const hit = stopped.has(roomId) || peopleOnlyRoom(roomId) ? null : tagged;
   const asked = bots.find((candidate) => candidate.id === hit?.id);
   if (asked) {

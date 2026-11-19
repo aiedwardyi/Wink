@@ -9,6 +9,7 @@ import type { Duplex } from "node:stream";
 import { z } from "zod";
 
 import { googleDiscoveryKeySource, type GoogleKeySource } from "../shared/google-id-token.ts";
+import { relayHost } from "../shared/relay-host.mjs";
 import { PHONE_RELAY_OFF, ROOM_CODE_RE, SETUP_PREFIX, labelFromHost, parseSetupCode, type PhoneRelayStatus, type SetupCodeProblem, type TeamSnag } from "../shared/relay-protocol.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { HarnessHandler } from "./early-listen.ts";
@@ -396,7 +397,7 @@ export class PhoneAccess {
   private describe(): PhoneAccessStatus {
     const config = this.options.config() ?? {};
     const available = this.options.env.ORBIT_RELAY !== "0";
-    const base = config.base?.trim().toLowerCase() || null;
+    const base = relayHost(config.base);
     const configured = Boolean(base) && available;
     const status = this.status();
     return {
