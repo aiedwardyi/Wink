@@ -279,11 +279,19 @@ const teammateAsks = (roomId: string, threadId: string, botId: string) =>
 
 /** A teammate's request is this bot's live turn on the thread. */
 export function teammateAskTurn(roomId: string, threadId: string, botId: string): boolean {
-  return teammateAsks(roomId, threadId, botId).length > 0;
+  return teammateAsks(roomId, threadId, botId).some((ask) => !askFromHost(ask));
 }
 
-/** The host, or a person the host turned "Can make bots work" on for. Keyed on who asked, never on the bot. */
-const askerWorks = (ask: RoomAsk) => ask.asker.kind === "host" || roomPeople(ask.roomId, true).some((person) => person.id === ask.asker.id && person.works);
+function askPermission(ask: RoomAsk) {
+  if (ask.asker.kind === "host") return "host";
+  const person = roomPeople(ask.roomId, true).find(({ id }) => id === ask.asker.id);
+  if (person?.host) return "host";
+  return person?.works ? "work" : "read-only";
+}
+
+export const askFromHost = (ask: RoomAsk | null) => Boolean(ask && askPermission(ask) === "host");
+
+const askerWorks = (ask: RoomAsk) => askPermission(ask) !== "read-only";
 
 /** Every ask one turn answers may make the bot work; one read-only asker makes the whole turn read-only. */
 export function asksWork(asks: readonly RoomAsk[]): boolean {

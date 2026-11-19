@@ -61,7 +61,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askById, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -7132,6 +7132,7 @@ async function runClaimedGroupMemberTurn(
   const lead = asked ? askById(asked) : null;
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
   const works = !asked || Boolean(lead && asksWork([lead, ...riders]));
+  const guestAsked = asked && (!askFromHost(lead) || riders.some((ask) => !askFromHost(ask)));
   if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
@@ -7145,7 +7146,7 @@ async function runClaimedGroupMemberTurn(
   const searchable = instance.adapter.capabilities.agentsMcp === true && hasOwnerChat(store, owned);
   // hand_off is a tool, so only an engine with Wink's tools gets a lane hand-off
   const handoff = instance.adapter.capabilities.agentsMcp === true
-    ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority) } : {}) })
+    ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff));
@@ -7267,7 +7268,7 @@ async function runClaimedGroupMemberTurn(
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
   // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
-  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (asked && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
+  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (guestAsked && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +

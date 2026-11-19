@@ -368,13 +368,14 @@ export class GuestClient {
     const saved = short ? joined.data.code : pasted;
     if (!saved || CODE.exec(saved)?.[1] !== relayHost) return unavailable();
     if (priorKey && (joinedKey(roomId)?.key !== priorKey || this.leaving.has(priorKey))) return failed(409, "seated");
+    const needsSnapshot = this.syncs.get(roomId)?.needsSnapshot;
     this.unfollow(roomId);
     if (priorKey && person.host && key === priorKey && joinedRoom(roomId)?.me.id === person.id) saveJoinedCode(roomId, saved);
     else saveJoined(roomId, relayHost, person, key, saved);
     setJoinedSentName(roomId, name);
     this.oldNames.delete(roomId);
     this.gone.delete(roomId);
-    this.follow(roomId, Boolean(priorKey));
+    this.follow(roomId, needsSnapshot);
     this.changed(roomId);
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }

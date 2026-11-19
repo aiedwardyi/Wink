@@ -17,7 +17,7 @@ import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store, type BotRecord, type Message } from "../store.ts";
-import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
+import { asksWork, closeAsksDb, configureRoomAsks, readOnlyAskTurn, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
@@ -292,6 +292,68 @@ describe("teammate and the real door", () => {
     await until(() => texts(roomId).includes("live from Home"));
     expect(c.rooms()[0]?.unread).toBe(0);
     expect(guestAlert).not.toHaveBeenCalled();
+  });
+
+  it.each(["offline upgrade", "startup upgrade", "reconnect control"])("keeps all 455 lines after %s, paging and restart", async (mode) => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    const { id, secret } = roomCode(roomId);
+    ownName = "Edward";
+    let c = teammate(mode === "offline upgrade" ? { retryMs: 60_000, maxRetryMs: 60_000 } : undefined);
+    expect((await c.seat(`wkr1:${HOST}:${id}.${secret}`, roomId)).ok).toBe(true);
+    await live(c, roomId);
+    for (let i = 1; i <= 5; i++) hostSays(group, `line ${i}`);
+    await until(() => joinedCursor(roomId) === 5);
+
+    if (mode === "offline upgrade") {
+      hop.up = false;
+      hop.drop();
+      await until(() => c.room(roomId)?.link === "offline");
+    } else {
+      c.stop();
+    }
+    for (let i = 6; i <= 455; i++) hostSays(group, `line ${i}`);
+    hop.up = true;
+    if (mode !== "offline upgrade") {
+      closeJoinedDb();
+      c = teammate();
+      c.start();
+    }
+    if (mode !== "reconnect control") expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    await until(() => joinedCursor(roomId) === 455, 10_000);
+    expect(Boolean(joinedRoom(roomId)?.me.host)).toBe(mode !== "reconnect control");
+    const caughtUp = seqs(roomId).length;
+    expect(await c.older(roomId, 256)).toEqual({ ok: true, value: true });
+    const paged = seqs(roomId).length;
+
+    c.stop();
+    closeJoinedDb();
+    c = teammate();
+    c.start();
+    await live(c, roomId);
+    expect({ caughtUp, paged, restarted: seqs(roomId).length }).toEqual({ caughtUp: 455, paged: 455, restarted: 455 });
+    expect(seqs(roomId)).toEqual(Array.from({ length: 455 }, (_, i) => i + 1));
+  });
+
+  it.each(["fresh", "upgraded"])("lets the %s owner seat ask the host's bot to work", async (mode) => {
+    const bot = store.patchBot(store.createBot().id, { name: "Wink" })!;
+    const group = store.createGroup("Crew", [bot.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    const { roomId } = group.hosted;
+    ownName = "Edward";
+    const c = teammate();
+    if (mode === "upgraded") {
+      const { id, secret } = roomCode(roomId);
+      expect((await c.seat(`wkr1:${HOST}:${id}.${secret}`, roomId)).ok).toBe(true);
+      await live(c, roomId);
+    }
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    expect((await c.send(roomId, "@Wink fix the build")).ok).toBe(true);
+    const asks = roomAsks(roomId, ["queued"]);
+    expect(asks).toEqual([expect.objectContaining({ botId: bot.id, grant: "work" })]);
+    expect(startAsk(asks[0]!.id)).toBe(true);
+    expect({ works: asksWork(asks), readOnly: readOnlyAskTurn(roomId, group.threadId, bot.id) }).toEqual({ works: true, readOnly: false });
   });
 
   it("retries a capped owner-seat send with the same committed text and entry", async () => {
