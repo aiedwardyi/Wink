@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import { writeDeviceRecord } from "./device-sync.ts";
 import { waitForExit } from "./testing/cleanup.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -125,7 +126,8 @@ describe("DELETE /api/devices/:id", () => {
     expect((await call(port, "DELETE", "/api/devices/old")).status).toBe(401);
     expect((await call(port, "DELETE", "/api/devices/old", { ...auth, host: "home.tail1234.ts.net" })).status).toBe(403);
     expect((await call(port, "DELETE", "/api/devices/home", auth)).status).toBe(409);
-    expect((await call(port, "DELETE", "/api/devices/nobody", auth)).status).toBe(409);
+    const missing = await call(port, "DELETE", "/api/devices/nobody", auth);
+    expect({ status: missing.status, code: JSON.parse(missing.body).code }).toEqual({ status: 409, code: "pc-gone" });
     const before = snapshot(sync);
     expect((await call(port, "DELETE", "/api/devices/old", auth)).status).toBe(200);
     const after = snapshot(sync);
@@ -142,5 +144,24 @@ describe("DELETE /api/devices/:id", () => {
     const reply = await call(port, "DELETE", "/api/devices/old", { authorization: `Bearer ${token}` });
     expect({ status: reply.status, code: JSON.parse(reply.body).code }).toEqual({ status: 409, code: "no-own-record" });
     expect(await devices(port, token)).toEqual(["old", "work"]);
+  }, 120_000);
+});
+
+describe("GET /api/devices", () => {
+  it("lists a reinstalled PC once with a renamed tailnet host or an older record", async () => {
+    const { home, sync } = makeHome();
+    const port = await freePort();
+    const host = "home.tail1234.ts.net";
+    const token = await start(home, port, { ORBIT_REMOTE_HOST: host });
+    const own = JSON.parse(readFileSync(join(sync, "devices", "home.json"), "utf8"));
+    const machine = z.string().regex(/^[0-9a-f]{32}$/).parse(own.machine);
+    for (const prior of [
+      { host: "home-before.tail1234.ts.net", machine },
+      { host, machine: machine.slice(0, 16) },
+      { host },
+    ]) {
+      writeDeviceRecord(sync, { deviceId: "home-before", name: "Home", ...prior }, Date.now() - 60_000);
+      expect(await devices(port, token)).toEqual(["home", "old", "work"]);
+    }
   }, 120_000);
 });

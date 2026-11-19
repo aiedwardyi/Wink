@@ -1,9 +1,9 @@
 // Per-PC presence records in the sync folder so a phone can jump between PCs.
 // Records carry only a name, a public tailnet or relay host and a timestamp: never a key or cookie.
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir, hostname, userInfo } from "node:os";
+import { homedir, hostname, platform, userInfo } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 import { z } from "zod";
@@ -16,6 +16,7 @@ export const DEVICE_HEARTBEAT_MS = 5 * 60_000;
 export const DEVICE_STALE_MS = 15 * 60_000;
 export const DEVICE_NAME_FILE = "device-name.json";
 const MAX_DEVICE_FILES = 64;
+const LEGACY_MACHINE_KEY_LENGTH = 16;
 
 export const deviceNameSchema = z.string().trim().min(1).max(64);
 
@@ -28,7 +29,7 @@ const deviceSchema = z.object({
   lastSeen: z.number().int().nonnegative(),
   laptop: z.boolean().optional(),
   chatSync: z.literal(2).optional(),
-  machine: z.string().regex(/^[0-9a-f]{16}$/).optional().catch(undefined),
+  machine: z.string().regex(/^(?:[0-9a-f]{16}|[0-9a-f]{32})$/).optional().catch(undefined),
   /** PCs this PC removed from the list, by id, with when; one shows again once it runs Wink after that. */
   removed: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/), z.number().int().nonnegative())
     .refine((value) => Object.keys(value).length <= MAX_DEVICE_FILES).optional().catch(undefined),
@@ -120,19 +121,52 @@ export function listDevices(folder: string, currentId: string, now: number, limi
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Records without a machine key (older builds) fall back to a shared tailnet host; a relay host is per install. */
 function samePc(a: DeviceRecord, b: DeviceRecord): boolean {
-  if (a.machine && b.machine) return a.machine === b.machine;
+  if (a.machine && b.machine) {
+    if (a.machine.length === b.machine.length) return a.machine === b.machine;
+    // A pre-upgrade key needs the same tailnet host to disambiguate matching names and paths.
+    if (a.machine.slice(0, LEGACY_MACHINE_KEY_LENGTH) !== b.machine.slice(0, LEGACY_MACHINE_KEY_LENGTH)) return false;
+  }
+  // A relay host is per install.
   return a.host !== a.relayHost && a.host === b.host;
 }
 
+function readOsMachineId(): string | undefined {
+  const options = { encoding: "utf8", stdio: "pipe", timeout: 1_000, windowsHide: true } as const;
+  let value: string | undefined;
+  try {
+    switch (platform()) {
+      case "win32":
+        value = execFileSync("reg.exe", ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"], options)
+          .match(/\bMachineGuid\s+REG_SZ\s+(\S+)/i)?.[1];
+        break;
+      case "darwin":
+        value = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], options)
+          .match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/)?.[1];
+        break;
+      case "linux":
+        value = readFileSync("/etc/machine-id", "utf8").trim();
+        break;
+    }
+  } catch {
+    return undefined;
+  }
+  const id = value?.replaceAll("-", "").toLowerCase();
+  return id && /^[0-9a-f]{32}$/.test(id) && !/^0+$/.test(id) ? id : undefined;
+}
+
 /** Stable across a reinstall on one PC; different on a PC that got a copied ~/.orbit, or for a second data dir on one PC. */
-export function machineKey(dataDir: string): string {
+export function machineKey(dataDir: string): string | undefined {
+  const id = readOsMachineId();
+  if (!id) return undefined;
   let user = "";
   try {
     user = userInfo().username;
   } catch {}
-  return createHash("sha256").update(["wink-device", hostname(), user, homedir(), resolve(dataDir)].join("\0")).digest("hex").slice(0, 16);
+  const local = ["wink-device", hostname(), user, homedir(), resolve(dataDir)].join("\0");
+  const legacy = createHash("sha256").update(local).digest("hex").slice(0, LEGACY_MACHINE_KEY_LENGTH);
+  const machine = createHash("sha256").update(`${local}\0${id}`).digest("hex").slice(0, LEGACY_MACHINE_KEY_LENGTH);
+  return legacy + machine;
 }
 
 /** Removals still in force: one whose PC ran Wink again, or whose record is gone, drops out. */

@@ -8658,7 +8658,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const deviceId = decodeURIComponent(path.slice("/api/devices/".length));
       // The same presence the list showed, so a PC shown offline can be removed.
       const shown = devicePresence(syncedDevices(), REMOTE_HOST, remoteRetry.status().state === "checking").find((device) => device.deviceId === deviceId);
-      if (!shown || shown.current || !shown.offline || shown.checking) return json(res, 409, { error: "Only an offline PC can be removed", code: "pc-online" });
+      if (!shown) return json(res, 409, { error: "PC is no longer listed", code: "pc-gone" });
+      if (shown.current || !shown.offline || shown.checking) return json(res, 409, { error: "Only an offline PC can be removed", code: "pc-online" });
       removedPcs[deviceId] = Date.now();
       publishDeviceRecord();
       // A PC with no tailnet or relay host has no record of its own to hold the removal.

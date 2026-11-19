@@ -127,10 +127,37 @@ describe("Your PCs", () => {
     await removeLaptop();
     expect(host.querySelector('[role="alert"]')?.textContent).toBe("Could not remove Laptop. Turn on Connect from my devices or Tailscale on this PC first.");
     gone = true;
+    code = "pc-gone";
     await removeLaptop();
     expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(rows(host).map((row) => row.querySelector("[data-device-name]")?.textContent)).toEqual(["Home", "Den"]);
     await act(async () => root.unmount());
+  });
+
+  it.each([
+    ["pc-online", "Laptop is online again, so it stays."],
+    ["no-own-record", "Could not remove Laptop. Turn on Connect from my devices or Tailscale on this PC first."],
+  ])("shows a %s refusal even if the refresh no longer lists that PC", async (code, message) => {
+    let refused = false;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        refused = true;
+        return Response.json({ error: "refused", code }, { status: 409 });
+      }
+      return Response.json({ devices: refused ? [DEVICES[0]] : [DEVICES[0], DEVICES[2]] });
+    }));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(YourPcs))));
+      await act(async () => host.querySelector("button")!.click());
+      const dialog = document.querySelector('[role="dialog"], [role="alertdialog"]')!;
+      await act(async () => [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Remove")!.click());
+      expect(rows(host)).toHaveLength(0);
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe(message);
+    } finally {
+      await act(async () => root.unmount());
+    }
   });
 
   it("keeps the name in the title while the dialog fades out", async () => {

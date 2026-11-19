@@ -61,10 +61,9 @@ export function YourPcs() {
   const [removing, setRemoving] = useState<{ deviceId: string; name: string } | null>(null);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<{ deviceId: string; name: string; code?: string } | null>(null);
+  const [failed, setFailed] = useState<{ name: string; code?: string } | null>(null);
   const others = devices.filter((device) => !device.current);
   if (!known) return <DevicesSection title={t("chrome.devices")} data-your-pcs=""><PendingRow /></DevicesSection>;
-  if (!others.length) return null;
   const deviceWindow = window.ogb?.deviceWindow;
   const open = (host: string, name: string) => {
     if (!deviceWindow) return leaveFor(`https://${host}/`);
@@ -77,20 +76,22 @@ export function YourPcs() {
     setBusy(true);
     setFailed(null);
     void api(`/api/devices/${encodeURIComponent(target.deviceId)}`, { method: "DELETE" })
-      .then(() => undefined, (error: { code?: string }) => setFailed({ deviceId: target.deviceId, name: target.name, code: error.code }))
+      .then(() => undefined, (error: { code?: string } | null) => {
+        if (error?.code !== "pc-gone") setFailed({ name: target.name, code: error?.code });
+      })
       .then(() => reload())
       .finally(() => {
         setBusy(false);
         setAsking(false);
       });
   };
-  // A PC another tab already removed needs no message.
-  const failure = failed && others.some((device) => device.deviceId === failed.deviceId)
-    ? t(failed.code === "pc-online" ? "settings.devices.removePcOnline" : failed.code === "no-own-record" ? "settings.devices.removePcNoHost" : "settings.devices.removePcError", { name: failed.name })
+  const failure = failed
+    ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{t(failed.code === "pc-online" ? "settings.devices.removePcOnline" : failed.code === "no-own-record" ? "settings.devices.removePcNoHost" : "settings.devices.removePcError", { name: failed.name })}</p>
     : null;
+  if (!others.length) return failure;
   return (
     <DevicesSection title={t("chrome.devices")} data-your-pcs="" after={<>
-      {failure ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{failure}</p> : null}
+      {failure}
       <Presence open={asking}>
         {(leaving) => <ConfirmDialog closing={leaving} title={t("settings.devices.removePcTitle", { name: removing?.name ?? "" })} body={t("settings.devices.removePcBody")}
           confirmLabel={t("settings.phoneAccess.remove")} cancelLabel={t("settings.phoneAccess.cancel")} confirmDisabled={busy}

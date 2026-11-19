@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -27,6 +28,9 @@ afterAll(() => temps.remove());
 const NOW = 1_800_000_000_000;
 const freshDir = () => temps.make(join(tmpdir(), "orbit-devices-"));
 const rec = (id: string, host = `${id}.tail1234.ts.net`) => ({ deviceId: id, name: id, host });
+
+vi.mock("node:child_process", { spy: true });
+vi.mock("node:os", { spy: true });
 
 describe("device sync", () => {
   it("keeps launch presence checking until its mirror record is known", () => {
@@ -195,9 +199,39 @@ describe("relay presence", () => {
   });
 
   it("keys a PC by machine and data dir", () => {
-    expect(machineKey("/a/.orbit")).toMatch(/^[0-9a-f]{16}$/);
-    expect(machineKey("/a/.orbit")).toBe(machineKey("/a/.orbit"));
-    expect(machineKey("/a/.orbit")).not.toBe(machineKey("/b/.orbit"));
+    const os = vi.mocked(platform).mockReturnValue("darwin");
+    const query = vi.mocked(execFileSync).mockReturnValue('    "IOPlatformUUID" = "11111111-2222-3333-4444-555555555555"\n');
+    try {
+      const first = machineKey("/a/.orbit");
+      expect(first).toMatch(/^[0-9a-f]{32}$/);
+      expect(first).not.toContain("11111111222233334444555555555555");
+      expect(first).toBe(machineKey("/a/.orbit"));
+      expect(first).not.toBe(machineKey("/b/.orbit"));
+      query.mockReturnValue("");
+      expect(machineKey("/a/.orbit")).toBeUndefined();
+    } finally {
+      os.mockRestore();
+      query.mockRestore();
+    }
+  });
+
+  it("keeps live PCs with the same name and paths separate from every PC", () => {
+    const os = vi.mocked(platform).mockReturnValue("win32");
+    const query = vi.mocked(execFileSync).mockReturnValue("    MachineGuid    REG_SZ    11111111-1111-1111-1111-111111111111\r\n");
+    try {
+      const first = machineKey("/a/.orbit");
+      const folder = freshDir();
+      query.mockReturnValue("    MachineGuid    REG_SZ    22222222-2222-2222-2222-222222222222\r\n");
+      const second = machineKey("/a/.orbit");
+      writeDeviceRecord(folder, { ...rec("pc-a"), name: "PC", machine: first }, NOW - 60_000);
+      writeDeviceRecord(folder, { ...rec("pc-b"), name: "PC", machine: second }, NOW);
+      for (const current of ["pc-a", "pc-b", "observer"]) {
+        expect(listDevices(folder, current, NOW).map((device) => device.deviceId)).toEqual(["pc-a", "pc-b"]);
+      }
+    } finally {
+      os.mockRestore();
+      query.mockRestore();
+    }
   });
 
   it("never merges different machines, even on one tailnet host, or different hosts", () => {
