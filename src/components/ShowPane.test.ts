@@ -8,6 +8,7 @@ import { applyLocale } from "@/lib/i18n";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
+import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
 
@@ -509,6 +510,78 @@ it("pairs a crossed picture by its caption, and an uncaptioned one only with the
   expect([...rows()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
 });
 
+it("shows a pick Auto Notes saves while the pane is open", async () => {
+  picks(() => new Response(JSON.stringify({ error: "no such topic file" }), { status: 404 }));
+  await openTimeline("b-live");
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  expect(rows()).toHaveLength(0);
+  pickList();
+  const saved = { id: "save-1", tool: { name: "memory.save", ok: true } };
+  await act(async () => noteMemoryFrame({ kind: "message", threadId: "t1", message: saved }, { hydrated: true, bots: [{ id: "b-live", threadId: "t1" }] }));
+  await until(() => rows().length > 0);
+  expect(rows()).toHaveLength(5);
+});
+
+it.each([
+  ["a room save for this bot", "room", false, "b-refresh"],
+  ["a save on an earlier task", "earlier", false, undefined],
+  ["a save replayed after reconnect", "t1", true, undefined],
+] as const)("refreshes the open Timeline after %s", async (_label, threadId, replayed, memoryBotId) => {
+  const botId = "b-refresh";
+  const bots = [{ id: botId, threadId: "t1", tasks: [{ threadId: "earlier" }] }];
+  picks(() => new Response(null, { status: 404 }));
+  await openTimeline(botId);
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  pickList();
+  const save = (id: string, owner?: string) => ({ id, tool: { name: "memory.save", ok: true, memoryBotId: owner } });
+  await act(async () => noteMemoryFrame({ kind: "message", threadId, replayed, message: save("other-save", "other-bot") }, { hydrated: true, bots }));
+  expect(rows()).toHaveLength(0);
+  await act(async () => noteMemoryFrame({ kind: "message", threadId, replayed, message: save("bot-save", memoryBotId) }, { hydrated: true, bots }));
+  expect(rows()).toHaveLength(5);
+});
+
+it("refreshes the open Timeline when its bot receives a synced pick", async () => {
+  const botId = "b-peer-sync";
+  const bots = [{ id: botId, threadId: "t1" }];
+  const sync = (id: string) => act(async () => noteMemoryFrame({ kind: "memory.changed", botId: id }, { hydrated: true, bots }));
+  picks(() => new Response(null, { status: 404 }));
+  await openTimeline(botId);
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  pickList();
+  await sync("other-bot");
+  expect(rows()).toHaveLength(0);
+  await sync(botId);
+  expect(rows()).toHaveLength(5);
+});
+
+it("keeps the loaded Timeline rows when a save refresh fails", async () => {
+  pickList();
+  await openTimeline("b-failed-refresh");
+  await until(() => rows().length > 0);
+  const refresh = vi.fn(() => new Response(null, { status: 503 }));
+  picks(refresh);
+  const message = { id: "fact-save", tool: { name: "memory.save", ok: true } };
+  await act(async () => noteMemoryFrame({ kind: "message", threadId: "t1", message }, { hydrated: true, bots: [{ id: "b-failed-refresh", threadId: "t1" }] }));
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(rows()).toHaveLength(5);
+});
+
+it("consumes Escape when it closes the Timeline, so a card behind it stays", async () => {
+  pickList();
+  await openTimeline("b-esc");
+  await until(() => rows().length > 0);
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => { window.dispatchEvent(escape); });
+  expect(escape.defaultPrevented).toBe(true);
+});
+
+it("keeps the Timeline search box at 16px on a phone so iOS does not zoom", async () => {
+  pickList();
+  await openTimeline("b-zoom");
+  await until(() => rows().length > 0);
+  expect(host.querySelector(".timeline-search input")!.className).toContain("max-md:text-[16px]");
+});
+
 const mapRow = () => rows().find((row) => row.querySelector(".timeline-key")?.textContent === "Map on phone")!;
 const pickList = () => picks(() => new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 }));
 
@@ -544,6 +617,44 @@ it("opens a screenshot, or a picked or crossed picture, in the viewer on one cli
     await until(() => !document.querySelector("[data-media-viewer]"));
     expect(document.querySelector("[data-media-viewer]")).toBeNull();
   }
+});
+
+it("moves to the next and previous picture of the same pick with the arrow keys", async () => {
+  pickList();
+  await openTimeline("b-arrows");
+  await until(() => rows().length > 0);
+  const shown = () => document.querySelector("[data-media-viewer] img")?.getAttribute("src") ?? "";
+  const name = (button?: HTMLElement) => button!.dataset.path!.split("\\").pop()!;
+  const press = (key: string) => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+  const [first, second] = [...mapRow().querySelectorAll<HTMLElement>("[data-path]")];
+  await act(async () => first!.click());
+  expect(shown()).toContain(name(first));
+  await press("ArrowLeft");
+  expect(shown()).toContain(name(first));
+  await press("ArrowRight");
+  expect(shown()).toContain(name(second));
+  await press("ArrowLeft");
+  expect(shown()).toContain(name(first));
+});
+
+it("steps through the same attachment in the winner and the screenshots", async () => {
+  const entries = [{ id: "2026-11-18", key: "Mock layout", picked: "A", picture: { path: "/attachments/A.png" }, over: [], overPictures: [], files: ["/attachments/A.png", "/attachments/B.png"], tweaks: [] }];
+  picks(() => new Response(JSON.stringify({ entries }), { status: 200 }));
+  await openTimeline("b-duplicate-pictures");
+  await until(() => rows().length > 0);
+  const shown = () => document.querySelector("[data-media-viewer] img")?.getAttribute("src");
+  const press = (key: string) => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+  const [winner, screenshot] = [...rows()[0]!.querySelectorAll<HTMLElement>("[data-path]")];
+  await act(async () => winner!.click());
+  await press("ArrowRight");
+  expect(shown()).toContain("A.png");
+  await press("ArrowRight");
+  expect(shown()).toContain("B.png");
+  await press("ArrowLeft");
+  expect(shown()).toContain("A.png");
+  await act(async () => screenshot!.click());
+  await press("ArrowRight");
+  expect(shown()).toContain("B.png");
 });
 
 it("leaves right-click on a picture to the image's own menu, with nothing drawn over it", async () => {

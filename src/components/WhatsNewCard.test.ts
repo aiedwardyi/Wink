@@ -116,6 +116,16 @@ describe("whats new card", () => {
     expect(onClose).toHaveBeenCalledTimes(3);
   });
 
+  it("leaves Escape to an open side pane, so the tour card stays", () => {
+    render(RELEASE);
+    scrollIntoView();
+    const pane = Object.assign(document.createElement("aside"), { className: "show-pane" });
+    document.body.append(pane);
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    pane.remove();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("ignores Escape while offscreen", () => {
     render(RELEASE);
     act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));

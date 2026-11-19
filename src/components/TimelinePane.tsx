@@ -5,8 +5,9 @@ import { z } from "zod";
 import { request } from "@/lib/api-request";
 import { attachmentImageUrl } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
-import type { PreviewImage } from "@/lib/media-viewer";
-import { openFile } from "@/lib/open-file";
+import { adjacentMedia, type MediaReference, type PreviewImage } from "@/lib/media-viewer";
+import { watchMemorySave } from "@/lib/memory-clean-events";
+import { fileOpen, openFile } from "@/lib/open-file";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
 import { Fold } from "./Fold";
 import { MediaViewer } from "./MediaViewer";
@@ -98,14 +99,23 @@ type PaneProps = { botId: string; threadId: string; maximized: boolean; profileN
 
 export function TimelinePane(props: PaneProps) {
   const [viewing, setViewing] = useState<PreviewImage | null>(null);
+  const [pick, setPick] = useState<MediaReference[]>([]);
   const view = useMemo(() => (path: string, threadId: string, opener: HTMLElement) => {
     opener.focus({ preventScroll: true });
-    openFile({ path, threadId, src: pictureSrc(threadId, path) }, { view: setViewing });
+    const buttons = [...(opener.closest(".timeline-detail")?.querySelectorAll<HTMLElement>("[data-path]") ?? [opener])].filter((button) => fileOpen(button.dataset.path!) === "picture");
+    const pictures = buttons.map(({ dataset }, i) => ({ src: pictureSrc(threadId, dataset.path!), name: showName(dataset.path!), id: String(i), messageId: threadId }));
+    setPick(pictures);
+    const selected = pictures[buttons.indexOf(opener)];
+    if (selected) setViewing(selected);
+    else openFile({ path, threadId, src: pictureSrc(threadId, path) }, { view: setViewing });
   }, []);
   return (
     <ViewPicture.Provider value={view}>
       <Picks {...props} />
-      {viewing && <MediaViewer image={viewing} onClose={() => setViewing(null)} />}
+      {viewing && (
+        <MediaViewer image={viewing} onClose={() => setViewing(null)} previous={Boolean(adjacentMedia(pick, viewing, -1))} next={Boolean(adjacentMedia(pick, viewing, 1))}
+          onNavigate={(direction) => setViewing((current) => current && (adjacentMedia(pick, current, direction) ?? current))} />
+      )}
     </ViewPicture.Provider>
   );
 }
@@ -115,6 +125,9 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [query, setQuery] = useState("");
+  const [saves, setSaves] = useState(0);
+
+  useEffect(() => watchMemorySave(botId, () => setSaves((count) => count + 1)), [botId]);
 
   useEffect(() => {
     let alive = true;
@@ -122,17 +135,21 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
       (body) => {
         if (!alive) return;
         const parsed = topic.safeParse(body);
-        if (parsed.success) setEntries(parsed.data.entries);
-        else setFailed(true);
+        if (parsed.success) {
+          setEntries(parsed.data.entries);
+          setFailed(false);
+        } else setFailed(true);
       },
       (error: { status?: number }) => {
         if (!alive) return;
-        if (error.status === 404) setEntries([]);
-        else setFailed(true);
+        if (error.status === 404) {
+          setEntries([]);
+          setFailed(false);
+        } else setFailed(true);
       },
     );
     return () => { alive = false; };
-  }, [botId]);
+  }, [botId, saves]);
 
   const days = useMemo(() => timelineDays(entries ?? []), [entries]);
   const needle = query.trim().toLowerCase();
@@ -142,7 +159,7 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
 
   return (
     <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined}>
-      {failed
+      {failed && !entries
         ? <p role="status" className="show-media-empty">{t("errors.request")}</p>
         : entries?.length === 0
           ? <p className="show-media-empty">{t("timeline.empty")}</p>
@@ -151,6 +168,7 @@ function Picks({ botId, threadId, maximized, profileName }: PaneProps) {
               <label className="timeline-search">
                 <Search size={14} aria-hidden="true" />
                 <input
+                  className="max-md:text-[16px]"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
@@ -259,7 +277,7 @@ function Img({ path, threadId, onFail, viewable = false }: { path: string; threa
   const [loaded, setLoaded] = useState(false);
   const img = <img src={pictureSrc(threadId, path)} alt="" loading="lazy" decoding="async" data-loaded={loaded || undefined} onLoad={() => setLoaded(true)} onError={onFail} />;
   return viewable
-    ? <button type="button" className="timeline-open" aria-label={t("viewer.open", { name: showName(path) })} onClick={(event) => view(path, threadId, event.currentTarget)}>{img}</button>
+    ? <button type="button" className="timeline-open" data-path={path} aria-label={t("viewer.open", { name: showName(path) })} onClick={(event) => view(path, threadId, event.currentTarget)}>{img}</button>
     : img;
 }
 

@@ -525,7 +525,12 @@ export function createBotRoutes(deps: BotRouteDeps) {
         return json(res, 400, { error: "invalid topic name" });
       }
       if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
-      const text = readMemoryTopic(m[1], name);
+      let text: string | null;
+      try {
+        text = readMemoryTopic(m[1], name);
+      } catch {
+        return json(res, 500, { error: "internal error" });
+      }
       if (text === null) return json(res, 404, { error: "no such topic file" });
       return json(res, 200, name === PICKS_FILE ? { name, text, entries: parseTimeline(text).entries } : { name, text });
     },
