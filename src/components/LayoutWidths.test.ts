@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider, translate } from "@/lib/i18n";
+import { SIDEBAR_SIDE_KEY } from "@/lib/sidebar-preferences";
 import type { Bot } from "@/state/store";
 
 const { mockState } = vi.hoisted(() => {
@@ -110,6 +111,39 @@ describe("Layout Widths", () => {
     host.remove();
     const portal = document.body.querySelector('[role="dialog"]');
     portal?.parentElement?.remove();
+  });
+
+  it("desktop New menu opens toward the window, not past the left edge", async () => {
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(Sidebar, { open: true, onClose: () => {} })));
+    });
+    const plusButton = host.querySelector('button[aria-label="' + translate("en", "chrome.newOrShare") + '"]');
+    await act(async () => {
+      if (plusButton instanceof HTMLElement) plusButton.click();
+    });
+    const newBot = [...host.querySelectorAll("button")].find((btn) => btn.textContent?.includes(translate("en", "chrome.newBot")));
+    const menu = newBot?.parentElement;
+    expect(menu?.className).toContain("left-0");
+    expect(menu?.className).not.toContain("right-0");
+  });
+
+  it("desktop New menu stays over the sidebar when the sidebar is on the right", async () => {
+    localStorage.setItem(SIDEBAR_SIDE_KEY, "right");
+    try {
+      await act(async () => {
+        root.render(createElement(I18nProvider, null, createElement(Sidebar, { open: true, onClose: () => {} })));
+      });
+      const plusButton = host.querySelector('button[aria-label="' + translate("en", "chrome.newOrShare") + '"]');
+      await act(async () => {
+        if (plusButton instanceof HTMLElement) plusButton.click();
+      });
+      const newBot = [...host.querySelectorAll("button")].find((btn) => btn.textContent?.includes(translate("en", "chrome.newBot")));
+      const menu = newBot?.parentElement;
+      expect(menu?.className).toContain("left-0");
+      expect(menu?.className).not.toContain("right-0");
+    } finally {
+      localStorage.removeItem(SIDEBAR_SIDE_KEY);
+    }
   });
 
   it("archived bots panel uses two columns only when there are two or more archived bots", async () => {

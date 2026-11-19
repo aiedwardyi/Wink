@@ -264,6 +264,31 @@ describe("relay presence", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to relay when a fresh PC's Tailscale probe times out", async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    });
+    try {
+      const folder = freshDir();
+      writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+      const request = vi.fn((_url, init) => new Promise<Response>((_done, reject) => {
+        init.signal.addEventListener("abort", () => reject(new Error("offline")));
+      }));
+      const presence = createDevicePresence(request);
+      const listed = listDevices(folder, "home", NOW);
+      const pick = () => pickerDevices(presence(listed, "home.tail1234.ts.net"), null, BASE, NOW)[0];
+      expect(pick()).toMatchObject({ host: "work.tail1234.ts.net", offline: false, checking: true });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(pick()).toEqual({ deviceId: "work", name: "work", host: relay("work"), lastSeen: NOW, current: false, offline: false, checking: false });
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps relay fallback when local Tailscale discovery settles without a host", () => {
     const folder = freshDir();
     writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW - DEVICE_STALE_MS - 1);

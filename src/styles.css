@@ -155,20 +155,25 @@
 @media (min-width: 768px) {
   .orbit-terminal-overlay[data-side] {
     --dock: max(440px, 52%);
-    position: relative;
+    position: absolute;
+    left: auto;
     z-index: 20;
     flex-shrink: 0;
     width: var(--dock);
-    margin-left: calc(-1 * var(--dock));
     transform: none;
     border-left: 1px solid var(--color-hairline);
     background: var(--color-app);
     transition: visibility 0s var(--motion-fast);
   }
   .orbit-terminal-overlay[data-side][data-open="true"] {
-    margin-left: 0;
+    position: relative;
+    left: 0;
+    transition: none;
     animation: panel-slide var(--motion-large) var(--ease-standard);
     transition-delay: 0s;
+  }
+  .orbit-terminal-overlay[data-side][data-closing] {
+    width: var(--dock-exit-width, var(--dock));
   }
   .orbit-terminal-overlay[data-side][data-open="true"] > * {
     animation: fade-in var(--motion-moderate) var(--ease-standard);
@@ -5702,8 +5707,13 @@ html[data-orbit-idle="hidden"] .needs-you-glow::after {
   animation-play-state: paused;
 }
 
+[data-board-list] > [data-board-post]:not([data-on-screen]) .orbit-ring {
+  display: none;
+}
+
 /* A frozen ring reads as a hung turn; the elapsed timer carries it instead. */
 html[data-orbit-idle] [data-turn-mascot] .orbit-ring,
+html[data-orbit-idle] [data-board-view] .orbit-ring,
 html[data-orbit-idle] [data-idle-hide] {
   visibility: hidden;
 }

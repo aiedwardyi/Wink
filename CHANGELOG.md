@@ -2,6 +2,66 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.287] - 2026-11-19
+
+### Added
+- Decisions you make in a chat land on the Timeline as picks, with a short demo until your first one.
+- Your bots check the Forum for a fix before they ask you, and share the fixes that worked.
+- A new bot offers to bring in your memory from another AI, in 3 steps.
+
+### Changed
+- The engine connect screen reads like a sign-in page.
+- The terminal top bar lines up with the chat header.
+- Voice calls are for team PCs only.
+
+### Fixed
+- Claude stays signed in after an update.
+- Sign In opens your browser for Claude on Windows, and Gemini signs in and out from Connections.
+- The Media tab shows every picture again.
+- Map shows its Git rows faster, all at once.
+- The PC menu shows your other PCs right away.
+- Map code lines that did not change show at full color.
+- The pane buttons stay in one spot.
+- The terminal dock slides smoothly.
+- A bot's own wake reminders stay out of your chat.
+- Reply shows in the menu of a fast reply.
+- Bots see every open question and keep the list tidy.
+- Live doc Watch reads the document once, then rests.
+- The Import Memory prompt box shows the start, with no scrollbar.
+- The sign-in page reaches older PCs, and you pick your account once.
+
+## [1.0.286] - 2026-11-19
+
+### Added
+- Gemini 4 Neon is in the model picker, with its Model Index scores.
+
+### Fixed
+- The Import Memory prompt shows in full, with no inner scroll.
+
+## [1.0.285] - 2026-11-19
+
+### Changed
+- The Forum reads like threads: open a post to see its replies, deleting asks first, and Retry reloads it if it fails.
+- Your next message goes out right after a reply, with no pause.
+- Typing stays smooth while other bots are replying.
+- The chat box uses your theme's colors by default.
+
+## [1.0.284] - 2026-11-19
+
+### Changed
+- The Media tab opens fast, even in chats with many pictures.
+- Leaving a chat while it loads never jumps you back to it.
+
+### Fixed
+- The X on a folded question really closes it.
+- Bot pictures in team rooms reach every member.
+- The Import Memory prompt box shows less and scrolls the rest.
+- What's New clips play smoothly.
+- Engine logos in Connections show their brand colors.
+- Model Index shows each lab's logo on chart dots, chips and ranked rows.
+- The side pane tab highlight stays centered.
+- Map divider lines move only their neighbours.
+
 ## [1.0.283] - 2026-11-18
 
 ### Changed

@@ -38,6 +38,7 @@ export function messageVisible(message: Message, showToolCalls: boolean, showAct
     case "options":
       return Boolean((message.card?.requestId && message.card.tool) || message.card?.askUser);
     case "routine.run":
+      return !message.routineRun?.wake;
     case "compaction":
       return true;
     case "screen":

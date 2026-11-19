@@ -26,7 +26,7 @@ export interface DocEnd { ms: number; blocked: boolean }
 export interface DocStep { marks: VerifyReplayMark[]; moved: DocCursor[]; left: string[]; end: DocEnd | null }
 
 interface Lane { kind: VerifyDocKind; i: number; turn: number; next: number; queue: VerifyReplayMark[]; landing?: { at: number; mark: VerifyReplayMark } }
-interface Band { from: number; to: number; at: number; rows: number[]; rounds: number; lanes: Lane[]; /** a cursor rests on the quote it just marked until then */ hold: number; compare?: boolean; closing?: number; done?: VerifyReplayMark }
+interface Band { from: number; to: number; at: number; rows: number[]; rounds: number; /** live: the readers make one pass over the chunk, then rest until its done mark */ once: boolean; lanes: Lane[]; /** a cursor rests on the quote it just marked until then */ hold: number; compare?: boolean; closing?: number; done?: VerifyReplayMark }
 interface Due { at: number; mark?: VerifyReplayMark; until?: number; compare?: boolean; end?: DocEnd }
 interface Chunk { from: number; to: number; start: number; done: number; s: number; e: number }
 
@@ -179,10 +179,10 @@ export class VerifyDocShow {
 
   private open(from: number, to: number, at: number, early: boolean, until?: number) {
     const kinds: VerifyDocKind[] = early ? [...READERS, "numbering"] : READERS, step = CURSOR_MS / kinds.length, rows = this.rows(from, to);
-    // A replay reads the chunk once, top to bottom, in the time it has; live keeps reading it over until the done mark.
+    // A replay reads the chunk once, top to bottom, in the time it has; live reads it once at the glide pace, then rests until the done mark.
     const reads = until === undefined ? 0 : Math.floor(Math.max(0, until - at - CURSOR_REST_MS) / GLIDE_MS) + 2;
     const rounds = until === undefined ? Math.min(8, Math.max(2, Math.ceil(rows.length / READERS.length))) : Math.ceil(reads / 2);
-    const band: Band = { from, to, at, rows, rounds, hold: 0, lanes: kinds.map((kind, i) => ({ kind, i, turn: 0, next: at + CURSOR_REST_MS + i * step, queue: [] })) };
+    const band: Band = { from, to, at, rows, rounds, once: until === undefined, hold: 0, lanes: kinds.map((kind, i) => ({ kind, i, turn: 0, next: at + CURSOR_REST_MS + i * step, queue: [] })) };
     this.bands.push(band);
     this.idle = Infinity;
     for (const lane of band.lanes) this.read(band, lane, 0);
@@ -192,7 +192,7 @@ export class VerifyDocShow {
   private compare(at: number) {
     this.idle = Infinity;
     if (this.still || !this.lines.length) return;
-    const band: Band = { from: 1, to: this.lines.length, at, rows: this.rows(1, this.lines.length), rounds: 1, hold: 0, compare: true, lanes: [{ kind: "names", i: 0, turn: 0, next: at + CURSOR_REST_MS, queue: [] }] };
+    const band: Band = { from: 1, to: this.lines.length, at, rows: this.rows(1, this.lines.length), rounds: 1, once: false, hold: 0, compare: true, lanes: [{ kind: "names", i: 0, turn: 0, next: at + CURSOR_REST_MS, queue: [] }] };
     this.bands.push(band);
     this.read(band, band.lanes[0]!, 0);
   }
@@ -219,6 +219,9 @@ export class VerifyDocShow {
       const f = findingOf(hit)!;
       this.point(band, lane, { line: f.line, along: 0, quote: f.quote, duration: glide });
       lane.landing = { at: at + glide, mark: hit };
+    } else if (band.once && lane.kind !== "numbering" && lane.turn >= 2 * band.rounds) {
+      lane.next = Infinity;
+      return;
     } else this.read(band, lane, glide);
     // Reading runs straight on; it rests only on a quote it marked.
     lane.next = at + glide + (quick ? QUICK_MS / 2 : hit ? CURSOR_REST_MS : 0);

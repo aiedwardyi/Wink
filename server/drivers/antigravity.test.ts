@@ -4,7 +4,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly;
 // spawnCli resolves it to `node <script>`, so these run everywhere.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,14 +55,20 @@ const FOREIGN_CREDENTIALS = [
 ];
 
 describe("readAntigravityModelCatalog", () => {
-  it("lists the three Gemini 4 Carbon tiers first, then Argon, then 3.8 Flash ahead of the legacy entries", () => {
+  it("lists the three Gemini 4 Carbon tiers first, then Neon, Hydrogen, Argon, then 3.8 Flash ahead of the legacy entries", () => {
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     expect(STATIC_ANTIGRAVITY_MODELS.options.slice(0, 3)).toEqual([
       { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)", contextWindow: 1_048_576 },
       { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)", contextWindow: 1_048_576 },
       { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)", contextWindow: 1_048_576 },
     ]);
-    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 6)).toEqual([
+    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 7)).toEqual([
+      { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-low", label: "Gemini 4 Neon (Low)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)", contextWindow: 1_048_576 },
+    ]);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(10, 13)).toEqual([
       { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
@@ -92,6 +98,11 @@ describe("readAntigravityModelCatalog", () => {
     "gemini-4-carbon-high",
     "gemini-4-carbon-medium",
     "gemini-4-carbon-low",
+    // Neon tiers from `agy models` on 1.5.11.
+    "gemini-4-neon-high",
+    "gemini-4-neon-medium",
+    "gemini-4-neon-low",
+    "gemini-4-neon-xhigh",
     "gemini-4-argon-high",
     "gemini-4-argon-medium",
     "gemini-4-argon-low",
@@ -1095,6 +1106,78 @@ describe("Antigravity snapshot", () => {
     expect(snap.version).toBe("1.1.12");
     expect(snap.authenticated).toBe(true);
     await instance.dispose();
+  });
+
+  it("names the signed-in account from agy's logs and none once signed out", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-account-"));
+    try {
+      mkdirSync(join(home, ".gemini", "antigravity-cli", "log"), { recursive: true });
+      const log = join(home, ".gemini", "antigravity-cli", "log", "cli-20261119_100000.log");
+      writeFileSync(log, "I1119 10:47:13.5 261 server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=\n");
+      let signedIn = true;
+      vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => signedIn));
+      const instance = await AntigravityDriver.create({
+        instanceId: "agy-account", displayName: undefined, environment: { HOME: home, USERPROFILE: home }, enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      expect((await instance.snapshot()).account).toBe("ed@example.com");
+      signedIn = false;
+      expect((await instance.snapshot({ refresh: true })).account).toBeUndefined();
+      await instance.dispose();
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it("takes sign-in from agy's logs where the keyring cannot be probed", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-unprobed-"));
+    try {
+      mkdirSync(join(home, ".gemini", "antigravity-cli", "log"), { recursive: true });
+      const log = join(home, ".gemini", "antigravity-cli", "log", "cli-20261119_100000.log");
+      vi.mocked(auth.antigravitySignIn).mockImplementation((_probe, unprobed) => createSignIn(async () => undefined, unprobed));
+      const instance = await AntigravityDriver.create({
+        instanceId: "agy-unprobed", displayName: undefined, environment: { HOME: home, USERPROFILE: home }, enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      writeFileSync(log, "I1119 10:47:13.5 261 server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=\n");
+      expect(await instance.snapshot({ refresh: true })).toMatchObject({ authenticated: true, account: "ed@example.com" });
+      appendFileSync(log, "I1119 10:47:15.2 727 auth_manager.go:315] Logging out current user\n");
+      expect(await instance.snapshot({ refresh: true })).toMatchObject({ authenticated: false });
+      await instance.dispose();
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it("signs agy out and back in through its ACP server, with no terminal", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-acp-"));
+    const flag = join(dir, "signed-in");
+    const fake = join(dir, "fake-agy.cjs");
+    writeFileSync(flag, "");
+    writeFileSync(fake, `
+const fs = require("node:fs");
+if (process.argv.includes("--version")) { console.log("1.5.12"); process.exit(0); }
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "logout") fs.rmSync(${JSON.stringify(flag)}, { force: true });
+  if (method === "authenticate") fs.writeFileSync(${JSON.stringify(flag)}, "");
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => existsSync(flag)));
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-acp": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      expect((await registry.get("agy-acp")!.snapshot()).authenticated).toBe(true);
+      expect(await registry.signOut("agy-acp")).toBe(true);
+      expect(existsSync(flag)).toBe(false);
+      expect((await registry.get("agy-acp")!.snapshot({ refresh: true })).authenticated).toBe(false);
+      await registry.startSignIn("agy-acp");
+      await registry.logins.wait("agy-acp");
+      expect(registry.logins.state("agy-acp")).toBe("complete");
+      expect((await registry.get("agy-acp")!.snapshot({ refresh: true })).authenticated).toBe(true);
+    } finally {
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("re-checks sign-in on a refresh instead of reusing a recent signed-in answer", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { request } from "./api-request";
 
@@ -90,33 +90,78 @@ export function sortBoardThreads<T extends { post: BoardPost; replies: readonly 
   return [...threads].sort((a, b) => score(b) - score(a) || b.post.created_at - a.post.created_at);
 }
 
-export const replyToBoard = (parentId: string, body: string): Promise<{ post: BoardPost }> =>
-  request("/api/board/reply", { method: "POST", body: JSON.stringify({ parent_id: parentId, body }) });
+/** clientId stays the same for a retry of the same reply, so a reply saved before its answer was lost is not posted twice. */
+export const replyToBoard = (parentId: string, body: string, clientId: string): Promise<{ post: BoardPost }> =>
+  request("/api/board/reply", { method: "POST", body: JSON.stringify({ parent_id: parentId, body, client_id: clientId }) });
 
 export const deleteFromBoard = (id: string): Promise<{ id: string }> =>
   request("/api/board/delete", { method: "POST", body: JSON.stringify({ id }) });
 
-export function useBoardPosts(): { posts: BoardPost[] | null; failed: boolean } {
-  const [posts, setPosts] = useState<BoardPost[] | null>(null);
+/** What the Forum showed, kept while it is closed: a chat visit returns to the same posts, sort, filter and open post. */
+export interface ForumKept {
+  posts: BoardPost[] | null;
+  sort: BoardSort;
+  flair: BoardKind | null;
+  openId: string | null;
+}
+export const forumKept: ForumKept = { posts: null, sort: "hot", flair: null, openId: null };
+
+export interface BoardPostsView {
+  posts: BoardPost[] | null;
+  failed: boolean;
+  saved: (post: BoardPost) => void;
+  removed: (post: BoardPost) => void;
+  retry: () => void;
+}
+
+export function useBoardPosts(): BoardPostsView {
+  const [posts, setPosts] = useState(() => forumKept.posts);
   const [failed, setFailed] = useState(false);
+  // only the newest load lands: an older one finishing late would drop posts the newer one has
+  const asked = useRef(0);
+  // a reply saved here stays until a load carries it, since that load may have been asked before the save
+  const mine = useRef(new Map<string, BoardPost>());
+  // a deleted reply stays gone, even from a load asked before the delete or with the live link down
+  const gone = useRef(new Map<string, string | null>());
+  // replies under a deleted post move up to its parent, as the server moves them
+  const lift = useCallback((post: BoardPost) => {
+    let parent = post.parent_id;
+    while (parent && gone.current.has(parent)) parent = gone.current.get(parent)!;
+    return parent === post.parent_id ? post : { ...post, parent_id: parent };
+  }, []);
+  const reload = useRef(() => {});
   useEffect(() => {
     let live = true;
     const load = () => {
+      const seq = ++asked.current;
       request("/api/board").then(
         (body: { posts?: BoardPost[] }) => {
-          if (!live) return;
-          setPosts(Array.isArray(body?.posts) ? body.posts : []);
+          if (!live || seq !== asked.current) return;
+          const list = (Array.isArray(body?.posts) ? body.posts : []).filter((post) => !gone.current.has(post.id));
+          for (const post of list) mine.current.delete(post.id);
+          setPosts((forumKept.posts = [...list, ...mine.current.values()].map(lift)));
           setFailed(false);
         },
-        () => live && setFailed(true),
+        () => live && seq === asked.current && setFailed(true),
       );
     };
+    reload.current = load;
     load();
     window.addEventListener(BOARD_CHANGED_EVENT, load);
     return () => {
       live = false;
       window.removeEventListener(BOARD_CHANGED_EVENT, load);
     };
+  }, [lift]);
+  const saved = useCallback((post: BoardPost) => {
+    mine.current.set(post.id, post);
+    setPosts((now) => (forumKept.posts = [...(now ?? []).filter((held) => held.id !== post.id), post]));
   }, []);
-  return { posts, failed };
+  const removed = useCallback((post: BoardPost) => {
+    gone.current.set(post.id, post.parent_id);
+    mine.current.delete(post.id);
+    setPosts((now) => (forumKept.posts = (now ?? []).filter((held) => held.id !== post.id).map(lift)));
+  }, [lift]);
+  const retry = useCallback(() => reload.current(), []);
+  return { posts, failed, saved, removed, retry };
 }

@@ -23,7 +23,7 @@ import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { useUsageSwitch } from "@/lib/use-usage-switch";
 import { EngineSignIn } from "./EngineSetup";
 import { Fold } from "./Fold";
-import { ProviderMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { EmptyState } from "./SettingsPrimitives";
 import { AccountPicker, EditableAccountName } from "./UsageAccounts";
 import { AccountBars, barSlots, WindowBar } from "./UsageBars";
@@ -293,7 +293,7 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
   return (
     <section ref={ref} data-usage-hero="" data-stale={muse?.stale || undefined} aria-label={account.name} className="min-w-0">
       <div className="flex min-h-7 min-w-0 items-center gap-2">
-        <ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} />
+        <ProviderBrandMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} />
         {accounts.length > 1
           ? <AccountPicker accounts={accounts} viewedId={account.id} select={select} />
           : <span data-hero-name="" className="min-w-0 truncate text-[13.5px] font-medium text-ink">{account.name}</span>}
@@ -404,7 +404,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
       <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, onFold)}
         className={cn("group relative flex h-5 min-w-0 shrink items-center gap-2 text-[14px] font-semibold text-ink",
           terminal ? "rounded-none" : "rounded-md", "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2")}>
-        <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px] font-normal")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+        <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px] font-normal")}><ProviderBrandMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
         <span data-engine-name="" className="min-w-0 truncate">{label}</span>
         <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-transform group-hover:text-ink motion-reduce:transition-none", folded && "-rotate-90")} />
       </button>

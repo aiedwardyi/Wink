@@ -48,7 +48,7 @@ import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { antigravitySignIn } from "./antigravity-auth.ts";
+import { antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 
@@ -104,13 +104,18 @@ export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
     { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)", contextWindow: 1_048_576 },
     { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)", contextWindow: 1_048_576 },
     { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)", contextWindow: 1_048_576 },
-    { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
-    { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
-    { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
+    // Neon ids confirmed against `agy models` on agy 1.5.11
+    { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)", contextWindow: 1_048_576 },
+    { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)", contextWindow: 1_048_576 },
+    { id: "gemini-4-neon-low", label: "Gemini 4 Neon (Low)", contextWindow: 1_048_576 },
+    { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)", contextWindow: 1_048_576 },
     // Hydrogen ids confirmed against `agy models` on agy 1.5.5
     { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)", contextWindow: 1_048_576 },
     { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)", contextWindow: 1_048_576 },
     { id: "gemini-4-hydrogen-low", label: "Gemini 4 Hydrogen (Low)", contextWindow: 1_048_576 },
+    { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
+    { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
+    { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
     { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)", contextWindow: 1_048_576 },
     { id: "gemini-3.1-pro-low", label: "Gemini 3.1 Pro (Low)", contextWindow: 1_048_576 },
     // 3.8 ids confirmed against the agy 1.1.26 binary's own model table;
@@ -530,6 +535,9 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     },
     docsUrl: "https://github.com/google-antigravity/antigravity-cli#installation",
     signInCommand: "agy",
+    // agy has no login or logout subcommand: a helper runs them over agy's ACP server (see loginConfig).
+    login: { args: ["login"], authHosts: ["accounts.google.com"] },
+    logout: ["logout"],
   },
   models: STATIC_ANTIGRAVITY_MODELS,
   decodeConfig,
@@ -538,7 +546,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
   async create(input: DriverCreateInput<AntigravityConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const env = antigravityEnvironment(input.environment);
-    const signIn = antigravitySignIn();
+    const signIn = antigravitySignIn(undefined, () => readAntigravityLogSignIn(env));
     const catalogEnv: Record<string, string | undefined> = env;
     let models = STATIC_ANTIGRAVITY_MODELS;
     const refreshModels = async () => {
@@ -1132,7 +1140,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      return { state: "available", version, authenticated: await signIn.check(opts?.rescan || opts?.refresh) };
+      const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
+      return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
     };
 
     return {
@@ -1145,6 +1154,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       },
       refreshModels,
       snapshot,
+      loginConfig: () => ({
+        cli: `"${process.execPath}" "${SPAWNED_PROXIES.antigravityAuth}"`,
+        env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli },
+      }),
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {

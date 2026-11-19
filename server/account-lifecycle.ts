@@ -152,7 +152,7 @@ export class AccountLifecycle {
         let capture;
         try {
           capture = await this.registry.startSignIn(id, device);
-          if (!capture) throw new AccountError("Unknown engine sign-in", 404);
+          if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
         } catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
         if (this.registry.accountBlocked(id)) {
           const finished = this.registry.logins.wait(id).then(async () => {
@@ -362,7 +362,7 @@ export class AccountLifecycle {
     let capture;
     try {
       capture = await this.registry.startSignIn(account.id, device);
-      if (!capture) throw new AccountError("Unknown engine sign-in", 404);
+      if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
     } catch (error) {
       this.jobs.delete(account.id);
       throw error;
@@ -445,13 +445,19 @@ export class AccountLifecycle {
       return;
     }
     this.clearRetry(account.id);
-    if (force && snapshot.authenticated === true && this.registry.get(account.id)?.driverKind === "codex") clearCodexPromo(account.home);
-    if (force || snapshot.authenticated !== true || !snapshot.accountIdentity || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
-    const next = await this.accounts.identify(account.id, snapshot.authenticated === true ? snapshot.accountIdentity : undefined, force);
-    if (snapshot.authenticated !== true) await this.accounts.stop(account.id);
-    if (next.generation !== account.generation || snapshot.authenticated !== true) await this.hooks.reload();
-    this.registry.blockAccount(account.id, snapshot.authenticated !== true);
-    this.hooks.changed?.(snapshot.authenticated === true ? account.id : undefined);
+    // A sign-out only stops the account, as signedOut() does: identity, generation and sessions wait for the next sign-in.
+    if (snapshot.authenticated === false) {
+      await this.accounts.stop(account.id);
+      this.registry.blockAccount(account.id, true);
+      this.hooks.changed?.();
+      return;
+    }
+    if (force && this.registry.get(account.id)?.driverKind === "codex") clearCodexPromo(account.home);
+    if (force || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
+    const next = await this.accounts.identify(account.id, snapshot.accountIdentity, force);
+    if (next.generation !== account.generation) await this.hooks.reload();
+    this.registry.blockAccount(account.id, false);
+    this.hooks.changed?.(account.id);
   }
 
   private promoHome(id: string) {
@@ -488,7 +494,7 @@ export class AccountLifecycle {
   private exclusive<T>(run: () => Promise<T>, checkConfig = true): Promise<T> {
     this.mutations += 1;
     const pending = this.queue.then(async () => {
-      if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated");
+      if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated", 409, "provider-config-busy");
       const before = this.hooks.onMainChanged && this.mains();
       try { return await run(); }
       finally { if (before) this.reportMains(before); }

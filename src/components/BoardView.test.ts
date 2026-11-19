@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,12 +10,13 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { BOARD_USER, createBoard } from "../../server/board.ts";
 import { createTempDirs } from "../../server/testing/cleanup.ts";
 
-import { BOARD_CHANGED_EVENT, FORUM_SELECTION, type BoardPost } from "@/lib/board";
+import { BOARD_CHANGED_EVENT, FORUM_SELECTION, forumKept, type BoardPost } from "@/lib/board";
+import { PHONE_QUERY } from "@/lib/phone-swipe";
 import type { Action, Bot } from "@/state/store";
 
 const mock = vi.hoisted(() => ({
   // SAFETY: the Forum reads only bots, the selection and the profile from state.
-  state: { bots: [] as Bot[], selectedId: "", config: undefined as { profile: { name: string } } | undefined },
+  state: { bots: [] as Bot[], instances: [] as { instanceId: string; driverKind: string; models?: { default: string; options: { id: string; label: string }[] } }[], selectedId: "", config: undefined as { profile: { name: string } } | undefined },
   dispatched: [] as Action[],
 }));
 vi.mock("@/state/store", async (original) => ({
@@ -24,6 +27,7 @@ vi.mock("@/state/store", async (original) => ({
 import { I18nProvider } from "@/lib/i18n";
 import { BoardButton } from "./BoardButton";
 import { BoardView } from "./BoardView";
+import { ProviderMark } from "./ProviderIcons";
 
 const bot = (id: string, name: string): Bot => ({
   id, threadId: `${id}-thread`, name, title: "", description: "", notifications: true, color: "green", unread: false,
@@ -49,10 +53,12 @@ const realMatchMedia = window.matchMedia.bind(window);
 const reduceMotion = (reduce: boolean) => vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: reduce && query.includes("reduce") }));
 
 beforeEach(() => {
+  Object.assign(forumKept, { posts: null, sort: "hot", flair: null, openId: null });
+  localStorage.clear();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  mock.state = { bots: [bot("astra", "Astra"), bot("carbon", "Carbon")], selectedId: "", config: undefined };
+  mock.state = { bots: [bot("astra", "Astra"), bot("carbon", "Carbon")], instances: [], selectedId: "", config: undefined };
   mock.dispatched = [];
   reduceMotion(true);
   posts = [];
@@ -80,7 +86,339 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const typeIn = (input: HTMLInputElement, text: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+});
+const box = (id: string) => host.querySelector<HTMLInputElement>(`[data-board-reply-box="${id}"] input`);
+const click = (selector: string) => act(async () => host.querySelector<HTMLElement>(selector)!.click());
+const openRow = (id: string) => click(`[data-board-post="${id}"] > button`);
+const dialogButton = (label: string) => act(async () => [...document.body.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((button) => button.textContent === label)!.click());
+const json = (body: { posts: BoardPost[] }) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+
 describe("Forum", () => {
+  it("a finished reply clears only its own draft: a reply typed meanwhile stays, across Back too", async () => {
+    posts = [post("pop", { created_at: 1 }), post("pa", { parent_id: "pop", author_bot_id: "carbon", body: "A", created_at: 2 }), post("pb", { parent_id: "pop", author_bot_id: "carbon", body: "B", created_at: 3 })];
+    const ok = globalThis.fetch;
+    let finish = () => {};
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => (url === "/api/board/reply" ? new Promise<Response>((resolve) => { finish = () => void ok(url, init).then(resolve); }) : ok(url, init))));
+    await render(BoardView);
+    await openRow("pop");
+    await click('[data-board-reply-to="pa"]');
+    await typeIn(box("pa")!, "to A");
+    await click('[data-board-reply-box="pa"] button[type="submit"]');
+    await click('[data-board-reply-to="pb"]');
+    await typeIn(box("pb")!, "to B");
+    await act(async () => finish());
+    await settle();
+    expect(box("pb")?.value).toBe("to B");
+    await click("[data-back-button]");
+    await openRow("pop");
+    await click('[data-board-reply-to="pb"]');
+    expect(box("pb")!.value).toBe("to B");
+    await click('[data-board-reply-to="pa"]');
+    expect(box("pa")!.value).toBe("");
+  });
+
+  it("an older load that finishes late does not drop a newer post", async () => {
+    const answers: Array<(list: BoardPost[]) => void> = [];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => answers.push((list) => resolve(json({ posts: list }))))));
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView))));
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await act(async () => answers[1]!([post("pold", { created_at: 1 }), post("pnew", { created_at: 2 })]));
+    await settle();
+    await act(async () => answers[0]!([post("pold", { created_at: 1 })]));
+    await settle();
+    expect(rows()).toEqual(["pnew", "pold"]);
+  });
+
+  it("shows a saved reply without waiting for a Board change, and a failed load inside the open post", async () => {
+    posts = [post("pop", { created_at: 1 })];
+    await render(BoardView);
+    await openRow("pop");
+    await typeIn(box("pop")!, "On it.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    expect(rows()).toEqual(["pop", "puser"]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(host.querySelector("[data-side-panel] [role=alert]")).not.toBeNull();
+  });
+
+  it("a retry after a lost answer sends the same reply id; a new reply gets a new one", async () => {
+    posts = [post("pop", { created_at: 1 })];
+    const ok = globalThis.fetch;
+    let lost = true;
+    const ids: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/reply") {
+        ids.push(JSON.parse(String(init?.body)).client_id);
+        if (lost) throw new TypeError("connection reset");
+      }
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pop");
+    await typeIn(box("pop")!, "Same words.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    lost = false;
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    await typeIn(box("pop")!, "Other words.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    expect(ids[0]).toBeTruthy();
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  it("Back returns to the same place in the list with the opened row focused; open focuses Back", async () => {
+    posts = Array.from({ length: 30 }, (_, i) => post(`p${i}`, { created_at: i + 1 }));
+    await render(BoardView);
+    const list = host.querySelector<HTMLElement>("[data-board-view] .overflow-y-auto")!;
+    list.scrollTop = 600;
+    await openRow("p10");
+    expect(document.activeElement).toBe(host.querySelector("[data-back-button]"));
+    list.scrollTop = 0;
+    await click("[data-back-button]");
+    expect(list.scrollTop).toBe(600);
+    expect(document.activeElement).toBe(host.querySelector('[data-board-post="p10"] > button'));
+  });
+
+  it("a keyboard user reaches Copy and Delete on their own plain reply", async () => {
+    posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
+    await render(BoardView);
+    await openRow("pbot");
+    const opener = host.querySelector<HTMLElement>('[data-board-post="pmine"] [tabindex="0"]')!;
+    expect(opener).not.toBeNull();
+    opener.focus();
+    await act(async () => { opener.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })); });
+    expect([...document.body.querySelectorAll("[data-message-menu] [role=menuitem]")].map((item) => item.textContent)).toEqual(["Copy", "Delete"]);
+  });
+
+  it("asks before deleting the user's own reply, and Cancel keeps it", async () => {
+    posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
+    const ok = globalThis.fetch;
+    const deletes: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/delete") deletes.push(JSON.parse(String(init?.body)).id);
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pbot");
+    const askDelete = async () => {
+      await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+      await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    };
+    await askDelete();
+    expect(document.body.querySelector("[role=dialog] h2")!.textContent).toBe("Delete this reply?");
+    expect(deletes).toEqual([]);
+    await dialogButton("Cancel");
+    await settle();
+    expect(deletes).toEqual([]);
+    expect(host.querySelector('[data-board-post="pmine"]')).not.toBeNull();
+    await askDelete();
+    await dialogButton("Delete");
+    await settle();
+    expect(deletes).toEqual(["pmine"]);
+  });
+
+  it("a deleted reply stays gone: no ghost from the saved reply or a load asked before the delete", async () => {
+    posts = [post("pbot", { created_at: 1 })];
+    const ok = globalThis.fetch;
+    let hold: ((value: Response) => void) | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/reply") {
+        const sent = JSON.parse(String(init?.body));
+        const mine = post("pmine", { parent_id: sent.parent_id, author_bot_id: "user", kind: "tip", body: sent.body, source_ref: `reply:${sent.client_id}`, created_at: 2 });
+        posts.push(mine);
+        return new Response(JSON.stringify({ post: mine }), { headers: { "content-type": "application/json" } });
+      }
+      // a load asked before the delete that answers after it
+      if (url === "/api/board" && hold === null && posts.some((held) => held.id === "pmine")) {
+        const snapshot = [...posts];
+        return new Promise<Response>((resolve) => { hold = resolve; }).then(() => json({ posts: snapshot }));
+      }
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pbot");
+    await typeIn(box("pbot")!, "Mine.");
+    await click('[data-board-reply-box="pbot"] button[type="submit"]');
+    await settle();
+    expect(rows()).toContain("pmine");
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    expect(rows()).not.toContain("pmine");
+    await act(async () => hold!(new Response()));
+    await settle();
+    expect(rows()).not.toContain("pmine");
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual(["pbot"]);
+  });
+
+it("a deleted reply's own replies stay in the thread, moved up to its parent", async () => {
+    posts = [
+      post("pbot", { created_at: 1 }),
+      post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 }),
+      post("pchild", { parent_id: "pmine", author_bot_id: "carbon", kind: "tip", body: "Child.", created_at: 3 }),
+    ];
+    const ok = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (url === "/api/board/delete" ? json({ posts: [] }) : ok(url, init))));
+    await render(BoardView);
+    await openRow("pbot");
+    await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    const inThread = () => host.querySelector('[data-side-panel] [data-board-post="pchild"]');
+    expect(host.querySelector('[data-board-post="pmine"]')).toBeNull();
+    expect(inThread()).not.toBeNull();
+    // a load asked before the delete still names the deleted parent
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(host.querySelector('[data-board-post="pmine"]')).toBeNull();
+    expect(inThread()).not.toBeNull();
+  });
+
+  it("a newer send of the same draft keeps its retry id when an older send finishes", async () => {
+    posts = [post("pop", { created_at: 1 })];
+    const ok = globalThis.fetch;
+    const ids: string[] = [];
+    let finishFirst: (() => void) | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/reply") {
+        ids.push(JSON.parse(String(init?.body)).client_id);
+        if (ids.length === 1) return new Promise<Response>((resolve) => { finishFirst = () => resolve(ok(url, init)); });
+        if (ids.length === 2) throw new TypeError("connection reset");
+      }
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pop");
+    await typeIn(box("pop")!, "First words.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await click("[data-back-button]");
+    await openRow("pop");
+    await typeIn(box("pop")!, "Second words.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    await act(async () => finishFirst!());
+    await settle();
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    expect(ids[1]).not.toBe(ids[0]);
+    expect(ids[2]).toBe(ids[1]);
+  });
+
+  it("a failed load offers Retry, and the error goes once a load works", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    await render(BoardView);
+    const alert = () => host.querySelector("[role=alert]");
+    const retry = [...alert()!.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+    expect(retry).toBeDefined();
+    vi.stubGlobal("fetch", vi.fn(async () => json({ posts: [post("pback", { created_at: 1 })] })));
+    await act(async () => retry.click());
+    await settle();
+    expect(alert()).toBeNull();
+    expect(rows()).toEqual(["pback"]);
+  });
+
+  it("only list rows near the screen draw a working ring", async () => {
+    let report: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => {};
+    const watched: Element[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: typeof report) { report = callback; }
+      observe(row: Element) { watched.push(row); }
+      disconnect() {}
+    });
+    posts = [post("pa", { created_at: 1 }), post("pb", { created_at: 2 })];
+    await render(BoardView);
+    expect(watched.map((row) => row.getAttribute("data-board-post"))).toEqual(["pb", "pa"]);
+    act(() => report([{ target: watched[0]!, isIntersecting: true }, { target: watched[1]!, isIntersecting: false }]));
+    expect(rows().filter((id) => host.querySelector(`[data-board-post="${id}"]`)!.hasAttribute("data-on-screen"))).toEqual(["pb"]);
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
+    const hide = /^([^{}\n]*data-on-screen[^{}\n]*)\{\s*display: none;/m.exec(css)![1]!.trim().replace(/ \.orbit-ring$/, "");
+    expect(host.querySelector('[data-board-post="pa"]')!.matches(hide)).toBe(true);
+    expect(host.querySelector('[data-board-post="pb"]')!.matches(hide)).toBe(false);
+    // a reply in an open post keeps its ring
+    await openRow("pa");
+    posts.push(post("preply", { parent_id: "pa", author_bot_id: "carbon", created_at: 3 }));
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(host.querySelector('[data-board-post="preply"]')!.matches(hide)).toBe(false);
+  });
+
+it("Back watches the list's new rows, so their rings come back", async () => {
+    let report: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => {};
+    let watched: Element[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: typeof report) { report = callback; }
+      observe(row: Element) { watched.push(row); }
+      disconnect() { watched = []; }
+    });
+    posts = [post("pa", { created_at: 1 }), post("pb", { created_at: 2 })];
+    await render(BoardView);
+    await openRow("pa");
+    await click("[data-back-button]");
+    await settle();
+    expect(watched.filter((row) => row.isConnected).map((row) => row.getAttribute("data-board-post"))).toEqual(["pb", "pa"]);
+    act(() => report(watched.map((target) => ({ target, isIntersecting: true }))));
+    expect(rows().filter((id) => host.querySelector(`[data-board-post="${id}"]`)!.hasAttribute("data-on-screen"))).toEqual(["pb", "pa"]);
+  });
+
+  it("a right swipe on a phone goes back from a post", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: query.includes("reduce") || query === PHONE_QUERY }));
+    posts = [post("pswipe", { created_at: 1 })];
+    await render(BoardView);
+    await openRow("pswipe");
+    const page = host.querySelector<HTMLElement>("[data-side-panel]")!;
+    const touch = (type: string, x: number, at: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, { touches: { value: type === "touchend" ? [] : [{ clientX: x, clientY: 200 }] }, timeStamp: { value: at } });
+      page.dispatchEvent(event);
+    };
+    await act(async () => {
+      touch("touchstart", 10, 100);
+      touch("touchmove", 60, 120);
+      touch("touchmove", 700, 140);
+      touch("touchend", 700, 160);
+    });
+    expect(host.querySelector("article")).toBeNull();
+  });
+
+  it("a chat visit comes back to the same sort, filter and open post, with no Loading frame", async () => {
+    posts = [post("pa", { kind: "tip", created_at: 1 }), post("pb", { kind: "tip", created_at: 2 }), post("pc", { created_at: 3 })];
+    await render(BoardView);
+    await click('[data-board-sort="new"]');
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((chip) => chip.textContent === "Tip")!.click());
+    await openRow("pa");
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView))));
+    expect(host.querySelector("[data-board-loading]")).toBeNull();
+    expect(host.querySelector('article[data-board-post="pa"]')).not.toBeNull();
+    await click("[data-back-button]");
+    expect(rows()).toEqual(["pb", "pa"]);
+  });
+
+  it("an app state change elsewhere redraws no list row", async () => {
+    posts = Array.from({ length: 6 }, (_, i) => post(`p${i}`, { created_at: i + 1 }));
+    await render(BoardView);
+    // each row reads the clock for its age; the list reads it once to sort
+    const clock = vi.spyOn(Date, "now");
+    mock.state = { ...mock.state, selectedId: "elsewhere" };
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView))));
+    expect(clock.mock.calls.length).toBeLessThan(posts.length);
+  });
+
   it("lists posts with helped, flair, replies and Solved; a click opens the thread", async () => {
     posts = [
       post("pold", { title: "Old snag", body: "Old snag", created_at: 1 }),
@@ -90,7 +428,7 @@ describe("Forum", () => {
     await render(BoardView);
     expect(host.querySelector("[data-board-subtitle]")!.textContent).toBe("Made for your bots. You can read and reply too.");
     expect(rows()).toEqual(["pnew", "pold"]);
-    expect([...host.querySelectorAll("[data-board-helped]")].map((count) => count.textContent)).toEqual(["1", "0"]);
+    expect([...host.querySelectorAll("[data-board-helped]")].map((count) => count.getAttribute("data-board-helped"))).toEqual(["1", "0"]);
     expect([...host.querySelectorAll("[data-board-flair]")].map((chip) => chip.textContent)).toEqual(["Stuck", "Stuck"]);
     expect(host.querySelector('[data-board-post="pnew"]')!.textContent).toContain("1 reply");
     expect([...host.querySelectorAll("[data-board-solved]")].map((mark) => mark.closest("[data-board-post]")!.getAttribute("data-board-post"))).toEqual(["pnew"]);
@@ -152,8 +490,15 @@ describe("Forum", () => {
 
   it("the back button sits clear of the phone menu badge: no negative margin below md", async () => {
     await openPost();
-    const back = host.querySelector<HTMLButtonElement>('button[aria-label="Back to Forum"]')!;
-    expect([...back.classList]).not.toContain("-ml-2");
+    const header = host.querySelector("[data-board-view] > div")!;
+    const classes: string[] = [];
+    for (let node: Element | null = host.querySelector('button[aria-label="Back to Forum"]'); node && node !== header; node = node.parentElement) classes.push(...node.classList);
+    expect(classes.filter((name) => name.startsWith("-m"))).toEqual([]);
+  });
+
+  it("marks the top reply box while it has focus, like the inline box", async () => {
+    await openPost();
+    expect(host.querySelector('[data-board-reply-box="pesc"]')!.className).toContain("focus-within:border-accent-border");
   });
 
   it("an open post's back reads ‹ Forum on the shared back button", async () => {
@@ -177,12 +522,43 @@ describe("Forum", () => {
     expect(host.querySelector("article")).toBeNull();
   });
 
+  it("slides in from the left like the bot list fold and leaves toward the left", async () => {
+    reduceMotion(false);
+    await render(BoardView);
+    const view = host.querySelector<HTMLElement>("[data-board-view]")!;
+    expect([...view.classList]).toEqual(expect.arrayContaining(["md:animate-panel-slide", "[--panel-dx:-28px]"]));
+    expect(view.hasAttribute("data-closing")).toBe(false);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView, { closing: true }))));
+    expect(view.hasAttribute("data-closing")).toBe(true);
+    expect(view.hasAttribute("inert")).toBe(true);
+  });
+
   it("names the bot and the model it ran from the post, even for a bot this PC does not have", async () => {
     posts = [post("premote", { author_bot_id: "pokkey-sync-id", author: { name: "Pokkey", model: "GPT-6 Astra", color: "peach", mascot_style: "" } })];
     await render(BoardView);
     expect(host.querySelector('[data-board-post="premote"]')!.textContent).toContain("Pokkey");
     expect(host.querySelector('[data-board-post="premote"]')!.textContent).toContain("GPT-6 Astra");
     expect(host.textContent).not.toContain("The bot");
+  });
+
+  it("takes the engine mark from the model the post ran, not the engine the bot runs today", async () => {
+    mock.state.instances = [
+      { instanceId: "codex-1", driverKind: "codex", models: { default: "gpt-6", options: [{ id: "gpt-6", label: "GPT-6" }] } },
+      { instanceId: "claude-1", driverKind: "claudeAgent", models: { default: "claude-opus-5-5", options: [{ id: "claude-opus-5-5", label: "Claude Opus 5.5" }] } },
+    ];
+    posts = [post("pold", { author: { name: "Astra", model: "Claude Opus 5.5", color: "green", mascot_style: "" } })];
+    await render(BoardView);
+    const mark = (driverKind: string) => {
+      const div = document.createElement("div");
+      const other = createRoot(div);
+      act(() => other.render(createElement(ProviderMark, { driverKind, size: 13 })));
+      const html = div.innerHTML;
+      act(() => other.unmount());
+      return html;
+    };
+    const shown = host.querySelector('[data-board-post="pold"] [data-board-model] svg')!.outerHTML;
+    expect(shown).toBe(mark("claudeAgent"));
+    expect(shown).not.toBe(mark("codex"));
   });
 
   it("sorts by Hot, New and Top", async () => {
@@ -199,6 +575,24 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pa", "pc", "pb"]);
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-sort="top"]')!.click());
     expect(rows()).toEqual(["pb", "pa", "pc"]);
+  });
+
+  it("Left and Right move between Hot, New and Top, one tab stop on the chosen one", async () => {
+    posts = [post("pa", { created_at: 1 })];
+    await render(BoardView);
+    const tab = (id: string) => host.querySelector<HTMLButtonElement>(`[data-board-sort="${id}"]`)!;
+    const stops = () => [...host.querySelectorAll<HTMLButtonElement>("[data-board-sort]")].map((each) => each.tabIndex);
+    expect(stops()).toEqual([0, -1, -1]);
+    const press = (key: string) => act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
+    tab("hot").focus();
+    await press("ArrowRight");
+    expect(document.activeElement).toBe(tab("new"));
+    expect(tab("new").getAttribute("aria-selected")).toBe("true");
+    expect(stops()).toEqual([-1, 0, -1]);
+    await press("ArrowLeft");
+    await press("ArrowLeft");
+    expect(document.activeElement).toBe(tab("top"));
+    expect(stops()).toEqual([-1, -1, 0]);
   });
 
   it("filters by flair and All brings every post back", async () => {
@@ -238,6 +632,48 @@ describe("Forum", () => {
     expect(reply("pr1").textContent).toContain("Carbon");
   });
 
+  it("chains a reply to its own replies down one thread line, says whom it helped and who is working", async () => {
+    mock.state.bots = [{ ...bot("astra", "Astra"), busy: true }, bot("carbon", "Carbon")];
+    posts = [
+      post("pop", { kind: "stuck", created_at: 1 }),
+      post("pr1", { parent_id: "pop", author_bot_id: "carbon", kind: "fix", body: "Commit first.", helped_bot_ids: ["astra"], created_at: 2 }),
+      post("pr2", { parent_id: "pr1", kind: "tip", body: "Good call.", created_at: 3 }),
+      post("pr3", { parent_id: "pop", author_bot_id: "carbon", kind: "tip", body: "Check the reset time.", created_at: 4 }),
+    ];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pop"] button')!.click());
+    const chained = (id: string) => host.querySelector(`[data-board-post="${id}"] > div [data-board-chain]`) !== null;
+    expect(["pr1", "pr2", "pr3"].map(chained)).toEqual([true, false, false]);
+    expect(host.querySelector('[data-board-post="pr1"] [data-board-helped-chip]')!.textContent).toBe("Helped Astra");
+    expect(host.querySelector('[data-board-post="pr3"] [data-board-helped-chip]')).toBeNull();
+    expect([...host.querySelectorAll("[data-board-flair]")].map((chip) => chip.closest("[data-board-post]")!.getAttribute("data-board-post"))).toEqual(["pop", "pr1"]);
+    expect(host.querySelector('[data-board-post="pr2"] [data-board-working]')!.textContent).toBe("Working");
+    expect(host.querySelector('[data-board-post="pr3"] [data-board-working]')).toBeNull();
+    expect(host.querySelector<HTMLInputElement>('[data-board-reply-box="pop"] input')!.placeholder).toBe("Reply to Astra…");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-reply-to="pr3"]')!.click());
+    expect(host.querySelector<HTMLInputElement>('[data-board-reply-box="pr3"] input')!.placeholder).toBe("Reply to Carbon…");
+  });
+
+  it("fades the replies in one after another down the line, from the motion token", async () => {
+    posts = [post("pop", { created_at: 1 }), ...[1, 2, 3, 4, 5, 6].map((n) => post(`pr${n}`, { parent_id: "pop", body: `reply ${n}`, created_at: 1 + n }))];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pop"] button')!.click());
+    const delays = [...host.querySelectorAll<HTMLElement>('[role="list"] [data-board-post] > div')].map((row) => row.style.animationDelay);
+    expect(delays).toEqual(["", ...[1, 2, 3, 4, 4].map((n) => `calc(var(--motion-fast) * ${n})`)]);
+  });
+
+  it("goes back with a plain accent ‹ Forum, no box behind it", async () => {
+    posts = [post("pesc", {})];
+    await render(BoardView);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pesc"] button')!.click());
+    const back = host.querySelector<HTMLButtonElement>("[data-back-button]")!;
+    expect(back.textContent).toBe("Forum");
+    expect(back.className).toContain("text-accent");
+    expect(back.className).not.toMatch(/(^|\s)(hover:)?bg-|rounded/);
+    expect(back.className).toContain("hover:text-ink");
+    expect(back.className).not.toContain("accent-border");
+  });
+
   it("saves the user's reply and shows it as an ordinary row with their name", async () => {
     mock.state.config = { profile: { name: "Edward" } };
     posts = [post("pop", { kind: "tip", created_at: 1 })];
@@ -250,7 +686,7 @@ describe("Forum", () => {
     });
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-reply-box="pop"] button[type="submit"]')!.click());
     await settle();
-    expect(replies).toEqual([{ parent_id: "pop", body: "Switching is fine by me." }]);
+    expect(replies).toEqual([{ parent_id: "pop", body: "Switching is fine by me.", client_id: expect.any(String) }]);
     expect(input.value).toBe("");
     await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
     await settle();
@@ -282,12 +718,13 @@ describe("Forum", () => {
     afterAll(() => temps.remove());
     await render(BoardView);
     expect(rows()).toEqual([stuck.id]);
-    expect(host.querySelector("[data-board-helped]")!.textContent).toBe("0");
+    expect(host.querySelector("[data-board-helped]")!.getAttribute("data-board-helped")).toBe("0");
     expect(host.textContent).toContain("0 replies");
     await act(async () => host.querySelector<HTMLButtonElement>(`[data-board-post="${stuck.id}"] button`)!.click());
     expect(rows()).toEqual([stuck.id]);
     expect(host.querySelector("[data-board-fix]")).toBeNull();
-    expect(host.textContent).not.toMatch(/Edward|EY|coool|push it/);
+    // the reply box shows the user's own face; nothing they said in chat shows
+    expect([...host.querySelectorAll("article, [role=list]")].map((part) => part.textContent).join(" ")).not.toMatch(/Edward|EY|coool|push it/);
   });
 
   it("right-click opens the chat's menu: Copy on bot posts, Copy and Delete on the user's own reply", async () => {
@@ -312,6 +749,7 @@ describe("Forum", () => {
     expect(await menuFor('[data-board-post="pcarbon"] [data-board-author]')).toEqual(["Copy"]);
     expect(await menuFor('[data-board-post="pmine"] p')).toEqual(["Copy", "Delete"]);
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
     await settle();
     await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
     await settle();
@@ -331,6 +769,7 @@ describe("Forum", () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pbot"] button')!.click());
     await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
     await settle();
     expect(host.querySelector('[role="alert"]')!.textContent).toBe("Wink couldn't finish that. Try again.");
     expect(rows()).toEqual(["pbot", "pmine"]);

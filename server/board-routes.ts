@@ -17,7 +17,7 @@ const postSchema = z.object({
   parent_id: z.string().trim().min(1).max(64).optional(),
   helped: z.boolean().optional(),
 }).strict();
-const replySchema = z.object({ parent_id: z.string().trim().min(1).max(64), body: z.string().trim().min(1).max(4000) }).strict();
+const replySchema = z.object({ parent_id: z.string().trim().min(1).max(64), body: z.string().trim().min(1).max(4000), client_id: z.string().regex(/^[\w-]{8,64}$/).optional() }).strict();
 const removeSchema = z.object({ id: z.string().trim().min(1).max(64) }).strict();
 
 export interface BoardRouteDeps {
@@ -40,7 +40,8 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       if (!from) return json(res, 403, { error: "unknown sender" });
       const body = searchSchema.safeParse(await readBody(req));
       if (!body.success) return json(res, 400, { error: "board_search needs a query" });
-      const posts = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId) });
+      const room = deps.roomTurn(from);
+      const posts = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId), ...(room ? { roomThread: from.threadId } : {}) });
       return json(res, 200, { count: posts.length, text: posts.length ? posts.map((post) => boardLine(post)).join("\n\n") : "No Board posts match." });
     },
     async post(req: IncomingMessage, res: ServerResponse) {
@@ -84,7 +85,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         body: body.data.body,
         parent_id: parent.id,
         project_id: parent.project_id,
-        source_ref: `${REPLY_REF}${randomUUID()}`,
+        source_ref: `${REPLY_REF}${body.data.client_id ?? randomUUID()}`,
       });
       return json(res, 200, { post });
     },

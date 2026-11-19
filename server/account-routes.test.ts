@@ -202,7 +202,7 @@ describe("lone base sign-in", () => {
       expect(await request("DELETE", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 200, data: {} });
       expect(cancelSignIn).toHaveBeenCalledExactlyOnceWith("claude");
       startSignIn.mockResolvedValue(null);
-      expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 404, data: { error: "Unknown engine sign-in" } });
+      expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 404, data: { error: "Unknown engine sign-in", code: "unknown-engine-sign-in" } });
       expect(registry.accountBlocked("claude")).toBe(true);
     } finally {
       lifecycle.dispose();

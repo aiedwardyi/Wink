@@ -46,6 +46,8 @@ export interface PhoneRelayOptions {
   onStatus: (status: PhoneRelayStatus) => void;
   /** Without it the relay never hears of a Google account. */
   account?: RelayAccountSource;
+  /** The sign-in page's base. A PC enrolled on another base answers there too. */
+  frontDoor?: string | null;
 }
 
 export interface PhoneRelay {
