@@ -218,7 +218,7 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     ["a two-row chat the bot answers after the hold runs out", { text: "continue our conversation", count: 2, slow: true, reply: true }],
     ["a six-row chat the bot answers after the hold runs out", { text: "continue our conversation", count: 6, slow: true, reply: true }],
     ["a renamed older chat after the hold runs out", { text: "continue our conversation", renamed: true, slow: true }],
-    ["a renamed older chat dropped before a restart", { text: "continue our conversation", renamed: true, restart: true }],
+    ["a renamed older chat that lands after the selected one and a restart", { text: "continue our conversation", renamed: true, restart: true }],
   ])("keeps an early send at the end of the chat it was typed in on both PCs: %s", async (_name, { text, renamed, selectedFirst, slow, late, count = 2001, reply, restart }: { text: string; renamed?: boolean; selectedFirst?: boolean; slow?: boolean; late?: boolean; count?: number; reply?: boolean; restart?: boolean }) => {
     const home = makePC("home", [{ ...bot("Counsel"), syncId: "bot" }]);
     await startOn(home);
@@ -272,7 +272,7 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     await work.sync.idle();
     if (selectedFirst) await laptop("pull", { threadId });
     if (restart) {
-      // Drive delivered the selected chat first, so the empty chat the send was typed in is dropped before Wink restarts.
+      // Drive delivers the selected chat first and Wink restarts before the chat the send was typed in lands.
       const typedIn = join(work.folder!, "threads-v2", "bot", opened.threadId);
       const away = join(root, "typed-in");
       renameSync(typedIn, away);
@@ -287,8 +287,7 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     await settle(home);
     await source("poll");
 
-    // Only the restart case drops the empty chat the send was typed in, so the send follows the bot to the chat that replaced it.
-    const sent = restart ? threadId : opened.threadId;
+    const sent = opened.threadId;
     const history = sent === threadId ? count : 1;
     for (const call of [laptop, source]) {
       const shown = await call<BotRecord>("bot");
@@ -430,20 +429,22 @@ describe("Google sync first join with a send typed before its chat landed", { ti
     }
   });
 
-  it("moves it with the bot when another chat lands first and drops the empty one it was typed in", async () => {
-    const { source, laptop, ids: [chat, typedIn], opened, land, hide, converge } = await heldJoin([{ title: "My named chat", count: 3 }, { title: "Old chat", texts: ["earlier closed conversation"] }]);
-    expect(opened.threadId).toBe(typedIn);
-    await laptop("send", { threadId: typedIn, text: "continue our conversation", value: true });
+  it("keeps it in the chat it was typed in when an older chat lands first", async () => {
+    const { source, laptop, ids: [old, chat], opened, land, hide, converge } = await heldJoin([{ title: "Old chat", texts: ["earlier closed conversation"] }, { title: "My named chat", count: 3 }]);
+    expect(opened.threadId).toBe(chat);
+    await laptop("send", { threadId: chat, text: "continue our conversation", value: true });
     await land();
-    const restore = hide(typedIn!);
+    const restore = hide(chat!);
     await laptop("poll");
     expect((await laptop<BotRecord>("bot")).threadId).toBe(chat);
-    expect((await texts(laptop, chat!)).path).toEqual(["row 0", "row 1", "row 2", "continue our conversation", "reply"]);
+    expect((await texts(laptop, old!)).path).toEqual(["earlier closed conversation"]);
+    expect(await waiting(laptop)).toEqual({ [chat!]: [expect.objectContaining({ text: "continue our conversation", reason: "sync" })] });
     restore();
     await converge();
     for (const call of [laptop, source]) {
+      expect((await call<BotRecord>("bot")).threadId).toBe(chat);
       expect(await texts(call, chat!)).toEqual({ path: ["row 0", "row 1", "row 2", "continue our conversation", "reply"], title: "My named chat", notices: 0 });
-      expect(await texts(call, typedIn!)).toEqual({ path: ["earlier closed conversation"], title: "Old chat", notices: 0 });
+      expect(await texts(call, old!)).toEqual({ path: ["earlier closed conversation"], title: "Old chat", notices: 0 });
     }
   });
 });

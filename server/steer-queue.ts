@@ -116,8 +116,12 @@ function saveQueueAfterAppend(): void {
   }
 }
 
-export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" | "messagesFor" | "onChange">, drain?: () => void, enabled?: () => boolean): void {
+export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" | "messagesFor" | "onChange" | "holdSends">, drain?: () => void, enabled?: () => boolean): void {
   if (drain) syncHold.initialize(drain, enabled);
+  store.holdSends((botId, threadId) => {
+    const entries = [...queues.values()];
+    return Boolean(queues.get(entryKey(botId, threadId))?.items.some((item) => !isRoomItem(item) && !isSendCancelled(item.sendId) && follows(entries, botId, item)));
+  });
   let pending: z.infer<typeof savedQueueSchema>;
   try {
     pending = savedQueueSchema.parse(parseJson(readFileSync(QUEUE_FILE, "utf8")));
@@ -368,7 +372,7 @@ export function earlySendAhead(botId: string, seq = Infinity, entries: Iterable<
 const follows = (entries: Following[], botId: string, item: Following["items"][number]) =>
   Boolean(item.early) || (item.syncUntil !== undefined && earlySendAhead(botId, item.seq, entries));
 
-// An early send, and a later send held behind it, follow the bot when the empty chat they were typed in is dropped.
+// An early send, and a later send held behind it, follow the bot only when the chat they were typed in is deleted.
 function followBots<T extends Following>(store: Pick<Store, "bot" | "taskByThread">, entries: T[]): T[] {
   const kept = new Map<string, T>();
   for (const entry of entries) {

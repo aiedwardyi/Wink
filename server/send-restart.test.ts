@@ -289,7 +289,7 @@ describe("waiting sends across restart", () => {
     expect(savedQueue()).toMatchObject([{ threadId: landed.threadId, items: [{ early: true }, { after: true }] }]);
   });
 
-  it("moves a send held behind an early send with the bot when the empty chat it waits in is dropped", async () => {
+  it("keeps the empty shown chat a send waits in at boot, and moves the send with the bot only when that chat is deleted", async () => {
     const { queue, store } = await boot();
     const bot = store.createBot();
     const typedIn = bot.threadId;
@@ -298,9 +298,11 @@ describe("waiting sends across restart", () => {
     queue.queueSteeredMessage(bot.id, fresh.threadId, "typed in a new chat", { syncUntil: Date.now() });
     const landed = store.createTask(bot.id, "Landed", false)!;
     store.appendMessage(landed.threadId, { role: "user", kind: "text", text: "history" });
-    expect(store.followNewestTask(bot.id)).toBe(true);
-    expect(store.taskByThread(bot.id, fresh.threadId)).toBeFalsy();
-    expect(queue.waitingSends()).toEqual({
+    const restarted = await boot();
+    expect(restarted.store.followNewestTask(bot.id)).toBe(false);
+    expect(restarted.store.bot(bot.id)?.threadId).toBe(fresh.threadId);
+    restarted.store.removeSyncedTask(bot.id, fresh.threadId);
+    expect(restarted.queue.waitingSends()).toEqual({
       [typedIn]: [expect.objectContaining({ text: "typed before its chat landed", reason: "sync" })],
       [landed.threadId]: [expect.objectContaining({ text: "typed in a new chat", reason: "sync" })],
     });

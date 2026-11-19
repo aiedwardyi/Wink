@@ -773,6 +773,7 @@ export class Store {
   private threads: ThreadCache;
   /** Threads a driver still owns after Stop marked its bot idle; the cache keeps them. */
   private heldThreads: () => Iterable<string> = () => [];
+  private sendWaits: (botId: string, threadId: string) => boolean = () => false;
   private taskPackets = new Map<string, TaskResumePacket | null>();
   private defaultSelection: () => ModelSelection;
   private listeners = new Set<(change: StoreChange) => void>();
@@ -1353,6 +1354,11 @@ export class Store {
   /** Driver turns survive Stop's cancel grace. Call trimThreadCache after a driver releases its thread. */
   holdThreads(held: () => Iterable<string>): void {
     this.heldThreads = held;
+  }
+
+  /** followNewestTask stays on a chat while a send typed before its first sync waits there. */
+  holdSends(waits: (botId: string, threadId: string) => boolean): void {
+    this.sendWaits = waits;
   }
 
   trimThreadCache(): void {
@@ -2351,7 +2357,7 @@ export class Store {
    * An empty task it leaves is dropped, like a followed import. */
   followNewestTask(botId: string, skip: ReadonlySet<string> = new Set()): boolean {
     const bot = this.bot(botId);
-    if (!bot?.tasks || bot.tasks.length < 2 || bot.busy) return false;
+    if (!bot?.tasks || bot.tasks.length < 2 || bot.busy || this.sendWaits(botId, bot.threadId)) return false;
     const current = bot.threadId;
     let newest: { threadId: string; at: number } | null = null;
     for (const task of bot.tasks) {
