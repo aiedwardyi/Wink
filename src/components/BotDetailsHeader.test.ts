@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Bot } from "@/state/store";
 import type { AcceptedSends } from "@/lib/send-accept";
-import { currentTurnId } from "@/lib/turn-stage";
+import { currentTurnId, type TurnStreamState } from "@/lib/turn-stage";
 import { en, ko } from "@/lib/i18n-catalog";
 
 const acceptedSends: AcceptedSends = {};
@@ -143,7 +143,7 @@ vi.mock("@/state/store", async (importOriginal) => {
       turnOrigin: () => undefined,
     }),
     useStoreDispatch: () => () => undefined,
-    useStreaming: () => ({
+    useStreamSelect: (select: (stream: TurnStreamState) => unknown) => select({
       streaming: { t1: "A reply still streaming\n\n" }, reasoning: {}, signal: {},
       turn: { t1: currentTurnId({}, "t1", "u1") },
     }),
