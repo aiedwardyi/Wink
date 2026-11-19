@@ -4,6 +4,7 @@ import { LIVE_VERIFY_V0, verifyCardStale, type VerifyCardData, type VerifyChecke
 import { useI18n } from "@/lib/i18n";
 import { VERIFY_ROLE, VERIFY_TAG, verifyProblem } from "@/lib/verify-copy";
 import { useCheckThread } from "@/lib/show-pane";
+import { useReplaysHere } from "@/lib/verify-replays";
 import { lazyView } from "@/lib/stale-build";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { openVerifyWatch, rerunVerify, toggleVerifyWatch, useVerifyShowing, useVerifyWatch, verifyCardAction, verifyCardIn } from "@/lib/verify-watch";
@@ -62,7 +63,8 @@ const rowState = (by: By | undefined, checkers: VerifyChecker[]) => !by ? undefi
 const dot = (checker: VerifyChecker) => <i key={checker} style={{ background: VERIFY_ROLE[checker] ?? VERIFY_ROLE.FIT }} />;
 
 export function VerifyCard(props: { card: VerifyCardData; threadId: string; messageId?: string; fixerRunning?: boolean }) {
-  return props.card.doc ? <VerifyDocCard card={props.card} threadId={props.threadId} messageId={props.messageId} /> : <VerifyPageCard {...props} />;
+  const card = useReplaysHere(props.card, props.threadId)!;
+  return card.doc ? <VerifyDocCard card={card} threadId={props.threadId} messageId={props.messageId} /> : <VerifyPageCard {...props} card={card} />;
 }
 
 function VerifyPageCard({ card, threadId, messageId, fixerRunning = false }: { card: VerifyCardData; threadId: string; messageId?: string; fixerRunning?: boolean }) {
@@ -189,7 +191,7 @@ export function VerifyWatchIcon({ messages, threadId }: { messages: readonly Mes
   const { locale } = useI18n();
   const open = useVerifyWatch();
   const checking = useCheckThread();
-  const card = useMemo(() => LIVE_VERIFY_V0 ? verifyCardIn(messages) : undefined, [messages]);
+  const card = useReplaysHere(useMemo(() => LIVE_VERIFY_V0 ? verifyCardIn(messages) : undefined, [messages]), threadId);
   if (!card || (!card.live && !card.replay?.length)) return null;
   const label = copy[locale].watchCheck;
   return (

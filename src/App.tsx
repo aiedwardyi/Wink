@@ -40,6 +40,7 @@ import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 import { closePane, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { useReplaysHere } from "@/lib/verify-replays";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { useAutoShow, useCheckThread, useMapThread, useMediaThread, useShowItem, useTimelineThread, useWorkersThread } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
@@ -327,9 +328,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const watchChat = group ?? bot;
   const room = group && isTeamRoom(group) ? group : undefined;
   const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
-  const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId
+  const watchCard = useReplaysHere(LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId
     ? verifyCardIn(chatMessages, watch.owner, watch.messageId)
-    : undefined;
+    : undefined, watchChat?.threadId);
+  const paneCard = useReplaysHere(LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, watchChat?.threadId);
   const showing = show && watchChat && show.threadId === watchChat.threadId ? show : undefined;
   const mediaOn = Boolean(watchChat && media === watchChat.threadId);
   const source = watchChat && { threadId: watchChat.threadId, messages: chatMessages, hasMore: watchChat.hasMore, roomId: room?.hosted.roomId };
@@ -337,7 +339,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const mapOn = Boolean(watchChat && mapping === watchChat.threadId);
   const workersOn = Boolean(watchChat && crewThread === watchChat.threadId);
   const timelineOn = Boolean(watchChat && timelineThread === watchChat.threadId);
-  const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn || workersOn || timelineOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), map: mapOn, workers: workersOn, timeline: timelineOn, profileName: shownProfile(state)?.profile?.name?.trim(), botId: bot?.id, card: LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, source } : null);
+  const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn || workersOn || timelineOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), map: mapOn, workers: workersOn, timeline: timelineOn, profileName: shownProfile(state)?.profile?.name?.trim(), botId: bot?.id, card: paneCard, source } : null);
   const withWatch = Boolean(bot || group && (isTeamRoom(group) || LIVE_VERIFY_V0));
   const watchDock = withWatch && watchShown.mounted ? "verify-watch-dock" : "";
   const slotPanels: SlotPanel[] = [...(watch || show || media || mapping || crewThread || timelineThread ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : []), ...(terminalOpen && !terminalCovers ? ["terminal" as const] : [])];

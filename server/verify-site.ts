@@ -16,7 +16,7 @@ import { json, readBody } from "./http-helpers.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { VERIFY_REASONS, verifyCardText, verifyProblems, verifyReplyText } from "./verify-message.ts";
-import { createReplay, readReplay, replayThread, VERIFY_REPLAYS_DIR } from "./verify-replay.ts";
+import { createReplay, listReplays, readReplay, replayThread, VERIFY_REPLAYS_DIR } from "./verify-replay.ts";
 
 // Same admission rules as ENGINE's site server (electron/verify-site-server.mjs): both sides must reach one revision.
 const SITE_TYPES = new Set([".html", ".htm", ".js", ".mjs", ".css", ".json", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".wav", ".mp3", ".mp4", ".webm", ".ttf", ".otf", ".woff", ".woff2"]);
@@ -559,5 +559,13 @@ export function createVerifySite(deps: VerifySiteDeps) {
     res.end(bytes);
   }
 
-  return { handleTool, handleDecision, handleStream, startAuto, cancelAuto: (threadId: string) => pending.get(threadId)?.abort() };
+  async function handleReplays(req: IncomingMessage, res: ServerResponse, threadId: string, from: { relay: boolean; phoneSession: boolean }): Promise<void> {
+    res.setHeader("cache-control", "no-store");
+    if (!enabled()) return json(res, 404, { error: "not found" });
+    if (from.relay ? !from.phoneSession : !deps.appToken(req.headers.authorization) && !deps.remoteClient(req) && !deps.resolveCommsCaller(req.headers.authorization)) return json(res, 401, { error: "unauthorized" });
+    if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "not-here" });
+    json(res, 200, { runs: await listReplays(threadId) });
+  }
+
+  return { handleTool, handleDecision, handleStream, handleReplays, startAuto, cancelAuto: (threadId: string) => pending.get(threadId)?.abort() };
 }
