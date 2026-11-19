@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { handsOff } from "../../shared/bot-chain.ts";
 import { hostFor, LABEL_RE, labelFromHost, ROOM_CODE_RE } from "../../shared/relay-protocol.ts";
+import { roomAuthorIsMine, roomMentionsHost } from "../../shared/room-routing.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES, ROOM_FILE_TYPES } from "./files.ts";
 import {
@@ -36,6 +37,8 @@ import {
   resetJoined,
   removeJoined,
   saveJoined,
+  saveJoinedCode,
+  seatTaken,
   setJoinedDeletedCount,
   setJoinedReactions,
   setJoinedState,
@@ -50,6 +53,7 @@ import {
 import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
 import { cachedJoinedFile, dropJoinedFiles, keepJoinedFile, removeJoinedFiles } from "./joined-files.ts";
 import { NAME_MAX } from "./names.ts";
+import { isOwnerRoomCode } from "./seat-key.ts";
 
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const SEND_ID = /^[A-Za-z0-9_-]{16,80}$/;
@@ -70,6 +74,7 @@ export const uploadDeadline = (length?: string) => UPLOAD_MS + Math.ceil((Number
 const id = z.string().regex(/^[\w-]{1,64}$/);
 const name = z.string().max(200);
 const personSchema = z.object({ id, name });
+const meSchema = personSchema.extend({ host: z.literal(true).optional() });
 const fileSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
   name: z.string().max(200),
@@ -83,6 +88,7 @@ const entrySchema = z.object({
   id,
   at: z.number(),
   author: z.object({ kind: z.enum(["host", "person", "bot"]), id, name, owner: id.optional() }),
+  seat: id.optional(),
   text: z.string().max(20_000),
   replyToId: id.optional(),
   files: z.array(fileSchema).max(MAX_FILES).optional(),
@@ -95,12 +101,13 @@ const stateSchema = z.object({
   roomName: z.string().max(200),
   instructions: z.string().max(20_000),
   host: name,
-  me: personSchema,
+  me: meSchema,
+  hostSeats: z.array(id).optional(),
   people: z.array(personSchema.extend({ works: z.boolean().optional() })).max(100),
   bots: z.array(z.object({ id, name, color: z.string().max(64), mascotStyle: z.string().max(64).optional() })).max(100).default([]),
   teamBots: z.array(z.object({ id, name, color: z.string().max(64), owner: id, mascotStyle: z.string().max(64).optional() })).max(200).optional(),
 });
-const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/), code: z.string().regex(CODE).optional() });
+const joinSchema = z.object({ roomId: id, person: meSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/), code: z.string().regex(CODE).optional() });
 const snapshotSchema = z.object({ head: z.number().int().nonnegative(), entries: z.array(entrySchema).max(1_000), state: stateSchema });
 const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entry"), entry: entrySchema }),
@@ -205,6 +212,7 @@ export class GuestClient {
   private readonly gone = new Set<string>();
   private readonly changing = new Set<string>();
   private joining = 0;
+  private joins: Promise<unknown> = Promise.resolve();
   private readonly fetching = new Map<string, Promise<GuestResult<{ file: JoinedFile; path: string }>>>();
   private started = false;
   private readonly deps: GuestClientDeps;
@@ -303,12 +311,25 @@ export class GuestClient {
     if (this.changing.size) return failed(409, "room is busy");
     const own = this.deps.ownRoom?.(code);
     if (own) return { ...failed(409, "own-room"), groupId: own };
+    return this.queued(() => this.joinNow(code));
+  }
+
+  /** Sync may upgrade a live guest seat in place. A left or removed seat stays read-only. */
+  async seat(code: string, roomId: string): Promise<GuestResult<JoinedView>> {
+    if (this.changing.size) return failed(409, "room is busy");
+    if (this.deps.ownRoom?.(code)) return failed(409, "own-room");
+    return this.queued(() => {
+      const upgrade = isOwnerRoomCode(code) && Boolean(joinedKey(roomId)) && !isOwnerRoomCode(joinedCode(roomId));
+      return seatTaken(roomId) && !upgrade ? Promise.resolve(failed(409, "seated")) : this.joinNow(code, roomId);
+    });
+  }
+
+  /** One join at a time: the host gives a returning PC a fresh key each time, so the last reply must be the last key. */
+  private queued(work: () => Promise<GuestResult<JoinedView>>): Promise<GuestResult<JoinedView>> {
     this.joining++;
-    try {
-      return await this.joinNow(code);
-    } finally {
-      this.joining--;
-    }
+    const run = this.joins.then(work).finally(() => this.joining--);
+    this.joins = run.catch(() => {});
+    return run;
   }
 
   /** The host a short code points at, from the first of `bases` whose relay knows it. */
@@ -334,7 +355,10 @@ export class GuestClient {
     if (!relayHost) return failed(400, "bad-code");
     const { name, device } = this.deps.joiner();
     // The door refuses join bodies over 1 KB, and a profile name has no cap.
-    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: short ?? pasted, name: [...name].slice(0, NAME_MAX).join(""), device, ...(expectedRoomId ? { roomId: expectedRoomId } : {}) }));
+    const prior = expectedRoomId && isOwnerRoomCode(pasted) ? joinedKey(expectedRoomId) : null;
+    const priorKey = prior?.relayHost === relayHost ? prior.key : null;
+    if (prior && !priorKey) return failed(400, "bad-code");
+    const reply = await this.call(relayHost, "POST", "/room/v1/join", priorKey, JSON.stringify({ code: short ?? pasted, name: [...name].slice(0, NAME_MAX).join(""), device, ...(expectedRoomId ? { roomId: expectedRoomId } : {}) }));
     if (!reply.ok) return reply;
     const joined = joinSchema.safeParse(reply.value);
     if (!joined.success) return unavailable();
@@ -343,18 +367,21 @@ export class GuestClient {
     // A short code expires, so a rejoin needs the long one the door hands back.
     const saved = short ? joined.data.code : pasted;
     if (!saved || CODE.exec(saved)?.[1] !== relayHost) return unavailable();
+    if (priorKey && (joinedKey(roomId)?.key !== priorKey || this.leaving.has(priorKey))) return failed(409, "seated");
+    const needsSnapshot = this.syncs.get(roomId)?.needsSnapshot;
     this.unfollow(roomId);
-    saveJoined(roomId, relayHost, person, key, saved);
+    if (priorKey && person.host && key === priorKey && joinedRoom(roomId)?.me.id === person.id) saveJoinedCode(roomId, saved);
+    else saveJoined(roomId, relayHost, person, key, saved);
     setJoinedSentName(roomId, name);
     this.oldNames.delete(roomId);
     this.gone.delete(roomId);
-    this.follow(roomId);
+    this.follow(roomId, needsSnapshot);
     this.changed(roomId);
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }
 
   async nameChanged(onlyRoomId?: string): Promise<void> {
-    await Promise.all(joinedRooms().filter((room) => room.status === "joined" && (onlyRoomId === undefined || room.roomId === onlyRoomId)).map((room) => {
+    await Promise.all(joinedRooms().filter((room) => room.status === "joined" && !room.me.host && (onlyRoomId === undefined || room.roomId === onlyRoomId)).map((room) => {
       const roomId = room.roomId;
       const next = (this.renaming.get(roomId) ?? Promise.resolve()).then(async () => {
         const creds = joinedKey(roomId);
@@ -653,10 +680,11 @@ export class GuestClient {
 
   private alertLine(roomId: string, entry: JoinedEntry): void {
     const room = joinedRoom(roomId);
-    if (!room || (entry.author.kind === "person" && entry.author.id === room.me.id)) return;
+    if (!room || roomAuthorIsMine(entry.author, room.me)) return;
     const state = room.state;
     // a handoff pings no one; the line that closes it does
     if (state && handsOff(entry, [...state.bots, ...(state.teamBots ?? [])], [state.host, ...state.people.map((person) => person.name)])) return;
+    if (room.me.host && state && roomMentionsHost(entry.text, state.host, [...state.bots, ...(state.teamBots ?? []), ...state.people].map((person) => person.name))) return;
     const chat = `joined:${roomId}`;
     const line = { chat, threadId: chat, room: room.state?.roomName ?? "", name: entry.author.name, text: roomLineText(entry.text, entry.files) };
     alertWhenUnread(line, () => joinedSummary(room).unread > 0, this.deps.alert, this.deps.timing?.alertMs, this.alerts);
@@ -666,8 +694,8 @@ export class GuestClient {
     this.deps.onChange?.(roomId);
   }
 
-  private follow(roomId: string): void {
-    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false, reacts: false, undropped: false };
+  private follow(roomId: string, needsSnapshot = false): void {
+    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot, snapshotting: null, stopped: false, reacts: false, undropped: false };
     this.syncs.set(roomId, sync);
     void this.connect(roomId, sync);
   }

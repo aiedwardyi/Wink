@@ -5,6 +5,14 @@
 
 const fold = (text: string) => text.normalize("NFC").toLowerCase();
 
+export function roomAuthorIsMine(author: { kind: string; id: string }, me?: { id: string; host?: boolean }): boolean {
+  return me !== undefined && (me.host ? author.kind === "host" && author.id === "host" : author.kind === "person" && author.id === me.id);
+}
+
+export function roomMentionsHost(text: string, host: string, otherNames: readonly string[]): boolean {
+  return roomResponder(text, [{ id: "host", name: host }], otherNames, undefined, false) !== null;
+}
+
 export function roomResponder<T extends { id: string; name: string }>(
   text: string,
   bots: readonly T[],
