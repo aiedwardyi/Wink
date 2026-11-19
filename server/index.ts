@@ -180,7 +180,7 @@ import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.t
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoading, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -5289,6 +5289,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     persistTaskPacket(packet, { staged: true });
   }
 
+  // Map may be loading this chat off the server thread, and the model context below reads all of it
+  const loading = coldLoading(threadId);
+  if (loading) await loading;
+
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
@@ -7552,7 +7556,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
 function resolveReplyTarget(threadId: string, value: unknown): Message | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (typeof value !== "string") throw Object.assign(new Error("replyToId must be a message id"), { status: 400 });
-  const target = store.messagesFor(threadId).find((message) => message.id === value);
+  const target = store.row(threadId, value);
   if (!target || target.kind !== "text" || !target.text?.trim()) {
     throw Object.assign(new Error("the message being replied to is no longer available"), { status: 404 });
   }
@@ -9101,9 +9105,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           console.warn("chat sync: delete failed", error);
         }
       }
-      const fresh = botWithThread(updated);
-      broadcast({ kind: "bot", bot: fresh });
-      return json(res, 200, { bot: fresh });
+      return json(res, 200, { bot: await botChatRoutes.taskFrame(updated, botWithThread, { answer: true }) });
     }
 
     // identity handshake for the packaged app's port fallback: the forked

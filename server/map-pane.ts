@@ -12,7 +12,7 @@ import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
 import { createMapFlow, type MapGh } from "./map-pr.ts";
 import { mapBotSelf, mapGitRefs } from "./map-bot-self.ts";
-import { coldLoad, coldPaneReason, coldWriteRows } from "./cold-thread.ts";
+import { coldLoad, coldPaneReason, coldSendIds, coldWriteRows } from "./cold-thread.ts";
 import { storedHead } from "./message-db.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), host: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
@@ -258,6 +258,8 @@ export function createMapPane(deps: MapPaneDeps) {
 // A chat nobody has loaded yet: Map reads only its rows that wrote files and its notes since the edit off the server thread, then loads it a page per turn (the Wink chat has 237k rows).
 const botWrites = async (store: Pick<Store, "adopt" | "loaded" | "messagesFor">, threadId: string) => {
   if (store.loaded(threadId) || storedHead(threadId) === undefined) return store.messagesFor(threadId);
+  // beside the scans this frame waits on, so a send during the load below dedupes without it
+  coldSendIds(store, threadId);
   const rows = await coldWriteRows(store, threadId);
   void coldLoad(store, threadId);
   return rows ?? store.messagesFor(threadId);

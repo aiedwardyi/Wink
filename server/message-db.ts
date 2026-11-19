@@ -305,6 +305,8 @@ export function messageTransactionEnd(): Promise<void> | undefined {
   });
 }
 
+export type SendIdRows = { cursor: number; rows: Array<{ id: string; sendId: string }> };
+
 export interface ThreadRowPage {
   messages: Message[];
   cursor: number;
@@ -440,6 +442,18 @@ export function writeRowsOn(handle: DatabaseSync, threadId: string): Message[] {
   // SAFETY: This projection selects the stored message JSON.
   const rows = handle.prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'activity' AND json_extract(json, '$.tool.writes') IS NOT NULL ORDER BY rowid").all(threadId) as Array<{ json: string }>;
   return rows.map(rowToMessage);
+}
+
+/** A thread's top rowid and the sendIds of its user rows up to it, oldest first; cold-thread-worker.ts runs it on its own handle. */
+export function sendIdsOn(handle: DatabaseSync, threadId: string): SendIdRows {
+  // SAFETY: An aggregate always yields one row, whose cursor is null for an empty thread.
+  const top = handle.prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null } | undefined;
+  const cursor = top?.cursor ?? 0;
+  // SAFETY: This projection selects the row id and the sendId string it carries.
+  const rows = handle.prepare(
+    "SELECT id, json_extract(json, '$.sendId') AS sendId FROM messages WHERE thread_id = ? AND rowid <= ? AND role = 'user' AND json_extract(json, '$.sendId') IS NOT NULL ORDER BY rowid",
+  ).all(threadId, cursor) as SendIdRows["rows"];
+  return { cursor, rows };
 }
 
 /** Newest message time without loading the transcript. */

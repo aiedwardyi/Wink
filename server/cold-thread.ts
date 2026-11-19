@@ -152,6 +152,52 @@ export function coldLoading(threadId: string): Promise<void> | undefined {
   return loads.get(threadId);
 }
 
+// per unloaded chat, its user rows' sendIds up to a rowid: Map reads them before its first frame, so a send while the chat loads dedupes by key
+type SendIds = { cursor: number; ids: Map<string, string> };
+const sendIdReads = new Map<string, { ids: Promise<SendIds | null>; stale: boolean }>();
+let staleOnDelete: (() => void) | undefined;
+
+/** Reads an unloaded chat's sendIds on the reader, beside the scans Map's frame waits on. */
+export function coldSendIds(store: Pick<Store, "loaded">, threadId: string): void {
+  if (store.loaded(threadId) || sendIdReads.get(threadId)?.stale === false) return;
+  // a deleted top row frees its rowid, and a row inserted there would sit behind the cursor
+  staleOnDelete ??= onMessageChange((thread, _id, deleted) => {
+    const read = sendIdReads.get(thread);
+    if (read && deleted) read.stale = true;
+  });
+  const ids = committed()
+    .then(() => (reader ??= startReader())({ threadId, sendIds: true }))
+    .then(({ cursor, rows }) => {
+      const first = new Map<string, string>();
+      for (const row of rows) if (!first.has(row.sendId)) first.set(row.sendId, row.id);
+      return { cursor, ids: first };
+    })
+    .catch((error) => {
+      console.error("cold sendId read failed; a send there reads the chat", threadId, error);
+      return null;
+    });
+  sendIdReads.delete(threadId);
+  sendIdReads.set(threadId, { ids, stale: false });
+  for (const older of sendIdReads.keys()) if (sendIdReads.size > 2) sendIdReads.delete(older);
+}
+
+/** The row a send was first accepted as: the store's when the chat is loaded, else by key from Map's sendId read and the rows stored since, else from the chat once a load under way lands. */
+export async function sentRow(store: Pick<Store, "loaded" | "messagesFor" | "row">, threadId: string, sendId: string): Promise<Message | undefined> {
+  const read = store.loaded(threadId) ? undefined : sendIdReads.get(threadId);
+  const known = await read?.ids;
+  if (known && !read!.stale && !store.loaded(threadId)) {
+    const id = known.ids.get(sendId);
+    const keyed = id === undefined ? undefined : store.row(threadId, id);
+    if (keyed) return keyed;
+    // a full page since the read means it is too old to finish here
+    const since = scanThreadRows(threadId, known.cursor, 1024);
+    if (since.messages.length < 1024) return since.messages.find((message) => message.sendId === sendId);
+  }
+  const loading = loads.get(threadId);
+  if (loading) await loading;
+  return store.messagesFor(threadId).find((message) => message.sendId === sendId);
+}
+
 /** Loads an unloaded chat into the store, a worker reading its pages and this thread parsing one per turn: else the first send after Map's cold read reads it all at once. */
 export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
   let load = loads.get(threadId);
@@ -240,6 +286,7 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
     if (activeLeafId === undefined) return;
     store.adopt(threadId, { messages: gone.size ? messages.filter((_, index) => !gone.has(index)) : messages, activeLeafId, chars });
     coldReads.delete(threadId);
+    sendIdReads.delete(threadId);
   } finally {
     stop();
   }

@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { chatListPage, coldLoad, coldPaneReason, coldWriteRows, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldPaneReason, coldSendIds, coldWriteRows, sentRow, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
 import { applySyncedRows, insertMessage, messageDatabase, messageDbFile, readThread } from "./message-db.ts";
@@ -382,6 +382,36 @@ describe("loading a chat off the server thread", () => {
     expect(store.messagesFor(bot.threadId)).toEqual(read.messagesFor(bot.threadId));
     expect(store.messagesFor(bot.threadId).filter((row) => row.id === sent.id)).toHaveLength(1);
     expect(store.activeLeaf(bot.threadId)).toBe(sent.id);
+  });
+
+  it("finds a send by Map's key read, or among the rows stored since, without loading the chat", async () => {
+    const setup = fresh();
+    const bot = setup.createBot({}, { seedMessages: false });
+    const before = setup.appendMessage(bot.threadId, { role: "user", kind: "text", text: "sent before", sendId: "sent-before-map-open" });
+    for (let n = 0; n < 50; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+    const store = fresh();
+    coldSendIds(store, bot.threadId);
+    expect(await sentRow(store, bot.threadId, "sent-before-map-open")).toEqual(before);
+    const after = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "sent after", sendId: "sent-after-map-open" });
+    expect(await sentRow(store, bot.threadId, "sent-after-map-open")).toEqual(after);
+    expect(await sentRow(store, bot.threadId, "never-sent-anywhere")).toBeUndefined();
+    expect(store.loaded(bot.threadId)).toBe(false);
+  });
+
+  it("finds a send that took a deleted row's rowid behind Map's key read", async () => {
+    const setup = fresh();
+    const bot = setup.createBot({}, { seedMessages: false });
+    for (let n = 0; n < 50; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+    const top = setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "newest" });
+    const store = fresh();
+    coldSendIds(store, bot.threadId);
+    expect(await sentRow(store, bot.threadId, "nothing-sent-yet-here")).toBeUndefined();
+    const rowid = (id: string) => Number(messageDatabase().prepare("SELECT rowid FROM messages WHERE thread_id = ? AND id = ?").get(bot.threadId, id)?.rowid);
+    const cursor = rowid(top.id);
+    messageDatabase().prepare("DELETE FROM messages WHERE thread_id = ? AND id = ?").run(bot.threadId, top.id);
+    const sent = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "sent", sendId: "sent-behind-the-cursor" });
+    expect(rowid(sent.id)).toBe(cursor);
+    expect(await sentRow(store, bot.threadId, "sent-behind-the-cursor")).toEqual(sent);
   });
 
   it("dismisses an unloaded chat's first-run quiz by key when the user sends", () => {
