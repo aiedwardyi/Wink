@@ -635,6 +635,7 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
     const host = phoneAccess.presenceHost();
     void teamSnags?.sync();
+    voiceCallsChanged();
     if (host === relayPresenceHost) return;
     relayPresenceHost = host;
     startDevicePresence();
@@ -3208,6 +3209,7 @@ const botCalls = createBotCalls({
   current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
   chat: (threadId) => store.groupByThread(threadId)?.id,
   skip: (threadId) => isHostedThread(store, threadId),
+  calls: () => teamReports.member(),
   called: (botId, threadId, blocker) => void boardCalls.called(botId, threadId, blocker),
 });
 
@@ -7826,6 +7828,14 @@ async function perBotLocalVmCountForModeChange(): Promise<number | null> {
   return existingPerBotLocalVmCount(runtime.runtime);
 }
 
+let voiceCallsSeen: boolean | null = null;
+/** Membership follows the relay link, so clients refetch the flag when it flips. */
+function voiceCallsChanged() {
+  const now = teamReports.member();
+  if (voiceCallsSeen !== null && voiceCallsSeen !== now) broadcast({ kind: "config", ...configStatus() });
+  voiceCallsSeen = now;
+}
+
 function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
@@ -7864,6 +7874,7 @@ function configStatus() {
       terminalHost: Boolean(terminalBridgeAccess),
       terminalLive: true,
       modelDial: effectiveModelDial(cfg),
+      voiceCalls: teamReports.member(),
     },
   };
 }

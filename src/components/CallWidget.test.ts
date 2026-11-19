@@ -12,8 +12,6 @@ import { CallSettings } from "./CallSettings";
 import { ChatView } from "./ChatView";
 import { failedText } from "./LiveCallBar";
 
-// oxlint-disable-next-line anti-slop/no-module-mocking -- voice calls ship cut; this test drives the call code behind the flag.
-vi.mock("../../shared/voice-calls", () => ({ VOICE_CALLS: true }));
 const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; closed: boolean }>, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined, puts: [] as unknown[], clips: [] as Array<{ src: string; paused: boolean; onended: (() => void) | null }> }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
@@ -55,7 +53,7 @@ const bot = (id: string, name: string) => ({
 }) as unknown as Bot;
 const atlas = bot("atlas", "Atlas");
 const juno = bot("juno", "Juno");
-const CONFIG: { gemini: { configured: boolean }; liveCall: { voice: string; language: string } } = { gemini: { configured: true }, liveCall: { voice: "Aoede", language: "auto" } };
+const CONFIG: { gemini: { configured: boolean }; liveCall: { voice: string; language: string }; features: { voiceCalls: boolean } } = { gemini: { configured: true }, features: { voiceCalls: true }, liveCall: { voice: "Aoede", language: "auto" } };
 
 const posts: string[] = [];
 const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {

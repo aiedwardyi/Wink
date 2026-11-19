@@ -13,8 +13,6 @@ import { CallHostSlot } from "./CallSlots";
 import { TeamRoomView } from "./TeamRoomView";
 
 type Fakes = { engines: Array<{ events: LiveEvents; texts: string[]; contexts: string[] }>; bots: Bot[]; sse?: { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } };
-// oxlint-disable-next-line anti-slop/no-module-mocking -- voice calls ship cut; this test drives the call code behind the flag.
-vi.mock("../../shared/voice-calls", () => ({ VOICE_CALLS: true }));
 const fakes = vi.hoisted((): Fakes => ({ engines: [], bots: [] }));
 // oxlint-disable-next-line anti-slop/no-module-mocking -- Markdown highlighting is not what this test checks.
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
@@ -107,7 +105,7 @@ async function mount(bots: Bot[] = [bot("first"), bot("Wink", true)], phone = fa
   const render = (group?: TeamRoom) => act(async () => root.render(createElement(StoreProvider, null, group && createElement(TeamRoomView, { group }), createElement(CallHostSlot))));
   await render(room());
   await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
-  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured: true, introSeen: true } }), lastEventId: "qa:2" }));
+  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured: true, introSeen: true }, features: { voiceCalls: true } }), lastEventId: "qa:2" }));
   unmount = async () => { await act(async () => root.unmount()); host.remove(); };
   return { host, render, sse: (frame: { kind: string; threadId: string; message: Partial<Message> }, n: number) => act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ cursor: `qa:${n}`, ...frame }), lastEventId: `qa:${n}` })) };
 }

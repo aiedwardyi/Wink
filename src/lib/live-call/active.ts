@@ -3,7 +3,6 @@ import { useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
 import type { CallRoom } from "../../../shared/live-call";
-import { VOICE_CALLS } from "../../../shared/voice-calls";
 import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
 import { callAudio, type CallSound } from "./warm-audio";
@@ -43,8 +42,8 @@ export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: Ac
 }
 
 /** A tapped bot call: the page may open with no tap of its own yet, so the first one lets the voice play. */
-export function answerCall(bot: Bot | undefined, opener: string | null): ActiveCall | null {
-  if (!VOICE_CALLS || !bot || !opener || call || !callsSupported()) return null;
+export function answerCall(bot: Bot | undefined, opener: string | null, voiceCalls: boolean): ActiveCall | null {
+  if (!voiceCalls || !bot || !opener || call || !callsSupported()) return null;
   const sound = callAudio();
   if (sound.ctx.state === "suspended") {
     addEventListener("pointerdown", () => {
@@ -60,15 +59,16 @@ const RUNG_MS = 30_000;
 let rung: (Rung & { at: number }) | null = null;
 
 /** The voice briefs from the bot's active thread, so a tapped call waits for the switch to its thread to land; one that never lands lapses. */
-export function answerOnThread(bots: readonly Bot[], next?: Rung): ActiveCall | null {
+export function answerOnThread(bots: readonly Bot[], voiceCalls: boolean, next?: Rung): ActiveCall | null {
   if (next) rung = next.opener ? { ...next, at: Date.now() } : null;
   const want = rung;
   if (!want) return null;
   if (Date.now() - want.at > RUNG_MS) return (rung = null);
   const bot = bots.find((candidate) => candidate.id === want.botId);
   if (bot?.threadId !== want.threadId) return null;
+  if (!voiceCalls) return null;
   rung = null;
-  return answerCall(bot, want.opener);
+  return answerCall(bot, want.opener, voiceCalls);
 }
 
 /** Only drops this call: a late teardown of an old one never hangs up a newer one. */

@@ -521,9 +521,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     pushOpenTarget.current = null;
     window.history.replaceState(window.history.state, "", window.location.pathname);
     openNotificationTarget(dispatch, target, latestState.current, true);
-    answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
+    answerOnThread(latestState.current.bots, latestState.current.config?.features?.voiceCalls === true, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
   }, [dispatch, hydratedBots]);
-  useEffect(() => void answerOnThread(state.bots), [state.bots]);
+  const voiceCalls = state.config?.features?.voiceCalls === true;
+  useEffect(() => void answerOnThread(state.bots, voiceCalls), [state.bots, voiceCalls]);
   useEffect(() => {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
@@ -538,7 +539,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       setTerminalViews((views) => ({ ...views, [target.botId]: false }));
       startWarmOpenTiming(Number(event.data.t0), target.threadId);
       openNotificationTarget(dispatch, target, latestState.current);
-      answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
+      answerOnThread(latestState.current.bots, latestState.current.config?.features?.voiceCalls === true, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
     };
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);

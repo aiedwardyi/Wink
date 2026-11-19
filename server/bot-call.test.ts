@@ -26,7 +26,7 @@ beforeEach(() => {
 
 afterEach(() => vi.useRealTimers());
 
-function routes(calls = true) {
+function routes(calls = () => true) {
   const botCalls = createBotCalls({ calls, send: (payload) => sent.push(payload), current: () => packet.blockers, chat: () => room, skip: () => hosted });
   const store = {
     bot: (id: string) => (id === bot.id ? bot : undefined),
@@ -103,7 +103,7 @@ describe("bot calls", () => {
   });
 
   it("stops ringing once the call is picked up", async () => {
-    const botCalls = createBotCalls({ calls: true, send: (payload) => sent.push(payload), current: () => [{ kind: "login", note: "Sign in" }], chat: () => undefined, skip: () => false });
+    const botCalls = createBotCalls({ calls: () => true, send: (payload) => sent.push(payload), current: () => [{ kind: "login", note: "Sign in" }], chat: () => undefined, skip: () => false });
     botCalls.blockers(bot, "t1", [], [{ kind: "login", note: "Sign in" }]);
     botCalls.answered("scout");
     await vi.advanceTimersByTimeAsync(CALL_RING_GAP_MS * 5);
@@ -132,16 +132,25 @@ describe("bot calls", () => {
   });
 });
 
-describe("voice calls cut", () => {
-  it("ships with calls off", () => {
+describe("non-team PCs", () => {
+  it("send the plain alert when calls are off", () => {
     const login = { kind: "login" as const, note: LOGIN.note };
-    const botCalls = createBotCalls({ send: (payload) => sent.push(payload), current: () => [login], chat: () => undefined, skip: () => false });
+    const botCalls = createBotCalls({ calls: () => false, send: (payload) => sent.push(payload), current: () => [login], chat: () => undefined, skip: () => false });
     botCalls.blockers(bot, "t1", [], [login]);
     expect(sent.map((payload) => payload.title)).toEqual(["Scout needs you"]);
   });
 
+  it("rings as soon as the PC becomes a team member", async () => {
+    let member = false;
+    const botCalls = createBotCalls({ calls: () => member, send: (payload) => sent.push(payload), current: () => [{ kind: "login", note: "Sign in" }], chat: () => undefined, skip: () => false });
+    botCalls.blockers(bot, "t1", [], [{ kind: "login", note: "Sign in" }]);
+    member = true;
+    botCalls.blockers(bot, "t2", [], [{ kind: "login", note: "Sign in" }]);
+    expect(sent.map((payload) => payload.title)).toEqual(["Scout needs you", "📞 Scout is calling"]);
+  });
+
   it("sends one plain alert for a new login blocker and never rings again", async () => {
-    await write(routes(false), [LOGIN]);
+    await write(routes(() => false), [LOGIN]);
     await vi.advanceTimersByTimeAsync(CALL_RING_GAP_MS * 5);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ title: "Scout needs you", body: LOGIN.note, tag: "wink-call:scout", url: "/?bot=scout&thread=t1" });
