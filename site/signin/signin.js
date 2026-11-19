@@ -237,9 +237,10 @@
     submit.disabled = true;
     say("");
     const label = await codeLabel(code);
-    // Then the same Google check as picking the PC from the list.
+    // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
     if (LABEL_RE.test(label)) {
-      go(label, "?g=1");
+      holdAccount(label);
+      location.assign(`https://${label}.${config.base}/pair?g=1`);
       return;
     }
     submit.disabled = false;

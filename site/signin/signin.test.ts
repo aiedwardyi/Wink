@@ -627,7 +627,18 @@ describe("entering a PC's code", () => {
     enter(typed);
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
     expect(asked).toEqual([{ url: LOOKUP, credentials: "omit" }, { url: CHECK, credentials: "omit" }]);
-    expect(localStorage.getItem(LAST_PC)).toBe(LABEL_A);
+  });
+
+  it("remembers no PC for a typed code, so the next visit sends this browser nowhere until Google signs in", async () => {
+    open("/signin", []);
+    answer({ [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } });
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(localStorage.getItem(LAST_PC)).toBeNull();
+    open("/signin", []);
+    expect(probes).toEqual([]);
+    expect(location.href).not.toContain("/pair");
+    expect(inits).toHaveLength(1);
   });
 
   it.each<[string, string, Record<string, Answer>]>([
