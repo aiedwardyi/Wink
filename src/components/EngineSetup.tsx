@@ -325,18 +325,22 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
   return { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode };
 }
 
-export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false, lineInTitle = false, named = (status) => status }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: ReactNode; buttonClassName?: string; forceSignIn?: boolean; lineInTitle?: boolean; named?: (status: ReactNode) => ReactNode }) {
+export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false, lineInTitle = false, row }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: ReactNode; buttonClassName?: string; forceSignIn?: boolean; lineInTitle?: boolean; row?: (end: ReactNode) => ReactNode }) {
   const { t } = useI18n();
   const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
-  if (connected) return named(<span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>);
+  const connectedLine = <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
+  if (connected) return row ? row(connectedLine) : connectedLine;
   if (!forceSignIn && loading) return null;
-  if (computerOnly) return <span data-computer-only="" className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
+  const computerLine = <span data-computer-only="" className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
+  if (computerOnly) return row ? row(computerLine) : computerLine;
   // The card shows this line under its title while the code row is open.
   const browserLine = lineInTitle && waiting && !capture.code && Boolean(capture.inputGeneration);
+  const cancelButton = <button type="button" onClick={() => void cancel()} disabled={busy} className={row ? "hover:underline disabled:opacity-50" : "text-ink underline disabled:opacity-50"}>{t("engines.cancel")}</button>;
   return (
-    <div aria-live="polite" data-sign-in-open={waiting || failed ? "" : undefined} data-sign-in-code={browserLine ? "" : undefined} className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
-      {waiting ? named(<>
-        {!browserLine && <span>{capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>}
+    <div aria-live="polite" data-sign-in-open={waiting || failed ? "" : undefined} data-sign-in-code={browserLine ? "" : undefined} className={`flex min-w-0 flex-col gap-1.5 break-keep text-[12px] text-ink-secondary ${row ? "items-center" : "items-end"}`}>
+      {waiting ? <>
+        {row?.(cancelButton)}
+        {!browserLine && (!row || capture.code) && <span>{capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>}
         {capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
         {capture.inputGeneration && <form className="flex max-w-full flex-wrap justify-end gap-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
           <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
@@ -344,11 +348,11 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
             className="min-h-11 w-60 min-w-0 max-w-full rounded border border-hairline bg-control px-2 text-ink" />
           <button type="submit" disabled={busy || !loginCode} className="min-h-11 text-ink underline disabled:opacity-50">{t("accounts.submitCode")}</button>
         </form>}
-        <div className="flex flex-wrap justify-end gap-3">
-          {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className="text-ink underline">{deviceFlow ? t("engines.openLink") : t("engines.openAgain")}</a>}
-          <button type="button" onClick={() => void cancel()} disabled={busy} className="text-ink underline disabled:opacity-50">{t("engines.cancel")}</button>
-        </div>
-      </>) : <button type="button" data-sign-in="" disabled={busy} onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
+        {(capture.url || !row) && <div className="flex flex-wrap justify-end gap-3">
+          {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={row ? "underline-offset-2 hover:text-ink hover:underline" : "text-ink underline"}>{deviceFlow ? t("engines.openLink") : t("engines.openAgain")}</a>}
+          {!row && cancelButton}
+        </div>}
+      </> : <button type="button" data-sign-in="" disabled={busy} onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
       {failed && <span>{t(failed)}</span>}
     </div>
   );
