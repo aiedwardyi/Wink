@@ -21,6 +21,7 @@ import { GPAIR_TTL_MS, pairNonce } from "./phone-google.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { enrollWith } from "./phone-relay/enroll.ts";
 import { enrollWithGoogle } from "./phone-relay/google-enroll.ts";
+import { relayMode } from "./phone-relay/mode.ts";
 import { createPhoneRelay } from "./phone-relay/runtime.ts";
 import { readAccount, readIdentity, readTicket, writeAccount } from "./phone-relay/store.ts";
 import type { JsonObject } from "./schema.ts";
@@ -1154,6 +1155,14 @@ describe("no relay configured", () => {
       expect((await ask(world.access, "POST", "/api/phone/pairing")).status).toBe(409);
       expect(readdirSync(world.dir)).toEqual([]);
       await world.access.stop();
+    }
+  });
+
+  it("reports the saved base in the one spelling the desktop checks", async () => {
+    for (const [saved, base] of [["Relay.Example", "relay.example"], [" relay.example ", "relay.example"], ["relay.example.", "relay.example"], ["relay.xn--p1ai", "relay.xn--p1ai"], ["relay.рф", "relay.xn--p1ai"]]) {
+      const world = idle({ base: saved });
+      expect((await ask(world.access, "GET", "/api/phone-relay/status")).body).toMatchObject({ configured: true, base });
+      expect(relayMode({ base: saved, enabled: true }, {})).toEqual({ kind: "on", base });
     }
   });
 
