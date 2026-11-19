@@ -643,7 +643,17 @@ it("shows the text of an unbound pick without printing its heading time", async 
   expect(named("Forum").querySelector("[data-won]")?.textContent).toBe("B - blue cards");
   expect(named("Forum").querySelector(".timeline-said span")?.textContent).toBe("Edward");
   expect(named("Forum").querySelector("time, img")).toBeNull();
-  expect(host.querySelector("[data-timeline-day]")).toBeNull();
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17"]);
+});
+
+it("sorts a text-only pick by its day, above an older day's timed pick", async () => {
+  const text = '# Decision timeline\n\n## 2026-11-14 10:00 | Header | current\n- Picked: A - small\n\n## 2026-11-17 | Forum | current\n- Picked: B - blue cards\n- Said: "I choose B"\n- Binding: unbound\n';
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-unbound-day");
+  await until(() => picked().length === 2);
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Forum", "Header"]);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17", "2026-11-14"]);
+  expect(named("Forum").querySelector("time")).toBeNull();
 });
 
 it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows the zoom in the corner", async () => {

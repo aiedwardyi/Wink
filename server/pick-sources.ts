@@ -24,6 +24,8 @@ export type PickBinding = {
   readonly [verifiedBinding]: true;
   at: number; messageId: string; questionId: string; thread: string;
   picture?: Picture; overPictures: Picture[]; files: string[];
+  /** the question's own asking sentences name the whole key */
+  named: boolean;
 };
 
 const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
@@ -38,7 +40,7 @@ function botTurn(messages: readonly Message[], start: number, parent: (index: nu
   return { turn: turn.reverse(), previous: -1 };
 }
 
-const OPTION = /(?:^|\s)(?:[a-h]|\d{1,2})\s*[-.):]\s+\S/gi;
+const OPTION = /(?:^|\s)[*_(]*(?:[a-h]|\d{1,2})[*_]*\s*[-.):]\s+\S/gi;
 const isQuestionCard = (row: Message) => row.kind === "options" && row.role === "bot" && row.card?.askUser && !row.card.requestId;
 const asks = (row: Message) => isQuestionCard(row) || (row.kind === "text" && (/[?？]/.test(row.text ?? "") || (row.text?.match(OPTION)?.length ?? 0) > 1));
 
@@ -101,9 +103,36 @@ function shownPicture(value: string | null | undefined, shown: ShownPicture[]): 
   return shown.some(({ path, caption }) => pathKey(path) === pathKey(match.path) && caption !== match.caption) ? undefined : { path: match.path, caption: match.caption };
 }
 
+const SENTENCE_END = /(?<=[.!?？。！][*_)"'”’\]]*)\s+|\n\s*\n/;
+const optionCount = (text: string) => text.match(OPTION)?.length ?? 0;
+
+/** A question's asking sentences, without the statements before them such as a restated earlier pick. */
+function asking(context = ""): string {
+  const units = context.split(SENTENCE_END).filter((unit) => unit.trim());
+  const kept: string[] = [];
+  for (let i = units.length - 1, lean = false; i >= 0; i -= 1) {
+    const unit = units[i]!;
+    const question = /[?？]/.test(unit) || optionCount(unit) > 1;
+    if (question || (lean && optionCount(unit) !== 1)) kept.unshift(unit);
+    // a bare "Which one?" or an option list with no label leans on the sentence before it, unless that one states a single option
+    lean = question && !(optionCount(unit) > 1 && /\p{L}/u.test(unit.slice(0, unit.search(OPTION))));
+  }
+  return kept.length ? kept.join(" ") : context;
+}
+
+/** A question that names its own topic before the options, as in "Settings: A - red or B - blue?", with no word of the key. */
+function namesOtherTopic(context: string | undefined, key: string): boolean {
+  const text = asking(context);
+  const head = text.slice(0, Math.max(0, text.search(OPTION))).replace(/[\s*_]+$/, "");
+  if (!head.endsWith(":")) return false;
+  const words = pickKey(head).split(" ");
+  // a prefix match lets "look" meet "looks" and a Korean noun meet its particle
+  return !pickKey(key).split(" ").some((word) => words.some((each) => each.startsWith(word) || word.startsWith(each)));
+}
+
 /** How well a reply's question names a pick: the whole key as one phrase first, then how many of its words. */
 function topicScore(source: PickSource, key: string): [number, number] {
-  const text = ` ${pickKey([source.context, source.prior?.context].filter(Boolean).join(" "))} `;
+  const text = ` ${pickKey([asking(source.context), asking(source.prior?.context)].filter(Boolean).join(" "))} `;
   const words = pickKey(key).split(" ");
   return [text.includes(` ${words.join(" ")} `) ? 1 : 0, words.filter((word) => text.includes(` ${word} `)).length];
 }
@@ -126,6 +155,7 @@ export function validatePickBinding(claim: PickClaim, source: PickSource | undef
     ? [before.picture, ...before.overPictures].filter((picture): picture is Picture => Boolean(picture)) : [];
   const questionId = prior?.questionId ?? (recorded.length ? before?.questionId : undefined) ?? source.questionId ?? source.id;
   if (claim.questionId != null && claim.questionId !== questionId) return undefined;
+  if (namesOtherTopic(prior ? prior.context : source.context, claim.key)) return undefined;
   const [phrase, words] = topicScore(source, claim.key);
   if (rivals.some((other) => {
     if (other.questionId === questionId || other.prior?.questionId === questionId) return false;
@@ -156,7 +186,7 @@ export function validatePickBinding(claim: PickClaim, source: PickSource | undef
   return {
     [verifiedBinding]: true,
     at: source.at, messageId: source.id, questionId, thread: source.thread, picture,
-    overPictures: [...overPictures.values()].filter((value): value is Picture => value !== null), files,
+    overPictures: [...overPictures.values()].filter((value): value is Picture => value !== null), files, named: phrase === 1,
   };
 }
 

@@ -92,7 +92,7 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     const row = rows.get(each);
     if (!row) continue;
     row.hay = [row, ...row.older].flatMap((each) => [each.key, each.picked, each.said ?? "", ...each.over, ...each.tweaks.map((tweak) => tweak.said)]).join("\n").toLowerCase();
-    const key = dayOf(entryStamp(row));
+    const key = dayOf(entryStamp(row) || row.id);
     const day = days.get(key);
     if (day) day.push(row);
     else days.set(key, [row]);

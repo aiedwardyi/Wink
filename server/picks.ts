@@ -228,7 +228,9 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const evidence: Partial<PickBinding> = change.binding === "unbound" ? {} : change.binding ?? change;
     if (evidence.messageId && entries.some((entry) => entry.messageId === evidence.messageId && entry.thread === evidence.thread && pickKey(entry.key) === pickKey(key))) continue;
     if (current && sameOption(current.picked, picked)) {
-      if (overTap || (binding === "verified" && (current.binding === "unbound" || (current.binding === "verified" && !tapped && !current.tapped)))) {
+      // a re-pick whose question never names the pick keeps the verified picture and time
+      const proven = binding !== "verified" || current.binding !== "verified" || evidence.named;
+      if (proven && (overTap || (binding === "verified" && (current.binding === "unbound" || (current.binding === "verified" && !tapped && !current.tapped))))) {
         // pinned first: the identity hashes the time, and a merge must still find the tap
         current.source = identity(current);
         delete current.tapped;

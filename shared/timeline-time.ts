@@ -6,8 +6,9 @@ export function pickStamp(ms: number): string {
 }
 
 export function entryTime({ id, at, binding }: { id: string; at?: number; binding?: "verified" | "unbound" }): number {
-  if (binding === "unbound") return -Infinity;
-  if (at !== undefined) return at;
   const stamp = id.replace(/ \(\d+\)$/, "");
+  // a text-only pick sorts by its day alone: its minute was never proven
+  if (binding === "unbound") return new Date(`${stamp.slice(0, 10)}T00:00`).getTime();
+  if (at !== undefined) return at;
   return new Date(stamp.includes(" ") ? stamp.replace(" ", "T") : `${stamp}T00:00`).getTime();
 }

@@ -423,6 +423,7 @@ describe("decision timeline", () => {
     // SAFETY: the Timeline read uses only the bot's ids, its thread's messages and the room list.
     const read = () => timelinePicks(parseTimeline(timeline()).entries, { id: BOT, threadId: "t1" } as never, { groups: [], messagesFor: store.messagesFor } as never);
     const shown = () => read().map(({ key, binding, at, files, picture }) => [key, binding, at, files, picture]);
+    const byKey = () => Object.fromEntries(read().map(({ key, binding, at, files }) => [key, [binding, at, files]]));
 
     it("gives an answer two picks claim only to the pick its question names", async () => {
       ask("Forum");
@@ -491,7 +492,10 @@ describe("decision timeline", () => {
         : pairs === "swapped" ? { Forum: unbound, Settings: unbound } : { Forum: unbound });
     });
 
-    it.each(["Choose Forum: A - red cards or B - blue cards.", "Forum: A - red cards or B - blue cards?"])("ends an earlier question's pictures at the option prompt %s", async (prompt) => {
+    it.each([
+      "Choose Forum: A - red cards or B - blue cards.", "Forum: A - red cards or B - blue cards?",
+      "Choose Forum: **A - red cards** or **B - blue cards**.", "Choose Forum: (a) red cards or (b) blue cards.",
+    ])("ends an earlier question's pictures at the option prompt %s", async (prompt) => {
       const forum = screen("forum-only", "B - blue cards");
       bot(prompt);
       screen("settings-only", "B - blue cards");
@@ -521,6 +525,78 @@ describe("decision timeline", () => {
       expect(Object.fromEntries(read().map(({ key, at, files }) => [key, [at, files]]))).toEqual({
         Forum: [noon.at, [shot("noon-forum")]], Settings: [settingsAnswer.at, [shot("settings")]],
       });
+    });
+
+    it("keeps a pick's picture and time when another question's answer repeats its option under its name", async () => {
+      const forum = ask("Forum");
+      const first = answer("forum");
+      reply(claim("Forum", forum.id, first.id));
+      await settle();
+      vi.setSystemTime(NOW + 60 * MINUTE);
+      const settings = ask("Settings");
+      reply(claim("Forum", settings.id, answer("settings").id));
+      await settle();
+      expect(shown()).toEqual([["Forum", "verified", first.at, [shot("forum")], undefined]]);
+    });
+
+    it.each(["correct", "swapped", "omitted"].flatMap((pairs) => [
+      [pairs, "For the forum", "Forum layout is B - blue cards. Settings layout", "Forum layout", "Settings layout"],
+      [pairs, "Forum", "Forum is set to B - blue cards. Settings", "Forum", "Settings"],
+    ]))("never gives a pick the picture of a later question that restates it, %s pairs after %s", async (pairs, first, next, forumKey, settingsKey) => {
+      const forum = ask(first!);
+      const forumAnswer = answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const settings = ask(next!);
+      const settingsAnswer = answer("settings");
+      reply(...pairs === "correct" ? [claim(forumKey!, forum.id, forumAnswer.id), claim(settingsKey!, settings.id, settingsAnswer.id)]
+        : [claim(forumKey!, settings.id, settingsAnswer.id), ...pairs === "swapped" ? [claim(settingsKey!, forum.id, forumAnswer.id)] : []]);
+      await settle();
+      const unbound = ["unbound", undefined, []];
+      // "Forum layout" shares one word with each question, so even the correct pair ties: text only
+      const forumKept = forumKey === "Forum" ? ["verified", forumAnswer.at, [shot("forum")]] : unbound;
+      expect(byKey()).toEqual(pairs === "correct" ? { [forumKey!]: forumKept, [settingsKey!]: ["verified", settingsAnswer.at, [shot("settings")]] }
+        : pairs === "swapped" ? { [forumKey!]: unbound, [settingsKey!]: unbound } : { [forumKey!]: unbound });
+    });
+
+    it.each([
+      ["A - red cards or B - blue cards", "B - blue cards", "I choose B"],
+      ["1 - compact or 2 - roomy", "2 - roomy", "I choose 2"],
+    ])("never gives a pick the answer to a question named for another topic: Settings: %s", async (options, fact, quote) => {
+      ask("Forum", "A - red cards or C - green cards");
+      say("go with red");
+      vi.setSystemTime(NOW + MINUTE);
+      const settings = ask("Settings", options);
+      const answered = say(`${quote}\n\n<attached-image path="${shot("settings")}"/>`);
+      reply(claim("Forum", settings.id, answered.id, { fact, quote }));
+      await settle();
+      expect(byKey()).toEqual({ Forum: ["unbound", undefined, []] });
+    });
+
+    it("never gives a pick the answer to a question that only says that pick is done", async () => {
+      ask("First page");
+      answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const next = ask("Forum done. Next page");
+      const nextAnswer = answer("settings");
+      reply(claim("Forum", next.id, nextAnswer.id), claim("Settings", next.id, nextAnswer.id));
+      await settle();
+      expect(byKey()).toEqual({ Forum: ["unbound", undefined, []], Settings: ["unbound", undefined, []] });
+    });
+
+    it.each([
+      "Forum look is B - blue cards. Header size",
+      "Locked in: B - blue cards for the forum look. Next, header size",
+      "Forum look done. Header size",
+      "Blue cards for the forum look, got it. Header size",
+    ])("keeps each pick's own picture when the next question restates the last pick: %s", async (next) => {
+      const forum = ask("Forum look");
+      const forumAnswer = answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const header = ask(next);
+      const headerAnswer = answer("header");
+      reply(claim("Forum look", forum.id, forumAnswer.id), claim("Header size", header.id, headerAnswer.id));
+      await settle();
+      expect(byKey()).toEqual({ "Forum look": ["verified", forumAnswer.at, [shot("forum")]], "Header size": ["verified", headerAnswer.at, [shot("header")]] });
     });
   });
 
