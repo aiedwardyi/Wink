@@ -211,14 +211,10 @@ export function runHiddenVerify(input) {
         return false;
       });
       if (forms) notChecked.add("form delivery");
-      let lastY = 0;
+      const looked = [];
       for (const rule of rules) {
         if (tile === "desktop" && rule === scrollRule) continue;
         if (guard.layout && (rule === detailsRule || rule === wrapsRule || tile === "phone" && (rule === scrollRule || rule === menuRule))) { notChecked.add(`phone layout (${guard.layout})`); continue; }
-        if (lastY) {
-          await race(cdp.ev('(() => { scrollTo({ top: 0, behavior: "instant" }); void document.body.offsetWidth; return scrollY; })()'));
-          emit({ kind: "scroll", tile, y: 0 }); lastY = 0;
-        }
         const data = await observe(cdp, rule, tile);
         if (!data) continue;
         try {
@@ -236,42 +232,52 @@ export function runHiddenVerify(input) {
           for (const row of checked.problems) problems.push(decorate(row));
           for (const reason of checked.notChecked) notChecked.add(reason);
           for (const row of checked.details ?? []) details.push(decorate(row));
-          const remaining = [...checked.problems];
-          let y = data.viewport?.y ?? 0;
-          let lastTarget = y;
-          candidates.sort((a, b) => (a.box?.[1] ?? 0) + (a.scrollY ?? 0) - (b.box?.[1] ?? 0) - (b.scrollY ?? 0));
-          for (const element of candidates) {
-            if (element.box && data.viewport) {
-              const documentY = element.box[1] + (element.scrollY ?? 0), height = data.viewport.height;
-              const target = Math.min(data.viewport.maxScroll, Math.max(0, Math.floor(Math.max(0, documentY - 80) / Math.max(1, height - 120)) * Math.max(1, height - 120)));
-              if (target !== lastTarget) {
-                flushChecks();
-                y = await race(cdp.ev(`(() => { scrollTo({ top: ${target}, behavior: "instant" }); void document.body.offsetWidth; return scrollY; })()`));
-                lastTarget = target;
-                emit({ kind: "scroll", tile, y }); await shot(tile, y);
-              }
-              element.box = [element.box[0], documentY - y, element.box[2], element.box[3]];
-              element.scrollY = y;
-            }
-            const found = remaining.filter(row => row.where === element.where && (!element.rule || element.rule === row.rule) && element.bad !== false);
-            for (const row of found) remaining.splice(remaining.indexOf(row), 1);
-            complete(element.unchecked === true || element.pending === true, found.length > 0 || element.bad === true, { tile, checker: rule.id, rule: element.rule ?? rule.label, where: element.where ?? "page", ...(element.box ? { box: element.box } : {}), scrollY: element.scrollY ?? 0, detail: rule === detailsRule });
-            if (counts.completed % 64 === 0) await race(new Promise(setImmediate));
-          }
-          for (const row of remaining) complete(false, true, { ...decorate(row), detail: false, scrollY: 0 });
-          lastY = y;
-          for (const row of [...problems, ...details].filter(row => row.tile === tile && row.checker === rule.id)) {
-            const element = candidates.find(item => item.where === row.where && (!item.rule || item.rule === row.rule));
-            if (element?.box) { row.box = element.box; row.scrollY = element.scrollY ?? 0; }
-          }
-          flushChecks(); casts[tile]?.readerStop();
-          if (rule === linksRule && tile === "desktop") emit({ kind: "part", part: "links" });
-          input.onTiming?.("first-check", Date.now());
+          looked.push({ rule, data, candidates, decorate, remaining: [...checked.problems], left: candidates.length });
         } catch (error) {
           if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
           notChecked.add(`${rule.label} (${tile})`);
         }
       }
+      // One pass down the page checks every rule at each stop; a pass per rule sent the view back to the top for each.
+      const docY = element => (element.box?.[1] ?? 0) + (element.scrollY ?? 0);
+      const stops = looked.flatMap(look => look.candidates.map(element => ({ look, element }))).sort((a, b) => docY(a.element) - docY(b.element));
+      const viewport = looked.find(look => look.data.viewport)?.data.viewport;
+      let y = viewport?.y ?? 0, lastTarget = y;
+      try {
+        for (const { look, element } of stops) {
+          const { rule, remaining } = look;
+          if (element.box && viewport) {
+            const documentY = docY(element), height = viewport.height;
+            const target = Math.min(viewport.maxScroll, Math.max(0, Math.floor(Math.max(0, documentY - 80) / Math.max(1, height - 120)) * Math.max(1, height - 120)));
+            if (target !== lastTarget) {
+              flushChecks();
+              y = await race(cdp.ev(`(() => { scrollTo({ top: ${target}, behavior: "instant" }); void document.body.offsetWidth; return scrollY; })()`));
+              lastTarget = target;
+              emit({ kind: "scroll", tile, y }); await shot(tile, y);
+            }
+            element.box = [element.box[0], documentY - y, element.box[2], element.box[3]];
+            element.scrollY = y;
+          }
+          const found = remaining.filter(row => row.where === element.where && (!element.rule || element.rule === row.rule) && element.bad !== false);
+          for (const row of found) remaining.splice(remaining.indexOf(row), 1);
+          complete(element.unchecked === true || element.pending === true, found.length > 0 || element.bad === true, { tile, checker: rule.id, rule: element.rule ?? rule.label, where: element.where ?? "page", ...(element.box ? { box: element.box } : {}), scrollY: element.scrollY ?? 0, detail: rule === detailsRule });
+          look.left--;
+          if (counts.completed % 64 === 0) await race(new Promise(setImmediate));
+        }
+      } catch (error) {
+        if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
+        for (const look of looked.filter(row => row.left)) notChecked.add(`${look.rule.label} (${tile})`);
+      }
+      for (const { rule, candidates, decorate, remaining } of looked.filter(row => !row.left)) {
+        for (const row of remaining) complete(false, true, { ...decorate(row), detail: false, scrollY: 0 });
+        for (const row of [...problems, ...details].filter(row => row.tile === tile && row.checker === rule.id)) {
+          const element = candidates.find(item => item.where === row.where && (!item.rule || item.rule === row.rule));
+          if (element?.box) { row.box = element.box; row.scrollY = element.scrollY ?? 0; }
+        }
+      }
+      flushChecks(); casts[tile]?.readerStop();
+      if (tile === "desktop" && looked.some(look => look.rule === linksRule)) emit({ kind: "part", part: "links" });
+      if (looked.length) input.onTiming?.("first-check", Date.now());
       await interact(cdp, tile);
       const data = { images: [] };
       await pageErrors(data, tiles[i], blockedGuard(blocked.filter(row => !hmr.has(row.url))).scripts || guard.scripts);

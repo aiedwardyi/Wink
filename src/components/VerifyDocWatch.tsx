@@ -20,6 +20,7 @@ const copy = {
 };
 const FADE_MS = 180;
 const EASE = Array.from({ length: 9 }, (_, i) => glideEase(i / 8));
+const RIDE = [0, 1];
 const KINDS = new Set<string>(VERIFY_DOC_KINDS);
 const route = (path: string, runId: string) => path.replace(":runId", encodeURIComponent(runId));
 const int = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
@@ -80,9 +81,25 @@ function linesInView(stage: HTMLElement): [number, number] | null {
 }
 
 /** The checkers' cursors: plain elements moved by transform, outside React, so a glide costs no render. `glide`: a camera moves the view. */
-function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, follows: (cursor: DocCursor) => boolean, glide: boolean) {
-  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; at: number; ms: number; band: number; lead: boolean; find: boolean; animation?: Animation }>(), fading = new Set<ReturnType<typeof setTimeout>>();
-  let offset = 0;
+function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, follows: (cursor: DocCursor) => boolean, glide: boolean, front: (now: number) => number | null) {
+  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; fromX: number; at: number; ms: number; band: number; lead: boolean; find: boolean; curve: readonly number[]; animation?: Animation; rows?: { from: number; to: number; adj: number } }>(), fading = new Set<ReturnType<typeof setTimeout>>();
+  let offset = 0, frame = 0;
+  const lineY = (line: number) => {
+    const view = stage.getBoundingClientRect().top - stage.scrollTop, top = (n: number) => stage.querySelector<HTMLElement>(`[data-n="${n}"]`)?.getBoundingClientRect().top;
+    const a = top(Math.floor(line)), b = top(Math.floor(line) + 1) ?? a;
+    return a === undefined ? undefined : a + (b! - a) * (line % 1) - view;
+  };
+  // A skim reader rides the same front the view sweeps with, a few rows below it; only its place among those rows glides.
+  const ride = (now: number) => {
+    frame = 0;
+    const at = front(now);
+    for (const c of shown.values()) {
+      if (!c.rows || at === null) continue;
+      const k = c.ms ? Math.min(1, Math.max(0, (now - c.at) / c.ms)) : 1, y = lineY(at + c.rows.from + (c.rows.to - c.rows.from) * k);
+      if (y !== undefined) c.el.style.transform = `translate(${c.fromX + (c.x - c.fromX) * k}px,${y - offset + c.rows.adj}px)`;
+    }
+    if ([...shown.values()].some(c => c.rows)) frame = requestAnimationFrame(ride);
+  };
   return {
     move(c: DocCursor) {
       const layer = stage.querySelector<HTMLElement>(".verify-doc-cursors"), row = stage.querySelector<HTMLElement>(`[data-n="${c.line}"]`);
@@ -109,15 +126,23 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
         el.lastElementChild!.textContent = tag(c.kind);
         layer.append(el);
         el.animate?.([{ opacity: 0 }, { opacity: 1 }], FADE_MS);
-        shown.set(c.id, cursor = { el, x, y, from: y, at: 0, ms: 0, band: c.band, lead, find: false });
+        shown.set(c.id, cursor = { el, x, y, from: y, fromX: x, at: 0, ms: 0, band: c.band, lead, find: false, curve: EASE });
       }
       const { el, x: fx, y: fy } = cursor, label = el.lastElementChild as HTMLElement;
       const spot = tagSpot({}, { x, y }, label.offsetWidth, [row.parentElement!.getBoundingClientRect().right - origin.left, layer.clientHeight], 1)!;
       label.style.transform = `translate(${spot.x}px,${spot.y}px)`;
       el.dataset.line = String(c.line);
       el.style.transform = `translate(${x}px,${y}px)`;
-      const animation = c.duration ? el.animate?.(EASE.map(e => ({ transform: `translate(${fx + (x - fx) * e}px,${fy + (y - fy) * e}px)` })), c.duration) : undefined;
-      Object.assign(cursor, { x, y, from: cursor.y, at: performance.now(), ms: c.duration, lead, find: c.quote !== undefined, animation });
+      const curve = c.ride ? RIDE : EASE, animation = c.duration && !c.ride ? el.animate?.(EASE.map(e => ({ transform: `translate(${fx + (x - fx) * e}px,${fy + (y - fy) * e}px)` })), c.duration) : undefined;
+      if (c.ride) cursor.animation?.cancel();
+      const now = performance.now(), arrive = c.ride ? front(now + c.duration) : null, rowY = c.ride ? lineY(c.line) : undefined;
+      const rows = arrive === null || rowY === undefined ? undefined : { from: cursor.rows ? cursor.rows.from + (cursor.rows.to - cursor.rows.from) * Math.min(1, cursor.ms ? (now - cursor.at) / cursor.ms : 1) : c.line - front(now)!, to: c.line - arrive, adj: y - (rowY - offset) };
+      Object.assign(cursor, { x, y, from: fy, fromX: fx, at: now, ms: c.duration, lead, find: c.quote !== undefined, curve, animation, rows });
+      if (rows) {
+        const at = front(now), start = at === null ? undefined : lineY(at + rows.from);
+        if (start !== undefined) el.style.transform = `translate(${fx}px,${start - offset + rows.adj}px)`;
+        if (!frame) frame = requestAnimationFrame(ride);
+      }
     },
     /** The furthest-down reader of the chunk being read and the names cursor, in the stage's scroll space. */
     view(now: number): DocView {
@@ -125,13 +150,14 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
       for (const c of shown.values()) {
         // A browser glide can start a frame later than the timer that requested it.
         const time = c.animation?.currentTime, elapsed = typeof time === "number" ? time : time === null ? 0 : now - c.at;
-        const k = Math.min(1, Math.max(0, elapsed / Math.max(1, c.ms))) * (EASE.length - 1), i = Math.min(EASE.length - 2, Math.floor(k));
-        const ease = EASE[i]! + (EASE[i + 1]! - EASE[i]!) * (k - i), y = offset + c.from + (c.y - c.from) * ease;
+        const k = Math.min(1, Math.max(0, elapsed / Math.max(1, c.ms))) * (c.curve.length - 1), i = Math.min(c.curve.length - 2, Math.floor(k));
+        const ease = c.curve[i]! + (c.curve[i + 1]! - c.curve[i]!) * (k - i), y = offset + c.from + (c.y - c.from) * ease;
         if (c.band === 0 && !(c.lead && c.find)) seen.stop = Math.min(seen.stop ?? Infinity, y);
         else if (c.lead) seen.lead = { y: Math.max(seen.lead?.y ?? -Infinity, y), to: Math.max(seen.lead?.to ?? -Infinity, offset + c.y) };
       }
       return seen;
     },
+    lineY,
     leave(id: string) {
       const cursor = shown.get(id);
       if (!cursor) return;
@@ -141,6 +167,8 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
       fading.add(gone);
     },
     clear() {
+      cancelAnimationFrame(frame);
+      frame = 0;
       fading.forEach(clearTimeout);
       fading.clear();
       shown.clear();
@@ -173,6 +201,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const stageRef = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const leadLine = useRef(0);
+  const front = useRef<(now: number) => number | null>(() => null);
   const cursorsRef = useRef<ReturnType<typeof docCursors>>(null);
   const tags = useRef(d.tags);
   tags.current = d.tags;
@@ -186,8 +215,9 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
     if (!runId) { setPhase("expired"); return; }
     const abort = new AbortController(), stage = stageRef.current!;
     const doc = new VerifyDocShow(live, reducedMotion(), () => linesInView(stage));
-    const cursors = cursorsRef.current = docCursors(stage, kind => tags.current[kind], c => follow.current && c.band === leadLine.current && (c.kind !== "numbering" || c.quote !== undefined), !live);
+    const cursors = cursorsRef.current = docCursors(stage, kind => tags.current[kind], c => follow.current && c.band === leadLine.current && (c.kind !== "numbering" || c.quote !== undefined), !live, now => front.current(now));
     let timer: ReturnType<typeof setTimeout> | undefined, last = performance.now();
+    front.current = now => doc.front(doc.clock + Math.max(0, now - last));
     // One timer to the next thing due: a glide starts or a mark lands. Nothing runs per frame.
     const pump = () => {
       clearTimeout(timer);
@@ -200,7 +230,9 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
         return end ? { ...next, ms: Math.max(next.ms, end.ms), ended: true, blocked: end.blocked } : next;
       }));
       step.left.forEach(cursors.leave);
-      step.moved.forEach(cursors.move);
+      // A skim glide keeps its arrival time though drawing the marks above took a while.
+      const late = performance.now() - now;
+      step.moved.forEach(c => cursors.move(c.ride ? { ...c, duration: Math.max(0, c.duration - late) } : c));
       if (end) { setPhase("done"); return; }
       const wait = doc.due();
       if (wait < Infinity) timer = setTimeout(pump, wait);
@@ -228,7 +260,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
       }
       pump();
     })().catch(() => { if (!abort.signal.aborted) setPhase("failed"); });
-    return () => { abort.abort(); clearTimeout(timer); cursors.clear(); };
+    return () => { abort.abort(); clearTimeout(timer); cursors.clear(); front.current = () => null; };
   }, [live, round, runId, streaming]);
 
   useEffect(() => {
@@ -257,7 +289,10 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const camera = !live && !reducedMotion(), glide = camera && phase === "play" && !show.ended;
   useEffect(() => {
     if (!glide || !gate) return;
-    return docCamera(stageRef.current!, now => cursorsRef.current?.view(now) ?? {}, () => follow.current, () => { follow.current = false; });
+    return docCamera(stageRef.current!, now => {
+      const view = cursorsRef.current?.view(now) ?? {}, line = front.current(now), sweep = line === null ? undefined : cursorsRef.current?.lineY(line);
+      return sweep === undefined ? view : { ...view, sweep };
+    }, () => follow.current, () => { follow.current = false; });
   }, [glide, gate]);
   useEffect(() => {
     const stage = stageRef.current, row = target === undefined ? null : stage?.querySelector<HTMLElement>(`[data-n="${target}"]`);
