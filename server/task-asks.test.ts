@@ -237,7 +237,7 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
 
     it("merges a new ask that closely matches an open one and says so", () => {
       const first = saved(mergeTaskAsks(undefined, [{ ask: "Show every open ask in the asks list", status: "open" }], NOW - HOUR));
-      const again = saved(mergeTaskAsks(first, [{ ask: "make the asks list show every open ask", status: "building", ref: "PR #2000" }], NOW));
+      const again = saved(mergeTaskAsks(first, [{ ask: "the asks list: show every open asks", status: "building", ref: "PR #2000" }], NOW));
       expect(again.asks).toEqual([{ id: "A1", ask: "Show every open ask in the asks list", status: "building", ref: "PR #2000", at: NOW - HOUR, changedAt: NOW }]);
       expect(again.note).toBe("Asks saved: merged into A1; 1 open.");
       const other = saved(mergeTaskAsks({ asks: [ask(1, { ask: "Fix the login redirect" })] }, [{ ask: "Fix the logout redirect", status: "open" }], NOW));
@@ -267,6 +267,29 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       expect(asksBlock(before, NOW)).toContain("- A1 open 11-12: ask number 1");
       const edited = saved(mergeTaskAsks({ asks: before }, [{ id: "A1", ask: "ask number one, reworded", status: "building", ref: "card X" }], NOW)).asks;
       expect(asksBlock(edited, NOW + 1).split("\n")).toEqual(["[Wink asks list - 2 open.]", "- A1 building 11-12: ask number one, reworded (card X)", "- A2 open 11-12: ask number 2"]);
+    });
+
+    it("never merges asks whose key words differ, even when most words match", () => {
+      const french = saved(mergeTaskAsks(undefined, [{ ask: "Translate settings page into French", status: "open" }], NOW));
+      const german = saved(mergeTaskAsks(french, [{ ask: "Translate settings page into German", status: "open" }], NOW));
+      expect(german.note).toBe("Asks saved: added A2; 2 open.");
+      expect(german.asks.map((item) => item.ask)).toEqual(["Translate settings page into French", "Translate settings page into German"]);
+      expect(sameAsk("Translate settings page", "Translate settings page into Korean")).toBe(false);
+      expect(sameAsk("Fix the login redirect", "Fix the login redirect on mobile")).toBe(false);
+    });
+
+    it("keeps a parked ask parked when a similar new ask comes in", () => {
+      const parked = saved(mergeTaskAsks(undefined, [{ ask: "Renew the domain", status: "parked", until: "2026-12-01" }], NOW));
+      const again = saved(mergeTaskAsks(parked, [{ ask: "renew  the DOMAIN", status: "building" }], NOW));
+      expect(again.asks[0]).toMatchObject({ id: "A1", status: "open", until: NOV(1 + 30) });
+      expect(again.asks[1]).toMatchObject({ id: "A2", ask: "renew  the DOMAIN", status: "building" });
+      expect(again.note).toBe("Asks saved: added A2; 1 open, 1 parked.");
+    });
+
+    it("reads -es plurals and verb forms as the same word", () => {
+      expect(sameAsk("fixes the login redirects", "Fix login redirect")).toBe(true);
+      expect(sameAsk("pushes the release branches", "push release branch")).toBe(true);
+      expect(sameAsk("closes the ticket", "close the ticket")).toBe(true);
     });
 
     it("tells every bot the list is whole, how to park, that repeats merge and how to judge an old ask", () => {
