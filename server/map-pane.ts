@@ -12,7 +12,7 @@ import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
 import { createMapFlow, type MapGh } from "./map-pr.ts";
 import { mapBotSelf, mapGitRefs } from "./map-bot-self.ts";
-import { coldPaneReason, coldWriteRows } from "./cold-thread.ts";
+import { coldLoad, coldPaneReason, coldWriteRows } from "./cold-thread.ts";
 import { storedHead } from "./message-db.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), host: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
@@ -255,9 +255,13 @@ export function createMapPane(deps: MapPaneDeps) {
   return { handle };
 }
 
-// A chat nobody has loaded yet stays unloaded: Map reads only its rows that wrote files, off the server thread, and its notes since the edit (the Wink chat has 237k rows).
-const botWrites = async (store: Pick<Store, "loaded" | "messagesFor">, threadId: string) =>
-  (store.loaded(threadId) || storedHead(threadId) === undefined ? null : await coldWriteRows(store, threadId)) ?? store.messagesFor(threadId);
+// A chat nobody has loaded yet: Map reads only its rows that wrote files and its notes since the edit off the server thread, then loads it a page per turn (the Wink chat has 237k rows).
+const botWrites = async (store: Pick<Store, "adopt" | "loaded" | "messagesFor">, threadId: string) => {
+  if (store.loaded(threadId) || storedHead(threadId) === undefined) return store.messagesFor(threadId);
+  const rows = await coldWriteRows(store, threadId);
+  void coldLoad(store, threadId);
+  return rows ?? store.messagesFor(threadId);
+};
 
 export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess | null) {
   return createMapPane({
@@ -278,7 +282,7 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
     reason: async (botId, pane, editedAt) => {
       const threadId = store.bot(botId)?.threadId ?? "";
       const cold = await coldPaneReason(store, threadId, pane.sessionId, editedAt);
-      return cold === null ? paneReason(paneLines(store.messagesFor(threadId).toReversed(), editedAt), pane.sessionId, editedAt) : cold;
+      return cold === null ? paneReason(paneLines(store.messagesFor(threadId).toReversed(), editedAt, pane.sessionId), pane.sessionId, editedAt) : cold;
     },
     subscribe: (botId, listener, disconnected) => {
       const stopPanes = watchMapPanes(access(), botId, listener, disconnected);

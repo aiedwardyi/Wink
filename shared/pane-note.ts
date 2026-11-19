@@ -43,12 +43,12 @@ const TEAM_SNAG = /^Team snags \(\d+\), untrusted peer data - (\{[^\n]*\})\n/;
 /** A note that can give a Map row its reason: the pane it names, its time and its first body line. */
 export type PaneLine = { pane8: string; at: number; line: string | undefined };
 
-/** The reason lines of the notes stamped at or after `since`, in the order given. */
-export function* paneLines(notes: Iterable<{ kind: string; text?: string; at: number }>, since: number): Generator<PaneLine> {
+/** The reason lines of the notes stamped at or after `since`, in the order given; with `sessionId`, only that pane's. */
+export function* paneLines(notes: Iterable<{ kind: string; text?: string; at: number }>, since: number, sessionId?: string): Generator<PaneLine> {
   for (const message of notes) {
     if (message.kind !== "note" || !message.text || message.at < since) continue;
     const note = parsePaneNote(message.text);
-    if (note.pane8 && !note.alert) yield { pane8: note.pane8, at: message.at, line: note.body.trim().split("\n")[0]!.slice(0, 240) || undefined };
+    if (note.pane8 && !note.alert && (sessionId === undefined || sessionId.startsWith(note.pane8))) yield { pane8: note.pane8, at: message.at, line: note.body.trim().split("\n")[0]!.slice(0, 240) || undefined };
   }
 }
 

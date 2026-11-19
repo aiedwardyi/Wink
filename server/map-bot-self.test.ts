@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +14,7 @@ import { Store, type Message, type StoreChange } from "./store.ts";
 import { messageDatabase } from "./message-db.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { completedTool } from "./tool-activity.ts";
+import type { SyncChange } from "./thread-sync-v2.ts";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -98,7 +100,7 @@ it("shows the bot as a row with the files its own turn edited in a git folder", 
   map.close();
 });
 
-it("reads only the rows that wrote files and leaves a long chat unloaded", async () => {
+it("reads only the rows that wrote files, then loads a long chat off the server thread", async () => {
   const { root } = repo();
   rmSync(DATA_DIR, { recursive: true, force: true });
   const write = (store: Store, threadId: string, path: string) => {
@@ -113,13 +115,19 @@ it("reads only the rows that wrote files and leaves a long chat unloaded", async
   writeFileSync(join(root, "other.ts"), "const second = 2;\n");
   write(setup, bot.threadId, "other.ts");
   const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
-  const whole = vi.spyOn(store, "messagesFor");
+  const messagesFor = store.messagesFor.bind(store);
+  const cold: string[] = [];
+  vi.spyOn(store, "messagesFor").mockImplementation(threadId => {
+    if (!store.loaded(threadId)) cold.push(threadId);
+    return messagesFor(threadId);
+  });
   const map = await open([], undefined, undefined, { store, botId: bot.id });
   const shown = await map.until(data => data.workers.length > 0);
   map.close();
   expect(shown.workers[0].files.map(file => file.path).sort()).toEqual(["file.ts", "other.ts"]);
-  expect(whole).not.toHaveBeenCalled();
-  expect(store.loaded(bot.threadId)).toBe(false);
+  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  expect(cold).toEqual([]);
+  expect(store.messagesFor(bot.threadId)).toEqual(setup.messagesFor(bot.threadId));
 });
 
 it("keeps serving while it reads an unloaded chat's write rows from a large database", async () => {
@@ -164,14 +172,16 @@ it("reads no note for panes edited after every note of an unloaded chat", async 
     setup.appendMessage(bot.threadId, row);
   }
   const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
-  const parse = vi.spyOn(JSON, "parse");
+  const post = vi.spyOn(Worker.prototype, "postMessage");
   const map = await open([], undefined, undefined, { store, botId: bot.id });
   const shown = await map.until(data => data.workers.length === 2);
   map.close();
-  const notes = parse.mock.calls.filter(([text]) => text.includes('"kind":"note"')).length;
-  parse.mockRestore();
+  // SAFETY: cold-thread.ts posts each worker request as one object.
+  const since = post.mock.calls.map(([request]) => (request as { notesSince?: number }).notesSince).filter(at => at !== undefined);
+  post.mockRestore();
   expect(shown.workers.map(worker => worker.reason)).toEqual([undefined, undefined]);
-  expect(notes).toBe(0);
+  // the chat then loads once off the server thread; the reason reads ask only for notes since each edit
+  expect(since.filter(at => at < Date.now() - 30_000)).toEqual([]);
 });
 
 // Two rows whose edits left no change, so each reason reads every note since 0, and `count` notes about other panes.
@@ -207,7 +217,7 @@ it("keeps serving while it reads clean rows' reasons from an unloaded chat's not
   const map = await open([], undefined, undefined, real);
   expect((await map.until(() => true)).workers).toEqual([]);
   map.close();
-  expect(real.store.loaded(real.store.bot(real.botId)!.threadId)).toBe(false);
+  await vi.waitFor(() => expect(loaded(real.store.bot(real.botId)!.threadId)).toBe(true));
   expect(Math.max(...waits)).toBeLessThan(50);
 });
 
@@ -225,7 +235,81 @@ it("reads an unloaded chat's write rows and notes once across Map reads of clean
   const requests = post.mock.calls.map(([request]) => request as { notesSince?: number; writes?: true });
   parse.mockRestore();
   post.mockRestore();
-  expect({ notes: here + 200 * requests.filter(request => request.notesSince === 0).length, writeReads: requests.filter(request => request.writes).length }).toEqual({ notes: 200, writeReads: 1 });
+  // the chat then loads once, parsing each note here, so the reason may come from the loaded chat
+  expect(requests.filter(request => request.notesSince === 0).length).toBeLessThanOrEqual(1);
+  expect(here).toBeLessThanOrEqual(200);
+  expect(requests.filter(request => request.writes).length).toBe(1);
+});
+
+// A peer's row change as applySyncChanges takes it: the chat keeps its row count and newest row.
+const synced = (message: Message): SyncChange => ({ cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false });
+const selfRow = (root: string) => `self-${createHash("sha256").update(root).digest("hex").slice(0, 12)}`;
+
+it("moves the bot's row when a synced patch moves its write to another checkout of an unloaded chat", async () => {
+  const [a, b] = [repo().root, repo().root];
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  for (const root of [a, b]) writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  const { id: _id, at: _at, ...row } = edited([join(a, "file.ts")]);
+  const wrote = setup.appendMessage(bot.threadId, row);
+  const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const map = await open([], undefined, undefined, { store, botId: bot.id });
+  expect((await map.until(data => data.workers.length > 0)).workers.map(worker => worker.id)).toEqual([selfRow(a)]);
+  store.applySyncChanges(bot.id, bot.threadId, [synced({ ...wrote, tool: { ...wrote.tool!, writes: [join(b, "file.ts")] } })]);
+  expect((await map.until(data => data.workers[0]?.id !== selfRow(a))).workers.map(worker => worker.id)).toEqual([selfRow(b)]);
+  map.close();
+});
+
+it("shows the bot's row once a synced completion gives a pending tool of an unloaded chat its write", async () => {
+  const { root } = repo();
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  const pending = setup.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "Edit" } });
+  const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const map = await open([], undefined, undefined, { store, botId: bot.id });
+  expect((await map.until(() => true)).workers).toEqual([]);
+  store.applySyncChanges(bot.id, bot.threadId, [synced({ ...pending, tool: edited([join(root, "file.ts")]).tool })]);
+  expect((await map.until(data => data.workers.length > 0)).workers.map(worker => worker.id)).toEqual([selfRow(root)]);
+  map.close();
+});
+
+it("follows the bot to a new task mid-turn, and back to the chat whose tool completed meanwhile", async () => {
+  const [a, b] = [repo().root, repo().root];
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  for (const root of [a, b]) writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  const pending = setup.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "Edit" } });
+  const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const map = await open([], undefined, undefined, { store, botId: bot.id });
+  expect((await map.until(() => true)).workers).toEqual([]);
+  const task = store.createTask(bot.id)!;
+  const { id: _id, at: _at, ...row } = edited([join(b, "file.ts")]);
+  store.appendMessage(task.threadId, row);
+  expect((await map.until(data => data.workers.length > 0)).workers.map(worker => worker.id)).toEqual([selfRow(b)]);
+  store.patchMessage(bot.threadId, pending.id, { tool: edited([join(a, "file.ts")]).tool });
+  store.switchTask(bot.id, bot.threadId);
+  store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "Read" } });
+  expect((await map.until(data => data.workers[0]?.id !== selfRow(b))).workers.map(worker => worker.id)).toEqual([selfRow(a)]);
+  map.close();
+});
+
+it("reads nothing off the server thread for a bot on a brand-new task", async () => {
+  rmSync(DATA_DIR, { recursive: true, force: true });
+  const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const bot = setup.createBot({}, { seedMessages: false });
+  const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+  const post = vi.spyOn(Worker.prototype, "postMessage");
+  const map = await open([], undefined, undefined, { store, botId: bot.id });
+  expect((await map.until(() => true)).workers).toEqual([]);
+  map.close();
+  // SAFETY: cold-thread.ts posts each worker request as one object.
+  const reads = post.mock.calls.filter(([request]) => (request as { threadId?: string }).threadId === bot.threadId);
+  post.mockRestore();
+  expect(reads).toEqual([]);
 });
 
 it("shows no row for a bot that only chats, or whose edit failed or left no change", async () => {

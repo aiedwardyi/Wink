@@ -4,9 +4,10 @@ import { Worker } from "node:worker_threads";
 
 import { offscreenLimit } from "./chat-tail.ts";
 import type { TailRead, TailReply, TailRequest } from "./cold-thread-worker.ts";
-import { lastRowid, messageDbFile, threadOver, type ThreadRows } from "./message-db.ts";
+import { messageDbFile, onMessageChange, readMessage, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
 import { paneReason, type PaneLine } from "../shared/pane-note.ts";
 import type { Message, Store } from "./store.ts";
+import { rowChars } from "./thread-cache.ts";
 
 type Tail = ThreadRows & { options: Message[] };
 
@@ -81,24 +82,33 @@ export async function chatListPage(
   return { messages: messages.slice(start), hasMore: start > 0 };
 }
 
-// per chat, its write rows read while no row is added: each Map refresh asks again
-const writeRows = new Map<string, { cursor: number; rows: Promise<Message[]> }>();
+// per unloaded chat, Map's reads of one version of it: each Map refresh asks again, a change to its rows or a load drops them, and the two chats read last keep theirs
+type ColdReads = { version: string; writes?: Promise<Message[]>; notes?: { since: number; lines: Promise<PaneLine[]> } };
+const coldReads = new Map<string, ColdReads>();
+let dropOnChange: (() => void) | undefined;
+
+function readsOf(threadId: string, version: string): ColdReads {
+  dropOnChange ??= onMessageChange((changed) => coldReads.delete(changed));
+  let reads = coldReads.get(threadId);
+  coldReads.delete(threadId);
+  if (reads?.version !== version) reads = { version };
+  coldReads.set(threadId, reads);
+  for (const older of coldReads.keys()) if (coldReads.size > 2) coldReads.delete(older);
+  return reads;
+}
 
 /** The rows that wrote files, or null when the store must answer (loaded, no rows here, or the read failed). */
 export async function coldWriteRows(store: Pick<Store, "loaded">, threadId: string): Promise<Message[] | null> {
   if (store.loaded(threadId)) return null;
-  const cursor = lastRowid(threadId);
-  if (cursor === undefined) return null;
-  let read = writeRows.get(threadId);
-  if (read?.cursor !== cursor) {
-    read = { cursor, rows: (scans ??= startReader())({ threadId, writes: true }).then((tail) => tail.messages) };
-    writeRows.set(threadId, read);
-  }
+  const version = threadVersion(threadId);
+  if (version === undefined) return null;
+  const reads = readsOf(threadId, version);
+  const read = reads.writes ??= (scans ??= startReader())({ threadId, writes: true }).then((tail) => tail.messages);
   let rows: Message[];
   try {
-    rows = await read.rows;
+    rows = await read;
   } catch (error) {
-    if (writeRows.get(threadId) === read) writeRows.delete(threadId);
+    if (reads.writes === read) delete reads.writes;
     console.error("cold write rows read failed; the store answers", threadId, error);
     return null;
   }
@@ -106,29 +116,88 @@ export async function coldWriteRows(store: Pick<Store, "loaded">, threadId: stri
   return store.loaded(threadId) ? null : rows;
 }
 
-// per chat, the reason lines since the lowest cutoff asked while no row is added: a clean pane's cutoff is 0, so its read decodes every note
-const noteLines = new Map<string, { cursor: number; since: number; lines: Promise<PaneLine[]> }>();
-
 /** A Map row's reason from an unloaded chat, or null when the store must answer (loaded, no rows here, or the read failed). */
 export async function coldPaneReason(store: Pick<Store, "loaded">, threadId: string, sessionId: string, since: number): Promise<string | undefined | null> {
   if (store.loaded(threadId)) return null;
-  const cursor = lastRowid(threadId);
-  if (cursor === undefined) return null;
-  let read = noteLines.get(threadId);
-  if (!read || read.cursor !== cursor || read.since > since) {
-    read = { cursor, since, lines: (scans ??= startReader())({ threadId, notesSince: since }) };
-    noteLines.set(threadId, read);
-  }
+  const version = threadVersion(threadId);
+  if (version === undefined) return null;
+  const reads = readsOf(threadId, version);
+  // the lowest cutoff asked serves every later one: a clean pane's cutoff is 0, so its read decodes every note
+  if (!reads.notes || reads.notes.since > since) reads.notes = { since, lines: (scans ??= startReader())({ threadId, notesSince: since }) };
+  const read = reads.notes;
   let lines: PaneLine[];
   try {
     lines = await read.lines;
   } catch (error) {
-    if (noteLines.get(threadId) === read) noteLines.delete(threadId);
+    if (reads.notes === read) delete reads.notes;
     console.error("cold pane reason read failed; the store answers", threadId, error);
     return null;
   }
   // a write during the read loaded the chat, and its newest rows may not be saved yet
   return store.loaded(threadId) ? null : paneReason(lines, sessionId, since);
+}
+
+const loads = new Map<string, Promise<void>>();
+
+/** Loads an unloaded chat into the store, a worker reading its pages and this thread parsing one per turn: else the first send after Map's cold read reads it all at once. */
+export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
+  let load = loads.get(threadId);
+  if (!load) {
+    load = loadPages(store, threadId)
+      .catch((error) => console.error("cold chat load failed; the store loads it when used", threadId, error))
+      .finally(() => loads.delete(threadId));
+    loads.set(threadId, load);
+  }
+  return load;
+}
+
+async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
+  // only this handle writes rows (a peer's land through applySyncChanges), so its updates and deletes are all the pages can miss
+  const changed = new Set<string>();
+  const stop = onMessageChange((thread, id) => { if (thread === threadId) changed.add(id); });
+  try {
+    const messages: Message[] = [];
+    const at = new Map<string, number>();
+    const gone = new Set<number>();
+    let chars = 0;
+    const take = (message: Message) => {
+      const was = at.get(message.id);
+      if (was !== undefined) gone.add(was);
+      at.set(message.id, messages.push(message) - 1);
+    };
+    let cursor = 0;
+    for (;;) {
+      const page = await (reader ??= startReader())({ threadId, after: cursor });
+      if (store.loaded(threadId) || changed.size > 1024) return;
+      if (!page.length) break;
+      for (const row of page) {
+        take(rowToMessage(row));
+        chars += row.json.length;
+      }
+      cursor = page.at(-1)!.cursor;
+    }
+    // rows added since the worker's last page
+    for (let tail = scanThreadRows(threadId, cursor, 1024); tail.messages.length; tail = scanThreadRows(threadId, tail.cursor, 1024)) {
+      for (const message of tail.messages) {
+        take(message);
+        chars += rowChars(message);
+        changed.delete(message.id);
+      }
+    }
+    for (const id of changed) {
+      const index = at.get(id);
+      if (index === undefined) continue;
+      const message = readMessage(threadId, id);
+      if (message) messages[index] = message;
+      else gone.add(index);
+    }
+    const activeLeafId = storedHead(threadId);
+    if (activeLeafId === undefined) return;
+    store.adopt(threadId, { messages: gone.size ? messages.filter((_, index) => !gone.has(index)) : messages, activeLeafId, chars });
+    coldReads.delete(threadId);
+  } finally {
+    stop();
+  }
 }
 
 /** Chats past this many rows keep their tail page until a write or an older page loads them: a 237k-row chat took 3 s. */

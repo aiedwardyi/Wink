@@ -1333,10 +1333,17 @@ export class Store {
     this.threads.offer(threadId, state, chars);
   }
 
-  private readState(threadId: string): { state: ThreadState; chars: number } {
+  /** Takes a chat read off the server thread, unless a write loaded it first. */
+  adopt(threadId: string, read: mdb.ThreadRows & { chars: number }): void {
+    if (this.threads.has(threadId)) return;
+    const { state, chars } = this.readState(threadId, read);
+    this.threads.set(threadId, state, chars);
+  }
+
+  private readState(threadId: string, read = mdb.readThread(threadId, messagesFile(threadId))): { state: ThreadState; chars: number } {
     // SQLite is the source of truth; a thread with no rows imports its
     // legacy messages-<threadId>.json once, inside readThread
-    const { messages, activeLeafId: storedLeaf, chars } = mdb.readThread(threadId, messagesFile(threadId));
+    const { messages, activeLeafId: storedLeaf, chars } = read;
     let activeLeafId = storedLeaf;
     // legacy rows carry no parentId — chain them in array order
     let prev: string | null = null;

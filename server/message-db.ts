@@ -24,6 +24,9 @@ const DB_FILE = () => join(DATA_DIR, "messages.db");
 
 let handle: DatabaseSync | null = null;
 let handlePath: string | null = null;
+let opened = 0;
+const changes = new Map<string, number>();
+const changeListeners = new Set<(threadId: string, id: string) => void>();
 
 function open(): DatabaseSync {
   const file = DB_FILE();
@@ -60,7 +63,27 @@ function open(): DatabaseSync {
       active_leaf_id TEXT
     );
   `);
+  db.function("message_changed", (threadId, id) => {
+    changes.set(String(threadId), (changes.get(String(threadId)) ?? 0) + 1);
+    for (const listener of changeListeners) listener(String(threadId), String(id));
+    return null;
+  });
+  // An insert raises its thread's newest rowid; an insert trigger would slow a 237k-row import from 1.6 to 4.5 s.
+  db.exec(`
+    CREATE TEMP TRIGGER message_updated AFTER UPDATE ON main.messages BEGIN
+      SELECT message_changed(old.thread_id, old.id);
+      SELECT message_changed(new.thread_id, new.id) WHERE new.thread_id IS NOT old.thread_id OR new.id IS NOT old.id;
+    END;
+    CREATE TEMP TRIGGER message_deleted AFTER DELETE ON main.messages BEGIN SELECT message_changed(old.thread_id, old.id); END;
+  `);
+  opened++;
   return db;
+}
+
+/** Calls `listener` inside each statement on this process's handle that updates or deletes a row, so one that throws fails the write. */
+export function onMessageChange(listener: (threadId: string, id: string) => void): () => void {
+  changeListeners.add(listener);
+  return () => changeListeners.delete(listener);
 }
 
 /** The live handle — reopened when the file was removed out from under us
@@ -91,8 +114,10 @@ export function openThreadExport(file: string) {
   };
 }
 
-// SAFETY: Stored rows use the Message envelope; preview fields are scrubbed on every read.
-const rowToMessage = (row: { json: string }): Message => redactToolMessage(JSON.parse(row.json) as Message);
+export function rowToMessage(row: { json: string }): Message {
+  // SAFETY: Stored rows use the Message envelope; preview fields are scrubbed on every read.
+  return redactToolMessage(JSON.parse(row.json) as Message);
+}
 
 export interface ThreadRows {
   messages: Message[];
@@ -124,11 +149,14 @@ export function storedHead(threadId: string): string | null | undefined {
   return row.last === null ? undefined : row.leaf || row.last;
 }
 
-/** A thread's newest row cursor, or undefined when it has no rows here: every insert moves it. */
-export function lastRowid(threadId: string): number | undefined {
+/** A key that moves with every committed change to a thread's rows, or undefined when it has no rows here; key cached reads of a thread on it. */
+export function threadVersion(threadId: string): string | undefined {
   // SAFETY: MAX(rowid) returns one integer row, NULL for no rows.
   const row = db().prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null };
-  return row.cursor ?? undefined;
+  if (row.cursor === null) return undefined;
+  // SAFETY: PRAGMA data_version returns one integer row; it moves when another connection commits.
+  const other = db().prepare("PRAGMA data_version").get() as { data_version: number };
+  return `${opened}:${other.data_version}:${row.cursor}:${changes.get(threadId) ?? 0}`;
 }
 
 /** Whether a thread has more than `cap` rows; counts at most cap + 1 index entries. */
@@ -265,11 +293,16 @@ export function scanThreadRows(threadId: string, after = 0, limit = 256): Thread
   if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 1024) {
     throw new Error("Invalid thread scan page");
   }
+  const rows = threadRowsOn(db(), threadId, after, limit);
+  return { messages: rows.map(rowToMessage), cursor: rows.at(-1)?.cursor ?? after };
+}
+
+/** A thread's stored rows past `after`, oldest first and unparsed; cold-thread-worker.ts runs it on its own handle. */
+export function threadRowsOn(handle: DatabaseSync, threadId: string, after: number, limit: number): Array<{ cursor: number; json: string }> {
   // SAFETY: This projection selects SQLite's rowid and the stored message JSON.
-  const rows = db().prepare(
+  return handle.prepare(
     "SELECT rowid AS cursor, json FROM messages WHERE thread_id = ? AND rowid > ? ORDER BY rowid LIMIT ?",
   ).all(threadId, after, limit) as Array<{ cursor: number; json: string }>;
-  return { messages: rows.map(rowToMessage), cursor: rows.at(-1)?.cursor ?? after };
 }
 
 /** Pass the transaction handle to commit rows and their sync outbox together. */

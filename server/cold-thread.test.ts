@@ -1,12 +1,17 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { chatListPage, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldPaneReason, coldWriteRows, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
-import { messageDatabase, readThread } from "./message-db.ts";
+import { messageDatabase, messageDbFile, readThread } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
+import type { SyncChange } from "./thread-sync-v2.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -174,5 +179,135 @@ describe("warm chats", () => {
     await start();
     await vi.waitFor(() => expect(store.loaded(bots[1]!.threadId)).toBe(true));
     expect(read.mock.calls.filter(([threadId]) => threadId === bots[0]!.threadId)).toHaveLength(1);
+  });
+});
+
+setFlagsFromString("--expose-gc");
+// SAFETY: with --expose-gc set, a new context gets V8's gc() as a global function.
+const gc = runInNewContext("gc") as () => void;
+const collect = async () => {
+  for (let pass = 0; pass < 5; pass++) {
+    await new Promise(setImmediate);
+    gc();
+  }
+};
+
+const unloaded = { loaded: () => false };
+const wrote = (path: string): Omit<Message, "id" | "at"> => ({ role: "bot", kind: "activity", tool: { name: "Edit", ok: true, writes: [path] } });
+const synced = (message: Message): SyncChange => ({ cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false });
+const reads = (post: { mock: { calls: unknown[][] } }) => post.mock.calls.length;
+
+describe("Map's reads of an unloaded chat", () => {
+  it("reads again after a synced patch that keeps the chat's newest row", async () => {
+    const store = fresh();
+    const bot = store.createBot({}, { seedMessages: false });
+    const edit = store.appendMessage(bot.threadId, wrote("/a/file.ts"));
+    const note = store.appendMessage(bot.threadId, { role: "bot", kind: "note", text: "[pane 0f0f0f0f] before" });
+    const read = async () => ({
+      writes: (await coldWriteRows(unloaded, bot.threadId))?.map(row => row.tool?.writes),
+      reason: await coldPaneReason(unloaded, bot.threadId, "0f0f0f0f-pane", 0),
+    });
+    expect(await read()).toEqual({ writes: [["/a/file.ts"]], reason: "before" });
+    store.applySyncChanges(bot.id, bot.threadId, [synced({ ...edit, tool: { ...edit.tool!, writes: ["/b/file.ts"] } }), synced({ ...note, text: "[pane 0f0f0f0f] after" })]);
+    expect(await read()).toEqual({ writes: [["/b/file.ts"]], reason: "after" });
+  });
+
+  it("reads again after another connection commits to the chat", async () => {
+    const store = fresh();
+    const bot = store.createBot({}, { seedMessages: false });
+    const edit = store.appendMessage(bot.threadId, wrote("/a/file.ts"));
+    expect((await coldWriteRows(unloaded, bot.threadId))?.map(row => row.tool?.writes)).toEqual([["/a/file.ts"]]);
+    const other = new DatabaseSync(messageDbFile());
+    other.prepare("UPDATE messages SET json = ? WHERE thread_id = ? AND id = ?").run(JSON.stringify({ ...edit, tool: { ...edit.tool!, writes: ["/b/file.ts"] } }), bot.threadId, edit.id);
+    other.close();
+    expect((await coldWriteRows(unloaded, bot.threadId))?.map(row => row.tool?.writes)).toEqual([["/b/file.ts"]]);
+  });
+
+  it("keeps a chat's reads while another bot's chat or a room's changes", async () => {
+    const store = fresh();
+    const bot = store.createBot({}, { seedMessages: false });
+    const other = store.createBot({}, { seedMessages: false });
+    const room = store.createGroup("Room", [bot.id, other.id]);
+    store.appendMessage(bot.threadId, wrote("/a/file.ts"));
+    store.appendMessage(bot.threadId, { role: "bot", kind: "note", text: "[pane 0f0f0f0f] mine" });
+    const theirs = store.appendMessage(other.threadId, { role: "bot", kind: "note", text: "[pane 0f0f0f0f] theirs" });
+    const said = store.appendMessage(room.threadId, { role: "bot", kind: "note", text: "[pane 0f0f0f0f] room" });
+    expect(await coldPaneReason(unloaded, bot.threadId, "0f0f0f0f-pane", 0)).toBe("mine");
+    await coldWriteRows(unloaded, bot.threadId);
+    const post = vi.spyOn(Worker.prototype, "postMessage");
+    store.applySyncChanges(other.id, other.threadId, [synced({ ...theirs, text: "[pane 0f0f0f0f] theirs again" })]);
+    messageDatabase().prepare("UPDATE messages SET json = ? WHERE thread_id = ? AND id = ?").run(JSON.stringify({ ...said, text: "[pane 0f0f0f0f] room again" }), room.threadId, said.id);
+    expect(await coldPaneReason(unloaded, bot.threadId, "0f0f0f0f-pane", 0)).toBe("mine");
+    expect((await coldWriteRows(unloaded, bot.threadId))?.map(row => row.tool?.writes)).toEqual([["/a/file.ts"]]);
+    expect(reads(post)).toBe(0);
+  });
+
+  it("frees a deleted task's reads", async () => {
+    const store = fresh();
+    const bot = store.createBot({}, { seedMessages: false });
+    const task = store.createTask(bot.id, "Doomed")!;
+    store.appendMessage(task.threadId, wrote("/a/file.ts"));
+    let rows = await coldWriteRows(unloaded, task.threadId);
+    const cached = new WeakRef(rows!);
+    const control = new WeakRef(structuredClone(rows!));
+    rows = null;
+    expect(store.deleteTask(bot.id, task.threadId)).not.toBeNull();
+    await collect();
+    expect({ cached: cached.deref(), control: control.deref() }).toEqual({ cached: undefined, control: undefined });
+  });
+
+  it("keeps reads for the two chats read last", async () => {
+    const store = fresh();
+    const bot = store.createBot({}, { seedMessages: false });
+    const chats = [bot.threadId, store.createTask(bot.id)!.threadId, store.createTask(bot.id)!.threadId];
+    const cached: WeakRef<Message[]>[] = [];
+    for (const threadId of chats) {
+      store.appendMessage(threadId, wrote("/a/file.ts"));
+      cached.push(new WeakRef((await coldWriteRows(unloaded, threadId))!));
+    }
+    await collect();
+    expect(cached.map(ref => ref.deref() !== undefined)).toEqual([false, true, true]);
+  });
+});
+
+describe("loading a chat off the server thread", () => {
+  it("loads what the store would read, with the rows written meanwhile", async () => {
+    const setup = fresh();
+    const bot = setup.createBot({}, { seedMessages: false });
+    for (let n = 0; n < 2_500; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+    const [first, second] = setup.messagesFor(bot.threadId);
+    const store = fresh();
+    const load = coldLoad(store, bot.threadId);
+    setup.applySyncChanges(bot.id, bot.threadId, [synced({ ...first, text: "edited" })]);
+    messageDatabase().prepare("DELETE FROM messages WHERE thread_id = ? AND id = ?").run(bot.threadId, second.id);
+    setup.appendMessage(bot.threadId, { role: "user", kind: "text", text: "sent during the load" });
+    await load;
+    expect(store.loaded(bot.threadId)).toBe(true);
+    const read = fresh();
+    expect(store.messagesFor(bot.threadId)).toEqual(read.messagesFor(bot.threadId));
+    expect(store.activeLeaf(bot.threadId)).toBe(read.activeLeaf(bot.threadId));
+  });
+
+  it("keeps the chat the store loaded first", async () => {
+    const setup = fresh();
+    const bot = setup.createBot({}, { seedMessages: false });
+    for (let n = 0; n < 50; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+    const store = fresh();
+    const load = coldLoad(store, bot.threadId);
+    const own = store.messagesFor(bot.threadId);
+    await load;
+    expect(store.messagesFor(bot.threadId)).toBe(own);
+  });
+
+  it("loads nothing for a chat deleted during the load", async () => {
+    const store = fresh();
+    const bot = store.createBot({}, { seedMessages: false });
+    const task = store.createTask(bot.id, "Doomed")!;
+    for (let n = 0; n < 50; n++) store.appendMessage(task.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+    const cold = fresh();
+    const load = coldLoad(cold, task.threadId);
+    store.deleteTask(bot.id, task.threadId);
+    await load;
+    expect(cold.loaded(task.threadId)).toBe(false);
   });
 });

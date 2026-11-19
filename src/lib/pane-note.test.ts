@@ -154,6 +154,7 @@ describe("paneReason", () => {
     for (const sessionId of ["aa11bb22ffff", "aa11ffff", "cc33ffff", "dd44ffff"]) {
       for (const since of [0, 100, 299, 300, 301, 500, 700, 701, 900, 901]) {
         const whole = paneReason(paneLines(notes, since), sessionId, since);
+        expect(paneReason(paneLines(notes, since, sessionId), sessionId, since), `${sessionId} since ${since}, its own lines`).toBe(whole);
         for (const lower of [0, 300, since].filter(lower => lower <= since)) expect(paneReason(newestPaneLines(paneLines(notes, lower)), sessionId, since), `${sessionId} since ${since} from ${lower}`).toBe(whole);
       }
     }
@@ -162,5 +163,10 @@ describe("paneReason", () => {
     expect(paneReason(paneLines(notes, 0), "aa11bb22ffff", 0)).toBe("first line");
     expect(paneReason(paneLines(notes, 301), "aa11bb22ffff", 301)).toBe("first line");
     expect(paneReason(paneLines(notes, 0), "cc33ffff", 0)).toBe("only cc");
+  });
+
+  it("builds only the asked pane's lines", () => {
+    const notes = [{ kind: "note", at: 2, text: "[pane aa11] mine\nmore" }, { kind: "note", at: 1, text: "[pane cc33] theirs" }];
+    expect([...paneLines(notes, 0, "aa11ffff")]).toEqual([{ pane8: "aa11", at: 2, line: "mine" }]);
   });
 });
