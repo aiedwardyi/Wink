@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -257,6 +258,99 @@ describe("board Drive sync", () => {
     a.board.remove(stuck.id);
     for (let pass = 0; pass < 2; pass++) for (const side of [a, b]) side.board.sync(folder, ids);
     for (const side of [a, b]) expect(side.board.list().map((post) => post.id)).toEqual([keep.id]);
+  });
+
+  it.each(["together", "tombstone first", "legacy tombstone first"])("a fresh PC keeps the newer reparented reply with copies arriving %s", (order) => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const c = home("pc-c");
+    const ids = { out: (id: string) => id, in: (id: string) => id };
+    const stuck = a.board.post(STUCK);
+    const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+    const child = a.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+    a.board.sync(folder, ids);
+    b.board.sync(folder, ids);
+    a.clock.at++;
+    a.board.remove(reply.id);
+    a.board.sync(folder, ids);
+    expect(a.board.get(child.id)?.parent_id).toBe(stuck.id);
+    expect(b.board.get(child.id)?.parent_id).toBe(reply.id);
+
+    const newest = join(folder, BOARD_DIR, "pc-a", `${child.id}.json`);
+    if (order === "legacy tombstone first") writeFileSync(join(folder, BOARD_DIR, "pc-a", "deleted.json"), JSON.stringify([reply.id]));
+    if (order !== "together") {
+      const delayed = join(folder, `${child.id}.json`);
+      fs.renameSync(newest, delayed);
+      c.board.sync(folder, ids);
+      fs.renameSync(delayed, newest);
+    }
+    for (let pass = 0; pass < 3; pass++) for (const side of [c, a]) side.board.sync(folder, ids);
+    expect(c.board.get(child.id)?.parent_id).toBe(stuck.id);
+    expect(a.board.get(child.id)?.parent_id).toBe(stuck.id);
+  });
+
+  it("resumes dropping an offline reply and its child after the root tombstone is renamed into place", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const c = home("pc-c");
+    const ids = { out: (id: string) => id, in: (id: string) => id };
+    const stuck = a.board.post(STUCK);
+    a.board.sync(folder, ids);
+    b.board.sync(folder, ids);
+    a.board.remove(stuck.id);
+    a.board.sync(folder, ids);
+    const late = b.board.post({ author_bot_id: "carbon", parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Late.", source_ref: "tool:tc:late" });
+    b.board.post({ author_bot_id: "scout", parent_id: late.id, kind: "tip", title: STUCK.title, body: "Later.", source_ref: "tool:tc:later" });
+
+    const tombstones = join(b.dir, "deleted.json");
+    const rename = fs.renameSync;
+    const interrupt = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      rename(from, to);
+      if (to === tombstones) throw new Error("restart after durable root tombstone");
+    });
+    syncBuiltinESMExports();
+    try {
+      expect(() => b.board.sync(folder, ids)).toThrow("restart after durable root tombstone");
+    } finally {
+      interrupt.mockRestore();
+      syncBuiltinESMExports();
+    }
+    expect(JSON.parse(readFileSync(tombstones, "utf8"))).toEqual([stuck.id]);
+    const restarted = createBoard({ dir: b.dir, pcId: () => "pc-b" });
+    for (let pass = 0; pass < 4; pass++) for (const board of [restarted, a.board, c.board]) board.sync(folder, ids);
+    for (const board of [restarted, a.board, c.board]) expect(board.list()).toEqual([]);
+  });
+
+  it("drops an already stored grandchild when its missing ancestor arrives under a tombstoned post", () => {
+    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const partial = temps.make(join(tmpdir(), "orbit-board-drive-"));
+    const a = home("pc-a");
+    const b = home("pc-b");
+    const c = home("pc-c");
+    const ids = { out: (id: string) => id, in: (id: string) => id };
+    const stuck = a.board.post(STUCK);
+    a.board.sync(folder, ids);
+    b.board.sync(folder, ids);
+    const late = b.board.post({ author_bot_id: "carbon", parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Late.", source_ref: "tool:tc:late" });
+    const deeper = b.board.post({ author_bot_id: "scout", parent_id: late.id, kind: "tip", title: STUCK.title, body: "Later.", source_ref: "tool:tc:later" });
+    b.board.sync(folder, ids);
+    a.board.remove(stuck.id);
+    a.board.sync(partial, ids);
+
+    const deliver = (pc: string, name: string) => {
+      const dir = join(partial, BOARD_DIR, pc);
+      mkdirSync(dir, { recursive: true });
+      copyFileSync(join(folder, BOARD_DIR, pc, name), join(dir, name));
+    };
+    deliver("pc-b", `${deeper.id}.json`);
+    c.board.sync(partial, ids);
+    expect(c.board.get(deeper.id)?.parent_id).toBe(late.id);
+    deliver("pc-b", `${late.id}.json`);
+    deliver("pc-b", `${stuck.id}.json`);
+    c.board.sync(partial, ids);
+    expect(c.board.list()).toEqual([]);
   });
 
   it("removing a reply still moves the replies under it up to its parent", () => {

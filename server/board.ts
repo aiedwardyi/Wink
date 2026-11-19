@@ -28,6 +28,7 @@ const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const
 export const BOARD_REF_MAX = LIMITS.ref;
 
 const idSchema = z.string().regex(/^p[0-9a-f]{24}$/);
+const replyTombstoneSchema = z.object({ id: idSchema, parent_id: idSchema });
 /** The author as it looked when it posted, so another PC can show a bot it does not have. */
 const authorSchema = z.object({ name: z.string().max(LIMITS.id), model: z.string().max(LIMITS.id), color: z.string().max(32), mascot_style: z.string().max(64) });
 const postSchema = z.object({
@@ -119,13 +120,32 @@ function readPosts(dir: string): BoardPost[] {
   });
 }
 
-function readDeleted(dir: string): string[] {
+function readDeleted(dir: string): Map<string, string | null> {
+  const deleted = new Map<string, string | null>();
   try {
     const ids: unknown = JSON.parse(readFileSync(join(dir, DELETED), "utf8"));
-    return Array.isArray(ids) ? ids.filter((id): id is string => idSchema.safeParse(id).success) : [];
+    if (Array.isArray(ids)) {
+      for (const id of ids) if (typeof id === "string" && idSchema.safeParse(id).success) deleted.set(id, null);
+      for (const entry of ids) {
+        if (typeof entry === "string") continue;
+        const reply = replyTombstoneSchema.safeParse(entry);
+        if (reply.success && deleted.has(reply.data.id)) deleted.set(reply.data.id, reply.data.parent_id);
+      }
+    }
   } catch {
-    return [];
+    // no tombstones yet
   }
+  return deleted;
+}
+
+function deletedJson(deleted: ReadonlyMap<string, string | null>): string {
+  const ids = [...deleted.keys()].sort();
+  // Keep the bare ids for PCs that only understand the original tombstones.
+  const replies = ids.flatMap((id) => {
+    const parent = deleted.get(id);
+    return parent ? [{ id, parent_id: parent }] : [];
+  });
+  return `${JSON.stringify([...ids, ...replies])}\n`;
 }
 
 const same = (left: BoardPost, right: BoardPost) => JSON.stringify(left) === JSON.stringify(right);
@@ -159,8 +179,8 @@ export function createBoard(options: BoardOptions) {
   let cache: Map<string, BoardPost> | null = null;
   const posts = () => (cache ??= new Map(readPosts(options.dir).map((post) => [post.id, post])));
   let view: Map<string, BoardPost> | null = null;
-  let deleted: Set<string> | null = null;
-  const gone = () => (deleted ??= new Set(readDeleted(options.dir)));
+  let deleted: Map<string, string | null> | null = null;
+  const gone = () => (deleted ??= readDeleted(options.dir));
 
   // keyed by post id and checked against the text it was built from, so an edit never reads stale words
   const wordSets = new Map<string, { title: string; body: string; fix: string; words: Set<string> }>();
@@ -172,22 +192,48 @@ export function createBoard(options: BoardOptions) {
     return words;
   };
 
-  const drop = (id: string) => {
+  const drop = (id: string, parentId: string | null = null): boolean => {
+    const heldParent = gone().get(id);
+    const parent = heldParent ?? parentId;
+    if (heldParent !== parent) {
+      const next = new Map(gone()).set(id, parent);
+      mkdirSync(options.dir, { recursive: true });
+      writeFileAtomic(join(options.dir, DELETED), deletedJson(next));
+      deleted = next;
+    }
+    if (!posts().has(id)) return false;
+    rmSync(join(options.dir, `${id}.json`), { force: true });
     view = null;
     wordSets.delete(id);
     posts().delete(id);
-    rmSync(join(options.dir, `${id}.json`), { force: true });
-    if (gone().has(id)) return;
-    gone().add(id);
-    mkdirSync(options.dir, { recursive: true });
-    writeFileAtomic(join(options.dir, DELETED), `${JSON.stringify([...gone()].sort())}\n`);
+    return true;
   };
 
-  /** A post and every reply under it, however deep. */
-  const thread = (id: string) => {
-    const doomed = [id];
-    for (const next of doomed) for (const child of posts().values()) if (child.parent_id === next) doomed.push(child.id);
-    return doomed;
+  const prune = (candidates: Map<string, BoardPost>): number => {
+    const tombstones = gone();
+    if (!tombstones.size) return 0;
+    const children = new Map<string, string[]>();
+    const link = (id: string, parent: string) => {
+      const siblings = children.get(parent);
+      if (siblings) siblings.push(id);
+      else children.set(parent, [id]);
+    };
+    for (const post of candidates.values()) {
+      if (post.parent_id && !tombstones.has(post.id)) link(post.id, post.parent_id);
+    }
+    const doomed = new Set<string>();
+    for (const [id, parent] of tombstones) {
+      // A deleted reply still connects its children to the post they belong to.
+      if (parent) link(id, parent);
+      else doomed.add(id);
+    }
+    let removed = 0;
+    for (const id of doomed) {
+      for (const child of children.get(id) ?? []) doomed.add(child);
+      if (drop(id)) removed++;
+      candidates.delete(id);
+    }
+    return removed;
   };
 
   const write = (post: BoardPost) => {
@@ -195,16 +241,6 @@ export function createBoard(options: BoardOptions) {
     mkdirSync(options.dir, { recursive: true });
     writeFileAtomic(join(options.dir, `${post.id}.json`), `${JSON.stringify(post, null, 2)}\n`);
     posts().set(post.id, post);
-  };
-
-  /** Keeps a copy another PC wrote; returns whether this PC's copy changed. */
-  const take = (incoming: BoardPost): boolean => {
-    if (gone().has(incoming.id)) return false;
-    const held = posts().get(incoming.id);
-    const next = held ? mergeBoardPosts(held, incoming) : incoming;
-    if (held && same(held, next)) return false;
-    write(next);
-    return true;
   };
 
   // copied chat stays on disk but is never read back, nor the fix it wrote into its parent
@@ -281,14 +317,14 @@ export function createBoard(options: BoardOptions) {
     remove(id: string): boolean {
       const held = posts().get(id);
       if (!held) return false;
-      const at = now();
       if (held.parent_id === null) {
-        for (const dead of thread(id)) drop(dead);
-        options.changed?.();
-        return true;
+        drop(id);
+        prune(posts());
+      } else {
+        const at = now();
+        for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: held.parent_id, updated_at: at, pc_id: options.pcId() });
+        drop(id, held.parent_id);
       }
-      for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: held.parent_id, updated_at: at, pc_id: options.pcId() });
-      drop(id);
       options.changed?.();
       return true;
     },
@@ -325,33 +361,35 @@ export function createBoard(options: BoardOptions) {
       }
       let pulled = 0;
       let pushed = 0;
-      const tombstones = pcs.flatMap((pc) => readDeleted(join(root, pc)));
-      // a deleted top-level post also takes the replies this PC wrote before it heard
-      for (const id of tombstones.filter((tomb) => posts().get(tomb)?.parent_id === null)) {
-        for (const dead of thread(id)) {
-          pulled++;
-          drop(dead);
+      const tombstones = new Map(gone());
+      const candidates = new Map(posts());
+      for (const pc of pcs) {
+        const dir = join(root, pc);
+        for (const [id, parent] of readDeleted(dir)) {
+          if (!tombstones.get(id)) tombstones.set(id, parent);
+        }
+        for (const post of readPosts(dir)) {
+          const incoming = mapPost(post, ids.in);
+          const held = candidates.get(post.id);
+          candidates.set(post.id, held ? mergeBoardPosts(held, incoming) : incoming);
         }
       }
-      for (const id of tombstones) {
-        if (posts().has(id)) pulled++;
-        drop(id);
+      for (const [id, parent] of tombstones) {
+        const post = candidates.get(id);
+        const replyParent = post && ownReply(post) ? post.parent_id : null;
+        if (drop(id, parent ?? replyParent)) pulled++;
+        candidates.delete(id);
       }
-      const incoming = pcs.flatMap((pc) => readPosts(join(root, pc)).map((post) => mapPost(post, ids.in)));
-      // a reply a PC wrote before it heard its post was deleted is dropped the same way, deeper replies too
-      const orphaned = new Set<string>();
-      for (let grew = true; grew;) {
-        grew = false;
-        for (const post of incoming) {
-          if (!post.parent_id || orphaned.has(post.id) || posts().has(post.id) || !(gone().has(post.parent_id) || orphaned.has(post.parent_id))) continue;
-          orphaned.add(post.id);
-          grew = true;
-        }
+      pulled += prune(candidates);
+      for (const post of candidates.values()) {
+        const held = posts().get(post.id);
+        if (held && same(held, post)) continue;
+        write(post);
+        pulled++;
       }
-      for (const post of incoming) if (!orphaned.has(post.id) && take(post)) pulled++;
       const ownDir = join(root, mine);
       if (gone().size) {
-        const list = `${JSON.stringify([...gone()].sort())}\n`;
+        const list = deletedJson(gone());
         let held = "";
         try {
           held = readFileSync(join(ownDir, DELETED), "utf8");
@@ -361,7 +399,7 @@ export function createBoard(options: BoardOptions) {
         if (held !== list) {
           mkdirSync(ownDir, { recursive: true });
           writeFileAtomic(join(ownDir, DELETED), list);
-          for (const id of gone()) rmSync(join(ownDir, `${id}.json`), { force: true });
+          for (const id of gone().keys()) rmSync(join(ownDir, `${id}.json`), { force: true });
           pushed++;
         }
       }
