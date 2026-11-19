@@ -274,6 +274,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   };
   const link = status?.host ? `https://${status.host}/` : null;
   const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;
+  const frontDoorLists = door || (!status?.host && (!status?.base || status.base === FRONT_DOOR));
   const shown = door ? FRONT_DOOR : status?.host?.replace(/^(.{4}).{12}\./, "$1….");
   const copy = async () => {
     if (!link) return;
@@ -433,7 +434,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       {asking ? (
         <ConfirmDialog
           title={t("settings.devices.reachConfirm")}
-          body={t("settings.devices.reachConfirmBody", { door: FRONT_DOOR })}
+          body={frontDoorLists ? t("settings.devices.reachConfirmBody", { door: FRONT_DOOR }) : t("settings.devices.reachConfirmBodyOther")}
           confirmLabel={t("settings.devices.turnOn")}
           cancelLabel={t("settings.phoneAccess.cancel")}
           danger={false}

@@ -585,6 +585,20 @@ describe("This PC", () => {
       await act(async () => root.unmount());
     });
 
+    it("on another relay base, points to this PC's own link instead of app.getwink.dev", async () => {
+      vi.stubGlobal("ogb", { googleAccount: { signIn: vi.fn(), cancel: vi.fn(), signOut: vi.fn() } });
+      serve({
+        "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null, base: "wink.test" }),
+        "GET /api/google-account": () => ({ state: "signed-out" }),
+        "GET /api/phone/devices": () => ({ phones: [] }),
+      });
+      const { host, root } = await renderView();
+      await act(async () => click(button(host, "Sign In")));
+      expect(dialog()?.textContent).toContain("open this PC's link from here");
+      expect(dialog()?.textContent).not.toContain("app.getwink.dev");
+      await act(async () => root.unmount());
+    });
+
     it("cancel signs nobody in and leaves it off", async () => {
       const { signIn, put } = setUp({ ok: true, email: EMAIL });
       const { host, root } = await renderView();
