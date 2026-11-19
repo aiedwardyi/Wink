@@ -432,7 +432,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           e.preventDefault();
           e.stopPropagation();
           dispatch({ type: "select", id });
-          focusComposerOnActivation({ settingsOpen: state.appSettingsOpen || state.settingsOpen });
+          focusComposerOnActivation({ switchingChat: latestState.current.selectedId !== id, settingsOpen: state.appSettingsOpen || state.settingsOpen });
           return;
         }
       }

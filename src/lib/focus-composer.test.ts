@@ -107,6 +107,22 @@ describe("focusComposerOnActivation guards", () => {
     expect(document.activeElement).toBe(textarea);
   });
 
+  it("uses the settled ring on chat switch and restores the ordinary fade on blur", async () => {
+    const frame = document.createElement("div");
+    frame.setAttribute("data-orbit-composer-frame", "");
+    document.body.append(frame);
+    frame.append(textarea);
+    const options = { targetDocument: document, switchingChat: true };
+    focusComposerOnActivation(options);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    expect(document.activeElement).toBe(textarea);
+    expect(frame.hasAttribute("data-chat-switch-focus")).toBe(true);
+    textarea.blur();
+    textarea.focus();
+    expect(frame.hasAttribute("data-chat-switch-focus")).toBe(false);
+  });
+
   it("leaves mobile activation unfocused until the input is tapped", async () => {
     const matchMedia = window.matchMedia.bind(window);
     vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ ...matchMedia(query), matches: query === "(pointer: coarse)" }));
