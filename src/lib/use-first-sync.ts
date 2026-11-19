@@ -26,10 +26,12 @@ function check(): void {
     .then((body: Status) => {
       current = firstSyncOf(body);
       for (const listener of listeners) listener(current);
-      if (current) timer = setTimeout(check, FIRST_SYNC_POLL_MS);
     })
     .catch(() => {})
-    .finally(() => { asking = false; });
+    .finally(() => {
+      asking = false;
+      if (current) timer = setTimeout(check, FIRST_SYNC_POLL_MS);
+    });
 }
 
 /** This PC's first sync with its other PCs; one shared poll that runs only while it does. */

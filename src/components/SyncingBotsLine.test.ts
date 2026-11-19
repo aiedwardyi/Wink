@@ -9,6 +9,7 @@ import { SyncingBotsLine } from "./SyncingBotsLine";
 
 let status: object = {};
 let asks = 0;
+let failing = false;
 let root: Root | null = null;
 const onOpen = vi.fn();
 
@@ -28,10 +29,11 @@ const line = () => document.querySelector<HTMLButtonElement>("[data-first-sync]"
 
 beforeEach(() => {
   asks = 0;
+  failing = false;
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     if (path !== "/api/google-sync") return Response.json({ error: "no route" }, { status: 404 });
     asks += 1;
-    return Response.json(status);
+    return failing ? Response.json({ error: "down" }, { status: 500 }) : Response.json(status);
   }));
   localStorage.setItem("omb-locale", "en");
 });
@@ -86,6 +88,20 @@ describe("SyncingBotsLine", () => {
     expect(line()).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(FIRST_SYNC_POLL_MS * 3); });
     expect(asks).toBe(2);
+  });
+
+  it("keeps asking after one failed status request", async () => {
+    vi.useFakeTimers();
+    status = google({ state: "joining", progress: { done: 1, total: 9 }, firstSync: true });
+    await render("a");
+    failing = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(FIRST_SYNC_POLL_MS); });
+    expect(asks).toBe(2);
+    failing = false;
+    status = google({});
+    await act(async () => { await vi.advanceTimersByTimeAsync(FIRST_SYNC_POLL_MS); });
+    expect(asks).toBe(3);
+    expect(line()).toBeNull();
   });
 
   it("speaks Korean", async () => {
