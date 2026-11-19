@@ -5,7 +5,7 @@ const TIMEOUT_MS = 1_500;
 const TAILNET_HOST = /^[a-z0-9-]+\.([a-z0-9-]+\.ts\.net)$/;
 
 export function createDevicePresence(request: typeof fetch = fetch, now: () => number = Date.now) {
-  const peers = new Map<string, { online?: boolean; at: number; pending: boolean }>();
+  const peers = new Map<string, { online?: boolean; timedOut?: boolean; at: number; pending: boolean }>();
   let active = 0;
   const queue: (() => Promise<void>)[] = [];
   const drain = () => {
@@ -29,9 +29,11 @@ export function createDevicePresence(request: typeof fetch = fetch, now: () => n
           const response = await request(`https://${item.host}/api/health`, { signal, redirect: "error" });
           const body = await response.json() as { app?: unknown } | null;
           state.online = response.ok && body?.app === "openmausbot";
+          state.timedOut = false;
         } catch {
           // A slow answer from a PC whose record is fresh is no answer yet, not offline.
-          if (!signal.aborted || item.offline) state.online = false;
+          state.timedOut = signal.aborted && !item.offline;
+          if (!state.timedOut) state.online = false;
         } finally {
           state.at = now();
           state.pending = false;
@@ -51,7 +53,7 @@ export function createDevicePresence(request: typeof fetch = fetch, now: () => n
       if (!tailnet || TAILNET_HOST.exec(item.host)?.[1] !== tailnet) return item;
       const state = health(item);
       // Live Wink health wins over a Drive record that has not caught up yet.
-      return { ...item, checking: state.online === undefined, offline: state.online === false };
+      return { ...item, checking: state.online === undefined, offline: state.online === false, unreachable: state.timedOut };
     });
   };
   /** Starts the health checks once this PC's tailnet is known, so the first read can already answer. */
