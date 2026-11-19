@@ -26,7 +26,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 function run(mode: string, env: Record<string, string> = {}) {
   writeFileSync(calls, "");
   const result = spawnSync(process.execPath, [SPAWNED_PROXIES.antigravityAuth, mode], {
-    encoding: "utf8", timeout: 20_000,
+    encoding: "utf8", timeout: 20_000, windowsHide: true,
     env: { ...process.env, OMB_AGY_CLI: `"${process.execPath}" "${fake}"`, FAKE_AGY_CALLS: calls, ...env },
   });
   return { ...result, calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean) };
