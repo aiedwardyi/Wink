@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -48,12 +48,13 @@ const factsSchema = z
   .array(z.object({
     kind: z.string().nullish(), fact: z.string(), quote: z.string(), replaces: z.string().nullish(),
     key: z.string().nullish(), over: listSchema, picture: z.string().nullish(), over_pictures: listSchema,
-  }))
-  .max(20);
+  }));
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
+  // notes a full MEMORY.md turned away before the overflow file; they are gone, never reported as moved
   dropped: z.record(z.string(), droppedSchema).optional(),
+  overflow: z.record(z.string(), droppedSchema).optional(),
 });
 
 export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>;
@@ -61,7 +62,7 @@ export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
 export type UserLine = { text: string; context?: string; options?: string[]; pictures?: Picture[]; files?: string[]; at?: number; tap?: boolean };
-export type DroppedNotes = z.infer<typeof droppedSchema>;
+export type DroppedNotes = z.infer<typeof droppedSchema> & { lost?: true };
 
 export interface MemoryPassDeps {
   store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot">>;
@@ -682,7 +683,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     for (const [threadId, ids] of Object.entries(state.threads)) {
       if (ids.length) pending.set(threadId, ids);
     }
-    for (const [botId, record] of Object.entries(state.dropped ?? {})) dropped.set(botId, record);
+    for (const [botId, record] of Object.entries(state.dropped ?? {})) dropped.set(botId, { ...record, lost: true });
+    for (const [botId, record] of Object.entries(state.overflow ?? {})) dropped.set(botId, record);
   } catch {
     // first run or unreadable: start empty
   }
@@ -692,7 +694,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     saveTimer = undefined;
     try {
       const state: z.infer<typeof stateSchema> = { threads: Object.fromEntries(pending) };
-      if (dropped.size) state.dropped = Object.fromEntries(dropped);
+      const counts = [...dropped].map(([botId, { dropped: count, since, lost }]) => ({ botId, record: { dropped: count, since }, lost }));
+      const lost = counts.filter((count) => count.lost);
+      const moved = counts.filter((count) => !count.lost);
+      if (lost.length) state.dropped = Object.fromEntries(lost.map(({ botId, record }) => [botId, record]));
+      if (moved.length) state.overflow = Object.fromEntries(moved.map(({ botId, record }) => [botId, record]));
       writeFileAtomic(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
     } catch (error) {
       console.warn(`[memory-pass] state save failed (${error instanceof Error ? error.name : "error"})`);
@@ -780,25 +786,50 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       }
     }
     const picked = Boolean(landed) || Boolean(batch.picked);
-    const overflow = full ? facts : [];
-    const pointer = overflow.length && !raw.includes(OVERFLOW_FILE) ? appendNotes(raw, [{ line: OVERFLOW_POINTER }], now()) : null;
-    const saved = text ?? pointer;
-    if (saved !== null && saveMemoryFile(botId, saved, memory.revision).conflict) {
-      held.set(threadId, { ...batch, picked });
-      log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
-      return arm(botId, threadId);
-    }
+    // at the limit a correction still swaps in place, or else its old line comes out, so MEMORY.md never asserts the old value
+    const rows = raw.split("\n");
+    const stamp = day(now());
+    const swaps = full
+      ? facts.filter(({ replaces }) => replaces !== undefined && rows.filter((row) => sameLine(row, replaces)).length === 1 && facts.filter((other) => other.replaces === replaces).length === 1)
+      : [];
+    const swapFor = new Map(swaps.map(({ replaces, line }) => [replaces, line]));
+    // in place, so the line count never grows and only the byte budget can refuse it
+    const edited = rows.map((row) => {
+      const line = swapFor.get(row.replace(/\r$/, ""));
+      return line === undefined ? row : `- ${line} (noted ${stamp})${row.endsWith("\r") ? "\r" : ""}`;
+    }).join("\n");
+    const swapped = swaps.length && Buffer.byteLength(edited, "utf8") <= MEMORY_MAX_BYTES ? edited : null;
+    const corrected = swapped ?? (swaps.length ? rows.filter((row) => !swapFor.has(row.replace(/\r$/, ""))).join("\n") : null);
+    const overflow = full ? facts.filter((note) => swapped === null || !swaps.includes(note)) : [];
+    const noted = text !== null ? facts : swapped !== null ? swaps : [];
+    const base = text ?? corrected ?? raw;
+    // with no spare line the pointer goes last with no line break, and only where the prompt still reads it
+    const ending = `${base}- ${OVERFLOW_POINTER} (noted ${stamp})`;
+    const pointer = overflow.length && !base.includes(OVERFLOW_FILE)
+      ? appendNotes(base, [{ line: OVERFLOW_POINTER }], now()) ??
+        (base.endsWith("\n") && ending.split("\n").length <= MEMORY_MAX_LINES && Buffer.byteLength(ending, "utf8") <= MEMORY_MAX_BYTES ? ending : null)
+      : null;
+    const saved = pointer ?? text ?? corrected;
+    // before MEMORY.md drops a corrected line, so a failed write never loses the new value; a retry finds it written
     if (overflow.length) {
       const path = join(ensureWorkspace(botId), "memory", OVERFLOW_FILE);
-      const stamp = day(now());
       try {
         // a locked file must hold the batch, never be rewritten from the header
-        const current = existsSync(path) ? readFileSync(path, "utf8") : OVERFLOW_HEAD;
-        const fresh = overflow.filter(({ line }) => !current.includes(`- ${line} (noted `));
+        const current = existsSync(path) ? readFileSync(path, "utf8") : "";
+        const known = new Set(current.split("\n").map((row) => NOTED.exec(row)?.[1]));
+        const fresh = overflow.filter(({ line }) => !known.has(line));
         if (fresh.length) {
-          writeFileAtomic(path, `${current.endsWith("\n") ? current : `${current}\n`}${fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("")}`, { mode: 0o600 });
+          // appended, never replaced: a line another writer lands after the read stays
+          const fd = openSync(path, "a", 0o600);
+          try {
+            writeFileSync(fd, `${!current ? OVERFLOW_HEAD : current.endsWith("\n") ? "" : "\n"}${fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("")}`);
+            fsyncSync(fd);
+          } finally {
+            closeSync(fd);
+          }
           const last = dropped.get(botId);
-          dropped.set(botId, { dropped: (last?.dropped ?? 0) + fresh.length, since: last?.since ?? now() });
+          const prior = last && !last.lost ? last : undefined;
+          dropped.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.length, since: prior?.since ?? now() });
         }
       } catch (error) {
         held.set(threadId, { ...batch, picked });
@@ -806,6 +837,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         console.warn(`[memory-pass] ${OVERFLOW_FILE} write failed (${error instanceof Error ? error.name : "error"})`);
         return arm(botId, threadId);
       }
+    }
+    if (saved !== null && saveMemoryFile(botId, saved, memory.revision).conflict) {
+      held.set(threadId, { ...batch, picked });
+      log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
+      return arm(botId, threadId);
     }
     const kept = accepted.filter((note) => (note.pick ? picked : !note.kind));
     if (!kept.length) {
@@ -818,8 +854,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: `${noteSummary(kept.map((note) => note.line))}${overflow.length ? ` (MEMORY.md is full, saved in memory/${OVERFLOW_FILE})` : ""}` },
     });
     log({
-      botId, threadId, lines: batch.source.length, facts: text === null ? 0 : facts.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
-      replaced: (landed?.replaced ?? 0) + (text === null ? 0 : facts.filter((note) => note.replaces).length), ms, result: full ? "too-large" : "saved",
+      botId, threadId, lines: batch.source.length, facts: noted.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
+      replaced: (landed?.replaced ?? 0) + noted.filter((note) => note.replaces).length, ms, result: full ? "too-large" : "saved",
     });
     if (!full) dropped.delete(botId);
     done(threadId, batch.ids);

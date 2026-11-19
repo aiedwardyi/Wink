@@ -28,7 +28,7 @@ export function memoryNotice(health: MemoryHealth, dropped?: DroppedNotes): stri
       ? `${listed(orphans.map((name) => `memory/${name}`))} ${orphans.length === 1 ? "has" : "have"} no pointer line in MEMORY.md`
       : "",
     dropped?.dropped
-      ? `${dropped.dropped === 1 ? "1 auto note" : `${dropped.dropped} auto notes`} since ${monthDay(dropped.since)} went to memory/${OVERFLOW_FILE} because MEMORY.md is full`
+      ? `${dropped.dropped === 1 ? "1 auto note" : `${dropped.dropped} auto notes`} since ${monthDay(dropped.since)} ${dropped.lost ? `${dropped.dropped === 1 ? "was" : "were"} not saved because the file is full` : `went to memory/${OVERFLOW_FILE} because MEMORY.md is full`}`
       : "",
   ].filter(Boolean);
   if (!parts.length) return "";

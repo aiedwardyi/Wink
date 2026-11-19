@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,10 +23,14 @@ import {
   type NoteGenerator,
 } from "./memory-pass.ts";
 import { memoryNotesEnabled } from "./config.ts";
+import { memoryNotice } from "./memory-health.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import type { Message, StoreChange } from "./store.ts";
-import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
+import { MEMORY_MAX_BYTES, MEMORY_SEED, memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+
+// oxlint-disable-next-line anti-slop/no-module-mocking -- a second writer has to land between the pass's read and its write.
+vi.mock("node:fs", async (importOriginal) => ({ ...await importOriginal<typeof import("node:fs")>() }));
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -358,7 +364,10 @@ describe("memory pass", () => {
     generate.mockResolvedValue(facts(["38 years old", "i'm 38"], ["Can't read Korean", "can't read korean"]));
     say("t1", "i'm 38, can't read korean");
     await settle("t1", 3 * MINUTE);
-    expect(memoryFileRaw("bot-t1")).toBe(full);
+    const pointer = "- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)";
+    expect(memoryFileRaw("bot-t1")).toBe(`${full}${pointer}`);
+    expect(memorySystemPrompt("bot-t1")).toContain(`${pointer}`);
+    expect(memorySystemPrompt("bot-t1")).not.toContain("cut off");
     expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n`);
     expect(chips("t1").map((m) => m.tool?.spoken)).toEqual(["38 years old, Can't read Korean (MEMORY.md is full, saved in memory/auto-notes-overflow.md)"]);
     expect(console.info).toHaveBeenCalledWith(expect.stringContaining("too-large"));
@@ -390,8 +399,8 @@ describe("memory pass", () => {
     });
     say("t1", "i'm 38, i like tea");
     await settle("t1", 3 * MINUTE);
-    expect(overflow()).toBeNull();
-    expect(pass.droppedNotes("bot-t1")).toBeUndefined();
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
+    expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 2, since: NOW + 3 * MINUTE });
     await settle("t1");
     expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
     expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 2, since: NOW + 3 * MINUTE });
@@ -437,6 +446,120 @@ describe("memory pass", () => {
     expect(overflow()).toBe("# Overflow\n- Uses pnpm\n- 38 years old (noted 2026-10-15)\n");
   });
 
+  it("keeps a note another writer adds to the overflow file while the pass saves its own", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), "# Existing notebook\n");
+    const read = fs.readFileSync;
+    // SAFETY: the wrapper passes every argument through and returns the real read.
+    vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof read>) => {
+      const out = read(...args);
+      if (args[0] === overflowPath()) execFileSync(process.execPath, ["-e", "require('node:fs').appendFileSync(process.argv[1], '- Uses cobalt blue\\n')", overflowPath()], { windowsHide: true });
+      return out;
+    }) as typeof read);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    vi.mocked(fs.readFileSync).mockRestore();
+    expect(overflow()).toBe("# Existing notebook\n- Uses cobalt blue\n- Likes tea (noted 2026-10-15)\n");
+  });
+
+  it("saves a fact that an overflow line names only inside a retraction", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), "# History\n- Retracted: ~~ - Likes tea (noted 2020-01-01) ~~\n- ~~Likes tea (noted 2020-01-02)~~\n");
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe("# History\n- Retracted: ~~ - Likes tea (noted 2020-01-01) ~~\n- ~~Likes tea (noted 2020-01-02)~~\n- Likes tea (noted 2026-10-15)\n");
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+  });
+
+  it("swaps a correction into a MEMORY.md at its limit and sends the rest to the overflow file", async () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    writeMemoryFile("bot-t1", `# Memory\n${old}\n${"- note\n".repeat(197)}`);
+    generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }, { fact: "Uses pnpm", quote: "i use pnpm" }]));
+    say("t1", "i now live in Vancouver, i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(memorySystemPrompt("bot-t1")).toContain("- Home city: Vancouver (noted 2026-10-15)");
+    expect(memorySystemPrompt("bot-t1")).not.toContain("Toronto");
+    expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
+    expect(overflow()).not.toContain("Vancouver");
+  });
+
+  it("swaps a correction into a MEMORY.md that already ends on its overflow pointer", async () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    const pointer = "- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-14)";
+    writeMemoryFile("bot-t1", `# Memory\n${old}\n${"- note\n".repeat(197)}${pointer}`);
+    generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }]));
+    say("t1", "i now live in Vancouver");
+    await settle("t1", 3 * MINUTE);
+    expect(memorySystemPrompt("bot-t1")).toContain("- Home city: Vancouver (noted 2026-10-15)");
+    expect(memorySystemPrompt("bot-t1")).not.toContain("Toronto");
+    expect(overflow()).toBeNull();
+  });
+
+  it("takes a corrected line out of a MEMORY.md too full in bytes to swap it", async () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    const head = `# Memory\n${old}\n`;
+    const filler = "x".repeat(98);
+    const rows = Math.floor((MEMORY_MAX_BYTES - head.length) / 101);
+    const rest = MEMORY_MAX_BYTES - 1 - head.length - rows * 101;
+    writeMemoryFile("bot-t1", `${head}${`- ${filler}\n`.repeat(rows)}${"y".repeat(rest - 1)}\n`);
+    generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }]));
+    say("t1", "i now live in Vancouver");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).not.toContain("Toronto");
+    expect(overflow()).toContain("- Home city: Vancouver (noted 2026-10-15)");
+  });
+
+  it("keeps a corrected line until its new value is on disk", async () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    const head = `# Memory\n${old}\n`;
+    const rows = Math.floor((MEMORY_MAX_BYTES - head.length) / 101);
+    const rest = MEMORY_MAX_BYTES - 1 - head.length - rows * 101;
+    const full = `${head}${`- ${"x".repeat(98)}\n`.repeat(rows)}${"y".repeat(rest - 1)}\n`;
+    writeMemoryFile("bot-t1", full);
+    mkdirSync(overflowPath(), { recursive: true });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }]));
+    say("t1", "i now live in Vancouver");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(full);
+    rmSync(overflowPath(), { recursive: true });
+    await settle("t1");
+    expect(memoryFileRaw("bot-t1")).not.toContain("Toronto");
+    expect(overflow()).toContain("- Home city: Vancouver (noted 2026-10-15)");
+  });
+
+  it("writes no pointer past the bytes the prompt reads", async () => {
+    const full = `# Memory\n${`- ${"x".repeat(118)}\n`.repeat(199)}`;
+    writeMemoryFile("bot-t1", full);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(full);
+    expect(overflow()).toContain("- Likes tea (noted 2026-10-15)");
+  });
+
+  it("never reports notes an older version turned away as saved in the overflow file", () => {
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ threads: {}, dropped: { "bot-t1": { dropped: 2, since: NOW } } }));
+    pass = start();
+    const notice = memoryNotice({ longLines: 0, orphans: [] }, pass.droppedNotes("bot-t1"));
+    expect(notice).toContain("2 auto notes since 10-15 were not saved because the file is full");
+    expect(notice).not.toContain("auto-notes-overflow.md");
+  });
+
+  it("saves every fact of a reply with more than 20", async () => {
+    const items = Array.from({ length: 21 }, (_, i): [string, string] => [`Project color ${i}`, `color ${i}`]);
+    generate.mockResolvedValue(facts(...items));
+    say("t1", items.map(([, quote]) => quote).join("\n\n"));
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toContain("- Project color 20 (noted 2026-10-15)");
+    expect(memoryFileRaw("bot-t1")).toContain("- Project color 0 (noted 2026-10-15)");
+  });
+
   it("leaves the overflow file alone when the note fits an empty MEMORY.md", async () => {
     generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
     say("t1", "i'm 38");
@@ -473,7 +596,7 @@ describe("memory pass", () => {
     await vi.advanceTimersByTimeAsync(MINUTE);
     await settle("t1", 3 * MINUTE);
     expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 3, since: NOW + 3 * MINUTE });
-    expect(stored()).toEqual({ threads: {}, dropped: { "bot-t1": { dropped: 3, since: NOW + 3 * MINUTE } } });
+    expect(stored()).toEqual({ threads: {}, overflow: { "bot-t1": { dropped: 3, since: NOW + 3 * MINUTE } } });
     pass.dispose();
     pass = start();
     expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 3, since: NOW + 3 * MINUTE });
