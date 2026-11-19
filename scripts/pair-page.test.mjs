@@ -158,13 +158,13 @@ describe("pair page", () => {
     ["ko", "/pair#g=id.token.sig", "Wink 여는 중…"],
   ])("titles the automatic Google path Opening <PC name>… with no pairing words (%s %s)", async (locale, url, text) => {
     localStorage.setItem("omb-locale", locale);
-    vi.spyOn(location, "assign").mockImplementation(() => {});
-    vi.spyOn(location, "replace").mockImplementation(() => {});
+    const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
+    const replace = vi.spyOn(location, "replace").mockImplementation(() => {});
     const page = open(url, googlePc());
     const title = document.getElementById("title");
     expect(title.textContent).toBe(text);
     expect(title.querySelector(".spinner")).not.toBeNull();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(url.includes("?g=1") ? assign : replace).toHaveBeenCalledOnce());
     expect(title.textContent).toBe(text);
     expect(page.status.textContent).not.toMatch(/pair|연결/i);
     expect(page.help.hidden).toBe(true);
