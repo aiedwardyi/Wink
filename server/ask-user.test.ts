@@ -90,7 +90,7 @@ describe("ask-user endpoint", () => {
     expect(handler).toContain("conversation: connectorThread");
     expect(handler).toContain('buildNotification("question", bot, target, question)');
     expect(handler).toContain("routineSourceThread(run)");
-    expect(handler).toContain("askHold.whenSettled(botId, threadId, post, question)");
+    expect(handler).toContain("askHold.whenSettled(botId, threadId, post, question, forum)");
     expect(source).toContain("askHold.flush();");
     expect(handler).not.toContain("waiting-on-you");
     const dispatch = source.slice(source.indexOf('if (method === "POST" && path === "/api/internal/ask-user")'));

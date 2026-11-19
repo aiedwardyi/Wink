@@ -14,6 +14,10 @@ export function roomBotsRefusal(bots: ReadonlyArray<{ name: string }>, people: r
 
 export const isHostedThread = (store: Pick<Store, "groupByThread">, threadId: string) => Boolean(store.groupByThread(threadId)?.hosted);
 
+/** A turn other people share: any group, hosted or not, or a task answering a room this PC joined. */
+export const sharedTurn = (store: Pick<Store, "groupByThread">, joined: ReadonlySet<string>) => (threadId: string) =>
+  Boolean(store.groupByThread(threadId)) || joined.has(threadId);
+
 /** The owner's linked files stay open on a shared group's older tasks; only the shared thread is closed. */
 export const linkedFilesClosed = (group: GroupRecord | undefined, threadId: string) => Boolean(group?.hosted) && group!.threadId === threadId;
 

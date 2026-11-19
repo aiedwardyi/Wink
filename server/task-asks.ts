@@ -58,14 +58,6 @@ const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== 
 const needsVerdict = (ask: TaskAsk, now: number) =>
   isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
-const FILLER = new Set(["a", "an", "the", "to", "of", "for", "and", "or", "in", "on", "it", "is", "be", "with", "please", "my", "our", "this", "that"]);
-const terms = (text: string) => new Set(words(text).split(/[^\p{L}\p{N}]+/u).filter((term) => term && !FILLER.has(term)).map((term) => term.length > 3 ? term.replace(/(?:(x|z|ch|sh|ss)es|([^s])s)$/, "$1$2") : term));
-
-/** Two phrasings of one ask: the same words once order, case, filler and plurals are set aside, so a different ask never merges. */
-export function sameAsk(left: string, right: string): boolean {
-  const [a, b] = [terms(left), terms(right)];
-  return a.size >= 2 && a.size === b.size && [...a].every((term) => b.has(term));
-}
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 // a bare date is the user's local midnight, not UTC's
@@ -96,7 +88,7 @@ export function mergeTaskAsks(
     const text = update.ask?.trim() ?? "";
     const target = id
       ? asks.find((ask) => ask.id === id)
-      : text ? asks.find((ask) => isOpenAsk(ask) && !isParked(ask, now) && words(ask.ask) === words(text)) ?? asks.find((ask) => isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && sameAsk(ask.ask, text)) : undefined;
+      : text ? asks.find((ask) => isOpenAsk(ask) && !isParked(ask, now) && words(ask.ask) === words(text)) : undefined;
     if (id && !target) {
       return { error: `Unknown ask id ${id}. Open asks: ${asks.filter(isOpenAsk).map((ask) => ask.id).join(", ") || "none"}.` };
     }
