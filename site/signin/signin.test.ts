@@ -491,6 +491,36 @@ describe("phone sign-in page", () => {
     expect(inits[0]).toMatchObject({ nonce: NONCE, auto_select: true, login_hint: "1234567890" });
   });
 
+  it("refuses a return leg token for another account than the cold start picked, and asks by name only once for that PC", async () => {
+    const token = (sub: string) => ["e30", Buffer.from(JSON.stringify({ sub })).toString("base64url"), "sig"].join(".");
+    const twoPcs = [
+      { label: LABEL_A, name: "Ada" },
+      { label: LABEL_B, name: "Zed" },
+    ];
+    open("/signin", twoPcs);
+    inits[0]!.callback({ credential: token("1234567890") });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button:last-child")!.click();
+    open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_A, name: "Ada" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]?.login_hint).toBeUndefined();
+
+    open("/signin?pick=1", twoPcs);
+    inits[0]!.callback({ credential: token("1234567890") });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    document.querySelector<HTMLButtonElement>("#list button:last-child")!.click();
+    open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]?.login_hint).toBe("1234567890");
+    inits[0]!.callback({ credential: token("999") });
+    await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe("That PC is not signed in to this Google account."));
+    expect(location.href).not.toContain("#g=");
+
+    open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]?.login_hint).toBeUndefined();
+  });
+
   it("shows the button when auto_select does not fire", async () => {
     open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
     await vi.waitFor(() => expect(prompts).toHaveLength(1));

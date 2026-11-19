@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { googleSubHash } from "../../shared/google-id-token.ts";
 import { FrameError, PERSON_NAME_MAX, PHONE_RELAY_OFF, PC_NAME_MAX, encodeFrame, hostFor, type PhoneRelayStatus, type TeamSnag } from "../../shared/relay-protocol.ts";
 import { ACCOUNT_TOKEN_MAX_AGE_MS, idTokenClaims, registerAccount } from "./account.ts";
-import { CertManager, SECOND_ACME_DIRECTORY, type CertManagerOptions } from "./acme.ts";
+import { CertManager, SECOND_ACME_DIRECTORY, type CertManagerOptions, type CertSnapshot } from "./acme.ts";
 import { RelayClient, defaultConnector, type RelayConnector } from "./client.ts";
 import { realClock, type Cancel, type Clock } from "./clock.ts";
 import { CtWatch, crtShSource, type CtSource } from "./ct-watch.ts";
@@ -349,6 +349,7 @@ class RelayRuntime {
     if (this.stopped || !this.client || !this.certs) return;
     const link = this.client.snapshot();
     const cert = this.certs.snapshot();
+    const door = this.doorCerts?.snapshot();
     const connected = link.state === "connected";
     if (connected !== this.wasConnected) {
       this.wasConnected = connected;
@@ -369,8 +370,8 @@ class RelayRuntime {
       relayRttMs: connected ? link.rttMs : null,
       poolIdle: link.poolIdle,
       certNotAfter: cert.notAfter,
-      lastError: this.ctAlert ?? linkError ?? (cert.error === "full" ? "relay-full" : cert.error),
-      nextRetryAt: link.nextRetryAt ?? cert.fullUntil,
+      lastError: this.ctAlert ?? linkError ?? certError(cert) ?? (door ? certError(door) : null),
+      nextRetryAt: link.nextRetryAt ?? cert.fullUntil ?? door?.retryAt ?? null,
     };
     if (connected && link.snags) next.snags = true;
     if (connected && link.reportOwner) next.reportOwner = link.reportOwner;
@@ -389,6 +390,10 @@ class RelayRuntime {
     for (const ct of this.cts) ct.stop();
     this.ingress?.close();
   }
+}
+
+function certError(cert: CertSnapshot): string | null {
+  return cert.error === "full" ? "relay-full" : cert.error;
 }
 
 function sameStatus(a: PhoneRelayStatus, b: PhoneRelayStatus): boolean {

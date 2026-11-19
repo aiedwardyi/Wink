@@ -20,6 +20,7 @@
   let gis = null;
   let config = null;
   let listed = [];
+  let account = "";
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
@@ -71,18 +72,28 @@
     } catch {}
   }
 
-  // The cold start's account, so the PC-bound token on the way back is asked for by name, not picked again.
-  function rememberAccount(token) {
+  function subject(token) {
     try {
       const part = token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/");
-      const sub = text(JSON.parse(atob(part.padEnd(Math.ceil(part.length / 4) * 4, "="))).sub);
-      if (sub) sessionStorage.setItem(ACCOUNT, sub);
+      return text(JSON.parse(atob(part.padEnd(Math.ceil(part.length / 4) * 4, "="))).sub);
+    } catch {
+      return "";
+    }
+  }
+
+  // The cold start's account, for the PC being opened: the token on the way back is asked for by name and must match.
+  function holdAccount(label) {
+    try {
+      if (account) sessionStorage.setItem(ACCOUNT, `${label}:${account}`);
+      else sessionStorage.removeItem(ACCOUNT);
     } catch {}
   }
 
-  function rememberedAccount() {
+  function takeAccount(label) {
     try {
-      return sessionStorage.getItem(ACCOUNT) || "";
+      const held = sessionStorage.getItem(ACCOUNT) || "";
+      sessionStorage.removeItem(ACCOUNT);
+      return held.startsWith(`${label}:`) ? held.slice(label.length + 1) : "";
     } catch {
       return "";
     }
@@ -122,6 +133,7 @@
       return;
     }
     remember(label);
+    holdAccount(label);
     location.assign(`https://${label}.${config.base}/pair${suffix}`);
   }
 
@@ -300,7 +312,7 @@
       return;
     }
     const token = await requestToken(randomNonce(), false);
-    rememberAccount(token);
+    account = subject(token);
     const listed = await loadPcs(token);
     if (!listed) {
       say(OFFLINE, "error");
@@ -311,13 +323,14 @@
 
   async function returnLeg(pc, m) {
     // One prompt: Google stays quiet on a second auto_select within minutes and asks for the account again.
-    const pcToken = await requestToken(await boundNonce(pc, m), true, rememberedAccount());
+    const held = takeAccount(pc);
+    const pcToken = await requestToken(await boundNonce(pc, m), true, held);
     const listed = await loadPcs(pcToken);
     if (!listed) {
       say(OFFLINE, "error");
       return;
     }
-    if (!listed.some((row) => row.label === pc)) {
+    if (!listed.some((row) => row.label === pc) || (held && subject(pcToken) !== held)) {
       say(NOT_YOURS, "error");
       return;
     }
