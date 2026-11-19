@@ -974,7 +974,10 @@ it.each([
   expect(sampled().map((pick) => [pick.querySelector(".timeline-key")?.textContent, pick.querySelector("[data-won]")?.textContent])).toEqual(rows);
   expect(host.querySelectorAll(".timeline-pane[data-sample] [data-timeline-day]")).toHaveLength(2);
   expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=ring]").length).toBe(2 * rows.length);
-  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=strike]").length).toBe(2 * 8);
+  const outs = host.querySelectorAll(".timeline-pane[data-sample] [data-timeline-out]").length;
+  expect(outs).toBeGreaterThan(0);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=strike]").length).toBe(2 * outs);
+  expect(host.querySelector(".timeline-pane[data-sample] .timeline-canvas")?.closest("[inert]")).not.toBeNull();
   expect(picked()).toHaveLength(0);
   expect(host.querySelector(".timeline-search")).toBeNull();
   expect(host.querySelectorAll(".timeline-sheet button, .timeline-sheet a")).toHaveLength(0);

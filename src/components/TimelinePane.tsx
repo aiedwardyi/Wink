@@ -324,7 +324,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
   }, [botId, saves]);
 
   const sample = entries?.length === 0;
-  const days = useMemo(() => (sample ? sampleDays(t) : timelineDays(entries ?? [])), [entries, sample, t]);
+  const days = useMemo(() => (entries?.length === 0 ? sampleDays(t) : timelineDays(entries ?? [])), [entries, t]);
   const needle = query.trim().toLowerCase();
   const shown = useMemo(() => (needle ? days.map((day) => ({ ...day, rows: day.rows.filter((row) => row.hay.includes(needle)) })).filter((day) => day.rows.length > 0) : days), [days, needle]);
   const you = profileName || t("chrome.you");
@@ -340,7 +340,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
                 <small className={DEMO_CHIP}>{t("timeline.sample")}</small>
                 <p className="show-media-empty">{t("timeline.empty")}</p>
               </div>
-              <Canvas days={days} needle="" botId={botId} threadId={threadId} you={you} closing={closing} />
+              <div inert className="contents"><Canvas days={days} needle="" botId={botId} threadId={threadId} you={you} closing={closing} /></div>
             </>
           )
           : entries && (
