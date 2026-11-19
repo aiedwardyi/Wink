@@ -714,7 +714,7 @@ describe("artifact overflow", () => {
     expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual(long.filter((item) => !kept.has(item.ref)));
   });
 
-  it("stays readable when a write would cross the 8 MiB read cap, dropping the oldest", () => {
+  it("stays readable past the 8 MiB read cap and keeps every ref", () => {
     const sidecar = join(dir, "thread-1.artifacts.jsonl");
     const lines: string[] = [];
     let bytes = 0;
@@ -730,9 +730,14 @@ describe("artifact overflow", () => {
     const later = Array.from({ length: 30 }, (_, index) => ({ ref: join(dir, "later", `shot-${index}.png`), label: `Shot ${index}` }));
     writeTaskResumePacket(packet({ artifacts: later }), { dir });
     expect(statSync(sidecar).size).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(statSync(join(dir, "thread-1.artifacts.1.jsonl")).size).toBeLessThanOrEqual(8 * 1024 * 1024);
     const read = readTaskArtifactOverflow("thread-1", { dir });
+    expect(read).toHaveLength(lines.length + 10);
+    expect(read[0]!.ref).toBe(join(dir, "history", "file-0.md"));
     expect(read.slice(-10)).toEqual(later.slice(0, 10));
-    expect(read[0]!.ref).not.toBe(join(dir, "history", "file-0.md"));
-    expect(read.length).toBeGreaterThan(10_000);
+    writeTaskResumePacket(packet({ artifacts: later }), { dir });
+    expect(readTaskArtifactOverflow("thread-1", { dir })).toHaveLength(lines.length + 10);
+    expect(deleteTaskResumePacket("thread-1", { dir })).toBe(true);
+    expect(existsSync(join(dir, "thread-1.artifacts.1.jsonl"))).toBe(false);
   });
 });

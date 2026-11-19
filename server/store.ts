@@ -174,9 +174,11 @@ export interface Message {
     usageWait?: UsageWaitView;
     /** an auto-approval chip; the model replay skips it */
     approval?: boolean;
-    /** update_task_state rows: the files the call recorded; the record stays on this PC, the row syncs */
-    artifacts?: Array<{ ref: string; label: string }>;
+    /** shell rows: files the command named that it created or changed, found on disk; not writes, so verify and the Map keep their rules */
+    made?: string[];
   };
+  /** Files a task-state call recorded; the record stays on this PC, the row syncs. */
+  recorded?: Array<{ ref: string; label: string }>;
   /** user messages sent INTO a running turn (capabilities.queueing): the
    * model saw it mid-turn, so the transcript marks it — a reader should
    * know the reply above it may already account for this line */

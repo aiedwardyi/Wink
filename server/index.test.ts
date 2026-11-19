@@ -2820,6 +2820,10 @@ describe("harness HTTP API", () => {
         { ref: groundedArtifactPath, label: "Weekly brief" },
         { ref: realpathSync(outsidePath), label: "Outside" },
       ]);
+      // no update_task_state row was open for these calls; a synced row still carries the files
+      const rows = z.array(z.object({ recorded: z.array(z.object({ ref: z.string() })).optional() }).passthrough())
+        .parse((await api("GET", `/api/threads/${bot.threadId}/messages?limit=200`)).body.messages);
+      expect(rows.flatMap((row) => row.recorded ?? []).map((item) => item.ref)).toEqual([groundedArtifactPath, realpathSync(outsidePath)]);
       const foreign = await fetch(`${BASE}/api/internal/task-state`, {
         method: "POST",
         headers: { authorization: `Bearer ${commsToken}`, "content-type": "application/json" },

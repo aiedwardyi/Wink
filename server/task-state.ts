@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { z } from "zod";
@@ -209,8 +209,15 @@ function serializeBounded(packet: TaskResumePacket): string {
 const MARK_BYTES = 65;
 const stagedPath = (path: string): string => `${path}.staged`;
 const overflowPath = (path: string): string => path.replace(/\.json$/, ".artifacts.jsonl");
-// the reader's cap too: past it the writer keeps the newest half, so the sidecar always reads
+// the reader's cap too: a full sidecar moves to the next archive, so every file reads and no ref is lost
 const OVERFLOW_MAX_BYTES = TASK_STATE_READ_MAX_BYTES;
+const archivePath = (path: string, index: number): string => path.replace(/\.json$/, `.artifacts.${index}.jsonl`);
+
+function overflowArchives(path: string): string[] {
+  const found: string[] = [];
+  while (existsSync(archivePath(path, found.length + 1))) found.push(archivePath(path, found.length + 1));
+  return found;
+}
 
 function sealed(packet: TaskResumePacket, dir: string): { path: string; serialized: string; saved: TaskResumePacket } {
   const normalized = normalize(packet);
@@ -224,8 +231,7 @@ function sealed(packet: TaskResumePacket, dir: string): { path: string; serializ
 
 /** Artifacts the cap or byte budget cut from the record go here instead of being lost. */
 function overflowArtifacts(path: string, given: TaskResumePacket["artifacts"], kept: TaskResumePacket["artifacts"]): void {
-  const old = overflowOf(path);
-  const seen = new Set([...kept, ...old].map((item) => item.ref));
+  const seen = new Set([...kept, ...overflowOf(path)].map((item) => item.ref));
   const lines: string[] = [];
   for (const item of given) {
     const ref = clean(item.ref, LIMITS.ref);
@@ -235,18 +241,8 @@ function overflowArtifacts(path: string, given: TaskResumePacket["artifacts"], k
   }
   if (!lines.length) return;
   const added = `${lines.join("\n")}\n`;
-  if (sizeOf(overflowPath(path)) + Buffer.byteLength(added) <= OVERFLOW_MAX_BYTES) {
-    appendFileSync(overflowPath(path), added, { mode: 0o600 });
-    return;
-  }
-  const newest: string[] = [];
-  let bytes = 0;
-  for (const line of [...old.map((item) => JSON.stringify(item)), ...lines].reverse()) {
-    bytes += Buffer.byteLength(line) + 1;
-    if (bytes > OVERFLOW_MAX_BYTES / 2) break;
-    newest.push(line);
-  }
-  writeFileAtomic(overflowPath(path), `${newest.reverse().join("\n")}\n`, { mode: 0o600 });
+  if (sizeOf(overflowPath(path)) + Buffer.byteLength(added) > OVERFLOW_MAX_BYTES) renameSync(overflowPath(path), archivePath(path, overflowArchives(path).length + 1));
+  appendFileSync(overflowPath(path), added, { mode: 0o600 });
 }
 
 function sizeOf(path: string): number {
@@ -260,7 +256,7 @@ function sizeOf(path: string): number {
 const overflowItemSchema = z.object({ ref: z.string().min(1), label: z.string() });
 
 function overflowOf(path: string): TaskResumePacket["artifacts"] {
-  return (fileText(overflowPath(path), OVERFLOW_MAX_BYTES) ?? "").split("\n").flatMap((line) => {
+  return [...overflowArchives(path), overflowPath(path)].flatMap((file) => (fileText(file, OVERFLOW_MAX_BYTES) ?? "").split("\n")).flatMap((line) => {
     try {
       const item = overflowItemSchema.safeParse(JSON.parse(line));
       return item.success ? [item.data] : [];
@@ -364,7 +360,7 @@ export function deleteTaskResumePacket(
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
   const staged = existsSync(stagedPath(path));
   rmSync(stagedPath(path), { force: true });
-  rmSync(overflowPath(path), { force: true });
+  for (const file of [...overflowArchives(path), overflowPath(path)]) rmSync(file, { force: true });
   if (!existsSync(path)) return staged;
   const status = lstatSync(path);
   if (!status.isFile() || status.isSymbolicLink()) return staged;

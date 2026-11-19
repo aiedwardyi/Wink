@@ -1328,6 +1328,10 @@ describe("fresh-session memory block", () => {
     expect(planFiles({ goal: `Follow the plan at "${spaced}" and notes.md`, plan: [], artifacts: [] }, cwd)).toEqual([spaced, join(cwd, "notes.md")]);
   });
 
+  it("pins a quoted plan file name that holds spaces", () => {
+    expect(planFiles({ goal: `Follow "Launch Plan.md" step by step`, plan: [], artifacts: [] }, cwd)).toEqual([join(cwd, "Launch Plan.md")]);
+  });
+
   it("pins a plan the record moved to its sidecar", () => {
     const shotsRecorded = shots.map((ref, index) => ({ ref, label: `Shot ${index + 1}` }));
     const text = chatMemory({
@@ -1341,10 +1345,16 @@ describe("fresh-session memory block", () => {
 
   it("names files and the plan from synced rows when this PC has no record", () => {
     const recorded = [{ ref: plan, label: "Thursday launch plan" }, ...shots.map((ref, index) => ({ ref, label: `Shot ${index + 1}` }))];
-    const text = chatMemory({ record: null, overflow: [], messages: [{ tool: { artifacts: recorded } }, { tool: { writes: [join(home, "notes.md")] } }], cwd });
+    const text = chatMemory({ record: null, overflow: [], messages: [{ recorded }, { tool: { writes: [join(home, "notes.md")] } }], cwd });
     expect(text).toContain(`Read first, your plan: ${plan}`);
     expect(text).toContain(`${join(home, "launch", "real-shots")} 11 (workers-11.png, workers-10.png)`);
+    expect(text).toContain(`${home} 1 (notes.md)`);
     expect(chatMemory({ record: null, overflow: [], messages: [], cwd })).toBe("");
+  });
+
+  it("names files a shell command made that no call recorded", () => {
+    const text = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: shots } }], cwd });
+    expect(text).toContain(`${join(home, "launch", "real-shots")} 11 (workers-11.png, workers-10.png)`);
   });
 
   it("finds the built list path in the bot's notes, only when the file exists", () => {

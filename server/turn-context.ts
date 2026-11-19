@@ -524,7 +524,7 @@ const MEMORY_FOLDERS = 4;
 const MEMORY_NAMES = 2;
 const DOC_PATH = /(?:[A-Za-z]:)?[\w.~\\/-]*\.(?:md|txt|docx?|pdf)\b/gi;
 // a quoted path may hold spaces, so it is read whole before DOC_PATH
-const QUOTED_DOC_PATH = /(["'`])([^"'`\n]*[\\/][^"'`\n]*\.(?:md|txt|docx?|pdf))\1/gi;
+const QUOTED_DOC_PATH = /(["'`])([^"'`\n]+\.(?:md|txt|docx?|pdf))\1/gi;
 const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
 
 function localPath(ref: string, cwd: string | undefined): string | null {
@@ -602,7 +602,7 @@ export interface ChatMemoryInput {
   record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts"> | null;
   /** artifacts the record moved to its sidecar, oldest first */
   overflow: readonly RecordedFile[];
-  messages: readonly { tool?: { writes?: string[]; artifacts?: RecordedFile[] } }[];
+  messages: readonly { recorded?: RecordedFile[]; tool?: { writes?: string[]; made?: string[] } }[];
   cwd?: string;
   builtList?: string | null;
   work?: string;
@@ -610,11 +610,11 @@ export interface ChatMemoryInput {
 
 /** memoryBlock for a chat: the record and its sidecar on this PC, plus what synced rows recorded or wrote. */
 export function chatMemory(input: ChatMemoryInput): string {
-  const rows = input.messages.flatMap((message) => message.tool?.artifacts ?? []);
+  const rows = input.messages.flatMap((message) => message.recorded ?? []);
   const recorded = [...input.overflow, ...input.record?.artifacts ?? [], ...rows];
   return memoryBlock({
     files: [...input.overflow, ...input.record?.artifacts ?? []].map((item) => item.ref)
-      .concat(input.messages.flatMap((message) => [...(message.tool?.artifacts ?? []).map((item) => item.ref), ...message.tool?.writes ?? []])),
+      .concat(input.messages.flatMap((message) => [...(message.recorded ?? []).map((item) => item.ref), ...message.tool?.writes ?? [], ...message.tool?.made ?? []])),
     cwd: input.cwd,
     plans: planFiles({ goal: input.record?.goal ?? "", plan: input.record?.plan ?? [], artifacts: recorded }, input.cwd),
     builtList: input.builtList,

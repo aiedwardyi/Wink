@@ -230,9 +230,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
-      // the record stays on this PC; the call's chat row syncs, so another PC still knows these files
-      const row = saved && artifacts.length ? recordedArtifactsPatch(store.messagesFor(body.fromThreadId), artifacts) : null;
-      if (row) store.patchMessage(body.fromThreadId, row.id, { tool: row.tool });
+      // the record stays on this PC; a 1:1 row syncs to the owner's other PCs, a room row would reach guests
+      const row = saved && artifacts.length && !conversation.group ? recordedArtifactsPatch(store.messagesFor(body.fromThreadId), artifacts) : null;
+      if (row) store.patchMessage(body.fromThreadId, row.id, { recorded: row.recorded });
       if (saved && body.blockers !== undefined) {
         deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
         try {
