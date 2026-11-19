@@ -454,21 +454,19 @@ it("shows the most workers at once where the streak was", async () => {
 });
 
 it.each([
-  [[], 0, []],
-  [[{ engine: "codex", count: 0 }], 0, []],
-  [[{ engine: "claudeAgent", count: 5 }], 5, [["Claude", "100%"]]],
-  [[{ engine: "codex", count: 1 }, { engine: "claudeAgent", count: 1 }], 2, [["Claude", "50%"], ["OpenAI", "50%"]]],
-  [[{ engine: "antigravityAgent", count: 2 }, { engine: "geminiAgent", count: 1 }, { engine: "museAgent", count: 1 }, { engine: "claudeAgent", count: 996 }], 1000, [["Claude", "100%"], ["Gemini", "<1%"], ["Muse", "<1%"]]],
-  [[{ engine: "claudeAgent", count: 72 }, { engine: "codex", count: 14 }, { engine: "grokAgent", count: 8 }, { engine: "geminiAgent", count: 4 }, { engine: "museAgent", count: 2 }], 100, [["Claude", "72%"], ["OpenAI", "14%"], ["Grok", "8%"], ["Gemini", "4%"], ["Muse", "2%"]]],
-  [[{ engine: "codex", count: 3 }, { engine: "claudeAgent", count: 3 }], 7, [["Claude", "43%"], ["OpenAI", "43%"]]],
-  [[{ engine: "claudeAgent", count: 5 }], 4, [["Claude", "100%"]]],
-] as const)("shares %j of %i replies by engine, biggest first", (engines, total, shares) => {
-  expect(engineShares([...engines], total).map(({ name, share }) => [name, share])).toEqual(shares);
+  [[], []],
+  [[{ engine: "codex", count: 0 }], []],
+  [[{ engine: "claudeAgent", count: 5 }], [["Claude", "100%"]]],
+  [[{ engine: "codex", count: 1 }, { engine: "claudeAgent", count: 1 }], [["Claude", "50%"], ["OpenAI", "50%"]]],
+  [[{ engine: "antigravityAgent", count: 2 }, { engine: "geminiAgent", count: 1 }, { engine: "museAgent", count: 1 }, { engine: "claudeAgent", count: 996 }], [["Claude", "100%"], ["Gemini", "<1%"], ["Muse", "<1%"]]],
+  [[{ engine: "claudeAgent", count: 72 }, { engine: "codex", count: 14 }, { engine: "grokAgent", count: 8 }, { engine: "geminiAgent", count: 4 }, { engine: "museAgent", count: 2 }], [["Claude", "72%"], ["OpenAI", "14%"], ["Grok", "8%"], ["Gemini", "4%"], ["Muse", "2%"]]],
+] as const)("shares %j by engine, biggest first", (engines, shares) => {
+  expect(engineShares([...engines]).map(({ name, share }) => [name, share])).toEqual(shares);
 });
 
 it("shows the top engine as a stat with every share on its hover, and none with no engines", async () => {
   const engines = [{ engine: "codex", count: 1400 }, { engine: "claudeAgent", count: 7200 }, { engine: "grokAgent", count: 800 }, { engine: "geminiAgent", count: 400 }, { engine: "museAgent", count: 200 }];
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), total: 10000, engines }))));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), total: 20000, engines }))));
   const { host, unmount } = mount();
   await act(async () => {});
   try {

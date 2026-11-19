@@ -59,7 +59,6 @@
 .map-code-row u { text-align: right; text-decoration: none; color: var(--color-ink-secondary); opacity: .6; user-select: none; font-variant-numeric: tabular-nums; }
 .map-code-row b { text-align: center; font-weight: 500; user-select: none; }
 .map-code-row code { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-syntax-fg, var(--color-ink)); }
-.map-code-row[data-kind="context"] code { opacity: .6; }
 .map-code-row[data-kind="add"] { background: color-mix(in oklab, var(--map-green) 9%, transparent); box-shadow: inset 2px 0 var(--map-green); }
 .map-code-row[data-kind="add"] b { color: var(--map-green); }
 .map-code-row[data-kind="remove"] { background: color-mix(in oklab, var(--color-danger) 9%, transparent); box-shadow: inset 2px 0 var(--color-danger); }

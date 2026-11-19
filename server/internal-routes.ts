@@ -67,7 +67,7 @@ type InternalRouteDeps = {
   answeredLine: (threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
-  boardCalls?: Pick<BoardCalls, "hold">;
+  boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -229,7 +229,14 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
-      if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+      if (saved && body.blockers !== undefined) {
+        deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+        try {
+          deps.boardCalls?.cleared(body.fromThreadId, current.blockers, saved.blockers, body.completed_note);
+        } catch (cause) {
+          console.warn(`board: ${cause}`);
+        }
+      }
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
@@ -422,7 +429,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         if (chip?.comm) store.patchMessage(fromThreadId, chip.id, { comm: { ...chip.comm, taskId: reply.taskId } });
         return json(res, 200, { botName: currentTarget.name, text: reply.text, taskId: reply.taskId, shown: false });
       }
-      const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true }, reply.replied, reply.text, reply.text);
+      const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true, engine: reply.engine }, reply.replied, reply.text, reply.text);
       if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId, requestingTurn);
       return json(res, 200, { botName: currentTarget.name, text: reply.text, shown });
     },
@@ -482,14 +489,15 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           appendMessage: (threadId, message) => store.appendMessage(threadId, message),
           activePath: (threadId) => store.activePath(threadId),
           patchMessage: (threadId, messageId, patch) => store.patchMessage(threadId, messageId, patch),
-          cancelHeld: (botId, threadId, question) => askHold.cancel(botId, threadId, question),
+          cancelHeld: (botId, threadId, question, forumOnly) => askHold.cancel(botId, threadId, question, forumOnly),
           alertThread: (bot, threadId) => {
             // A routine run's alert opens the conversation that owns the routine.
             const run = routines?.activeRunForBot(bot.id);
             return (run?.threadId === threadId && routineSourceThread(run)) || threadId;
           },
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
-          whenSettled: (botId, threadId, post, question) => askHold.whenSettled(botId, threadId, post, question),
+          whenSettled: (botId, threadId, post, question, forum) => askHold.whenSettled(botId, threadId, post, question, forum),
+          forum: (botId, threadId, question, choices) => deps.boardCalls?.ask(botId, threadId, question, choices) ?? "",
         },
         askUserRequestSchema.parse(body),
       );

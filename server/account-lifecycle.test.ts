@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -14,6 +14,8 @@ import type { MainChange } from "./account-lifecycle.ts";
 import { Store } from "./store.ts";
 import { createUsageRefresh } from "./usage-refresh.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
+import { resetPathCacheForTests } from "./env-path.ts";
+import { ClaudeDriver } from "./drivers/claude.ts";
 
 const core = await import("./accounts.ts").catch(() => null);
 const lifecycle = await import("./account-lifecycle.ts").catch(() => null);
@@ -28,6 +30,7 @@ afterEach(async () => {
   await Promise.all(registries.splice(0).map((registry) => registry.disposeAll()));
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -81,7 +84,7 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
     referenced: async (id) => references.has(id), invalidate, changed, configBusy: () => configBusy,
   });
   controllers.push(controller);
-  return { dir, accounts, registry, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
+  return { dir, accounts, registry, drivers, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
     busy: (value: boolean) => { configBusy = value; }, failLogout: () => { logoutFails = true; },
     state: (value: typeof state) => { state = value; }, wait: (value: Promise<void>) => { waiting = value; },
     add: async (of = "claude") => { const result = await controller.add(of); await controller.settled(result.id); return accounts.get(result.id)!; },
@@ -283,6 +286,56 @@ describe("account lifecycle", () => {
     await expect(f.controller.signIn(account.id)).rejects.toThrow(/active work/);
   });
 
+  it.runIf(process.platform === "win32")("signs in a stopped Claude account before a status check selects the working CLI", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    await f.accounts.stop(account.id);
+    const broken = join(f.dir, "old bin");
+    const working = join(f.dir, "new bin");
+    const opened = join(f.dir, "browser-requested");
+    const failed = join(f.dir, "broken-login");
+    for (const dir of [broken, working]) {
+      mkdirSync(dir);
+      writeFileSync(join(dir, "claude.cmd"), '@node "%~dp0\\cli.cjs" %*');
+    }
+    writeFileSync(join(broken, "cli.cjs"), `
+      if (process.argv[2] === 'auth') require('node:fs').writeFileSync(${JSON.stringify(failed)}, 'Claude package binary is missing');
+      console.error('Claude package binary is missing');
+      process.exitCode = 1;
+    `);
+    writeFileSync(join(working, "cli.cjs"), `
+      const args = process.argv.slice(2);
+      if (args[0] === '--version') console.log('2.1.325 (Claude Code)');
+      if (args.slice(0, 2).join(' ') === 'auth login') {
+        require('node:fs').writeFileSync(${JSON.stringify(opened)}, process.env.CLAUDE_CONFIG_DIR);
+        console.log("If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true");
+      }
+    `);
+    vi.stubEnv("PATH", `${broken};${working}`);
+    vi.stubEnv("OMB_EXTRA_PATH", "");
+    for (const name of ["APPDATA", "LOCALAPPDATA", "ProgramFiles"]) vi.stubEnv(name, f.dir);
+    resetPathCacheForTests();
+    const registry = new ProviderRegistry([ClaudeDriver]);
+    registries.push(registry);
+    const configs = f.configs();
+    const controller = new lifecycle!.AccountLifecycle(f.accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: () => {},
+    });
+    controllers.push(controller);
+    try {
+      await registry.load({ [account.id]: configs[account.id] }, { deferAccountAuth: true });
+      await controller.restore();
+      const response = await request({ controller, registry }, "POST", `/api/instances/${account.id}/sign-in`);
+      await controller.settled(account.id);
+      expect(existsSync(failed), "the broken shim received auth login").toBe(false);
+      expect(response).toMatchObject({ status: 200, body: { url: "https://claude.com/cai/oauth/authorize?code=true" } });
+      expect(readFileSync(opened, "utf8")).toBe(account.home);
+    } finally {
+      vi.unstubAllEnvs();
+      resetPathCacheForTests();
+    }
+  });
+
   it("still refuses sign-in on a ready account with live panes and gives the account-busy code", async () => {
     const f = await fixture();
     const account = await f.add();
@@ -303,6 +356,27 @@ describe("account lifecycle", () => {
     const refused = await request(f, "POST", "/api/accounts", { of: "nope" });
     expect(refused).toMatchObject({ status: 400, body: { error: expect.any(String) } });
     expect(refused.body.code).toBeUndefined();
+  });
+
+  it("logs sign-in validation, settings, unknown engine and server refusals once", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    const path = `/api/instances/${account.id}/sign-in`;
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect((await request(f, "POST", path, { device: "fixture" })).status).toBe(400);
+    f.busy(true);
+    expect((await request(f, "POST", path)).status).toBe(409);
+    f.busy(false);
+    const start = vi.spyOn(f.registry, "startSignIn");
+    start.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("private-fixture-token"));
+    expect((await request(f, "POST", path)).status).toBe(404);
+    expect((await request(f, "POST", path)).status).toBe(500);
+    expect(log.mock.calls).toEqual([
+      ["sign-in refused code=http-400 status=400 stderr=-"],
+      ["sign-in refused code=provider-config-busy status=409 stderr=-"],
+      ["sign-in refused code=unknown-engine-sign-in status=404 stderr=-"],
+      ["sign-in refused code=http-500 status=500 stderr=-"],
+    ]);
   });
 
   it("leaves the sign-out mark alone during a sign-in or for a stopped account", async () => {
@@ -668,6 +742,63 @@ describe("account lifecycle", () => {
     expect(f.registry.accountAvailable(account.id)).toBe(false);
   });
 
+  it.each(["observe", "restore", "refresh", "observe while a pane uses it"])("keeps a signed-out account's identity, generation and sessions after a %s read, and the other accounts as they were", async (path) => {
+    const f = await fixture();
+    const added = [await f.add(), await f.add(), await f.add(), await f.add()];
+    const [account] = added;
+    expect(account.identity).toBeTruthy();
+    f.invalidate.mockClear();
+    if (path.includes("pane")) f.references.add(account.id);
+    f.statuses.set(account.id, { state: "available", authenticated: false });
+    if (path === "restore") await f.controller.restore();
+    else if (path === "refresh") await f.registry.describe({ refresh: true });
+    else await f.controller.observe(account.id, f.statuses.get(account.id)!);
+    expect(f.accounts.get(account.id)).toEqual({ ...account, state: "stopped" });
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+    expect(f.invalidate).not.toHaveBeenCalled();
+    for (const other of added.slice(1)) expect(f.accounts.get(other.id)).toEqual(other);
+  });
+
+  it("keeps showing the address a signed-out account was signed in as", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.statuses.set(account.id, { state: "available", authenticated: true, accountIdentity: account.identity, account: "fixture@example.test" });
+    await f.registry.describe({ refresh: true });
+    f.statuses.set(account.id, { state: "available", authenticated: false });
+    await f.registry.describe({ refresh: true });
+    expect((await f.registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot).toMatchObject({ authenticated: false, account: "fixture@example.test" });
+  });
+
+  it("keeps a login's identity on the PC that reads it signed out, leaving the other PC's accounts file as it was", async () => {
+    const pcs = [await fixture(), await fixture()];
+    const [, work] = [await pcs[0].add(), await pcs[1].add()];
+    const other = readFileSync(join(pcs[0].dir, "accounts.json"), "utf8");
+    pcs[1].invalidate.mockClear();
+    pcs[1].statuses.set(work.id, { state: "available", authenticated: false });
+    await pcs[1].controller.observe(work.id, pcs[1].statuses.get(work.id)!);
+    expect(pcs[1].accounts.get(work.id)).toEqual({ ...work, state: "stopped" });
+    expect(pcs[1].invalidate).not.toHaveBeenCalled();
+    expect(readFileSync(join(pcs[0].dir, "accounts.json"), "utf8")).toBe(other);
+  });
+
+  it("offers the normal Sign In on an account stopped before a restart", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.statuses.set(account.id, { state: "available", authenticated: false });
+    await f.controller.observe(account.id, f.statuses.get(account.id)!);
+    const bases = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" } };
+    const accounts = new core!.AccountService(f.dir, () => bases);
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: bases }, accounts.snapshot));
+    controllers.push(new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    }));
+    expect(accounts.get(account.id)).toEqual({ ...account, state: "stopped" });
+    // Settled as signed out, the row shows Sign In; unsettled, it waits on a check a stopped account never runs.
+    expect((await registry.describeKnown()).find((row) => row.instanceId === account.id)?.snapshot).toEqual({ state: "unavailable", authChecked: true });
+  });
+
   it("keeps the prior identity when a re-login probe is unknown", async () => {
     const f = await fixture();
     const account = await f.add();
@@ -837,7 +968,7 @@ describe("account lifecycle", () => {
   });
 });
 
-async function request(f: Awaited<ReturnType<typeof fixture>>, method: string, path: string, value: unknown = {}, contentType = "application/json") {
+async function request(f: Pick<Awaited<ReturnType<typeof fixture>>, "controller" | "registry">, method: string, path: string, value: unknown = {}, contentType = "application/json") {
   expect(routes, "account routes exist").not.toBeNull();
   const req = Object.assign(Readable.from([JSON.stringify(value)]), { headers: { "content-type": contentType } }) as unknown as IncomingMessage;
   let status = 0;

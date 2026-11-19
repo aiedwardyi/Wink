@@ -1,7 +1,7 @@
 // Stand-in for the five engine CLIs, at the same stdio boundary the drivers spawn.
 // Usage (as a configured `cli`): "<node>" "<this file>" <claude|grok|codex|antigravity|muse> ...driver args
 // Replies read: STUB <ENGINE> <model> | re: <last line of the prompt> | <n> image
-const { appendFileSync } = require("node:fs");
+const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
 const { createInterface } = require("node:readline");
 const { randomUUID } = require("node:crypto");
 
@@ -85,6 +85,13 @@ if (engine === "claude") {
       }
       out({ type: "system", subtype: "status", status: "requesting" });
       const { text, delay } = reply(model, message.message?.content);
+      // An expired login fails the first send only, as if Sign in fixed it before Retry.
+      const expiredOnce = process.env.WINK_STUB_LOG && `${process.env.WINK_STUB_LOG}.expired`;
+      if (text.includes("re: [expired]") && expiredOnce && !existsSync(expiredOnce)) {
+        writeFileSync(expiredOnce, "");
+        setTimeout(() => out({ type: "result", subtype: "success", is_error: true, result: "Failed to authenticate: OAuth session expired and could not be refreshed", total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } }), delay);
+        return;
+      }
       if (text.includes("re: [restate]")) {
         // A morning summary written before its tool calls, then said again after them.
         const said = (body) => ({ type: "assistant", message: { id: randomUUID(), content: [{ type: "text", text: body }] } });

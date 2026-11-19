@@ -1,8 +1,6 @@
 // @vitest-environment happy-dom
-import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -330,47 +328,16 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     expect(rows()).toEqual(["pback"]);
   });
 
-  it("only list rows near the screen draw a working ring", async () => {
-    let report: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => {};
-    const watched: Element[] = [];
-    vi.stubGlobal("IntersectionObserver", class {
-      constructor(callback: typeof report) { report = callback; }
-      observe(row: Element) { watched.push(row); }
-      disconnect() {}
-    });
-    posts = [post("pa", { created_at: 1 }), post("pb", { created_at: 2 })];
+  it("a busy bot's avatar in the list and in an open post carries no working ring", async () => {
+    reduceMotion(false);
+    mock.state.bots = [{ ...bot("astra", "Astra"), busy: true }];
+    posts = [post("pbusy", { author_bot_id: "astra", created_at: 1 }), post("pbusyreply", { parent_id: "pbusy", author_bot_id: "astra", created_at: 2 })];
     await render(BoardView);
-    expect(watched.map((row) => row.getAttribute("data-board-post"))).toEqual(["pb", "pa"]);
-    act(() => report([{ target: watched[0]!, isIntersecting: true }, { target: watched[1]!, isIntersecting: false }]));
-    expect(rows().filter((id) => host.querySelector(`[data-board-post="${id}"]`)!.hasAttribute("data-on-screen"))).toEqual(["pb"]);
-    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
-    const hide = /^([^{}\n]*data-on-screen[^{}\n]*)\{\s*display: none;/m.exec(css)![1]!.trim().replace(/ \.orbit-ring$/, "");
-    expect(host.querySelector('[data-board-post="pa"]')!.matches(hide)).toBe(true);
-    expect(host.querySelector('[data-board-post="pb"]')!.matches(hide)).toBe(false);
-    // a reply in an open post keeps its ring
-    await openRow("pa");
-    posts.push(post("preply", { parent_id: "pa", author_bot_id: "carbon", created_at: 3 }));
-    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
-    await settle();
-    expect(host.querySelector('[data-board-post="preply"]')!.matches(hide)).toBe(false);
-  });
-
-it("Back watches the list's new rows, so their rings come back", async () => {
-    let report: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => {};
-    let watched: Element[] = [];
-    vi.stubGlobal("IntersectionObserver", class {
-      constructor(callback: typeof report) { report = callback; }
-      observe(row: Element) { watched.push(row); }
-      disconnect() { watched = []; }
-    });
-    posts = [post("pa", { created_at: 1 }), post("pb", { created_at: 2 })];
-    await render(BoardView);
-    await openRow("pa");
-    await click("[data-back-button]");
-    await settle();
-    expect(watched.filter((row) => row.isConnected).map((row) => row.getAttribute("data-board-post"))).toEqual(["pb", "pa"]);
-    act(() => report(watched.map((target) => ({ target, isIntersecting: true }))));
-    expect(rows().filter((id) => host.querySelector(`[data-board-post="${id}"]`)!.hasAttribute("data-on-screen"))).toEqual(["pb", "pa"]);
+    expect(host.querySelector('[data-board-post="pbusy"] [data-board-working]')).toBeNull();
+    expect(host.querySelector("[data-board-view] .orbit-ring")).toBeNull();
+    await openRow("pbusy");
+    expect(host.querySelector('[data-board-post="pbusyreply"] [data-board-working]')).not.toBeNull();
+    expect(host.querySelector("[data-board-view] .orbit-ring")).toBeNull();
   });
 
   it("a right swipe on a phone goes back from a post", async () => {
@@ -520,6 +487,17 @@ it("Back watches the list's new rows, so their rings come back", async () => {
     expect(host.querySelector('[role="list"] [data-board-post="pesc"]')).not.toBeNull();
     await vi.waitFor(() => expect(host.querySelector("[data-side-panel]")).toBeNull());
     expect(host.querySelector("article")).toBeNull();
+  });
+
+  it("slides in from the left like the bot list fold and leaves toward the left", async () => {
+    reduceMotion(false);
+    await render(BoardView);
+    const view = host.querySelector<HTMLElement>("[data-board-view]")!;
+    expect([...view.classList]).toEqual(expect.arrayContaining(["md:animate-panel-slide", "[--panel-dx:-28px]"]));
+    expect(view.hasAttribute("data-closing")).toBe(false);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(BoardView, { closing: true }))));
+    expect(view.hasAttribute("data-closing")).toBe(true);
+    expect(view.hasAttribute("inert")).toBe(true);
   });
 
   it("names the bot and the model it ran from the post, even for a bot this PC does not have", async () => {

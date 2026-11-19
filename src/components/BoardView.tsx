@@ -85,7 +85,7 @@ const engineOf = (instances: Instances, post: BoardPost) => {
   return (model && instances.find((instance) => instance.models?.options.some((option) => option.label === model || option.id === model))?.driverKind) || "";
 };
 
-/** Name, face, model and its engine mark come from the post; a bot on this PC lends its face, which may be an uploaded picture, and its working ring. */
+/** Name, face, model and its engine mark come from the post; a bot on this PC lends its face, which may be an uploaded picture. */
 function authorOf(post: BoardPost, bot: Bot | undefined, driverKind: string, user: UserLook) {
   if (post.author_bot_id === BOARD_USER) return { name: user.name, face: userFace(user), model: "", driverKind: "", working: false };
   const name = post.author?.name || bot?.name || "";
@@ -96,7 +96,7 @@ function authorOf(post: BoardPost, bot: Bot | undefined, driverKind: string, use
     model: post.author?.model ?? "",
     driverKind,
     working,
-    face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} orbitRing={working} />,
+    face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} />,
   };
 }
 
@@ -386,7 +386,7 @@ function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; chi
   );
 }
 
-export function BoardView({ hidden = false }: { hidden?: boolean }) {
+export function BoardView({ hidden = false, closing = false }: { hidden?: boolean; closing?: boolean }) {
   const { t } = useI18n();
   const sidebarOnRight = useSidebarSide() === "right";
   const { posts, failed, saved, removed, retry } = useBoardPosts();
@@ -410,19 +410,6 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
     opener.current = { id, top: listRef.current?.scrollTop ?? 0 };
     setOpenId(id);
   }, []);
-  // a working ring repaints its blurred halo every frame, even scrolled away, so only rows near the screen draw one
-  const shownIds = shown.map((thread) => thread.post.id).join(" ");
-  // Back mounts new rows for the same ids
-  const listShown = !open && threads.length > 0;
-  useEffect(() => {
-    const root = listRef.current;
-    if (!root) return;
-    const near = new IntersectionObserver((entries) => {
-      for (const entry of entries) entry.target.toggleAttribute("data-on-screen", entry.isIntersecting);
-    }, { root, rootMargin: "200px 0px" });
-    for (const row of root.querySelectorAll("[data-board-list] > [data-board-post]")) near.observe(row);
-    return () => near.disconnect();
-  }, [shownIds, listShown]);
   useBackLayer(Boolean(open), close);
   const stepSort = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
@@ -436,6 +423,15 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const page = usePresence(open);
   const phone = useIsPhone();
   const pageRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<HTMLElement>(null);
+  // a closing Forum overlays the chat at the width it had, so the chat takes the column back on the first frame
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || closing) return;
+    const watch = new ResizeObserver(() => view.style.setProperty("--board-w", `${view.offsetWidth}px`));
+    watch.observe(view);
+    return () => watch.disconnect();
+  }, [closing]);
   useSettingsSwipe(pageRef, phone && page.mounted && !page.closing, false, () => {
     hapticTick();
     // the swipe already settled offscreen; do not replay the exit
@@ -481,8 +477,15 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, hidden]);
   return (
-    <main data-board-view hidden={hidden} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      <div className={cn("flex min-h-[3.25rem] items-center px-5 py-2 md:min-h-[76px]", open ? (sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT) : cn(DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT))}>
+    <main
+      ref={viewRef}
+      data-board-view
+      data-closing={closing || undefined}
+      inert={closing}
+      hidden={hidden}
+      className="md:animate-panel-slide relative flex h-full min-w-0 flex-1 flex-col bg-app [--panel-dx:-28px] data-closing:z-20 data-closing:w-(--board-w) data-closing:-mr-(--board-w) data-closing:flex-none"
+    >
+      <div className={cn("flex min-h-[3.25rem] items-center px-5 py-2 md:min-h-[76px] md:animate-fade-in", open ? (sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT) : cn(DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT))}>
         <div className="mx-auto flex w-full max-w-[640px] min-w-0 justify-center">
           {open ? <span className="mr-auto md:-ml-1.5"><BackButton label={t("chrome.forum")} ariaLabel={t("board.back")} onClick={close} className={FORUM_BACK} /></span> : (
             <div className="flex min-w-0 flex-col items-center text-center">
@@ -492,7 +495,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
           )}
         </div>
       </div>
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1 md:animate-fade-in">
         <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto md:px-5">
           <section className={SHEET}>
             {failed && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{retryButton}</div>}

@@ -2,9 +2,10 @@
 // it dispatches typed commands over HTTP and folds the one SSE event
 // stream from the harness server into local state. The reducer stays
 // pure; everything async lives in the wrapped dispatch + SSE fold.
-import { noteMemoryFrame } from "@/lib/memory-clean-events";
+import { noteMemoryFrame, noteMemorySnapshot } from "@/lib/memory-clean-events";
 import { request } from "@/lib/api-request";
 import { createErrorBanner } from "@/lib/error-banner";
+import { activeLocale } from "@/lib/i18n";
 import {
   createContext,
   useCallback,
@@ -1513,6 +1514,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 deliver: action.after ? "after" : undefined,
                 queueId: action.queueId,
                 actedAt,
+                locale: activeLocale(),
               }),
             });
           const settle = async (body: any) => {
@@ -2270,6 +2272,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (receipt) api(receipt.path, { method: "PATCH", body: JSON.stringify(receipt.patch) }).catch(() => {});
         // Text held behind the snapshot is history now: it lands whole.
         flushDeltas();
+        // A chat snapshot can cover save frames, but it does not include memory files.
+        noteMemorySnapshot();
         return true;
       })().finally(() => {
         hydrationPromise = null;

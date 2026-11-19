@@ -112,7 +112,7 @@ declare global {
         signOut(): Promise<CompanionAccountState>;
       };
       googleAccount?: {
-        signIn(): Promise<{ ok: true; email: string } | { ok: false; error: import("@/lib/google-signin-error").GoogleSignInCode }>;
+        signIn(options?: { openAfter?: "dashboard" }): Promise<{ ok: true; email: string } | { ok: false; error: import("@/lib/google-signin-error").GoogleSignInCode }>;
         cancel(): Promise<void>;
         signOut(): Promise<{ ok: true }>;
       };

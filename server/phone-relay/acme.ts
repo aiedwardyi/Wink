@@ -157,6 +157,8 @@ export interface CertSnapshot {
   error: string | null;
   /** With error "full": when a CA takes orders again. */
   fullUntil: number | null;
+  /** With error: when the backoff lets the next order run. */
+  retryAt: number | null;
 }
 
 x509.cryptoProvider.set(crypto);
@@ -314,6 +316,7 @@ export class CertManager {
       issuing: this.issuing,
       error: this.error,
       fullUntil: this.fullUntil,
+      retryAt: this.error && this.retryAt > now ? this.retryAt : null,
     };
   }
 
