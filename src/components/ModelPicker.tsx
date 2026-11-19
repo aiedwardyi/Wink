@@ -21,7 +21,7 @@ import { loadModelPickerView, saveModelPickerView, type ModelPickerView } from "
 import { showTouchPickerLegend } from "@/lib/friends-chrome";
 import { pickerLookSkin, savePickerLook, shownPickerLook, usePickedLook } from "@/lib/picker-look";
 import { useSkin } from "@/lib/skins";
-import { ModelDial, useDialFontWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
+import { ModelDial, useDialFontWarm, useDialWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
 import { ModelChart } from "./ModelChart";
 import { PickerStyleButton, PickerStyleStrip } from "./PickerStyleStrip";
 import "./ModelPicker.css";
@@ -79,6 +79,9 @@ export function ModelPickerControl({
   const styles: ModelPickerView[] = dial && dialFits ? ["dial", "list", "chart"] : ["list"];
   const shown: ModelPickerView = dialView ? "dial" : chartView ? "chart" : "list";
   useDialFontWarm(dial, open);
+  const warmDial = useDialWarm(dial && dialFits && loadModelPickerView() === "dial", open);
+  const warmStageRef = useRef<HTMLDivElement>(null);
+  const warmDialRef = useRef<ModelDialHandle>(null);
   useEffect(() => {
     if (!presence.mounted) return;
     void window.ogb?.setModelPickerBackground?.(dialView || chartView ? "dial" : "list")?.catch(() => undefined);
@@ -550,6 +553,14 @@ export function ModelPickerControl({
         </div>
       ) : trigger}
       {presence.mounted && (globalThis.document ? createPortal(dialog, document.body) : dialog)}
+      {warmDial && !presence.mounted && createPortal(
+        <div className="model-cross-backdrop" data-skin={pickerLookSkin(skin, look)} data-light={look !== "dark" || undefined} data-picker-family={family} data-dial-warm="" aria-hidden inert style={{ visibility: "hidden", pointerEvents: "none" }}>
+          <div className="model-cross-dialog">
+            <ModelDial rows={rows} draft={selection} canCommit={canCommit} onDraft={() => {}} onSave={() => false} handle={warmDialRef} stageRef={warmStageRef} bindingsId={`${bindingsId}-warm`} />
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
