@@ -156,3 +156,42 @@ describe("the painted marker", () => {
     scene.dispose();
   });
 });
+
+describe("a swipe's peeked chat", () => {
+  it("uploads the open chat's plates instead of painting them again", () => {
+    const uploads: unknown[] = [];
+    const record = new Proxy({}, { get: (_, key) => (key === "getProgramParameter" ? () => true : key === "texImage2D" ? (...args: unknown[]) => void uploads.push(args.at(-1)) : () => null) });
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", { configurable: true, value: () => record });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        cb: () => void;
+        constructor(cb: () => void) {
+          this.cb = cb;
+        }
+        observe() {
+          this.cb();
+        }
+        disconnect() {}
+      },
+    );
+    const backdrop = vi.fn();
+    const extra = vi.fn(() => new ImageData(1, 1));
+    scenes = flowScene({ frag: "", colors: {}, period: 60, backdrop, extra });
+    const open = start();
+    const peek = start();
+    expect(backdrop).toHaveBeenCalledTimes(1);
+    expect(extra).toHaveBeenCalledTimes(1);
+    expect(uploads).toHaveLength(4);
+    expect(uploads.slice(2)).toEqual(uploads.slice(0, 2));
+    // The land releases the outgoing chat; the plates live on with the incoming one.
+    open.dispose();
+    Object.defineProperty(layer, "clientWidth", { configurable: true, value: 390 });
+    const turned = start();
+    expect(backdrop).toHaveBeenCalledTimes(2);
+    peek.dispose();
+    turned.dispose();
+    start().dispose();
+    expect(backdrop).toHaveBeenCalledTimes(3);
+  });
+});
