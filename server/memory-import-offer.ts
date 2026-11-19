@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 
 import { aboutYouNote } from "../shared/about-you-note.ts";
-import type { MessageKey } from "../src/lib/i18n-catalog.ts";
+import { catalogs, type MessageKey } from "../src/lib/i18n-catalog.ts";
 import { aboutYouFacts, addToAboutYou, day } from "./about-you.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
@@ -26,25 +26,21 @@ export function noteSendLocale(value: unknown): void {
   if (value === "en" || value === "ko") locale = value;
 }
 
-async function translator() {
-  const { catalogs } = await import("../src/lib/i18n-catalog.ts");
-  return (key: MessageKey, vars?: { count: number }) => {
-    const phrase: string = catalogs[locale][key];
-    return vars ? phrase.replaceAll("{count}", String(vars.count)) : phrase;
-  };
+function t(key: MessageKey, vars?: { count: number }): string {
+  const phrase: string = catalogs[locale][key];
+  return vars ? phrase.replaceAll("{count}", String(vars.count)) : phrase;
 }
 
-/** An owner's 1:1 turn: the offer on a new chat's first typed message, the tool until the paste can have come. */
-export function importMemoryTurn(messages: readonly Pick<Message, "role" | "kind">[]): { offer: boolean; tool: boolean } {
-  let typed = 0;
+/** An owner's 1:1 turn: the offer on a new chat's first typed message, the tool until the paste can have come. Unsent counts a send not in messages yet. */
+export function importMemoryTurn(messages: readonly Pick<Message, "role" | "kind">[], unsent = 0): { offer: boolean; tool: boolean } {
+  let typed = unsent;
   // stops past the first few typed lines, so a long chat costs nothing
   for (const message of messages) if (message.role === "user" && message.kind === "text" && ++typed > TOOL_TURNS) return NONE;
   if (!typed || existsSync(declinedFile()) || aboutYouFacts()) return NONE;
   return { offer: typed === 1, tool: true };
 }
 
-export async function importOfferNote(): Promise<string> {
-  const t = await translator();
+export function importOfferNote(): string {
   return [
     `[Wink] The user has not imported memory from another AI yet. After your answer, end this reply with one short line in the user's language offering to bring in what their other AI (like ChatGPT, Claude or Gemini) knows about them: they paste the prompt below into it, then paste its answer here. Then give the prompt exactly as written, in a text code block. When they paste that answer, call ${IMPORT_MEMORY_TOOL} and tell them its result. If they say no, call ${IMPORT_MEMORY_TOOL} with decline: true. Offer only in this reply.`,
     `\`\`\`text\n${t("aboutYou.prompt")}\n\`\`\``,
@@ -70,7 +66,6 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
     writeFileAtomic(declinedFile(), "", { mode: 0o600 });
     return json(res, 200, { text: "Saved: no bot offers this again. Settings > Import Memory still works." });
   }
-  const t = await translator();
   const paste = deps.messages(source.threadId).findLast((message) => message.role === "user" && message.kind === "text")?.text ?? "";
   const result = addToAboutYou(paste, day((deps.now ?? Date.now)()));
   const note = !("error" in result) ? aboutYouNote(result, t)

@@ -38,6 +38,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 describe("new bot import offer", () => {
   it("offers on a new chat's first typed message while Import Memory is empty", () => {
     expect(importMemoryTurn([typed("hi")])).toEqual({ offer: true, tool: true });
+    expect(importMemoryTurn([], 1)).toEqual({ offer: true, tool: true });
   });
 
   it("never offers once anything is imported, including facts synced from another PC", () => {
@@ -65,10 +66,10 @@ describe("new bot import offer", () => {
     expect(read).toBeLessThan(10);
   });
 
-  it("asks for the exact Settings prompt in the user's language", async () => {
-    expect(await importOfferNote()).toContain(`\`\`\`text\n${en["aboutYou.prompt"]}\n\`\`\``);
+  it("asks for the exact Settings prompt in the user's language", () => {
+    expect(importOfferNote()).toContain(`\`\`\`text\n${en["aboutYou.prompt"]}\n\`\`\``);
     noteSendLocale("ko");
-    expect(await importOfferNote()).toContain(`\`\`\`text\n${ko["aboutYou.prompt"]}\n\`\`\``);
+    expect(importOfferNote()).toContain(`\`\`\`text\n${ko["aboutYou.prompt"]}\n\`\`\``);
   });
 });
 
@@ -106,7 +107,11 @@ describe("import_memory saves through the Settings path", () => {
   it("is offered and mounted only in the owner's own 1:1 turns", () => {
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     expect(index).toContain("turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)");
-    const mounts = [...index.matchAll(/[^n] agentsIntegration\(([^)]*)\)/g)].map((match) => match[1]).filter((args) => args.includes("importMemory"));
-    expect(mounts).toEqual(["bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool"]);
+    const mounts = index.split("\n").filter((line) => line.includes("agentsIntegration(bot.id"));
+    expect(mounts.filter((line) => line.includes("importMemory")).map((line) => line.trim())).toEqual([
+      "const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePath(bot.threadId), 1).tool) : undefined;",
+      "integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);",
+    ]);
+    expect(mounts.find((line) => line.includes("hop"))).not.toContain("importMemory");
   });
 });

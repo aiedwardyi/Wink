@@ -5162,7 +5162,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePath(bot.threadId), 1).tool) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5616,7 +5616,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ...reactions,
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
+  const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
+    ? importMemoryTurn(activeMessages)
+    : { offer: false, tool: false };
   const currentPrompt = [
+    ...(importMemory.offer ? [importOfferNote()] : []),
     composeUserTurnPrompt(text, turnOpts),
     ...folded,
   ].join("\n\n");
@@ -5643,11 +5647,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
-    ? importMemoryTurn(activeMessages)
-    : { offer: false, tool: false };
-  const importNotes = importMemory.offer ? [await importOfferNote()] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes, ...importNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -6198,7 +6198,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes, ...importNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
