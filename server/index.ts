@@ -450,6 +450,7 @@ import {
 import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from "./picture-sync.ts";
 import { createThreadSyncV2Store, migrationCutoverAt } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
+import { disconnectSyncFolder, hasJoinedSync } from "./sync-history.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
 import { linkedFileGrant, ownChat, PC_HOLDER, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
 import { linkedRows } from "./linked-rows.ts";
@@ -8568,8 +8569,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "DELETE" && path === "/api/profile-sync") {
       threadSyncPoll.stop();
       threadSyncV2?.stop();
-      profileSyncSettings.folder = null;
-      profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
+      profileSyncSettings = disconnectSyncFolder(DATA_DIR, profileSyncSettings);
       return json(res, 200, await profileSyncStatus());
     }
     if (method === "PUT" && path === "/api/profile-sync/chats") {
@@ -8587,7 +8587,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/activity") {
-      return json(res, 200, replyActivity());
+      if (hasJoinedSync(profileSyncSettings)) return json(res, 200, replyActivity());
+      const kinds = new Map(registry.entries().map((entry) => [entry.instanceId, entry.live?.driverKind ?? entry.shadow?.driverKind]));
+      return json(res, 200, replyActivity(Date.now(), (threadId, botId) => {
+        const bot = botId ? store.bot(botId) : store.botByThread(threadId);
+        return bot ? kinds.get(bot.modelSelection.instanceId) ?? null : null;
+      }));
     }
 
     if (method === "GET" && path === "/api/analytics") {
