@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addQuestionAsk, answerQuestionAsk, ASK_VERDICT_MS, asksBlock, asksNudge, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, rotatedAsks, sameAsk, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_VERDICT_MS, asksBlock, asksNudge, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 import { taskRecordBlock } from "./turn-context.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -235,16 +235,14 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       expect(saved(mergeTaskAsks({ asks }, [{ ask: "One more", status: "open" }], NOW)).note).toBe("Asks saved: added A3; 2 open, 1 parked.");
     });
 
-    it("merges a new ask that closely matches an open one and says so", () => {
+    it("merges an exact repeat of an open ask and says so", () => {
       const first = saved(mergeTaskAsks(undefined, [{ ask: "Show every open ask in the asks list", status: "open" }], NOW - HOUR));
-      const again = saved(mergeTaskAsks(first, [{ ask: "the asks list: show every open asks", status: "building", ref: "PR #2000" }], NOW));
+      const again = saved(mergeTaskAsks(first, [{ ask: "show every OPEN ask in the  asks list", status: "building", ref: "PR #2000" }], NOW));
       expect(again.asks).toEqual([{ id: "A1", ask: "Show every open ask in the asks list", status: "building", ref: "PR #2000", at: NOW - HOUR, changedAt: NOW }]);
       expect(again.note).toBe("Asks saved: merged into A1; 1 open.");
       const other = saved(mergeTaskAsks({ asks: [ask(1, { ask: "Fix the login redirect" })] }, [{ ask: "Fix the logout redirect", status: "open" }], NOW));
       expect(other.note).toBe("Asks saved: added A2; 2 open.");
-      expect(sameAsk("Fix the login redirects", "fix login redirect")).toBe(true);
-      expect(sameAsk("Deploy", "Deploy now")).toBe(false);
-      expect(saved(mergeTaskAsks({ asks: [ask(1, { ask: "Fix the login redirect", status: "done" })] }, [{ ask: "fix login redirect", status: "open" }], NOW)).note).toBe("Asks saved: added A2; 1 open.");
+      expect(saved(mergeTaskAsks({ asks: [ask(1, { ask: "Fix the login redirect", status: "done" })] }, [{ ask: "fix the login redirect", status: "open" }], NOW)).note).toBe("Asks saved: added A2; 1 open.");
     });
 
     it("lists every ask in a room thread, on a status turn and once one needs a verdict", () => {
@@ -274,8 +272,13 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       const german = saved(mergeTaskAsks(french, [{ ask: "Translate settings page into German", status: "open" }], NOW));
       expect(german.note).toBe("Asks saved: added A2; 2 open.");
       expect(german.asks.map((item) => item.ask)).toEqual(["Translate settings page into French", "Translate settings page into German"]);
-      expect(sameAsk("Translate settings page", "Translate settings page into Korean")).toBe(false);
-      expect(sameAsk("Fix the login redirect", "Fix the login redirect on mobile")).toBe(false);
+    });
+
+    it("never merges two asks with the same words in another order", () => {
+      const first = saved(mergeTaskAsks(undefined, [{ ask: "move header above footer", status: "open" }], NOW));
+      const flipped = saved(mergeTaskAsks(first, [{ ask: "move footer above header", status: "open" }], NOW));
+      expect(flipped.asks.map((item) => [item.id, item.ask, item.status])).toEqual([["A1", "move header above footer", "open"], ["A2", "move footer above header", "open"]]);
+      expect(flipped.note).toBe("Asks saved: added A2; 2 open.");
     });
 
     it("keeps a parked ask parked when a similar new ask comes in", () => {
@@ -284,12 +287,6 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       expect(again.asks[0]).toMatchObject({ id: "A1", status: "open", until: NOV(1 + 30) });
       expect(again.asks[1]).toMatchObject({ id: "A2", ask: "renew  the DOMAIN", status: "building" });
       expect(again.note).toBe("Asks saved: added A2; 1 open, 1 parked.");
-    });
-
-    it("reads -es plurals and verb forms as the same word", () => {
-      expect(sameAsk("fixes the login redirects", "Fix login redirect")).toBe(true);
-      expect(sameAsk("pushes the release branches", "push release branch")).toBe(true);
-      expect(sameAsk("closes the ticket", "close the ticket")).toBe(true);
     });
 
     it("tells every bot the list is whole, how to park, that repeats merge and how to judge an old ask", () => {
