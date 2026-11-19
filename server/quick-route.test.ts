@@ -227,12 +227,39 @@ const ORDERS: Array<[string, boolean]> = [
   ["Csn i give feedback.", false],
   ["다 했어", false],
   ["지금 뭐 하고 있어?", false],
+  ["Do these work, please?", false],
+  ["Do those look right, please?", false],
+  ["Could you explain why it failed, please?", false],
+  ["Can you confirm whether it supports Windows, please?", false],
+  ["Can you please clarify what changed, pls?", false],
+  ["Would you describe the setup, please?", false],
+  ["Could you remind me which port it uses, please?", false],
+  ["Can you summarize the error, please?", false],
+  ["Could you let me know if the build passed, please?", false],
+  ["do these first, please", true],
+  ["do those two, please?", true],
+  ["Can you confirm the order, please?", true],
+  ["Can you squash the two commits?", true],
+  ["squash the two commits", true],
+  ["윈도우 지원하는지 알려줄래?", false],
+  ["왜 실패했는지 설명해 줄래요?", false],
+  ["포트가 뭔지 알려줘", false],
+  ["어떻게 설치하는지 말해 줄래?", false],
+  ["빌드 통과했는지 알려주세요", false],
+  ["어디서 설정하는지 설명해 줄 수 있어?", false],
+  ["PR 머지하고 알려줘", true],
+  ["테스트 통과하는지 확인해 줘", true],
   ["", false],
 ];
 
 describe("isOrder", () => {
   it.each(ORDERS)("%s", (text, want) => {
     expect(isOrder(text)).toBe(want);
+  });
+
+  it.each(["squash", "rebase", "keep", "revert", "skip", "drop", "approve", "finish", "close", "publish", "switch to", "apply", "commit", "share", "pick", "split"])("takes %s as an order, bare and after can you", (verb) => {
+    expect(isOrder(`${verb} the two commits`)).toBe(true);
+    expect(isOrder(`Can you ${verb} the two commits?`)).toBe(true);
   });
 });
 

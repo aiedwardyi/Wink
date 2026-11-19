@@ -9,11 +9,15 @@ const LEAD =
 // Approvals, refusals, pauses and suggestions steer the running work with no reply beside them, whatever follows.
 const STEER =
   /^(yes|yep|yup|go|go ahead|go for it|do (it|that|this|both|all|them)|let'?s do|ship it|merge it|push it|lgtm|sounds good|sure|alright|dont|don't|do not|no|nope|never|stop|pause|hold on|cancel|instead|nvm|never ?mind|how about|what about|what if|why not|why don'?t (we|you|u))\b/i;
-const COMMAND =
-  /^(ship|merge|push|deploy|release|continue|resume|switched|done|fix|add|make|build|change|update|remove|delete|rename|run|install|use|try|send|give|put|move|record|save|write|create|open|check|test|keep|let'?s|lets|please|pls|plz|start|restart|reinstall|set|turn|upload|download|buy|grab|park|skip|drop|revert|undo|approve|allow|deny|retry|redo|finish|wrap|close|launch|publish|post|get|tell (him|her|them|pokkey|wink|\w+ bot))\b/i;
-// "can you <verb>", "can we <verb>" (not "when can we"), "please": asks the bot to act, even with a question mark.
-const REQUEST =
-  /\b((can|could|would|will|wanna|want to)\s+(u|you|ya)|(?<!\b(when|what|how|why|where|which)\s)(can|could|shall)\s+we)\s+(please\s+|pls\s+|also\s+|just\s+|quickly\s+)?(save|fix|add|make|build|change|update|remove|delete|run|install|send|merge|push|deploy|create|write|move|rename|restart|reinstall|switch|start|stop|try|test|use|do|set|turn|put|upload|download|buy|record|open|check|look|find out|go|get|post|share|draft|redo|retake|apply|commit|launch|spawn|mind|ask|tell (him|her|them|pokkey|wink))\b|\b(please|pls|plz|asap|let'?s|lets)\b/i;
+// One verb list for "fix it" and "can you fix it?", so the two forms never drift apart.
+const ACT =
+  "ship|merge|push|deploy|release|continue|resume|fix|add|make|build|change|update|remove|delete|rename|run|install|use|try|send|give|put|move|record|save|write|create|open|check|test|keep|start|restart|reinstall|set|turn|upload|download|buy|grab|park|skip|drop|revert|undo|approve|allow|deny|retry|redo|finish|wrap|close|launch|publish|post|get|switch|stop|look|find out|go|share|draft|retake|apply|commit|spawn|ask|squash|rebase|amend|cherry-pick|pick|choose|split|combine|rerun|refactor|tell (him|her|them|pokkey|wink|\\w+ bot)";
+const COMMAND = new RegExp(`^(switched|done|let'?s|lets|please|pls|plz|${ACT})\\b`, "i");
+// "can you <verb>" (also "do" and "mind", which open questions on their own), "can we <verb>" (not "when can we"), "please": asks the bot to act, even with a question mark.
+const REQUEST = new RegExp(
+  `\\b((can|could|would|will|wanna|want to)\\s+(u|you|ya)|(?<!\\b(when|what|how|why|where|which)\\s)(can|could|shall)\\s+we)\\s+(please\\s+|pls\\s+|also\\s+|just\\s+|quickly\\s+)?(${ACT}|do|mind)\\b|\\b(please|pls|plz|asap|let'?s|lets)\\b`,
+  "i",
+);
 // Reports carry news the bot needs, even when they end with a question.
 const REPORT =
   /\b(fyi|i'?m (done|back|bak)|im (done|back|bak)|it'?s (saved|done)|i (just )?(did|saved|installed|restarted|logged in|signed in|finished|pushed|merged|sent|uploaded|changed|set|added|removed|deleted|clicked|tried|ran)|bug|broken|does ?n'?o?t work|not working|stopped working|crash(es|ed)?|glitch)\b/i;
@@ -40,14 +44,14 @@ const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i
 // A pick or a number answers the bot's question: "both", "squash both", "2", "the second one".
 const PICK = /^((\w+ )?both|all( of (them|it))?|everything|neither|none|(the )?(first|second|third|fourth|last)( one| option)?|option [a-z0-9]|#?\d+)[\s.!]*$/i;
 const KO_PICK = /^(둘 ?다|전부|모두|(첫|두|세|네) ?번째(꺼|것)?|\d+ ?번(째)?)[\s.!~]*$/;
-// "what port is it, please?" and "can it run on Windows, please?" ask for facts; "switched to X" and "done" report news. Neither orders anything.
+// "what port is it, please?", "can it run on Windows, please?" and "could you explain why, please?" ask for facts; "switched to X" and "done" report news. Neither orders anything.
 const INFO_Q =
-  /^((what|whats|what's|where|wheres|where's|which|who|whose|when|why|how)\b|(is|isn't|isnt|are|aren't|arent|was|wasn't|wasnt|were|weren't|werent|am|does|doesn't|doesnt|did|didn't|didnt|has|hasn't|hasnt|had|can|can't|cant|could|couldn't|couldnt|will|won't|wont|would|wouldn't|wouldnt|should|shouldn't|shouldnt|may|might|must)\s+(?!(you|u|ya|we)\b)\w|(can|could|would|will)\s+(you|u)\s+tell\s+me\b|(do|did)\s+(you|u)\s+(know|remember)\b)/i;
-// "do" and "have" also open orders ("do both", "have it ready"), so they ask only before I or they, or before a subject, its verb and a "?".
+  /^((what|whats|what's|where|wheres|where's|which|who|whose|when|why|how)\b|(is|isn't|isnt|are|aren't|arent|was|wasn't|wasnt|were|weren't|werent|am|does|doesn't|doesnt|did|didn't|didnt|has|hasn't|hasnt|had|can|can't|cant|could|couldn't|couldnt|will|won't|wont|would|wouldn't|wouldnt|should|shouldn't|shouldnt|may|might|must)\s+(?!(you|u|ya|we)\b)\w|(can|could|would|will)\s+(you|u)\s+(please\s+|pls\s+|just\s+|quickly\s+)?(tell\s+me|explain|clarify|describe|remind\s+me|summari[sz]e|recap|walk\s+me\s+through|(confirm|say|let\s+me\s+know)\s+(whether|if|that|what|why|how|when|where|which|who))\b|(do|did)\s+(you|u)\s+(know|remember)\b)/i;
+// "do" and "have" also open orders ("do both", "have it ready"), so they ask only before I or they, before a subject, its verb and a "?", or in "do these work?".
 const DO_Q =
-  /^(do|have)\s+((i|they)\s+\w|(?!(you|u|ya|we|it|this|that|them|not)\b)\w+\s+(?!of\b)\w+\s+(?!(and|or|then|now|right|too|first|next|again|today|tonight|please|pls|asap|later|also)\b)\w[^?]*\?)/i;
-// "성능 어때?" and "화면 어때?" ask how something is, "하면 어때?" and "하는 게 어때?" suggest; "윈도우에서도 돼?" asks whether it works there, "지워도 돼?" asks leave.
-const KO_ASKS = /(?<!([^화장]면|는 ?[거게건걸것])\s*)(어때|어떨까)|(에서|에|으로|로|랑|이랑|하고|까지)도 ?(돼|되|될)/g;
+  /^(do|have)\s+((i|they)\s+\w|(?!(you|u|ya|we|it|this|that|them|not)\b)\w+\s+(?!of\b)\w+\s+(?!(and|or|then|now|right|too|first|next|again|today|tonight|please|pls|asap|later|also)\b)\w[^?]*\?)|^do\s+(these|those)\s+(?!(and|or|then|now|right|too|first|next|again|today|tonight|please|pls|asap|later|also|as|in|on|for|with|instead|one|ones|two|three|all|both)\b)[a-z]+\b[^?]*\?/i;
+// "성능 어때?" and "화면 어때?" ask how something is, "하면 어때?" and "하는 게 어때?" suggest; "윈도우에서도 돼?" asks whether it works there, "지워도 돼?" asks leave; "되는지 알려줘" asks to be told.
+const KO_ASKS = /(?<!([^화장]면|는 ?[거게건걸것])\s*)(어때|어떨까)|(에서|에|으로|로|랑|이랑|하고|까지)도 ?(돼|되|될)|지 ?(알려|설명해|말해) ?(줘|줄래|주세요|주실|줄 ?수 ?있)/g;
 const REPORTED = /^(switched|done)\b/i;
 const ENDS_Q = /\?[\s!?.)]*((lol|lmao|haha)\s*)?\W*$/i;
 const TAG_Q = /\b(right|correct|or not|or no)[\s.!]*$/i;
