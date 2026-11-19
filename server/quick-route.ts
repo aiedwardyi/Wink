@@ -40,10 +40,14 @@ const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i
 // A pick or a number answers the bot's question: "both", "squash both", "2", "the second one".
 const PICK = /^((\w+ )?both|all( of (them|it))?|everything|neither|none|(the )?(first|second|third|fourth|last)( one| option)?|option [a-z0-9]|#?\d+)[\s.!]*$/i;
 const KO_PICK = /^(둘 ?다|전부|모두|(첫|두|세|네) ?번째(꺼|것)?|\d+ ?번(째)?)[\s.!~]*$/;
-// "what port is it, please?" asks for facts; "switched to X" and "done" report news. Neither orders anything.
-const INFO_Q = /^(what|whats|what's|where|wheres|where's|which|who|whose|when|why|how|is|isn't|isnt|are|aren't|was|were|does|doesn't|doesnt|did|didn't|didnt|has|hasn't|hasnt)\b/i;
-// "성능은 어때?" asks how something is; "하면 어때?" suggests.
-const KO_HOW = /[은는]\s*(어때|어떨까)/g;
+// "what port is it, please?" and "can it run on Windows, please?" ask for facts; "switched to X" and "done" report news. Neither orders anything.
+const INFO_Q =
+  /^((what|whats|what's|where|wheres|where's|which|who|whose|when|why|how)\b|(is|isn't|isnt|are|aren't|arent|was|wasn't|wasnt|were|weren't|werent|am|does|doesn't|doesnt|did|didn't|didnt|has|hasn't|hasnt|had|can|can't|cant|could|couldn't|couldnt|will|won't|wont|would|wouldn't|wouldnt|should|shouldn't|shouldnt|may|might|must)\s+(?!(you|u|ya|we)\b)\w|(can|could|would|will)\s+(you|u)\s+tell\s+me\b|(do|did)\s+(you|u)\s+(know|remember)\b)/i;
+// "do" and "have" also open orders ("do both", "have it ready"), so they ask only before I or they, or before a subject, its verb and a "?".
+const DO_Q =
+  /^(do|have)\s+((i|they)\s+\w|(?!(you|u|ya|we|it|this|that|them|not)\b)\w+\s+(?!of\b)\w+\s+(?!(and|or|then|now|right|too|first|next|again|today|tonight|please|pls|asap|later|also)\b)\w[^?]*\?)/i;
+// "성능 어때?" and "화면 어때?" ask how something is, "하면 어때?" and "하는 게 어때?" suggest; "윈도우에서도 돼?" asks whether it works there, "지워도 돼?" asks leave.
+const KO_ASKS = /(?<!([^화장]면|는 ?[거게건걸것])\s*)(어때|어떨까)|(에서|에|으로|로|랑|이랑|하고|까지)도 ?(돼|되|될)/g;
 const REPORTED = /^(switched|done)\b/i;
 const ENDS_Q = /\?[\s!?.)]*((lol|lmao|haha)\s*)?\W*$/i;
 const TAG_Q = /\b(right|correct|or not|or no)[\s.!]*$/i;
@@ -57,8 +61,8 @@ export function isOrder(raw: string): boolean {
     .some((part) => {
       const sentence = part.replace(LEAD, "").replace(KO_LEAD, "").trim();
       return (
-        (REQUEST.test(part) && !INFO_Q.test(sentence)) ||
-        KO_REQUEST.test(part.replace(KO_HOW, "")) ||
+        (REQUEST.test(part) && !INFO_Q.test(sentence) && !DO_Q.test(sentence)) ||
+        KO_REQUEST.test(part.replace(KO_ASKS, "")) ||
         PICK.test(sentence) ||
         KO_PICK.test(sentence) ||
         (COMMAND.test(sentence) && !REPORTED.test(sentence) && !QUESTION_START.test(sentence))
@@ -77,7 +81,7 @@ export function nominate(raw: string): "quick" | "ack" | "main" {
     .split(SENTENCE)
     .map((sentence) => sentence.trim().replace(LEAD, "").replace(KO_LEAD, "").trim())
     .filter(Boolean);
-  if (!sentences.length || KO_STOP.test(text) || sentences.some((sentence) => STEER.test(sentence) || KO_STEER.test(sentence))) return "main";
+  if (!sentences.length || KO_STOP.test(text) || sentences.some((sentence) => (STEER.test(sentence) && !DO_Q.test(sentence)) || KO_STEER.test(sentence))) return "main";
   if (whole.length > MAX_CHARS || ATTACH_OR_LINK.test(whole) || REQUEST.test(text) || REPORT.test(text) || KO_REQUEST.test(text) || KO_REPORT.test(text)) return "ack";
   if (sentences.some((sentence) => COMMAND.test(sentence) && !QUESTION_START.test(sentence))) return "ack";
   const last = sentences.at(-1)!;

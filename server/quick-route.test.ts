@@ -186,6 +186,35 @@ const ORDERS: Array<[string, boolean]> = [
   ["how do I run this, pls", false],
   ["Does it support Windows, please?", false],
   ["성능은 어때?", false],
+  ["Can it support Windows, please?", false],
+  ["Could it run on Linux, please?", false],
+  ["Will the release include the fix, pls?", false],
+  ["Do the tests pass on Windows, please?", false],
+  ["Do both builds support Windows, please?", false],
+  ["Have the tests passed, please?", false],
+  ["Should I send it now, please?", false],
+  ["Could you tell me which port it uses, please?", false],
+  ["Do you know if it supports Windows, please?", false],
+  ["Can you merge it, please?", true],
+  ["Can we deploy today, please?", true],
+  ["do both, please", true],
+  ["do the migration, please", true],
+  ["do both PRs now, please?", true],
+  ["have it ready by noon, please", true],
+  ["성능 어때?", false],
+  ["속도 어때?", false],
+  ["이거 어때?", false],
+  ["화면 어때?", false],
+  ["새로 만든 게 어때?", false],
+  ["빌드 상태 어때요?", false],
+  ["성능 어떨까?", false],
+  ["윈도우에서도 돼?", false],
+  ["맥에서도 되나요?", false],
+  ["머지하는 게 어때?", true],
+  ["해보는 건 어때?", true],
+  ["내일 하면 어떨까?", true],
+  ["배포해도 돼?", true],
+  ["그걸로 해도 돼?", true],
   ["please install node", true],
   ["switched to the new branch", false],
   ["done", false],
@@ -207,7 +236,22 @@ describe("isOrder", () => {
   });
 });
 
+// "do both" approves whatever follows; a "do" question with its own verb and a "?" asks.
+const DO_BOTH: Array<[string, "quick" | "ack" | "main"]> = [
+  ["Do both builds support Windows, please?", "ack"],
+  ["Do all tests pass on CI?", "quick"],
+  ["do both", "main"],
+  ["do both PRs?", "main"],
+  ["do both PRs now?", "main"],
+  ["do all of them?", "main"],
+  ["do it?", "main"],
+];
+
 describe("nominate", () => {
+  it.each(DO_BOTH)("do: %s", (text, want) => {
+    expect(nominate(text)).toBe(want);
+  });
+
   it.each(SENT_MIDTURN)("sent mid-turn: %s", (text, want) => {
     expect(nominate(text)).toBe(want);
   });
