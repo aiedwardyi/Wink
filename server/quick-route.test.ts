@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { nominate } from "./quick-route.ts";
+import { isOrder, nominate } from "./quick-route.ts";
 
 // Busy-time asks, redacted; the label is the probe rules' decision.
 const LABELED: Array<[string, "quick" | "ack" | "main"]> = [
@@ -165,6 +165,36 @@ const SENT_MIDTURN: Array<[string, "quick" | "ack" | "main"]> = [
   ["Yes, soft press + fade", "main"],
   ["no stop", "main"],
 ];
+
+const ORDERS: Array<[string, boolean]> = [
+  ["merge both", true],
+  ["both", true],
+  ["2", true],
+  ["the second one", true],
+  ["option b", true],
+  ["also update the docs when you are done", true],
+  ["can u save these on my work pc desktop", true],
+  ["can we do the world swipe now please? i would love that we can deploy today", true],
+  ["yea use 3080", true],
+  ["둘 다", true],
+  ["2번", true],
+  ["PR 머지해줘", true],
+  ["says 57%", false],
+  ["GetWinkDev is available", false],
+  ["what port is in the server config?", false],
+  ["dark mode?", false],
+  ["when can we do that. i want to keep developing", false],
+  ["Csn i give feedback.", false],
+  ["다 했어", false],
+  ["지금 뭐 하고 있어?", false],
+  ["", false],
+];
+
+describe("isOrder", () => {
+  it.each(ORDERS)("%s", (text, want) => {
+    expect(isOrder(text)).toBe(want);
+  });
+});
 
 describe("nominate", () => {
   it.each(SENT_MIDTURN)("sent mid-turn: %s", (text, want) => {

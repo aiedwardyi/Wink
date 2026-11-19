@@ -37,8 +37,26 @@ const CASUAL_WORD =
   "hi+|hello+|hey+|heya|hiya|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(s|ing)?|\\d+|sidekick|side ?bot|helper|main|one|if|(you|u|ya)('?re|'?r| are| r)?|youre|ur|are|r|is|the|a|there|here|still|alive|awake|asleep|sleeping|i think|say|((do|dont|don'?t|do not) )?(respond|reply|answer)|let me know|with|sentence|last|time|again|please|pls|yeah|yea|ya|ok|okay|and|so|lol|lmao|ha(ha)+\\w*|" +
   "안녕(하세요)?|하이|헬로|ㅎㅇ|테스트(중)?|사이드킥(이면|이라면|이야)?|사이드 ?봇(이면|이라면|이야)?|거기|아직|있어(요)?|인사(해|해줘|해주세요)|대?답(해|해줘|해주세요)|ㅋ+|ㅎ+";
 const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i");
+// A pick or a number answers the bot's question: "both", "2", "the second one".
+const PICK = /^(both|all( of (them|it))?|everything|neither|none|(the )?(first|second|third|fourth|last)( one| option)?|option [a-z0-9]|#?\d+)[\s.!]*$/i;
+const KO_PICK = /^(둘 ?다|전부|모두|(첫|두|세|네) ?번째(꺼|것)?|\d+ ?번(째)?)[\s.!~]*$/;
 const ENDS_Q = /\?[\s!?.)]*((lol|lmao|haha)\s*)?\W*$/i;
 const TAG_Q = /\b(right|correct|or not|or no)[\s.!]*$/i;
+
+/** An order or a decision for the bot, whose meaning only the bot may read. */
+export function isOrder(raw: string): boolean {
+  const text = raw.trim();
+  if (!text) return false;
+  const sentences = text
+    .split(SENTENCE)
+    .map((sentence) => sentence.trim().replace(LEAD, "").replace(KO_LEAD, "").trim())
+    .filter(Boolean);
+  return (
+    REQUEST.test(text) ||
+    KO_REQUEST.test(text) ||
+    sentences.some((sentence) => PICK.test(sentence) || KO_PICK.test(sentence) || (COMMAND.test(sentence) && !QUESTION_START.test(sentence)))
+  );
+}
 
 /** "quick": the helper tries it first, then confirms or hands off. "ack": the bot takes it now and the helper adds one short reply. "main": the bot alone. */
 export function nominate(raw: string): "quick" | "ack" | "main" {

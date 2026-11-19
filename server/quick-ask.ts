@@ -12,7 +12,7 @@ import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
-import { nominate } from "./quick-route.ts";
+import { isOrder, nominate } from "./quick-route.ts";
 import type { QuickBot, QuickResult } from "./side-chat.ts";
 import { queueSteeredMessage } from "./steer-queue.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -20,7 +20,11 @@ import type { BotRecord, Message, Store } from "./store.ts";
 const BLOCK_HEAD =
   "[Your earlier fast replies in this chat, sent while you were busy. They are your own words and the person has seen them. If one was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you:]";
 const NOTE_HEAD =
-  "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you.]";
+  "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you. The user's own words decide; if they don't match what you asked (like 'both' for 3 items), take every item or ask one short question.]";
+// An order gets a fixed line, never the helper's reading of it; the bot decides what the order means.
+const ORDER_ACK = "Got it, one moment while I finish this step, then I'll do it.";
+const ORDER_ACK_KO = "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요.";
+const HANGUL = /[\u3131-\u318e\uac00-\ud7a3]/;
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
 const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
@@ -326,7 +330,10 @@ export async function ackQuick(deps: HelperDeps, botId: string, threadId: string
   const bot = store.bot(botId);
   const instance = bot ? deps.instance(bot, threadId) : null;
   if (!instance) return;
-  const result = await askHelper(deps, instance, botId, threadId, sent, true);
+  const text = sent.text ?? "";
+  const result: QuickResult = isOrder(text)
+    ? { route: "answer", text: HANGUL.test(text) ? ORDER_ACK_KO : ORDER_ACK, ms: 0 }
+    : await askHelper(deps, instance, botId, threadId, sent, true);
   const current = store.bot(botId);
   if (!current || result.route === "handoff" || !result.text) return;
   const path = store.activePath(threadId);

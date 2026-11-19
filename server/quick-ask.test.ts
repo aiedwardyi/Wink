@@ -35,6 +35,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const NOTE_LINE = "The user's own words decide; if they don't match what you asked (like 'both' for 3 items), take every item or ask one short question.";
 const QUESTION = "what port is in the server config?";
 const ANSWER: QuickResult = { route: "answer", text: "Port 8787.", usage: { input: 100, output: 10, cachedInput: 90 }, ms: 5 };
 
@@ -118,7 +119,6 @@ describe("quick route", () => {
   });
 
   it.each([
-    "also update the docs when you are done",
     "i know ur working, but its odd, im testing the sidekick thing but it doesnt seem like our feature works",
     "when u got time read this real quick to see if it'll help us with ci https://example.com/ci-cost",
   ])("steers at once, then posts one short reply under it: %s", async (text) => {
@@ -133,6 +133,24 @@ describe("quick route", () => {
     expect(sent!.quick).toBeUndefined();
     expect(reply).toMatchObject({ role: "bot", kind: "text", text: "Got it, that goes in next.", quick: { state: "answer", askId: sent!.id } });
     expect(h.steer.mock.calls[1]![1]).toMatch(/^\[Wink note, automated, not from the person\.[\s\S]*A: Got it, that goes in next\.$/);
+    expect(h.steer.mock.calls[1]![1]).toContain(NOTE_LINE);
+  });
+
+  it.each([
+    ["merge both", "Got it, one moment while I finish this step, then I'll do it."],
+    ["also update the docs when you are done", "Got it, one moment while I finish this step, then I'll do it."],
+    ["2", "Got it, one moment while I finish this step, then I'll do it."],
+    ["둘 다 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+  ])("answers an order with the fixed line only: %s", async (text, line) => {
+    const h = harness({ consumed: true, result: { route: "answer", text: "Merging PR 12 and PR 14 now.", ms: 4 } });
+    await h.send({ text });
+    await vi.waitFor(() => expect(h.steer).toHaveBeenCalledTimes(2));
+    expect(h.ask).not.toHaveBeenCalled();
+    const [sent, reply] = h.rows().slice(-2);
+    expect(sent).toMatchObject({ role: "user", text, steered: true });
+    expect(reply).toMatchObject({ role: "bot", kind: "text", text: line, quick: { state: "answer", askId: sent!.id } });
+    expect(h.steer.mock.calls[1]![1]).toMatch(new RegExp(`A: ${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    expect(h.steer.mock.calls[1]![1]).toContain(NOTE_LINE);
   });
 
   it("leaves a steered send alone when the helper has no reply", async () => {
