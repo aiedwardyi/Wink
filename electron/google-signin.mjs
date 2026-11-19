@@ -134,8 +134,8 @@ function page(res, status, locale, title, hint, next) {
   res.end(signInPage({ locale, title: translate(locale, title), body: hint ? translate(locale, hint) : "", next }));
 }
 
-/** One sign-in. `onListening` sees the bound address (tests); `signal` cancels. */
-export async function runGoogleSignIn({ client, openExternal, fetch = globalThis.fetch, signal, timeoutMs = SIGN_IN_TIMEOUT_MS, onListening, getLocale = () => "en", openAfter, persist }) {
+/** One sign-in. `onListening` sees the bound address (tests); `signal` cancels. With `hold`, the signed-in tab waits for the returned `finish(dashboard)`. */
+export async function runGoogleSignIn({ client, openExternal, fetch = globalThis.fetch, signal, timeoutMs = SIGN_IN_TIMEOUT_MS, onListening, getLocale = () => "en", hold, persist }) {
   const { verifier, challenge } = pkcePair();
   const state = randomBytes(16).toString("base64url");
   const server = createServer();
@@ -191,9 +191,15 @@ export async function runGoogleSignIn({ client, openExternal, fetch = globalThis
   try {
     const session = await exchangeCode({ client, code, verifier, redirectUri, fetch, signal });
     await persist?.(session);
-    if (openAfter === "dashboard") {
-      page(held, 200, locale, "google.signedIn", "google.openingDashboard", { url: DASHBOARD_URL, label: translate(locale, "google.openDashboard") });
-    } else page(held, 200, locale, "google.signedIn", "google.signedInHint");
+    let open = true;
+    const finish = (dashboard) => {
+      if (!open) return;
+      open = false;
+      if (dashboard) page(held, 200, locale, "google.signedIn", "google.openingDashboard", { url: DASHBOARD_URL, label: translate(locale, "google.openDashboard") });
+      else page(held, 200, locale, "google.signedIn", "google.signedInHint");
+    };
+    if (hold) return { ...session, finish };
+    finish(false);
     return session;
   } catch (error) {
     page(held, 200, locale, "google.failed", "google.failedHint");
@@ -241,6 +247,13 @@ async function exchangeCode({ client, code, verifier, redirectUri, fetch, signal
 /** The main-process side of the preload actions. Secrets stay in here and in saveSession. */
 export function createGoogleAccountController({ client, openExternal, saveSession, clearSession, fetch, getLocale, log = () => {} }) {
   let active = null;
+  // The tab of a held sign-in, waiting for the caller to say where it goes.
+  let waiting = null;
+  const release = (dashboard = false) => {
+    const finish = waiting;
+    waiting = null;
+    finish?.(dashboard);
+  };
   let transition = Promise.resolve();
   const serialize = (work) => {
     const next = transition.then(work, work);
@@ -248,9 +261,10 @@ export function createGoogleAccountController({ client, openExternal, saveSessio
     return next;
   };
   return {
-    async signIn({ openAfter } = {}) {
+    async signIn({ hold } = {}) {
       if (!client) return { ok: false, error: "unavailable" };
       active?.abort();
+      release();
       const controller = new AbortController();
       active = controller;
       try {
@@ -259,8 +273,12 @@ export function createGoogleAccountController({ client, openExternal, saveSessio
             if (controller.signal.aborted) throw new GoogleSignInError("cancelled");
             await saveSession(stored, idToken);
           });
-        const { email } = await runGoogleSignIn({ client, openExternal, fetch, getLocale, openAfter: openAfter === "dashboard" ? openAfter : undefined, signal: controller.signal, persist });
-        if (controller.signal.aborted) return { ok: false, error: "cancelled" };
+        const { email, finish } = await runGoogleSignIn({ client, openExternal, fetch, getLocale, hold: hold === true, signal: controller.signal, persist });
+        if (controller.signal.aborted) {
+          finish?.(false);
+          return { ok: false, error: "cancelled" };
+        }
+        waiting = finish ?? null;
         return { ok: true, email };
       } catch (error) {
         const code = error instanceof GoogleSignInError ? error.code : "store-failed";
@@ -270,11 +288,16 @@ export function createGoogleAccountController({ client, openExternal, saveSessio
         if (active === controller) active = null;
       }
     },
+    finish(next) {
+      release(next === "dashboard");
+    },
     cancel() {
       active?.abort();
+      release();
     },
     async signOut() {
       active?.abort();
+      release();
       await serialize(clearSession);
       return { ok: true };
     },

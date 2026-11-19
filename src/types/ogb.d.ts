@@ -112,7 +112,9 @@ declare global {
         signOut(): Promise<CompanionAccountState>;
       };
       googleAccount?: {
-        signIn(options?: { openAfter?: "dashboard" }): Promise<{ ok: true; email: string } | { ok: false; error: import("@/lib/google-signin-error").GoogleSignInCode }>;
+        /** `hold` keeps the signed-in tab waiting until `finish`. */
+        signIn(options?: { hold?: true }): Promise<{ ok: true; email: string } | { ok: false; error: import("@/lib/google-signin-error").GoogleSignInCode }>;
+        finish(next: "dashboard" | null): Promise<void>;
         cancel(): Promise<void>;
         signOut(): Promise<{ ok: true }>;
       };

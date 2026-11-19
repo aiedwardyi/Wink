@@ -21,6 +21,8 @@ const status = (over: Partial<RelayStatus> = {}): RelayStatus => ({
   problem: null,
   ...over,
 });
+const joinable = () => status({ available: true, configured: false, enabled: false, state: "off", host: null, joinable: true });
+const DOOR_HOST = "abcdefghijklmnop.app.getwink.dev";
 
 type Route = (init?: RequestInit) => Awaited<ReturnType<typeof api>>;
 
@@ -111,7 +113,6 @@ describe("PhoneAccessSettings", () => {
     await act(async () => root.unmount());
   });
 
-  const joinable = () => status({ available: true, configured: false, enabled: false, state: "off", host: null, joinable: true });
 
   it.each([
     ["en", "Connect to this PC from your devices?", "Turn On", "Open on any device"],
@@ -172,7 +173,7 @@ describe("PhoneAccessSettings", () => {
 
   it("with a relay to join, a signed-out PC signs in first", async () => {
     const signIn = vi.fn(async () => ({ ok: true as const, email: "fixture@example.invalid" }));
-    vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
+    vi.stubGlobal("ogb", { googleAccount: { signIn, finish: vi.fn(async () => {}), cancel: vi.fn(), signOut: vi.fn() } });
     serve({ "GET /api/phone-relay/status": joinable, "GET /api/google-account": () => ({ state: "signed-out" }) });
     const { host, root } = await renderView();
     expect(host.querySelector('[role="switch"]')).toBeNull();
@@ -521,7 +522,7 @@ describe("This PC", () => {
 
   it("signed out shows Sign In in the switch's place", async () => {
     const signIn = vi.fn(async () => ({ ok: true as const, email: EMAIL }));
-    vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
+    vi.stubGlobal("ogb", { googleAccount: { signIn, finish: vi.fn(async () => {}), cancel: vi.fn(), signOut: vi.fn() } });
     serve({ "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }), "GET /api/google-account": () => ({ state: "signed-out" }) });
     const { host, root } = await renderView();
     expect(host.querySelector('[role="switch"]')).toBeNull();
@@ -536,7 +537,7 @@ describe("This PC", () => {
   it("signing in waits for Google, then says why it failed in plain words", async () => {
     let finish: (value: { ok: false; error: string }) => void = () => {};
     const signIn = vi.fn(() => new Promise<{ ok: false; error: string }>((resolve) => (finish = resolve)));
-    vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
+    vi.stubGlobal("ogb", { googleAccount: { signIn, finish: vi.fn(async () => {}), cancel: vi.fn(), signOut: vi.fn() } });
     serve({ "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }), "GET /api/google-account": () => ({ state: "signed-out" }) });
     const { host, root } = await renderView();
     await act(async () => click(button(host, "Sign In")));
@@ -558,30 +559,114 @@ describe("This PC", () => {
         if (result.ok) google = "signed-in";
         return result;
       });
-      vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
-      const put = vi.fn((_init?: RequestInit) => status());
+      const finish = vi.fn(async () => {});
+      vi.stubGlobal("ogb", { googleAccount: { signIn, finish, cancel: vi.fn(), signOut: vi.fn() } });
+      const put = vi.fn((_init?: RequestInit) => status({ host: DOOR_HOST }));
       serve({
         "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }),
         "GET /api/google-account": () => (google === "signed-in" ? { state: "signed-in", email: EMAIL } : { state: "signed-out" }),
         "GET /api/phone/devices": () => ({ phones: [] }),
         "PUT /api/phone-relay": put,
       });
-      return { signIn, put };
+      return { signIn, finish, put };
     };
     const dialog = () => document.querySelector('[role="dialog"]');
 
     it("asks first, then signs in, then turns on without a second dialog", async () => {
-      const { signIn, put } = setUp({ ok: true, email: EMAIL });
+      const { signIn, finish, put } = setUp({ ok: true, email: EMAIL });
       const { host, root } = await renderView();
       await act(async () => click(button(host, "Sign In")));
       expect(dialog()?.textContent).toContain("Connect to this PC from your devices?");
       expect(dialog()?.textContent).toContain("Then open app.getwink.dev on your phone or another PC and sign in with this Google account.");
       expect(signIn).not.toHaveBeenCalled();
       await act(async () => click(button(document.body, "Turn On")));
-      expect(signIn).toHaveBeenCalledExactlyOnceWith({ openAfter: "dashboard" });
+      expect(signIn).toHaveBeenCalledExactlyOnceWith({ hold: true });
       expect(dialog()).toBeNull();
       expect(put).toHaveBeenCalledTimes(1);
       expect(put).toHaveBeenCalledWith(expect.objectContaining({ body: JSON.stringify({ enabled: true }) }));
+      expect(finish).toHaveBeenCalledExactlyOnceWith("dashboard");
+      expect(finish.mock.invocationCallOrder[0]).toBeGreaterThan(put.mock.invocationCallOrder[0]!);
+      await act(async () => root.unmount());
+    });
+
+    it("a failed first enrollment releases the tab without the dashboard", async () => {
+      let signed = false;
+      const signIn = vi.fn(async () => {
+        signed = true;
+        return { ok: true as const, email: EMAIL };
+      });
+      const finish = vi.fn(async () => {});
+      vi.stubGlobal("ogb", { googleAccount: { signIn, finish, cancel: vi.fn(), signOut: vi.fn() } });
+      const onNoRelay = vi.fn();
+      serve({
+        "GET /api/phone-relay/status": joinable,
+        "GET /api/google-account": () => (signed ? { state: "signed-in", email: EMAIL } : { state: "signed-out" }),
+        "POST /api/phone-relay/google-enroll": () => {
+          throw new Error("relay-full");
+        },
+      });
+      const { host, root } = await renderView({ onNoRelay });
+      await act(async () => click(button(host, "Sign In")));
+      await act(async () => click(button(document.body, "Turn On")));
+      expect(signIn).toHaveBeenCalledExactlyOnceWith({ hold: true });
+      expect(finish).toHaveBeenCalledExactlyOnceWith(null);
+      expect(onNoRelay).toHaveBeenCalledTimes(1);
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe("The fast phone link is full this week. Use Tailscale for now.");
+      await act(async () => root.unmount());
+    });
+
+    it("on a private relay, never sends the tab to the public dashboard", async () => {
+      const { signIn, finish, put } = setUp({ ok: true, email: EMAIL });
+      put.mockImplementation(() => status());
+      serve({
+        "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null, base: "wink.test" }),
+        "GET /api/google-account": () => (google === "signed-in" ? { state: "signed-in", email: EMAIL } : { state: "signed-out" }),
+        "GET /api/phone/devices": () => ({ phones: [] }),
+        "PUT /api/phone-relay": put,
+      });
+      const { host, root } = await renderView();
+      await act(async () => click(button(host, "Sign In")));
+      await act(async () => click(button(document.body, "Turn On")));
+      expect(signIn).toHaveBeenCalledTimes(1);
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(finish).toHaveBeenCalledExactlyOnceWith(null);
+      expect(host.querySelector("[data-relay-qr]")?.getAttribute("data-url")).toBe(`https://${HOST}/`);
+      await act(async () => root.unmount());
+    });
+
+    it("on first open, Turn On waits for the account read and signs in first", async () => {
+      let signed = false;
+      const signIn = vi.fn(async () => {
+        signed = true;
+        return { ok: true as const, email: EMAIL };
+      });
+      const finish = vi.fn(async () => {});
+      vi.stubGlobal("ogb", { googleAccount: { signIn, finish, cancel: vi.fn(), signOut: vi.fn() } });
+      let answer: (body: { state: string }) => void = () => {};
+      const first = new Promise<{ state: string }>((resolve) => (answer = resolve));
+      let answered = false;
+      const enroll = vi.fn(() => status({ host: DOOR_HOST }));
+      serve({
+        "GET /api/phone-relay/status": joinable,
+        "GET /api/google-account": () => (!answered ? first : signed ? { state: "signed-in", email: EMAIL } : { state: "signed-out" }),
+        "GET /api/phone/devices": () => ({ phones: [] }),
+        "POST /api/phone-relay/google-enroll": enroll,
+      });
+      const { host, root } = await renderView();
+      await act(async () => click(host.querySelector('[role="switch"]')!));
+      await act(async () => click(button(document.body, "Turn On")));
+      expect(enroll).not.toHaveBeenCalled();
+      await act(async () => {
+        answered = true;
+        answer({ state: "signed-out" });
+      });
+      expect(signIn).toHaveBeenCalledExactlyOnceWith({ hold: true });
+      expect(enroll).toHaveBeenCalledTimes(1);
+      expect(enroll.mock.invocationCallOrder[0]).toBeGreaterThan(signIn.mock.invocationCallOrder[0]!);
+      expect(finish).toHaveBeenCalledExactlyOnceWith("dashboard");
+      const row = host.querySelector("[data-this-pc]")?.textContent ?? "";
+      expect(row).not.toContain("Sign in with Google to turn this on.");
+      expect(row).not.toContain("Not available on this PC yet.");
       await act(async () => root.unmount());
     });
 

@@ -2053,7 +2053,8 @@ const googleAccount = createGoogleAccountController({
   },
   log: slog,
 });
-ipcMain.handle("google-account:sign-in", (_event, options) => googleAccount.signIn({ openAfter: options?.openAfter }));
+ipcMain.handle("google-account:sign-in", (_event, options) => googleAccount.signIn({ hold: options?.hold }));
+ipcMain.handle("google-account:finish", (_event, next) => googleAccount.finish(next));
 ipcMain.handle("google-account:cancel", () => googleAccount.cancel());
 ipcMain.handle("google-account:sign-out", () => googleAccount.signOut());
 
