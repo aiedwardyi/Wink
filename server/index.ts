@@ -361,10 +361,12 @@ import {
   detectLaptop,
   deviceDisplayName,
   deviceNameSchema,
+  heldRemovals,
   listDevices,
   loadDeviceName,
   namedDevicePeers,
   pickerDevices,
+  removableDevice,
   saveDeviceName,
   writeDeviceRecord,
 } from "./device-sync.ts";
@@ -2379,13 +2381,15 @@ function scheduleProfilePublish(): void {
 
 let deviceName = loadDeviceName(DATA_DIR);
 let deviceLaptop = false;
+const removedPcs: Record<string, number> = {};
 
 function publishDeviceRecord(): void {
   const folder = profileSyncSettings.folder;
   if (!folder) return;
   try {
     const relayHost = phoneAccess.presenceHost() ?? undefined;
-    const previous = REMOTE_HOST ? undefined : listDevices(folder, profileSyncSettings.deviceId, Date.now()).find((record) => record.current);
+    const own = listDevices(folder, profileSyncSettings.deviceId, Date.now()).find((record) => record.current);
+    const previous = REMOTE_HOST ? undefined : own;
     // A relay-only PC repeats its relay host as host, so older PCs still read the record.
     const host = REMOTE_HOST ?? (previous?.host !== previous?.relayHost ? previous?.host : undefined) ?? relayHost;
     if (!host) return;
@@ -2398,6 +2402,7 @@ function publishDeviceRecord(): void {
         relayHost,
         laptop: deviceLaptop,
         chatSync: 2,
+        removed: heldRemovals(folder, { ...own?.removed, ...removedPcs }),
       },
       Date.now(),
     );
@@ -8645,6 +8650,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const listed = syncedDevices();
       const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
+    }
+    if (method === "DELETE" && path.startsWith("/api/devices/")) {
+      if (!credentials.bearerOk || !isLoopbackHost(req.headers.host)) return json(res, 403, { error: "Manage devices on this PC" });
+      const deviceId = decodeURIComponent(path.slice("/api/devices/".length));
+      const folder = profileSyncSettings.folder;
+      if (!folder || !removableDevice(folder, profileSyncSettings.deviceId, deviceId, Date.now())) return json(res, 409, { error: "Only an offline PC can be removed" });
+      removedPcs[deviceId] = Date.now();
+      publishDeviceRecord();
+      return json(res, 200, { ok: true });
     }
     if (method === "PUT" && path === "/api/devices/name") {
       const body = await readBody(req);

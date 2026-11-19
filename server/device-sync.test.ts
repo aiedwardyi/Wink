@@ -9,10 +9,12 @@ import {
   DEVICE_DIR,
   DEVICE_STALE_MS,
   deviceDisplayName,
+  heldRemovals,
   listDevices,
   loadDeviceName,
   namedDevicePeers,
   pickerDevices,
+  removableDevice,
   saveDeviceName,
   scanDevices,
   writeDeviceRecord,
@@ -187,6 +189,44 @@ describe("relay presence", () => {
     writeDeviceRecord(folder, { ...rec("b"), host: "pc.tail1234.ts.net" }, NOW);
     writeDeviceRecord(folder, { ...rec("copy"), host: "pc-1.tail1234.ts.net" }, NOW - 2 * 60 * 60_000);
     expect(listDevices(folder, "x", NOW).map((d) => d.deviceId)).toEqual(["a", "b", "copy"]);
+  });
+
+  it("hides a removed offline PC on every PC until it runs Wink again", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("laptop-old"), NOW - 2 * 60 * 60_000);
+    writeDeviceRecord(folder, rec("work"), NOW);
+    expect(removableDevice(folder, "home", "laptop-old", NOW)).toBe(true);
+    expect(removableDevice(folder, "home", "work", NOW)).toBe(false);
+    expect(removableDevice(folder, "home", "home", NOW)).toBe(false);
+    writeDeviceRecord(folder, { ...rec("home"), removed: heldRemovals(folder, { "laptop-old": NOW }) }, NOW);
+    expect(listDevices(folder, "home", NOW).map((d) => d.deviceId)).toEqual(["home", "work"]);
+    expect(listDevices(folder, "work", NOW).map((d) => d.deviceId)).toEqual(["home", "work"]);
+    expect(listDevices(folder, "laptop-old", NOW).map((d) => d.deviceId)).toEqual(["home", "laptop-old", "work"]);
+    writeDeviceRecord(folder, rec("laptop-old"), NOW + 1);
+    expect(listDevices(folder, "work", NOW + 1).map((d) => d.deviceId)).toEqual(["home", "laptop-old", "work"]);
+    expect(heldRemovals(folder, { "laptop-old": NOW, gone: NOW })).toEqual({});
+  });
+
+  it("removing a PC rewrites only this PC's own record", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, rec("laptop-old"), NOW - 2 * 60 * 60_000);
+    const data = { "threads-v2/bot/thread/w1/head.json": "{}", "changes/1-laptop-old-x.json": "{}", "memory-v2/bot/abcdefabcdef.json": "{}", "board/laptop-old/deleted.json": "{}" };
+    for (const [path, text] of Object.entries(data)) {
+      mkdirSync(join(folder, path, ".."), { recursive: true });
+      writeFileSync(join(folder, path), text);
+    }
+    const files = () => Object.fromEntries(readdirSync(folder, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => {
+      const path = join(entry.parentPath, entry.name);
+      return [path, readFileSync(path, "utf8")];
+    }));
+    const before = files();
+    writeDeviceRecord(folder, { ...rec("home"), removed: heldRemovals(folder, { "laptop-old": NOW }) }, NOW);
+    const after = files();
+    const own = join(folder, DEVICE_DIR, "home.json");
+    expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
+    for (const path of Object.keys(before)) if (path !== own) expect(after[path]).toBe(before[path]);
+    expect(JSON.parse(after[own]!).removed).toEqual({ "laptop-old": NOW });
   });
 
   it("reads old records and drops a relay host that is not a relay label", () => {

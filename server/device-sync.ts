@@ -26,6 +26,9 @@ const deviceSchema = z.object({
   lastSeen: z.number().int().nonnegative(),
   laptop: z.boolean().optional(),
   chatSync: z.literal(2).optional(),
+  /** PCs this PC removed from the list, by id, with when; one shows again once it runs Wink after that. */
+  removed: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/), z.number().int().nonnegative())
+    .refine((value) => Object.keys(value).length <= MAX_DEVICE_FILES).optional().catch(undefined),
 });
 
 export type DeviceRecord = z.infer<typeof deviceSchema>;
@@ -37,7 +40,7 @@ export function namedDevicePeers<T extends { name: string; host: string }>(peers
 }
 
 export function writeDeviceRecord(folder: string, record: Omit<DeviceRecord, "lastSeen">, now: number): void {
-  const parsed = deviceSchema.parse({ deviceId: record.deviceId, name: record.name, host: record.host, relayHost: record.relayHost, lastSeen: now, laptop: record.laptop, chatSync: record.chatSync });
+  const parsed = deviceSchema.parse({ deviceId: record.deviceId, name: record.name, host: record.host, relayHost: record.relayHost, lastSeen: now, laptop: record.laptop, chatSync: record.chatSync, removed: record.removed && Object.keys(record.removed).length ? record.removed : undefined });
   const directory = join(folder, DEVICE_DIR);
   mkdirSync(directory, { recursive: true });
   writeFileAtomic(join(directory, `${parsed.deviceId}.json`), `${JSON.stringify(parsed, null, 2)}\n`);
@@ -106,13 +109,28 @@ export function listDevices(folder: string, currentId: string, now: number, limi
   }
   // A PC whose ~/.orbit was wiped comes back under a new id on the same tailnet host; its stale old record is the same PC.
   const newest = new Map<string, DeviceListItem>();
+  const removedAt = new Map<string, number>();
   for (const item of items) {
     const kept = newest.get(item.host);
     if (item.host !== item.relayHost && (!kept || item.current || (!kept.current && item.lastSeen > kept.lastSeen))) newest.set(item.host, item);
+    for (const [id, at] of Object.entries(item.removed ?? {})) removedAt.set(id, Math.max(at, removedAt.get(id) ?? 0));
   }
   return items
     .filter((item) => item.host === item.relayHost || newest.get(item.host) === item || now - item.lastSeen <= DEVICE_STALE_MS)
+    .filter((item) => item.current || item.lastSeen > (removedAt.get(item.deviceId) ?? -1))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Only an offline PC: a live one would publish itself back within a heartbeat. */
+export function removableDevice(folder: string, currentId: string, deviceId: string, now: number): boolean {
+  const item = listDevices(folder, currentId, now).find((device) => device.deviceId === deviceId);
+  return !!item && !item.current && now - item.lastSeen > DEVICE_STALE_MS;
+}
+
+/** Removals still in force: one whose PC ran Wink again, or whose record is gone, drops out. */
+export function heldRemovals(folder: string, removed: Record<string, number>): Record<string, number> {
+  const seen = new Map(scanDevices(folder).records.map((record) => [record.deviceId, record.lastSeen]));
+  return Object.fromEntries(Object.entries(removed).filter(([id, at]) => (seen.get(id) ?? Infinity) <= at).slice(-MAX_DEVICE_FILES));
 }
 
 /**
