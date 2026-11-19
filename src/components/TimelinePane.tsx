@@ -571,7 +571,6 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       <Redraw.Provider value={redraw}>
         <div ref={sheet} className="timeline-sheet">
           <svg ref={ink} className="timeline-ink" aria-hidden="true" />
-          {grow.limit >= total && <p className="timeline-day">{t("timeline.oldest")}</p>}
           {drawn.map(({ day, rows }) => {
             const [name, date] = day ? dayLabel(day, now, t, locale) : [];
             return (
@@ -581,10 +580,11 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
               </section>
             );
           })}
-          <p className="timeline-day">{t("timeline.newest")}</p>
         </div>
       </Redraw.Provider>
       <p className="timeline-hint">{t(touch ? "timeline.hintTouch" : "timeline.hintMouse")}<b ref={zoom} /></p>
+      <p className="timeline-hint" data-end="oldest">{t("timeline.oldest")}</p>
+      <p className="timeline-hint" data-end="newest">{t("timeline.newest")}</p>
     </div>
   );
 }

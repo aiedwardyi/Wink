@@ -787,15 +787,14 @@ it("draws the newest picks first and the rest a batch a frame", async () => {
   await until(() => picked().length > 0);
   expect(picked().length).toBe(8);
   expect(picked().at(-1)?.querySelector(".timeline-key")?.textContent).toBe("Question 27");
-  const sheet = host.querySelector(".timeline-sheet")!;
-  const labels = () => [...sheet.querySelectorAll("p.timeline-day")].map((label) => label.textContent);
-  expect(labels()).toEqual(["Newest"]);
-  expect(sheet.lastElementChild?.textContent).toBe("Newest");
+  // the ends wear the hint bar's own class, pinned to the pane, not drawn on the sheet
+  const ends = () => [...host.querySelectorAll(".timeline-canvas > p.timeline-hint[data-end]")].map((label) => [label.getAttribute("data-end"), label.textContent]);
+  expect(ends()).toEqual([["oldest", "Oldest"], ["newest", "Newest"]]);
+  expect(host.querySelector(".timeline-sheet .timeline-hint")).toBeNull();
   while (frames.length) await act(async () => frames.shift()!(0));
   expect(picked().length).toBe(40);
   expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Question 0");
-  expect(labels()).toEqual(["Oldest", "Newest"]);
-  expect(sheet.querySelector(".timeline-day")?.textContent).toBe("Oldest");
+  expect(ends()).toEqual([["oldest", "Oldest"], ["newest", "Newest"]]);
   raf.mockRestore();
 });
 
