@@ -1192,11 +1192,37 @@ test("an old scratch row cannot expire a newer hand-off", async (t) => {
   assert.equal(fs.existsSync(f.scratch), false);
 });
 
-test("scratch absent from the ledger is never swept", async (t) => {
+test("closed, kept, open and unowned scratch each go on their day and junction targets survive", async (t) => {
   const f = fixture(t);
-  f.advance(10 * DAY_MS);
+  const precious = path.join(f.home, "precious");
+  fs.mkdirSync(precious);
+  fs.writeFileSync(path.join(precious, "file"), "safe");
+  const pane = (name) => ({ ...f.session, id: name, label: `${name} | model | high`, reportAt: null });
+  const scratch = (name, linked = false) => {
+    const dir = path.join(f.tempRoot, `wink-${name}`);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, "file"), name);
+    if (linked) fs.symlinkSync(precious, path.join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
+    return dir;
+  };
+  const folders = [f.scratch, scratch("DONE", true), scratch("KEPT"), scratch("LIVE"), scratch("1.0.255-release", true), scratch("safety-LIVE-1"), scratch("GHOST")];
+  for (const name of ["DONE", "KEPT", "LIVE"]) f.cleanup.opened(pane(name));
+  await f.cleanup.closed(pane("DONE"));
+  await f.cleanup.closed(pane("KEPT"), true);
+  f.open([pane("LIVE"), pane("GHOST")]);
+  const left = () => folders.filter((dir) => fs.existsSync(dir)).map((dir) => path.basename(dir));
   await f.cleanup.sweep();
-  assert.equal(fs.existsSync(f.scratch), true);
+  assert.equal(left().length, 7);
+  f.advance(2 * DAY_MS);
+  const written = new Date(Date.now() + 2 * DAY_MS);
+  fs.utimesSync(path.join(folders[5], "file"), written, written);
+  await f.cleanup.sweep();
+  assert.deepEqual(left(), ["wink-KEPT", "wink-LIVE", "wink-safety-LIVE-1", "wink-GHOST"]);
+  f.advance(2 * DAY_MS);
+  await f.cleanup.sweep();
+  assert.deepEqual(left(), ["wink-LIVE", "wink-GHOST"]);
+  assert.equal(fs.readFileSync(path.join(precious, "file"), "utf8"), "safe");
+  assert.deepEqual(f.warnings, []);
 });
 
 test("startup and six-hour sweeps use unreferenced timers", (t) => {

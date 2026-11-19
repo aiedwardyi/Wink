@@ -225,6 +225,8 @@ describe("harness playbook", () => {
     expect(prompt).toContain("-Attributes ReparsePoint | % { [System.IO.Directory]::Delete(");
     expect(prompt).toContain("wipes their targets");
     expect(prompt).toContain("wink-<NICKNAME>");
+    expect(prompt).toContain("Delete the big files in it that nobody needs before the report.");
+    expect(prompt).toContain("delete the ones nobody needs before your final report.");
     expect(prompt).toContain("Wink removes it when the pane closes; close with `keep` to hand it to the next card.");
     expect(prompt).toContain("Wink removes clean worktrees a day after pane close if all commits are on a remote.");
     expect(prompt).toContain("Squash-landed, unpushed worktrees: use the manual rules above.");
