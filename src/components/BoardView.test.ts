@@ -453,15 +453,23 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     expect(mock.dispatched).toEqual([{ type: "select", id: "astra", reveal: true }]);
   });
 
-  it("Esc on the list stays in the Forum with a menu open", async () => {
+  it.each(["data-message-menu", "data-bot-menu", "data-room-menu", "data-section-picker"])("Esc on the list stays in the Forum with a %s open", async (marker) => {
     mock.state.selectedId = FORUM_SELECTION;
     posts = [post("pesc", { created_at: 1 })];
     await render(BoardView);
     const menu = document.body.appendChild(document.createElement("div"));
-    menu.setAttribute("data-message-menu", "");
+    menu.setAttribute(marker, "");
     await esc();
     menu.remove();
     expect(mock.dispatched).toEqual([]);
+  });
+
+  it("a re-render keeps the one Esc listener", async () => {
+    mock.state.selectedId = FORUM_SELECTION;
+    await render(BoardView);
+    const add = vi.spyOn(window, "addEventListener");
+    await render(BoardView);
+    expect(add.mock.calls.filter(([type]) => type === "keydown")).toEqual([]);
   });
 
   it("Esc on the list does nothing on a phone", async () => {

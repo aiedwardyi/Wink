@@ -425,6 +425,8 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   const page = usePresence(open);
   const phone = useIsPhone();
   const leave = useToggleForum();
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
   const pageRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLElement>(null);
   // a closing Forum overlays the chat at the width it had, so the chat takes the column back on the first frame
@@ -472,14 +474,14 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
       if (event.target instanceof Element && event.target.closest('[aria-modal="true"], [data-sidebar-search]')) return;
       if ([...document.querySelectorAll<HTMLInputElement>("[data-board-view] [data-board-reply-box] input")].some((input) => input.value)) return;
       // the open menu takes this Escape
-      if (document.querySelector("[data-message-menu], [data-selection-menu]")) return;
+      if (document.querySelector("[data-message-menu], [data-selection-menu], [data-bot-menu], [data-room-menu], [data-section-picker]")) return;
       event.preventDefault();
       if (isOpen) setOpenId(null);
-      else leave();
+      else leaveRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, hidden, closing, phone, leave]);
+  }, [isOpen, hidden, closing, phone]);
   return (
     <main
       ref={viewRef}
