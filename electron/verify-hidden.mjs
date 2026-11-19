@@ -242,10 +242,16 @@ export function runHiddenVerify(input) {
       // One pass down the page checks every rule at each stop; a pass per rule sent the view back to the top for each.
       const docY = element => (element.box?.[1] ?? 0) + (element.scrollY ?? 0);
       const stops = looked.flatMap(look => look.candidates.map(element => ({ look, element }))).sort((a, b) => docY(a.element) - docY(b.element));
-      const viewport = looked.find(look => look.data.viewport)?.data.viewport;
+      const seen = looked.find(look => look.data.viewport)?.data.viewport;
+      const viewport = seen && await race(cdp.ev("({ height: innerHeight, maxScroll: Math.max(0, document.documentElement.scrollHeight - innerHeight), y: scrollY })")).catch(error => {
+        if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
+        return seen;
+      });
       let y = viewport?.y ?? 0, lastTarget = y;
-      try {
-        for (const { look, element } of stops) {
+      const failed = new Set();
+      for (const { look, element } of stops) {
+        if (failed.has(look)) continue;
+        try {
           const { rule, remaining } = look;
           if (element.box && viewport) {
             const documentY = docY(element), height = viewport.height;
@@ -264,10 +270,11 @@ export function runHiddenVerify(input) {
           complete(element.unchecked === true || element.pending === true, found.length > 0 || element.bad === true, { tile, checker: rule.id, rule: element.rule ?? rule.label, where: element.where ?? "page", ...(element.box ? { box: element.box } : {}), scrollY: element.scrollY ?? 0, detail: rule === detailsRule });
           look.left--;
           if (counts.completed % 64 === 0) await race(new Promise(setImmediate));
+        } catch (error) {
+          if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
+          failed.add(look);
+          notChecked.add(`${look.rule.label} (${tile})`);
         }
-      } catch (error) {
-        if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
-        for (const look of looked.filter(row => row.left)) notChecked.add(`${look.rule.label} (${tile})`);
       }
       for (const { rule, candidates, decorate, remaining } of looked.filter(row => !row.left)) {
         for (const row of remaining) complete(false, true, { ...decorate(row), detail: false, scrollY: 0 });
