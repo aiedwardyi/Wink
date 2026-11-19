@@ -92,7 +92,7 @@ const claudeBot = {
 } as Bot;
 
 beforeEach(({ onTestFinished }) => {
-  const fetchSettings = (window as Window & Pick<HappyWindow, "happyDOM">).happyDOM.settings.fetch;
+  const fetchSettings = (window as typeof window & Pick<HappyWindow, "happyDOM">).happyDOM.settings.fetch;
   const previous = fetchSettings.interceptor;
   const unexpected: string[] = [];
   fetchSettings.interceptor = {
