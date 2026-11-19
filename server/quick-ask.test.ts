@@ -148,9 +148,10 @@ describe("quick route", () => {
     expect(h.rows()).toHaveLength(count);
   });
 
-  it.each(["still busy", "turn finished", "fallback declined", "helper throws"])("acks a steered send once when the helper has no reply: %s", async (state) => {
+  it.each(["still busy", "turn finished", "fallback declined", "helper throws", "task switched"])("acks a steered send once when the helper has no reply: %s", async (state) => {
     const missed = /^\[Wink note, automated, not from the person\. No fast reply reached the person for "switched to the new branch"/;
     const h = harness({ result: { route: "handoff", ms: 3 } });
+    const own = h.bot.threadId;
     if (state === "helper throws") h.ask.mockRejectedValueOnce(new Error("helper failed"));
     const reply = (threadId: string) => h.store.appendMessage(threadId, { role: "bot", kind: "text", text: "Noted, you're on the new branch." });
     h.steer.mockImplementation(async (threadId, text, consumed) => {
@@ -161,14 +162,16 @@ describe("quick route", () => {
     });
     const sent = await h.send({ text: "switched to the new branch" });
     expect(sent.data.steered).toBe(true);
-    if (state === "turn finished") h.store.setActivity(h.bot.id, "idle");
+    if (state === "turn finished" || state === "task switched") h.store.setActivity(h.bot.id, "idle");
+    if (state === "task switched") h.store.createTask(h.bot.id);
     await h.settled();
     h.store.setActivity(h.bot.id, "idle");
     drainSteeredMessages(h.store, (_botId, threadId, prompt) => {
       if (missed.test(prompt)) reply(threadId);
     });
-    expect(h.rows().filter((row) => row.text === "switched to the new branch")).toHaveLength(1);
-    expect(h.rows().filter((row) => row.role === "bot" && row.kind === "text").map((row) => row.text)).toEqual(["Noted, you're on the new branch."]);
+    const rows = h.store.messagesFor(own);
+    expect(rows.filter((row) => row.text === "switched to the new branch")).toHaveLength(1);
+    expect(rows.filter((row) => row.role === "bot" && row.kind === "text").map((row) => row.text)).toEqual(["Noted, you're on the new branch."]);
   });
 
   it("owes no ack for a steered send after a Stop", async () => {

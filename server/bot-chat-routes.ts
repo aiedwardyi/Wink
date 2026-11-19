@@ -280,7 +280,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     const owed = () => {
       const current = store.bot(botId);
       const path = store.activePath(threadId);
-      if (current?.threadId !== threadId || askStopped(sent) || !path.some((row) => row.id === sent.id) || path.some((row) => row.quick?.askId === sent.id)) return undefined;
+      if (!current || !store.taskByThread(botId, threadId) || askStopped(sent) || !path.some((row) => row.id === sent.id) || path.some((row) => row.quick?.askId === sent.id)) return undefined;
       return current;
     };
     void ackQuick({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent)
@@ -290,11 +290,11 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         if (!current) return;
         const note = ackMissed(sent.text ?? "");
         const adapter = instanceForBot(current, threadId)?.adapter;
-        if (current.busy && (current.activeThreadId ?? threadId) === threadId && adapter?.steer) {
+        if (current.busy && (current.activeThreadId ?? current.threadId) === threadId && adapter?.steer) {
           if (await (steerUntilTaken(adapter, threadId, note) ?? adapter.steer(threadId, note)).catch(() => false)) return;
           if (!owed()) return;
         }
-        // a turn that ended or refused the note leaves it for the bot's next turn, drained into the send's own row
+        // a turn that ended or refused the note, or a switch to another task, leaves it for the bot's next turn in this task, drained into the send's own row
         const queued = queueSteeredMessage(botId, threadId, sent.text ?? "", { prompt: note });
         store.patchMessage(threadId, sent.id, { quick: { state: "handoff" }, queueId: queued.id });
         drainQueuedSends();
