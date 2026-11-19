@@ -31,6 +31,9 @@ function rig(target: "bot" | "group") {
     patchBot: (_id: string, patch: Partial<typeof state>) => Object.assign(state, patch),
     patchGroup: (_id: string, patch: Partial<typeof state>) => Object.assign(state, patch),
     patchMessage: (_threadId: string, id: string, patch: Partial<Message>) => Object.assign(messages.find((m) => m.id === id)!, patch),
+    patchRow: (_threadId: string, id: string, patch: Partial<Message>) => Object.assign(messages.find((m) => m.id === id)!, patch),
+    rowMark: () => ({ count: messages.length }),
+    rowsSince: (_threadId: string, mark: { count: number }) => messages.slice(mark.count),
   };
   const fold = find(parsed, (node) => ts.isSwitchStatement(node)
     && node.expression.getText(parsed) === "event.type"

@@ -505,6 +505,9 @@ export type BotActivity = "working" | "waiting-on-you" | "idle" | "no-signal" | 
 /** The states in which the bot cannot take a new message. */
 export const ACTIVITY_BUSY: ReadonlySet<BotActivity> = new Set(["working", "waiting-on-you", "no-signal"]);
 
+/** Store.rowMark: a loaded thread's row count, or an unloaded one's newest stored rowid. */
+export type RowMark = { count: number } | { after: number };
+
 export type StoreChange =
   | { type: "message"; threadId: string; message: Message; imported?: true }
   | { type: "message.patch"; threadId: string; message: Message }
@@ -1407,6 +1410,41 @@ export class Store {
   /** activePath newest first, read lazily from disk when the thread is not loaded. */
   activePathBack(threadId: string): Iterable<Message> {
     return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
+  }
+
+  /** messagesFor(threadId).findLast(predicate), read newest first from disk when the thread is not loaded. */
+  findLast(threadId: string, predicate: (message: Message) => boolean): Message | undefined {
+    if (this.threads.has(threadId)) return this.thread(threadId).messages.findLast(predicate);
+    for (const message of mdb.rowsBack(threadId)) if (predicate(message)) return message;
+    return undefined;
+  }
+
+  /** activePath(threadId).findLast(predicate), walked back from disk when the thread is not loaded. */
+  findLastOnPath(threadId: string, predicate: (message: Message) => boolean): Message | undefined {
+    if (this.threads.has(threadId)) return this.activePath(threadId).findLast(predicate);
+    for (const message of this.activePathBack(threadId)) if (predicate(message)) return message;
+    return undefined;
+  }
+
+  /** activePath(threadId).slice(-count), walked back from disk when the thread is not loaded. */
+  pathTail(threadId: string, count: number): Message[] {
+    if (this.threads.has(threadId)) return this.activePath(threadId).slice(-count);
+    const rows: Message[] = [];
+    for (const message of this.activePathBack(threadId)) if (rows.unshift(message) >= count) break;
+    return rows;
+  }
+
+  /** Where the rows a turn adds begin: the row count when the thread is loaded, else its newest stored rowid. */
+  rowMark(threadId: string): RowMark {
+    return this.threads.has(threadId) ? { count: this.thread(threadId).messages.length } : { after: mdb.lastCursor(threadId) };
+  }
+
+  /** The rows added since rowMark; a mark taken while the thread was unloaded reads them by rowid. */
+  rowsSince(threadId: string, mark: RowMark): readonly Message[] {
+    if ("count" in mark) return this.thread(threadId).messages.slice(mark.count);
+    const rows: Message[] = [];
+    for (let page = mdb.scanThreadRows(threadId, mark.after, 1024); page.messages.length; page = mdb.scanThreadRows(threadId, page.cursor, 1024)) rows.push(...page.messages);
+    return rows;
   }
 
   /** Note rows newest first, read lazily from disk when the thread is not loaded. */

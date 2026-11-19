@@ -3,7 +3,7 @@
 // not stop it reaching a collector; each collector applies the same rule.
 import type { RuntimeEvent } from "./contracts.ts";
 import { ENGINE_SUMMARY_PREFIX } from "./replies.ts";
-import type { Message } from "./store.ts";
+import type { Message, RowMark } from "./store.ts";
 
 export type TurnReplyStep = { text: string; replace?: boolean } | "completed" | null;
 type Phase = Extract<RuntimeEvent, { itemType: "assistant_text" }>["phase"];
@@ -121,18 +121,18 @@ export function turnAddedMessage(messages: readonly Message[], start: number): b
 }
 
 export function turnUnread() {
-  const turns = new Map<string, { turnId?: string; start: number }>();
+  const turns = new Map<string, { turnId?: string; start: RowMark }>();
   return {
-    start(threadId: string, turnId: string | undefined, messages: readonly Message[]) {
+    start(threadId: string, turnId: string | undefined, start: RowMark) {
       const turn = turns.get(threadId);
       if (turn && turn.turnId === turnId) return;
-      turns.set(threadId, { turnId, start: messages.length });
+      turns.set(threadId, { turnId, start });
     },
-    settle(threadId: string, turnId: string | undefined, messages: readonly Message[]): boolean {
+    settle(threadId: string, turnId: string | undefined, since: (start: RowMark) => readonly Message[]): boolean {
       const turn = turns.get(threadId);
       if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return false;
       turns.delete(threadId);
-      return turnAddedMessage(messages, turn.start);
+      return turnAddedMessage(since(turn.start), 0);
     },
     forget(threadId: string) {
       turns.delete(threadId);

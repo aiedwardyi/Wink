@@ -1402,7 +1402,7 @@ const limitWaits = new LimitWaits({
     const controlKey = createHash("sha256").update(JSON.stringify([
       bot.modelSelection, bot.pendingModelSelection, instanceConfigs(cfg, accounts.snapshot)[instanceId ?? bot.modelSelection.instanceId],
       ...(accounts.snapshot.length ? [accounts.defaultFor(bot.modelSelection.instanceId), bot.pendingModelSelection && accounts.defaultFor(bot.pendingModelSelection.instanceId)] : []),
-      lastUserInstruction(store.activePath(bot.threadId))?.messageId,
+      store.findLastOnPath(bot.threadId, (message) => lastUserInstruction([message]) !== null)?.id,
     ])).digest("hex");
     return { threadId: bot.threadId, controlKey, busy: botHasActiveTurn(botId) || hasQueuedSends(botId) };
   },
@@ -1426,8 +1426,8 @@ const limitWaits = new LimitWaits({
   dispatch: (row, prompt) => startTurn(row.botId, prompt, { ...row.origin, threadId: row.threadId, cardContinuation: true, limitWaitId: row.id, onDispatchError: () => limitWaits.dispatchFailed(row.id) }).then(() => undefined),
   changed: (row, usageWait) => {
     if (!store.taskByThread(row.botId, row.threadId)) return;
-    const message = store.messagesFor(row.threadId).find((message) => message.id === row.messageId);
-    if (message?.tool && JSON.stringify(message.tool.usageWait) !== JSON.stringify(usageWait)) store.patchMessage(row.threadId, row.messageId, { tool: { ...message.tool, usageWait } });
+    const message = store.row(row.threadId, row.messageId);
+    if (message?.tool && JSON.stringify(message.tool.usageWait) !== JSON.stringify(usageWait)) store.patchRow(row.threadId, row.messageId, { tool: { ...message.tool, usageWait } });
   },
 });
 
@@ -2912,7 +2912,7 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
-const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchMessage(threadId, id, { summarized: true, restated }); });
+const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); });
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
@@ -3189,7 +3189,7 @@ function releaseInterruptedBot(botId: string, threadId: string, lane = roomLanes
   const speaker = groupSpeakers.get(threadId);
   if (group && group.busyBotId === botId) {
     if (speaker?.botId === botId) groupSpeakers.delete(threadId);
-    const addedMessage = unreadTurns.settle(threadId, undefined, store.messagesFor(threadId));
+    const addedMessage = unreadTurns.settle(threadId, undefined, (start) => store.rowsSince(threadId, start));
     store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
   }
   if (!lane && store.bot(botId)?.busy) store.setActivity(botId, "idle");
@@ -3853,7 +3853,7 @@ bus.subscribe((event: RuntimeEvent) => {
         bindPeerTurn(event.threadId, event.turnId);
       }
       limitWaits.bind(event.threadId, event.turnId);
-      unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
+      unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
       break;
     case "session.started":
       if (bot && event.sessionId && event.providerInstanceId && !staleTurnEvent(event.threadId, event.turnId)) {
@@ -3874,7 +3874,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown and is never hidden as restated: the final does not repeat it
-        const anchor = event.summarized ? undefined : store.messagesFor(event.threadId).findLast((m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
+        const anchor = event.summarized ? undefined : store.findLast(event.threadId, (m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
         const message = pushMessage(
           event.summarized
@@ -3897,9 +3897,9 @@ bus.subscribe((event: RuntimeEvent) => {
           : undefined;
         let toolName = "tool";
         if (messageId) {
-          const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId)?.tool;
+          const existing = store.row(event.threadId, messageId)?.tool;
           toolName = existing?.name ?? "tool";
-          store.patchMessage(event.threadId, messageId, {
+          store.patchRow(event.threadId, messageId, {
             tool: completedTool(existing, event),
           });
           toolMessageByItem.delete(itemKey);
@@ -4232,7 +4232,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // this is the branch where a card actually reached a human. Anything
       // auto mode answered took the early return above and never buzzes.
       const notifyHuman = () => {
-        const card = store.messagesFor(event.threadId).find((candidate) => candidate.id === message.id)?.card;
+        const card = store.row(event.threadId, message.id)?.card;
         if (!card || card.answered) return;
         routineRun = routines?.requestWaiting(event, routineOwnerId) ?? routineRun;
         if (!asker) return;
@@ -4282,9 +4282,9 @@ bus.subscribe((event: RuntimeEvent) => {
       if (waiting?.activity === "waiting-on-you" && roomLanes.thread(waiting.id) !== event.threadId) store.setActivity(waiting.id, "working");
       const messageId = event.requestId ? askMessageByRequest.get(`${event.threadId}:${event.requestId}`) : null;
       if (messageId) {
-        const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
+        const existing = store.row(event.threadId, messageId);
         if (existing?.card && !existing.card.answered) {
-          store.patchMessage(event.threadId, messageId, {
+          store.patchRow(event.threadId, messageId, {
             card: { ...existing.card, answered: event.behavior, dismissed: event.source !== "user" },
           });
         }
@@ -4311,8 +4311,8 @@ bus.subscribe((event: RuntimeEvent) => {
       // the activity chip keeps the bot visibly busy through the backoff,
       // one chip per streak
       const tool = { name: retryLine(event, busyResumeThreads.has(event.threadId)), ok: true };
-      const last = store.messagesFor(event.threadId).at(-1);
-      if (last?.kind === "activity" && isRetryLine(last.tool?.name)) store.patchMessage(event.threadId, last.id, { tool });
+      const last = store.findLast(event.threadId, () => true);
+      if (last?.kind === "activity" && isRetryLine(last.tool?.name)) store.patchRow(event.threadId, last.id, { tool });
       else pushMessage({ role: "bot", kind: "activity", tool });
       break;
     }
@@ -4320,11 +4320,11 @@ bus.subscribe((event: RuntimeEvent) => {
       refreshCodexPromo(event.message, usageBoard.touch);
       if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
-      unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
+      unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
       const previousId = event.usageLimit ? limitWaits.messageId(event.threadId) : undefined;
       const tool = runtimeErrorTool(event, (id) => Boolean(accounts.get(id)));
       const row = previousId
-        ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
+        ? store.patchRow(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });
       if (event.signedOut && event.providerInstanceId) void accountRuntime.signedOut(event.providerInstanceId).catch(() => console.error("Signed-out account could not be saved"));
       if (event.usageLimit && row) limitWaits.failed(event.threadId, event.turnId, event.usageLimit, row.id,
@@ -4350,8 +4350,8 @@ bus.subscribe((event: RuntimeEvent) => {
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
-      for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchMessage(event.threadId, id, { summarized: undefined });
-      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, store.messagesFor(event.threadId));
+      for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
+      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
       const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       roomTurnInstruction.delete(event.threadId);
@@ -4449,8 +4449,14 @@ bus.subscribe((event: RuntimeEvent) => {
           clearSendRunning(bot.id);
           memoryPass.onSettled(bot.id, event.threadId, flushNotes);
           if (!store.groupByThread(event.threadId)) {
-            summaryBuild.onSettled(bot.id, event.threadId);
-            summaryRepair.onSettled(bot.id, event.threadId);
+            const summaries = () => {
+              summaryBuild.onSettled(bot.id, event.threadId);
+              summaryRepair.onSettled(bot.id, event.threadId);
+            };
+            // both read the whole chat, so a chat Map is still loading settles them once it lands
+            const load = coldLoading(event.threadId);
+            if (load) void load.then(summaries);
+            else summaries();
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void unlandedWork.refresh(bot.id, event.threadId);
@@ -4510,7 +4516,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // after a Stop already cleared the speaker too
       roomLanes.settle(event.threadId);
       // Before the queue drain subscribers append the next send.
-      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && message.text?.trim());
+      const human = store.findLastOnPath(event.threadId, message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && Boolean(message.text?.trim()));
       setImmediate(() => {
         const owner = verifyOwner && store.bot(verifyOwner.botId);
         void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, docFix: verifyOwner?.docFix, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
@@ -5167,7 +5173,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePath(bot.threadId), 1).tool) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1).tool) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5177,7 +5183,8 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
         pin: bot.cwd,
         remembered: bot.lastProjectCwd,
         continuation: false,
-        userTexts: userProjectTexts(store.messagesFor(bot.threadId), undefined, { since: bot.projectFolderClearedAt }),
+        // an unloaded chat's folder cues wait for the send; a process prepared in another folder is not reused
+        userTexts: store.loaded(bot.threadId) ? userProjectTexts(store.messagesFor(bot.threadId), undefined, { since: bot.projectFolderClearedAt }) : [],
         recentPaths: projectPathsFromRecords({ bots: store.bots, groups: store.groups }),
       }).cwd ?? ensureWorkspace(bot.id);
   return { integrations, cwd: cwd ?? undefined, leanStartup: bot.leanStartup === true ? true : undefined };
@@ -6094,7 +6101,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const foldLate = () => {
           const queued = foldPeerQueuedSends(store, bot.id, threadId, claimMark, live.adapter.capabilities.queueing === true);
           if (!queued.length) return;
-          for (const message of store.activePath(threadId).slice(-queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
+          for (const message of store.pathTail(threadId, queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
@@ -6192,6 +6199,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             const waitedMs = await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), {
               sendId: latencySendId, grace: finalGraceInputs, onWait: onSummaryWait,
             });
+            // the context below reads the whole chat, which Map may still be loading off the server thread
+            const load = coldLoading(threadId);
+            if (load) await load;
             foldLate();
             const messages = store.activePath(threadId);
             const replayedIds = new Set(activeMessages.map((message) => message.id));

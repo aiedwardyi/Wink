@@ -32,7 +32,7 @@ function t(key: MessageKey, vars?: { count: number }): string {
 }
 
 /** An owner's 1:1 turn: the offer on a new chat's first typed message, the tool until the paste can have come. Unsent counts a send not in messages yet. */
-export function importMemoryTurn(messages: readonly Pick<Message, "role" | "kind">[], unsent = 0): { offer: boolean; tool: boolean } {
+export function importMemoryTurn(messages: Iterable<Pick<Message, "role" | "kind">>, unsent = 0): { offer: boolean; tool: boolean } {
   let typed = unsent;
   // stops past the first few typed lines, so a long chat costs nothing
   for (const message of messages) if (message.role === "user" && message.kind === "text" && ++typed > TOOL_TURNS) return NONE;

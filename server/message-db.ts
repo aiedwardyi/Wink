@@ -407,6 +407,22 @@ export function activePathBack(threadId: string): Iterable<Message> | null {
   })();
 }
 
+/** A thread's rows newest first, parsed only as far as the caller reads. */
+export function rowsBack(threadId: string): Iterable<Message> {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid DESC").iterate(threadId) as Iterable<{ json: string }>;
+  return (function* () {
+    for (const row of rows) yield rowToMessage(row);
+  })();
+}
+
+/** The rowid of a thread's newest stored row, or 0 when it has none here. */
+export function lastCursor(threadId: string): number {
+  // SAFETY: MAX(rowid) returns one integer row, NULL for no rows.
+  const row = db().prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null };
+  return row.cursor ?? 0;
+}
+
 /** A thread's note rows newest first, parsed only as far as the caller reads. */
 export function notesBack(threadId: string): Iterable<Message> {
   return notesBackOn(db(), threadId);

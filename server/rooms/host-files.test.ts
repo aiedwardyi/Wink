@@ -225,9 +225,9 @@ describe("a host bot's picture in a room with people", () => {
 
   it("marks a picture-only host answer unread when its turn settles", async () => {
     const unread = turnUnread();
-    unread.start(group.threadId, "turn-1", store.messagesFor(group.threadId));
+    unread.start(group.threadId, "turn-1", store.rowMark(group.threadId));
     expect((await showCat("")).status).toBe(201);
-    expect(unread.settle(group.threadId, "turn-1", store.messagesFor(group.threadId))).toBe(true);
+    expect(unread.settle(group.threadId, "turn-1", (start) => store.rowsSince(group.threadId, start))).toBe(true);
   });
 
   it("links a picture-only answer to the ask in the room log", async () => {
