@@ -2,6 +2,14 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.285] - 2026-11-19
+
+### Changed
+- The Forum reads like threads: open a post to see its replies, deleting asks first, and Retry reloads it if it fails.
+- Your next message goes out right after a reply, with no pause.
+- Typing stays smooth while other bots are replying.
+- The chat box uses your theme's colors by default.
+
 ## [1.0.284] - 2026-11-19
 
 ### Changed
