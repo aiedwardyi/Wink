@@ -1419,6 +1419,14 @@ describe("pending queued chip", () => {
     expect(drained.pendingQueued).toEqual({});
   });
 
+  it("moves a sync chip with the bot when the empty chat it waits in is dropped", () => {
+    const tasks = [{ threadId: "t1", title: "Typed in", createdAt: 2 }, { threadId: "t2", title: "Landed", createdAt: 1 }];
+    const withBot = reducer(initialState, { type: "botPatched", bot: { ...bot, tasks } });
+    const queued = reducer(withBot, { type: "pendingQueued", threadId: "t1", queueId: "q-sync", text: "early", reason: "sync" });
+    const followed = reducer(queued, { type: "botPatched", bot: { ...bot, threadId: "t2", messages: [], tasks: tasks.slice(1) } });
+    expect(followed.pendingQueued).toEqual({ t2: [expect.objectContaining({ queueId: "q-sync", reason: "sync" })] });
+  });
+
   it("drops a held chip when its line lands in the bot's other chat", () => {
     const withBot = reducer(initialState, { type: "botPatched", bot });
     const queued = reducer(withBot, { type: "pendingQueued", threadId: "t1", queueId: "q-sync", text: "early", reason: "sync" });

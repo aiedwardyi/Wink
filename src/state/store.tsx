@@ -452,6 +452,14 @@ export function reducer(state: AppState, action: Action): AppState {
       }
       const switchedThread = typeof action.bot.threadId === "string" && action.bot.threadId !== before.threadId;
       if (switchedThread) state = consumeFocus(state, before.threadId);
+      // A send waiting in the empty chat the bot dropped follows the bot, as on the server.
+      const followed = switchedThread && !before.messages?.length && action.bot.tasks && !action.bot.tasks.some((task) => task.threadId === before.threadId)
+        ? state.pendingQueued[before.threadId]?.filter((entry) => entry.reason === "sync") : undefined;
+      if (followed?.length) {
+        const pendingQueued = { ...state.pendingQueued, [action.bot.threadId!]: [...followed, ...state.pendingQueued[action.bot.threadId!] ?? []] };
+        delete pendingQueued[before.threadId];
+        state = { ...state, pendingQueued };
+      }
       const kind =
         action.bot.unread && !before?.unread
           ? "surprise"

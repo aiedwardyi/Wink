@@ -289,6 +289,23 @@ describe("waiting sends across restart", () => {
     expect(savedQueue()).toMatchObject([{ threadId: landed.threadId, items: [{ early: true }, { after: true }] }]);
   });
 
+  it("moves a send held behind an early send with the bot when the empty chat it waits in is dropped", async () => {
+    const { queue, store } = await boot();
+    const bot = store.createBot();
+    const typedIn = bot.threadId;
+    queue.queueSteeredMessage(bot.id, typedIn, "typed before its chat landed", { syncUntil: Date.now(), early: true });
+    const fresh = store.createTask(bot.id)!;
+    queue.queueSteeredMessage(bot.id, fresh.threadId, "typed in a new chat", { syncUntil: Date.now() });
+    const landed = store.createTask(bot.id, "Landed", false)!;
+    store.appendMessage(landed.threadId, { role: "user", kind: "text", text: "history" });
+    expect(store.followNewestTask(bot.id)).toBe(true);
+    expect(store.taskByThread(bot.id, fresh.threadId)).toBeFalsy();
+    expect(queue.waitingSends()).toEqual({
+      [typedIn]: [expect.objectContaining({ text: "typed before its chat landed", reason: "sync" })],
+      [landed.threadId]: [expect.objectContaining({ text: "typed in a new chat", reason: "sync" })],
+    });
+  });
+
   it("rejects an enqueue when persistence fails without losing an earlier receipt", async () => {
     const { queue, store } = await boot();
     const bot = store.createBot();

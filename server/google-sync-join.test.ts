@@ -219,7 +219,7 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     ["a six-row chat the bot answers after the hold runs out", { text: "continue our conversation", count: 6, slow: true, reply: true }],
     ["a renamed older chat after the hold runs out", { text: "continue our conversation", renamed: true, slow: true }],
     ["a renamed older chat dropped before a restart", { text: "continue our conversation", renamed: true, restart: true }],
-  ])("keeps an early send at the end of the bot's chat on both PCs: %s", async (_name, { text, renamed, selectedFirst, slow, late, count = 2001, reply, restart }: { text: string; renamed?: boolean; selectedFirst?: boolean; slow?: boolean; late?: boolean; count?: number; reply?: boolean; restart?: boolean }) => {
+  ])("keeps an early send at the end of the chat it was typed in on both PCs: %s", async (_name, { text, renamed, selectedFirst, slow, late, count = 2001, reply, restart }: { text: string; renamed?: boolean; selectedFirst?: boolean; slow?: boolean; late?: boolean; count?: number; reply?: boolean; restart?: boolean }) => {
     const home = makePC("home", [{ ...bot("Counsel"), syncId: "bot" }]);
     await startOn(home);
     const source = engine(home.folder!, "home");
@@ -239,6 +239,7 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
       await source("flush", { threadId: older });
       await settle(home);
     }
+    const olderTip = older && (await source<Snapshot>("snapshot", { threadId: older })).leaf;
 
     const work = makePC("work", []);
     work.account.setSession(A);
@@ -261,6 +262,7 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
       return path?.endsWith("/head.json") ? [[path, [file]]] : [];
     });
     const opened = await laptop<BotRecord>("join", { heads });
+    await laptop("open", { threadId: opened.threadId });
     await laptop("poll");
     if (late) await laptop("tick", { at: 11 * 60_000 });
     await laptop("send", { threadId: opened.threadId, text, value: reply });
@@ -285,23 +287,163 @@ describe("Google sync first join with chat engines", { timeout: 180_000 }, () =>
     await settle(home);
     await source("poll");
 
+    // Only the restart case drops the empty chat the send was typed in, so the send follows the bot to the chat that replaced it.
+    const sent = restart ? threadId : opened.threadId;
+    const history = sent === threadId ? count : 1;
     for (const call of [laptop, source]) {
       const shown = await call<BotRecord>("bot");
-      const chat = await call<Snapshot>("snapshot", { threadId });
+      const chat = await call<Snapshot>("snapshot", { threadId: sent });
       const byId = new Map(chat.rows.map((row: Message) => [row.id, row]));
       const path: Message[] = [];
       for (let row = byId.get(chat.leaf ?? ""); row; row = byId.get(row.parentId ?? "")) if (row.kind === "text") path.unshift(row);
-      expect(shown.threadId).toBe(threadId);
-      expect(path).toHaveLength(count + (reply ? 2 : 1));
-      expect(path[count]?.text).toBe(text);
-      expect(path[count]?.parentId).toBe(tip);
+      expect(shown.threadId).toBe(sent);
+      expect(path).toHaveLength(history + (reply ? 2 : 1));
+      expect(path[history]?.text).toBe(text);
+      expect(path[history]?.parentId).toBe(sent === threadId ? tip : olderTip);
       expect(chat.leaf).toBe(path.at(-1)?.id);
       expect(chat.rows.filter(isConflictNotice)).toEqual([]);
       expect(chat.tasks.find((task) => task.threadId === threadId)?.title).toBe("Other");
       if (older) {
         expect(chat.tasks.find((task) => task.threadId === older)?.title).toBe("Renamed");
-        expect((await call<Snapshot>("snapshot", { threadId: older })).rows.map((row) => row.text)).toEqual(["an older chat"]);
+        if (sent === threadId) expect((await call<Snapshot>("snapshot", { threadId: older })).rows.map((row) => row.text)).toEqual(["an older chat"]);
+        else expect((await call<Snapshot>("snapshot", { threadId })).leaf).toBe(tip);
       }
+    }
+  });
+});
+
+/** Home holds these chats, the last flushed newest; work joins and holds every chat download until land. */
+async function heldJoin(chats: Array<{ title: string; count?: number; texts?: string[] }>) {
+  const home = makePC("home", [{ ...bot("Counsel"), syncId: "bot" }]);
+  await startOn(home);
+  const source = engine(home.folder!, "home");
+  const ids: string[] = [];
+  for (const chat of chats) {
+    const { threadId } = await source<TaskRecord>("create");
+    if (chat.count) await source("batch", { threadId, count: chat.count });
+    for (const text of chat.texts ?? []) await source("append", { threadId, text });
+    await source("rename", { threadId, title: chat.title });
+    await source("flush", { threadId });
+    await settle(home);
+    ids.push(threadId);
+  }
+  const work = makePC("work", []);
+  work.account.setSession(A);
+  await work.sync.read();
+  let reached = () => {};
+  const atChat = new Promise<void>((resolve) => { reached = resolve; });
+  let resume = () => {};
+  const resumed = new Promise<void>((resolve) => { resume = resolve; });
+  drive.onDownload = async (file) => {
+    if (!decodeDrivePath(file.name)?.startsWith("threads-v2/")) return;
+    reached();
+    await resumed;
+  };
+  const joined = work.sync.start();
+  await atChat;
+  const laptop = engine(work.folder!, "work");
+  await laptop("clock");
+  const heads = [...drive.records.values()].flatMap(({ file }): Array<[string, typeof file[]]> => {
+    const path = decodeDrivePath(file.name);
+    return path?.endsWith("/head.json") ? [[path, [file]]] : [];
+  });
+  const opened = await laptop<BotRecord>("join", { heads });
+  await laptop("poll");
+  const land = async () => {
+    resume();
+    await joined;
+    await work.sync.idle();
+  };
+  const hide = (threadId: string) => {
+    const from = join(work.folder!, "threads-v2", "bot", threadId);
+    const to = join(root, `held-${threadId}`);
+    renameSync(from, to);
+    return () => renameSync(to, from);
+  };
+  const converge = async (...more: string[]) => {
+    await laptop("poll");
+    for (const threadId of [...ids, opened.threadId, ...more]) await laptop("flush", { threadId });
+    await settle(work);
+    await settle(home);
+    await source("poll");
+  };
+  return { source, laptop, ids, opened, land, hide, converge };
+}
+
+async function texts(call: ReturnType<typeof engine>, threadId: string) {
+  const chat = await call<Snapshot>("snapshot", { threadId });
+  const byId = new Map(chat.rows.map((row: Message) => [row.id, row]));
+  const path: Message[] = [];
+  for (let row = byId.get(chat.leaf ?? ""); row; row = byId.get(row.parentId ?? "")) if (row.kind === "text") path.unshift(row);
+  return { path: path.map((row) => row.text), title: chat.tasks.find((task) => task.threadId === threadId)?.title, notices: chat.rows.filter(isConflictNotice).length };
+}
+
+// SAFETY: the harness answers with waitingSends() as JSON.
+const waiting = async (call: ReturnType<typeof engine>) => JSON.parse(await call<string>("waiting")) as Record<string, Array<{ text: string; reason?: string }>>;
+
+describe("Google sync first join with a send typed before its chat landed", { timeout: 180_000 }, () => {
+  it("keeps the send waiting through a failed Drive listing, then sends it after the history", async () => {
+    const { source, laptop, ids: [chat], land, converge } = await heldJoin([{ title: "My named chat", count: 2 }]);
+    await laptop("send", { threadId: chat, text: "continue our conversation", value: true });
+    await laptop("offline");
+    expect((await texts(laptop, chat)).path).toEqual([]);
+    expect(await waiting(laptop)).toEqual({ [chat!]: [expect.objectContaining({ text: "continue our conversation", reason: "sync" })] });
+    await land();
+    await converge();
+    for (const call of [laptop, source]) {
+      expect(await texts(call, chat!)).toEqual({ path: ["row 0", "row 1", "continue our conversation", "reply"], title: "My named chat", notices: 0 });
+    }
+  });
+
+  it("sends it once its own chat lands while another chat of the bot never does, before a later send", async () => {
+    const { source, laptop, ids: [side, chat], land, hide, converge } = await heldJoin([{ title: "Side chat", count: 5 }, { title: "My named chat", count: 3 }]);
+    await laptop("send", { threadId: chat, text: "continue our conversation", value: true });
+    await land();
+    const restore = hide(side!);
+    await laptop("poll");
+    expect((await texts(laptop, chat!)).path).toEqual(["row 0", "row 1", "row 2", "continue our conversation", "reply"]);
+    await laptop("send", { threadId: chat, text: "and one more thing", value: true });
+    restore();
+    await converge();
+    for (const call of [laptop, source]) {
+      expect(await texts(call, chat!)).toEqual({ path: ["row 0", "row 1", "row 2", "continue our conversation", "reply", "and one more thing"], title: "My named chat", notices: 0 });
+      expect((await texts(call, side!)).path).toHaveLength(5);
+    }
+  });
+
+  it("delivers it to the chat it was typed in after the user moves on, and holds the later send behind it", async () => {
+    const { source, laptop, ids: [chat], land, converge } = await heldJoin([{ title: "My named chat", count: 3 }]);
+    await laptop("send", { threadId: chat, text: "continue our conversation", value: true });
+    const other = (await laptop<TaskRecord>("create")).threadId;
+    await laptop("append", { threadId: other, text: "a note on this PC" });
+    await laptop("switch", { threadId: other });
+    await laptop("send", { threadId: other, text: "a question elsewhere", value: true });
+    expect((await texts(laptop, other)).path).toEqual(["a note on this PC"]);
+    expect((await waiting(laptop))[other]).toEqual([expect.objectContaining({ text: "a question elsewhere", reason: "sync" })]);
+    await land();
+    await laptop("poll");
+    await laptop("pull", { threadId: other });
+    await converge(other);
+    for (const call of [laptop, source]) {
+      expect(await texts(call, chat!)).toEqual({ path: ["row 0", "row 1", "row 2", "continue our conversation", "reply"], title: "My named chat", notices: 0 });
+      expect((await texts(call, other)).path).toEqual(["a note on this PC", "a question elsewhere", "reply"]);
+    }
+  });
+
+  it("moves it with the bot when another chat lands first and drops the empty one it was typed in", async () => {
+    const { source, laptop, ids: [chat, typedIn], opened, land, hide, converge } = await heldJoin([{ title: "My named chat", count: 3 }, { title: "Old chat", texts: ["earlier closed conversation"] }]);
+    expect(opened.threadId).toBe(typedIn);
+    await laptop("send", { threadId: typedIn, text: "continue our conversation", value: true });
+    await land();
+    const restore = hide(typedIn!);
+    await laptop("poll");
+    expect((await laptop<BotRecord>("bot")).threadId).toBe(chat);
+    expect((await texts(laptop, chat!)).path).toEqual(["row 0", "row 1", "row 2", "continue our conversation", "reply"]);
+    restore();
+    await converge();
+    for (const call of [laptop, source]) {
+      expect(await texts(call, chat!)).toEqual({ path: ["row 0", "row 1", "row 2", "continue our conversation", "reply"], title: "My named chat", notices: 0 });
+      expect(await texts(call, typedIn!)).toEqual({ path: ["earlier closed conversation"], title: "Old chat", notices: 0 });
     }
   });
 });

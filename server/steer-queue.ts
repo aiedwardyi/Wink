@@ -135,16 +135,7 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
     pending = [];
   }
   queues.clear();
-  // An early send whose chat was dropped follows its bot to the chat that replaced it.
-  const kept = new Map<string, (typeof pending)[number]>();
-  for (const entry of pending) {
-    const bot = store.bot(entry.botId);
-    const moved = bot && !store.taskByThread(entry.botId, entry.threadId) ? { ...entry, threadId: bot.threadId, items: entry.items.filter((item) => item.early) } : entry;
-    const key = entryKey(moved.botId, moved.threadId);
-    const prior = kept.get(key);
-    kept.set(key, prior ? { ...moved, items: [...prior.items, ...moved.items].sort((a, b) => a.seq - b.seq) } : moved);
-  }
-  pending = [...kept.values()];
+  pending = followBots(store, pending);
   for (const entry of pending) {
     for (const item of entry.items) queueSeq = Math.max(queueSeq, item.seq);
     if (!store.bot(entry.botId) || !store.taskByThread(entry.botId, entry.threadId)) continue;
@@ -155,12 +146,19 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
   }
   if (pending.length) saveQueuedSends();
   store.onChange((change) => {
+    if (change.type === "bot") {
+      const kept = followBots(store, [...queues.values()]);
+      if (kept.every((entry) => queues.get(entryKey(entry.botId, entry.threadId)) === entry)) return;
+      queues.clear();
+      for (const entry of kept) queues.set(entryKey(entry.botId, entry.threadId), entry);
+      return saveQueuedSends();
+    }
     if (change.type !== "bot.deleted" && change.type !== "thread.deleted") return;
     let changed = false;
+    const entries = [...queues.values()];
     for (const [key, entry] of queues) {
       if (change.type === "bot.deleted" ? entry.botId !== change.botId : entry.threadId !== change.threadId) continue;
-      // An early send follows its bot when the empty chat it was typed in is dropped.
-      const items = change.type === "thread.deleted" ? entry.items.filter((item) => !isRoomItem(item) && item.early) : [];
+      const items = change.type === "thread.deleted" ? entry.items.filter((item) => follows(entries, entry.botId, item)) : [];
       if (items.length) queues.set(key, { ...entry, items });
       else queues.delete(key);
       changed = true;
@@ -357,6 +355,33 @@ export function queuedRoomBotIds(groupId: string, threadId: string): string[] {
 // a queued quick handoff's ask row, or a requeued call row, already shows this line
 const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || Boolean(message.call?.order || message.call?.ask));
 
+type Following = { botId: string; threadId: string; items: Array<{ messageId: string; sendId?: string; seq?: number; early?: boolean; syncUntil?: number }> };
+
+/** A send typed before its chat landed keeps the bot's later sends behind it. */
+export function earlySendAhead(botId: string, seq = Infinity, entries: Iterable<Following> = queues.values()): boolean {
+  for (const entry of entries) {
+    if (entry.botId === botId && entry.items.some((item) => item.early && (item.seq ?? 0) < seq && !isSendCancelled(item.sendId))) return true;
+  }
+  return false;
+}
+
+const follows = (entries: Following[], botId: string, item: Following["items"][number]) =>
+  Boolean(item.early) || (item.syncUntil !== undefined && earlySendAhead(botId, item.seq, entries));
+
+// An early send, and a later send held behind it, follow the bot when the empty chat they were typed in is dropped.
+function followBots<T extends Following>(store: Pick<Store, "bot" | "taskByThread">, entries: T[]): T[] {
+  const kept = new Map<string, T>();
+  for (const entry of entries) {
+    const bot = store.bot(entry.botId);
+    const items = bot && !store.taskByThread(entry.botId, entry.threadId) ? entry.items.filter((item) => follows(entries, entry.botId, item)) : [];
+    const moved = bot && items.length ? { ...entry, threadId: bot.threadId, items } : entry;
+    const key = entryKey(moved.botId, moved.threadId);
+    const prior = kept.get(key);
+    kept.set(key, prior ? { ...moved, items: [...prior.items, ...moved.items].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)) } : moved);
+  }
+  return [...kept.values()];
+}
+
 function isRoomItem(item: QueueItem): item is RoomItem {
   return item.kind === "room";
 }
@@ -394,7 +419,7 @@ export function drainSteeredMessages(
     const laneItem = entry.items.every(isRoomItem) && entry.items.some((item) => isRoomItem(item) && !item.hands) && laneFree?.(entry.botId);
     if ((busy && !laneItem) || draining.has(entry.botId) || promotingBots.has(entry.botId)) continue;
     const first = entry.items.find((item) => !isRoomItem(item) && !isSendCancelled(item.sendId));
-    if (first && !isRoomItem(first) && syncHold.waiting(entry.threadId, first.syncUntil, first.early)) continue;
+    if (first && !isRoomItem(first) && (syncHold.waiting(entry.threadId, first.syncUntil, first.early) || earlySendAhead(entry.botId, first.seq))) continue;
     // committed to draining: the entry leaves the map before anything runs,
     // so a settle racing another settle can never fire the same queue twice
     queues.delete(key);
@@ -410,14 +435,12 @@ export function drainSteeredMessages(
         // keys 1:1 and room separately, so this mix is rare
         queues.set(key, { botId: entry.botId, threadId: entry.threadId, items: [...rest, ...roomItems] });
       }
-      // A send typed before its chat landed goes to the chat the bot selected once its chats landed.
-      const threadId = item.early ? bot.threadId : entry.threadId;
       // queueId is the pending-chip identity from the 202; append still
       // assigns a fresh transcript id so replay/exclude keep using message.id.
-      const ask = store.messagesFor(threadId).find((message) => showsQueued(message, item.messageId));
+      const ask = store.messagesFor(entry.threadId).find((message) => showsQueued(message, item.messageId));
       let appended: Message;
       try {
-        appended = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, queued: undefined })) || store.appendMessage(threadId, {
+        appended = (ask && store.patchMessage(entry.threadId, ask.id, { quick: undefined, queued: undefined })) || store.appendMessage(entry.threadId, {
           role: "user",
           kind: "text",
           text: item.text,
@@ -437,7 +460,7 @@ export function drainSteeredMessages(
       pendingDrainedSends.set(item.messageId, { botId: entry.botId, sendId: item.sendId });
       void (async () => {
         try {
-          await run(entry.botId, threadId, item.prompt, appended, [appended.id]);
+          await run(entry.botId, entry.threadId, item.prompt, appended, [appended.id]);
         } finally {
           pendingDrainedSends.delete(item.messageId);
         }
@@ -490,7 +513,7 @@ export function takeQueuedSteers(
   if (!entry || entry.botId !== botId) return [];
   const steerItems = entry.items.filter((item): item is SteerItem => !isRoomItem(item));
   if (!steerItems.length) return [];
-  const waitsAhead = (item: SteerItem) => !steering || item.after || syncHold.waiting(threadId, item.syncUntil, item.early);
+  const waitsAhead = (item: SteerItem) => !steering || item.after || syncHold.waiting(threadId, item.syncUntil, item.early) || earlySendAhead(botId, item.seq);
   if (steerItems.some((item) => item.seq <= since && !isSendCancelled(item.sendId) && waitsAhead(item))) return [];
   const held = entry.items.filter((item) => isRoomItem(item) || promoting.has(item.messageId) || (item.after && !isSendCancelled(item.sendId)));
   if (held.length) queues.set(key, { botId, threadId, items: held });

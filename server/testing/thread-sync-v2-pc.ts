@@ -250,6 +250,9 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         break;
       }
       case "bot": value = bot; break;
+      case "switch": value = store.switchTask(bot.id, threadId); break;
+      case "offline": syncHold.google(input.folder); break;
+      case "waiting": value = JSON.stringify((await import("../steer-queue.ts")).waitingSends()); break;
       case "import":
         store.applySyncChanges(bot.id, threadId, [
           ...(args.rows ?? []).map((row) => ({ cursor: 0, kind: "row" as const, rowId: row.id, value: row, conflict: false })),
