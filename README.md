@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <b>Context switching, in style.</b>
+  <b>The harness for self-improving frontier agents.</b>
   <br>
   Claude, Codex, Grok, Gemini and Muse in one app, at terminal speed.
   <br>
@@ -30,10 +30,10 @@
 **1. Every coding subscription you pay for**<br>
 Give each bot its own engine and model. `Alt+M` switches mid-thread, and the thread carries over.
 
-<img src="./assets/readme/tour-models.png" width="780" alt="The model picker open on Atlas: Opus 5.5 at High effort, ringed in Anthropic orange, with Fable 5.1 and Sonnet 5.5 above and below.">
+<img src="./assets/readme/tour-models.png" width="780" alt="The model picker open on Atlas: Opus 5.5 at High effort, ringed in Anthropic orange, with Fable 5.2 and Sonnet 5.5 above and below.">
 
 **2. A lead bot runs your workers**<br>
-Ask once. It splits the job, picks each worker's engine, model and effort, and checks the work before it lands.
+Ask once. It splits the job, picks each worker's engine, model and effort, and shows you what's broken before it lands.
 
 <img src="./assets/readme/tour-workers.png" width="880" alt="Five worker rows, each with its engine's mark and model: three working, two done.">
 
