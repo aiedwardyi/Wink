@@ -11,6 +11,7 @@ import { buildBrief } from "./live-call.ts";
 import { Store } from "./store.ts";
 
 const file = join(DATA_DIR, "about-you", "MEMORY.md");
+const savedFacts = () => readFileSync(file, "utf8").split("\n").filter((line) => !line.startsWith("<!--"));
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const index = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, true);
 const paste = [
@@ -35,13 +36,13 @@ describe("About You save", () => {
     const fetch = vi.spyOn(globalThis, "fetch");
     const result = addToAboutYou(paste, "2026-11-16");
     expect(result).toEqual({ source: "ChatGPT", found: 4, added: 4, duplicates: 0, hidden: 1, full: 0 });
-    expect(readFileSync(file, "utf8")).toBe([
+    expect(savedFacts()).toEqual([
       "- The user is Dana Park; call her Dana. (from ChatGPT, 2026-11-16)",
       "- Speaks Korean and English. (from ChatGPT, 2026-11-16)",
       "- Lives in Seoul (UTC+9). (from ChatGPT, 2026-11-16)",
       "- Moved to Seoul (from Busan) in 2024. (from ChatGPT, 2026-11-16)",
       "",
-    ].join("\n"));
+    ]);
     expect(readFileSync(file, "utf8")).not.toContain("hunter2");
     expect(aboutYouSources()).toEqual([{ source: "ChatGPT", facts: [
       "The user is Dana Park; call her Dana.", "Speaks Korean and English.", "Lives in Seoul (UTC+9).", "Moved to Seoul (from Busan) in 2024.",
@@ -146,7 +147,7 @@ describe("About You dedupe", () => {
     addToAboutYou(paste, "2026-11-16");
     const again = addToAboutYou(`${paste}\n- speaks korean and english!!\n- Speaks Korean and English.\n- Plays tennis on Sundays.`.replace("ChatGPT", "Claude"), "2026-11-17");
     expect(again).toMatchObject({ source: "Claude", found: 7, added: 1, duplicates: 6 });
-    expect(readFileSync(file, "utf8").split("\n").filter(Boolean)).toHaveLength(5);
+    expect(savedFacts().filter(Boolean)).toHaveLength(5);
     expect(aboutYouSources().map((group) => [group.source, group.facts.length])).toEqual([["ChatGPT", 4], ["Claude", 1]]);
   });
 });

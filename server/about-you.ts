@@ -1,8 +1,8 @@
 // About You: what the user's other AI knew about them, kept once for every bot.
 // Code splits the paste into fact lines, drops repeats and secret-looking lines,
 // and notes where each came from; no model reads or rewrites it.
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
@@ -30,9 +30,11 @@ export const ABOUT_YOU_SYNC_ID = "about-you";
 // a copy set aside again while PCs changed it nests (MEMORY.conflict-X.conflict-Y.md); a deep one is cut short
 const SET_ASIDE = /^MEMORY\.conflict-[0-9a-f]{8}[\w.-]*\.md$/;
 const SET_ASIDE_NOTE = "<!-- memory sync:";
-// a line's count: odd once removed, even once added back; PCs merge counts by the larger, so a merge never undoes either
-const MARK = /^<!-- about-you: ([0-9a-f]{16}) (\d+) -->$/;
-// the lines this PC held after its last sync, kept beside the file so it is wiped with it and never synced
+const LEGACY_MARK = /^<!-- about-you: ([0-9a-f]{16}) (\d+) -->$/;
+const ADD = /^<!-- about-you-add: ([0-9a-f]{16}) ([0-9a-f-]{36}|[0-9a-f]{16}) -->$/;
+const REMOVE = /^<!-- about-you: removed ([0-9a-f-]{36}|[0-9a-f]{16}) -->$/;
+const LEGACY_ID = /^[0-9a-f]{16}$/;
+// the IDs this PC held after its last sync, so rewriting Markdown cannot erase them
 const lastSyncFile = () => join(aboutYouDir(), "MEMORY.synced");
 
 // a saved line comes from text another AI wrote, so nothing in it may read as markup or as Wink's own framing
@@ -104,9 +106,9 @@ export function factsOf(paste: string): { facts: string[]; hidden: number } {
   return { facts, hidden };
 }
 
-function readSaved(): string {
+function readSaved(file = aboutYouFile()): string {
   try {
-    return readFileSync(aboutYouFile(), "utf8");
+    return readFileSync(file, "utf8");
   } catch (error) {
     if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return "";
     throw error;
@@ -115,30 +117,103 @@ function readSaved(): string {
 
 const savedLines = (raw: string) => raw.split(/\r?\n/).filter((line) => line.trim());
 const markOf = (line: string) => createHash("sha256").update(line).digest("hex").slice(0, 16);
-type Marks = Map<string, number>;
-const removed = (marks: Marks, hash: string) => (marks.get(hash) ?? 0) % 2 === 1;
+type AboutYouState = { lines: string[]; adds: Map<string, Set<string>>; removes: Set<string>; legacy: Map<string, number> };
 
-function parse(raw: string): { lines: string[]; marks: Marks } {
-  const lines: string[] = [];
-  const marks: Marks = new Map();
+function emptyState(): AboutYouState {
+  return { lines: [], adds: new Map(), removes: new Set(), legacy: new Map() };
+}
+
+function rememberIds(state: AboutYouState, hash: string, ids: Iterable<string>): void {
+  const added = state.adds.get(hash) ?? new Set<string>();
+  for (const id of ids) added.add(id);
+  state.adds.set(hash, added);
+}
+
+function parse(raw: string): AboutYouState {
+  const state = emptyState();
   for (const line of savedLines(raw)) {
-    const mark = MARK.exec(line);
-    if (mark) marks.set(mark[1]!, Math.max(marks.get(mark[1]!) ?? 0, Number(mark[2])));
-    else lines.push(line);
+    const add = ADD.exec(line);
+    const remove = REMOVE.exec(line);
+    const legacy = LEGACY_MARK.exec(line);
+    if (add) rememberIds(state, add[1]!, [add[2]!]);
+    else if (remove) state.removes.add(remove[1]!);
+    else if (legacy) state.legacy.set(legacy[1]!, Math.max(state.legacy.get(legacy[1]!) ?? 0, Number(legacy[2])));
+    else if (!line.startsWith(SET_ASIDE_NOTE)) state.lines.push(line);
   }
-  return { lines, marks };
+  return state;
 }
 
-function render(lines: string[], marks: Marks): string {
-  const all = [...lines, ...[...marks].sort(([a], [b]) => a.localeCompare(b)).map(([hash, count]) => `<!-- about-you: ${hash} ${count} -->`)];
-  return all.length ? `${all.join("\n")}\n` : "";
+function metadata({ adds, removes, legacy }: AboutYouState): string[] {
+  return [
+    ...[...adds.keys()].sort().flatMap((hash) => [...adds.get(hash)!].sort().map((id) => `<!-- about-you-add: ${hash} ${id} -->`)),
+    ...[...removes].sort().map((id) => `<!-- about-you: removed ${id} -->`),
+    ...[...legacy.keys()].sort().map((hash) => `<!-- about-you: ${hash} ${legacy.get(hash)} -->`),
+  ];
 }
 
-function save(lines: string[], marks: Marks): void {
-  const text = render(lines, marks);
-  if (!text) return rmSync(aboutYouFile(), { force: true });
+const render = (lines: string[]) => lines.length ? `${lines.join("\n")}\n` : "";
+
+function save(state: AboutYouState, before: string, keepEditTime = false): void {
+  const text = render([...state.lines, ...metadata(state)]);
+  if (text === before) return;
+  const file = aboutYouFile();
+  if (!text) return rmSync(file, { force: true });
+  const editTime = keepEditTime && before ? statSync(file) : undefined;
   mkdirSync(aboutYouDir(), { recursive: true, mode: 0o700 });
-  writeFileAtomic(aboutYouFile(), text, { mode: 0o600 });
+  writeFileAtomic(file, text, { mode: 0o600 });
+  if (editTime) utimesSync(file, editTime.atime, editTime.mtime);
+}
+
+function rememberRemovals(state: AboutYouState, other: AboutYouState): void {
+  for (const id of other.removes) state.removes.add(id);
+  for (const [hash, count] of other.legacy) state.legacy.set(hash, Math.max(state.legacy.get(hash) ?? 0, count));
+}
+
+function fold(states: AboutYouState[]): AboutYouState {
+  const merged = emptyState();
+  for (const state of states) rememberRemovals(merged, state);
+  const facts = new Map<string, string>();
+  for (const state of states) for (const line of state.lines) {
+    const hash = markOf(line);
+    const ids = [...(state.adds.get(hash) ?? [hash])].filter((id) => !merged.removes.has(id) && (merged.legacy.get(id) ?? 0) % 2 === 0);
+    if (!ids.length) continue;
+    const source = TAG.exec(line)?.[1];
+    const fact = source && keyOf(clean(line));
+    const key = fact ? `${source}\n${fact}` : line;
+    const kept = facts.get(key);
+    if (!kept) {
+      merged.lines.push(line);
+      facts.set(key, hash);
+    }
+    // A displayed fact can represent several independently added copies from its source.
+    rememberIds(merged, kept ?? hash, ids);
+  }
+  return merged;
+}
+
+// Hand edits arrive as Markdown, so assign their IDs before looking at any peer's copy.
+function localEdits(raw: string): AboutYouState {
+  const state = parse(raw);
+  const last = parse(readSaved(lastSyncFile()));
+  // Tagged rows in old files predate the add IDs. Untagged local edits get their own IDs.
+  const legacyImports = !state.adds.size;
+  for (const hash of last.lines) if (LEGACY_ID.test(hash)) rememberIds(last, hash, [hash]);
+  rememberRemovals(state, last);
+  const hashes = new Set(state.lines.map(markOf));
+  for (const hash of hashes) {
+    const ids = last.adds.get(hash);
+    if (ids) rememberIds(state, hash, ids);
+  }
+  const presentIds = new Set([...hashes].flatMap((hash) => [...(state.adds.get(hash) ?? [])]));
+  for (const previous of [last, state]) for (const [hash, ids] of previous.adds) {
+    if (hashes.has(hash)) continue;
+    for (const id of ids) if (!presentIds.has(id)) state.removes.add(id);
+  }
+  for (const line of state.lines) {
+    const hash = markOf(line);
+    if (!state.adds.has(hash)) rememberIds(state, hash, [legacyImports && TAG.test(line) ? hash : randomUUID()]);
+  }
+  return fold([state]);
 }
 
 export type AboutYouAdd = { source: string; found: number; added: number; duplicates: number; hidden: number; full: number };
@@ -151,8 +226,12 @@ export function addToAboutYou(paste: string, date: string): AboutYouAdd | AboutY
   const source = sourceOf(paste);
   const { facts, hidden } = factsOf(paste);
   try {
-    const { lines, marks } = parse(readSaved());
-    const seen = new Set(lines.map((line) => keyOf(clean(line))));
+    const raw = readSaved();
+    const state = localEdits(raw);
+    const { lines } = state;
+    const keys = lines.map((line) => keyOf(clean(line)));
+    const seen = new Set(keys.filter(Boolean));
+    let count = seen.size + keys.filter((key) => !key).length;
     let size = lines.reduce((sum, line) => sum + bytes(line) + 1, 0);
     const result: AboutYouAdd = { source, found: facts.length, added: 0, duplicates: 0, hidden, full: 0 };
     for (const fact of facts) {
@@ -162,16 +241,18 @@ export function addToAboutYou(paste: string, date: string): AboutYouAdd | AboutY
         continue;
       }
       const line = `- ${fact} (from ${source}, ${date})`;
-      if (lines.length >= MEMORY_MAX_LINES || size + bytes(line) + 1 > MEMORY_MAX_BYTES) {
+      if (count >= MEMORY_MAX_LINES || size + bytes(line) + 1 > MEMORY_MAX_BYTES) {
         result.full++;
         continue;
       }
       lines.push(line);
+      rememberIds(state, markOf(line), [randomUUID()]);
       seen.add(key);
+      count++;
       size += bytes(line) + 1;
       result.added++;
     }
-    if (result.added) save(lines, marks);
+    if (result.added) save(state, raw);
     return result;
   } catch (error) {
     console.warn(`[about-you] save failed (${error instanceof Error ? error.name : "error"})`);
@@ -196,42 +277,24 @@ export function aboutYouSources(): AboutYouSource[] {
 }
 
 export function removeAboutYouSource(source: string): void {
-  const { lines, marks } = parse(readSaved());
-  save(lines.filter((line) => (TAG.exec(line)?.[1] ?? "") !== source), marks);
+  const raw = readSaved();
+  const state = localEdits(raw);
+  state.lines = state.lines.filter((line) => {
+    if ((TAG.exec(line)?.[1] ?? "") !== source) return true;
+    const hash = markOf(line);
+    for (const id of state.adds.get(hash)!) state.removes.add(id);
+    state.adds.delete(hash);
+    return false;
+  });
+  save(state, raw);
 }
 
-// a line this PC dropped or brought back since its last sync gets a count, so a copy another PC set aside cannot undo it
-function markEdits(): void {
-  let last: Set<string>;
-  try {
-    last = new Set(readFileSync(lastSyncFile(), "utf8").split("\n").filter(Boolean));
-  } catch {
-    return;
-  }
-  const { lines, marks } = parse(readSaved());
-  const now = new Set(lines.map(markOf));
-  let changed = false;
-  for (const hash of last) {
-    if (now.has(hash) || removed(marks, hash)) continue;
-    marks.set(hash, (marks.get(hash) ?? 0) + 1);
-    changed = true;
-  }
-  for (const hash of now) {
-    if (last.has(hash) || !removed(marks, hash)) continue;
-    marks.set(hash, marks.get(hash)! + 1);
-    changed = true;
-  }
-  if (changed) save(lines, marks);
-}
-
-/**
- * Syncs Import Memory as memory sync does a bot's; facts only add up, so a copy two PCs set aside is folded back in whole.
- * A removed line stays removed, and a hand-added line is only a repeat of the same hand line, so it outlives an imported twin.
- */
+/** Syncs Import Memory by keeping every add ID its peers have not explicitly removed. */
 export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?: MemorySyncOptions): Record<string, MemorySyncResult> {
-  markEdits();
-  // a PC that never synced (fresh install) saw no remove, so each line it holds was added after any remove another PC made
-  const fresh = existsSync(lastSyncFile()) ? undefined : parse(readSaved()).lines.map(markOf);
+  const before = readSaved();
+  const local = localEdits(before);
+  // Keep the transport's existing display order when recording IDs for hand edits.
+  save(local, before, true);
   const results = syncBotMemory(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), ledger, options);
   const dir = join(aboutYouDir(), "memory");
   let copies: string[];
@@ -240,34 +303,14 @@ export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?:
   } catch {
     copies = [];
   }
-  if (copies.length) {
+  if (existsSync(aboutYouDir())) {
     const raw = readSaved();
-    const { lines: kept, marks } = parse(raw);
-    const texts = copies.map((name) => parse(readFileSync(join(dir, name), "utf8")));
-    for (const text of texts) for (const [hash, count] of text.marks) marks.set(hash, Math.max(marks.get(hash) ?? 0, count));
-    for (const hash of fresh ?? []) if (removed(marks, hash)) marks.set(hash, marks.get(hash)! + 1);
-    const live = kept.filter((line) => !removed(marks, markOf(line)));
-    // an imported line repeats only its own source's line, so a twin from another source or by hand keeps it
-    const twin = (line: string) => `${TAG.exec(line)?.[1] ?? ""}\n${keyOf(clean(line))}`;
-    const keys = new Set(live.map(twin));
-    const exact = new Set(live);
-    const older: string[] = [];
-    for (const line of texts.flatMap((text) => text.lines)) {
-      if (line.startsWith(SET_ASIDE_NOTE) || exact.has(line) || removed(marks, markOf(line))) continue;
-      if (TAG.test(line) && (!keyOf(clean(line)) || keys.has(twin(line)))) continue;
-      keys.add(twin(line));
-      exact.add(line);
-      older.push(line);
-    }
-    const lines = [...live, ...older];
-    if (render(lines, marks) !== raw) save(lines, marks);
-    // the next pass publishes the merged file and each copy's delete
+    // A newer file version can omit an add ID, for example after the peer's folder was wiped.
+    const merged = fold([parse(raw), ...copies.map((name) => parse(readFileSync(join(dir, name), "utf8"))), local]);
+    save(merged, raw);
     for (const name of copies) rmSync(join(dir, name), { force: true });
-  }
-  // a wiped folder stays absent, so memory sync still restores it; a fresh PC stays fresh until a pass reads its file
-  if (existsSync(aboutYouDir()) && (!fresh || (results["MEMORY.md"] ?? "skipped") !== "skipped")) {
-    const last = `${parse(readSaved()).lines.map(markOf).join("\n")}\n`;
-    if (!existsSync(lastSyncFile()) || readFileSync(lastSyncFile(), "utf8") !== last) writeFileAtomic(lastSyncFile(), last, { mode: 0o600 });
+    const last = render(metadata(merged));
+    if (readSaved(lastSyncFile()) !== last) writeFileAtomic(lastSyncFile(), last, { mode: 0o600 });
   }
   return results;
 }

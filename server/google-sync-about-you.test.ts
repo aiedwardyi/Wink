@@ -261,6 +261,46 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     }
   });
 
+  it("counts a fact listed under two sources once toward the import cap", async () => {
+    const a = makePC("a");
+    const b = makePC("b");
+    const sharedFacts = Array.from({ length: 120 }, (_, i) => `Shared fact ${i}.`);
+    await a.call("seed", { bots: BOTS });
+    await a.call("importMemory", { text: paste("ChatGPT", ...sharedFacts) });
+    await b.call("importMemory", { text: paste("Claude", ...sharedFacts) });
+    await start(a);
+    await start(b);
+    await rounds(4);
+    for (const pc of [a, b]) expect(shown(await pc.aboutYou())).toEqual(["ChatGPT · 120", "Claude · 120"]);
+
+    await a.call("importMemory", { text: many("Gemini", 81) });
+    await rounds(4);
+    for (const pc of [a, b]) {
+      const view = await pc.aboutYou();
+      expect(shown(view)).toEqual(["ChatGPT · 120", "Claude · 120", "Gemini · 80"]);
+      expect(promptFacts(view)).toHaveLength(200);
+    }
+  });
+
+  it("keeps existing facts when a PC imports before its wiped folder is restored", async () => {
+    const a = makePC("a");
+    const b = makePC("b");
+    await a.call("seed", { bots: BOTS });
+    await a.call("importMemory", { text: paste("ChatGPT", "Goes by Dana.", "Lives in Seoul.") });
+    byHand(a, "Allergic to peanuts.");
+    await start(a);
+    await start(b);
+    await rounds(4);
+    expect(facts(await b.aboutYou())).toEqual(["Allergic to peanuts.", "Goes by Dana.", "Lives in Seoul."]);
+
+    rmSync(join(b.dataDir, "about-you"), { recursive: true });
+    await b.call("importMemory", { text: paste("Claude", "Uses a blue pen.") });
+    await rounds(4);
+    for (const pc of [a, b]) {
+      expect(facts(await pc.aboutYou())).toEqual(["Allergic to peanuts.", "Goes by Dana.", "Lives in Seoul.", "Uses a blue pen."]);
+    }
+  });
+
   it("folds nested set-aside copies on three PCs and a quick remove stays removed", async () => {
     const [a, b, c] = [makePC("a"), makePC("b"), makePC("c")];
     await a.call("seed", { bots: BOTS });
