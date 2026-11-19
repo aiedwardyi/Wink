@@ -459,21 +459,29 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     timers.set(threadId, timer);
   }
 
-  async function pull(threadId: string, target = host.target(threadId)): Promise<void> {
-    if (!host.enabled() || !target || host.running(threadId)) return;
-    const task = register(threadId, target);
-    if (!task?.eligible) return;
-    const transport = await client();
-    if (!transport || host.running(threadId)) return;
-    const pulled = await transport.pull(task);
-    if (!host.enabled() || host.folder() !== workerFolder || host.running(threadId)) return;
-    const cursor = task.cursor;
-    const own = ownHead(threadId);
-    await adopt(task);
+  /** `turn` runs each step; the poll passes serial so a send or chat open can go between pages. */
+  async function pull(threadId: string, target = host.target(threadId), turn: <T>(work: () => Promise<T>) => Promise<T> = (work) => work()): Promise<void> {
+    const pulled = await turn(async () => {
+      if (!host.enabled() || !target || host.running(threadId)) return null;
+      const task = register(threadId, target);
+      if (!task?.eligible) return null;
+      const transport = await client();
+      if (!transport || host.running(threadId)) return null;
+      const result = await transport.pull(task);
+      if (!host.enabled() || host.folder() !== workerFolder || host.running(threadId)) return null;
+      return { task, result, cursor: task.cursor, own: ownHead(threadId) };
+    });
+    if (!pulled || !target) return;
+    const { task, cursor, own } = pulled;
+    while (await turn(async () => adoptPage(task))) await new Promise<void>((resolve) => setImmediate(resolve));
+    await turn(async () => finishPull(task, target, cursor, own, pulled.result.heads));
+  }
+
+  function finishPull(task: StoredTask, target: Target, cursor: number, own: string | null | undefined, heads: SyncApplyResult["heads"]): void {
     resolveHeads(task, task.cursor !== cursor, own);
     notifyConflict(task);
     if (task.cursor !== cursor && !room(target)) host.store.applySyncImport(() => host.imported(target.botId));
-    if (host.enabled() && host.folder() === workerFolder) syncHold.pulled(workerFolder!, task, pulled.heads);
+    if (host.enabled() && host.folder() === workerFolder) syncHold.pulled(workerFolder!, task, heads);
   }
 
   function resolveHeads(task: StoredTask, changed: boolean, own: string | null | undefined): void {
@@ -597,14 +605,16 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     schedule(task.threadId);
   }
 
+  function adoptPage(task: StoredTask): boolean {
+    if (!host.enabled() || host.folder() !== workerFolder || host.running(task.threadId)) return false;
+    const more = consume(task, 1);
+    const result = more ? null : engine.applyPending(task);
+    if (!more) consume(task, 1);
+    return more || Boolean(result?.applied);
+  }
+
   async function adopt(task: StoredTask): Promise<void> {
-    while (host.enabled() && host.folder() === workerFolder && !host.running(task.threadId)) {
-      const more = consume(task, 1);
-      const result = more ? null : engine.applyPending(task);
-      if (!more) consume(task, 1);
-      if (!more && !result?.applied) break;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    while (adoptPage(task)) await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
   function unfinished(threadId: string): number {
@@ -679,9 +689,10 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
   }
 
-  async function poll(): Promise<void> {
+  /** Everything up to the pulls; each pull then takes its own turn, so a chat open never waits for the whole filing. */
+  async function poll(): Promise<Array<[string, Target]>> {
     const transport = await client();
-    if (!transport) return;
+    if (!transport) return [];
     for (const threadId of retry) schedule(threadId);
     const pendingMaintenance = host.maintenance();
     if (pendingMaintenance instanceof Promise) await pendingMaintenance;
@@ -698,7 +709,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (host.rooms) for (const target of host.rooms.scopes()) for (const threadId of host.rooms.threads(target.botId)) register(threadId, target);
     tasks.push(...withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store WHERE eligible = 0").all())));
     for (const task of tasks) await migrate(task, true);
-    if (withMessageTransaction((db) => db.prepare("SELECT 1 FROM sync_v2_migration WHERE phase = 'snapshot' AND error IS NULL LIMIT 1").get())) return;
+    if (withMessageTransaction((db) => db.prepare("SELECT 1 FROM sync_v2_migration WHERE phase = 'snapshot' AND error IS NULL LIMIT 1").get())) return [];
     for (const task of tasks) await migrate(task);
     const seen = new Set(tasks.map((task) => task.threadId));
     const pendingTasks = withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare(
@@ -714,12 +725,34 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
     const openThread = host.openThread?.();
     const openTarget = openThread ? host.target(openThread) : null;
-    if (openThread && openTarget) await pull(openThread, openTarget);
+    const work: Array<[string, Target]> = openThread && openTarget ? [[openThread, openTarget]] : [];
     for (const target of [...host.bots(), ...host.rooms?.scopes() ?? []]) {
       for (const threadId of await transport.threads(target.botSyncId)) {
-        if (threadId !== openThread || !openTarget) await pull(threadId, target);
+        if (threadId !== openThread || !openTarget) work.push([threadId, target]);
       }
     }
+    return work;
+  }
+
+  let polls: Promise<unknown> = Promise.resolve();
+  let filing = 0;
+  function pollAll(): Promise<void> {
+    const next = polls.then(async () => {
+      filing = 1;
+      const work = await serial(poll);
+      filing = work.length;
+      while (work.length) {
+        // A chat opened mid-poll, or any chat of its bot, goes next.
+        const open = host.openThread?.() ?? null;
+        const botId = open ? host.target(open)?.botId : undefined;
+        const exact = work.findIndex(([id]) => id === open);
+        const [[threadId, target]] = work.splice(Math.max(0, exact >= 0 ? exact : work.findIndex(([, item]) => item.botId === botId)), 1);
+        await pull(threadId, target, serial);
+        filing -= 1;
+      }
+    }).finally(() => { filing = 0; });
+    polls = next.catch(() => {});
+    return next;
   }
 
   return {
@@ -733,12 +766,14 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       return publish(threadId);
     },
     pull: (threadId: string) => serial(() => pull(threadId)),
-    poll: () => serial(poll),
+    poll: pollAll,
     /** Sends every sealed segment and fresh picture again; files the folder already holds are kept. */
     republish(): void {
       republishChats();
     },
     republishing: () => republishing > 0,
+    /** A poll is still filing chats; true for the whole first poll after a join. */
+    filing: () => filing > 0,
     /** Rebuilds a returning bot's chats from this PC's own sync records. */
     rebuild(botId: string): void {
       const tasks = withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store WHERE botId = ?").all(botId)))
@@ -772,12 +807,12 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     },
     start(): void {
       const moved = followBotIds();
-      void Promise.resolve(host.painted?.()).then(() => serial(poll)).catch(() => {});
+      void Promise.resolve(host.painted?.()).then(pollAll).catch(() => {});
       if (!pollTimer) {
         const tick = wakeClock(THREAD_SYNC_POLL_MS);
         pollTimer = setInterval(() => {
           tick();
-          void serial(poll).catch(() => {});
+          void pollAll().catch(() => {});
         }, THREAD_SYNC_POLL_MS);
         pollTimer.unref?.();
       }

@@ -2574,6 +2574,7 @@ const googleSync = createGoogleSync({
   },
   republishing: () => threadSyncV2?.republishing() ?? false,
   kindsReady: () => googleKindsReady,
+  filing: () => threadSyncV2?.filing() ?? false,
   pull: pullSyncedThread,
   picture: (name) => broadcast({ kind: "picture", name }),
   memory: (botSyncId) => peerMemoryLanded(botSyncId, profileSyncSettings.botMap, (botId) => botHasActiveTurn(botId), syncMemory),

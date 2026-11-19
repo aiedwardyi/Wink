@@ -60,7 +60,7 @@ export interface DriveMirrorSummary {
 
 /** Local md5s by path, trusted while size and mtime hold; outlives one mirror so later passes skip rehashing. */
 export type DriveHashes = Map<string, { size: bigint; mtimeNs: bigint; md5: string }>;
-type Options = { owner: DriveOwner; mirrorPath: string; statePath: string; kindsPath?: string; allowKindRescan?: boolean; ownIds: DriveOwnIds; client: DriveClient; now?: () => number; uploads?: boolean; hashes?: DriveHashes; rateLimit?: { strikes: number }; chatFirst?: boolean; openThread?: string | null; downloaded?: (path: string) => void; behind?: (paths: ReadonlySet<string>) => void; listed?: (files: ReadonlyMap<string, readonly DriveFile[]> | null) => void };
+type Options = { owner: DriveOwner; mirrorPath: string; statePath: string; kindsPath?: string; allowKindRescan?: boolean; ownIds: DriveOwnIds; client: DriveClient; now?: () => number; uploads?: boolean; hashes?: DriveHashes; rateLimit?: { strikes: number }; chatFirst?: boolean; chatsLater?: boolean; openThread?: string | null; downloaded?: (path: string) => void; behind?: (paths: ReadonlySet<string>) => void; listed?: (files: ReadonlyMap<string, readonly DriveFile[]> | null) => void };
 const passes = new Set<string>();
 const samePath = (a: string, b: string) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 const md5 = (bytes: Uint8Array) => createHash("md5").update(bytes).digest("hex");
@@ -684,8 +684,13 @@ export function createDriveMirror(options: Options) {
       if (behind.delete(path)) options.behind?.(behind);
     };
     let stopped = false;
+    let deferred = false;
     async function one(path: string): Promise<void> {
       await breathe();
+      if (options.chatsLater && (chatPart(path) || path.startsWith("pictures/"))) {
+        deferred = true;
+        return;
+      }
       if (!needsWork(path)) { summary.skipped.push(path); landed(path); return; }
       try {
         await syncPath(path);
@@ -788,7 +793,8 @@ export function createDriveMirror(options: Options) {
     }
     function remember(token: string): void {
       if (summary.retryAfterMs !== null || !token) return;
-      if (summary.failed.length > 0) {
+      // A pass that left files for later keeps no cursor, so the next pass lists them again.
+      if (summary.failed.length > 0 || deferred) {
         if (table!.changeToken !== undefined) {
           delete table!.changeToken;
           save();

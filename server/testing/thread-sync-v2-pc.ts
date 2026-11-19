@@ -122,9 +122,11 @@ ThreadSyncV2.prototype.flush = function (scope, crash, through) {
   return originalFlush.call(this, scope, crash, through);
 };
 const originalPull = ThreadSyncV2.prototype.pull;
-ThreadSyncV2.prototype.pull = function (scope) {
+let pullDelay = 0;
+ThreadSyncV2.prototype.pull = async function (scope) {
   transports.add(this);
   pulls.push(scope.threadId);
+  if (pullDelay) await new Promise((done) => setTimeout(done, pullDelay));
   return originalPull.call(this, scope);
 };
 if (input.writer) {
@@ -170,6 +172,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         break;
       case "live": live = Boolean(args.value); startAt = Infinity; break;
       case "open": openThread = threadId; break;
+      case "slowPulls": pullDelay = args.at ?? 0; break;
       case "clock": mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: Date.now() }); break;
       case "start": sync?.start(); await sync?.poll(); break;
       case "tick": mock.timers.tick(args.at ?? 0); await sync?.poll(); break;

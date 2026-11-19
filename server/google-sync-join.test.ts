@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,7 +19,7 @@ interface LocalBot { id: string; syncId: string; name: string; talked: boolean; 
 interface Fault { match: (method: string, url: URL) => boolean; skip: number; reply: () => Response; hits: number }
 interface PC {
   name: string; dataDir: string; deviceId: string; account: GoogleAccount; sync: GoogleSync; ledger: MemorySyncLedger;
-  bots: LocalBot[]; folder: string | null; workspaceId: string; sequence: number; activations: Array<string | null>; fault: Fault | null;
+  bots: LocalBot[]; folder: string | null; workspaceId: string; sequence: number; activations: Array<string | null>; chatsAtActivation: boolean[]; filing: boolean; fault: Fault | null;
 }
 
 type Booting = Omit<PC, "sync"> & { sync?: GoogleSync };
@@ -58,8 +58,10 @@ function boot(pc: Booting): GoogleSync {
     prepare: () => void ensureMemorySyncDevice(pc.ledger),
     ownIds: () => ({ profileDeviceId: pc.deviceId, writerId: `writer-${pc.name}`, memoryDeviceId: pc.ledger.device! }),
     unusedBots: () => pc.bots.filter((item) => !item.talked).map((item) => item.id),
+    filing: () => pc.filing,
     activate: (mirror) => {
       pc.activations.push(existsSync(join(mirror, "workspace.json")) ? readFileSync(join(mirror, "workspace.json"), "utf8") : null);
+      pc.chatsAtActivation.push(existsSync(join(mirror, "threads-v2")) || existsSync(join(mirror, "pictures")));
       pc.folder = mirror;
       pc.workspaceId = loadOrCreateSyncWorkspace(mirror, pc.workspaceId);
       publish(pc);
@@ -86,7 +88,7 @@ function makePC(name: string, bots: LocalBot[]): PC {
   const dataDir = join(root, name);
   mkdirSync(dataDir, { recursive: true });
   const base: Booting = {
-    name, dataDir, deviceId: `device-${name}`, ledger: { bots: {} }, bots, folder: null, workspaceId: randomUUID(), sequence: 1, activations: [], fault: null,
+    name, dataDir, deviceId: `device-${name}`, ledger: { bots: {} }, bots, folder: null, workspaceId: randomUUID(), sequence: 1, activations: [], chatsAtActivation: [], filing: false, fault: null,
     account: new GoogleAccount(CLIENT, null, { fetch: tokenFetch, log: () => {} }),
   };
   const pc: PC = Object.assign(base, { sync: boot(base) });
@@ -127,6 +129,48 @@ beforeEach(() => {
 afterEach(() => {
   for (const pc of pcs) pc.sync.stop();
   rmSync(root, { recursive: true, force: true });
+});
+
+/** Home uploads one bot, one chat and one picture; work, with no bots of its own, taps Start. */
+async function joinWithChats() {
+  const home = makePC("home", [bot("Counsel")]);
+  await startOn(home);
+  const chat = join(home.folder!, "threads-v2", "bot-1", "thread-1", "writer-home");
+  mkdirSync(chat, { recursive: true });
+  writeFileSync(join(chat, "seg-1-1.json.gz"), "segment");
+  writeFileSync(join(chat, "head.json"), "{}");
+  mkdirSync(join(home.folder!, "pictures"));
+  writeFileSync(join(home.folder!, "pictures", "a1.png"), "png");
+  await settle(home);
+  const work = makePC("work", []);
+  work.account.setSession(A);
+  await work.sync.read();
+  await work.sync.start();
+  return work;
+}
+
+describe("Google sync first join", { timeout: 60_000 }, () => {
+  it("hands the bots to the engines before chat history lands, then fills in the chats", async () => {
+    const work = await joinWithChats();
+    await work.sync.idle();
+    expect(work.chatsAtActivation).toEqual([false]);
+    expect(botNames(work.folder!)).toEqual(["Counsel"]);
+    expect(existsSync(join(work.folder!, "threads-v2", "bot-1", "thread-1", "writer-home", "head.json"))).toBe(true);
+    expect(existsSync(join(work.folder!, "pictures", "a1.png"))).toBe(true);
+  });
+
+  it("marks the first sync until this PC has caught up once", async () => {
+    const work = await joinWithChats();
+    work.filing = true;
+    expect(work.sync.status()).toMatchObject({ state: "joining", firstSync: true });
+    await work.sync.idle();
+    expect(work.sync.status()).toMatchObject({ state: "up-to-date", firstSync: true, finishing: true });
+    work.filing = false;
+    expect(work.sync.status().firstSync).toBeUndefined();
+    work.filing = true;
+    await settle(work);
+    expect(work.sync.status().firstSync).toBeUndefined();
+  });
 });
 
 describe("Google sync join under Drive errors", { timeout: 60_000 }, () => {

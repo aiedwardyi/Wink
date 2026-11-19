@@ -514,6 +514,79 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     expect((await a.snapshot()).historyScans).toBe(first.historyScans);
   });
 
+  it("answers a chat open while the first poll is still filing other chats", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const c = pc(folder, "c");
+    const threads = Array.from({ length: 20 }, (_, i) => `t${String(i).padStart(2, "0")}`);
+    for (const threadId of threads) {
+      await a.call("seed", { threadId });
+      await a.call("append", { threadId, text: threadId });
+      await a.call("flush", { threadId });
+    }
+    await c.call("poll");
+    for (const threadId of threads) {
+      await a.call("append", { threadId, text: `${threadId} new` });
+      await a.call("flush", { threadId });
+    }
+    await c.call("slowPulls", { at: 50 });
+    let filed = false;
+    const poll = c.call("poll").then(() => { filed = true; });
+    await delay(150);
+    await c.call("pull", { threadId: "t19" });
+    expect(filed).toBe(false);
+    expect((await c.call<Snapshot>("snapshot", { threadId: "t19" })).rows.map((row) => row.text)).toEqual(["t19", "t19 new"]);
+    await poll;
+  });
+
+  it("lets a send's pull through between pages of a big chat being filed", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const c = pc(folder, "c");
+    for (const threadId of ["big", "small"]) {
+      await a.call("seed", { threadId });
+      await a.call("append", { threadId, text: threadId });
+      await a.call("flush", { threadId });
+    }
+    await c.call("poll");
+    await a.call("batch", { threadId: "big", count: 4000 });
+    await a.call("flush", { threadId: "big" });
+    await a.call("append", { threadId: "small", text: "small new" });
+    await a.call("flush", { threadId: "small" });
+    await c.call("open", { threadId: "big" });
+    const poll = c.call("poll");
+    await vi.waitFor(async () => expect((await c.call<Snapshot>("snapshot", { threadId: "big" })).rows.length).toBeGreaterThan(1), { timeout: 30_000, interval: 5 });
+    await c.call("pull", { threadId: "small" });
+    expect((await c.call<Snapshot>("snapshot", { threadId: "big" })).rows.length).toBeLessThan(4001);
+    expect((await c.call<Snapshot>("snapshot", { threadId: "small" })).rows.map((row) => row.text)).toEqual(["small", "small new"]);
+    await poll;
+  });
+
+  it("files a chat opened mid-poll next, before the rest of the queue", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const c = pc(folder, "c");
+    const threads = Array.from({ length: 20 }, (_, i) => `t${String(i).padStart(2, "0")}`);
+    for (const threadId of threads) {
+      await a.call("seed", { threadId });
+      await a.call("append", { threadId, text: threadId });
+      await a.call("flush", { threadId });
+    }
+    await c.call("poll");
+    for (const threadId of threads) {
+      await a.call("append", { threadId, text: `${threadId} new` });
+      await a.call("flush", { threadId });
+    }
+    await c.call("slowPulls", { at: 50 });
+    await c.snapshot();
+    const poll = c.call("poll");
+    await delay(150);
+    await c.call("open", { threadId: "t19" });
+    await poll;
+    const pulls = (await c.snapshot()).pulls;
+    expect(pulls.indexOf("t19")).toBeLessThan(pulls.indexOf("t10"));
+  });
+
   it("polls the most recently opened thread first, once per poll", async () => {
     const a = pc(temp(), "a");
     await a.call("clock");
