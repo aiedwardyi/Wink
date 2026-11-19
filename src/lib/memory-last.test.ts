@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from "vitest";
 
+import { noteMemoryFrame } from "./memory-clean-events";
 import { lastMemory, MEMORY_LAST_KEY, MEMORY_LAST_MAX_CHARS, rememberMemory } from "./memory-last";
 
 const shown = (text: string) => ({ text, truncated: false, topics: [{ name: "prefs.md", bytes: 3 }] });
@@ -24,6 +25,17 @@ describe("last memory read", () => {
     expect(lastMemory("b")?.text).toBe(big);
     expect(lastMemory("c")?.text).toBe(big);
     expect(localStorage.getItem(MEMORY_LAST_KEY)!.length).toBeLessThanOrEqual(MEMORY_LAST_MAX_CHARS);
+  });
+
+  it("drops a bot's copy when its memory changes elsewhere or Auto Notes saves", () => {
+    const state = { hydrated: true, bots: [{ id: "a", threadId: "t-a" }, { id: "b", threadId: "t-b" }] };
+    rememberMemory("a", shown("- one"));
+    rememberMemory("b", shown("- two"));
+    noteMemoryFrame({ kind: "memory.changed", botId: "a" }, state);
+    expect(lastMemory("a")).toBeNull();
+    expect(lastMemory("b")).toEqual(shown("- two"));
+    noteMemoryFrame({ kind: "message", threadId: "t-b", message: { id: "m1", tool: { name: "memory.save" } } }, state);
+    expect(lastMemory("b")).toBeNull();
   });
 
   it("reads nothing from a store it cannot parse", () => {

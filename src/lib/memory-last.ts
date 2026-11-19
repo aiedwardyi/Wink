@@ -36,7 +36,24 @@ export function lastMemory(botId: string): MemoryShown | null {
 }
 
 export function rememberMemory(botId: string, { text, truncated, topics }: MemoryShown): void {
-  const entries = [{ botId, text, truncated, topics: topics.map(({ name, bytes }) => ({ name, bytes })) }, ...read().filter((each) => each.botId !== botId)];
+  store([{ botId, text, truncated, topics: topics.map(({ name, bytes }) => ({ name, bytes })) }, ...read().filter((each) => each.botId !== botId)]);
+}
+
+/** A save from this page: the kept copy takes its text, so the next open never paints the text from before it. */
+export function keepSaved(botId: string, text: string, truncated: boolean): void {
+  const entries = read();
+  const found = entries.find((each) => each.botId === botId);
+  if (!found) return;
+  store(entries.map((each) => (each === found ? { ...each, text, truncated } : each)));
+}
+
+/** Memory changed somewhere this page did not write, or the bot is gone. */
+export function forgetMemory(botId: string): void {
+  const entries = read();
+  if (entries.some((each) => each.botId === botId)) store(entries.filter((each) => each.botId !== botId));
+}
+
+function store(entries: z.infer<typeof entrySchema>[]): void {
   let json = JSON.stringify(entries);
   while (entries.length && json.length > MEMORY_LAST_MAX_CHARS) {
     entries.pop();
