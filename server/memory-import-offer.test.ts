@@ -66,6 +66,22 @@ describe("new bot import offer", () => {
     expect(read).toBeLessThan(10);
   });
 
+  it("ends the reply with the fixed 3-step offer, saying to paste in the other AI's own app, not Wink", () => {
+    const steps = (note: string) => note.slice(note.indexOf("Offer only in this reply.") + 25, note.indexOf("```text")).trim();
+    expect(steps(importOfferNote())).toBe([
+      "Want me to know what ChatGPT, Claude, Gemini, Grok or Muse already knows about you? It takes a minute:",
+      "1. Copy the prompt in the box below.",
+      "2. Paste it into that AI, on its own app or website (not here in Wink).",
+      "3. Copy its answer and paste it back here.",
+    ].join("\n"));
+    expect(importOfferNote()).toContain("word for word");
+    noteSendLocale("ko");
+    const ko = steps(importOfferNote());
+    expect(ko.split("\n").map((line) => line.slice(0, 3))).toEqual([ko.slice(0, 3), "1. ", "2. ", "3. "]);
+    expect(ko).toContain("ChatGPT, Claude, Gemini, Grok, Muse가");
+    expect(ko).toContain("(여기 Wink 말고요)");
+  });
+
   it("asks for the exact Settings prompt in the user's language", () => {
     expect(importOfferNote()).toContain(`\`\`\`text\n${en["aboutYou.prompt"]}\n\`\`\``);
     noteSendLocale("ko");
