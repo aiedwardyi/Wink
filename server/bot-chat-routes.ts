@@ -19,6 +19,7 @@ import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
 import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
+import { isOrder } from "./quick-route.ts";
 import { composeUserTurnPrompt, promptWithReply, replyExcerpt, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -155,6 +156,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     let dropped = false;
     let recorded = false;
     let callRow: Message | undefined;
+    // the reply beside a covered order promises it, so a late drop requeues it like a call
+    const requeues = Boolean(call) || Boolean(covered && isOrder(text));
     let peerInput: ReturnType<typeof beginPeerUserReply>;
     // a held switch: the adapter is still the old turn's engine, so this send queues for the chip's model
     if (!switchHeld(bot) && steersSend(adapter, bot.busy, after)) {
@@ -184,8 +187,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           else dropped = true;
         }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
         .catch(() => false);
-      // an ask or call send the engine already dropped goes once down the idle or queue path
-      if ((ask || call) && dropped) steered = false;
+      // an ask, call or promised order the engine already dropped goes once down the idle or queue path
+      if ((ask || requeues) && dropped) steered = false;
       if (!steered) peerInput?.cancel();
     }
     // steer() is awaited adapter work. The turn can settle, the task can
@@ -232,7 +235,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           answersCard,
           actedAt,
         });
-      if (call) callRow = message;
+      if (requeues) callRow = message;
       peerInput?.accept(message);
       cancelUsageWait?.(bot.id, undefined, true);
       markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
@@ -286,8 +289,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     };
     void ackQuick({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent)
       .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`))
-      .then(async () => {
-        const current = owed();
+      .then(async (settled) => {
+        const current = !settled && owed();
         if (!current) return;
         const note = ackMissed(sent.text ?? "");
         const adapter = instanceForBot(current, threadId)?.adapter;

@@ -283,6 +283,52 @@ describe("quick route", () => {
     expect(h.steer.mock.calls[0]![1]).toContain("also update the docs when you are done");
   });
 
+  it.each([false, true])("queues a promised order once when its steer comes back unread, stopped: %s", async (stopped) => {
+    const h = harness({ consumed: true });
+    const drops: Array<(taken: boolean) => void> = [];
+    h.steer.mockImplementation(async (_threadId, _text, consumed) => {
+      if (consumed) drops.push(consumed);
+      return true;
+    });
+    const text = "also update the docs when you are done";
+    expect((await h.send({ text })).data.steered).toBe(true);
+    await vi.waitFor(() => expect(drops).toHaveLength(2));
+    if (stopped) await h.stop();
+    drops.forEach((drop) => drop(false));
+    drops[0]!(false);
+    h.store.setActivity(h.bot.id, "idle");
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(botLines(h).slice(-1)).toEqual(["Got it, one moment while I finish this step, then I'll do it."]);
+    expect(h.rows().filter((row) => row.text === text)).toHaveLength(1);
+    if (stopped) return expect(run).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]![2]).toContain(text);
+  });
+
+  it("asks for no second reply when the bot's final reply already answered the send", async () => {
+    const h = harness({ consumed: true, result: { route: "answer", text: "Yes, Windows is supported.", ms: 20 } });
+    await h.send({ text: "Does it support Windows, please?" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Yes, Windows is supported." });
+    h.store.setActivity(h.bot.id, "idle");
+    await h.settled();
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(run).not.toHaveBeenCalled();
+    expect(botLines(h)).toEqual(["Yes, Windows is supported."]);
+  });
+
+  it("still asks the bot once for a line when its turn ended with none and the helper had none", async () => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 20 } });
+    await h.send({ text: "Does it support Windows, please?" });
+    h.store.setActivity(h.bot.id, "idle");
+    await h.settled();
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]![2]).toMatch(/No fast reply reached the person for "Does it support Windows, please\?"/);
+  });
+
   it("leaves a send in a peer-watched turn to the bot's own tagged line, with no reply beside it", async () => {
     const h = harness({ result: { route: "answer", text: "Got it, switching.", ms: 4 } });
     const end = watchPeerTurn(h.bot.threadId);

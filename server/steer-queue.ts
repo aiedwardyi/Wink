@@ -338,8 +338,8 @@ export function queuedRoomBotIds(groupId: string, threadId: string): string[] {
     .map((entry) => entry.botId);
 }
 
-// a queued quick handoff's ask row, or a requeued call row, already shows this line
-const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || Boolean(message.call?.order || message.call?.ask));
+// a queued quick handoff's ask row, or a requeued call or promised order row, already shows this line
+const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || message.queued === true || Boolean(message.call?.order || message.call?.ask));
 
 function isRoomItem(item: QueueItem): item is RoomItem {
   return item.kind === "room";
