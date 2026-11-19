@@ -113,6 +113,7 @@ import { useArrivalGlow } from "@/lib/arrival-glow";
 import { BoardButton } from "./BoardButton";
 import { DeviceSwitcher } from "./DeviceSwitcher";
 import { BrandMark } from "./BrandMark";
+import { SyncingBotsLine } from "./SyncingBotsLine";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -1782,6 +1783,12 @@ export function Sidebar({
 
       {/* Bot list */}
       <div ref={touchListRef} data-sidebar-list className={cn("min-w-0 flex-1 overflow-x-hidden overflow-y-auto", density === "icons" ? "px-0" : "px-2")}>
+        {density !== "icons" && (
+          <SyncingBotsLine
+            recheck={`${state.appSettingsOpen}:${state.bots.length}`}
+            onOpen={() => dispatch({ type: "toggleAppSettings", open: true, section: "account" })}
+          />
+        )}
         <div className="flex flex-col gap-0.5">
           {matchingBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">{t("palette.noMatch", { query })}</div>

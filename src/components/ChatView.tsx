@@ -46,6 +46,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
+import { useFirstSync, useOpenWhileSyncing } from "@/lib/use-first-sync";
 import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
@@ -703,6 +704,8 @@ const MessagesList = memo(function MessagesList({
   const streamedPeerReply = streamingMessage?.text?.trim() ? pendingPeerReply : undefined;
   const { pictured, tailPictures } = useMemo(() => picturedReplies(transcript), [transcript]);
   const idleAfterOnboarding = useMemo(() => transcriptIdleAfterOnboarding(transcript), [transcript]);
+  const bringingOver = useFirstSync(bot.threadId) !== null && idleAfterOnboarding;
+  useOpenWhileSyncing(bot.threadId, bringingOver);
   // the first user text after each bot reply, for its option chips
   const laterAnswers = useMemo(() => {
     const answers = new Map<string, string>();
@@ -745,7 +748,7 @@ const MessagesList = memo(function MessagesList({
             inputClassName="rounded bg-inset px-1.5 py-0.5 text-center text-[17px] font-semibold"
           />
           <div className="max-w-[360px] text-[14px] text-ink-secondary">
-            {bot.description || t("chat.startConversation")}
+            {bringingOver ? t("chat.bringingOver") : bot.description || t("chat.startConversation")}
           </div>
         </div>
       )}
