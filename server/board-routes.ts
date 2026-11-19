@@ -40,7 +40,8 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       if (!from) return json(res, 403, { error: "unknown sender" });
       const body = searchSchema.safeParse(await readBody(req));
       if (!body.success) return json(res, 400, { error: "board_search needs a query" });
-      const posts = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId) });
+      const room = deps.roomTurn(from);
+      const posts = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId), ...(room ? { roomThread: from.threadId } : {}) });
       return json(res, 200, { count: posts.length, text: posts.length ? posts.map((post) => boardLine(post)).join("\n\n") : "No Board posts match." });
     },
     async post(req: IncomingMessage, res: ServerResponse) {

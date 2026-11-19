@@ -45,16 +45,16 @@ function harness(options: Partial<ConstructorParameters<typeof LimitWaits>[0]> =
 it.each(["linux", "darwin"] as const)("H2: only promises a Claude resume when the %s usage read can run", async (platform) => {
   vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "");
   const environment = platform === "linux" ? { CLAUDE_CODE_OAUTH_TOKEN: "fake-token" } : {};
-  const request = vi.fn(async () => Response.json({ five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 20, resets_at: null } }));
+  const claude = vi.fn(async () => [{ id: "five_hour", usedPercent: 0, resetsAt: null }, { id: "seven_day", usedPercent: 20, resetsAt: null }]);
   const h = harness({ canRead: () => platform !== "darwin" || Boolean(environment.CLAUDE_CODE_OAUTH_TOKEN) });
-  const refresh = createUsageRefresh({ platform, request: request as typeof fetch, now: () => h.state.now });
+  const refresh = createUsageRefresh({ platform, claude, now: () => h.state.now });
   h.usage.mockImplementation(() => refresh("claudeAgent", { instanceId: "claude", environment }));
   const row = h.arm();
   expect(h.waits.view(row).state).toBe(platform === "darwin" ? "manual" : "waiting");
   h.state.now = row.nextCheckAt;
   await h.waits.tick();
   expect(h.dispatch).toHaveBeenCalledTimes(platform === "darwin" ? 0 : 1);
-  expect(request).toHaveBeenCalledTimes(platform === "darwin" ? 0 : 1);
+  expect(claude).toHaveBeenCalledTimes(platform === "darwin" ? 0 : 1);
 });
 
 it("H2: moves an existing wait to manual if its usage reader becomes unavailable", async () => {

@@ -95,6 +95,8 @@ describe("one workers list", () => {
     expect(menu()?.querySelector("h2")?.textContent).toBe("Scout's workers");
     expect(document.querySelectorAll("[data-worker-list]")).toHaveLength(1);
     expect(document.querySelector('[data-side-panel] [role="tab"][aria-selected="true"]')?.textContent).toBe("Workers");
+    expect(strip()?.classList.contains("md:hidden")).toBe(true);
+    expect(document.querySelector("[data-side-panel] [data-show-pane-button] [data-worker-badge]")?.textContent).toBe("1");
   });
 });
 

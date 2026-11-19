@@ -97,7 +97,7 @@ export const KEPT_LIMITS: Limits = {
   "server/summary-build.ts": { MAX_BUILD_RUNS: AUTO },
   "server/summary-repair.ts": { MAX_REPAIR_RUNS: AUTO, MAX_REPAIR_BATCHES: AUTO },
   "server/task-asks.ts": {
-    MAX_STATUS_ASKS_BYTES: "Crash: a status turn lists every open ask; past this size the rest show as +N more open, so the turn fits the model's input. Nothing is refused or dropped.",
+    MAX_STATUS_ASKS_BYTES: "Crash: bots see every open ask, so the turn must still fit the model's input; past this size the least recently shown go first and the header counts the rest for the next turn. Nothing is refused or dropped.",
   },
   "server/team-library.ts": { MAX_CATALOG_BYTES: OUTSIDER, MAX_MANIFEST_BYTES: OUTSIDER },
   "server/thread-events.ts": { MAX_LIMIT: FILE, MAX_TAIL_BYTES: FILE },
@@ -147,8 +147,8 @@ export const PROMPT_WORDING: Limits = {
   "server/drivers/team-report-tool.ts": { "at most eight": PROMPT },
   "server/index.ts": { "at most one short activity line": PROMPT },
   "server/live-call.ts": { "two at most": PROMPT, "in at most two short sentences": PROMPT },
-  "server/memory-pass.ts": { "At most ": PROMPT },
   "server/side-chat.ts": { "at most 3 Read, Glob or Grep": PROMPT },
+  "server/task-asks.ts": { "ask the user about at most 3": PROMPT },
   "server/team-report-evidence.ts": { "(at most 8)": PROMPT },
   "server/verify-doc-text.ts": { "at most 8 words": PROMPT, "At most 12 findings": PROMPT },
   "server/verify-message.ts": { "at most twice": PROMPT },

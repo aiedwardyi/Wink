@@ -130,9 +130,9 @@ export const pending = (store: Pick<Store, "activePath">, threadId: string, ask:
   store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && !row.steered && row.quick?.state !== "handoff");
 
 /** The ask as the bot's ordinary next turn in its own thread, else the failed-send row. */
-function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message): void {
+export function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message, prompt?: string): void {
   try {
-    const queued = queueSteeredMessage(botId, threadId, ask.text ?? "");
+    const queued = queueSteeredMessage(botId, threadId, ask.text ?? "", { prompt });
     store.patchRow(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
   } catch (error) {
     store.patchRow(threadId, ask.id, { quick: undefined });
@@ -218,7 +218,7 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
         stopped.add(row.id);
         // a stopped ask reads as handed off, so it is neither pending nor recovered
         store.patchMessage(threadId, row.id, { quick: { state: "handoff" } });
-      } else if (turn && row.steered && (row.quick?.state === "handoff" || row.call?.order || row.call?.ask)) stopped.add(row.id);
+      } else if (turn && row.steered) stopped.add(row.id);
     }
   }
 }
