@@ -51,7 +51,7 @@ describe("TimelinePane demo", () => {
     const keyed = sheet().style.transform;
     expect(keyed).not.toBe(wheeled);
 
-    // happy-dom drops ctrlKey and clientX/Y from the WheelEvent init
+    // happy-dom ignores ctrlKey/clientX/clientY in WheelEventInit (gap vs. spec); patch them in by hand
     const zoomEvent = new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true });
     for (const [key, value] of Object.entries({ ctrlKey: true, clientX: 100, clientY: 100 })) Object.defineProperty(zoomEvent, key, { value });
     const before = canvas().querySelector(".timeline-hint b")!.textContent;
