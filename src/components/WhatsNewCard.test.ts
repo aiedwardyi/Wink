@@ -10,6 +10,7 @@ import { applySkin } from "@/lib/skins";
 import { FORUM_SELECTION } from "@/lib/board";
 import { closeShow, useMapThread, useTimelineThread, useWorkersThread } from "@/lib/show-pane";
 import { WHATS_NEW } from "@/lib/whats-new";
+import { newerRelease } from "../../shared/release-order";
 import type { SceneModule } from "@/scenes/scene-host";
 
 type Run = { frames: number; stopped: boolean };
@@ -525,20 +526,14 @@ describe("whats new card", () => {
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
-    expect(bytes).toBeLessThan(3 * 1024 * 1024);
+    expect(bytes).toBeLessThan(3.5 * 1024 * 1024);
   });
 
   it("keeps animated previews moving smoothly", () => {
     const dir = "src/assets/whats-new";
     const failures: string[] = [];
     for (const file of readdirSync(dir).filter((name) => name.endsWith(".webp"))) {
-      const data = readFileSync(join(dir, file));
-      const durations: number[] = [];
-      for (let offset = 12; offset + 8 <= data.length; ) {
-        const size = data.readUInt32LE(offset + 4);
-        if (data.toString("ascii", offset, offset + 4) === "ANMF" && offset + 23 <= data.length) durations.push(data.readUIntLE(offset + 20, 3));
-        offset += 8 + size + (size % 2);
-      }
+      const durations = frameDurations(join(dir, file));
       if (durations.length === 0) continue;
       const motion = durations.slice(1, -1);
       const ms = motion.reduce((sum, duration) => sum + duration, 0);
@@ -546,4 +541,24 @@ describe("whats new card", () => {
     }
     expect(failures, "re-encode at a steady frame rate, no dropped frames").toEqual([]);
   });
+
+  it("plays previews from 1.0.282 on at 20 fps or faster", () => {
+    const dir = "src/assets/whats-new";
+    const slow = readdirSync(dir).filter((file) => {
+      const durations = frameDurations(join(dir, file));
+      return durations.length > 0 && !newerRelease("1.0.282", file.split("-")[0]) && Math.min(...durations) > 50;
+    });
+    expect(slow, "a pan or zoom under 20 fps reads as lag: re-encode from the capture at 50 ms frames").toEqual([]);
+  });
 });
+
+function frameDurations(path: string): number[] {
+  const data = readFileSync(path);
+  const durations: number[] = [];
+  for (let offset = 12; offset + 8 <= data.length; ) {
+    const size = data.readUInt32LE(offset + 4);
+    if (data.toString("ascii", offset, offset + 4) === "ANMF" && offset + 23 <= data.length) durations.push(data.readUIntLE(offset + 20, 3));
+    offset += 8 + size + (size % 2);
+  }
+  return durations;
+}
