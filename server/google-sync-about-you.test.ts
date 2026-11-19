@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -113,7 +113,16 @@ const byHand = (pc: PC, fact: string) => {
   appendFileSync(memoryFile(pc), `- ${fact}
 `);
 };
+// the PC whose file was edited last wins a merge
+const age = (pc: PC, secondsAgo: number) => {
+  const at = new Date(Date.now() - secondsAgo * 1000);
+  utimesSync(memoryFile(pc), at, at);
+};
+const handFacts = (view: AboutYouView) => view.sources.find(({ source }) => !source)?.facts ?? [];
+const promptFacts = (view: AboutYouView) => view.prompt.split("\n").filter((line) => line.startsWith("- "));
 const many = (source: string, n: number) => paste(source, ...Array.from({ length: n }, (_, i) => `${source} fact number ${i + 1}.`));
+// the file every bot reads and this PC's list of what it last synced, with no copy waiting
+const ALONE = ["MEMORY.md", "MEMORY.synced"];
 const shown = (view: AboutYouView) => view.sources.map(({ source, facts }) => `${source} · ${facts.length}`).sort();
 
 beforeEach(() => {
@@ -177,7 +186,7 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
       const view = await pc.aboutYou();
       expect(shown(view).filter((line) => /Gemini|Grok/.test(line))).toEqual(["Gemini · 1", "Grok · 1"]);
       expect(facts(view)).toEqual(["Drinks tea.", "Goes by Dana.", "Lives in Seoul.", "Runs at dawn.", "Writes TypeScript."]);
-      expect(view.files).toEqual(["MEMORY.md"]);
+      expect(view.files).toEqual(ALONE);
     }
     expect((await b.aboutYou()).sources).toEqual((await a.aboutYou()).sources);
   });
@@ -201,12 +210,12 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
       expect(facts(view)).toEqual(["Allergic to peanuts.", "Bikes to work.", "Goes by Dana.", "Has a cat named Miso.", "Plays the cello.", "Writes TypeScript."]);
       expect(view.prompt).toContain("- Allergic to peanuts.\n");
       expect(view.prompt).toContain("- Bikes to work.\n");
-      expect(view.files).toEqual(["MEMORY.md"]);
+      expect(view.files).toEqual(ALONE);
     }
     expect(saved(b)).toBe(saved(a));
   });
 
-  // two PCs with 150 facts each meet: one file wins, the other is set aside and folded up to the cap
+  // two PCs with 150 facts each meet: the Memory page lists all 300, the prompt the newest 200
   async function bigMerge(): Promise<{ a: PC; b: PC; first: string; second: string }> {
     const a = makePC("a");
     const b = makePC("b");
@@ -219,41 +228,36 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     const kept = saved(a);
     expect(saved(b)).toBe(kept);
     const [first, second] = kept.startsWith("- ChatGPT") ? ["ChatGPT", "Claude"] : ["Claude", "ChatGPT"];
-    // the same two imports on one PC: the second stops at the cap
-    const one = makePC("one");
-    await one.call("importMemory", { text: many(first, 150) });
-    await one.call("importMemory", { text: many(second, 150) });
-    expect(kept).toBe(saved(one));
-    expect(kept.trim().split("\n")).toHaveLength(200);
     for (const pc of [a, b]) {
       const view = await pc.aboutYou();
-      expect(shown(view)).toEqual([`${first} · 150`, `${second} · 50`].sort());
-      expect(view.files).toHaveLength(2);
-      const copy = readFileSync(join(pc.dataDir, "about-you", view.files.find((name) => name !== "MEMORY.md")!), "utf8");
-      expect(copy.split("\n").filter((line) => line.startsWith(`- ${second} fact`))).toHaveLength(100);
+      expect(shown(view)).toEqual([`${first} · 150`, `${second} · 150`].sort());
+      expect(view.files).toEqual(ALONE);
+      const prompt = promptFacts(view);
+      expect(prompt).toHaveLength(200);
+      expect(prompt.filter((line) => line.startsWith(`- ${second} fact`))).toHaveLength(150);
     }
     return { a, b, first, second };
   }
 
-  it("merges two big files up to the import cap as one PC's import would, and folds the rest in once there is room", async () => {
+  it("merges two big files whole, and the prompt takes in the rest once there is room", async () => {
     const { a, b, first, second } = await bigMerge();
     await a.call("forgetMemory", { text: first });
     await rounds(4, [a, b]);
     for (const pc of [a, b]) {
       const view = await pc.aboutYou();
       expect(shown(view)).toEqual([`${second} · 150`]);
-      expect(view.files).toEqual(["MEMORY.md"]);
+      expect(view.files).toEqual(ALONE);
     }
   });
 
-  it("a source removed while some of its facts wait for room does not come back", async () => {
+  it("a source removed past the cap does not come back", async () => {
     const { a, b, first, second } = await bigMerge();
     await b.call("forgetMemory", { text: second });
     await rounds(4, [a, b]);
     for (const pc of [a, b]) {
       const view = await pc.aboutYou();
       expect(shown(view)).toEqual([`${first} · 150`]);
-      expect(view.files).toEqual(["MEMORY.md"]);
+      expect(view.files).toEqual(ALONE);
     }
   });
 
@@ -276,7 +280,7 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     for (const pc of [a, b, c]) {
       const view = await pc.aboutYou();
       expect(facts(view)).toEqual(all);
-      expect(view.files).toEqual(["MEMORY.md"]);
+      expect(view.files).toEqual(ALONE);
     }
     expect(drivePaths().filter((path) => path.startsWith("memory-v2/about-you/"))).toHaveLength(3);
 
@@ -288,10 +292,144 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     for (const pc of [a, b, c]) {
       const view = await pc.aboutYou();
       expect(facts(view)).toEqual(all.filter((fact) => !/Dana|Seoul/.test(fact)));
-      expect(view.files).toEqual(["MEMORY.md"]);
+      expect(view.files).toEqual(ALONE);
     }
     expect(saved(b)).toBe(saved(a));
     expect(saved(c)).toBe(saved(a));
+  });
+
+  for (const fullWins of [true, false]) {
+    it(`lists every fact on both PCs when a full file meets a small one and ${fullWins ? "wins" : "loses"}; the prompt keeps the hand line`, async () => {
+      const a = makePC("a");
+      const b = makePC("b");
+      await a.call("seed", { bots: BOTS });
+      await a.call("importMemory", { text: many("ChatGPT", 150) });
+      await a.call("importMemory", { text: many("Gemini", 50) });
+      await b.call("importMemory", { text: paste("Claude", "Writes TypeScript.", "Drinks tea.", "Owns a kayak.") });
+      byHand(b, "Allergic to peanuts.");
+      age(a, fullWins ? 30 : 120);
+      age(b, fullWins ? 120 : 30);
+      await start(a);
+      await start(b);
+      await rounds(4);
+      for (const pc of [a, b]) {
+        const view = await pc.aboutYou();
+        expect(shown(view)).toEqual([" · 1", "ChatGPT · 150", "Claude · 3", "Gemini · 50"]);
+        expect(view.files).toEqual(ALONE);
+        expect(promptFacts(view)).toHaveLength(200);
+        expect(view.prompt).toContain("- Allergic to peanuts.\n");
+      }
+      expect(saved(b)).toBe(saved(a));
+    });
+  }
+
+  it("lists all 450 facts on three PCs with 150 each", async () => {
+    const [a, b, c] = [makePC("a"), makePC("b"), makePC("c")];
+    await a.call("seed", { bots: BOTS });
+    await a.call("importMemory", { text: many("ChatGPT", 150) });
+    await b.call("importMemory", { text: many("Claude", 150) });
+    await c.call("importMemory", { text: many("Gemini", 150) });
+    byHand(c, "Allergic to peanuts.");
+    age(a, 150);
+    age(b, 90);
+    age(c, 30);
+    for (const pc of [a, b, c]) await start(pc);
+    await rounds(6);
+    for (const pc of [a, b, c]) {
+      const view = await pc.aboutYou();
+      expect(shown(view)).toEqual([" · 1", "ChatGPT · 150", "Claude · 150", "Gemini · 150"]);
+      expect(view.files).toEqual(ALONE);
+      expect(promptFacts(view)).toHaveLength(200);
+      expect(view.prompt).toContain("- Allergic to peanuts.\n");
+    }
+    expect(saved(b)).toBe(saved(a));
+    expect(saved(c)).toBe(saved(a));
+  });
+
+  for (const handPc of ["older", "newer"] as const) {
+    it(`keeps a hand line that twins an imported fact when the hand PC's file is ${handPc}, also after the source is removed`, async () => {
+      const a = makePC("a");
+      const b = makePC("b");
+      await a.call("seed", { bots: BOTS });
+      await a.call("importMemory", { text: paste("ChatGPT", "Lives in Seoul.") });
+      byHand(a, "Goes by Dana.");
+      byHand(a, "!!!");
+      await b.call("importMemory", { text: paste("Claude", "Goes by Dana.", "Writes TypeScript.") });
+      age(a, handPc === "older" ? 120 : 30);
+      age(b, handPc === "older" ? 30 : 120);
+      await start(a);
+      await start(b);
+      await rounds(4);
+      for (const pc of [a, b]) expect(handFacts(await pc.aboutYou())).toEqual(["Goes by Dana.", "!!!"]);
+      await b.call("forgetMemory", { text: "Claude" });
+      await rounds(4);
+      for (const pc of [a, b]) {
+        const view = await pc.aboutYou();
+        expect(facts(view)).toEqual(["!!!", "Goes by Dana.", "Lives in Seoul."]);
+        expect(handFacts(view)).toEqual(["Goes by Dana.", "!!!"]);
+        expect(view.prompt).toContain("- Goes by Dana.\n");
+      }
+    });
+  }
+
+  for (const count of [2, 3]) {
+    it(`a source removed before ${count} PCs that imported at once have met stays removed`, async () => {
+      const all = ["a", "b", "c"].slice(0, count).map((name) => makePC(name));
+      await all[0]!.call("seed", { bots: BOTS });
+      await all[0]!.call("importMemory", { text: paste("ChatGPT", "Goes by Dana.", "Lives in Seoul.") });
+      for (const pc of all) await start(pc);
+      await rounds(3);
+      for (const [i, pc] of all.entries()) await pc.call("importMemory", { text: paste(["Gemini", "Grok", "Muse"][i]!, `Fact ${i}.`) });
+      await all[0]!.call("forgetMemory", { text: "ChatGPT" });
+      await rounds(6);
+      for (const pc of all) {
+        const view = await pc.aboutYou();
+        expect(view.sources.map(({ source }) => source).sort()).toEqual(["Gemini", "Grok", "Muse"].slice(0, count));
+        expect(view.files).toEqual(ALONE);
+      }
+    });
+  }
+
+  it("two PCs removing different sources at once both stay removed", async () => {
+    const a = makePC("a");
+    const b = makePC("b");
+    await a.call("seed", { bots: BOTS });
+    await a.call("importMemory", { text: paste("ChatGPT", "Goes by Dana.") });
+    await b.call("importMemory", { text: paste("Claude", "Writes TypeScript.") });
+    await start(a);
+    await start(b);
+    await rounds(4);
+    await a.call("importMemory", { text: paste("Gemini", "Runs at dawn.") });
+    await a.call("forgetMemory", { text: "ChatGPT" });
+    await b.call("forgetMemory", { text: "Claude" });
+    await rounds(6);
+    for (const pc of [a, b]) expect(facts(await pc.aboutYou())).toEqual(["Runs at dawn."]);
+    expect(saved(b)).toBe(saved(a));
+  });
+
+  it("a line deleted or changed by hand stays that way while the other PC adds at once", async () => {
+    const a = makePC("a");
+    const b = makePC("b");
+    await a.call("seed", { bots: BOTS });
+    await a.call("importMemory", { text: paste("ChatGPT", "Goes by Dana.", "Lives in Seoul.") });
+    byHand(a, "Allergic to peanuts.");
+    await start(a);
+    await start(b);
+    await rounds(3);
+    writeFileSync(memoryFile(a), saved(a).replace("- Allergic to peanuts.\n", ""));
+    await b.call("importMemory", { text: paste("Grok", "Owns a kayak.") });
+    await rounds(4);
+    writeFileSync(memoryFile(a), saved(a).replace("Lives in Seoul.", "Lives in Busan."));
+    byHand(b, "Bikes to work.");
+    await rounds(4);
+    for (const pc of [a, b]) expect(facts(await pc.aboutYou())).toEqual(["Bikes to work.", "Goes by Dana.", "Lives in Busan.", "Owns a kayak."]);
+    expect(saved(b)).toBe(saved(a));
+
+    // brought back by hand, it stays back
+    byHand(a, "Allergic to peanuts.");
+    await b.call("importMemory", { text: paste("Muse", "Plays cello.") });
+    await rounds(4);
+    for (const pc of [a, b]) expect(facts(await pc.aboutYou())).toEqual(["Allergic to peanuts.", "Bikes to work.", "Goes by Dana.", "Lives in Busan.", "Owns a kayak.", "Plays cello."]);
   });
 });
 

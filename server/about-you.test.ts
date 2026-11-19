@@ -1,11 +1,11 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { aboutYouPrompt, aboutYouRoutes, aboutYouSources, addToAboutYou, factsOf, removeAboutYouSource } from "./about-you.ts";
+import { aboutYouFacts, aboutYouPrompt, aboutYouRoutes, aboutYouSources, addToAboutYou, factsOf, removeAboutYouSource } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
 import { buildBrief } from "./live-call.ts";
 import { Store } from "./store.ts";
@@ -91,6 +91,21 @@ describe("About You save", () => {
     const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
     aboutYouRoutes.remove(res, "%");
     expect(status).toBe(400);
+  });
+
+  it("past the cap the prompt keeps every hand line, then the newest imports, and the Memory page lists every line", () => {
+    const old = Array.from({ length: 100 }, (_, i) => `- Old fact ${i}. (from ChatGPT, 2026-10-01)`);
+    const fresh = Array.from({ length: 105 }, (_, i) => `- New fact ${i}. (from Claude, 2026-11-16)`);
+    mkdirSync(join(DATA_DIR, "about-you"), { recursive: true });
+    writeFileSync(file, [...fresh.slice(0, 50), "- Allergic to peanuts.", ...old, "- !!!", ...fresh.slice(50), ""].join("\n"));
+    const shown = aboutYouFacts().split("\n");
+    expect(shown).toHaveLength(200);
+    expect(shown).toContain("- Allergic to peanuts.");
+    expect(shown).toContain("- !!!");
+    expect(shown.filter((line) => line.startsWith("- New fact"))).toHaveLength(105);
+    expect(shown.filter((line) => line.startsWith("- Old fact"))).toEqual(Array.from({ length: 93 }, (_, i) => `- Old fact ${i + 7}. (noted 2026-10-01)`));
+    expect(shown.indexOf("- Allergic to peanuts.")).toBe(50);
+    expect(aboutYouSources().map(({ source, facts }) => [source, facts.length])).toEqual([["Claude", 105], ["", 2], ["ChatGPT", 100]]);
   });
 
   it("refuses an empty or oversized paste and saves nothing", () => {
