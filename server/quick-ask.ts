@@ -31,6 +31,7 @@ const isKorean = (text: string) => {
   const korean = text.match(HANGUL)?.length ?? 0;
   return korean > 0 && korean * 4 >= korean + (text.match(LATIN)?.length ?? 0);
 };
+const orderAck = (text: string) => (isKorean(text) ? ORDER_ACK_KO : ORDER_ACK);
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
 const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
@@ -286,6 +287,15 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const { store } = deps;
   const bot = store.bot(botId);
   const instance = bot ? deps.instance(bot, threadId) : null;
+  const text = ask.text ?? "";
+  if (isOrder(text)) {
+    if (!bot || !pending(store, threadId, ask)) return;
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: orderAck(text), engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
+    // this route never gave the bot the order, so it waits for the bot's next turn here
+    queueAsk(store, botId, threadId, ask);
+    deps.drain();
+    return;
+  }
   const result: QuickResult = instance ? await askHelper(deps, instance, botId, threadId, ask) : { route: "handoff", ms: 0 };
   const current = store.bot(botId);
   // a stopped ask still takes its late answer; one handed to the bot any other way is the bot's
@@ -338,7 +348,7 @@ export async function ackQuick(deps: HelperDeps, botId: string, threadId: string
   if (!instance) return;
   const text = sent.text ?? "";
   const result: QuickResult = isOrder(text)
-    ? { route: "answer", text: isKorean(text) ? ORDER_ACK_KO : ORDER_ACK, ms: 0 }
+    ? { route: "answer", text: orderAck(text), ms: 0 }
     : await askHelper(deps, instance, botId, threadId, sent, true);
   const current = store.bot(botId);
   if (!current || result.route === "handoff" || !result.text) return;

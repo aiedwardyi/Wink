@@ -37,11 +37,13 @@ const CASUAL_WORD =
   "hi+|hello+|hey+|heya|hiya|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(s|ing)?|\\d+|sidekick|side ?bot|helper|main|one|if|(you|u|ya)('?re|'?r| are| r)?|youre|ur|are|r|is|the|a|there|here|still|alive|awake|asleep|sleeping|i think|say|((do|dont|don'?t|do not) )?(respond|reply|answer)|let me know|with|sentence|last|time|again|please|pls|yeah|yea|ya|ok|okay|and|so|lol|lmao|ha(ha)+\\w*|" +
   "안녕(하세요)?|하이|헬로|ㅎㅇ|테스트(중)?|사이드킥(이면|이라면|이야)?|사이드 ?봇(이면|이라면|이야)?|거기|아직|있어(요)?|인사(해|해줘|해주세요)|대?답(해|해줘|해주세요)|ㅋ+|ㅎ+";
 const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i");
-// A pick or a number answers the bot's question: "both", "2", "the second one".
-const PICK = /^(both|all( of (them|it))?|everything|neither|none|(the )?(first|second|third|fourth|last)( one| option)?|option [a-z0-9]|#?\d+)[\s.!]*$/i;
+// A pick or a number answers the bot's question: "both", "squash both", "2", "the second one".
+const PICK = /^((\w+ )?both|all( of (them|it))?|everything|neither|none|(the )?(first|second|third|fourth|last)( one| option)?|option [a-z0-9]|#?\d+)[\s.!]*$/i;
 const KO_PICK = /^(둘 ?다|전부|모두|(첫|두|세|네) ?번째(꺼|것)?|\d+ ?번(째)?)[\s.!~]*$/;
 // "what port is it, please?" asks for facts; "switched to X" and "done" report news. Neither orders anything.
-const INFO_Q = /^(what|whats|what's|where|wheres|where's|which|who|whose|when|why|how|is|isn't|isnt|are|aren't|was|were)\b/i;
+const INFO_Q = /^(what|whats|what's|where|wheres|where's|which|who|whose|when|why|how|is|isn't|isnt|are|aren't|was|were|does|doesn't|doesnt|did|didn't|didnt|has|hasn't|hasnt)\b/i;
+// "성능은 어때?" asks how something is; "하면 어때?" suggests.
+const KO_HOW = /[은는]\s*(어때|어떨까)/g;
 const REPORTED = /^(switched|done)\b/i;
 const ENDS_Q = /\?[\s!?.)]*((lol|lmao|haha)\s*)?\W*$/i;
 const TAG_Q = /\b(right|correct|or not|or no)[\s.!]*$/i;
@@ -56,7 +58,7 @@ export function isOrder(raw: string): boolean {
       const sentence = part.replace(LEAD, "").replace(KO_LEAD, "").trim();
       return (
         (REQUEST.test(part) && !INFO_Q.test(sentence)) ||
-        KO_REQUEST.test(part) ||
+        KO_REQUEST.test(part.replace(KO_HOW, "")) ||
         PICK.test(sentence) ||
         KO_PICK.test(sentence) ||
         (COMMAND.test(sentence) && !REPORTED.test(sentence) && !QUESTION_START.test(sentence))

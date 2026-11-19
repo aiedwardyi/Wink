@@ -120,6 +120,8 @@ describe("quick route", () => {
 
   it.each([
     "what port is in the server config, please?",
+    "Does it support Windows, please?",
+    "성능은 어때?",
     "switched to the new branch",
     "i know ur working, but its odd, im testing the sidekick thing but it doesnt seem like our feature works",
     "when u got time read this real quick to see if it'll help us with ci https://example.com/ci-cost",
@@ -140,6 +142,7 @@ describe("quick route", () => {
 
   it.each([
     ["merge both", "Got it, one moment while I finish this step, then I'll do it."],
+    ["squash both", "Got it, one moment while I finish this step, then I'll do it."],
     ["also update the docs when you are done", "Got it, one moment while I finish this step, then I'll do it."],
     ["2", "Got it, one moment while I finish this step, then I'll do it."],
     ["둘 다 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
@@ -362,6 +365,22 @@ describe("quick route", () => {
     const run = vi.fn();
     drainSteeredMessages(h.store, run);
     expect(run).toHaveBeenCalledExactlyOnceWith(h.bot.id, own, QUESTION, expect.objectContaining({ text: QUESTION }), [expect.any(String)]);
+  });
+
+  it.each(["merge both", "squash both"])("answers an order sent while the bot works in another chat with the fixed line, then queues it: %s", async (text) => {
+    const h = harness({ result: { route: "answer", text: "I take that to mean the first two.", ms: 4 } });
+    h.store.setActivity(h.bot.id, "working", "room-thread");
+    await h.send({ text });
+    h.release();
+    await vi.waitFor(() => expect(h.rows().at(-1)).toMatchObject({ role: "bot", kind: "text" }));
+    const [sent, reply] = h.rows().slice(-2);
+    expect(reply).toMatchObject({ text: "Got it, one moment while I finish this step, then I'll do it.", quick: { state: "answer", askId: sent!.id } });
+    expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer).not.toHaveBeenCalled();
+    h.store.setActivity(h.bot.id, "idle");
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(run).toHaveBeenCalledExactlyOnceWith(h.bot.id, h.bot.threadId, text, expect.objectContaining({ text }), [expect.any(String)]);
   });
 
   it.each(["an edit", "a rewind"])("drops a late answer after %s", async (how) => {
