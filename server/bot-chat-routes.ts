@@ -415,6 +415,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             }
           }
 
+          // a busy send is routed and steered off the active branch: a chat Map is loading lands first rather than be read here
+          const busyLoad = store.bot(bot.id)?.busy ? coldLoading(threadId) : undefined;
+          if (busyLoad) await busyLoad;
           if (sendId && isSendCancelled(sendId)) {
             return { ok: true as const, cancelled: true as const, threadId };
           }

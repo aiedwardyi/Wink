@@ -198,11 +198,12 @@ describe("queued send through the message POST", () => {
 });
 
 describe("a line typed while the bot works", () => {
-  const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread")) => {
+  const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread"), extra: Record<string, unknown> = {}) => {
     const startQuick = vi.fn();
     const h = harness(steer, true, {
       routesQuick, routesAck, isOrder, startQuick, startAck: vi.fn(), quick: { accountReady: () => true },
       instanceForBot: () => ({ driverKind: "claudeAgent", fork: vi.fn(), adapter: { capabilities: { queueing: true }, steer, interruptTurn: vi.fn() } }),
+      ...extra,
     });
     Object.assign(h.store, { groupByThread: () => undefined });
     h.bot.activeThreadId = activeThreadId;
@@ -221,6 +222,18 @@ describe("a line typed while the bot works", () => {
     expect((await h.post({ text: "tldr pls ?" })).body).toMatchObject({ steered: true });
     expect(h.steer).toHaveBeenCalledWith("thread", "[covered]\n\ntldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
     expect(h.startQuick).not.toHaveBeenCalled();
+  });
+
+  it("routes a line on a chat Map is still loading only once the load lands", async () => {
+    let land!: () => void;
+    const coldLoading = vi.fn(() => new Promise<void>((resolve) => { land = resolve; }));
+    const h = working("thread", undefined, { coldLoading });
+    const read = vi.spyOn(h.store, "activePath");
+    const sent = h.post({ text: "tldr pls ?" });
+    await vi.waitFor(() => expect(coldLoading.mock.calls.length + read.mock.calls.length).toBeGreaterThan(0), { timeout: 500 });
+    expect(read).not.toHaveBeenCalled();
+    land();
+    expect((await sent).body).toMatchObject({ steered: true });
   });
 
   it("holds a card answer for the bot, the same as a typed answer, while the turn runs in a room", async () => {

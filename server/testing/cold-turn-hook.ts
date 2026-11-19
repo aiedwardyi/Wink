@@ -1,7 +1,7 @@
 // Preloaded with --import into a harness boot: each Claude sendTurn unloads its chat and starts the chat's background
 // load, so the turn runs while Map would still be loading the chat; a COLD_TURN_GATES/unload file holding a thread id
 // does the same at once. The load's page reads wait for a COLD_TURN_GATES/<threadId> file. COLD_TURN_LOG gets a line
-// for each whole read of a chat while its load waits, each settled turn and each load that lands.
+// for each whole read of a chat while its load waits, each started and settled turn and each load that lands.
 import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -66,6 +66,7 @@ ClaudeDriver.create = async (input) => {
   instance.adapter.onEvent((event) => {
     // after the runtime subscribers and the work they put off to the loop's next turn
     if (event.type === "turn.completed") setImmediate(() => setImmediate(() => write({ settled: event.threadId })));
+    else if (event.type === "turn.started") setImmediate(() => setImmediate(() => write({ started: event.threadId })));
   });
   const sendTurn = instance.adapter.sendTurn.bind(instance.adapter);
   instance.adapter.sendTurn = (turn) => {
