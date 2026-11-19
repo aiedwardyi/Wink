@@ -85,7 +85,7 @@ const engineOf = (instances: Instances, post: BoardPost) => {
   return (model && instances.find((instance) => instance.models?.options.some((option) => option.label === model || option.id === model))?.driverKind) || "";
 };
 
-/** Name, face, model and its engine mark come from the post; a bot on this PC lends its face, which may be an uploaded picture, and its working ring. */
+/** Name, face, model and its engine mark come from the post; a bot on this PC lends its face, which may be an uploaded picture. */
 function authorOf(post: BoardPost, bot: Bot | undefined, driverKind: string, user: UserLook) {
   if (post.author_bot_id === BOARD_USER) return { name: user.name, face: userFace(user), model: "", driverKind: "", working: false };
   const name = post.author?.name || bot?.name || "";
@@ -96,7 +96,7 @@ function authorOf(post: BoardPost, bot: Bot | undefined, driverKind: string, use
     model: post.author?.model ?? "",
     driverKind,
     working,
-    face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} orbitRing={working} />,
+    face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} />,
   };
 }
 
@@ -410,19 +410,6 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
     opener.current = { id, top: listRef.current?.scrollTop ?? 0 };
     setOpenId(id);
   }, []);
-  // a working ring repaints its blurred halo every frame, even scrolled away, so only rows near the screen draw one
-  const shownIds = shown.map((thread) => thread.post.id).join(" ");
-  // Back mounts new rows for the same ids
-  const listShown = !open && threads.length > 0;
-  useEffect(() => {
-    const root = listRef.current;
-    if (!root) return;
-    const near = new IntersectionObserver((entries) => {
-      for (const entry of entries) entry.target.toggleAttribute("data-on-screen", entry.isIntersecting);
-    }, { root, rootMargin: "200px 0px" });
-    for (const row of root.querySelectorAll("[data-board-list] > [data-board-post]")) near.observe(row);
-    return () => near.disconnect();
-  }, [shownIds, listShown]);
   useBackLayer(Boolean(open), close);
   const stepSort = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
