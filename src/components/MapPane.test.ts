@@ -974,3 +974,10 @@ it("keeps a loaded Map through wide, narrow and wide again with no size-only fet
   }
   expect(seen).toEqual([{ code: "1+const edited = true;", streams: 0, fetches: 0 }, { code: "1+const edited = true;", streams: 0, fetches: 0 }]);
 });
+
+it("draws unchanged code lines at full color like the added ones", () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  const faded = [...css.matchAll(/([^{}]*)\{([^{}]*)\}/g)].filter(([, selector, body]) => /data-kind="context"/.test(selector) && /(?:^|[;\s])opacity:/.test(body));
+  expect(faded.map(([, selector]) => selector.trim())).toEqual([]);
+  expect(css).toMatch(/\.map-code-row\[data-kind="remove"\] code \{ opacity: \.7; \}/);
+});
