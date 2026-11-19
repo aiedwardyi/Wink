@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
@@ -105,6 +105,7 @@ export function createSyncEngine(input: SyncOptions) {
         hash TEXT NOT NULL, PRIMARY KEY(thread, kind, row_id, hash));
       CREATE TABLE IF NOT EXISTS sync_v2_selection (thread TEXT NOT NULL, kind TEXT NOT NULL, row_id TEXT NOT NULL,
         writer TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(thread, kind, row_id));
+      CREATE TABLE IF NOT EXISTS sync_v2_retired (thread TEXT NOT NULL, writer TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(thread, writer));
     `);
     db.prepare("INSERT OR IGNORE INTO sync_v2_identity VALUES (1, ?, ?)").run(options.deviceId, randomUUID());
   });
@@ -139,6 +140,7 @@ export function createSyncEngine(input: SyncOptions) {
   const hashSchema = z.object({ hash: z.string() }).optional();
   const nextSeqSchema = z.object({ next_seq: integer });
   const sealSchema = jsonSchema.extend({ first_seq: integer, last_seq: integer });
+  const sealFileSchema = sealSchema.extend({ thread: threadIdSchema, bot: idSchema });
   const localHeadSchema = z.object({ cut: integer, generation: integer, head: z.string().nullable() });
   const peerHeadSchema = z.object({ generation: integer, cut: integer, last_seq: integer, hash: z.string() });
   const parentSchema = z.object({ parent: z.union([z.string(), z.number()]).nullable() });
@@ -149,7 +151,17 @@ export function createSyncEngine(input: SyncOptions) {
   };
   const identity = get(z.object({ device: idSchema, writer: idSchema }), "SELECT device, writer FROM sync_v2_identity WHERE id = 1");
   if (identity.device !== options.deviceId) throw new Error("This local sync database belongs to another device");
-  const writerId = identity.writer;
+  let writerId = identity.writer;
+  const ownHeads = new Map<string, string>();
+  const retiredHeads = new Map<string, string>();
+  // The worker engine moves a copied install to a new writer id under every other engine on this database.
+  const ownWriter = () => {
+    const writer = get(writerSchema, "SELECT writer FROM sync_v2_identity WHERE id = 1").writer;
+    if (writer === writerId) return;
+    writerId = writer;
+    ancestries.clear();
+    ownHeads.clear();
+  };
   const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
   const emptyResult = (): SyncApplyResult => ({ applied: 0, rowsTouched: 0, sqlRowsTouched: 0, conflicts: 0, quarantined: 0, rejected: 0 });
   const totalChanges = () => get(countSchema, "SELECT total_changes() AS n").n;
@@ -157,6 +169,12 @@ export function createSyncEngine(input: SyncOptions) {
   const saw = (version: SyncVersion, writer: string, seq: number) => (version.seen[writer] ?? 0) >= seq;
   const contentHash = (version: SyncVersion | SyncMutation) => syncContentHash(version.kind === "head" && "legacy" in version && version.legacy?.source
     ? { head: version.value, source: version.legacy.source } : version.value);
+  // A parsed head lists keys in schema order, not the order a packet was stored in, so packets compare by content.
+  const packetHash = (packet: SyncPacket) => syncContentHash(packet);
+  const storedHash = (thread: string, writer: string, seq: number) => {
+    const stored = get(jsonSchema.optional(), "SELECT json FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", thread, writer, seq);
+    return stored && packetHash(JSON.parse(stored.json));
+  };
 
   function scopeDir(scope: SyncScope): string {
     idSchema.parse(scope.botSyncId);
@@ -210,6 +228,7 @@ export function createSyncEngine(input: SyncOptions) {
   }
 
   function ancestry(thread: string, needed: boolean): Ancestry | undefined {
+    ownWriter();
     const now = seen(thread);
     const mark = get(z.object({ mark: integer }).optional(), "SELECT mark FROM temp.sync_v2_ancestry WHERE thread = ?", thread)?.mark;
     let entry = ancestries.get(thread);
@@ -490,6 +509,7 @@ export function createSyncEngine(input: SyncOptions) {
     const result = emptyResult();
     const before = totalChanges();
     withMessageTransaction(() => {
+      ownWriter();
       localWrite?.(database!);
       let seq = get(nextSeqSchema, "SELECT next_seq FROM sync_v2_threads WHERE thread = ?", scope.threadId).next_seq;
       const context = seen(scope.threadId);
@@ -595,12 +615,157 @@ export function createSyncEngine(input: SyncOptions) {
     return written;
   }
 
-  function flush(scope: SyncScope, crash?: SealCrash, through?: number): SyncFlushResult {
-    scopeDir(scope);
+  function headPath(scope: SyncScope): string {
     const ownerPath = join(scope.botSyncId, scope.threadId, writerId);
     const root = syncRoots(options.folder, "threads-v2").find((path) => existsSync(join(path, ownerPath, "head.json")))
       ?? syncWriteRoot(options.folder, "threads-v2", ownerPath);
-    const dir = join(root, ownerPath);
+    return join(root, ownerPath, "head.json");
+  }
+
+  const fileKey = (path: string) => {
+    const stat = statSync(path, { throwIfNoEntry: false });
+    return stat ? `${stat.size}:${stat.mtimeMs}` : "";
+  };
+  const ownHash = (thread: string, seq: number) => storedHash(thread, writerId, seq);
+  const mine = (thread: string, head: SyncHead) => head.versions.every((packet) => ownHash(thread, packet.seq) === packetHash(packet));
+
+  function ours(scope: SyncScope): boolean {
+    const path = headPath(scope);
+    const key = fileKey(path);
+    if (!key || ownHeads.get(path) === key) return true;
+    const state = get(localHeadSchema, "SELECT cut, generation, head FROM sync_v2_threads WHERE thread = ?", scope.threadId);
+    const bytes = readFileSync(path);
+    if (state.head === null || !bytes.equals(Buffer.from(state.head))) {
+      let head: SyncHead;
+      try {
+        head = validateHead(bytes, scope, writerId);
+      } catch {
+        return true;
+      }
+      if (head.generation >= state.generation || !mine(scope.threadId, head)) return false;
+      // An older head of ours, as a stale Drive copy brings back, is replaced so peers see what we published.
+      durableFile(path, Buffer.from(state.head!));
+    }
+    ownHeads.set(path, fileKey(path));
+    return true;
+  }
+
+  /** First seq of ours the copy does not share; null while the copy's sealed history is still missing here. */
+  function forkOf(scope: SyncScope): number | null {
+    const state = get(localHeadSchema, "SELECT cut, generation, head FROM sync_v2_threads WHERE thread = ?", scope.threadId);
+    const previous: SyncHead | null = state.head ? JSON.parse(state.head) : null;
+    const path = headPath(scope);
+    let head: SyncHead;
+    try {
+      head = validateHead(readFileSync(path), scope, writerId);
+    } catch {
+      return (previous?.lastSeq ?? 0) + 1;
+    }
+    if (head.generation <= state.generation && mine(scope.threadId, head)) return Math.min(previous?.lastSeq ?? 0, head.lastSeq) + 1;
+    const theirs = new Map(head.versions.map((packet) => [packet.seq, packetHash(packet)]));
+    const shared = new Set<number>();
+    for (const name of readdirSync(dirname(path))) {
+      const range = /^seg-([1-9]\d*)-([1-9]\d*)\.json\.gz$/.exec(name);
+      if (!range) continue;
+      try {
+        const bytes = gunzipSync(readFileSync(join(dirname(path), name)), { maxOutputLength: headBytes });
+        const seal = get(jsonSchema.optional(), "SELECT json FROM sync_v2_seals WHERE thread = ? AND first_seq = ? AND last_seq = ?", scope.threadId, Number(range[1]), Number(range[2]));
+        if (seal?.json === bytes.toString("utf8")) shared.add(Number(range[2]));
+        else for (const packet of validateHead(bytes, scope, writerId).versions) theirs.set(packet.seq, packetHash(packet));
+      } catch {
+        continue;
+      }
+    }
+    let fork = theirs.size ? Math.min(...theirs.keys()) : head.lastSeq + 1;
+    // Below the copy's first packet here, its history is a seal both installs published before they parted.
+    if (fork > 1 && ownHash(scope.threadId, fork) !== theirs.get(fork)) return shared.has(fork - 1) ? fork : null;
+    while (theirs.has(fork) && ownHash(scope.threadId, fork) === theirs.get(fork)) fork++;
+    return fork;
+  }
+
+  // Tables are edited directly: advance() would skip legacy versions whose content is already stored.
+  function rehome(thread: string, fork: number, from: string, to: string): Map<number, number> {
+    const moved = new Map<number, number>();
+    let seq = from === writerId ? 1 : get(nextSeqSchema, "SELECT next_seq FROM sync_v2_threads WHERE thread = ?", thread).next_seq;
+    for (const row of all(seqJsonSchema, "SELECT seq, json FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq >= ? ORDER BY seq", thread, from, fork)) {
+      const packet: SyncPacket = JSON.parse(row.json);
+      if (packet.kind === "fragment" && packet.value.index < packet.value.count - 1) continue;
+      const old = packet.kind === "fragment" ? assemble(thread, from, packet) : packet;
+      const prior = old.seen[from] ?? 0;
+      const seen: SyncSeen = { ...old.seen, [from]: Math.min(prior, fork - 1) };
+      if (!seen[from]) delete seen[from];
+      if (prior >= fork) seen[to] = moved.get(prior)!;
+      const [baseSeq, baseWriter] = old.baseStamp?.split(":") ?? [];
+      const baseStamp = baseWriter === from && Number(baseSeq) >= fork ? stamp(to, moved.get(Number(baseSeq))!) : old.baseStamp;
+      validateVersion({ ...old, seq, seen, baseStamp });
+      const packets = packetsFor({ ...old, seq, seen, baseStamp });
+      for (const item of packets) {
+        const json = JSON.stringify(item);
+        sql("INSERT INTO sync_v2_packets(thread, writer, seq, json, hash, applied) VALUES (?, ?, ?, ?, ?, 1)").run(thread, to, item.seq, json, hash(json));
+      }
+      const version: SyncVersion = { ...old, seq: packets.at(-1)!.seq, seen, baseStamp };
+      sql("UPDATE sync_v2_frontier SET writer = ?, seq = ?, json = ? WHERE thread = ? AND writer = ? AND seq = ?")
+        .run(to, version.seq, JSON.stringify(previewVersion(version)), thread, from, old.seq);
+      sql("UPDATE sync_v2_selection SET writer = ?, seq = ? WHERE thread = ? AND writer = ? AND seq = ?").run(to, version.seq, thread, from, old.seq);
+      moved.set(old.seq, version.seq);
+      seq = version.seq + 1;
+    }
+    sql("DELETE FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq >= ?").run(thread, from, fork);
+    if (fork > 1) sql("UPDATE sync_v2_progress SET seq = ? WHERE thread = ? AND writer = ? AND seq >= ?").run(fork - 1, thread, from, fork);
+    else sql("DELETE FROM sync_v2_progress WHERE thread = ? AND writer = ?").run(thread, from);
+    if (seq > 1) sql("INSERT INTO sync_v2_progress VALUES (?, ?, ?) ON CONFLICT(thread, writer) DO UPDATE SET seq = excluded.seq").run(thread, to, seq - 1);
+    sql("UPDATE sync_v2_threads SET next_seq = ? WHERE thread = ?").run(seq, thread);
+    return moved;
+  }
+
+  /** Shared history stays under the old writer id, so nothing is published twice; null waits for a later pass. */
+  function split(scope: SyncScope): Map<number, number> | null {
+    const owned = () => all(z.object({ thread: threadIdSchema, bot: idSchema }), "SELECT thread, bot FROM sync_v2_threads WHERE next_seq > 1");
+    const forks = new Map(owned().map((row) => [row.thread, forkOf({ threadId: row.thread, botSyncId: row.bot })]));
+    if ([...forks.values()].includes(null)) return null;
+    const next = randomUUID();
+    const leftovers: string[] = [];
+    const moved = withMessageTransaction(() => {
+      for (const row of owned()) if (!forks.has(row.thread)) forks.set(row.thread, forkOf({ threadId: row.thread, botSyncId: row.bot }));
+      if ([...forks.values()].includes(null)) return null;
+      let mapped = new Map<number, number>();
+      for (const [thread, fork] of forks) {
+        const map = rehome(thread, fork!, writerId, next);
+        if (thread === scope.threadId) mapped = map;
+        if (fork! > 1) sql("INSERT OR REPLACE INTO sync_v2_retired VALUES (?, ?, ?)").run(thread, writerId, fork! - 1);
+      }
+      // Our seals past the fork would reach peers under the old id, which now carries the other install's history.
+      for (const seal of all(sealFileSchema, "SELECT thread, bot, first_seq, last_seq, json FROM sync_v2_seals JOIN sync_v2_threads USING (thread)")) {
+        const fork = forks.get(seal.thread);
+        if (!fork || seal.last_seq < fork) continue;
+        const path = join(dirname(headPath({ threadId: seal.thread, botSyncId: seal.bot })), `seg-${seal.first_seq}-${seal.last_seq}.json.gz`);
+        try {
+          if (gunzipSync(readFileSync(path), { maxOutputLength: headBytes }).toString("utf8") === seal.json) leftovers.push(path);
+        } catch {
+          continue;
+        }
+      }
+      sql("UPDATE sync_v2_threads SET cut = 0, generation = 0, head = NULL").run();
+      sql("DELETE FROM sync_v2_seals").run();
+      sql("UPDATE sync_v2_identity SET writer = ? WHERE id = 1").run(next);
+      return mapped;
+    });
+    if (!moved) return null;
+    ownWriter();
+    for (const path of leftovers) unlinkSync(path);
+    return moved;
+  }
+
+  function flush(scope: SyncScope, crash?: SealCrash, through?: number): SyncFlushResult {
+    scopeDir(scope);
+    ownWriter();
+    if (!ours(scope)) {
+      const moved = split(scope);
+      if (!moved) return { bytesWritten: 0, headBytes: 0, segments: 0, sealedThrough: 0 };
+      if (through !== undefined) through = Math.max(0, ...[...moved].filter(([seq]) => seq <= through!).map(([, seq]) => seq));
+    }
+    const path = headPath(scope);
+    const dir = dirname(path);
     mkdirSync(dir, { recursive: true });
     let bytesWritten = 0;
     let state = get(localHeadSchema, "SELECT cut, generation, head FROM sync_v2_threads WHERE thread = ?", scope.threadId);
@@ -663,11 +828,11 @@ export function createSyncEngine(input: SyncOptions) {
         });
       }
       const bytes = Buffer.from(state.head!);
-      const path = join(dir, "head.json");
       if (!existsSync(path) || !readFileSync(path).equals(bytes)) {
         durableFile(path, bytes);
         bytesWritten += bytes.length;
       }
+      ownHeads.set(path, fileKey(path));
       const segments = get(countSchema, "SELECT COUNT(*) AS n FROM sync_v2_seals WHERE thread = ?", scope.threadId).n;
       return { bytesWritten, headBytes: bytes.length, segments, sealedThrough: state.cut };
     }
@@ -686,7 +851,8 @@ export function createSyncEngine(input: SyncOptions) {
     }
     for (const packet of head.versions) {
       const known = get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", scope.threadId, writer, packet.seq);
-      if (known && known.hash !== hash(JSON.stringify(packet))) {
+      // A packet this PC wrote under that id before a split keeps its stored key order.
+      if (known && known.hash !== hash(JSON.stringify(packet)) && storedHash(scope.threadId, writer, packet.seq) !== packetHash(packet)) {
         result.quarantined += quarantine(scope.threadId, writer, bytes, `Conflicting bytes for sequence ${packet.seq}`);
         result.rejected++;
         return false;
@@ -740,10 +906,86 @@ export function createSyncEngine(input: SyncOptions) {
     reconcilePendingHead(scope);
   }
 
+  /** A copied install can leave segments overlapping the writer's own; of those, only the run ending at the head's sealedThrough is read. */
+  function tiled(scope: SyncScope, writer: string, dir: string, names: string[]): string[] {
+    const ranges = names.flatMap((name) => {
+      const range = /^seg-([1-9]\d*)-([1-9]\d*)\.json\.gz$/.exec(name);
+      return range ? [{ name, first: Number(range[1]), last: Number(range[2]) }] : [];
+    });
+    const overlapping = new Set(ranges.filter((a) => ranges.some((b) => a !== b && a.first <= b.last && b.first <= a.last)).map((range) => range.name));
+    if (!overlapping.size) return names;
+    let last = 0;
+    try {
+      last = validateHead(readFileSync(join(dir, "head.json")), scope, writer).sealedThrough;
+    } catch {
+      last = 0;
+    }
+    const chain = new Set<string>();
+    for (let ends = ranges.filter((range) => range.last === last); last > 0 && ends.length === 1; ends = ranges.filter((range) => range.last === last)) {
+      chain.add(ends[0].name);
+      last = ends[0].first - 1;
+    }
+    return names.filter((name) => !overlapping.has(name) || chain.has(name));
+  }
+
+  /** Our rows a split left under the old writer id: while our own head is there they stay, and a copy's head moves the ones it does not share onto ours. */
+  function reclaim(scope: SyncScope, writer: string, dir: string, names: string[], last: number): "ours" | "wait" | "moved" | "shared" {
+    const path = join(dir, "head.json");
+    const key = fileKey(path);
+    if (!key || retiredHeads.get(path) === key) return "ours";
+    const own = (seq: number) => storedHash(scope.threadId, writer, seq);
+    const read = (name: string) => validateHead(gunzipSync(readFileSync(join(dir, name)), { maxOutputLength: headBytes }), scope, writer).versions;
+    let head: SyncHead;
+    try {
+      head = validateHead(readFileSync(path), scope, writer);
+    } catch {
+      return "ours";
+    }
+    if (head.lastSeq <= last && head.versions.every((packet) => own(packet.seq) === packetHash(packet))) {
+      retiredHeads.set(path, key);
+      return "ours";
+    }
+    const theirs = new Map(head.versions.map((packet) => [packet.seq, packetHash(packet)]));
+    for (const name of tiled(scope, writer, dir, names)) {
+      const range = /^seg-([1-9]\d*)-([1-9]\d*)\.json\.gz$/.exec(name);
+      if (!range || Number(range[1]) > last) continue;
+      try {
+        for (const packet of read(name)) theirs.set(packet.seq, packetHash(packet));
+      } catch {
+        continue;
+      }
+    }
+    if (!theirs.size) return "wait";
+    let fork = Math.min(...theirs.keys());
+    if (fork > 1 && own(fork) !== theirs.get(fork)) return "wait";
+    while (theirs.has(fork) && own(fork) === theirs.get(fork)) fork++;
+    if (fork <= last && !theirs.has(fork)) return "wait";
+    // Our segments past the fork would reach peers under the old id, which now carries the copy's history.
+    const leftovers = fork > last ? [] : names.filter((name) => {
+      const range = /^seg-([1-9]\d*)-([1-9]\d*)\.json\.gz$/.exec(name);
+      try {
+        return !!range && Number(range[2]) >= fork && read(name).every((packet) => own(packet.seq) === packetHash(packet));
+      } catch {
+        return false;
+      }
+    });
+    withMessageTransaction(() => {
+      if (fork <= last) rehome(scope.threadId, fork, writer, writerId);
+      sql("DELETE FROM sync_v2_retired WHERE thread = ? AND writer = ?").run(scope.threadId, writer);
+      sql("DELETE FROM sync_v2_heads WHERE thread = ? AND writer = ?").run(scope.threadId, writer);
+    });
+    for (const name of leftovers) unlinkSync(join(dir, name));
+    return fork > last ? "shared" : "moved";
+  }
+
   function pull(scope: SyncScope): SyncApplyResult {
     scopeDir(scope);
+    ownWriter();
+    if (!ours(scope)) split(scope);
     const result = emptyResult();
     const before = totalChanges();
+    const retired = new Map(all(writerSeqSchema, "SELECT writer, seq FROM sync_v2_retired WHERE thread = ?", scope.threadId).map((row) => [row.writer, row.seq]));
+    let moved = false;
     for (const root of syncRoots(options.folder, "threads-v2")) {
       const dir = join(root, scope.botSyncId, scope.threadId);
       if (!existsSync(dir)) continue;
@@ -751,8 +993,19 @@ export function createSyncEngine(input: SyncOptions) {
         if (!entry.isDirectory() || !idSchema.safeParse(entry.name).success || entry.name === writerId) continue;
         const writer = entry.name;
         const writerDir = join(dir, writer);
-        const names = readdirSync(writerDir).filter((name) => name === "head.json" || /^seg-[1-9]\d*-[1-9]\d*\.json\.gz$/.test(name));
-        for (const name of names) {
+        let names = readdirSync(writerDir).filter((name) => name === "head.json" || /^seg-[1-9]\d*-[1-9]\d*\.json\.gz$/.test(name));
+        const last = retired.get(writer);
+        if (last !== undefined) {
+          const outcome = reclaim(scope, writer, writerDir, names, last);
+          if (outcome === "wait") continue;
+          if (outcome === "ours") names = names.filter((name) => name === "head.json");
+          else {
+            retired.delete(writer);
+            moved ||= outcome === "moved";
+            names = names.filter((name) => existsSync(join(writerDir, name)));
+          }
+        }
+        for (const name of tiled(scope, writer, writerDir, names)) {
           const segment = name !== "head.json";
           if (segment && sql("SELECT 1 FROM sync_v2_files WHERE thread = ? AND writer = ? AND name = ?").get(scope.threadId, writer, name)) continue;
           let bytes: Buffer;
@@ -774,12 +1027,15 @@ export function createSyncEngine(input: SyncOptions) {
       }
     }
     if (!options.staged) drain(scope, result);
+    // No local edit follows to publish the rows a copy's head moved onto our id.
+    if (moved) flush(scope, undefined, seen(scope.threadId)[writerId] ?? 0);
     result.sqlRowsTouched = totalChanges() - before;
     return result;
   }
 
   function state(scope: SyncScope): SyncState {
     scopeDir(scope);
+    ownWriter();
     const deletes = variants(scope, "delete");
     let deleteConflicts = 0;
     if (deletes.length) {
@@ -803,6 +1059,7 @@ export function createSyncEngine(input: SyncOptions) {
 
   function applyPending(scope: SyncScope): SyncApplyResult {
     scopeDir(scope);
+    ownWriter();
     const result = emptyResult();
     drain(scope, result, 128);
     return result;

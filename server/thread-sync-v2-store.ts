@@ -89,7 +89,9 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
   const options: SyncOptions = { dataDir: host.dataDir, deviceId: host.deviceId, folder: join(host.dataDir, "sync-v2-staging"), staged: true };
   const engine = createSyncEngine(options);
-  const writer = String(withMessageTransaction((db) => db.prepare("SELECT writer FROM sync_v2_identity WHERE id = 1").get()!.writer));
+  // A copied install moves to a new writer id once its sync worker finds the copy.
+  const writer = () => String(withMessageTransaction((db) => db.prepare("SELECT writer FROM sync_v2_identity WHERE id = 1").get()!.writer));
+  let followed = writer();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const retry = new Set<string>();
   let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -443,7 +445,8 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       publishThreadPictures({ folder: workerFolder!, dataDir: host.dataDir, messages: pictures.map((row): Message => JSON.parse(row.json)) });
       withMessageTransaction((db) => db.prepare("DELETE FROM sync_v2_pictures WHERE thread = ? AND id <= ?").run(threadId, pictures.at(-1)!.id));
     }
-    const { bytesWritten } = await transport.flush(task, undefined, through ?? engine.seen(task.threadId)[writer] ?? 0);
+    const { bytesWritten } = await transport.flush(task, undefined, through ?? engine.seen(task.threadId)[writer()] ?? 0);
+    followWriter();
     bytesPublished += bytesWritten;
     if (wake && (bytesWritten || pictured)) host.published?.();
     return "written";
@@ -463,6 +466,15 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       retry.add(threadId);
       return "skipped" as const;
     });
+  }
+
+  /** A split moves versions the other install's head hid onto the new writer id; nothing else publishes them before this PC's next edit. */
+  function followWriter(): void {
+    const current = writer();
+    if (current === followed) return;
+    followed = current;
+    const threads = withMessageTransaction((db) => z.array(z.object({ thread: z.string() })).parse(db.prepare("SELECT thread FROM sync_v2_threads WHERE next_seq > 1").all()));
+    for (const { thread } of threads) schedule(thread);
   }
 
   function schedule(threadId: string): void {
@@ -495,7 +507,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     try {
       watcher = watch(folder, { recursive: true }, (_event, name) => {
         const [root, botSyncId, threadId, writerId, file, ...rest] = String(name ?? "").split(/[\\/]/);
-        if (file !== "head.json" || rest.length || writerId === writer || !/^threads-v2(?: \([1-9]\d*\))?$/.test(root) || waking.has(threadId)) return;
+        if (file !== "head.json" || rest.length || writerId === writer() || !/^threads-v2(?: \([1-9]\d*\))?$/.test(root) || waking.has(threadId)) return;
         waking.add(threadId);
         void serial(() => {
           waking.delete(threadId);
@@ -519,6 +531,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     const transport = await client();
     if (!transport || host.running(threadId)) return;
     const pulled = await transport.pull(task);
+    followWriter();
     if (!host.enabled() || host.folder() !== workerFolder || host.running(threadId)) return;
     const cursor = task.cursor;
     const own = ownHead(threadId);
@@ -537,7 +550,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (resolve && heads.every((item) => item.version.value === heads[0].version.value)) {
       // Equal heads still look like a fork to older builds; one elected writer folds them so the others never race it.
       const resolvers = heads.filter((item) => engine.automatic(task, item));
-      resolve = (resolvers.length ? resolvers : heads).map((item) => item.writerId).sort()[0] === writer;
+      resolve = (resolvers.length ? resolvers : heads).map((item) => item.writerId).sort()[0] === writer();
     }
     if (!resolve && !changed) return;
     const value = z.string().nullable().parse(heads[0].version.value);
@@ -558,15 +571,16 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   function ownHead(threadId: string): string | null | undefined {
     const row = withMessageTransaction((db) => db.prepare(`SELECT json_extract(json, '$.value') AS value FROM sync_v2_frontier
       WHERE thread = ? AND kind = 'head' AND row_id = '' AND writer = ? AND json_extract(json, '$.legacy') IS NULL ORDER BY seq DESC LIMIT 1`)
-      .get(threadId, writer));
+      .get(threadId, writer()));
     return row && z.string().nullable().parse(row.value);
   }
 
   /** The branch this PC last picked, once `main` hid it, with the reason it stays split if it can't join. */
   function staleBranch(task: StoredTask, main: string, own: string): StaleBranch | undefined {
+    const me = writer();
     const picks = withMessageTransaction((db) => db.prepare(`SELECT json FROM sync_v2_packets WHERE thread = ? AND writer = ?
-      AND json_extract(json, '$.kind') = 'head' AND json_extract(json, '$.legacy') IS NULL ORDER BY seq DESC LIMIT 8`).all(task.threadId, writer));
-    const pick = picks.map((row) => ({ writerId: writer, version: JSON.parse(String(row.json)) })).find((item) => !engine.automatic(task, item));
+      AND json_extract(json, '$.kind') = 'head' AND json_extract(json, '$.legacy') IS NULL ORDER BY seq DESC LIMIT 8`).all(task.threadId, me));
+    const pick = picks.map((row) => ({ writerId: me, version: JSON.parse(String(row.json)) })).find((item) => !engine.automatic(task, item));
     const tip = pick ? z.string().nullable().parse(pick.version.value) : null;
     if (!pick || tip !== own || tip === main) return;
     const messages = host.store.messagesFor(task.threadId);
@@ -604,7 +618,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
     const mine = (id: string) => {
       const variants = engine.variants(task, "row", id);
-      return variants.length === 1 && variants[0].writerId === writer && variants[0].version.origin === host.deviceId;
+      return variants.length === 1 && variants[0].writerId === me && variants[0].version.origin === host.deviceId;
     };
     const packet = (stamp: string) => {
       const [seq, writerId] = stamp.split(":");
@@ -614,10 +628,10 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     const based = (stamp: string | null | undefined) => stamp ? packet(stamp)?.value : null;
     // An append bases its head on the new row's parent; an edit or a branch switch bases it on the old leaf.
     const appended = (id: string, parent: string | null) => {
-      let version = packet(`${engine.variants(task, "row", id)[0].version.seq}:${writer}`);
+      let version = packet(`${engine.variants(task, "row", id)[0].version.seq}:${me}`);
       while (version?.baseStamp) version = packet(version.baseStamp);
       const head = version && withMessageTransaction((db) => db.prepare(`SELECT json FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq > ?
-        AND json_extract(json, '$.kind') = 'head' ORDER BY seq LIMIT 1`).get(task.threadId, writer, version.seq));
+        AND json_extract(json, '$.kind') = 'head' ORDER BY seq LIMIT 1`).get(task.threadId, me, version.seq));
       const created = head ? packetSchema.parse(JSON.parse(String(head.json))) : undefined;
       return created?.value === id && based(created.baseStamp) === parent;
     };
@@ -788,7 +802,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     },
     /** A saved send or edit publishes now, through what it committed, though its turn has started. */
     saved(threadId: string): Promise<"running" | "written" | "skipped"> {
-      const through = engine.seen(threadId)[writer] ?? 0;
+      const through = engine.seen(threadId)[writer()] ?? 0;
       return flushNow(threadId, through, true).catch(() => {
         retry.add(threadId);
         return "skipped" as const;

@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mock } from "node:test";
 import { parentPort, workerData } from "node:worker_threads";
@@ -29,6 +29,7 @@ export interface TestArgs {
   at?: number;
   compaction?: ContextCompactionV1;
   botSyncId?: string;
+  copy?: string;
 }
 
 export interface Snapshot {
@@ -56,8 +57,9 @@ export type TestResult = Snapshot | Message | TaskRecord | BotRecord | string | 
 const input = z.object({ folder: z.string(), dataDir: z.string(), deviceId: z.string(), enabled: z.boolean(), legacy: z.boolean().optional(), auto: z.boolean().optional(), writer: z.string().optional() }).parse(workerData);
 const selection = () => ({ instanceId: "test", model: "test" });
 let store = new Store(selection);
-let bot = store.createBot({}, { seedMessages: false });
-store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
+// A data folder copied from another PC brings its bot and chat along.
+let bot = store.bots[0] ?? store.createBot({}, { seedMessages: false });
+if (!store.taskByThread(bot.id, "thread")) store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
 if (input.legacy) store.appendMessage("thread", { role: "user", kind: "text", text: "legacy" });
 let live = false;
 let openThread: string | null = null;
@@ -148,7 +150,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
       case "append": value = store.appendMessage(threadId, { role: args.role ?? "user", kind: "text", text: args.text, at: args.at ?? Date.now(), ...args.patch }); break;
       case "compaction": value = store.appendCompaction(threadId, args.compaction!); break;
       case "batch":
-        for (let i = 0; i < Number(args.count); i++) store.appendMessage(threadId, { role: "user", kind: "text", text: `row ${i}` });
+        for (let i = 0; i < Number(args.count); i++) store.appendMessage(threadId, { role: "user", kind: "text", text: `row ${i}${args.text ?? ""}` });
         break;
       case "patch": value = store.patchMessage(threadId, String(args.id), args.patch ?? {}); break;
       case "head": value = store.setActiveLeaf(threadId, String(args.id)); break;
@@ -252,6 +254,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
       case "restart":
         await sync?.close();
         closeMessageDb();
+        if (args.copy) cpSync(input.dataDir, args.copy, { recursive: true });
         store = new Store(selection);
         bot = store.bots[0];
         traceQueries();

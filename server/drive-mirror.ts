@@ -119,6 +119,10 @@ function priority(path: string, chatFirst = false, openThread?: string | null): 
   return 5 + offset;
 }
 
+function newest(a: ContentFile, b: ContentFile): number {
+  return Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime) || Date.parse(b.createdTime) - Date.parse(a.createdTime) || a.id.localeCompare(b.id);
+}
+
 function chatPart(path: string): { thread: string; head: boolean } | null {
   const match = /^threads-v2(?: \([1-9]\d*\))?\/[^/]+\/([^/]+)\/[^/]+\/(seg-[1-9]\d*-[1-9]\d*\.json\.gz|head\.json)$/.exec(path);
   return match && { thread: match[1], head: match[2] === "head.json" };
@@ -281,10 +285,15 @@ export function createDriveMirror(options: Options) {
     return drivePathRule(own, ids) === "own" ? own : null;
   }
 
-  function assertDownloadPath(path: string, ownPaths: string[]): void {
+  function assertDownloadPath(path: string, ownPaths: string[], own = false): void {
     assertSafePath(path);
     const target = join(mirrorPath, ...path.split("/"));
     const resolved = canonicalPath(target);
+    if (own) {
+      // mirrorPath can keep an 8.3 short name that realpathSync.native expands.
+      if (!samePath(resolved, join(canonicalPath(mirrorPath), ...path.split("/")))) throw new DriveMirrorError("path-alias");
+      return;
+    }
     if (drivePathRule(relative(mirrorPath, resolved).split(sep).join("/"), ids) === "own") throw new DriveMirrorError("path-alias");
     const identity = fileIdentity(target);
     const candidate = ownTargetPath(path);
@@ -294,7 +303,7 @@ export function createDriveMirror(options: Options) {
     }
   }
 
-  async function download(path: string, bytes: Buffer, once: boolean, check: () => void, ownPaths: string[]): Promise<boolean> {
+  async function download(path: string, bytes: Buffer, once: boolean, check: () => void, ownPaths: string[], own = false): Promise<boolean> {
     check();
     parents(path, true);
     const target = join(mirrorPath, ...path.split("/"));
@@ -308,8 +317,8 @@ export function createDriveMirror(options: Options) {
         closeSync(fd);
       }
       check();
-      assertDownloadPath(path, ownPaths);
-      if (!once) await renameDriveFile(tmp, target, () => { check(); assertDownloadPath(path, ownPaths); });
+      assertDownloadPath(path, ownPaths, own);
+      if (!once) await renameDriveFile(tmp, target, () => { check(); assertDownloadPath(path, ownPaths, own); });
       else {
         try {
           linkSync(tmp, target);
@@ -598,6 +607,15 @@ export function createDriveMirror(options: Options) {
       return entry.md5 !== local.md5 || entry.size !== local.size;
     }
 
+    // A segment under our writer id waits while Drive's head for that chat is another install's; the split it starts drops the segment.
+    function copiedHead(path: string): boolean {
+      const head = `${path.slice(0, path.lastIndexOf("/"))}/head.json`;
+      if (chatPart(path)?.head !== false || drivePathRule(head, ids) !== "own") return false;
+      const file = [...(remote.get(head) ?? [])].sort(newest)[0];
+      const previous = table!.files[head];
+      return !!file && (!previous || !same(file, previous));
+    }
+
     async function syncPath(path: string): Promise<void> {
       check();
       const rule = drivePathRule(path, ids);
@@ -625,16 +643,21 @@ export function createDriveMirror(options: Options) {
       }
       copies.sort((a, b) => rule === "once"
         ? Date.parse(a.createdTime) - Date.parse(b.createdTime) || a.id.localeCompare(b.id)
-        : Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime) || Date.parse(b.createdTime) - Date.parse(a.createdTime) || a.id.localeCompare(b.id));
+        : newest(a, b));
       const file = copies[0];
       if (copies.length > 1 && !summary.duplicates.some((item) => item.path === path)) {
         summary.duplicates.push({ path, selectedId: file.id, ids: copies.map((copy) => copy.id) });
         if (rule === "once" && copies.some((copy) => copy.md5Checksum !== file.md5Checksum || copy.size !== file.size) && !summary.conflicts.includes(path)) summary.conflicts.push(path);
       }
       const local = localHash(path);
+      const previous = table!.files[path];
+      // A copy of this install moved our chat head; landing it lets the chat engine split off instead of losing it.
+      const copied = !!file && rule === "own" && !!chatPart(path)?.head && (!previous || !same(file, previous));
+      // Our chat head from before a split: Drive still holds what we last synced, so the rows only this head has go up.
+      const retired = !!file && rule === "peer" && !!chatPart(path)?.head && !!local && !!previous && same(file, previous);
       if (!file) {
         if (!local) { summary.skipped.push(path); return; }
-        if (held()) return;
+        if (held() || copiedHead(path)) return;
         const bytes = localBytes(path);
         if (!bytes) { summary.skipped.push(path); return; }
         const created = await client.createFile(rootId, encodeDrivePath(path), { ph: drivePathHash(path) }, bytes);
@@ -646,9 +669,9 @@ export function createDriveMirror(options: Options) {
       } else if (local && same(file, local)) {
         summary.skipped.push(path);
         track(path, file);
-      } else if (rule === "once" && local) {
+      } else if (rule === "once" && local && !chatPart(path)) {
         if (!summary.conflicts.includes(path)) summary.conflicts.push(path);
-      } else if (rule === "own") {
+      } else if ((rule === "own" && !copied) || retired) {
         if (!local) { summary.skipped.push(path); return; }
         if (held()) return;
         const bytes = localBytes(path);
@@ -658,7 +681,6 @@ export function createDriveMirror(options: Options) {
         if (!hasContent(updated) || updated.id !== file.id || !matches(updated, bytes) || updated.trashed) throw new DriveMirrorError("invalid-remote");
         summary.uploaded.push(path);
         // Cloned owners can keep restoring the same bytes over each other.
-        const previous = table!.files[path];
         if (!previous || !same(updated, previous)) summary.uploadedForPeers = true;
         track(path, updated);
       } else {
@@ -668,7 +690,8 @@ export function createDriveMirror(options: Options) {
         });
         check();
         if (!matches(file, downloaded)) throw new DriveMirrorError("content-changed");
-        const written = await download(path, downloaded, rule === "once", check, ownPaths);
+        // Drive's first copy of a chat segment is that writer's history; a differing local one is a copied install's.
+        const written = await download(path, downloaded, rule === "once" && !local, check, ownPaths, copied);
         check();
         const current = localHash(path);
         if (current && same(file, current)) {
