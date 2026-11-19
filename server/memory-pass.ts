@@ -258,7 +258,8 @@ function liveRows(text: string): { rows: string[]; close: string } {
       if (block.end.test(row)) block = undefined;
       continue;
     }
-    const marks = /^ {0,3}(`{3,}|~{3,})/.exec(row)?.[1];
+    // an info string with a backtick is inline code, not a fence
+    const marks = /^ {0,3}(`{3,}(?!.*`)|~{3,})/.exec(row)?.[1];
     if (marks) {
       block = { close: marks, end: new RegExp(`^ {0,3}${marks[0]}{${marks.length},}\\s*$`) };
       continue;
@@ -274,34 +275,6 @@ function liveRows(text: string): { rows: string[]; close: string } {
     if (bullet) rows.push(NOTED.exec(row)?.[1] ?? bullet.trim());
   }
   return { rows, close: block ? `${block.close}\n` : "" };
-}
-
-const OVERFLOW_FIELDS: Array<[string, RegExp]> = [
-  ["residence", /^(?:[Ll]ives in|[Mm]oved to) (\p{Lu}[\p{L} .'-]*)$/u],
-  ["JavaScript package manager", /^(?:uses|switched to) (p?npm|yarn|bun)$/i],
-  ["Python package manager", /^(?:uses|switched to) (pip|uv|poetry)$/i],
-  ["operating system", /^(?:on|uses|switched to) (macOS|Linux|Windows|(?:Free|Open|Net)BSD|Ubuntu|Debian|Fedora)$/i],
-  ["pet", /^has an? (cat|dog|rabbit|hamster|parrot|guinea pig)$/i],
-  ["diet", /^(vegetarian|vegan|pescat[ae]rian|eats meat)(?: again)?$/i],
-  ["appearance", /^(?:uses|prefers|switched to) (dark|light) (?:mode|theme)$/i],
-  ["relationship", /^(single|married to .+|engaged to .+|divorced|widowed)$/i],
-  ["timezone", /^(?:[Tt]ime ?zone is|[Nn]ow in) ([ECMP][SD]T|[A-Z]?GMT|UTC|[CE][E]?S?T|KST|JST|IST|A[EW][SD]T)$/],
-  ["age", /^(\d+) years? old$/i],
-  ["wake time", /^wakes at (\d{1,2}(?::\d\d)?\s*(?:am|pm)?)$/i],
-  ["budget", /^budget is (\S.*)$/i],
-  ["favorite color", /^favou?rite colou?r (?:is )?(\S.*)$/i],
-  ["milk", /^drinks (\S+) milk$/i],
-];
-const COEXISTING_FIELDS = new Set(["pet", "milk"]);
-
-function overflowValue(line: string): { field: string; value: string } | undefined {
-  const label = /^([\p{L}][\p{L}\p{N} -]*):\s+(\S.*)$/u.exec(line);
-  if (label) return { field: `label:${squash(label[1]!)}`, value: squash(label[2]!) };
-  for (const [field, pattern] of OVERFLOW_FIELDS) {
-    const value = pattern.exec(line)?.[1];
-    if (value) return { field, value: squash(value) };
-  }
-  return undefined;
 }
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
@@ -810,21 +783,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         // a restart can replay a batch whose notes already landed in order
         let ends = due.length;
         while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line)) ends -= 1;
-        const latest = new Map<string, string>();
-        for (const row of rows) {
-          const entry = overflowValue(row);
-          if (entry) latest.set(entry.field, entry.value);
-        }
-        const changed = (line: string) => batch.facts.some(({ fact, quote }) =>
-          squash(fact.replace(/^[-*]\s+/, "")) === squash(line) &&
-          batch.source.some(({ text }) => quotes(text, quote) && /\b(?:now|back to|no wait|instead|actually)\b/i.test(clauseOf(text, quote))),
-        );
-        // free-form facts can coexist, even when they share words
+        // a line said again lands unless it is already the newest row, so the newest row is what was said last
+        let newest = rows.at(-1);
         const fresh = due.slice(ends).filter(({ line }) => {
-          const entry = overflowValue(line);
-          if (known.has(line) && (!entry || latest.get(entry.field) === entry.value ||
-            (COEXISTING_FIELDS.has(entry.field) && !changed(line)))) return false;
-          if (entry) latest.set(entry.field, entry.value);
+          if (line === newest) return false;
+          newest = line;
           return true;
         });
         if (fresh.length) {

@@ -169,7 +169,11 @@ function hasNearPair(positions: number[][]): boolean {
 }
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
-  const parsed = files.flatMap(piecesOfFile);
+  const all = files.flatMap(piecesOfFile);
+  // a note said again is one row, so repeating it never makes its words common
+  const note = (row: Piece[]) => `${row[0]!.source}\0${row.map(({ text }) => text).join("\n").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)$/, "")}`;
+  const last = new Map(all.map((row, at) => [note(row), at]));
+  const parsed = all.filter((row, at) => last.get(note(row)) === at);
   const latest = new Map<string, string>();
   for (const piece of parsed.flat()) if (piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
   const rows = parsed.filter((row) => row.every((piece) => piece.date === latest.get(piece.topic)));

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -588,17 +589,17 @@ describe("memory pass", () => {
       await settle("t1", 3 * MINUTE);
     }
     expect(generate).toHaveBeenCalledTimes(3);
-    expect(overflow()).toBe(notes);
-    expect(chips("t1")).toHaveLength(0);
-    expect(pass.droppedNotes("bot-t1")).toBeUndefined();
+    expect(overflow()).toBe(`${notes}- Likes tea (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
   });
 
   it.each([
-    ["an open comment", "<!-- draft\n- idea\n"],
-    ["an open fence", "```\nexample output\n"],
-    ["a nested detail", "- Allergic to nuts (noted 2026-10-13)\n  - Carries an EpiPen in the blue bag\n- Owns a kayak\n"],
-    ["two headings", "## Mina\n- Allergic to nuts (noted 2026-10-13)\n## Sam\n- Allergic to nuts (noted 2026-10-14)\n- Owns a kayak\n"],
-  ])("leaves an overflow note in place with %s", async (_kind, tail) => {
+    ["an open comment", "<!-- draft\n- idea\n", "-->\n"],
+    ["an open fence", "```\nexample output\n", "```\n"],
+    ["a nested detail", "- Allergic to nuts (noted 2026-10-13)\n  - Carries an EpiPen in the blue bag\n- Owns a kayak\n", ""],
+    ["two headings", "## Mina\n- Allergic to nuts (noted 2026-10-13)\n## Sam\n- Allergic to nuts (noted 2026-10-14)\n- Owns a kayak\n", ""],
+  ])("leaves an overflow note in place with %s and adds the repeat after it", async (_kind, tail, close) => {
     writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
     mkdirSync(dirname(overflowPath()), { recursive: true });
     const notes = `# Notebook\n- Allergic to nuts (noted 2026-10-12)\n- Likes coffee\n${tail}`;
@@ -606,9 +607,23 @@ describe("memory pass", () => {
     generate.mockResolvedValue(facts(["Allergic to nuts", "i am allergic to nuts"]));
     say("t1", "i am allergic to nuts");
     await settle("t1", 3 * MINUTE);
-    expect(overflow()).toBe(notes);
-    expect(chips("t1")).toHaveLength(0);
+    expect(overflow()).toBe(`${notes}${close}- Allergic to nuts (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
   });
+  it("reads a line of inline code in an overflow file as text, not a fence", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const notes = "# Notebook\n- Likes tea (noted 2026-10-01)\n```js``` is how i write code\n- Owns a kayak (noted 2026-10-03)\n";
+    writeFileSync(overflowPath(), notes);
+    const turns: Array<[string, string]> = [["Owns a kayak", "i own a kayak"], ["Plays the cello", "i play the cello"]];
+    for (const [fact, quote] of turns) {
+      generate.mockResolvedValue(facts([fact, quote]));
+      say("t1", quote);
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(overflow()).toBe(`${notes}- Plays the cello (noted 2026-10-15)\n`);
+  });
+
 
   it("keeps an old overflow note reachable in a file past the lookup budget", async () => {
     writeMemoryFile("bot-t1", `# Memory\n- memory/auto-notes-overflow.md: prior pointer\n${"- note\n".repeat(197)}`);
@@ -627,7 +642,8 @@ describe("memory pass", () => {
     say("t1", fact.toLowerCase());
     await settle("t1", 3 * MINUTE);
     expect(await recall("after")).toContain("north office");
-    expect(chips("t1")).toHaveLength(0);
+    expect(overflow()).toBe(`${notes}\n- ${fact} (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
   });
 
   it("saves a value an overflow file had before a later correction as the latest", async () => {
@@ -638,7 +654,7 @@ describe("memory pass", () => {
     generate.mockResolvedValue(facts(["Home city: Toronto", "i moved back to Toronto"], ["Lives in Toronto", "back to Toronto"], ["Likes tea", "i like tea"]));
     say("t1", "i moved back to Toronto, i like tea");
     await settle("t1", 3 * MINUTE);
-    expect(overflow()).toBe(`${moves}- Home city: Toronto (noted 2026-10-15)\n- Lives in Toronto (noted 2026-10-15)\n`);
+    expect(overflow()).toBe(`${moves}- Home city: Toronto (noted 2026-10-15)\n- Lives in Toronto (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
   });
 
   it("saves a return to a multiword city after a one-word city as the latest", async () => {
@@ -709,16 +725,104 @@ describe("memory pass", () => {
     expect(overflow()).toBe("# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- Uses pnpm (noted 2026-10-15)\n- Uses npm\n- Uses pnpm (noted 2026-10-15)\n");
     expect(chips("t1")).toHaveLength(2);
   });
+  it.each([
+    ["Works at Acme", "i work at acme", "Works at Globex", "i work at globex", "i work at acme again"],
+    ["Drives a Honda", "i drive a honda", "Drives a Tesla", "i drive a tesla", "i drive a honda again"],
+    ["Uses Chrome", "i use chrome", "Uses Firefox", "i use firefox", "i use chrome again"],
+    ["Lives in seoul", "i live in seoul", "Lives in busan", "i live in busan", "i live in seoul again"],
+    ["Lives in Toronto, Canada", "i live in toronto, canada", "Lives in Vancouver, Canada", "i live in vancouver, canada", "back in toronto, canada"],
+    ["서울에 산다", "서울에 산다", "부산에 산다", "부산에 산다", "다시 서울에 산다"],
+    ["Favorite editor is Vim", "my favorite editor is vim", "Favorite editor is Emacs", "my favorite editor is emacs", "my favorite editor is vim after all"],
+    ["Phone is an iPhone", "my phone is an iphone", "Phone is a Pixel", "my phone is a pixel", "my phone is an iphone again"],
+    ["Is vegetarian", "i am vegetarian", "Eats meat", "i eat meat", "i am vegetarian again"],
+    ["Uses Python 3.11", "i use python 3.11", "Uses Python 3.12", "i use python 3.12", "i use python 3.11 again"],
+    ["Wakes up at 6am", "i wake up at 6am", "Wakes up at 9am", "i wake up at 9am", "i wake up at 6am again"],
+    ["Uses pnpm for work projects", "i use pnpm for work projects", "Uses npm for work projects", "i use npm for work projects", "i use pnpm for work projects again"],
+    ["Manager is Dana", "my manager is dana", "Manager is Lee", "my manager is lee", "my manager is dana again"],
+    ["Prefers tabs", "i prefer tabs", "Prefers spaces", "i prefer spaces", "i prefer tabs after all"],
+    ["Based in Toronto", "i am based in toronto", "Based in Vancouver", "i am based in vancouver", "i am based in toronto again"],
+    ["Is 38", "i am 38", "Is 39", "i am 39", "sorry i am 38"],
+    ["Subscribed to the Pro plan", "i am on the pro plan", "Subscribed to the Max plan", "i am on the max plan", "i am on the pro plan again"],
+    ["Team standup is at 9", "standup is at 9", "Team standup is at 10", "standup is at 10", "standup is at 9 again"],
+    ["Has a cat", "i have a cat", "Has a dog", "i have a dog", "sorry i meant i have a cat"],
+    ["Drinks oat milk", "i drink oat milk", "Drinks soy milk", "i drink soy milk", "i drink oat milk these days"],
+  ])("saves a return to %s (%s) after %s as the latest, in any wording", async (a, said, b, saidB, again) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    const turns: Array<[string, string]> = [[a, said], [b, saidB], [a, again]];
+    for (const [fact, quote] of turns) {
+      generate.mockResolvedValue(facts([fact, quote]));
+      say("t1", quote);
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([a, b, a].map((fact) => `- ${fact} (noted 2026-10-15)`));
+    expect(chips("t1")).toHaveLength(3);
+  });
+
+  it("keeps what was said last as the newest overflow row in any script, and a plain repeat changes nothing", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    // seeded, so a failing run replays
+    let seed = 1991;
+    const pick = (n: number) => {
+      seed = (seed * 48_271) % 2_147_483_647;
+      return seed % n;
+    };
+    const scripts = ["abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "0123456789", ".,;:!?'\"()&%#@/=_"];
+    const glyph = (script: number) => {
+      const letters = scripts[script];
+      return letters ? letters[pick(letters.length)]! : String.fromCodePoint(0xac00 + pick(11_172));
+    };
+    const word = () => {
+      const script = pick(4);
+      return Array.from({ length: 2 + pick(5) }, () => glyph(script)).join("");
+    };
+    const said: string[] = [];
+    const value = (): string => {
+      const text = said.length && !pick(4) ? said[pick(said.length)]! : Array.from({ length: 2 + pick(3) }, word).join(" ");
+      if (acceptFacts([{ fact: text, quote: text }], text, memoryFileRaw("bot-t1")).length !== 1) return value();
+      if (!said.includes(text)) said.push(text);
+      return text;
+    };
+    const tell = async (...lines: string[]) => {
+      generate.mockResolvedValue(facts(...lines.map((line): [string, string] => [line, line])));
+      for (const line of lines) say("t1", line);
+      await settle("t1", 3 * MINUTE);
+    };
+    const newest = () => overflow()?.trimEnd().split("\n").at(-1)?.replace(/ \(noted \d{4}-\d{2}-\d{2}\)$/, "");
+    for (let run = 0; run < 100; run++) {
+      const a = value();
+      let b = value();
+      while (b === a) b = value();
+      if (overflow() !== null && !pick(8)) fs.appendFileSync(overflowPath(), ["<!-- draft\n", "```\n", "<details>\n"][pick(3)]!);
+      await tell(a);
+      if (pick(3)) {
+        await tell(b);
+        await tell(a);
+      } else {
+        await tell(b, a);
+      }
+      expect(newest(), `run ${run}: ${a} then ${b} then ${a}`).toBe(`- ${a}`);
+      const text = overflow();
+      const saved = chips("t1").length;
+      const count = pass.droppedNotes("bot-t1");
+      const calls = generate.mock.calls.length;
+      await tell(a);
+      expect(generate).toHaveBeenCalledTimes(calls + 1);
+      expect(overflow(), `run ${run}: ${a} again`).toBe(text);
+      expect(chips("t1")).toHaveLength(saved);
+      expect(pass.droppedNotes("bot-t1")).toEqual(count);
+    }
+  }, 120_000);
+
 
   it.each([
     ["Likes tea", "Likes coffee"],
     ["Works at Acme", "Works at night"],
     ["Lives in Toronto", "Lives in a condo"],
-  ])("keeps one dated row of %s said again after %s, and recall keeps the overflow topic", async (a, b) => {
+  ])("adds one dated row for %s said again after %s, and recall keeps the overflow topic", async (a, b) => {
     writeMemoryFile("bot-t1", `# Memory\n- memory/auto-notes-overflow.md: prior pointer\n${"- note\n".repeat(197)}`);
     mkdirSync(dirname(overflowPath()), { recursive: true });
     const fillers = Array.from({ length: 120 }, (_, i) => `- filler kettle${i} harbor${i} lantern${i}\n`).join("");
-    // eight bytes under the lookup budget, so a second dated row would take the file past it
+    // eight bytes under the lookup budget, so the new dated row takes the file past it
     const notes = `# Notebook\n\n- ${a} (noted 2026-10-01)\n- ${b} (noted 2026-10-02)\n- COBALT WALRUS: invoice goes to the north office\n${fillers}`
       .padEnd(2 * 1024 * 1024 - Buffer.byteLength(memoryFileRaw("bot-t1")) - 8, " ");
     writeFileSync(overflowPath(), notes);
@@ -732,18 +836,59 @@ describe("memory pass", () => {
     generate.mockResolvedValue(facts([a, `ok so now ${a.toLowerCase()}`]));
     say("t1", `ok so now ${a.toLowerCase()}`);
     await settle("t1", 3 * MINUTE);
-    expect(overflow()).toBe(notes);
-    expect(chips("t1")).toHaveLength(0);
-    expect(pass.droppedNotes("bot-t1")).toBeUndefined();
+    expect(overflow()).toBe(`${notes}\n- ${a} (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
     expect(await recalled("after")).toBe(true);
   });
+  it.each([0, 20, 45, 60, 120])("recalls a note the user returned to in an overflow file with %i other rows", async (count) => {
+    writeMemoryFile("bot-t1", `# Memory\n- memory/auto-notes-overflow.md: prior pointer\n${"- note\n".repeat(197)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const fillers = Array.from({ length: count }, (_, i) => `- Filler fact about topic${i} and subject${i} (noted 2026-09-01)\n`).join("");
+    writeFileSync(overflowPath(), `# Notebook\n${fillers}- Likes tea (noted 2026-10-01)\n- Uses pnpm (noted 2026-10-01)\n- Uses npm (noted 2026-10-02)\n- Owns a kayak (noted 2026-10-03)\n`);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    const recall = async (cursor: string) => {
+      await lookup.refresh("bot-t1");
+      return lookup.take("bot-t1", "t1", cursor, "uses pnpm").join("");
+    };
+    expect(await recall("before")).toContain("Uses pnpm");
+    generate.mockResolvedValue(facts(["Uses pnpm", "ok so now i use pnpm"]));
+    say("t1", "ok so now i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toMatch(/- Uses pnpm \(noted 2026-10-15\)\n$/);
+    expect(await recall("after")).toContain("Uses pnpm");
+  });
+
+  it("recalls the value the user flipped back to ten times", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n- memory/auto-notes-overflow.md: prior pointer\n${"- note\n".repeat(197)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const fillers = Array.from({ length: 60 }, (_, i) => `- Filler fact about topic${i} and subject${i} (noted 2026-09-01)\n`).join("");
+    writeFileSync(overflowPath(), `# Notebook\n${fillers}- Uses macOS (noted 2026-10-01)\n`);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    const recall = async (cursor: string) => {
+      await lookup.refresh("bot-t1");
+      return lookup.take("bot-t1", "t1", cursor, "uses macos").join("");
+    };
+    expect(await recall("before")).toContain("Uses macOS");
+    for (let flip = 0; flip < 20; flip++) {
+      const system = flip % 2 ? "macOS" : "Windows";
+      generate.mockResolvedValue(facts([`Uses ${system}`, `ok so now i use ${system.toLowerCase()}`]));
+      say("t1", `ok so now i use ${system.toLowerCase()}`);
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(overflow()?.split("\n").filter((row) => /^- Uses (?:macOS|Windows) /.test(row))).toHaveLength(21);
+    expect(await recall("after")).toContain("Uses macOS");
+  });
+
 
   it.each([
     ["Has a cat", "Has a dog", "i have a cat"],
     ["Drinks oat milk", "Drinks soy milk", "i drink oat milk"],
     ["Uses pnpm", "Uses pip", "i use pnpm"],
     ["Uses pnpm", "Switched to pnpm", "i use pnpm"],
-  ])("leaves a repeat of %s alone after %s", async (a, b, quote) => {
+  ])("adds a repeat of %s after %s as the newest row", async (a, b, quote) => {
     writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
     mkdirSync(dirname(overflowPath()), { recursive: true });
     const notes = `# Notebook\n- ${a} (noted 2026-10-01)\n- ${b} (noted 2026-10-02)\n`;
@@ -751,8 +896,8 @@ describe("memory pass", () => {
     generate.mockResolvedValue(facts([a, quote]));
     say("t1", quote);
     await settle("t1", 3 * MINUTE);
-    expect(overflow()).toBe(notes);
-    expect(chips("t1")).toHaveLength(0);
+    expect(overflow()).toBe(`${notes}- ${a} (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
   });
 
   it("keeps the count of notes an older version lost when a new note overflows", async () => {
@@ -1813,5 +1958,51 @@ describe("memory pass wiring", () => {
     const source = readFileSync(join(here, "memory-pass.ts"), "utf8");
     expect(source.replace(/\r\n/g, "\n")).toContain("const messages = deps.store.messagesFor(sourceThread(threadId));\n    const rows = pendingRows(messages, ids);");
     expect(source).not.toMatch(/new Map\(deps\.store\.messagesFor/);
+  });
+  it("picks overflow rows without reading their wording", () => {
+    const path = join(here, "memory-pass.ts");
+    const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
+    const all = <T extends ts.Node>(root: ts.Node, test: (node: ts.Node) => node is T) => {
+      const found: T[] = [];
+      const walk = (node: ts.Node) => {
+        if (test(node)) found.push(node);
+        node.forEachChild(walk);
+      };
+      walk(root);
+      return found;
+    };
+    const statementOf = (node: ts.Node): ts.Node => (node.parent && node.parent !== source ? statementOf(node.parent) : node);
+    const names = (statement: ts.Node) =>
+      ts.isFunctionDeclaration(statement) && statement.name ? [statement.name.text]
+        : ts.isVariableStatement(statement) ? statement.declarationList.declarations.flatMap(({ name }) => (ts.isIdentifier(name) ? [name.text] : []))
+          : [];
+    const owner = (node: ts.Node) => names(statementOf(node))[0] ?? "";
+    const line = (node: ts.Node) => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+    // a pattern's own text, escapes and character classes left out
+    const literal = (pattern: ts.Node) => {
+      const text = pattern.getText(source);
+      return text.slice(1, text.lastIndexOf("/")).replace(/\[(?:\\.|[^\]\\])*\]/g, " ").replace(/\\./g, " ");
+    };
+    const tables = [...all(source, ts.isArrayLiteralExpression), ...all(source, ts.isObjectLiteralExpression)]
+      .filter((node) => all(node, ts.isRegularExpressionLiteral).filter((pattern) => /\p{L}{2,} \p{L}{2,}/u.test(literal(pattern))).length >= 2)
+      .map((node) => `memory-pass.ts:${line(node)} ${owner(node)}: a table of sentence patterns`);
+    const appends = all(source, ts.isCallExpression).filter((call) => call.expression.getText(source) === "appendLines");
+    const holds = (outer: ts.Node, inner: ts.Node) => outer.getStart(source) <= inner.getStart(source) && inner.getEnd() <= outer.getEnd();
+    const writers = all(source, ts.isIdentifier).filter((name) => name.text === "OVERFLOW_FILE").map((name) => {
+      let node: ts.Node = name;
+      while (node.parent && !appends.some((call) => holds(node, call))) node = node.parent;
+      return node;
+    });
+    const writer = writers.sort((a, b) => a.getWidth(source) - b.getWidth(source))[0];
+    if (!writer) throw new Error("no overflow write found in memory-pass.ts");
+    const declared = new Map(source.statements.flatMap((statement) => names(statement).map((name): [string, ts.Node] => [name, statement])));
+    const reached = new Set<ts.Node>([writer]);
+    for (const node of reached) for (const name of all(node, ts.isIdentifier)) reached.add(declared.get(name.text) ?? writer);
+    // Markdown structure, not what a note says
+    const markup = new Set(["liveRows", "NOTED"]);
+    const wording = [...reached].flatMap((node) => all(node, ts.isRegularExpressionLiteral))
+      .filter((pattern) => !markup.has(owner(pattern)) && /\p{L}{2,}/u.test(literal(pattern)))
+      .map((pattern) => `memory-pass.ts:${line(pattern)} ${owner(pattern)}: ${pattern.getText(source)}`);
+    expect([...tables, ...wording], "Overflow returns are language-free: a line lands unless it is already the file's newest row. Delete the wording list instead of growing it.").toEqual([]);
   });
 });
