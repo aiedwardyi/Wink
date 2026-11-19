@@ -119,6 +119,8 @@ describe("quick route", () => {
   });
 
   it.each([
+    "what port is in the server config, please?",
+    "switched to the new branch",
     "i know ur working, but its odd, im testing the sidekick thing but it doesnt seem like our feature works",
     "when u got time read this real quick to see if it'll help us with ci https://example.com/ci-cost",
   ])("steers at once, then posts one short reply under it: %s", async (text) => {
@@ -141,6 +143,9 @@ describe("quick route", () => {
     ["also update the docs when you are done", "Got it, one moment while I finish this step, then I'll do it."],
     ["2", "Got it, one moment while I finish this step, then I'll do it."],
     ["둘 다 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["PR 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["npm install 다시 해볼까?", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["merge 2번", "Got it, one moment while I finish this step, then I'll do it."],
   ])("answers an order with the fixed line only: %s", async (text, line) => {
     const h = harness({ consumed: true, result: { route: "answer", text: "Merging PR 12 and PR 14 now.", ms: 4 } });
     await h.send({ text });

@@ -40,22 +40,28 @@ const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i
 // A pick or a number answers the bot's question: "both", "2", "the second one".
 const PICK = /^(both|all( of (them|it))?|everything|neither|none|(the )?(first|second|third|fourth|last)( one| option)?|option [a-z0-9]|#?\d+)[\s.!]*$/i;
 const KO_PICK = /^(둘 ?다|전부|모두|(첫|두|세|네) ?번째(꺼|것)?|\d+ ?번(째)?)[\s.!~]*$/;
+// "what port is it, please?" asks for facts; "switched to X" and "done" report news. Neither orders anything.
+const INFO_Q = /^(what|whats|what's|where|wheres|where's|which|who|whose|when|why|how|is|isn't|isnt|are|aren't|was|were)\b/i;
+const REPORTED = /^(switched|done)\b/i;
 const ENDS_Q = /\?[\s!?.)]*((lol|lmao|haha)\s*)?\W*$/i;
 const TAG_Q = /\b(right|correct|or not|or no)[\s.!]*$/i;
 
 /** An order or a decision for the bot, whose meaning only the bot may read. */
 export function isOrder(raw: string): boolean {
-  const text = raw.trim();
-  if (!text) return false;
-  const sentences = text
+  return raw
     .split(SENTENCE)
-    .map((sentence) => sentence.trim().replace(LEAD, "").replace(KO_LEAD, "").trim())
-    .filter(Boolean);
-  return (
-    REQUEST.test(text) ||
-    KO_REQUEST.test(text) ||
-    sentences.some((sentence) => PICK.test(sentence) || KO_PICK.test(sentence) || (COMMAND.test(sentence) && !QUESTION_START.test(sentence)))
-  );
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .some((part) => {
+      const sentence = part.replace(LEAD, "").replace(KO_LEAD, "").trim();
+      return (
+        (REQUEST.test(part) && !INFO_Q.test(sentence)) ||
+        KO_REQUEST.test(part) ||
+        PICK.test(sentence) ||
+        KO_PICK.test(sentence) ||
+        (COMMAND.test(sentence) && !REPORTED.test(sentence) && !QUESTION_START.test(sentence))
+      );
+    });
 }
 
 /** "quick": the helper tries it first, then confirms or hands off. "ack": the bot takes it now and the helper adds one short reply. "main": the bot alone. */

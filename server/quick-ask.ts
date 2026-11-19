@@ -24,7 +24,13 @@ const NOTE_HEAD =
 // An order gets a fixed line, never the helper's reading of it; the bot decides what the order means.
 const ORDER_ACK = "Got it, one moment while I finish this step, then I'll do it.";
 const ORDER_ACK_KO = "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요.";
-const HANGUL = /[\u3131-\u318e\uac00-\ud7a3]/;
+const HANGUL = /[\u3131-\u318e\uac00-\ud7a3]/g;
+const LATIN = /[a-z]/gi;
+// the message's main script: one stray Hangul character ("merge 2번") stays English
+const isKorean = (text: string) => {
+  const korean = text.match(HANGUL)?.length ?? 0;
+  return korean > 0 && korean * 4 >= korean + (text.match(LATIN)?.length ?? 0);
+};
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
 const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
@@ -332,7 +338,7 @@ export async function ackQuick(deps: HelperDeps, botId: string, threadId: string
   if (!instance) return;
   const text = sent.text ?? "";
   const result: QuickResult = isOrder(text)
-    ? { route: "answer", text: HANGUL.test(text) ? ORDER_ACK_KO : ORDER_ACK, ms: 0 }
+    ? { route: "answer", text: isKorean(text) ? ORDER_ACK_KO : ORDER_ACK, ms: 0 }
     : await askHelper(deps, instance, botId, threadId, sent, true);
   const current = store.bot(botId);
   if (!current || result.route === "handoff" || !result.text) return;
