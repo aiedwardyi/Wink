@@ -23,7 +23,11 @@ const BASE = ["uSize", "uBuf", "uT", "uFlow", "uLaneX", "uLaneW", "uTex", "uTex2
 const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 
 export function flowScene(spec: FlowSpec): SceneModule {
+  // A swipe's peeked chat runs its own scene at the open chat's size: it reuses those plates instead of painting them again.
+  let plates: { key: string; paper: HTMLCanvasElement | null; extra: ImageData | null } | null = null;
+  let live = 0;
   function create(api: SceneApi) {
+    live++;
     const canvas = document.createElement("canvas");
     api.layer.append(canvas);
     const main = api.layer.parentElement;
@@ -98,21 +102,26 @@ export function flowScene(spec: FlowSpec): SceneModule {
       height = Math.max(1, api.layer.clientHeight);
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
-      if (gl && ready && spec.backdrop) {
-        const paper = document.createElement("canvas");
-        paper.width = canvas.width;
-        paper.height = canvas.height;
-        const g = paper.getContext("2d");
-        if (g) {
-          g.scale(dpr, dpr);
-          spec.backdrop(g, width, height);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, paper);
+      const key = `${width}x${height}@${dpr}`;
+      if (gl && ready && (spec.backdrop || spec.extra) && plates?.key !== key) {
+        let paper: HTMLCanvasElement | null = null;
+        if (spec.backdrop) {
+          const sheet = document.createElement("canvas");
+          sheet.width = canvas.width;
+          sheet.height = canvas.height;
+          const g = sheet.getContext("2d");
+          if (g) {
+            g.scale(dpr, dpr);
+            spec.backdrop(g, width, height);
+            paper = sheet;
+          }
         }
+        plates = { key, paper, extra: spec.extra?.(width, height, dpr) ?? null };
       }
-      const extra = gl && ready && spec.extra?.(width, height, dpr);
-      if (gl && extra) {
+      if (gl && ready && plates?.paper) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, plates.paper);
+      if (gl && ready && plates?.extra) {
         gl.activeTexture(gl.TEXTURE1);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, extra);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, plates.extra);
         gl.activeTexture(gl.TEXTURE0);
       }
       render();
@@ -158,6 +167,7 @@ export function flowScene(spec: FlowSpec): SceneModule {
       },
       dispose() {
         sizes.disconnect();
+        if (--live === 0) plates = null;
         gl?.getExtension("WEBGL_lose_context")?.loseContext();
         canvas.remove();
         main?.removeAttribute("data-scene-painted");
