@@ -32,6 +32,7 @@
 //   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
 //   board_post(kind, title, body, …)      → leave a stuck, fix, tip or handoff post on the Board
 //   hand_off()                            → a busy bot's room reply: run the asked work once it is free
+//   import_memory(decline?)               → a new chat: save the user's pasted other-AI answer to Import Memory
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -261,8 +262,15 @@ export const BOARD_TOOLS = [
   },
 ];
 
+const IMPORT_MEMORY_TOOL = {
+  name: "import_memory",
+  description: "Saves the user's latest message, the answer they pasted from their other AI, to Import Memory, which all their bots read. Wink reads the message itself. Tell the user the returned result. decline: true when they say no to importing, so no bot offers again.",
+  inputSchema: { type: "object", properties: { decline: { type: "boolean" } }, additionalProperties: false },
+};
+
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
+  ...(process.env.OMB_IMPORT_MEMORY === "1" ? [IMPORT_MEMORY_TOOL] : []),
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(process.env.OMB_HAND_OFF === "1" ? [HAND_OFF_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
@@ -1176,6 +1184,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   }
   if (name === "board_search" || name === "board_post") {
     const r = await api(name === "board_search" ? "/api/internal/board-search" : "/api/internal/board-post", { method: "POST", body: JSON.stringify(args) });
+    return { text: String(r.text ?? "") };
+  }
+  if (name === IMPORT_MEMORY_TOOL.name) {
+    const r = await api("/api/internal/import-memory", { method: "POST", body: JSON.stringify({ decline: args.decline === true }) });
     return { text: String(r.text ?? "") };
   }
   if (name === HAND_OFF_TOOL.name) {

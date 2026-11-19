@@ -1,0 +1,112 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { aboutYouSources, ABOUT_YOU_MAX_PASTE } from "./about-you.ts";
+import { DATA_DIR } from "./config.ts";
+import { importMemoryRoute, importMemoryTurn, importOfferNote, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
+import type { Message } from "./store.ts";
+import { en, ko } from "../src/lib/i18n-catalog.ts";
+
+const dir = join(DATA_DIR, "about-you");
+const typed = (text: string) => ({ role: "user", kind: "text", text }) as Message;
+const reply = (text: string) => ({ role: "bot", kind: "text", text }) as Message;
+const paste = ["- The user is Dana Park; call her Dana.", "- Speaks Korean and English.", "Source: ChatGPT"].join("\n");
+
+async function call(body: object, chat: Message[], ownerChat = true) {
+  let status = 0;
+  let raw = "";
+  const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
+  const deps: ImportMemoryDeps = {
+    caller: () => ({ botId: "b1", threadId: "t1" }),
+    ownerChat: () => ownerChat,
+    messages: () => chat,
+    now: () => new Date(2026, 10, 19).getTime(),
+  };
+  await importMemoryRoute(Object.assign(Readable.from([JSON.stringify(body)]), { headers: {} }) as unknown as IncomingMessage, res, deps);
+  return { status, text: String(JSON.parse(raw).text ?? JSON.parse(raw).error) };
+}
+
+beforeEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  noteSendLocale("en");
+});
+afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+describe("new bot import offer", () => {
+  it("offers on a new chat's first typed message while Import Memory is empty", () => {
+    expect(importMemoryTurn([typed("hi")])).toEqual({ offer: true, tool: true });
+  });
+
+  it("never offers once anything is imported, including facts synced from another PC", () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "MEMORY.md"), "- Lives in Seoul. (from ChatGPT, 2026-11-18)\n");
+    expect(importMemoryTurn([typed("hi")])).toEqual({ offer: false, tool: false });
+  });
+
+  it("never offers again after the user says no", async () => {
+    expect(await call({ decline: true }, [typed("no thanks")])).toEqual({ status: 200, text: expect.stringContaining("no bot offers this again") });
+    expect(importMemoryTurn([typed("hi")])).toEqual({ offer: false, tool: false });
+    expect(existsSync(join(dir, "MEMORY.md"))).toBe(false);
+  });
+
+  it("offers only on the first turn: a send during it or after keeps the tool, not the offer", () => {
+    expect(importMemoryTurn([typed("hi"), typed("also this")])).toEqual({ offer: false, tool: true });
+    expect(importMemoryTurn([typed("hi"), reply("hello"), typed(paste)])).toEqual({ offer: false, tool: true });
+    expect(importMemoryTurn([typed("a"), reply("b"), typed("c"), reply("d"), typed("e"), reply("f"), typed("g")])).toEqual({ offer: false, tool: false });
+  });
+
+  it("reads only the start of a heavy chat", () => {
+    let read = 0;
+    const heavy = { *[Symbol.iterator]() { for (let i = 0; i < 1e9; i++) { read++; yield i % 2 ? reply("r") : typed("q"); } } } as unknown as Message[];
+    expect(importMemoryTurn(heavy)).toEqual({ offer: false, tool: false });
+    expect(read).toBeLessThan(10);
+  });
+
+  it("asks for the exact Settings prompt in the user's language", async () => {
+    expect(await importOfferNote()).toContain(`\`\`\`text\n${en["aboutYou.prompt"]}\n\`\`\``);
+    noteSendLocale("ko");
+    expect(await importOfferNote()).toContain(`\`\`\`text\n${ko["aboutYou.prompt"]}\n\`\`\``);
+  });
+});
+
+describe("import_memory saves through the Settings path", () => {
+  it("saves the user's pasted message and reports what Settings reports", async () => {
+    const result = await call({}, [typed("hi"), reply("offer"), typed(paste)]);
+    expect(result).toEqual({ status: 200, text: "Import Memory says: Added 2 new.\nTell the user this result." });
+    expect(aboutYouSources()).toEqual([{ source: "ChatGPT", facts: ["The user is Dana Park; call her Dana.", "Speaks Korean and English."] }]);
+    expect((await call({}, [typed(paste)])).text).toContain(en["aboutYou.nothingNew"]);
+  });
+
+  it("refuses a paste over 4 MB with the Settings message", async () => {
+    const result = await call({}, [typed("x".repeat(ABOUT_YOU_MAX_PASTE + 1))]);
+    expect(result.text).toContain(en["aboutYou.tooLarge"]);
+    expect(existsSync(join(dir, "MEMORY.md"))).toBe(false);
+  });
+
+  it("counts what a full memory left out", async () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "MEMORY.md"), Array.from({ length: 199 }, (_, i) => `- Fact ${i}. (from Gemini, 2026-11-18)`).join("\n") + "\n");
+    expect((await call({}, [typed(paste)])).text).toContain("Added 1 new. Memory is full: 1 not added.");
+  });
+
+  it("answers a Korean user in Korean", async () => {
+    noteSendLocale("ko");
+    expect((await call({}, [typed(paste)])).text).toContain("새로 2개 추가했어요.");
+  });
+
+  it("never writes from a room: other people's text stays out of the owner's memory", async () => {
+    expect((await call({}, [typed(paste)], false)).status).toBe(403);
+    expect((await call({ decline: true }, [typed("no")], false)).status).toBe(403);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("is offered and mounted only in the owner's own 1:1 turns", () => {
+    const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    expect(index).toContain("turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)");
+    const mounts = [...index.matchAll(/[^n] agentsIntegration\(([^)]*)\)/g)].map((match) => match[1]).filter((args) => args.includes("importMemory"));
+    expect(mounts).toEqual(["bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool"]);
+  });
+});

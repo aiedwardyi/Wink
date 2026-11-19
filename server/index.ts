@@ -332,6 +332,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
+import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -706,7 +707,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -721,6 +722,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number, searc
       ...(searchOwnerChats ? { OMB_OWNER_CHATS: "1" } : {}),
       ...(readOnly ? { OMB_READ_ONLY_TURN: "1" } : {}),
       ...(handOff ? { OMB_HAND_OFF: "1" } : {}),
+      ...(importMemory ? { OMB_IMPORT_MEMORY: "1" } : {}),
     },
   };
 }
@@ -5641,7 +5643,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+  const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
+    ? importMemoryTurn(activeMessages)
+    : { offer: false, tool: false };
+  const importNotes = importMemory.offer ? [await importOfferNote()] : [];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes, ...importNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -6014,7 +6020,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly);
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6192,7 +6198,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes, ...importNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -8275,6 +8281,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === BOARD_ROUTES.post) return await boardRoutes.post(req, res);
       if (method === "POST" && path === "/api/internal/my-chats") {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
+      }
+      if (method === "POST" && path === "/api/internal/import-memory") {
+        return await importMemoryRoute(req, res, {
+          caller: (header) => commsCallers.resolve(header),
+          ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
+          messages: (threadId) => store.activePath(threadId),
+        });
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
         const source = commsCallers.resolve(req.headers.authorization);

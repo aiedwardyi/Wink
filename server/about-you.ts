@@ -196,7 +196,7 @@ export function aboutYouPrompt(): string {
   );
 }
 
-function day(ms: number): string {
+export function day(ms: number): string {
   const date = new Date(ms);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }

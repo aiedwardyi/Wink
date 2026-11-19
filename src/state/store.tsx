@@ -5,6 +5,7 @@
 import { noteMemoryFrame, noteMemorySnapshot } from "@/lib/memory-clean-events";
 import { request } from "@/lib/api-request";
 import { createErrorBanner } from "@/lib/error-banner";
+import { activeLocale } from "@/lib/i18n";
 import {
   createContext,
   useCallback,
@@ -1508,6 +1509,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 deliver: action.after ? "after" : undefined,
                 queueId: action.queueId,
                 actedAt,
+                locale: activeLocale(),
               }),
             });
           const settle = async (body: any) => {
