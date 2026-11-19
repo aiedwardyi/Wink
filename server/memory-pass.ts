@@ -20,6 +20,7 @@ import {
   readMemoryFile,
   readMemoryTopic,
   saveMemoryFile,
+  saveMemoryTopic,
 } from "./workspace.ts";
 
 const IDLE_MS = 3 * 60_000;
@@ -250,14 +251,14 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
-/** The Auto Notes bullets Markdown shows as notes, in file order. One retired into a comment block or a
- * fenced or indented code example reads as gone, so it never stands in for a new one; a comment opener
+/** The bullets Markdown shows as list items, in file order, each with its text when Auto Notes dated it. One retired into a
+ * comment block or a fenced or indented code example reads as gone, so it never stands in for a new one; a comment opener
  * inside a line, as note text or in code, hides nothing after it. */
-function liveNotes(text: string): string[] {
-  const notes: string[] = [];
+function liveRows(text: string): Array<{ at: number; note: string | undefined }> {
+  const rows: Array<{ at: number; note: string | undefined }> = [];
   let fence: RegExp | undefined;
   let comment = false;
-  for (const row of text.split("\n").map((line) => line.replace(/\r$/, ""))) {
+  for (const [at, row] of text.split("\n").map((line) => line.replace(/\r$/, "")).entries()) {
     if (comment) {
       comment = !row.includes("-->");
       continue;
@@ -269,13 +270,10 @@ function liveNotes(text: string): string[] {
     const marks = /^ {0,3}(`{3,}|~{3,})/.exec(row)?.[1];
     if (marks) fence = new RegExp(`^ {0,3}${marks[0]}{${marks.length},}\\s*$`);
     else if (/^ {0,3}<!--/.test(row)) comment = !row.slice(row.indexOf("<!--") + 4).includes("-->");
-    else {
-      // four spaces in is an indented code example
-      const note = /^ {0,3}[-*+]\s+(.*?)\s*\(noted \d{4}-\d{2}-\d{2}\)\s*$/.exec(row);
-      if (note) notes.push(note[1]!);
-    }
+    // four spaces in is an indented code example
+    else if (/^ {0,3}[-*+]\s/.test(row)) rows.push({ at, note: /^ {0,3}[-*+]\s+(.*?)\s*\(noted \d{4}-\d{2}-\d{2}\)\s*$/.exec(row)?.[1] });
   }
-  return notes;
+  return rows;
 }
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
@@ -302,7 +300,6 @@ export function decisionSpan(lines: string[]): [number, number] | null {
 const contentWords = (text: string) =>
   words(text).filter((word) => (word.length >= 3 || /\d/.test(word) || /\P{ASCII}/u.test(word)) && !STOP_WORDS.has(word));
 const sameStem = (a: string, b: string) => a.startsWith(b.slice(0, 4)) || b.startsWith(a.slice(0, 4));
-const related = (a: string, b: string) => contentWords(a).some((word) => contentWords(b).some((other) => sameStem(word, other)));
 const LITERALS = [
   /\b(?:[a-z][\w+.-]*:\/\/|www\.)\S+/gi,
   /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,
@@ -598,7 +595,7 @@ interface Batch {
   source: UserLine[];
   // its picks are in the timeline, held only for MEMORY.md
   picked?: boolean;
-  // its lines already in the overflow file, so a retry never writes one twice
+  // its lines an earlier try put in the overflow file, written again only once gone from there
   wrote?: string[];
 }
 
@@ -772,21 +769,31 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       : null;
     const saved = pointer ?? text ?? corrected;
     // before MEMORY.md drops a corrected line, so a failed write never loses the new value; a retry finds it written
-    const wrote = [...(batch.wrote ?? [])];
+    let wrote = batch.wrote ?? [];
     if (overflow.length) {
       const path = join(ensureWorkspace(botId), "memory", OVERFLOW_FILE);
       try {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-        const notes = liveNotes(current);
-        // a repeat stays out unless a later note shares a word with it, so a value back after a change lands again
-        const fresh = overflow.filter(({ line }) => !wrote.includes(line) && (!notes.includes(line) || notes.slice(notes.lastIndexOf(line) + 1).some((note) => related(note, line))));
+        const rows = liveRows(current);
+        wrote = wrote.filter((line) => rows.some(({ note }) => note === line));
+        const due = overflow.filter(({ line }) => !wrote.includes(line));
+        // the last row is what the user said last: unless the file already ends on them, notes go last in the order said
+        let ends = due.length;
+        while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends)?.note !== line)) ends -= 1;
+        const fresh = due.slice(ends);
         if (fresh.length) {
+          const added = fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("");
+          // an older dated copy of a note comes out in the same write, so no note keeps two dated rows
+          const old = new Set(rows.flatMap(({ at, note }) => (fresh.some(({ line }) => line === note) ? [at] : [])));
+          const rest = current.split("\n").filter((_, at) => !old.has(at)).join("\n");
+          // a last line with no break keeps none, so a move never grows the file past the lookup budget
+          const moved = old.size > 0 && saveMemoryTopic(botId, OVERFLOW_FILE, !rest || rest.endsWith("\n") ? `${rest}${added}` : `${rest}\n${added.slice(0, -1)}`, current);
           // appended, never replaced: a line another writer lands after the read stays
-          appendLines(path, `${current ? "" : OVERFLOW_HEAD}${fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("")}`);
-          wrote.push(...fresh.map(({ line }) => line));
+          if (!moved) appendLines(path, `${current ? "" : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);
-          overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.length, since: prior?.since ?? now() });
+          overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.includes(line)).length, since: prior?.since ?? now() });
+          wrote = [...wrote, ...fresh.map(({ line }) => line)];
         }
       } catch (error) {
         held.set(threadId, { ...batch, picked, wrote });

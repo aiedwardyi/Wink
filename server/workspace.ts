@@ -10,7 +10,7 @@
 // delete anything the bot believes.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
@@ -173,13 +173,12 @@ export function saveMemoryFile(botId: string, text: string, baseRevision?: strin
     writeMemoryFile(botId, text);
     return { conflict: false as const, ...readMemoryFile(botId) };
   };
-  // set aside where the prompt names it for the bot to merge, as memory sync parks a copy
-  const park = (late: string) =>
-    writeFileAtomic(join(workspaceDir(botId), "memory", `MEMORY.conflict-${memoryRevision(late).slice(0, 8)}.md`), late, { mode: 0o600 });
+  const stem = join(workspaceDir(botId), "memory", "MEMORY");
+  const park = (late: string) => parkCopy(stem, late);
   if (baseRevision === undefined) return save();
   if (baseRevision !== readMemoryFile(botId).revision) return conflict();
   const path = join(ensureWorkspace(botId), "MEMORY.md");
-  const swap = swapPinned(path, text, (checked) => rawRevision(checked) === baseRevision);
+  const swap = swapPinned(path, text, (checked) => rawRevision(checked) === baseRevision, stem);
   // no file yet, or a volume without hard links: the check above is all there is
   if (swap === null) return save();
   if (!swap.landed) return conflict();
@@ -187,7 +186,7 @@ export function saveMemoryFile(botId: string, text: string, baseRevision?: strin
   let back: Swap | null = null;
   try {
     // the other writer's whole file goes back, and the caller saves again on top of it
-    back = swapPinned(path, swap.late, (current) => current === text);
+    back = swapPinned(path, swap.late, (current) => current === text, stem);
   } catch {
     /* a failed restore leaves the new file, and the old one is parked below */
   }
@@ -201,13 +200,27 @@ export function saveMemoryFile(botId: string, text: string, baseRevision?: strin
   return current.text.startsWith(text) ? { conflict: false as const, ...current } : conflict();
 }
 
+/** Rewrites memory/`name` only while it still reads `base`; false, with nothing written, when it changed first or cannot be pinned. */
+export function saveMemoryTopic(botId: string, name: string, text: string, base: string): boolean {
+  if (!isMemoryTopicName(name)) return false;
+  const stem = join(ensureWorkspace(botId), "memory", name.slice(0, -".md".length));
+  const swap = swapPinned(`${stem}.md`, text, (current) => current === base, stem);
+  if (swap?.late !== undefined) parkCopy(stem, swap.late);
+  return Boolean(swap?.landed);
+}
+
+// set aside where the prompt names it for the bot to merge, as memory sync parks a copy
+function parkCopy(stem: string, late: string): void {
+  writeFileAtomic(`${stem}.conflict-${memoryRevision(late).slice(0, 8)}.md`, late, { mode: 0o600 });
+}
+
 type Swap = { landed: boolean; late?: string };
 
 /** Puts `next` at `path` while `holds` accepts the file there. A second name pins the file it replaces: a line
  * another writer appends to it before `next` lands is carried over, and any other change comes back as `late`,
- * or off Windows, where that writer may not be done, the pinned file itself is parked as a conflict copy.
+ * or off Windows, where that writer may not be done, the pinned file itself is parked as `<stem>.conflict-<id>.md`.
  * Null when the file cannot be pinned. */
-function swapPinned(path: string, next: string, holds: (current: string) => boolean): Swap | null {
+function swapPinned(path: string, next: string, holds: (current: string) => boolean, stem: string): Swap | null {
   const id = randomUUID();
   const pin = `${path}.${process.pid}.${id}.tmp`;
   try {
@@ -233,7 +246,7 @@ function swapPinned(path: string, next: string, holds: (current: string) => bool
     }
     if (whole) return { landed: true, late };
     // the file itself, never its bytes, so a writer still writing finishes into the copy
-    linkSync(pin, join(dirname(path), "memory", `MEMORY.conflict-${id.slice(0, 8)}.md`));
+    linkSync(pin, `${stem}.conflict-${id.slice(0, 8)}.md`);
     return { landed: true };
   } finally {
     try {

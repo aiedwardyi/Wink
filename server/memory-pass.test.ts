@@ -100,6 +100,20 @@ describe("memory pass", () => {
   const stored = () => JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"));
   const overflowPath = () => join(workspaceDir("bot-t1"), "memory", "auto-notes-overflow.md");
   const overflow = () => (existsSync(overflowPath()) ? readFileSync(overflowPath(), "utf8") : null);
+  const lockMemoryOnce = () => {
+    const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+    const open = fs.openSync;
+    let failed = false;
+    // SAFETY: the wrapper passes every other call through and returns the real descriptor.
+    vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof open>) => {
+      if (!failed && args[0] === path) {
+        failed = true;
+        throw Object.assign(new Error("locked"), { code: "EBUSY" });
+      }
+      return open(...args);
+    }) as typeof open);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  };
   const switchTo = (next: boolean) => {
     on = next;
     pass.onConfigChanged();
@@ -552,7 +566,7 @@ describe("memory pass", () => {
       await settle("t1", 3 * MINUTE);
     }
     expect(generate).toHaveBeenCalledTimes(3);
-    expect(overflow()).toBe(notes);
+    expect(overflow()).toBe(`${notes.replace("- Likes tea (noted 2026-10-14)\n", "")}- Likes tea (noted 2026-10-15)\n`);
   });
 
   it("saves a value an overflow file had before a later correction as the latest", async () => {
@@ -563,7 +577,7 @@ describe("memory pass", () => {
     generate.mockResolvedValue(facts(["Home city: Toronto", "i moved back to Toronto"], ["Lives in Toronto", "back to Toronto"], ["Likes tea", "i like tea"]));
     say("t1", "i moved back to Toronto, i like tea");
     await settle("t1", 3 * MINUTE);
-    expect(overflow()).toBe(`${moves}- Home city: Toronto (noted 2026-10-15)\n- Lives in Toronto (noted 2026-10-15)\n`);
+    expect(overflow()).toBe("# Notebook\n- Home city: Vancouver (noted 2026-10-10)\n- Lives in Vancouver (noted 2026-10-10)\n- Home city: Toronto (noted 2026-10-15)\n- Lives in Toronto (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n");
   });
 
   it("saves a return to a multiword city after a one-word city as the latest", async () => {
@@ -574,7 +588,6 @@ describe("memory pass", () => {
       await settle("t1", 3 * MINUTE);
     }
     expect(overflow()?.split("\n").filter((row) => row.startsWith("- Lives in"))).toEqual([
-      "- Lives in New York (noted 2026-10-15)",
       "- Lives in Boston (noted 2026-10-15)",
       "- Lives in New York (noted 2026-10-15)",
     ]);
@@ -587,6 +600,14 @@ describe("memory pass", () => {
     ["Moved to Toronto", "Moved to Vancouver"],
     ["38 years old", "39 years old"],
     ["Drinks oat milk", "Drinks soy milk"],
+    ["Lives in Toronto", "Moved to Vancouver"],
+    ["Uses pnpm", "Switched to npm"],
+    ["On macOS", "On Linux"],
+    ["Has a cat", "Has a dog"],
+    ["Vegetarian", "Eats meat again"],
+    ["Uses dark mode", "Switched to light theme"],
+    ["Single", "Married to Sam"],
+    ["Timezone is PST", "Now in EST"],
   ])("saves a return to %s after %s as the latest, with a chip for each", async (a, b) => {
     writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
     for (const fact of [a, b, a]) {
@@ -594,16 +615,49 @@ describe("memory pass", () => {
       say("t1", `ok so now ${fact.toLowerCase()}`);
       await settle("t1", 3 * MINUTE);
     }
-    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([a, b, a].map((fact) => `- ${fact} (noted 2026-10-15)`));
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([b, a].map((fact) => `- ${fact} (noted 2026-10-15)`));
     expect(chips("t1")).toHaveLength(3);
   });
 
-  it("writes a preference again after a later one on its subject, and recall keeps the overflow topic past the budget", async () => {
+  it.each([
+    ["Uses pnpm", "Uses npm"],
+    ["Lives in Toronto", "Lives in Vancouver"],
+    ["Home city: Toronto", "Home city: Vancouver"],
+  ])("saves a return to %s said in one batch after %s as the latest", async (a, b) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts([a, `ok so now ${a.toLowerCase()}`]));
+    say("t1", `ok so now ${a.toLowerCase()}`);
+    await settle("t1", 3 * MINUTE);
+    generate.mockResolvedValue(facts([b, `ok so now ${b.toLowerCase()}`], [a, `no wait back to ${a.toLowerCase()}`]));
+    say("t1", `ok so now ${b.toLowerCase()}`);
+    say("t1", `no wait back to ${a.toLowerCase()}`);
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([b, a].map((fact) => `- ${fact} (noted 2026-10-15)`));
+    expect(chips("t1")).toHaveLength(2);
+  });
+
+  it("saves a return after a hand-written row with no date as the latest", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts(["Uses pnpm", "i use pnpm"]));
+    say("t1", "i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Uses npm\n");
+    say("t1", "no wait i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe("# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- Uses npm\n- Uses pnpm (noted 2026-10-15)\n");
+    expect(chips("t1")).toHaveLength(2);
+  });
+
+  it.each([
+    ["Likes tea", "Likes coffee"],
+    ["Works at Acme", "Works at night"],
+    ["Lives in Toronto", "Lives in a condo"],
+  ])("keeps one dated row of %s said again after %s, and recall keeps the overflow topic", async (a, b) => {
     writeMemoryFile("bot-t1", `# Memory\n- memory/auto-notes-overflow.md: prior pointer\n${"- note\n".repeat(197)}`);
     mkdirSync(dirname(overflowPath()), { recursive: true });
     const fillers = Array.from({ length: 120 }, (_, i) => `- filler kettle${i} harbor${i} lantern${i}\n`).join("");
-    // eight bytes under the lookup budget, so the repeat takes the file past it
-    const notes = `# Notebook\n\n- Likes tea (noted 2026-10-01)\n- Likes coffee (noted 2026-10-02)\n- COBALT WALRUS: invoice goes to the north office\n${fillers}`
+    // eight bytes under the lookup budget, so a second dated row would take the file past it
+    const notes = `# Notebook\n\n- ${a} (noted 2026-10-01)\n- ${b} (noted 2026-10-02)\n- COBALT WALRUS: invoice goes to the north office\n${fillers}`
       .padEnd(2 * 1024 * 1024 - Buffer.byteLength(memoryFileRaw("bot-t1")) - 8, " ");
     writeFileSync(overflowPath(), notes);
     writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
@@ -613,10 +667,11 @@ describe("memory pass", () => {
       return lookup.take("bot-t1", "t1", cursor, "cobalt walrus").join("").includes("north office");
     };
     expect(await recalled("before")).toBe(true);
-    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
-    say("t1", "i like tea");
+    generate.mockResolvedValue(facts([a, `ok so now ${a.toLowerCase()}`]));
+    say("t1", `ok so now ${a.toLowerCase()}`);
     await settle("t1", 3 * MINUTE);
-    expect(overflow()!.split("\n").filter((row) => row.startsWith("- Likes"))).toEqual(["- Likes tea (noted 2026-10-01)", "- Likes coffee (noted 2026-10-02)", "- Likes tea (noted 2026-10-15)"]);
+    expect(overflow()!.split("\n").filter((row) => row.includes("(noted "))).toEqual([`- ${b} (noted 2026-10-02)`, `- ${a} (noted 2026-10-15)`]);
+    expect(Buffer.byteLength(overflow()!)).toBe(Buffer.byteLength(notes));
     expect(await recalled("after")).toBe(true);
   });
 
@@ -663,6 +718,54 @@ describe("memory pass", () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(memoryFileRaw("bot-t1")).toBe(`${full}- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)`);
     expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- Likes tea (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("writes a held note again when another writer removed it before the retry", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(chips("t1")).toHaveLength(0);
+    writeFileSync(overflowPath(), "# Auto notes overflow\n\n- Owns a kayak (noted 2026-10-01)\n");
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    expect(overflow()).toBe("# Auto notes overflow\n\n- Owns a kayak (noted 2026-10-01)\n- Likes tea (noted 2026-10-15)\n");
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it.each([
+    ["Uses pnpm", "Uses npm"],
+    ["Lives in Toronto", "Lives in Vancouver"],
+  ])("keeps the change last when a restart replays a held batch of %s then %s", async (a, b) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts([a, `i used to say ${a.toLowerCase()}`], [b, `ok so now ${b.toLowerCase()}`]));
+    say("t1", `i used to say ${a.toLowerCase()}`);
+    say("t1", `ok so now ${b.toLowerCase()}`);
+    await settle("t1", 3 * MINUTE);
+    pass.dispose();
+    pass = start();
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([a, b].map((fact) => `- ${fact} (noted 2026-10-15)`));
+  });
+
+  it("appends a note said again when another writer changes the overflow file during the move", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), "# Notebook\n- Likes tea (noted 2026-10-01)\n- Likes coffee (noted 2026-10-02)\n");
+    const link = fs.linkSync;
+    // SAFETY: the wrapper passes every call through to the real one.
+    vi.spyOn(fs, "linkSync").mockImplementation(((...args: Parameters<typeof link>) => {
+      if (args[0] === overflowPath()) fs.appendFileSync(overflowPath(), "- Owns a kayak (noted 2026-10-15)\n");
+      return link(...args);
+    }) as typeof link);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe("# Notebook\n- Likes tea (noted 2026-10-01)\n- Likes coffee (noted 2026-10-02)\n- Owns a kayak (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n");
     expect(chips("t1")).toHaveLength(1);
   });
 
