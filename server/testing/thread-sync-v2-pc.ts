@@ -150,7 +150,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
       case "append": value = store.appendMessage(threadId, { role: args.role ?? "user", kind: "text", text: args.text, at: args.at ?? Date.now(), ...args.patch }); break;
       case "compaction": value = store.appendCompaction(threadId, args.compaction!); break;
       case "batch":
-        for (let i = 0; i < Number(args.count); i++) store.appendMessage(threadId, { role: "user", kind: "text", text: `row ${i}` });
+        for (let i = 0; i < Number(args.count); i++) store.appendMessage(threadId, { role: "user", kind: "text", text: `row ${i}${args.text ?? ""}` });
         break;
       case "patch": value = store.patchMessage(threadId, String(args.id), args.patch ?? {}); break;
       case "head": value = store.setActiveLeaf(threadId, String(args.id)); break;

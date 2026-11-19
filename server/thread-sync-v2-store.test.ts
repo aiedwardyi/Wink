@@ -2143,85 +2143,91 @@ async function converged(boxes: Array<Pick<Box, "peer">>, length: number, thread
 }
 
 const own = (boxes: Array<Pick<Box, "peer">>) => Promise.all(boxes.map(async (target) => (await shown(target)).ids));
+const segments = (folder: string) => readdirSync(join(folder, "threads-v2", "bot", "thread", LOW)).filter((name) => name.startsWith("seg-")).sort();
+// Wide rows fill a chat head to its seal size in about a hundred turns instead of thousands.
+const wide = "x".repeat(4000);
 
 describe("copied installs syncing separate folders", { timeout: 240_000 }, () => {
   it("gives both copies every row when each sealed a same-named segment before seeing the other", async () => {
     const drive = new FakeDrive();
     const a = box("a", LOW);
-    await a.peer.call("batch", { count: 1000 });
+    await a.peer.call("batch", { count: 40, text: wide });
     await a.peer.call("flush");
     await pass(drive, a);
     const b = await copyBox(a);
     for (const target of [a, b]) {
-      await target.peer.call("batch", { count: 1500 });
+      await target.peer.call("batch", { count: 100, text: wide });
       await target.peer.call("flush");
     }
-    const segments = (target: Box) => readdirSync(join(target.folder, "threads-v2", "bot", "thread", LOW)).filter((name) => name.startsWith("seg-")).sort();
-    expect(segments(b)).toEqual(segments(a));
+    expect(segments(a.folder)).toHaveLength(1);
+    expect(segments(b.folder)).toEqual(segments(a.folder));
     const forks = await own([a, b]);
     await pass(drive, a);
     await cycle(drive, [b, a]);
-    // Both installs added 1500 turns after the copy, a real fork past the join limit, so a PC may keep it split with a notice.
-    await converged([a, b], 4000, "thread", forks);
+    // Both installs added 100 turns after the copy, a real fork past the join limit, so a PC may keep it split with a notice.
+    await converged([a, b], 240, "thread", forks);
   });
 
   it.each(["copy", "original"])("gives the copy and a later third PC every row when the %s sealed a shorter first segment", async (shorter) => {
     const drive = new FakeDrive();
     const a = box("a", LOW);
     const c = box("c", HIGH);
-    await a.peer.call("batch", { count: 1000 });
+    await a.peer.call("batch", { count: 40, text: wide });
     await a.peer.call("flush");
     await pass(drive, a);
     const b = await copyBox(a);
     // A long first row ends that install's segment sooner, so the two seal different ranges.
-    await (shorter === "copy" ? b : a).peer.call("append", { text: "x".repeat(4000) });
+    await (shorter === "copy" ? b : a).peer.call("append", { text: wide.repeat(10) });
     for (const target of [a, b]) {
-      await target.peer.call("batch", { count: 1500 });
+      await target.peer.call("batch", { count: 100, text: wide });
       await target.peer.call("flush");
     }
+    expect(segments(a.folder)).not.toEqual(segments(b.folder));
     const forks = await own([a, b]);
     await pass(drive, a);
     await cycle(drive, [b, a]);
     await cycle(drive, [c, a, b], ["thread"], 2);
-    await converged([a, b, c], 4001, "thread", forks);
+    await converged([a, b, c], 241, "thread", forks);
   });
 
   it("lets the original seal the range the copy sealed before it split", async () => {
     const drive = new FakeDrive();
     const a = box("a", LOW);
     const c = box("c", HIGH);
-    await a.peer.call("batch", { count: 1000 });
+    await a.peer.call("batch", { count: 40, text: wide });
     await a.peer.call("flush");
     await pass(drive, a);
     const b = await copyBox(a);
-    await a.peer.call("batch", { count: 1000 });
+    await a.peer.call("batch", { count: 40, text: wide });
     await a.peer.call("flush");
-    await b.peer.call("batch", { count: 1000 });
-    await b.peer.call("batch", { count: 500 });
+    await b.peer.call("batch", { count: 100, text: wide });
     await b.peer.call("flush");
+    const sealed = segments(b.folder);
     const [copied] = await own([b]);
     await pass(drive, a);
     await pass(drive, b);
     expect(identity(b.peer.dataDir)).not.toBe(LOW);
-    await a.peer.call("batch", { count: 500 });
+    await a.peer.call("batch", { count: 60, text: wide });
     await a.peer.call("flush");
+    expect([sealed.length, segments(a.folder)]).toEqual([1, sealed]);
     const forks = [...await own([a]), copied];
     await cycle(drive, [a, b, c]);
-    await converged([a, b, c], 4000, "thread", forks);
+    await converged([a, b, c], 240, "thread", forks);
   });
 
   it.each(["copy", "original"])("gives a third PC every row when a synced folder carried segments the %s sealed before the split", async (longer) => {
     const [home, work, third] = [temp(), temp(), temp()];
     const a = pc(home, "a", true, false, false, LOW);
-    await a.call("batch", { count: 1000 });
+    await a.call("batch", { count: 40, text: wide });
     await a.call("flush");
     const b = await copy(a, work, "a");
     cpSync(home, work, { recursive: true });
-    await (longer === "copy" ? b : a).call("append", { text: "x".repeat(4000) });
+    await (longer === "copy" ? b : a).call("append", { text: wide.repeat(10) });
     for (const peer of [a, b]) {
-      await peer.call("batch", { count: 1500 });
+      await peer.call("batch", { count: 100, text: wide });
       await peer.call("flush");
     }
+    expect(segments(home)).not.toEqual(segments(work));
     const forks = await own([a, b].map((peer) => ({ peer })));
     const dir = (folder: string, writer = "") => join(folder, "threads-v2", "bot", "thread", writer);
     // A sync client: segments copy once each way, a head only from the one install that owns its writer id.
@@ -2256,7 +2262,7 @@ describe("copied installs syncing separate folders", { timeout: 240_000 }, () =>
       await c.call("pull");
       await c.call("poll");
     }
-    await converged([a, b, c].map((peer) => ({ peer })), 4001, "thread", forks);
+    await converged([a, b, c].map((peer) => ({ peer })), 241, "thread", forks);
   });
 
   it.each([1, 2])("keeps every row when the original publishes %i time(s) offline after a copy of a running turn", async (offline) => {
