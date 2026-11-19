@@ -8,7 +8,7 @@ import { mediaKey, messageRefs, showKind } from "../src/lib/chat-media.ts";
 
 import { readMediaRows, type MediaRow } from "./media-rows.ts";
 import { messageDbFile } from "./message-db.ts";
-import type { Store } from "./store.ts";
+import type { Message, Store } from "./store.ts";
 
 export interface MediaIndex {
   /** An unchanged chat answers with `{ v }` alone. */
@@ -75,9 +75,21 @@ function mightShowMedia({ image, kind, role, text }: MediaRow): boolean {
   return Boolean(image || (kind === "text" && text && (role === "user" ? text.includes("<attached-") : text.includes("](") || text.includes("![") || (text.includes("`") && text.includes("(")))));
 }
 
-function readPage(threadId: string, cached: HeldIndex, limit: number, database?: DatabaseSync): MediaIndex {
+type Rows = Pick<Store, "loaded" | "activePath">;
+const pathAt = new WeakMap<readonly Message[], Map<string, number>>();
+
+/** readMediaRows from a chat already in memory, or undefined when the cursor left its active path. */
+function pathRows(path: readonly Message[], cursor: string, limit: number): { rows: MediaRow[]; next: string | null } | undefined {
+  let at = pathAt.get(path);
+  if (!at) pathAt.set(path, at = new Map(path.map((message, n) => [message.id, n])));
+  const end = at.get(cursor);
+  return end === undefined ? undefined : { rows: path.slice(Math.max(0, end - limit + 1), end + 1).reverse(), next: path[end - limit]?.id ?? null };
+}
+
+function readPage(store: Rows, threadId: string, cached: HeldIndex, limit: number, database?: DatabaseSync): MediaIndex {
   const start = cached.cursor;
-  const { rows, next } = readMediaRows(threadId, start, limit, database);
+  // An open chat is in memory already; walking a big one on disk took 12 s over 127 pages.
+  const { rows, next } = (start && store.loaded(threadId) && pathRows(store.activePath(threadId), start, limit)) || readMediaRows(threadId, start, limit, database);
   if (start) cached.cursors.add(start);
   cached.cursor = next && !cached.cursors.has(next) ? next : null;
   const page: MediaIndex = { v: cached.v, ...buildMediaIndex(threadId, rows, cached.seen) };
@@ -105,7 +117,7 @@ function readSize(cached: HeldIndex, n: number, slot: number, page = cached.page
   return size;
 }
 
-export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) {
+export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange"> & Rows) {
   const held = new Map<string, HeldIndex>();
   let count = 0;
   store.onChange((change) => {
@@ -133,7 +145,7 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) 
       const next: HeldIndex = {
         v: `${boot}.${++count}`, leaf, cursor: leaf, cursors: new Set(), pages: [], seen: new Set(), sizes: new Map(), legacy: cached?.legacy,
       };
-      const page = readPage(threadId, next, FIRST_ROWS);
+      const page = readPage(store, threadId, next, FIRST_ROWS);
       const prior = cached?.pages[0];
       if (cached && prior && !prior.next && !page.next && same(prior, page)) {
         cached.dirty = undefined;
@@ -154,7 +166,7 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) 
       // Pin the rows to one revision while chat writes run between pages.
       database.exec("BEGIN");
       while (full.cursor) {
-        readPage(threadId, full, OLDER_ROWS, database);
+        readPage(store, threadId, full, OLDER_ROWS, database);
         if (full.cursor) await yieldLoop();
       }
       return full.pages;
@@ -184,7 +196,7 @@ export function createMediaIndex(store: Pick<Store, "activeLeaf" | "onChange">) 
     page(threadId: string, v: string | null, n: number): MediaIndex | null {
       const cached = held.get(threadId);
       if (!cached || cached.dirty || cached.v !== v) return null;
-      return cached.pages[n] ?? (n === cached.pages.length && cached.cursor ? readPage(threadId, cached, OLDER_ROWS) : null);
+      return cached.pages[n] ?? (n === cached.pages.length && cached.cursor ? readPage(store, threadId, cached, OLDER_ROWS) : null);
     },
     snapshot(threadId: string): Promise<MediaIndex[]> {
       return complete(threadId, current(threadId));
