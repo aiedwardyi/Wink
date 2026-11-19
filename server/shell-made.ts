@@ -27,42 +27,56 @@ const changed = (stat: Stats, after: number) => Math.max(stat.mtimeMs, stat.birt
 export function shellMade(command: string, cwd: string, since: number): string[] {
   const after = since - CLOCK_SLACK_MS;
   const made = new Set<string>();
-  const seen = new Set<string>();
-  const locations: string[] = [];
-  let here = cwd;
+  const seen = new Map<string, Stats | undefined>();
+  // A pop may be skipped, and a missing target may have failed or been removed since the command ran.
+  const walks: { here: string; stack?: string[]; followMissing: boolean }[] = [
+    { here: cwd, stack: [], followMissing: true },
+    { here: cwd, followMissing: true },
+    { here: cwd, stack: [], followMissing: false },
+    { here: cwd, followMissing: false },
+  ];
   let change = false;
+  let push = false;
   let end = 0;
   for (const match of [...command.matchAll(TOKEN)].slice(0, MAX_TOKENS)) {
     const first = end === 0 || /[;&|\n]/.test(command.slice(end, match.index));
     end = match.index + match[0].length;
     const token = match[1] ?? match[2] ?? match[3]!;
+    const pop = first && POP_DIR.test(token);
     if (first) {
-      change = false;
-      if (POP_DIR.test(token)) {
-        here = locations.pop() ?? here;
-        continue;
-      }
-      if (PUSH_DIR.test(token)) locations.push(here);
-      if (CHANGE_DIR.test(token) || PUSH_DIR.test(token)) {
-        change = true;
+      push = PUSH_DIR.test(token);
+      change = push || CHANGE_DIR.test(token);
+      if (change) {
+        if (push) for (const walk of walks) walk.stack?.push(walk.here);
         continue;
       }
     }
     if (!token || token.startsWith("-") || /[*?]/.test(token) || /^\w{2,}:\/\//.test(token) || isNetworkPath(token)) continue;
-    const path = resolve(here, token);
-    if (isNetworkPath(path)) continue;
-    // a folder the command went through may be gone by the scan, so the location comes from the text alone
-    if (change) here = path;
-    change = false;
-    if (seen.has(path)) continue;
-    seen.add(path);
-    const stat = statOf(path);
-    if (stat?.isFile() && changed(stat, after)) made.add(path);
-    if (stat?.isDirectory()) {
-      try {
-        for (const ref of listed(path, stat, after)) made.add(ref);
-      } catch {}
+    let resolved = false;
+    for (const walk of walks) {
+      if (pop && walk.stack) {
+        walk.here = walk.stack.pop() ?? walk.here;
+        continue;
+      }
+      const path = resolve(walk.here, token);
+      if (isNetworkPath(path)) continue;
+      resolved = true;
+      const scanned = seen.has(path);
+      const stat = scanned ? seen.get(path) : statOf(path);
+      if (change) {
+        if (walk.followMissing || stat?.isDirectory()) walk.here = path;
+        else if (push) walk.stack?.pop();
+      }
+      if (scanned) continue;
+      seen.set(path, stat);
+      if (stat?.isFile() && changed(stat, after)) made.add(path);
+      if (stat?.isDirectory()) {
+        try {
+          for (const ref of listed(path, stat, after)) made.add(ref);
+        } catch {}
+      }
     }
+    if (resolved) change = false;
   }
   return [...made];
 }

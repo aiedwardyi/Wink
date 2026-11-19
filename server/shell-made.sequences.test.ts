@@ -14,7 +14,7 @@ type Sequence = { name: string; cwd: string; command: string; setup: () => void;
 
 const disk = vi.hoisted(() => ({ entries: new Map<string, Entry>(), kids: new Map<string, Set<string>>() }));
 
-// oxlint-disable-next-line anti-slop/no-module-mocking -- an in-memory disk gives 4229 replays exact file times, which a real disk cannot in test time.
+// oxlint-disable-next-line anti-slop/no-module-mocking -- an in-memory disk gives thousands of replays exact file times.
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
   const { basename: nameOf } = await import("node:path");
@@ -420,6 +420,39 @@ function generate(seed: number, count: number): Sequence[] {
   return Array.from({ length: count }, (_, index) => sequence(`s${seed}-${String(index).padStart(4, "0")}`, index % 3 !== 2));
 }
 
+function generateControlFlow(): Sequence[] {
+  return Array.from({ length: 120 }, (_, index) => {
+    const ps = index % 2 === 0;
+    const scenario = Math.floor(index / 2) % 3;
+    const phase = `phase-${index}`;
+    const other = `other-${index}`;
+    const copy = (to: string) => ps
+      ? `Copy-Item -Path '{w}/inputs/*.png' -Destination '${to}'`
+      : `cp '{w}/inputs/'*.png '${to}'`;
+    const push = (to: string) => ps ? `Push-Location '${to}'` : `pushd '${to}' > /dev/null`;
+    const pop = ps ? "Pop-Location" : "popd > /dev/null";
+    const guard = index % 4 < 2 ? (ps ? "if ($false) {" : "if false; then")
+      : (ps ? "if ($LASTEXITCODE -ne 0) {" : "command -v git > /dev/null || {");
+    const endGuard = ps || guard.endsWith("{") ? "}" : "fi";
+    const inputs = ["inputs/shot-*11", `${phase}/real-shots/`, `${other}/real-shots/`];
+    const op = (to: string): Op => [ps ? "copy" : "cp", "inputs", to];
+    const check = ps ? "git --version | Out-Null" : "command -v git > /dev/null";
+
+    if (scenario === 0) {
+      const steps = [push(phase), check, guard, pop, "exit 1", endGuard, copy("real-shots"), pop];
+      return row([`skipped-pop-${index}`, inputs, steps.join("\n"), [op(`${phase}/real-shots`)]]);
+    }
+    if (scenario === 1) {
+      const fail = ps ? "Set-Location 'missing' -ErrorAction SilentlyContinue" : "cd missing 2> /dev/null";
+      const steps = [ps ? `Set-Location '${phase}'` : `cd '${phase}'`, fail, push(`{w}/${other}`), copy("real-shots"), pop, copy(`../${phase}/real-shots`)];
+      return row([`failed-cd-${index}`, inputs, steps.join("\n"), [op(`${other}/real-shots`), op(`${phase}/real-shots`)]]);
+    }
+    const loop = ps ? "foreach ($i in 1, 2) {" : "for i in 1 2; do";
+    const steps = [loop, push(phase), check, guard, pop, "exit 1", endGuard, copy("real-shots"), pop, ps ? "}" : "done"];
+    return row([`loop-${index}`, inputs, steps.join("\n"), [op(`${phase}/real-shots`), op(`${phase}/real-shots`)]]);
+  });
+}
+
 const files = () => new Map([...disk.entries].filter(([, entry]) => !entry.dir).map(([path, entry]) => [path, `${entry.birth}:${entry.mtime}`]));
 
 // a folder too big to list is named itself, never with a short count
@@ -438,13 +471,14 @@ function replay({ name, cwd, command, setup, effects }: Sequence) {
   const base = new Set(baseMade(command, cwd, SINCE));
   const head = new Set(shellMade(command, cwd, SINCE));
   const kept = made.filter((path) => base.has(path));
-  return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path) && !tooBig(head, path)) };
+  return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path) && !tooBig(head, path)), missing: made.filter((path) => !head.has(path)) };
 }
 
-const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)])];
+const CONTROL_FLOW = generateControlFlow();
+const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)]), ["control flow", CONTROL_FLOW]];
 
-it("replays the gate's 4229 sequences", () => {
-  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4229);
+it("replays 4349 sequences", () => {
+  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4349);
 });
 
 it.each(GROUPS)("keeps every file the base named in %s", (_, sequences) => {
@@ -452,4 +486,19 @@ it.each(GROUPS)("keeps every file the base named in %s", (_, sequences) => {
   // a replay the mock missed would name nothing on either side and pass
   expect(runs.reduce((sum, run) => sum + run.kept, 0)).toBeGreaterThan(0);
   expect(runs.filter((run) => run.lost.length).map(({ name, command, lost }) => ({ name, command, lost }))).toEqual([]);
+});
+
+it("keeps every file made after a skipped pop or a failed cd in control flow", () => {
+  const missing = CONTROL_FLOW.map(replay).filter((run) => run.missing.length);
+  expect(missing.map(({ name, missing }) => ({ name, missing: missing.length }))).toEqual([]);
+});
+
+it.each(["missing", "notes.md"])("keeps the current location when cd to %s may have failed", (target) => {
+  const run = replay(row([
+    `failed-location-${target}`,
+    ["inputs/shot-*11", "real-shots/", "notes.md"],
+    `Set-Location '${target}' -ErrorAction SilentlyContinue; Copy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'`,
+    [["copy", "inputs", "real-shots"]],
+  ]));
+  expect(run.missing).toEqual([]);
 });
