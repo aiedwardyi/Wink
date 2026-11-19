@@ -197,7 +197,9 @@ it("lists the replays kept on this PC for a chat, to the app only", async () => 
   const get = (id: string, headers: Record<string, string> = { authorization: "Bearer app-token" }) => fetch(`${base}/api/verify/threads/${id}/replays`, { headers });
   expect((await get(threadId, {})).status).toBe(401);
   expect((await get(threadId, { "x-relay": "1", authorization: "Bearer app-token" })).status).toBe(401);
-  expect((await get("nobody")).status).toBe(404);
+  const nobody = await get("nobody");
+  expect(nobody.status).toBe(404);
+  expect(await nobody.json()).toEqual({ error: "not found" });
   const reply = await get(threadId);
   expect(reply.status).toBe(200);
   expect(await reply.json()).toEqual({ runs: ["run-kept001"] });

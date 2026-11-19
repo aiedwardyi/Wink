@@ -563,7 +563,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     res.setHeader("cache-control", "no-store");
     if (!enabled()) return json(res, 404, { error: "not found" });
     if (from.relay ? !from.phoneSession : !deps.appToken(req.headers.authorization) && !deps.remoteClient(req) && !deps.resolveCommsCaller(req.headers.authorization)) return json(res, 401, { error: "unauthorized" });
-    if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "not-here" });
+    if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "not found" });
     json(res, 200, { runs: await listReplays(threadId) });
   }
 

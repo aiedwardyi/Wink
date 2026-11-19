@@ -66,6 +66,26 @@ it("keeps Watch when this PC could not say which replays it has", async () => {
   await view.close();
 });
 
+it("asks once per chat for cards that each list a different run", async () => {
+  kept("run-a");
+  const view = await mount(...["a", "b", "c"].map(id => createElement(VerifyCard, { card: card({ runId: `run-${id}00000`, replay: [`run-${id}`] }), threadId: "thread-distinct" })));
+  expect(asked()).toBe(1);
+  const cards = view.host.querySelectorAll("[data-verify-card]");
+  expect(cards[0]!.querySelector('[data-verify-watch="watch"]')).not.toBeNull();
+  expect(cards[1]!.querySelector('[data-verify-watch="watch"]')).toBeNull();
+  expect(cards[2]!.querySelector('[data-verify-watch="watch"]')).toBeNull();
+  await view.close();
+});
+
+it("keeps Watch on a check that ended after the chat's list was read", async () => {
+  kept("run-here04");
+  const view = await mount(createElement(VerifyCard, { card: card({ replay: ["run-here04"] }), threadId: "thread-fresh" }));
+  await view.close();
+  const fresh = await mount(createElement(VerifyCard, { card: card({ runId: "run-fresh0000", replay: ["run-new"], endedAt: Date.now() + 60000 }), threadId: "thread-fresh" }));
+  expect(fresh.host.querySelector('[data-verify-watch="watch"]')).not.toBeNull();
+  await fresh.close();
+});
+
 it("asks once per chat for every card it shows", async () => {
   kept("run-here03");
   const view = await mount(...["a", "b", "c"].map(runId => createElement(VerifyCard, { card: card({ runId: `run-${runId}00000`, replay: ["run-here03"] }), threadId: "thread-batch" })));
