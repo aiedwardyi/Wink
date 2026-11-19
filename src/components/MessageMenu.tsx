@@ -9,6 +9,7 @@ import { ArrowUp, Copy, MessageSquareReply, Pin, PinOff, SmilePlus, TextCursor, 
 import { EXTENDED_REACTIONS } from "../../shared/reactions";
 import type { Message } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
+import { isBottomFollowScroll } from "@/lib/bottom-follow";
 import { cn } from "@/lib/cn";
 import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -150,8 +151,8 @@ function cancelPress(): void {
   document.removeEventListener("scroll", pressScrolled, true);
 }
 
-function pressScrolled(): void {
-  if (press?.timer) cancelPress();
+function pressScrolled(event: Event): void {
+  if (press?.timer && !isBottomFollowScroll(event)) cancelPress();
 }
 
 /** Row props that open the menu after a still, one-finger hold on touch-first devices. */
@@ -176,7 +177,6 @@ export function holdToOpen(open: ((x: number, y: number, opener: HTMLElement) =>
           open(x, y, opener);
         }, HOLD_MS),
       };
-      // the transcript can scroll under a still finger, like following a streaming reply
       document.addEventListener("scroll", pressScrolled, true);
     },
     onTouchMove: (e: React.TouchEvent<HTMLElement>) => {
@@ -329,7 +329,9 @@ function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTM
     // a scroll moves the message without moving the pointer, so the menu
     // would point at the wrong row
     const transcript = opener.closest("[data-orbit-transcript]");
-    const onScroll = () => onClose();
+    const onScroll = (event: Event) => {
+      if (!isBottomFollowScroll(event)) onClose();
+    };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("touchstart", onDown);
     window.addEventListener("keydown", onKey);
@@ -574,7 +576,7 @@ export function MessageMenu({
           {target.notice ? t(pinned ? "teamRoom.unpinNotice" : "teamRoom.pinNotice") : t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
-      {onReply && message.kind === "text" && message.quick?.state !== "answer" && (
+      {onReply && message.kind === "text" && (
         <button
           type="button"
           role="menuitem"

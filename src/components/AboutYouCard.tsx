@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { aboutYouNote } from "../../shared/about-you-note";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
@@ -59,11 +60,7 @@ export function AboutYouCard() {
       if (seq === listSeq.current) setSources(body.sources);
       setText("");
       setMore(false);
-      setNote([
-        body.added ? t("aboutYou.added", { count: body.added }) : body.found ? t("aboutYou.nothingNew") : t("aboutYou.noFacts"),
-        body.hidden ? t("aboutYou.hidden", { count: body.hidden }) : "",
-        body.full ? t("aboutYou.full", { count: body.full }) : "",
-      ].filter(Boolean).join(" "));
+      setNote(aboutYouNote(body, t));
     } catch (error) {
       setNote((error as { status?: number }).status === 413 ? t("aboutYou.tooLarge") : t("aboutYou.failed"));
     } finally {
@@ -88,7 +85,7 @@ export function AboutYouCard() {
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step1")}</div>
         <div className="mt-2 flex items-start gap-1 rounded-lg border border-hairline/40 bg-raised p-1.5">
-          <div tabIndex={0} className="min-w-0 flex-1 whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          <div tabIndex={0} className="max-h-[129px] min-w-0 flex-1 overflow-hidden whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
             {t("aboutYou.prompt")}
           </div>
           <button

@@ -42,7 +42,7 @@ export class AccountLifecycle {
     this.hooks = hooks;
     this.bots = bots;
     registry.onAccountIdentity((id, snapshot) => this.observe(id, snapshot));
-    for (const account of accounts.snapshot) registry.blockAccount(account.id, account.state !== "ready");
+    for (const account of accounts.snapshot) if (account.state !== "ready") registry.blockAccount(account.id, true);
     for (const id of Object.keys(accounts.drains)) registry.blockAccount(id, true);
   }
 
@@ -65,7 +65,7 @@ export class AccountLifecycle {
     }
     const accounts = this.accounts.snapshot.filter((account) => !this.accounts.drains[account.id]);
     for (const account of accounts) if (account.state === "pending") await this.discard(account.id);
-    const ready = new Map(accounts.filter((account) => account.state === "ready").map((account) => [account.id, this.restoreAccount(account.id)]));
+    const ready = new Map(accounts.filter((account) => account.state === "ready").map((account) => [account.id, this.restoreAccount(account)]));
     if (!Object.values(this.accounts.drains).some((drain) => drain.phase !== "failed")) this.restoring = ready;
     await Promise.all(ready.values());
     await this.resumeDrains().catch(() => {
@@ -74,12 +74,18 @@ export class AccountLifecycle {
     });
   }
 
-  private async restoreAccount(id: string) {
-    this.registry.blockAccount(id, true);
+  private async restoreAccount({ id, generation }: AccountRecord) {
+    this.registry.checkAccount(id);
     const snapshot = await this.registry.get(id)?.snapshot({ refresh: true }).catch(() => undefined);
-    await this.observe(id, snapshot ?? { state: "unavailable" }).catch(() => {
+    if (!this.registry.accountChecking(id) || this.accounts.get(id)?.generation !== generation) return;
+    try {
+      await this.observe(id, snapshot ?? { state: "unavailable" }, generation);
+      if (snapshot?.authenticated === true && this.accounts.get(id)?.identity === snapshot.accountIdentity) {
+        this.registry.recordAccountCheck(id, snapshot);
+      }
+    } catch {
       console.error("Account restoration is waiting for recovery");
-    });
+    }
   }
 
   dispose() {
@@ -146,7 +152,7 @@ export class AccountLifecycle {
         let capture;
         try {
           capture = await this.registry.startSignIn(id, device);
-          if (!capture) throw new AccountError("Unknown engine sign-in", 404);
+          if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
         } catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
         if (this.registry.accountBlocked(id)) {
           const finished = this.registry.logins.wait(id).then(async () => {
@@ -162,13 +168,14 @@ export class AccountLifecycle {
         return capture;
       }
       if (this.jobs.has(id)) return this.registry.logins.capture(id);
+      const blocked = this.registry.accountBlocked(id);
       this.registry.blockAccount(id, true);
       try {
         if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id, account.state === "stopped" && destinations.length === 0)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
         return await this.begin(account, device);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);
-        else this.registry.blockAccount(id, account.state !== "ready");
+        else this.registry.blockAccount(id, blocked || account.state !== "ready");
         throw error;
       }
     });
@@ -259,24 +266,28 @@ export class AccountLifecycle {
     const account = this.accounts.get(id);
     if (!account || this.accounts.drains[id] || (generation !== undefined && generation !== account.generation) || account.state !== "ready" || this.jobs.has(id)) return Promise.resolve();
     if (snapshot.authenticated !== false && !(snapshot.authenticated === true && snapshot.accountIdentity)) {
-      this.registry.blockAccount(id, true);
+      this.registry.recordUnverifiedAccountCheck(id, snapshot);
       this.retry(account);
       return Promise.resolve();
     }
+    const retrying = this.retries.has(id);
     this.clearRetry(id);
     if (snapshot.authenticated === true && snapshot.accountIdentity === account.identity) {
       this.registry.blockAccount(id, false);
+      if (retrying) this.hooks.changed?.();
       return Promise.resolve();
     }
     this.registry.blockAccount(id, true);
     return this.exclusive(async () => {
       const current = this.accounts.get(id);
       if (!current || current.generation !== account.generation) return;
-      if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) {
-        await this.accounts.stop(id);
-        return;
+      const inUse = await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id);
+      if (inUse) await this.accounts.stop(id);
+      else await this.accept(current, snapshot);
+      if (snapshot.authenticated === false) {
+        this.registry.recordAccountCheck(id, snapshot);
+        if (inUse && retrying) this.hooks.changed?.();
       }
-      await this.accept(current, snapshot);
     }, false).catch((error) => {
       this.retry(account);
       throw error;
@@ -351,7 +362,7 @@ export class AccountLifecycle {
     let capture;
     try {
       capture = await this.registry.startSignIn(account.id, device);
-      if (!capture) throw new AccountError("Unknown engine sign-in", 404);
+      if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
     } catch (error) {
       this.jobs.delete(account.id);
       throw error;
@@ -434,13 +445,19 @@ export class AccountLifecycle {
       return;
     }
     this.clearRetry(account.id);
-    if (force && snapshot.authenticated === true && this.registry.get(account.id)?.driverKind === "codex") clearCodexPromo(account.home);
-    if (force || snapshot.authenticated !== true || !snapshot.accountIdentity || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
-    const next = await this.accounts.identify(account.id, snapshot.authenticated === true ? snapshot.accountIdentity : undefined, force);
-    if (snapshot.authenticated !== true) await this.accounts.stop(account.id);
-    if (next.generation !== account.generation || snapshot.authenticated !== true) await this.hooks.reload();
-    this.registry.blockAccount(account.id, snapshot.authenticated !== true);
-    this.hooks.changed?.(snapshot.authenticated === true ? account.id : undefined);
+    // A sign-out only stops the account, as signedOut() does: identity, generation and sessions wait for the next sign-in.
+    if (snapshot.authenticated === false) {
+      await this.accounts.stop(account.id);
+      this.registry.blockAccount(account.id, true);
+      this.hooks.changed?.();
+      return;
+    }
+    if (force && this.registry.get(account.id)?.driverKind === "codex") clearCodexPromo(account.home);
+    if (force || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
+    const next = await this.accounts.identify(account.id, snapshot.accountIdentity, force);
+    if (next.generation !== account.generation) await this.hooks.reload();
+    this.registry.blockAccount(account.id, false);
+    this.hooks.changed?.(account.id);
   }
 
   private promoHome(id: string) {
@@ -477,7 +494,7 @@ export class AccountLifecycle {
   private exclusive<T>(run: () => Promise<T>, checkConfig = true): Promise<T> {
     this.mutations += 1;
     const pending = this.queue.then(async () => {
-      if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated");
+      if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated", 409, "provider-config-busy");
       const before = this.hooks.onMainChanged && this.mains();
       try { return await run(); }
       finally { if (before) this.reportMains(before); }

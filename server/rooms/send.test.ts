@@ -1,4 +1,5 @@
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CHAIN_PENDING_MS } from "../../shared/bot-chain.ts";
@@ -6,6 +7,7 @@ import { DATA_DIR } from "../config.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, ROOM_TEXT_MAX, type RoomPerson } from "./db.ts";
+import { copyRoomFile } from "./files.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend, hostSend, liveBotChain, stopBotChain, teamBotSend } from "./send.ts";
 import { addTeamBot, type TeamBot } from "./team-bots.ts";
@@ -171,6 +173,17 @@ describe("teamBotSend", () => {
     const entry = said("@Wink Sora is free after 7. What works for Edward?");
     expect(asks()).toEqual([expect.objectContaining({ botId: wink, asker: { kind: "person", id: people.sora.id }, entryId: entry.id, grant: "work", state: "queued", clean: true })]);
     expect(deps.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts no turn from a picture's caption", async () => {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const path = join(DATA_DIR, "chart.png");
+    writeFileSync(path, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 3)]));
+    const file = await copyRoomFile(path, group.hosted.roomId, { owner: people.sora.id, name: "chart.png", uploadId: "picture-0123456789abcdef" });
+    const entry = teamBotSend(group, people.sora, star, "Chart from @Wink", undefined, undefined, [file.id]);
+    expect(entry.files).toEqual([file]);
+    expect(asks()).toEqual([]);
+    expect(deps.dispatch).not.toHaveBeenCalled();
   });
 
   it("wakes nobody without an explicit @ to a host bot", () => {

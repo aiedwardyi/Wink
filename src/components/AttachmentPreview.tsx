@@ -122,12 +122,18 @@ export function AttachedImageGallery({ paths, pictures, className }: { paths?: s
 }
 
 /** A show_image message. A synced row whose file never reached this machine keeps its caption. */
-export function ShownImage({ name, caption }: { name: string; caption?: string }) {
+export function ShownImage({ name, picture, caption, messageId }: { name?: string; picture?: PreviewImage; caption?: string; messageId?: string }) {
   const viewer = useMediaViewer();
+  const src = picture?.src;
+  const pictureName = picture?.name;
   const image = useMemo(() => {
-    const image = previewImage(name);
+    const image = src && pictureName ? { src, name: pictureName } : name ? previewImage(name) : null;
     return image ? { ...image, caption } : null;
-  }, [name, caption]);
+  }, [name, src, pictureName, caption]);
+  useEffect(() => {
+    if (!viewer || !src || !image || !messageId) return;
+    return viewer.register({ ...image, messageId, id: `${messageId}:${image.src}` });
+  }, [viewer, src, image, messageId]);
   const retry = usePictureRetry(image?.src ?? "");
   const [open, setOpen] = useState(false);
   const preview = usePresence(open && image);

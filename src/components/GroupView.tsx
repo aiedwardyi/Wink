@@ -15,7 +15,6 @@ import { isVoiceLine } from "../../shared/live-call";
 import {
   api,
   useStore,
-  useStreaming,
   openNotificationTarget,
   type Bot,
   type Group,
@@ -96,7 +95,7 @@ import { turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
 import { useI18n } from "@/lib/i18n";
 import { useRoomTurnStage } from "@/lib/room-turn";
-import { buffersForTurn } from "@/lib/turn-stage";
+import { useLiveReply, useThreadTurn } from "@/lib/thread-stream";
 import { splitAttachedImages } from "@/lib/composer-attachments";
 import { usePresence } from "@/lib/use-presence";
 import {
@@ -232,6 +231,7 @@ export const Transcript = memo(function Transcript({
   messages: listed,
   transcript,
   streamingMessage: streamingRow,
+  onLiveText,
   dock,
   onReply,
   onMessageMenu,
@@ -246,6 +246,8 @@ export const Transcript = memo(function Transcript({
   /** Full room transcript, used to resolve quoted messages outside the mounted window. */
   transcript: Message[];
   streamingMessage: Message | null;
+  /** Live reply text changed: GroupView keeps a following list at its end. */
+  onLiveText?: () => void;
   dock: ReplyDock | null;
   onReply: (message: Message) => void;
   onMessageMenu: (menu: MessageMenuRequest) => void;
@@ -264,7 +266,8 @@ export const Transcript = memo(function Transcript({
   const showActivities = showToolCalls || terminal;
   const shownRows = useChatPeekRows();
   const messages = useMemo(() => peekRows(listed, shownRows), [listed, shownRows]);
-  const streamingMessage = shownRows ? streamingRow : null;
+  const streamingMessage = useLiveReply(shownRows ? streamingRow : null, group.threadId);
+  useEffect(() => onLiveText?.(), [streamingMessage?.text, onLiveText]);
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   const teamBotOf = (id?: string) => roomTeamBots(group).find((b) => b.id === id);
   const people = useMemo(() => {
@@ -288,7 +291,7 @@ export const Transcript = memo(function Transcript({
     () => roomTranscriptRows(items, { showToolCalls, showActivities, workers: workerAt }),
     [items, showToolCalls, showActivities, workerAt],
   );
-  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
+  const { pictured, tailPictures } = useMemo(() => picturedReplies(transcript), [transcript]);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
   const toggleFold = (id: string) => setUnfolded((current) => {
     const next = new Set(current);
@@ -302,7 +305,10 @@ export const Transcript = memo(function Transcript({
   const focus = state.focusMessage;
   const focusedId = focus && !focus.consumed && focus.threadId === group.threadId ? focus.messageId : null;
   const findCurrent = useFindCurrentId();
-  const lastBotTextId = [...transcript].reverse().find((entry) => entry.role === "bot" && entry.kind === "text" && !isVoiceLine(entry) && isShownMessage(entry))?.id;
+  const lastBotTextId = useMemo(
+    () => transcript.findLast((entry) => entry.role === "bot" && entry.kind === "text" && !isVoiceLine(entry) && isShownMessage(entry))?.id,
+    [transcript],
+  );
   const target = roomRetry(group.messages, members, group, group.threadId, group.busyBotId, { allowSetup: true });
   const onRetryFor = (messageId: string) =>
     target && !readOnly && messageId === target.messageId
@@ -467,6 +473,8 @@ export const Transcript = memo(function Transcript({
               onRetry={onRetryFor(m.id)}
               onMessageMenu={readOnly ? undefined : onMessageMenu}
             />
+          ) : m.kind === "screen" && roomBase && m.roomFiles ? (
+            <ShownImage picture={roomPictures(roomBase, m.roomFiles)[0]} caption={m.text} messageId={m.id} />
           ) : m.kind === "screen" && m.image ? (
             <ShownImage name={m.image} caption={m.text} />
           ) : m.kind === "screen" && (m.png || m.hasImage) ? (
@@ -534,10 +542,12 @@ export const Transcript = memo(function Transcript({
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} threadId={group.threadId} className={cn(m.text && "mt-2")} />}
                       {(folded || unfolded.has(m.id)) && <FoldToggle expanded={!folded} onToggle={() => toggleFold(m.id)} />}
                     </>
-                  ) : markdownText.trim() ? (
+                  ) : markdownText.trim() || (roomBase && m.roomFiles) ? (
                     <MessageBoundary fallbackText={markdownText}>
-                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={pictured.has(m.id)} />
+                      {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className="justify-start" />}
+                      {markdownText.trim() && <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)} />}
                       {translation && <RoomTranslationText translation={translation} markdown />}
+                      {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} threadId={group.threadId} className={cn(m.text && "mt-2")} />}
                     </MessageBoundary>
                   ) : null}
                 </div>
@@ -966,8 +976,6 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   const { t } = useI18n();
   const { state, dispatch, turnOrigin } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
-  const stream = useStreaming();
-  const streaming = stream.streaming[group.threadId];
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const composerDockRef = useRef<HTMLDivElement>(null);
@@ -1043,28 +1051,26 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
   const speakerEngine = state.instances.find((instance) => instance.instanceId === speaker?.modelSelection?.instanceId);
-  const { label: activityLabel, noReply, responding } = useRoomTurnStage(group.threadId, group.messages, stream, showActivities, speakerEngine?.driverKind, speaker?.activity === "no-signal");
-  const reveal = stream.reveal?.[group.threadId];
-  const waiting = !reveal?.ended && turnPresenceWaiting({
+  const turn = useThreadTurn(group.threadId, lastGroupMessage?.id);
+  const { label: activityLabel, noReply, responding } = useRoomTurnStage(group.threadId, group.messages, turn, showActivities, speakerEngine?.driverKind, speaker?.activity === "no-signal");
+  const waiting = !turn.ended && turnPresenceWaiting({
     busy: Boolean(speaker),
-    turnActive: stream.signal[group.threadId] !== undefined,
+    turnActive: turn.signal !== undefined,
     activity: speaker?.activity,
     lastMessage: group.messages.at(-1),
     speakerBotId: speaker?.id,
     accepted: state.acceptedSends[group.threadId],
   });
-  const liveText = buffersForTurn(stream, group.threadId, lastGroupMessage?.id).streaming;
-  const streamingMessage = useMemo<Message | null>(() => (waiting || reveal?.ended) && liveText ? {
+  const streamingMessage = useMemo<Message | null>(() => (waiting || turn.ended) && turn.replying ? {
     id: `stream:${group.threadId}:${lastGroupMessage?.id ?? ""}`,
     parentId: lastGroupMessage?.id,
     role: "bot",
     kind: "text",
-    text: liveText,
+    text: "",
     at: lastGroupMessage?.at ?? 0,
     placeholder: true,
-    streamWhole: reveal?.whole,
     from: speaker ? { botId: speaker.id, name: speaker.name, color: speaker.color } : undefined,
-  } : null, [waiting, liveText, reveal, group.threadId, lastGroupMessage?.id, lastGroupMessage?.at, speaker]);
+  } : null, [waiting, turn.ended, turn.replying, group.threadId, lastGroupMessage?.id, lastGroupMessage?.at, speaker]);
   const presenceSpeaker = speaker ?? members[0];
 
   // Windowed transcript, mirroring ChatView: only a tail of the room mounts;
@@ -1075,7 +1081,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   const accepted = state.acceptedSends[group.threadId];
   // a sent line shows at once, as in a 1:1 chat, while the server still holds it
   const messages = useMemo(() => withAcceptedMessages(group.messages, accepted), [group.messages, accepted]);
-  const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots);
+  const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots, state.focusMessage);
   const shown = jump.messages ?? messages;
   // rooms have no pane liveness, so a run without a report stays Working
   const workers = useMemo(() => workerRuns(group.messages).map((run) => ({ run, state: shownState(run, null) })), [group.messages]);
@@ -1195,7 +1201,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     if (targetIndex < 0) {
       if (group.hasMore && requestedFocus.current !== focus.nonce) {
         requestedFocus.current = focus.nonce;
-        openJump(focus.messageId);
+        openJump(focus.messageId, focus.nonce);
       }
       return;
     }
@@ -1235,12 +1241,13 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
   }, [group.id, group.threadId, windowSize, transcriptWindow.size, startIndex]);
-  useEffect(() => {
+  const followTail = useCallback(() => {
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
-  }, [group.id, messages.length, streaming, group.busyBotId, composerDock.pad]);
+  }, []);
+  useEffect(followTail, [group.id, messages.length, group.busyBotId, composerDock.pad, followTail]);
 
   // Late layout, images and viewport changes fire no scroll event, so the pill and fill read geometry here too.
   const [newestBelow, setNewestBelow] = useState(false);
@@ -1527,6 +1534,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
             messages={windowedMessages}
             transcript={shown}
             streamingMessage={listedStreaming}
+            onLiveText={followTail}
             dock={dock}
             onReply={selectReply}
             onMessageMenu={setMenu}

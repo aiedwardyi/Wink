@@ -257,4 +257,11 @@ describe("roomTranscriptRows", () => {
     expect(result.map((row) => row.visible)).toEqual([true, true, true]);
     expect(result.map((row) => row.cluster)).toEqual([true, true, false]);
   });
+
+  it("leaves a wake out of the next speaker's cluster", () => {
+    const wake: Message = { id: "w1", at: at(1), role: "bot", kind: "routine.run", text: "", from: from("b"), routineRun: { runId: "r", routineId: "x", routineName: "Wake", status: "completed", wake: true } };
+    const result = roomTranscriptRows(groupActivityRuns([say("a", "one"), wake, say("a", "two")]), { showToolCalls: false });
+    expect(result.map((row) => row.visible)).toEqual([true, false, true]);
+    expect(result.map((row) => row.cluster)).toEqual([true, false, false]);
+  });
 });

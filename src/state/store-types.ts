@@ -81,6 +81,7 @@ export interface Message {
   /** `setup` marks an error fixed by installing something, not by retrying. */
   tool?: {
     name: string;
+    memoryBotId?: string;
     /** Claude Code tool name, when the engine said the kind. */
     verb?: string;
     ok?: boolean;
@@ -395,7 +396,7 @@ export interface ConfigStatus {
   /** who's using the app - collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean };
   /** Opt-in flags. Absent means off, except memoryNotes. */
-  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; terminalLive?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; terminalLive?: boolean; modelDial?: boolean; voiceCalls?: boolean };
 }
 
 export type ConfigStatusFrame = Pick<
@@ -594,7 +595,7 @@ export type Action =
       queued?: AppState["pendingQueued"];
       sidebarOrder: SidebarOrder;
     }
-  | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
+  | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean; focusNonce?: number }
   | { type: "routinesHydrated"; routines: Routine[]; runs: RoutineRun[] }
   | { type: "routinePatched"; routine: Routine }
   | { type: "routineDeleted"; routineId: string }
@@ -636,7 +637,7 @@ export type Action =
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
   | { type: "rateLimits"; instanceId: string; report: RateLimitReport; identity?: string | null }
   | { type: "configStatus"; config: ConfigStatus }
-  | { type: "select"; id: string; reveal?: boolean }
+  | { type: "select"; id: string; reveal?: boolean; searchLanding?: { threadId: string; request: AbortController } }
   | {
       type: "send";
       botId: string;

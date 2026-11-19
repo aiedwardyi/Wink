@@ -1,5 +1,5 @@
-import { useId, useState } from "react";
-import { Check, Download } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
+import { Check } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { firstLaunchConnectInstances } from "@/lib/engine-rail";
 import { baseInstances } from "@/lib/cross-model-picker";
@@ -7,7 +7,7 @@ import { usageAccount } from "@/lib/accounts";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
 import { EngineSetup, EngineSignIn, engineChecking, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
-import { ProviderMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
 import { trackOnboard } from "@/lib/usage-stats";
 
@@ -18,7 +18,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   instances: InstanceInfo[];
   onRefresh: () => void | Promise<void>;
   recheckOnFocus?: boolean;
-  footer?: { back: () => void; open: () => void; label?: MessageKey; disabled?: boolean; skip?: () => void };
+  footer?: { back: () => void; open: () => void; label?: MessageKey };
 }) {
   const { t } = useI18n();
   const canInstall = Boolean(window.ogb?.openEngineInstall);
@@ -73,54 +73,54 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       : installed ? t("engineConnect.signIn", { name: instance.displayName })
         : working ? t("engineConnect.openAgain")
           : failed ? t("engineConnect.tryAgain")
-            : recommended ? t("engineConnect.install", { name: instance.displayName }) : t("engines.install");
+            : t("engineConnect.install", { name: instance.displayName });
     const accountKey = ACCOUNTS[instance.driverKind as keyof typeof ACCOUNTS];
-    const buttonClassName = `flex shrink-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12.5px] font-semibold disabled:cursor-default ${featured ? "w-full bg-accent text-accent-ink hover:brightness-110" : "bg-control text-ink hover:bg-raised-hover"}`;
-    const button = installed && !ready ? <EngineSignIn instance={signInAs(instance)} buttonLabel={label} buttonClassName={buttonClassName}
+    const buttonClassName = "flex w-full items-center gap-2.5 rounded-lg border border-hairline/60 px-3.5 py-2.5 text-[13px] font-medium text-ink hover:bg-control disabled:cursor-default";
+    const mark = <ProviderBrandMark driverKind={instance.driverKind} size={16} />;
+    const action = <span className="ml-auto shrink-0 text-[12.5px] font-semibold text-accent">{installed ? t("engines.signIn") : working || failed ? label : t("engines.install")}</span>;
+    const content = featured ? <>{mark}{instance.displayName}{action}</> : <>
+      {mark}{label}
+      <span className="ml-auto flex items-center gap-1.5 text-[11.5px] font-normal text-ink-secondary">{accountKey && t(accountKey)}{ready && <Check size={14} />}</span>
+    </>;
+    // Signing in keeps the engine's name on the row, with that state's one action at the end.
+    const named = (end: ReactNode) => <div className="flex w-full items-center gap-2.5 rounded-lg border border-hairline/60 px-3.5 py-2.5 text-[13px] font-medium text-ink">
+      {mark}<span className="min-w-0 truncate">{instance.displayName}</span>
+      <span className="ml-auto flex shrink-0 items-center gap-3 text-[12.5px] font-semibold text-accent">{end}</span>
+    </div>;
+    const help = featured && t(installed ? "chat.signInHelp" : "engineConnect.note", { name: instance.displayName });
+    const helpClassName = "break-keep text-center text-[12px] leading-relaxed text-ink-secondary";
+    const button = installed && !ready ? <EngineSignIn instance={signInAs(instance)} buttonLabel={content} buttonClassName={buttonClassName} row={named}
+      note={help && <p className={`mt-1 ${helpClassName}`}>{help}</p>}
       onUpdated={(next) => { if (next.snapshot.authenticated === true) void onRefresh(); }} />
       // Launchers report spawn, not the window's end, so an open window never locks the button.
       : <button type="button" disabled={Boolean(ready || checking || busy[instance.instanceId])}
-      onClick={() => void install(instance)} className={buttonClassName}>
-      {ready ? <Check size={14} /> : recommended && !checking && !working ? <Download size={14} /> : null}
-      {label}
-    </button>;
-    return <div key={instance.instanceId} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}
-      className={featured ? "rounded-xl border border-hairline/50 bg-card p-4" : "border-b border-hairline/30 py-3 last:border-0"}>
-      {featured ? <>
-        <div className="mb-3 flex items-center gap-2 text-[15px] font-semibold text-ink"><ProviderMark driverKind={instance.driverKind} size={20} />{instance.displayName}</div>
-        {button}
-        <p className="mt-2.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t(installed ? "chat.signInHelp" : "engineConnect.note", { name: instance.displayName })}</p>
-      </> : <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5"><ProviderMark driverKind={instance.driverKind} size={16} />
-          <div><div className="text-[13px] font-medium text-ink">{instance.displayName}</div>
-            {accountKey && <div className="mt-0.5 text-[11.5px] text-ink-secondary">{t(accountKey)}</div>}
-          </div>
-        </div>{button}
-      </div>}
-      {working && <p role="status" className="mt-2 text-[12px] text-ink-secondary">{t(paste ? "engine.pasteAndEnter" : "engineConnect.finish")}</p>}
-      {failed && <p role="status" className="mt-2 text-[12px] text-ink-secondary">{t("engineConnect.didntFinish")}</p>}
+      onClick={() => void install(instance)} className={buttonClassName}>{content}</button>;
+    return <div key={instance.instanceId} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}>
+      {button}
+      {!installed && help && <p className={`mt-2.5 ${helpClassName}`}>{help}</p>}
+      {working && <p role="status" className="mt-1.5 text-center text-[12px] text-ink-secondary">{t(paste ? "engine.pasteAndEnter" : "engineConnect.finish")}</p>}
+      {failed && <p role="status" className="mt-1.5 text-center text-[12px] text-ink-secondary">{t("engineConnect.didntFinish")}</p>}
     </div>;
   };
 
   return <div data-engine-connect-panel className="flex min-h-0 flex-col">
     <div className="-mx-1 flex min-h-0 flex-col overflow-y-auto px-1 [scrollbar-width:thin]">
-      {primary.map((instance) => row(instance, instance.driverKind === "claudeAgent"))}
-      <h2 className="mt-5 text-[12px] font-semibold text-ink-secondary">{t("engineConnect.others")}</h2>
-      <div>{others.map((instance) => row(instance))}</div>
+      <div className="flex flex-col gap-2">{primary.map((instance) => row(instance, instance.driverKind === "claudeAgent"))}</div>
+      <h2 className="my-5 flex items-center gap-3 text-[12px] text-ink-secondary before:h-px before:flex-1 before:bg-hairline/50 after:h-px after:flex-1 after:bg-hairline/50">{t("engineConnect.others")}</h2>
+      <div className="flex flex-col gap-2">{others.map((instance) => row(instance))}</div>
       <Fold open={commands}>
         <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
           {engines.filter((instance) => !engineChecking(instance)).map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" />)}
         </div>
       </Fold>
     </div>
-    <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-1">
-      {footer && <button type="button" onClick={footer.back} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>}
+    <div className="mt-4 flex shrink-0 flex-wrap items-center justify-center gap-1">
       <button type="button" aria-expanded={commands} aria-controls={commandsId} onClick={() => setCommands((current) => !current)}
-        className="rounded-xl px-3 py-2.5 text-[12.5px] text-ink-secondary hover:bg-control hover:text-ink">{t("engineConnect.commands")}</button>
-      {footer && <div className="flex items-center gap-1">
-        {footer.skip && <button type="button" onClick={footer.skip} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.openOrbit")}</button>}
-        <button type="button" data-engine-connect-primary onClick={footer.open} disabled={footer.disabled} className="rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{t(footer.label ?? "onboarding.openOrbit")}</button>
-      </div>}
+        className="px-2 py-1 text-[12px] text-ink-secondary underline-offset-2 hover:text-ink hover:underline">{t("engineConnect.commands")}</button>
     </div>
+    {footer && <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-1">
+      <button type="button" onClick={footer.back} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>
+      <button type="button" data-engine-connect-primary onClick={footer.open} className="rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{t(footer.label ?? "onboarding.openOrbit")}</button>
+    </div>}
   </div>;
 }

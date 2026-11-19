@@ -55,6 +55,9 @@ export class TeamReports {
     return o.status().state !== "connected" && this.canDraft() ? TEAM_REPORT_RULE : "";
   }
 
+  /** Enrolled on the team relay: the one test for team-only features (voice calls). */
+  member(): boolean { return this.prompt() !== ""; }
+
   private canDraft(): boolean {
     const o = this.options;
     const status = o.status();

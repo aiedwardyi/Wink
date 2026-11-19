@@ -90,7 +90,7 @@ describe("ask-user endpoint", () => {
     expect(handler).toContain("conversation: connectorThread");
     expect(handler).toContain('buildNotification("question", bot, target, question)');
     expect(handler).toContain("routineSourceThread(run)");
-    expect(handler).toContain("askHold.whenSettled(botId, threadId, post, question)");
+    expect(handler).toContain("askHold.whenSettled(botId, threadId, post, question, forum)");
     expect(source).toContain("askHold.flush();");
     expect(handler).not.toContain("waiting-on-you");
     const dispatch = source.slice(source.indexOf('if (method === "POST" && path === "/api/internal/ask-user")'));
@@ -133,8 +133,7 @@ describe("closed ask_user card note", () => {
     activeMessages, userMessage, text: userMessage.text, closedAskNotes, currentPrompt: userMessage.text,
     turnStartedByUser: () => true, opts: undefined, supportsWorkspaceFiles: () => false, instance: {}, threadSyncV2: null,
     mailForTurn: () => [], store: {}, threadId: "t1", paneNoteIds: [], modelContextWindow: 200_000, paneTokens: 0,
-    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], bot: { id: "bot-a" },
-  });
+    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], bot: { id: "bot-a" },  });
 
   it("tells the bot its open card closed when the user typed past it", () => {
     const typed = said("u1", "what's for lunch?");

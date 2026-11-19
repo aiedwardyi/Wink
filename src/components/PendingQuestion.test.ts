@@ -210,7 +210,7 @@ describe("question folding", () => {
     await settle();
     expect(pill()?.getAttribute("aria-label")).toContain("질문 펼치기");
     expect(pill()?.textContent).toContain("Wink");
-    expect(button("질문 숨기기")).not.toBeNull();
+    expect(button("질문 닫기")).not.toBeNull();
     expect(host.querySelector("[data-row-choices]")?.textContent).toContain("Analytics");
     await open();
     expect(pill()).toBeNull();

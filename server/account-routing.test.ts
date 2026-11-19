@@ -856,6 +856,17 @@ describe("account removal drain", () => {
     expect(describe().find((row) => row.instanceId === "claude")?.pickerSnapshot?.state).toBe("unavailable");
   });
 
+  it("projects Checking to the model picker while a saved Main account is blocked for restore", async () => {
+    const f = await fixture();
+    const main = f.added[0];
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    f.registry.checkAccount(main.id);
+    const instances = await f.registry.describeKnown();
+    expect(instances.find((row) => row.instanceId === main.id)?.snapshot.state).toBe("checking");
+    expect(f.controller.bots!.pickerInstances(instances).find((row) => row.instanceId === "claude")?.pickerSnapshot).toEqual({ state: "checking" });
+    expect(f.registry.accountAvailable(main.id)).toBe(false);
+  });
+
   it("waits for a captured usage refresh and refuses another during drain", async () => {
     const f = await fixture(false, "codex");
     expect((await f.useDefault(f.added[0].id)).status).toBe(200);

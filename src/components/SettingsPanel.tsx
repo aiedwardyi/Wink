@@ -43,7 +43,7 @@ import { memoryTargetLine } from "@/lib/memory-recent";
 import { botAsks } from "@/lib/asks";
 import { useCoverChat } from "@/lib/cover-chat";
 import { lazyView } from "@/lib/stale-build";
-import { watchMemoryArrival } from "@/lib/memory-clean-events";
+import { watchMemoryChange } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
 import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
@@ -356,7 +356,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
 
   useEffect(() => {
     if (!active) return;
-    return watchMemoryArrival(botId, () => { void refresh(); });
+    return watchMemoryChange(botId, () => { void refresh(); });
   }, [active, botId]);
   useEffect(() => {
     if (!active || loading || !target) return;
@@ -446,13 +446,14 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       window.removeEventListener("pagehide", onPageHide);
       if (savedFade.current !== null) clearTimeout(savedFade.current);
       // the panel is gone, so the red line under the editor is too
+      const toast = (message: string) => {
+        dispatch({ type: "error", message });
+        setTimeout(() => dispatch({ type: "error", message: null }), 6000);
+      };
       watchMemory(botId, {
         saved: () => undefined,
-        failed: (message) => {
-          dispatch({ type: "error", message });
-          setTimeout(() => dispatch({ type: "error", message: null }), 6000);
-        },
-        conflict: () => undefined,
+        failed: toast,
+        conflict: () => toast(t("bot.memoryConflict")),
       });
       void flushMemory(botId);
     };

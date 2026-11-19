@@ -102,6 +102,8 @@ export function RoutineRunCard({
     ) : null;
   }
 
+  if (run.wake) return null;
+
   const foot = footer(run, message.at, ringing, t);
   const instruction = run.instruction?.replace(/\s+/g, " ").trim();
   // detached runs (cloud, webhook, older local) report their result here

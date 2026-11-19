@@ -18,6 +18,7 @@ export const roomCallBot = (bots: readonly Bot[]): Bot | undefined => bots.find(
 /** The one way a screen mounts a call: a room call is the bot's own call with the room attached. */
 export function useCallControls(bot: Bot | undefined, hidden: boolean, room?: ActiveCall["room"]) {
   const { state } = useStore();
+  const voiceCalls = state.config?.features?.voiceCalls === true;
   const preview = useChatPreview();
   const { capabilities, ready } = useDesktopCapabilities();
   const active = useActiveCall();
@@ -32,7 +33,7 @@ export function useCallControls(bot: Bot | undefined, hidden: boolean, room?: Ac
     if (!bot) return;
     placeCall(bot, callAudio(), undefined, roomId && roomKind ? { id: roomId, kind: roomKind, name: roomName } : undefined);
   }, [bot, roomId, roomKind, roomName]);
-  if (!bot) return { on: false, bar: null, composer: {} };
+  if (!bot || !voiceCalls) return { on: false, bar: null, composer: {} };
   const available = ready && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
   return {
     on,

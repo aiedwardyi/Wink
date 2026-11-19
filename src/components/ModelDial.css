@@ -344,6 +344,8 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
 .dial-stage[data-phone] .dial-stat { flex-direction: column-reverse; align-items: center; gap: 6px; }
 .dial-stage[data-phone] .dial-stat-text { align-items: center; text-align: center; }
 .dial-stage[data-phone] .dial-cta { grid-column: 1 / -1; grid-row: 2; justify-content: center; height: 52px; }
+.dial-stage[data-phone] [data-dial-sign-in] { grid-column: 1 / -1; grid-row: 2; }
+.dial-stage[data-phone] [data-dial-sign-in] > div { align-items: stretch; }
 .dial-stage[data-phone] .dial-ring { --w: 5px; width: 66px; height: 66px; }
 .dial-stage[data-phone] .dial-ring .cap { transform-origin: 50% 33px; }
 .dial-stage[data-phone] .dial-ring .num { font-size: max(18px, var(--floor)); }

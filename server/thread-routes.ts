@@ -11,6 +11,7 @@ import { json, readBody } from "./http-helpers.ts";
 import { createMediaIndex } from "./media-index.ts";
 import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
+import { serveRoomFile } from "./rooms/files.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { readThreadEvents } from "./thread-events.ts";
 import type { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
@@ -115,10 +116,16 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       // and `messagesFor` materialises and caches a ThreadState for whatever
       // it is handed. Without this, a client asking for images on ids that
       // do not exist grows the thread map for as long as it keeps asking.
-      if (!store.botByThread(m[1]) && !store.groupByThread(m[1])) {
+      const group = store.groupByThread(m[1]);
+      if (!store.botByThread(m[1]) && !group) {
         return json(res, 404, { error: "no such conversation" });
       }
       const message = store.messagesFor(m[1]).find((msg) => msg.id === m![2]);
+      if (message?.kind === "screen" && message.roomFiles) {
+        const file = message.roomFiles.find((each) => !each.deleted && each.type.startsWith("image/"));
+        if (file && group?.hosted && await serveRoomFile(res, group.hosted.roomId, file.id, true)) return;
+        return json(res, 404, { error: "no image on that message" });
+      }
       const attachment = message?.image ? readAttachment(message.image) : null;
       const bytes = attachment?.bytes ?? (message?.png ? Buffer.from(message.png, "base64") : null);
       if (!bytes) return json(res, 404, { error: "no image on that message" });

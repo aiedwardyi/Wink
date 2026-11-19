@@ -23,6 +23,7 @@ import { parseTimeline, PICKS_FILE } from "./picks.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { timelinePicks } from "./timeline-picks.ts";
 import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 type BotRouteDeps = {
@@ -44,6 +45,7 @@ type BotRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
+  noteTalked: (botId: string) => void;
   activeVpsThreads: Map<string, string>;
   resumePaneWakes: (botId: string) => void;
 };
@@ -505,12 +507,14 @@ export function createBotRoutes(deps: BotRouteDeps) {
       }
       const saved = saveMemoryFile(m[1], parsed.data.text, parsed.data.baseRevision);
       if (saved.conflict) return json(res, 409, { error: "conflict", text: saved.text, revision: saved.revision });
+      deps.noteTalked(m[1]);
       memoryHealthCheck.refresh(m[1]);
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });
     },
     memoryTopic: async (res: ServerResponse, m: RegExpMatchArray) => {
-      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
       // Decode before validating: a UI-sent name arrives percent-encoded
       // ("my notes.md" → "my%20notes.md"), and an encoded traversal
       // ("..%2F..") must be judged by what it decodes TO, not slip through
@@ -523,9 +527,17 @@ export function createBotRoutes(deps: BotRouteDeps) {
         return json(res, 400, { error: "invalid topic name" });
       }
       if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
-      const text = readMemoryTopic(m[1], name);
+      let text: string | null;
+      try {
+        text = readMemoryTopic(m[1], name);
+      } catch {
+        return json(res, 500, { error: "internal error" });
+      }
+      if (text === null && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
       if (text === null) return json(res, 404, { error: "no such topic file" });
-      return json(res, 200, name === PICKS_FILE ? { name, text, entries: parseTimeline(text).entries } : { name, text });
+      if (name !== PICKS_FILE) return json(res, 200, { name, text });
+      const entries = timelinePicks(parseTimeline(text).entries, bot, store);
+      return json(res, 200, { name, text, entries });
     },
   };
 }

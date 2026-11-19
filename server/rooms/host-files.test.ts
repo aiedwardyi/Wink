@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
@@ -9,13 +10,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ATTACHMENTS_DIR } from "../attachments.ts";
 import { DATA_DIR } from "../config.ts";
 import { createGroupRoutes } from "../group-routes.ts";
+import { createInternalRoutes } from "../internal-routes.ts";
 import { markRelaySocket } from "../phone-relay/via.ts";
 import { SendSequencer } from "../send-idempotency.ts";
-import { Store, type Message } from "../store.ts";
-import { closeAsksDb, configureRoomAsks, type HostedGroup } from "./asks.ts";
-import { addPerson, closeRoomsDb, createRoom, recentRoomEntries } from "./db.ts";
+import { Store, type BotRecord, type Message } from "../store.ts";
+import { createThreadRoutes } from "../thread-routes.ts";
+import { turnUnread } from "../turn-reply.ts";
+import { askById, closeAsksDb, configureRoomAsks, startAsk, type HostedGroup } from "./asks.ts";
+import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
+import { hostFileRoute } from "./file-routes.ts";
 import { listRoomFiles } from "./files.ts";
-import { hostRoomFiles, hostSend } from "./send.ts";
+import { publishTurnAnswer } from "./multiplayer.ts";
+import { captureHostBotPicture, hostedSend, hostRoomFiles, hostSend } from "./send.ts";
 
 const copying = vi.hoisted(() => ({ before: null as null | (() => Promise<void>) }));
 vi.mock("./send.ts", async (actual) => {
@@ -161,6 +167,101 @@ describe("the host's files in a room with people and bots", () => {
     expect(lastEntry()).toMatchObject({ text: "see [image]" });
     expect(lastEntry().files).toBeUndefined();
     expect(listRoomFiles(group.hosted.roomId, "Edward").files).toEqual([]);
+  });
+});
+
+describe("a host bot's picture in a room with people", () => {
+  async function showCat(caption = " A cat ") {
+    const bot = store.bot(group.memberIds[0]!)!;
+    const routes = createInternalRoutes({
+      cfg: {},
+      store,
+      connectorThread: () => ({ group }),
+      botOutputRoots: () => [local],
+      captureRoomPicture: (from: BotRecord, threadId: string) => captureHostBotPicture(store, from, threadId, () => false),
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    const body = { fromBotId: bot.id, fromThreadId: group.threadId, path: put("cat.png", PNG), caption };
+    await routes.showImage(Readable.from([JSON.stringify(body)]) as unknown as IncomingMessage, res as unknown as ServerResponse);
+    return { bot, status: res.writeHead.mock.calls[0]![0] as number, body: JSON.parse(res.end.mock.calls[0]![0]) };
+  }
+
+  it("reaches teammates as a room file on the bot's own line, and stays inline on the host", async () => {
+    mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+    const attachments = readdirSync(ATTACHMENTS_DIR);
+    const { bot, status, body } = await showCat();
+    expect(status).toBe(201);
+    const entry = lastEntry();
+    expect(entry).toMatchObject({ author: { kind: "bot", id: bot.id, name: "Wink" }, text: "A cat" });
+    expect(entry.files?.map((each) => [each.name, each.type])).toEqual([["cat.png", "image/png"]]);
+    const rows = store.messagesFor(group.threadId).filter((message) => message.role === "bot");
+    expect(rows).toEqual([expect.objectContaining({ kind: "screen", roomFiles: entry.files, text: "A cat", roomEntryId: entry.id, from: expect.objectContaining({ botId: bot.id }) })]);
+    expect(rows[0]?.image).toBeUndefined();
+    expect(readdirSync(ATTACHMENTS_DIR)).toEqual(attachments);
+    expect(body).toEqual({ messageId: rows[0]!.id, url: `/api/rooms/${group.hosted.roomId}/files/${entry.files![0]!.id}/preview` });
+    const threadRoutes = createThreadRoutes({ store, dataDir: DATA_DIR } as Parameters<typeof createThreadRoutes>[0]);
+    const response = new PassThrough();
+    const bytes: Buffer[] = [];
+    response.on("data", (chunk: Buffer) => bytes.push(chunk));
+    const received = once(response, "end");
+    const writeHead = vi.fn();
+    await threadRoutes.messageImage(Object.assign(response, { writeHead }) as unknown as ServerResponse,
+      ["", group.threadId, body.messageId] as RegExpMatchArray);
+    expect(writeHead).toHaveBeenCalledWith(200, expect.objectContaining({ "content-type": "image/png" }));
+    await received;
+    expect(Buffer.concat(bytes)).toEqual(PNG);
+  });
+
+  it("answers a teammate's ask with a picture alone", async () => {
+    const peter = roomPeople(group.hosted.roomId)[0]!;
+    const { ask } = hostedSend(group, { kind: "person", id: peter.id }, "@Wink draw a cat");
+    expect(startAsk(ask!.id)).toBeTruthy();
+    const since = store.messagesFor(group.threadId).length;
+    const { bot } = await showCat("");
+    publishTurnAnswer(store, group, group.threadId, bot, since, ask!.id);
+    expect(askById(ask!.id)?.state).toBe("done");
+    expect(recentRoomEntries(group.hosted.roomId, 10).map((each) => each.text)).not.toContain("Wink couldn't finish this.");
+  });
+
+  it("marks a picture-only host answer unread when its turn settles", async () => {
+    const unread = turnUnread();
+    unread.start(group.threadId, "turn-1", store.messagesFor(group.threadId));
+    expect((await showCat("")).status).toBe(201);
+    expect(unread.settle(group.threadId, "turn-1", store.messagesFor(group.threadId))).toBe(true);
+  });
+
+  it("links a picture-only answer to the ask in the room log", async () => {
+    const peter = roomPeople(group.hosted.roomId)[0]!;
+    const { entry, ask } = hostedSend(group, { kind: "person", id: peter.id }, "@Wink draw a cat");
+    expect(startAsk(ask!.id)).toBeTruthy();
+    const since = store.messagesFor(group.threadId).length;
+    const { bot, body } = await showCat("");
+    publishTurnAnswer(store, group, group.threadId, bot, since, ask!.id);
+    expect(lastEntry()).toMatchObject({ replyToId: entry.id, askId: ask!.id });
+    const rows = store.messagesFor(group.threadId);
+    expect(rows.find((message) => message.id === body.messageId)?.replyToId).toBe(rows.find((message) => message.roomEntryId === entry.id)?.id);
+  });
+
+  it.each([false, true])("removes the host inline picture when its room file is deleted (legacy %s)", async (legacy) => {
+    const { status, body } = await showCat();
+    expect(status).toBe(201);
+    const roomId = group.hosted.roomId;
+    const fileId = lastEntry().files![0]!.id;
+    const old = join(ATTACHMENTS_DIR, "old.png");
+    if (legacy) {
+      writeFileSync(old, PNG);
+      store.patchMessage(group.threadId, body.messageId, { image: "old.png", roomFiles: undefined });
+    }
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    await hostFileRoute({} as IncomingMessage, res as unknown as ServerResponse, "DELETE",
+      new URL(`https://localhost/api/rooms/${roomId}/files/${fileId}`), { store, botCaller: false });
+    expect(res.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+    expect(listRoomFiles(roomId, "Edward").used).toBe(0);
+    expect(store.messagesFor(group.threadId).find((message) => message.id === body.messageId)).toMatchObject({
+      text: "A cat", roomFiles: [expect.objectContaining({ id: fileId, deleted: true })],
+    });
+    expect(store.messagesFor(group.threadId).find((message) => message.id === body.messageId)?.image).toBeUndefined();
+    expect(existsSync(old)).toBe(false);
   });
 });
 

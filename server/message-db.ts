@@ -12,7 +12,7 @@
 // truth (the JSON file is left behind as a one-time backup).
 import { chmodSync, closeSync, existsSync, openSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 import { termVerb } from "../shared/tool-verb.ts";
 
@@ -99,8 +99,8 @@ export interface ThreadRows {
   activeLeafId: string | null;
 }
 
-/** Read one thread, importing its legacy JSON file on first touch. */
-export function readThread(threadId: string, legacyFile: string): ThreadRows {
+/** Read one thread, importing its legacy JSON file on first touch; `chars` is the rows' stored JSON size, which the thread cache weighs. */
+export function readThread(threadId: string, legacyFile: string): ThreadRows & { chars: number } {
   const rows = db()
     .prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid")
     .all(threadId) as Array<{ json: string }>;
@@ -108,9 +108,10 @@ export function readThread(threadId: string, legacyFile: string): ThreadRows {
     const state = db()
       .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
       .get(threadId) as { active_leaf_id: string | null } | undefined;
-    return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
+    return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null, chars: rows.reduce((sum, row) => sum + row.json.length, 0) };
   }
-  return importLegacy(threadId, legacyFile);
+  const legacy = importLegacy(threadId, legacyFile);
+  return { ...legacy, chars: legacy.messages.reduce((sum, message) => sum + JSON.stringify(message).length, 0) };
 }
 
 /** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here. */
@@ -294,6 +295,22 @@ export function applySyncedRows(
   return touched;
 }
 
+const MARKDOWN_LINK_MARKS = ["](", "]:"] as const;
+const FILE_TAG_MARKS = ["<file:", "<attached-file"] as const;
+export const LINK_MARKS = [...MARKDOWN_LINK_MARKS, ...FILE_TAG_MARKS] as const;
+
+/** Rows with link syntax, oldest first. */
+export function linkRows(threadId: string): Array<{ id: string; role: string; text: string; fromBotId: string | null }> {
+  // instr and JSON quoting preserve the suffix after a NUL, where LIKE and node:sqlite's TEXT result stop.
+  // SAFETY: id, role and textJson are TEXT, fromBotId is nullable TEXT.
+  const rows = db().prepare(
+    "SELECT id, role, json_quote(text) AS textJson, json_extract(json, '$.from.botId') AS fromBotId " +
+      "FROM messages WHERE thread_id = ? AND (instr(text, ?) OR instr(text, ?) " +
+      "OR (instr(text, '<') AND (instr(lower(text), ?) OR instr(lower(text), ?)))) ORDER BY rowid",
+  ).all(threadId, ...MARKDOWN_LINK_MARKS, ...FILE_TAG_MARKS) as Array<{ id: string; role: string; textJson: string; fromBotId: string | null }>;
+  return rows.map(({ textJson, ...row }) => ({ ...row, text: JSON.parse(textJson) }));
+}
+
 /** One stored row by key, without loading its thread. */
 export function readMessage(threadId: string, id: string): Message | undefined {
   // SAFETY: This projection selects the stored message JSON.
@@ -301,18 +318,26 @@ export function readMessage(threadId: string, id: string): Message | undefined {
   return row && rowToMessage(row);
 }
 
-/** The active path newest first, one row at a time, or null when the thread has no stored leaf. */
+/** The active path newest first, one row at a time, or null when there are no stored rows. */
 export function activePathBack(threadId: string): Iterable<Message> | null {
-  const leaf = (db().prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?").get(threadId) as { active_leaf_id: string | null } | undefined)?.active_leaf_id;
+  const leaf = storedHead(threadId);
   if (!leaf) return null;
-  const row = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?");
+  const database = db();
+  const row = database.prepare("SELECT rowid AS position, json FROM messages WHERE thread_id = ? AND id = ?");
   return (function* () {
     const seen = new Set<string>();
+    let previous: StatementSync | undefined;
     for (let id: string | null | undefined = leaf; id && !seen.has(id); ) {
       seen.add(id);
-      const found = row.get(threadId, id) as { json: string } | undefined;
+      const found = row.get(threadId, id) as { position: number; json: string } | undefined;
       if (!found) return;
       const message = rowToMessage(found);
+      // Flat legacy rows omit parentId. An explicit null ends the branch.
+      if (message.parentId === undefined) {
+        previous ??= database.prepare("SELECT id FROM messages WHERE thread_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT 1");
+        const prior = previous.get(threadId, found.position) as { id: string } | undefined;
+        message.parentId = prior?.id ?? null;
+      }
       yield message;
       id = message.parentId;
     }
@@ -359,7 +384,7 @@ export function firstBotReplyAt(): number | null {
 
 /** Bot text replies grouped by thread, room speaker and engine tag, all time. */
 export function botRepliesByEngine(): Array<{ threadId: string; botId: string | null; engine: string | null; count: number }> {
-  // SAFETY: This SELECT list is three TEXT keys and one COUNT.
+  // SAFETY: This SELECT list is three text keys and one COUNT.
   return db().prepare(
     "SELECT thread_id AS threadId, json_extract(json, '$.from.botId') AS botId, json_extract(json, '$.engine') AS engine, COUNT(*) AS count " +
       "FROM messages WHERE role = 'bot' AND kind = 'text' GROUP BY 1, 2, 3",

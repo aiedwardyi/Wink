@@ -9,6 +9,8 @@ import { DATA_DIR } from "./config.ts";
 import { prepareModelContext, routineCardsSinceLastUserTurn } from "./context-compaction.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
+import { watchPeerTurn } from "./peer-takeover.ts";
+import { _resetPeerUserReplies, drainPeerUserReplies, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks, routesAck, routesQuick, type QuickGate } from "./quick-ask.ts";
 import { bootRowsNow } from "./testing/boot-rows.ts";
 import type { QuickResult } from "./side-chat.ts";
@@ -35,8 +37,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const NOTE_LINE = "The user's own words decide; if they don't match what you asked (like 'both' for 3 items), take every item or ask one short question.";
 const QUESTION = "what port is in the server config?";
 const ANSWER: QuickResult = { route: "answer", text: "Port 8787.", usage: { input: 100, output: 10, cachedInput: 90 }, ms: 5 };
+
+const COVERED = /^\[Wink note, automated, not from the person\. A fast reply in your voice answers the message below/;
 
 function harness(opts: { busy?: boolean; consumed?: boolean; queueing?: boolean; result?: QuickResult; quick?: boolean; taken?: boolean } = {}) {
   const selection = { instanceId: "claude", model: "opus", effort: "max" as const };
@@ -94,6 +99,16 @@ function harness(opts: { busy?: boolean; consumed?: boolean; queueing?: boolean;
   return { bot, store, steer, ask, usage, startTurn, send, stop, rows, settled, release };
 }
 
+// A bot that acks each steered send unless the note with it says a fast reply covers it.
+function mainAcks(h: ReturnType<typeof harness>) {
+  h.steer.mockImplementation(async (_threadId, text, consumed) => {
+    consumed?.(true);
+    if (!text.includes("A fast reply in your voice answers") && !text.includes("You already sent the person")) h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Main ack" });
+    return true;
+  });
+}
+const botLines = (h: ReturnType<typeof harness>) => h.rows().filter((row) => row.role === "bot" && row.kind === "text").map((row) => row.text);
+
 describe("quick route", () => {
   it("sends to an idle bot exactly as without the router", async () => {
     const withRouter = harness({ busy: false });
@@ -113,12 +128,19 @@ describe("quick route", () => {
     expect(response.data.steered).toBe(true);
     expect(h.steer).toHaveBeenCalledTimes(1);
     expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer.mock.calls[0]![1]).not.toMatch(COVERED);
     expect(h.rows().at(-1)).toMatchObject({ steered: true, text: "yes go ahead and update the docs" });
     expect(h.rows().at(-1)?.quick).toBeUndefined();
   });
 
   it.each([
-    "also update the docs when you are done",
+    "what port is in the server config, please?",
+    "Does it support Windows, please?",
+    "성능은 어때?",
+    "Can it support Windows, please?",
+    "Do both builds support Windows, please?",
+    "성능 어때?",
+    "switched to the new branch",
     "i know ur working, but its odd, im testing the sidekick thing but it doesnt seem like our feature works",
     "when u got time read this real quick to see if it'll help us with ci https://example.com/ci-cost",
   ])("steers at once, then posts one short reply under it: %s", async (text) => {
@@ -133,6 +155,69 @@ describe("quick route", () => {
     expect(sent!.quick).toBeUndefined();
     expect(reply).toMatchObject({ role: "bot", kind: "text", text: "Got it, that goes in next.", quick: { state: "answer", askId: sent!.id } });
     expect(h.steer.mock.calls[1]![1]).toMatch(/^\[Wink note, automated, not from the person\.[\s\S]*A: Got it, that goes in next\.$/);
+    expect(h.steer.mock.calls[1]![1]).toContain(NOTE_LINE);
+  });
+
+  it.each([
+    ["merge both", "Got it, one moment while I finish this step, then I'll do it."],
+    ["squash both", "Got it, one moment while I finish this step, then I'll do it."],
+    ["also update the docs when you are done", "Got it, one moment while I finish this step, then I'll do it."],
+    ["2", "Got it, one moment while I finish this step, then I'll do it."],
+    ["둘 다 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["PR 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["npm install 다시 해볼까?", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["merge 2번", "Got it, one moment while I finish this step, then I'll do it."],
+  ])("answers an order with the fixed line only: %s", async (text, line) => {
+    const h = harness({ consumed: true, result: { route: "answer", text: "Merging PR 12 and PR 14 now.", ms: 4 } });
+    await h.send({ text });
+    await vi.waitFor(() => expect(h.steer).toHaveBeenCalledTimes(2));
+    expect(h.ask).not.toHaveBeenCalled();
+    const [sent, reply] = h.rows().slice(-2);
+    expect(sent).toMatchObject({ role: "user", text, steered: true });
+    expect(reply).toMatchObject({ role: "bot", kind: "text", text: line, quick: { state: "answer", askId: sent!.id } });
+    expect(h.steer.mock.calls[1]![1]).toMatch(new RegExp(`A: ${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    expect(h.steer.mock.calls[1]![1]).toContain(NOTE_LINE);
+  });
+
+  it.each([
+    ["merge both", "Got it, one moment while I finish this step, then I'll do it."],
+    ["squash both", "Got it, one moment while I finish this step, then I'll do it."],
+    ["둘 다 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+  ])("gives a mid-turn order one reply, even when its send is replayed: %s", async (text, line) => {
+    const h = harness({ consumed: true, result: { route: "answer", text: "I take that to mean the first two.", ms: 4 } });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "PRs 12, 14 and 15 are ready. Which should I merge?" });
+    mainAcks(h);
+    const body = { text, sendId: "send-quick-0000000021" };
+    expect((await h.send(body)).status).toBe(202);
+    await h.send(body);
+    await vi.waitFor(() => expect(h.steer).toHaveBeenCalledTimes(2));
+    expect(h.ask).not.toHaveBeenCalled();
+    expect(h.rows().filter((row) => row.text === text)).toHaveLength(1);
+    expect(botLines(h).slice(1)).toEqual([line]);
+  });
+
+  it.each([
+    ["Do these work, please?", "Yes, both work."],
+    ["Could you explain why it failed, please?", "The config was missing."],
+    ["Can you confirm whether it supports Windows, please?", "Yes, it supports Windows."],
+  ])("answers a polite factual question once, from the helper: %s", async (text, answer) => {
+    const h = harness({ consumed: true, result: { route: "answer", text: answer, ms: 1 } });
+    mainAcks(h);
+    expect((await h.send({ text })).status).toBe(202);
+    await h.settled();
+    expect(h.ask).toHaveBeenCalledTimes(1);
+    expect(botLines(h)).toEqual([answer]);
+  });
+
+  it("answers a polite order about earlier items with the fixed line, never the helper's guess", async () => {
+    const h = harness({ consumed: true, result: { route: "answer", text: "I take that to mean the first two.", ms: 1 } });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "There are three commits in this PR." });
+    mainAcks(h);
+    expect((await h.send({ text: "Can you squash the two commits?" })).status).toBe(202);
+    h.release();
+    await vi.waitFor(() => expect(h.steer).toHaveBeenCalledTimes(2));
+    expect(h.ask).not.toHaveBeenCalled();
+    expect(botLines(h).slice(1)).toEqual(["Got it, one moment while I finish this step, then I'll do it."]);
   });
 
   it("leaves a steered send alone when the helper has no reply", async () => {
@@ -140,8 +225,45 @@ describe("quick route", () => {
     await h.send({ text: "help me answer ur questions" });
     const count = h.rows().length;
     await h.settled();
-    expect(h.steer).toHaveBeenCalledTimes(1);
+    expect(h.steer).toHaveBeenCalledTimes(2);
+    expect(h.steer.mock.calls[1]![1]).toMatch(/^\[Wink note, automated, not from the person\. No fast reply reached the person for "help me answer ur questions"; reply to it now in one short visible line/);
     expect(h.rows()).toHaveLength(count);
+  });
+
+  it.each(["still busy", "turn finished", "fallback declined", "helper throws", "task switched"])("acks a steered send once when the helper has no reply: %s", async (state) => {
+    const missed = /^\[Wink note, automated, not from the person\. No fast reply reached the person for "switched to the new branch"/;
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    const own = h.bot.threadId;
+    if (state === "helper throws") h.ask.mockRejectedValueOnce(new Error("helper failed"));
+    const reply = (threadId: string) => h.store.appendMessage(threadId, { role: "bot", kind: "text", text: "Noted, you're on the new branch." });
+    h.steer.mockImplementation(async (threadId, text, consumed) => {
+      if (state === "fallback declined" && missed.test(text)) return false;
+      consumed?.(true);
+      if (missed.test(text)) reply(threadId);
+      return true;
+    });
+    const sent = await h.send({ text: "switched to the new branch" });
+    expect(sent.data.steered).toBe(true);
+    if (state === "turn finished" || state === "task switched") h.store.setActivity(h.bot.id, "idle");
+    if (state === "task switched") h.store.createTask(h.bot.id);
+    await h.settled();
+    h.store.setActivity(h.bot.id, "idle");
+    drainSteeredMessages(h.store, (_botId, threadId, prompt) => {
+      if (missed.test(prompt)) reply(threadId);
+    });
+    const rows = h.store.messagesFor(own);
+    expect(rows.filter((row) => row.text === "switched to the new branch")).toHaveLength(1);
+    expect(rows.filter((row) => row.role === "bot" && row.kind === "text").map((row) => row.text)).toEqual(["Noted, you're on the new branch."]);
+  });
+
+  it("owes no ack for a steered send after a Stop", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: "switched to the new branch" });
+    await h.stop();
+    await h.settled();
+    expect(h.steer).toHaveBeenCalledTimes(1);
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+    expect(h.startTurn).not.toHaveBeenCalled();
   });
 
   it("posts no reply beside a card tap or a stop", async () => {
@@ -151,6 +273,36 @@ describe("quick route", () => {
     await h.send({ text: "no stop" });
     expect(h.ask).not.toHaveBeenCalled();
     expect(h.steer).toHaveBeenCalledTimes(2);
+    expect(h.steer.mock.calls.map((call) => call[1])).not.toContainEqual(expect.stringMatching(COVERED));
+  });
+
+  it("tells the bot the reply beside a steered send covers it", async () => {
+    const h = harness({ result: { route: "answer", text: "Got it, that goes in next.", ms: 4 } });
+    await h.send({ text: "also update the docs when you are done" });
+    expect(h.steer.mock.calls[0]![1]).toMatch(COVERED);
+    expect(h.steer.mock.calls[0]![1]).toContain("also update the docs when you are done");
+  });
+
+  it("leaves a send in a peer-watched turn to the bot's own tagged line, with no reply beside it", async () => {
+    const h = harness({ result: { route: "answer", text: "Got it, switching.", ms: 4 } });
+    const end = watchPeerTurn(h.bot.threadId);
+    try {
+      expect((await h.send({ text: "switched to the new branch" })).data.steered).toBe(true);
+      const prompt = h.steer.mock.calls[0]![1];
+      const tag = prompt.match(/<user\d+>/)![0];
+      // a bot told a fast reply covers the send writes no line of its own for it
+      const text = COVERED.test(prompt) ? "Peer answer." : `${tag}Main ack${tag.replace("<", "</")}\nPeer answer.`;
+      persistPeerUserReply(h.store, { provider: "claude", eventId: "reply", createdAt: new Date().toISOString(), threadId: h.bot.threadId, type: "item.completed", itemType: "assistant_text", text } as RuntimeEvent);
+      settlePeerUserReplies(h.bot.threadId);
+      const follow = vi.fn(async () => {});
+      drainPeerUserReplies(h.store, follow, () => false);
+      expect(follow).not.toHaveBeenCalled();
+      expect(h.ask).not.toHaveBeenCalled();
+      expect(h.rows().filter((row) => row.role === "bot" && row.kind === "text").map((row) => row.text)).toEqual(["Main ack"]);
+    } finally {
+      end();
+      _resetPeerUserReplies();
+    }
   });
 
   it("answers a nominated ask in two rows without a steer", async () => {
@@ -174,6 +326,7 @@ describe("quick route", () => {
     await h.settled();
     expect(h.steer).toHaveBeenCalledTimes(1);
     expect(h.steer.mock.calls[0]![1]).toContain(QUESTION);
+    expect(h.steer.mock.calls[0]![1]).not.toMatch(COVERED);
     expect(h.rows()).toHaveLength(count);
     expect(h.rows().at(-1)).toMatchObject({ steered: true, quick: { state: "handoff" } });
   });
@@ -313,6 +466,24 @@ describe("quick route", () => {
     expect(failed).toMatchObject({ role: "bot", kind: "activity", tool: { name: "error: queued message could not start - disk full", ok: false } });
   });
 
+  it("shows the failed-send row when the owed ack cannot queue either", async () => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 12000 } });
+    h.steer.mockImplementation(async (threadId, prompt, consumed) => {
+      consumed?.(true);
+      if (!COVERED.test(prompt)) h.store.appendMessage(threadId, { role: "bot", kind: "text", text: "Main ack" });
+      return true;
+    });
+    expect(await h.send({ text: "switched to the new branch", sendId: "send-quick-0000000009" })).toMatchObject({ status: 202, data: { steered: true } });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Finished the original task." });
+    h.store.setActivity(h.bot.id, "idle");
+    queueFails.on = true;
+    await h.settled();
+    queueFails.on = false;
+    const outcomes = h.rows().filter((row) => row.role === "bot" && (row.text === "Main ack" || row.tool?.ok === false));
+    expect(outcomes.map((row) => row.text ?? row.tool?.name)).toEqual(["error: queued message could not start - disk full"]);
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+  });
+
   it("lands a late answer in the ask's own task after a switch, without a steer", async () => {
     const h = harness({ consumed: true });
     await h.send({ text: QUESTION });
@@ -339,6 +510,22 @@ describe("quick route", () => {
     const run = vi.fn();
     drainSteeredMessages(h.store, run);
     expect(run).toHaveBeenCalledExactlyOnceWith(h.bot.id, own, QUESTION, expect.objectContaining({ text: QUESTION }), [expect.any(String)]);
+  });
+
+  it.each(["merge both", "squash both"])("answers an order sent while the bot works in another chat with the fixed line, then queues it: %s", async (text) => {
+    const h = harness({ result: { route: "answer", text: "I take that to mean the first two.", ms: 4 } });
+    h.store.setActivity(h.bot.id, "working", "room-thread");
+    await h.send({ text });
+    h.release();
+    await vi.waitFor(() => expect(h.rows().at(-1)).toMatchObject({ role: "bot", kind: "text" }));
+    const [sent, reply] = h.rows().slice(-2);
+    expect(reply).toMatchObject({ text: "Got it, one moment while I finish this step, then I'll do it.", quick: { state: "answer", askId: sent!.id } });
+    expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer).not.toHaveBeenCalled();
+    h.store.setActivity(h.bot.id, "idle");
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(run).toHaveBeenCalledExactlyOnceWith(h.bot.id, h.bot.threadId, text, expect.objectContaining({ text }), [expect.any(String)]);
   });
 
   it.each(["an edit", "a rewind"])("drops a late answer after %s", async (how) => {
