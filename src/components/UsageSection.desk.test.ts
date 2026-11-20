@@ -761,8 +761,9 @@ describe("Usage desk", () => {
       return { status: "no_observation" };
     };
     await mount();
+    expect(server.calls).not.toContain("POST /api/usage/refresh/muse");
     const { useAutoRefresh } = await import("@/lib/usage-auto-refresh");
-    function QuickRefresh() { useAutoRefresh(server.board); return null; }
+    function QuickRefresh() { useAutoRefresh(server.board, "quick"); return null; }
     await act(async () => root.render(createElement(QuickRefresh)));
     await settle();
     expect(server.calls).toContain("POST /api/usage/refresh/muse");

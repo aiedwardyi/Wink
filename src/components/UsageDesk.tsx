@@ -432,7 +432,7 @@ export function UsageDesk() {
   const { t, locale } = useI18n();
   const { state: store, dispatch, refreshInstances } = useStore();
   const state = useUsageBoard();
-  useAutoRefresh(state.board, true);
+  useAutoRefresh(state.board, "desk");
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
   const mode = useUsageMode();

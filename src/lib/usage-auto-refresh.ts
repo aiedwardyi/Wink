@@ -100,38 +100,41 @@ const refreshAt = (instance: InstanceInfo, maxAge: number) => {
   return Math.max(Number.isFinite(observedAt) ? observedAt + maxAge : 0, retryAfter.get(instance.instanceId) ?? 0);
 };
 
-export function useAutoRefresh(board?: UsageBoard | null, open = false) {
+export function useAutoRefresh(board?: UsageBoard | null, surface?: "desk" | "quick") {
   const { state, dispatch } = useStore();
   const latest = useRef({ instances: state.instances, dispatch });
   latest.current = { instances: state.instances, dispatch };
   useEffect(() => {
-    const maxAge = open ? OPEN_REFRESH_MS : AUTO_REFRESH_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const candidates = () => latest.current.instances.filter((instance) => eligible(instance, board) && !pending.has(instance.instanceId));
+    const live = (instance: InstanceInfo) => Boolean(surface) && instance.driverKind !== "museAgent";
+    const maxAge = (instance: InstanceInfo) => live(instance) ? OPEN_REFRESH_MS : AUTO_REFRESH_MS;
+    const candidates = () => latest.current.instances.filter((instance) => (surface === "quick" || instance.driverKind !== "museAgent")
+      && eligible(instance, board) && !pending.has(instance.instanceId));
     const schedule = () => {
       clearTimeout(timer);
-      if (!open || document.visibilityState === "hidden") return;
-      const next = candidates().reduce((at, instance) => Math.min(at, refreshAt(instance, maxAge)), Infinity);
+      if (!surface || document.visibilityState === "hidden") return;
+      const next = candidates().filter(live).reduce((at, instance) => Math.min(at, refreshAt(instance, OPEN_REFRESH_MS)), Infinity);
       if (Number.isFinite(next)) timer = setTimeout(run, Math.max(0, next - Date.now()));
     };
     const run = () => {
       clearTimeout(timer);
       if (document.visibilityState === "hidden") return;
       const now = Date.now();
-      for (const { instanceId, snapshot } of candidates().filter((instance) => refreshAt(instance, maxAge) <= now)) {
+      for (const instance of candidates().filter((each) => refreshAt(each, maxAge(each)) <= now)) {
+        const { instanceId, snapshot } = instance;
         const current = () => usageIdentity(latest.current.instances.find((instance) => instance.instanceId === instanceId)?.snapshot ?? {}) === usageIdentity(snapshot);
         const cooldown = (retryAt = 0) => retryAfter.set(instanceId, Math.max(retryAt, Date.now() + AUTO_RETRY_MS));
         joinRefresh(instanceId, () => api(`/api/usage/refresh/${instanceId}`, { method: "POST" }).then((result) => {
           if (!current()) return result;
           if (result.report) latest.current.dispatch({ type: "rateLimits", instanceId, report: result.report });
           if (!result.report || result.error || result.status === "retained" || result.status === "no_observation"
-            || Date.now() - Date.parse(result.report.observedAt) >= maxAge) cooldown(result.retryAt);
+            || Date.now() - Date.parse(result.report.observedAt) >= maxAge(instance)) cooldown(result.retryAt);
           return result;
         }, (error) => { if (current()) cooldown(); throw error; })).catch(() => { if (current()) cooldown(); });
       }
       schedule();
     };
-    const stop = open ? subscribe(schedule) : undefined;
+    const stop = surface ? subscribe(schedule) : undefined;
     run();
     document.addEventListener("visibilitychange", run);
     return () => {
@@ -139,5 +142,5 @@ export function useAutoRefresh(board?: UsageBoard | null, open = false) {
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", run);
     };
-  }, [state.instances, board, open]);
+  }, [state.instances, board, surface]);
 }

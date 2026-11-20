@@ -128,6 +128,26 @@ describe("Usage auto refresh", () => {
     expect(refreshed()).toEqual([path, path]);
   });
 
+  it("refetches a stale live reading and skips a backed-off row while Usage stays open", async () => {
+    const codex = "/api/usage/refresh/codex";
+    const grok = "/api/usage/refresh/grok";
+    const previous = reading(minutesAgo(6), 83);
+    mockState.instances = [
+      engine("codex", "codex", "Codex", { rateLimits: reading(minutesAgo(0), 90) }),
+      engine("grok", "grokAgent", "Grok", { rateLimits: previous }),
+    ];
+
+    await open();
+    expect(refreshed()).toEqual([grok]);
+    await act(async () => { settle(grok, { status: "retained", report: previous, retryAt: Date.now() + 10 * 60_000 }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    expect(refreshed()).toEqual([codex, grok]);
+    await act(async () => { settle(codex, { report: reading(minutesAgo(0), 12) }); });
+    expect(mockState.instances[0]?.rateLimits?.windows[0]?.usedPercent).toBe(12);
+    expect(mockState.instances[1]?.rateLimits).toEqual(previous);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("starts nothing twice while a refresh runs or while its report is fresh", async () => {
     await open();
     await open(createElement("div", null, createElement(UsageSection), createElement(UsageSection)));
@@ -225,6 +245,8 @@ describe("Usage auto refresh", () => {
     root = createRoot(host);
     await open(quick());
     expect(refreshed()).toHaveLength(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(refreshed().filter((path) => path.endsWith("/muse"))).toEqual(["/api/usage/refresh/muse"]);
     anchor.remove();
   });
 
