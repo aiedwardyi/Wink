@@ -53,7 +53,7 @@
 .verify-watch-caption b { font-weight: 400; color: #ff8a8a; }
 .verify-watch-frame > .verify-watch-caption { position: static; transform: none; flex-shrink: 0; margin: 8px 12px; }
 .verify-watch-captions { display: grid; grid-template-columns: minmax(0, 1fr); flex-shrink: 0; margin: 8px 12px; }
-.verify-watch-captions > .verify-watch-caption { grid-area: 1 / 1; position: static; transform: none; max-width: 100%; }
+.verify-watch-captions > .verify-watch-caption { grid-area: 1 / 1; align-self: start; position: static; transform: none; max-width: 100%; }
 .verify-watch-captions > [aria-hidden] { visibility: hidden; }
 .verify-watch-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; padding: 8px 12px; border-top: 1px solid var(--color-hairline); color: var(--color-ink-secondary); }
 .verify-watch-line span { display: inline-flex; align-items: center; gap: 4px; }

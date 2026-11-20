@@ -265,7 +265,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   const captionOf = (issue: VerifyIssue) => <><b>{issue.tile === "phone" ? c.phone : c.desktop} · {issue.where}</b><span>{verifyProblem(issue, locale)}</span></>;
   const caption = reel && <div className="verify-watch-caption">{captionOf(reel)}</div>;
   // in the chat a caption arriving mid-replay would grow the card, so the slot holds the tallest one from the start
-  const held = inline && show.showing ? verifyReel(card.issues ?? []) : [];
+  const held = inline && (show.showing || show.phase === "after") ? [...verifyReel(card.issues ?? []), ...show.reels] : [];
   const issues = show.end?.issues ?? [];
   const seconds = Math.round(show.ms / 1000);
   const current = PARTS.find(part => !show.parts.has(part));

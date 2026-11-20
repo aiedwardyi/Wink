@@ -206,7 +206,7 @@ it("puts phone inline captions after the stage", async () => {
   await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
   await tick(2);
   expect(host.querySelector(".verify-watch-stage .verify-watch-caption")).toBeNull();
-  expect(host.querySelector(".verify-watch-stage + .verify-watch-caption")).not.toBeNull();
+  expect(host.querySelector(".verify-watch-stage + .verify-watch-captions > .verify-watch-caption:not([aria-hidden])")).not.toBeNull();
 });
 
 it("holds the phone inline caption's room for the whole replay, desktop unchanged", async () => {
@@ -222,8 +222,28 @@ it("holds the phone inline caption's room for the whole replay, desktop unchange
   expect(host.querySelector(".verify-watch-captions > .verify-watch-caption:not([aria-hidden])")?.textContent).toContain("#apply");
   await tick(60);
   expect(host.querySelector(".verify-watch-captions, .verify-watch-caption")).toBeNull();
-  await act(async () => root.render(createElement(VerifyWatchFrame, { card: done, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { key: "desktop", card: done, threadId: "t", live: false, hidden: false, onClose() {} })));
+  expect(host.querySelector(".verify-watch-stage")).not.toBeNull();
   expect(host.querySelector(".verify-watch-captions")).toBeNull();
+});
+
+it("holds the phone inline caption's room through a bot-fixed chain", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  const issue: VerifyIssue = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] };
+  const fixed: VerifyCardData = { ...card, status: "completed", live: undefined, replay: ["run-1", "run-2"], issues: [] };
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => bufferedRun("completed", url.includes("run-1") ? [issue] : [])));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: fixed, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  const seen: string[] = [];
+  let fixedShown = false;
+  for (let i = 0; i < 200 && !host.querySelector(".verify-watch-again"); i++) {
+    await tick(1);
+    const state = host.querySelector(".verify-watch-again") ? "end" : host.querySelector(".verify-watch-captions") ? "slot" : "bare";
+    if (seen.at(-1) !== state) seen.push(state);
+    fixedShown ||= host.textContent!.includes("Bot fixed it");
+  }
+  expect(fixedShown).toBe(true);
+  expect(seen).toEqual(["slot", "end"]);
 });
 
 it.each([false, true])("keeps docked captions outside the target's stage (live=%s)", async live => {
@@ -591,6 +611,10 @@ it("raises the pane before the maximize motion starts and preserves the chat's c
 
 it("wraps a held phone caption at the slot's width, as a lone one wraps at the frame's", () => {
   expect(watchRule(".verify-watch-captions")).toContain("grid-template-columns: minmax(0, 1fr);");
+});
+
+it("keeps each held phone caption its own height, as a lone one", () => {
+  expect(watchRule(".verify-watch-captions > .verify-watch-caption")).toContain("align-self: start;");
 });
 
 it("lets the phone inline frame take its content height inside the replay fold", () => {

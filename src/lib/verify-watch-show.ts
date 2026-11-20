@@ -228,6 +228,8 @@ export class VerifyWatchShow {
   scroll: Record<VerifyTile, number> = { desktop: 0, phone: 0 };
   frames: Record<VerifyTile, Stored | null> = { desktop: null, phone: null };
   reel: VerifyIssue[] = [];
+  /** every reel planned so far, across a chain's runs */
+  reels: VerifyIssue[] = [];
   /** set when the panel should close */
   closeAt = Infinity;
   /** run ms of the latest chunk let out */
@@ -336,6 +338,7 @@ export class VerifyWatchShow {
     }
     this.held = [];
     this.planned = true;
+    if (end?.kind === "end") this.reels.push(...verifyReel(end.end.issues));
     const lists = (["desktop", "phone"] as const).map(tile => ({ tile, things: shownThings(thingsOf(rows.filter(row => tileOf(row.tile) === tile))) }));
     const count = Math.max(...lists.map(list => list.things.length));
     const total = count ? Math.min(SHOW_MAX_MS, Math.max(SHOW_MIN_MS, count * THING_MS)) : 0, start = this.clock;
