@@ -104,7 +104,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),
       persona: "Verify the delegated work.", cwd: ".", projectFolderPrompt: () => "", projectNotesPrompt: () => "",
-      computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
+      computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "", canMessage: false,
       commsDepth: 0, MAX_COMMS_DEPTH: 1,
       taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false,
       ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },

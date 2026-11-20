@@ -334,7 +334,7 @@ describe("workspace", () => {
       const prompt = memorySystemPrompt(BOT);
       const size = `about ${Math.ceil(Buffer.byteLength(text, "utf8") / 1_000) * 1_000} bytes`;
       expect(prompt, size).toContain(size);
-      expect(prompt.indexOf(size)).toBeLessThan(prompt.indexOf("Your memory (MEMORY.md):"));
+      expect(prompt.indexOf(size)).toBeGreaterThan(prompt.indexOf("Your memory (MEMORY.md):"));
       expect(prompt.includes("its end was not loaded"), size).toBe(cut);
     }
   });
@@ -345,7 +345,7 @@ describe("workspace", () => {
     const notice = (text: string) => {
       writeFileSync(join(dir, "MEMORY.md"), text);
       const prompt = memorySystemPrompt(BOT);
-      return prompt.slice(prompt.indexOf("\n\n[MEMORY.md is"), prompt.indexOf("\n\nYour memory (MEMORY.md):"));
+      return prompt.match(/\[MEMORY\.md is about [^\n]+\]/)?.[0] ?? "";
     };
     expect(notice(notes)).toContain("[MEMORY.md is about 21000 bytes in about 10 lines, near ");
     expect(notice(`${notes}\n- one more fact`)).toBe(notice(notes));
