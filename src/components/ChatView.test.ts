@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, useStore, type Bot, type Group, type InstanceInfo, type Message } from "@/state/store";
 
-import { STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
+import { REVEALED_EVENT, STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
 import { setFindCurrent } from "@/lib/chat-find";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 
@@ -963,6 +963,56 @@ describe("a box opening in a row", () => {
       await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
       await grow();
       expect(scroller.scrollTop).toBe(top);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+  it.each(["chat", "room"] as const)("keeps the %s off its newest row when the box lands at the bottom, until the reader scrolls there", async (kind) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    const observed: { resize: ResizeObserverCallback; targets: Element[] }[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      targets: Element[] = [];
+      constructor(resize: ResizeObserverCallback) { observed.push({ resize, targets: this.targets }); }
+      observe(target: Element) { this.targets.push(target); }
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const group: Group = { id: "g", threadId: "thread-g", name: "Room", memberIds: ["a", "b"], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, hasMore: false, messages: [userMsg("ug", "hello room")] };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, kind === "chat" ? createElement(ChatView, { bot: botB }) : createElement(GroupView, { group }))));
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      let height = TRANSCRIPT_PX;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => height });
+      scroller.scrollTo = ((opts?: ScrollToOptions) => {
+        scroller.scrollTop = Math.max(0, Math.min(opts?.top ?? 0, height - VIEWPORT_PX));
+      }) as typeof scroller.scrollTo;
+      const grow = () => act(async () => {
+        height += 500;
+        for (const { resize, targets } of observed) if (targets.includes(scroller.firstElementChild!)) resize([], {} as ResizeObserver);
+      });
+      const scrollTo = (top: number) => act(async () => {
+        scroller.scrollTop = top;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      await grow();
+      await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
+      await grow();
+      await scrollTo(height - VIEWPORT_PX);
+      const landed = scroller.scrollTop;
+      await grow();
+      expect(scroller.scrollTop).toBe(landed);
+      await act(async () => { scroller.dispatchEvent(new Event(REVEALED_EVENT)); });
+      await grow();
+      expect(scroller.scrollTop).toBe(landed);
+      await scrollTo(height - VIEWPORT_PX);
+      await grow();
+      expect(scroller.scrollTop).toBe(height - VIEWPORT_PX);
     } finally {
       await act(async () => root.unmount());
       host.remove();

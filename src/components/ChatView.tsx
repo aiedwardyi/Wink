@@ -1775,7 +1775,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
           });
           previousScrollTop.current = scrollTop;
-          if (resume && !jump.messages && laterCount === 0) setBottomFollow(true);
+          if (resume && !revealing && !jump.messages && laterCount === 0) setBottomFollow(true);
           measure();
         }}
         onClick={(e) => {

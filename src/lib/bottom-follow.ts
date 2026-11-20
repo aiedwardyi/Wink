@@ -7,7 +7,7 @@ const followScrollEvents = new WeakSet<Event>();
 
 /** Bubbles from a box opening in place: following the bottom would push it out of view. */
 export const STOP_FOLLOW_EVENT = "orbit:stop-follow";
-/** Sent to the chat once that box has scrolled into view: older rows held until then may load. */
+/** Sent to the chat once the reader scrolls or that box closes: older rows held until then may load. */
 export const REVEALED_EVENT = "orbit:revealed";
 
 export function onStopFollow(el: HTMLElement | null, stop: () => void, revealed: () => void): () => void {

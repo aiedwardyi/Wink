@@ -402,12 +402,14 @@ it.each([
     replay = { top: 300, height: 900 };
     await resized();
     expect(below.scrolled.mock.calls[1]).toEqual([{ top: 240, behavior: "smooth" }]);
-    expect(below.revealed).not.toHaveBeenCalled();
     await act(async () => { below.chat.dispatchEvent(new Event("scrollend")); });
-    expect(below.revealed).toHaveBeenCalledTimes(1);
     replay = { top: 75, height: 1000 };
     await resized();
     expect(below.scrolled).toHaveBeenCalledTimes(2);
+    await act(async () => { below.chat.querySelector(".verify-watch-frame")!.dispatchEvent(new Event("touchmove", { bubbles: true })); });
+    expect(below.revealed).not.toHaveBeenCalled();
+    await act(async () => { below.chat.dispatchEvent(new Event("touchmove")); });
+    expect(below.revealed).toHaveBeenCalledTimes(1);
   } finally { await below.close(); }
   const tall = await open(300, 1000);
   try { expect(tall.scrolled.mock.calls).toEqual([[{ top: 240, behavior: "smooth" }]]); } finally { await tall.close(); }
