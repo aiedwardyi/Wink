@@ -135,7 +135,8 @@ it.skipIf(process.platform !== "win32")("links a cut local report to its full te
   expect(result.code, result.stderr).toBe(0);
   const note = f.notes()[0]!.text!;
   const reportPath = note.split("\n").at(-1)!.replace(/^Full report: /, "");
-  expect(reportPath.startsWith(reports)).toBe(true);
+  expect(reportPath.toLowerCase()).toMatch(/^\w:\\/);
+  expect(join(reportPath, "..").toLowerCase()).toBe(reports.toLowerCase());
   expect(readFileSync(reportPath, "utf8")).toBe(text);
   expect(readdirSync(reports)).toHaveLength(100);
   expect(readdirSync(reports)).not.toContain("0000000000000000000-00000000-0000-0000-0000-000000000000.txt");
