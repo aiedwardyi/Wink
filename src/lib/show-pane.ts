@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Message } from "@/state/store";
 import { prefersReducedMotion } from "./arrival-glow";
 import { linkedFileSrc, localLinks, showKind, type ShowKind } from "./chat-media";
+import { trackScreen } from "./usage-stats";
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
@@ -189,6 +190,7 @@ export function useCheckThread(): string | null {
 
 function openMap(threadId: string) {
   if (mapping === threadId) return;
+  trackScreen("map");
   mapping = threadId;
   checking = null;
   media = null;
@@ -228,6 +230,7 @@ export function useWorkersThread(): string | null {
 
 function openTimeline(threadId: string) {
   if (timeline === threadId) return;
+  trackScreen("timeline");
   timeline = threadId;
   checking = null;
   media = null;

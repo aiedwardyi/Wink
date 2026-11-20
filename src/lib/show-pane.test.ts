@@ -4,8 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
+import * as usageStats from "./usage-stats";
 import { paneKind } from "./open-file";
-import { autoShowStep, closeShow, PANE_TAB_KEY, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, usePanePulse, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { autoShowStep, closeShow, PANE_TAB_KEY, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, showTimeline, togglePane, useAutoShow, useMapThread, useMediaThread, usePanePulse, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -310,4 +311,16 @@ it("switches a link click to Show from the Map tab without pulsing", async () =>
   expect(seen).toEqual([{ ...pdf, threadId: "t15" }, "t15", start]);
   await act(async () => showItem({ ...pdf, threadId: "t15" }));
   expect(seen).toEqual([{ ...pdf, threadId: "t15" }, null, start]);
+});
+
+it("counts Map and Timeline when they open, including a restored pane", () => {
+  const track = vi.spyOn(usageStats, "trackScreen");
+  closeShow();
+  showMap("stats-test");
+  showMap("stats-test");
+  showTimeline("stats-test");
+  closeShow();
+  togglePane("stats-test", "idle");
+  expect(track.mock.calls).toEqual([["map"], ["timeline"], ["timeline"]]);
+  track.mockRestore();
 });

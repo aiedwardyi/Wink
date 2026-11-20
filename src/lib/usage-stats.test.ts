@@ -57,6 +57,25 @@ async function page({ capture = true, desktop = false, phone = false, status = 2
 }
 
 describe("usage stats on a screen", () => {
+  it("counts Map and Timeline only while stats are on", async () => {
+    const { stats, events, heard, tick } = await page();
+    stats.trackScreen("map");
+    stats.trackScreen("timeline");
+    stats.trackScreen("timeline");
+    heard.get("pagehide")!();
+    await settle();
+    const sent = events();
+    expect(sent).toEqual([{ e: "screen", name: "map", n: 1, c: "browser" }, { e: "screen", name: "timeline", n: 2, c: "browser" }]);
+    for (const event of sent) expect(statsEventSchema.safeParse({ ...event, h: 1 }).success).toBe(true);
+    stats.usageStatsSwitched(false);
+    stats.trackScreen("map");
+    stats.trackScreen("timeline");
+    stats.usageStatsSwitched(true);
+    heard.get("pagehide")!();
+    await tick();
+    expect(events()).toEqual(sent);
+  });
+
   it("sends one keepalive batch a minute with the client, the look and the language", async () => {
     const { stats, posts, inits, tick, fetched } = await page({ desktop: true });
     stats.trackFeature("export");
