@@ -1005,6 +1005,13 @@ describe("a box opening in a row", () => {
       await grow();
       await scrollTo(height - VIEWPORT_PX);
       const landed = scroller.scrollTop;
+      await act(async () => {
+        const row = scroller.querySelector("[data-mid]")!;
+        for (const [type, clientY] of [["touchstart", 330], ["touchmove", 200], ["touchend", 200]] as const) {
+          row.dispatchEvent(Object.defineProperty(new Event(type, { bubbles: true }), "touches", { value: [{ clientX: 130, clientY }] }));
+        }
+        row.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true }));
+      });
       await grow();
       expect(scroller.scrollTop).toBe(landed);
       await act(async () => { scroller.dispatchEvent(new Event(REVEALED_EVENT)); });

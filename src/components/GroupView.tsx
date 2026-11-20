@@ -1351,6 +1351,10 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     const el = scrollRef.current;
     return !el || el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_FOLLOW_THRESHOLD;
   };
+  // every gesture back at the end resumes here, so a revealing box holds follow off until the reader scrolls the chat
+  const resumeFollow = (back: boolean) => {
+    if (back && !revealing && !jump.messages && laterCount === 0) setBottomFollow(true);
+  };
   // a transcript too short to scroll has no scrollback to read, so an upward swipe there keeps follow
   const breakFollow = () => {
     const el = scrollRef.current;
@@ -1437,7 +1441,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
           if (e.deltaY < 0) breakFollow();
           else {
             advanceLater(e.deltaY > 0);
-            if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+            resumeFollow(atEnd());
           }
         }}
         onTouchStart={(e) => {
@@ -1450,7 +1454,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
           if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
-            if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+            resumeFollow(atEnd());
           }
         }}
         onTouchEnd={() => (reaching.current = false)}
@@ -1469,7 +1473,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
             distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
           });
           previousScrollTop.current = scrollTop;
-          if (resume && !revealing && !jump.messages && laterCount === 0) setBottomFollow(true);
+          resumeFollow(resume);
           measure();
         }}
         onClick={(e) => {

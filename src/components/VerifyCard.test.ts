@@ -404,12 +404,23 @@ it.each([
     replay = { top: 300, height: 900 };
     await resized();
     expect(below.scrolled.mock.calls[1]).toEqual([{ top: 240, behavior: "smooth" }]);
-    await act(async () => { below.chat.dispatchEvent(new Event("scroll")); });
+    await act(async () => {
+      below.chat.dispatchEvent(new Event("scroll"));
+      below.chat.querySelector(".verify-watch-frame")!.dispatchEvent(new Event("scrollend"));
+    });
     expect(below.revealed).not.toHaveBeenCalled();
+    replay = { top: 280, height: 900 };
+    await resized();
+    expect(below.scrolled.mock.calls[2]).toEqual([{ top: 220, behavior: "smooth" }]);
     await act(async () => { below.chat.dispatchEvent(new Event("scrollend")); });
     replay = { top: 75, height: 1000 };
     await resized();
-    expect(below.scrolled).toHaveBeenCalledTimes(2);
+    expect(below.scrolled.mock.calls[3]).toEqual([{ top: 15, behavior: "instant" }]);
+    for (const top of [-200, 760]) {
+      replay = { top, height: 1000 };
+      await resized();
+    }
+    expect(below.scrolled).toHaveBeenCalledTimes(4);
     await act(async () => {
       const frame = below.chat.querySelector(".verify-watch-frame")!;
       frame.dispatchEvent(new Event("touchmove", { bubbles: true }));

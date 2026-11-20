@@ -13,7 +13,7 @@ export function revealInChat(node: HTMLElement | null): (() => void) | undefined
   if (!node || !chat) return;
   node.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true }));
   // Older rows loading right after landing shift the scroll by the bottom, which reads as the reader resuming follow.
-  let held = true, reading = false, aiming = false;
+  let held = true, reading = false, aiming = false, landed = false;
   const release = () => {
     if (!held) return;
     held = false;
@@ -27,16 +27,18 @@ export function revealInChat(node: HTMLElement | null): (() => void) | undefined
     [doc, "wheel", read], [doc, "touchmove", read], [doc, "pointerdown", read], [doc, "keydown", read],
     [doc, "touchend", rest], [doc, "touchcancel", rest], [doc, "pointerup", rest],
     [chat, "scroll", (e) => e.target === chat && reading && release()],
-    [chat, "scrollend", () => aiming && sized.disconnect()],
+    [chat, "scrollend", (e) => { if (e.target === chat) landed = aiming; }],
   ];
   // The box grows as its view loads, and a smooth scroll stops at the room there was when it began: re-aim until it lands.
+  // Landed, it keeps its bottom in view at once, as a followed newest row does, but only while its top shows: a box left behind stays put.
   const sized = new ResizeObserver(() => {
     const box = node.getBoundingClientRect(), view = chat.getBoundingClientRect();
     if (!box.height || (box.top >= view.top && box.bottom <= view.bottom)) return;
+    if (landed && (box.top < view.top - 1 || box.top > view.bottom)) return;
     const top = Math.min(chat.scrollTop + box.top - view.top, chat.scrollHeight - chat.clientHeight);
     if (Math.abs(top - chat.scrollTop) < 1) return;
     aiming = true;
-    chat.scrollTo({ top, behavior: reducedMotion() ? "instant" : "smooth" });
+    chat.scrollTo({ top, behavior: landed || reducedMotion() ? "instant" : "smooth" });
   });
   for (const [target, type, on] of listeners) target.addEventListener(type, on, { capture: true, passive: true });
   sized.observe(node);
