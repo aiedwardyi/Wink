@@ -141,6 +141,11 @@ export function mailboxRecipient<T extends { id: string }>(bots: readonly T[], s
 /** Deliverables that are not PRs (pages, sites, docs) never get a built.md line on merge. */
 export const BUILT_REMINDER = "Add or edit its built.md line now (PR or not).";
 
+export function splitReportPath(text: string): { text: string; path: string } {
+  const match = /\n\[truncated\]\nFull report: ([A-Za-z]:[\\/][^\n]+)$/.exec(text);
+  return match ? { text: text.slice(0, match.index), path: match[1]! } : { text, path: "" };
+}
+
 /** Pane text is untrusted: strip escapes and controls, cap it, tag it. Null when nothing is left. */
 export function mailboxNoteText(pane: string, from: string, botId: string, text: string, label?: string | null): string | null {
   const clean = text
@@ -150,10 +155,10 @@ export function mailboxNoteText(pane: string, from: string, botId: string, text:
     .replace(UNSAFE_CONTROLS, "")
     .trim();
   if (!clean) return null;
-  const cut = clean.length > MAILBOX_NOTE_MAX_CHARS;
+  const linked = splitReportPath(clean);
+  const cut = linked.text.length > MAILBOX_NOTE_MAX_CHARS;
   const done = parsePaneNote(clean).status === "done" ? `\n${BUILT_REMINDER}` : "";
-  // [truncated] stays last: parsePaneNote only spots a cut at the very end.
-  const capped = `${cut ? clean.slice(0, MAILBOX_NOTE_MAX_CHARS) : clean}${done}${cut ? "\n[truncated]" : ""}`;
+  const capped = `${cut ? linked.text.slice(0, MAILBOX_NOTE_MAX_CHARS) : linked.text}${done}${cut || linked.path ? "\n[truncated]" : ""}${linked.path ? `\nFull report: ${linked.path}` : ""}`;
   const who = sanitizeMailboxName(from);
   const pane8 = `[pane ${pane.slice(0, 8)}]`;
   const tag = label ? `${pane8} [${sanitizeMailboxName(label).replace(/\]/g, ")")}]` : pane8;

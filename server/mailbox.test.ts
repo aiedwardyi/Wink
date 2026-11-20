@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { installOrbitMsg, terminalPaneEnv } from "../electron/terminal-mailbox.mjs";
 import {
-  BUILT_REMINDER, loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody,
+  BUILT_REMINDER, loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody, splitReportPath,
 } from "./mailbox.ts";
 import { PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_PROMPT } from "./pane-wake.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
@@ -199,6 +199,21 @@ describe("mailbox note text", () => {
     for (const text of ["FAIL SITE branch=HEAD sha=abc1234 dirty=no\nbroke", "DONE: lead work", "done"]) {
       expect(mailboxNoteText(PANE, "worker", "w1", text), text).not.toContain(BUILT_REMINDER);
     }
+  });
+
+  it("keeps a report link last, after the cut marker and the built.md reminder", () => {
+    const head = "DONE SITE branch=HEAD sha=abc1234 dirty=no";
+    const link = "Full report: C:\\orbit\\report.txt";
+    expect(mailboxNoteText(PANE, "worker", "w1", `${head}\npartial\n[truncated]\n${link}`)).toBe(`[pane 0f3c9a1e] from worker (w1): ${head}\npartial\n${BUILT_REMINDER}\n[truncated]\n${link}`);
+    const long = mailboxNoteText(PANE, "worker", "w1", `${head}\n${"x".repeat(MAILBOX_NOTE_MAX_CHARS + 50)}\n[truncated]\n${link}`)!;
+    expect(long.endsWith(`x\n${BUILT_REMINDER}\n[truncated]\n${link}`)).toBe(true);
+    expect(long.match(/\[truncated\]/g)).toHaveLength(1);
+  });
+
+  it("extracts only a Windows report path", () => {
+    expect(splitReportPath("text\n[truncated]\nFull report: C:\\orbit\\r.txt")).toEqual({ text: "text", path: "C:\\orbit\\r.txt" });
+    const posix = "text\n[truncated]\nFull report: /home/user/r.txt";
+    expect(splitReportPath(posix)).toEqual({ text: posix, path: "" });
   });
 });
 

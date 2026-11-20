@@ -120,6 +120,7 @@ if ($report) {
     $rest = @($args[3..($args.Count - 1)])
     $text = Get-OrbitMessage @rest
   } else { $text = Get-OrbitMessage }
+  $reportText = $text
   $branch = 'none'; $sha = 'none'; $dirty = 'unknown'
   # Repo config can run fsmonitor or hooks; neither may see the pane grant.
   $paneVars = @('ORBIT_PANE', 'ORBIT_BOT', 'ORBIT_TEACHER', 'ORBIT_URL', 'ORBIT_MSG_AUTH', 'ORBIT_MSG_TOKEN')
@@ -163,8 +164,36 @@ if (-not $text.Trim()) {
 }
 ${MAILBOX_ID_PS1}
 $max = 8000
+$reportPath = $null
+$reportFailed = $false
 do {
   $clip = if ($text.Length -gt $max) { $text.Substring(0, $max) + "` + "`" + String.raw`n[truncated]" } else { $text }
+  if ($report -and $text.Length -gt $max -and $env:ORBIT_URL -match '^http://127\.0\.0\.1:\d+$' -and $env:ORBIT_BOT -match '^[a-zA-Z0-9_-]{1,128}$') {
+    if (-not $reportPath -and -not $reportFailed) {
+      try {
+        $profile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__ORBIT_PROFILE__'))
+        if (-not $profile) { throw 'orbit-msg: report storage is unavailable' }
+        $dir = [IO.Path]::Combine($profile, 'mailbox-reports', $env:ORBIT_BOT)
+        $mutex = New-Object Threading.Mutex($false, "Local\OrbitReports-$($env:ORBIT_BOT)")
+        $held = $false
+        try {
+          try { $held = $mutex.WaitOne(10000) } catch [Threading.AbandonedMutexException] { $held = $true }
+          if (-not $held) { throw 'orbit-msg: report storage is busy' }
+          [void][IO.Directory]::CreateDirectory($dir)
+          $reportPath = [IO.Path]::GetFullPath([IO.Path]::Combine($dir, "$([DateTime]::UtcNow.Ticks.ToString('D19'))-$messageId.txt"))
+          [IO.File]::WriteAllText($reportPath, $reportText, (New-Object Text.UTF8Encoding $false))
+          $files = @(Get-ChildItem -LiteralPath $dir -File -Filter '*.txt' | Where-Object { $_.Name -match '^\d{19}-[a-f0-9-]{36}\.txt$' } | Sort-Object Name -Descending)
+          foreach ($file in @($files | Select-Object -Skip 100)) { [IO.File]::Delete($file.FullName) }
+        } finally {
+          if ($held) { $mutex.ReleaseMutex() }
+          $mutex.Dispose()
+        }
+      } catch { $reportPath = $null; $reportFailed = $true }
+    }
+    if ($reportPath) {
+      $clip += "` + "`" + String.raw`nFull report: $reportPath"
+    }
+  }
   $payload = @{ text = $clip; messageId = $messageId; sentAt = $sentAt }
   if ($report) { $payload.kind = 'report' } elseif ($mode) { $payload.kind = 'auto' }
   $body = [Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress))
