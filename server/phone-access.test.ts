@@ -948,6 +948,45 @@ describe("phone management", () => {
     streamB.socket.destroy();
   });
 
+  it("signs a browser out of itself the way Remove does, keeping other phones", async () => {
+    const w = await world();
+    const a = await pairPhone(w, "A");
+    const b = await pairPhone(w, "B");
+    const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
+    const keys = { p256dh: "BA", auth: "AA" };
+    addPushSubscription(w.r.dataDir, { endpoint: "https://fcm.googleapis.com/fcm/send/a", keys }, phones.find((phone) => phone.name === "A")!.id);
+    addPushSubscription(w.r.dataDir, { endpoint: "https://fcm.googleapis.com/fcm/send/b", keys }, phones.find((phone) => phone.name === "B")!.id);
+    const streamA = await streamViaRelay(w.r, "/api/events", { cookie: a });
+    const streamB = await streamViaRelay(w.r, "/api/events", { cookie: b });
+    await once(streamA.res, "data");
+    await once(streamB.res, "data");
+
+    const closed = new Promise((resolve) => streamA.res.once("close", resolve));
+    const out = await viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: a, origin: w.origin } });
+    expect(out.status).toBe(200);
+    expect(out.headers["set-cookie"]).toEqual(["__Host-wink_phone=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"]);
+    expect(out.headers["clear-site-data"]).toBe('"cache", "cookies", "storage"');
+    await closed;
+    expect(phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body)).phones.map((phone) => phone.name)).toEqual(["B"]);
+    expect(loadPushSubscriptions(w.r.dataDir).map((sub) => sub.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/b"]);
+    expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: a } })).status).toBe(401);
+    expect((await viaRelay(w.r, "/", { headers: { cookie: a } })).headers.location).toBe("/pair");
+    expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: b } })).status).toBe(200);
+    expect((await viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: a, origin: w.origin } })).status).toBe(200);
+    streamB.socket.destroy();
+  });
+
+  it("takes sign-out only as this PC's own POST from a relay browser", async () => {
+    const w = await world();
+    const session = await pairPhone(w);
+    expect((await viaRelay(w.r, "/api/phone/sign-out", { headers: { cookie: session } })).status).toBe(404);
+    expect((await viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: session } })).status).toBe(403);
+    expect((await viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: session, origin: "https://evil.test" } })).status).toBe(403);
+    expect((await w.local("/api/phone/sign-out", { method: "POST" })).status).toBe(404);
+    expect(phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body)).phones).toHaveLength(1);
+    expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: session } })).status).toBe(200);
+  });
+
   it("lets no request through after a revoke that raced it", async () => {
     const w = await world();
     const session = await pairPhone(w, "A");

@@ -15,6 +15,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import type { HarnessHandler } from "./early-listen.ts";
 import { linkedFileGrant } from "./linked-files.ts";
 import {
+  PHONE_CLEAR_COOKIE,
   RateLimiter,
   enrollError,
   phoneCookieToken,
@@ -448,6 +449,9 @@ export class PhoneAccess {
       case "open-code":
         this.checkOpenCode(req, res, host, own);
         return HANDLED;
+      case "sign-out":
+        this.signOut(req, res);
+        return HANDLED;
       case "room":
         if (this.options.room) await this.options.room(req, res, { host, peer: this.client?.peer(req) ?? null });
         else send(res, 404, { error: "not found" });
@@ -487,6 +491,27 @@ export class PhoneAccess {
     this.track(auth.phone.id, req.socket);
     if (auth.refreshCookie) res.setHeader("set-cookie", phoneSetCookie(token));
     return auth.phone;
+  }
+
+  /** A browser's own Sign Out: the same revoke as Remove on this PC, then the browser drops this site's cookie, storage and cache. */
+  private signOut(req: IncomingMessage, res: ServerResponse): void {
+    const token = phoneCookieToken(req.headers.cookie);
+    const auth = token ? this.phones.authenticate(token) : null;
+    if (auth) this.revoke(auth.phone.id, req.socket);
+    send(res, 200, { ok: true }, { "set-cookie": PHONE_CLEAR_COOKIE, "clear-site-data": '"cache", "cookies", "storage"', connection: "close" });
+  }
+
+  /** Signs a phone out everywhere it is open. `answering` is the socket still owed a reply. */
+  private revoke(id: string, answering?: Duplex): boolean {
+    try {
+      return this.phones.revoke(id);
+    } finally {
+      // A revoke whose write failed still refuses the phone, so cut it either way.
+      this.google?.dropPhone(id);
+      for (const socket of this.sockets.get(id) ?? []) if (socket !== answering) socket.destroy();
+      this.sockets.delete(id);
+      removePhonePushSubscriptions(this.options.dataDir, id);
+    }
   }
 
   /** Remembers which sockets a phone used, so revoking it can cut them. */
@@ -709,19 +734,7 @@ export class PhoneAccess {
       return reply(200, { url: `https://${status.host}/pair#k=${window.token}`, code: window.code, expiresAt: window.expiresAt });
     }
     if (method === "GET" && path === "/api/phone/devices") return reply(200, { phones: this.describe().enabled ? this.phones.list() : [] });
-    if (method === "DELETE" && device) {
-      const id = device[1]!;
-      try {
-        if (!this.phones.revoke(id)) return reply(404, { error: "no such phone" });
-      } finally {
-        // A revoke whose write failed still refuses the phone, so cut it either way.
-        this.google?.dropPhone(id);
-        for (const socket of this.sockets.get(id) ?? []) socket.destroy();
-        this.sockets.delete(id);
-        removePhonePushSubscriptions(this.options.dataDir, id);
-      }
-      return reply(200, { ok: true });
-    }
+    if (method === "DELETE" && device) return this.revoke(device[1]!) ? reply(200, { ok: true }) : reply(404, { error: "no such phone" });
     return reply(405, { error: "method not allowed" });
   }
 }
