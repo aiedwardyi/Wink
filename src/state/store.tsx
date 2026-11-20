@@ -453,6 +453,14 @@ export function reducer(state: AppState, action: Action): AppState {
       }
       const switchedThread = typeof action.bot.threadId === "string" && action.bot.threadId !== before.threadId;
       if (switchedThread) state = consumeFocus(state, before.threadId);
+      // A send waiting in the empty chat the bot dropped follows the bot, as on the server.
+      const followed = switchedThread && !before.messages?.length && action.bot.tasks && !action.bot.tasks.some((task) => task.threadId === before.threadId)
+        ? state.pendingQueued[before.threadId]?.filter((entry) => entry.reason === "sync") : undefined;
+      if (followed?.length) {
+        const pendingQueued = { ...state.pendingQueued, [action.bot.threadId!]: [...followed, ...state.pendingQueued[action.bot.threadId!] ?? []] };
+        delete pendingQueued[before.threadId];
+        state = { ...state, pendingQueued };
+      }
       const kind =
         action.bot.unread && !before?.unread
           ? "surprise"
@@ -777,7 +785,9 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "consumePendingQueued": {
-      const prev = state.pendingQueued[action.threadId] ?? [];
+      // An early send held in one chat can land in the bot's other chat.
+      const threadId = Object.keys(state.pendingQueued).find((id) => state.pendingQueued[id]?.some((entry) => entry.queueId === action.queueId)) ?? action.threadId;
+      const prev = state.pendingQueued[threadId] ?? [];
       const at = prev.findIndex((entry) => entry.queueId === action.queueId);
       if (at < 0) {
         return {
@@ -787,8 +797,8 @@ export function reducer(state: AppState, action: Action): AppState {
       }
       const rest = prev.filter((_, i) => i !== at);
       const pendingQueued = { ...state.pendingQueued };
-      if (rest.length) pendingQueued[action.threadId] = rest;
-      else delete pendingQueued[action.threadId];
+      if (rest.length) pendingQueued[threadId] = rest;
+      else delete pendingQueued[threadId];
       return { ...state, pendingQueued };
     }
     case "cancelQueued": {

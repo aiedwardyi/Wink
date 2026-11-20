@@ -32,6 +32,7 @@ interface SteerItem {
   sendId?: string;
   after?: boolean;
   syncUntil?: number;
+  early?: boolean;
   call?: CallTag;
   answersCard?: string;
   actedAt?: number;
@@ -90,6 +91,7 @@ const savedQueueSchema = z.array(z.object({
     sendId: z.string().optional(),
     after: z.boolean().optional(),
     syncUntil: z.number().finite().nonnegative().optional(),
+    early: z.boolean().optional(),
     call: z.object({ id: z.string(), voice: z.literal(true).optional(), order: z.literal(true).optional(), ask: z.literal(true).optional() }).optional(),
     answersCard: z.string().optional(),
     actedAt: z.number().finite().nonnegative().optional(),
@@ -114,8 +116,12 @@ function saveQueueAfterAppend(): void {
   }
 }
 
-export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" | "messagesFor" | "onChange">, drain?: () => void, enabled?: () => boolean): void {
+export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" | "messagesFor" | "onChange" | "holdSends">, drain?: () => void, enabled?: () => boolean): void {
   if (drain) syncHold.initialize(drain, enabled);
+  store.holdSends((botId, threadId) => {
+    const entries = [...queues.values()];
+    return Boolean(queues.get(entryKey(botId, threadId))?.items.some((item) => !isRoomItem(item) && !isSendCancelled(item.sendId) && follows(entries, botId, item)));
+  });
   let pending: z.infer<typeof savedQueueSchema>;
   try {
     pending = savedQueueSchema.parse(parseJson(readFileSync(QUEUE_FILE, "utf8")));
@@ -133,6 +139,7 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
     pending = [];
   }
   queues.clear();
+  pending = followBots(store, pending);
   for (const entry of pending) {
     for (const item of entry.items) queueSeq = Math.max(queueSeq, item.seq);
     if (!store.bot(entry.botId) || !store.taskByThread(entry.botId, entry.threadId)) continue;
@@ -144,11 +151,21 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
   }
   if (pending.length) saveQueuedSends();
   store.onChange((change) => {
+    if (change.type === "bot") {
+      const kept = followBots(store, [...queues.values()]);
+      if (kept.every((entry) => queues.get(entryKey(entry.botId, entry.threadId)) === entry)) return;
+      queues.clear();
+      for (const entry of kept) queues.set(entryKey(entry.botId, entry.threadId), entry);
+      return saveQueuedSends();
+    }
     if (change.type !== "bot.deleted" && change.type !== "thread.deleted") return;
     let changed = false;
+    const entries = [...queues.values()];
     for (const [key, entry] of queues) {
       if (change.type === "bot.deleted" ? entry.botId !== change.botId : entry.threadId !== change.threadId) continue;
-      queues.delete(key);
+      const items = change.type === "thread.deleted" ? entry.items.filter((item) => follows(entries, entry.botId, item)) : [];
+      if (items.length) queues.set(key, { ...entry, items });
+      else queues.delete(key);
       changed = true;
     }
     if (changed) saveQueuedSends();
@@ -240,7 +257,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; after?: boolean; syncUntil?: number; call?: CallTag; answersCard?: string; actedAt?: number } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; after?: boolean; syncUntil?: number; early?: boolean; call?: CallTag; answersCard?: string; actedAt?: number } = {},
 ): QueuedSteer {
   if (options.sendId && cancelledSendIds.has(options.sendId)) {
     return { id: options.sendId, skipped: true, cancelled: true };
@@ -258,6 +275,7 @@ export function queueSteeredMessage(
     sendId: options.sendId,
     after: options.after,
     syncUntil: options.syncUntil,
+    early: options.early,
     call: options.call,
     answersCard: options.answersCard,
     actedAt: options.actedAt,
@@ -342,6 +360,33 @@ export function queuedRoomBotIds(groupId: string, threadId: string): string[] {
 // a queued quick handoff's ask row, or a requeued call or promised order row, already shows this line
 const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || message.queued === true || Boolean(message.call?.order || message.call?.ask));
 
+type Following = { botId: string; threadId: string; items: Array<{ messageId: string; sendId?: string; seq?: number; early?: boolean; syncUntil?: number }> };
+
+/** A send typed before its chat landed keeps the bot's later sends behind it. */
+export function earlySendAhead(botId: string, seq = Infinity, entries: Iterable<Following> = queues.values()): boolean {
+  for (const entry of entries) {
+    if (entry.botId === botId && entry.items.some((item) => item.early && (item.seq ?? 0) < seq && !isSendCancelled(item.sendId))) return true;
+  }
+  return false;
+}
+
+const follows = (entries: Following[], botId: string, item: Following["items"][number]) =>
+  Boolean(item.early) || (item.syncUntil !== undefined && earlySendAhead(botId, item.seq, entries));
+
+// An early send, and a later send held behind it, follow the bot only when the chat they were typed in is deleted.
+function followBots<T extends Following>(store: Pick<Store, "bot" | "taskByThread">, entries: T[]): T[] {
+  const kept = new Map<string, T>();
+  for (const entry of entries) {
+    const bot = store.bot(entry.botId);
+    const items = bot && !store.taskByThread(entry.botId, entry.threadId) ? entry.items.filter((item) => follows(entries, entry.botId, item)) : [];
+    const moved = bot && items.length ? { ...entry, threadId: bot.threadId, items } : entry;
+    const key = entryKey(moved.botId, moved.threadId);
+    const prior = kept.get(key);
+    kept.set(key, prior ? { ...moved, items: [...prior.items, ...moved.items].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)) } : moved);
+  }
+  return [...kept.values()];
+}
+
 function isRoomItem(item: QueueItem): item is RoomItem {
   return item.kind === "room";
 }
@@ -379,7 +424,7 @@ export function drainSteeredMessages(
     const laneItem = entry.items.every(isRoomItem) && entry.items.some((item) => isRoomItem(item) && !item.hands) && laneFree?.(entry.botId);
     if ((busy && !laneItem) || draining.has(entry.botId) || promotingBots.has(entry.botId)) continue;
     const first = entry.items.find((item) => !isRoomItem(item) && !isSendCancelled(item.sendId));
-    if (first && !isRoomItem(first) && syncHold.waiting(entry.threadId, first.syncUntil)) continue;
+    if (first && !isRoomItem(first) && (syncHold.waiting(entry.threadId, first.syncUntil, first.early) || earlySendAhead(entry.botId, first.seq))) continue;
     // committed to draining: the entry leaves the map before anything runs,
     // so a settle racing another settle can never fire the same queue twice
     queues.delete(key);
@@ -473,7 +518,7 @@ export function takeQueuedSteers(
   if (!entry || entry.botId !== botId) return [];
   const steerItems = entry.items.filter((item): item is SteerItem => !isRoomItem(item));
   if (!steerItems.length) return [];
-  const waitsAhead = (item: SteerItem) => !steering || item.after || syncHold.waiting(threadId, item.syncUntil);
+  const waitsAhead = (item: SteerItem) => !steering || item.after || syncHold.waiting(threadId, item.syncUntil, item.early) || earlySendAhead(botId, item.seq);
   if (steerItems.some((item) => item.seq <= since && !isSendCancelled(item.sendId) && waitsAhead(item))) return [];
   const held = entry.items.filter((item) => isRoomItem(item) || promoting.has(item.messageId) || (item.after && !isSendCancelled(item.sendId)));
   if (held.length) queues.set(key, { botId, threadId, items: held });

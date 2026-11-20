@@ -26,7 +26,7 @@ import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { sendPostReceipt, type StartedTurn } from "./send-receipt.ts";
-import { cancelQueuedSends, cancelSteeredMessage, isSendCancelled, queuedSteeredMessage, queueMark, queueSteeredMessage, withQueuedSend } from "./steer-queue.ts";
+import { cancelQueuedSends, cancelSteeredMessage, earlySendAhead, isSendCancelled, queuedSteeredMessage, queueMark, queueSteeredMessage, withQueuedSend } from "./steer-queue.ts";
 import type { BotRecord, Message, Store, TaskRecord } from "./store.ts";
 import { syncHold } from "./sync-hold.ts";
 import { isRecoveryFlushReason, shouldStampRecoveryDismiss, type RecoveryFlushReason, type TaskResumeScheduler } from "./task-recovery-flush.ts";
@@ -482,10 +482,12 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             markChatLatency({ sendId, threadId }, "queue.decided", { queueId: held.id });
             return { ok: true as const, queued: true as const, queueId: held.id, threadId };
           }
-          const syncUntil = !queueId && threadSyncGate.enabled ? syncHold.until(threadId) : undefined;
+          const empty = !store.messagesFor(threadId).length;
+          const own = !queueId && threadSyncGate.enabled ? syncHold.until(threadId, empty) : undefined;
+          const syncUntil = own ?? (!queueId && threadSyncGate.enabled && earlySendAhead(bot.id) ? Date.now() : undefined);
           if (syncUntil !== undefined) {
             const held = queueSteeredMessage(bot.id, threadId, text, {
-              replyToId: replyTo?.id, sendId, syncUntil, call, answersCard, actedAt,
+              replyToId: replyTo?.id, sendId, syncUntil, early: own !== undefined && empty, call, answersCard, actedAt,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             markChatLatency({ sendId, threadId }, "queue.decided", { queueId: held.id });

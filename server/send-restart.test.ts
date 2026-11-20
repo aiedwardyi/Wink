@@ -271,6 +271,43 @@ describe("waiting sends across restart", () => {
     expect(savedQueue()).toEqual([]);
   });
 
+  it("moves an early send whose chat was dropped to the bot's chat, in order with a send waiting there", async () => {
+    const { queue, store } = await boot();
+    const bot = store.createBot();
+    const typedIn = bot.threadId;
+    queue.queueSteeredMessage(bot.id, typedIn, "typed before its chat landed", { syncUntil: Date.now(), early: true });
+    const landed = store.createTask(bot.id)!;
+    queue.queueSteeredMessage(bot.id, landed.threadId, "typed in the chat that landed", { after: true });
+    const pending = readFileSync(join(dir, "queued-sends.json"), "utf8");
+    store.deleteTask(bot.id, typedIn);
+    writeFileSync(join(dir, "queued-sends.json"), pending);
+    const restarted = await boot();
+    expect(restarted.queue.waitingSends()).toEqual({ [landed.threadId]: [
+      expect.objectContaining({ text: "typed before its chat landed", reason: "sync" }),
+      expect.objectContaining({ text: "typed in the chat that landed" }),
+    ] });
+    expect(savedQueue()).toMatchObject([{ threadId: landed.threadId, items: [{ early: true }, { after: true }] }]);
+  });
+
+  it("keeps the empty shown chat a send waits in at boot, and moves the send with the bot only when that chat is deleted", async () => {
+    const { queue, store } = await boot();
+    const bot = store.createBot();
+    const typedIn = bot.threadId;
+    queue.queueSteeredMessage(bot.id, typedIn, "typed before its chat landed", { syncUntil: Date.now(), early: true });
+    const fresh = store.createTask(bot.id)!;
+    queue.queueSteeredMessage(bot.id, fresh.threadId, "typed in a new chat", { syncUntil: Date.now() });
+    const landed = store.createTask(bot.id, "Landed", false)!;
+    store.appendMessage(landed.threadId, { role: "user", kind: "text", text: "history" });
+    const restarted = await boot();
+    expect(restarted.store.followNewestTask(bot.id)).toBe(false);
+    expect(restarted.store.bot(bot.id)?.threadId).toBe(fresh.threadId);
+    restarted.store.removeSyncedTask(bot.id, fresh.threadId);
+    expect(restarted.queue.waitingSends()).toEqual({
+      [typedIn]: [expect.objectContaining({ text: "typed before its chat landed", reason: "sync" })],
+      [landed.threadId]: [expect.objectContaining({ text: "typed in a new chat", reason: "sync" })],
+    });
+  });
+
   it("rejects an enqueue when persistence fails without losing an earlier receipt", async () => {
     const { queue, store } = await boot();
     const bot = store.createBot();

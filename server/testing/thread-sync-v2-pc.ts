@@ -1,6 +1,8 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { mock } from "node:test";
+import { Readable } from "node:stream";
 import { parentPort, workerData } from "node:worker_threads";
 import { z } from "zod";
 
@@ -12,6 +14,8 @@ import { createThreadSyncV2Store } from "../thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "../thread-sync-v2-gate.ts";
 import { createSyncEngine } from "../thread-sync-v2-engine.ts";
 import type { ContextCompactionV1 } from "../../shared/context-compaction.ts";
+import type { DriveFile } from "../drive-client.ts";
+import { syncHold } from "../sync-hold.ts";
 import { testBootReads } from "./boot-rows.ts";
 
 export interface TestArgs {
@@ -27,6 +31,7 @@ export interface TestArgs {
   leaf?: string | null;
   at?: number;
   compaction?: ContextCompactionV1;
+  heads?: Array<[string, DriveFile[]]>;
 }
 
 export interface Snapshot {
@@ -45,6 +50,7 @@ export interface Snapshot {
   conflictScans: number;
   memo: number | null;
   pulls: string[];
+  filing: boolean;
   logs: string[];
 }
 
@@ -122,9 +128,11 @@ ThreadSyncV2.prototype.flush = function (scope, crash, through) {
   return originalFlush.call(this, scope, crash, through);
 };
 const originalPull = ThreadSyncV2.prototype.pull;
-ThreadSyncV2.prototype.pull = function (scope) {
+let pullDelay = 0;
+ThreadSyncV2.prototype.pull = async function (scope) {
   transports.add(this);
   pulls.push(scope.threadId);
+  if (pullDelay) await new Promise((done) => setTimeout(done, pullDelay));
   return originalPull.call(this, scope);
 };
 if (input.writer) {
@@ -139,6 +147,32 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
     let value: TestResult;
     const threadId = args.threadId ?? "thread";
     switch (method) {
+      case "join":
+        syncHold.feed(input.folder, new Map(args.heads), { profileDeviceId: input.deviceId, writerId: input.writer!, memoryDeviceId: "a".repeat(12) });
+        bot = store.createBot({}, { seedMessages: false, threadId: syncHold.chat(input.folder, "bot") });
+        value = bot;
+        break;
+      case "send": {
+        const [{ createBotChatRoutes }, { SendSequencer }, { startedTurn }, queue] = await Promise.all([
+          import("../bot-chat-routes.ts"), import("../send-idempotency.ts"), import("../send-receipt.ts"), import("../steer-queue.ts"),
+        ]);
+        // A drained send starts the bot's turn; value asks for its reply.
+        queue.initializeSteerQueue(store, () => queue.drainSteeredMessages(store, (_bot, thread) => {
+          if (args.value) store.appendMessage(thread, { role: "bot", kind: "text", text: "reply" });
+        }));
+        const noop = () => {};
+        // SAFETY: an idle bot's send reads only these deps.
+        const routes = createBotChatRoutes({
+          cfg: {}, store, threadSyncGate: { enabled: true }, sendSequencer: new SendSequencer(), instanceForBot: () => null, botHasActiveTurn: () => false,
+          noteTalked: noop, markChatLatency: noop, ensureChatLatency: noop, resolveReplyTarget: () => undefined, pullSyncedThread: (id: string) => sync?.pull(id),
+          startTurn: async (_bot: string, text: string, options: { sendId?: string }) => startedTurn(store.appendMessage(threadId, { role: "user", kind: "text", text, sendId: options.sendId })),
+        } as unknown as Parameters<typeof createBotChatRoutes>[0]);
+        // SAFETY: the route reads the body stream, status and match groups only.
+        const req = Readable.from([JSON.stringify({ threadId, text: args.text, sendId: `first-sync-send-${String(id).padStart(4, "0")}` })]) as IncomingMessage;
+        // SAFETY: the route answers through writeHead and end only.
+        await routes.send(req, { writeHead: noop, end: noop } as unknown as ServerResponse, ["", bot.id] as RegExpMatchArray);
+        break;
+      }
       case "seed": store.adoptSyncedTask(bot.id, { threadId, title: "Chat", createdAt: 1 }, args.rows ?? [], args.leaf ?? null, true); break;
       case "append": value = store.appendMessage(threadId, { role: args.role ?? "user", kind: "text", text: args.text, at: args.at ?? Date.now(), ...args.patch }); break;
       case "compaction": value = store.appendCompaction(threadId, args.compaction!); break;
@@ -170,6 +204,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         break;
       case "live": live = Boolean(args.value); startAt = Infinity; break;
       case "open": openThread = threadId; break;
+      case "slowPulls": pullDelay = args.at ?? 0; break;
       case "clock": mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: Date.now() }); break;
       case "start": sync?.start(); await sync?.poll(); break;
       case "tick": mock.timers.tick(args.at ?? 0); await sync?.poll(); break;
@@ -216,6 +251,9 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         break;
       }
       case "bot": value = bot; break;
+      case "switch": value = store.switchTask(bot.id, threadId); break;
+      case "offline": syncHold.google(input.folder); break;
+      case "waiting": value = JSON.stringify((await import("../steer-queue.ts")).waitingSends()); break;
       case "import":
         store.applySyncChanges(bot.id, threadId, [
           ...(args.rows ?? []).map((row) => ({ cursor: 0, kind: "row" as const, rowId: row.id, value: row, conflict: false })),
@@ -236,6 +274,19 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         await Promise.all(doomed.map((worker) => worker.close()));
         break;
       }
+      case "boot": {
+        const [queue, botId] = [await import("../steer-queue.ts"), bot.id];
+        await sync?.close();
+        closeMessageDb();
+        syncHold.reset();
+        store = new Store(selection);
+        bot = store.bot(botId)!;
+        traceQueries();
+        sync = createThreadSyncV2Store(host(), true);
+        queue.initializeSteerQueue(store, () => queue.drainSteeredMessages(store, () => {}));
+        syncHold.feed(input.folder, new Map(args.heads), { profileDeviceId: input.deviceId, writerId: input.writer!, memoryDeviceId: "a".repeat(12) });
+        break;
+      }
       case "restart":
         await sync?.close();
         closeMessageDb();
@@ -252,7 +303,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         const pending = hasSync ? Number(db.prepare("SELECT COUNT(*) AS n FROM sync_v2_packets WHERE applied = 0").get()!.n) : 0;
         const disk = db.prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid").all(threadId).map((row) => JSON.parse(String(row.json)));
         value = { rows: store.messagesFor(threadId), disk, leaf: store.activeLeaf(threadId), events: events.splice(0), tasks: store.tasks(bot.id), outbox, pending, files: readdirSync(input.dataDir), hasSync, noticeChecks, historyScans, headChecks, conflictScans,
-          memo: hasSync ? Number(db.prepare("SELECT cursor FROM sync_v2_notices WHERE thread = ?").get(threadId)?.cursor ?? NaN) : null, pulls: pulls.splice(0), logs };
+          memo: hasSync ? Number(db.prepare("SELECT cursor FROM sync_v2_notices WHERE thread = ?").get(threadId)?.cursor ?? NaN) : null, pulls: pulls.splice(0), filing: sync?.filing() ?? false, logs };
         break;
       }
       case "close":

@@ -22,6 +22,7 @@ const google = new Map<string, boolean>();
 const delivered = new Map<string, { folder: string; behind: boolean }>();
 const peers = new Map<string, Map<string, { feed?: string; pull?: string }>>();
 const released = new Set<string>();
+const chats = new Map<string, { threadId: string; at: number }>();
 const expired = new Set<string>();
 let waiting: WaitingSend[] = [];
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -36,6 +37,10 @@ function behind(threadId: string): boolean | undefined {
   }
   const local = delivered.get(threadId);
   return local ? google.get(local.folder) === false ? false : local.behind : undefined;
+}
+
+function landed(threadId: string): boolean {
+  return [...applied.values()].some((hashes) => [...hashes.keys()].some((path) => threadFor(path) === threadId));
 }
 
 function notePeer(threadId: string, path: string, source: "feed" | "pull", hash: string): void {
@@ -86,9 +91,9 @@ export const syncHold = {
     drain = onDrain;
     enabled = isEnabled;
   },
-  watch(entries: Array<{ threadId: string; items: Array<{ messageId: string; syncUntil?: number }> }>): void {
+  watch(entries: Array<{ threadId: string; items: Array<{ messageId: string; syncUntil?: number; early?: boolean }> }>): void {
     waiting = entries.flatMap((entry) => entry.items.filter((item) => item.syncUntil !== undefined)
-      .map((item) => ({ messageId: item.messageId, threadId: entry.threadId, syncUntil: item.syncUntil })));
+      .map((item) => ({ messageId: item.messageId, threadId: entry.threadId, syncUntil: item.early ? Infinity : item.syncUntil })));
     schedule();
   },
   google(folder: string): void {
@@ -109,6 +114,9 @@ export const syncHold = {
       const file = [...copies].sort((a, b) => Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime) || Date.parse(b.createdTime) - Date.parse(a.createdTime) || a.id.localeCompare(b.id))[0];
       if (!file?.md5Checksum) continue;
       notePeer(threadId, `${key}/${path}`, "feed", file.md5Checksum);
+      const bot = `${key}/${path.split("/")[1]}`;
+      const at = Date.parse(file.modifiedTime);
+      if ((chats.get(bot)?.at ?? -Infinity) < at) chats.set(bot, { threadId, at });
       if (applied.get(key)?.get(path) === file.md5Checksum) cleared = heads.delete(path) || cleared;
       else heads.set(path, file.md5Checksum);
     }
@@ -133,19 +141,24 @@ export const syncHold = {
     delivered.set(scope.threadId, { folder: key, behind: ahead });
     wake();
   },
-  until(threadId: string): number | undefined {
+  until(threadId: string, early = false): number | undefined {
     expire();
-    return !released.has(threadId) && behind(threadId) === true ? Date.now() + HOLD_MS : undefined;
+    return !released.has(threadId) && (behind(threadId) === true || (early && enabled() && peers.has(threadId) && !landed(threadId))) ? Date.now() + HOLD_MS : undefined;
   },
   release,
+  /** The bot's chat with the newest peer head Drive listed. */
+  chat(folder: string, botSyncId: string): string | undefined {
+    return chats.get(`${folderKey(folder)}/${botSyncId}`)?.threadId;
+  },
   /** Resolves once the thread has the peer heads Drive listed, or when the hold runs out. */
   async settle(threadId: string): Promise<void> {
     const until = syncHold.until(threadId);
     while (until !== undefined && syncHold.waiting(threadId, until)) await new Promise((done) => setTimeout(done, 100));
   },
-  waiting(threadId: string, until?: number): boolean {
+  /** An early send waits until its own chat has applied a peer head; a failed listing never counts as landed. */
+  waiting(threadId: string, until?: number, early = false): boolean {
     expire();
-    return !released.has(threadId) && until !== undefined && until > Date.now() && behind(threadId) !== false;
+    return !released.has(threadId) && until !== undefined && (early ? enabled() && (!landed(threadId) || behind(threadId) === true) : until > Date.now() && behind(threadId) !== false);
   },
   reset(): void {
     clearTimeout(timer);
@@ -157,6 +170,7 @@ export const syncHold = {
     peers.clear();
     released.clear();
     expired.clear();
+    chats.clear();
     drain = () => {};
     enabled = () => true;
   },

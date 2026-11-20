@@ -44,6 +44,8 @@ export interface GoogleSyncStatus {
   lastSyncAt: number | null;
   move?: true;
   problem?: string;
+  firstSync?: true;
+  finishing?: true;
 }
 
 const bindingSchema = z.object({
@@ -83,6 +85,8 @@ type Options = {
   /** The engines are still writing what activate republished. */
   republishing?: () => boolean;
   kindsReady?: () => boolean;
+  /** The engines are still filing chats into the local store. */
+  filing?: () => boolean;
   /** Pulls a chat whose peer head a pass just downloaded. */
   pull?: (threadId: string) => void | Promise<void>;
   /** A pass just downloaded pictures/<name>. */
@@ -222,6 +226,11 @@ export function createGoogleSync(options: Options) {
     return { done, total: Math.max(total, done) };
   }
 
+  // No kinds receipt yet: this PC has never finished a whole pass.
+  const firstSync = () => !existsSync(join(dataDir, GOOGLE_KINDS_FILE));
+  // Drive finishes before the engines have filed every chat, so the first sync lasts until they have.
+  let firstRun = false;
+
   function status(): GoogleSyncStatus {
     const accountStatus = account.status();
     const owner = accountStatus.state === "pending" || accountStatus.state === "signed-out" ? null : account.owner();
@@ -242,13 +251,16 @@ export function createGoogleSync(options: Options) {
     if (!bound) return { ...base, state: "ready", join: joinInfo?.sub === owner.sub ? joinInfo.value : null };
     if (problem === "error") return base;
     if (bound.phase === "joining") {
-      const joining: GoogleSyncStatus = fullStrikes ? { ...base, state: "drive-full" } : { ...base, state: "joining", progress: progress() };
+      const joining: GoogleSyncStatus = fullStrikes ? { ...base, state: "drive-full" } : { ...base, state: "joining", progress: progress(), firstSync: true };
       if (moving()) joining.move = true;
       return joining;
     }
     if (problem === "offline" || accountStatus.state === "offline") return { ...base, state: "offline" };
     if (fullStrikes) return { ...base, state: "drive-full" };
+    if (catching && (firstRun || firstSync())) return { ...base, state: "syncing", progress: progress(), firstSync: true };
     if (catching || lastSyncAt === null) return { ...base, state: "syncing", progress: catching ? progress() : null };
+    if (firstRun && options.filing?.()) return { ...base, state: "up-to-date", firstSync: true, finishing: true };
+    firstRun = false;
     return { ...base, state: "up-to-date" };
   }
 
@@ -381,6 +393,7 @@ export function createGoogleSync(options: Options) {
     let listed = false;
     try {
       options.prepare();
+      if (bound.phase === "joining" || firstSync()) firstRun = true;
       if (catching && !total) {
         const [root] = await client.listRoots();
         const remote = root ? (await client.listChildren(root.id)).flatMap((file) => decodeDrivePath(file.name) ?? []) : [];
@@ -391,6 +404,8 @@ export function createGoogleSync(options: Options) {
         owner, mirrorPath: bound.mirrorPath, statePath, ownIds: ids, client, now, uploads, hashes, rateLimit, chatFirst,
         kindsPath: join(dataDir, GOOGLE_KINDS_FILE), allowKindRescan: quiet && bound.phase === "ready" && !busy,
         openThread: chatFirst ? options.openThread?.() : null,
+        // Bots join first; chat history fills in once the engines can show them.
+        chatsLater: bound.phase === "joining",
         behind: (paths) => { behind = paths; },
         listed: (files) => {
           listed = true;

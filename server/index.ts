@@ -1819,6 +1819,7 @@ async function importProfileChanges(): Promise<void> {
     const created = !bot;
     if (!bot) {
       const remoteStyle = botAvatarChoiceSchema.safeParse(remoteBot.mascotStyle);
+      const listed = syncHold.chat(folder, item.globalId);
       bot = store.createBot({
         name: String(remoteBot.name ?? "Imported bot"),
         title: String(remoteBot.title ?? ""),
@@ -1828,7 +1829,7 @@ async function importProfileChanges(): Promise<void> {
         mascotStyle: remoteStyle.success ? remoteStyle.data : DEFAULT_MASCOT_STYLE,
         section: typeof remoteBot.sectionId === "string" ? sectionNames.get(remoteBot.sectionId) : undefined,
         autoApprove: true,
-      }, { seedMessages: false, id: item.localId ?? undefined });
+      }, { seedMessages: false, id: item.localId ?? undefined, threadId: listed && !store.botByThread(listed) ? listed : undefined });
     }
     bindSyncId(profileSyncSettings.botMap, bot.id, item.globalId);
     // the avatar keeps its local base, so a later pass applies it once Drive delivers the asset
@@ -2591,6 +2592,7 @@ const googleSync = createGoogleSync({
   },
   republishing: () => threadSyncV2?.republishing() ?? false,
   kindsReady: () => googleKindsReady,
+  filing: () => threadSyncV2?.filing() ?? false,
   pull: pullSyncedThread,
   picture: (name) => broadcast({ kind: "picture", name }),
   memory: (botSyncId) => peerMemoryLanded(botSyncId, profileSyncSettings.botMap, (botId) => botHasActiveTurn(botId), syncMemory),
