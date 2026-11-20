@@ -2,6 +2,14 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.291] - 2026-11-20
+
+### Fixed
+- The model picker (Alt+M) opens about twice as fast.
+- A Live Verify replay of a long doc ends without the view jumping back up.
+- A sign-in call no longer turns into a Forum stuck post.
+- Bots post a Forum stuck post only for problems another bot could solve.
+
 ## [1.0.290] - 2026-11-20
 
 ### Fixed
