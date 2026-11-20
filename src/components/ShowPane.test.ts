@@ -836,18 +836,22 @@ it("keeps a pinch's move at the canvas edge, and moves the canvas with the arrow
   expect(view()[1]).toBeCloseTo(y - 40);
 });
 
-const glideSetup = async (botId: string) => {
-  pickList();
+const glideSetup = async (botId: string, mounting = false) => {
+  const frames = new Map<number, FrameRequestCallback>();
+  let next = 0;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((frame) => (frames.set(++next, frame), next));
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => void frames.delete(id));
+  if (mounting) {
+    const many = "# Decision timeline\n\n" + Array.from({ length: 40 }, (_, i) => `## 2026-10-${String(1 + (i % 28)).padStart(2, "0")} ${10 + Math.floor(i / 28)}:00 | Question ${i} | current\n- Picked: A${i}\n- Over: B${i}\n`).join("\n");
+    picks(() => new Response(JSON.stringify({ name: "decisions.md", text: many, entries: parseTimeline(many).entries }), { status: 200 }));
+  } else pickList();
   await openTimeline(botId);
   await until(() => picked().length > 0);
   const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
   const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
   Object.defineProperties(canvas, { clientWidth: { value: 400 }, clientHeight: { value: 600 } });
-  Object.defineProperties(sheet, { offsetWidth: { value: 1000 }, offsetHeight: { value: 2000 } });
-  const frames = new Map<number, FrameRequestCallback>();
-  let next = 0;
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((frame) => (frames.set(++next, frame), next));
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => void frames.delete(id));
+  // a sheet that grows with the rows mounted, so older rows landing above can move the view
+  Object.defineProperties(sheet, { offsetWidth: { value: 1000 }, offsetHeight: mounting ? { get: () => 100 * picked().length } : { value: 2000 } });
   const y = () => Number(/translate\(-?[\d.]+px, (-?[\d.]+)px\)/.exec(sheet.style.transform)![1]);
   const chip = (end: string) => host.querySelector<HTMLElement>(`.timeline-canvas > [data-end="${end}"]`)!;
   const tap = (end: string) => act(async () => { chip(end).dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
@@ -904,6 +908,26 @@ it("jumps instead under reduced motion", async () => {
   await tap("newest");
   expect(y()).toBe(-1120);
   expect(frames.size).toBe(0);
+});
+
+it("jumps onto the oldest pick under reduced motion when older rows are still to mount", async () => {
+  const { y, tap } = await glideSetup("b-glide-mount-still", true);
+  expect(picked().length).toBe(8);
+  const media = window.matchMedia;
+  // SAFETY: reducedMotion() reads only .matches.
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => query === "(prefers-reduced-motion: reduce)" ? { matches: true } as MediaQueryList : media.call(window, query));
+  await tap("oldest");
+  expect(picked().length).toBe(40);
+  expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Question 0");
+  expect(y()).toBe(44);
+});
+
+it("glides onto the oldest pick when older rows are still to mount", async () => {
+  const { y, tap, play } = await glideSetup("b-glide-mount", true);
+  await tap("oldest");
+  expect(picked().length).toBe(40);
+  expect((await play(600)).at(-1)).toBe(44);
+  expect(y()).toBe(44);
 });
 
 it("draws the newest picks first and the rest a batch a frame", async () => {

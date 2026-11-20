@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ChevronRight, History, Paperclip, Pencil, Search } from "lucide-react";
+import { flushSync } from "react-dom";
 import { z } from "zod";
 
 import { request } from "@/lib/api-request";
@@ -441,7 +442,8 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   const glideTo = useCallback((end: "oldest" | "newest") => {
     stopGlide();
     const box = frame.current!;
-    if (end === "oldest") setGrow((at) => (at.limit < total ? { ...at, limit: total } : at));
+    // the older rows lay out first, so the move below starts from the expanded sheet
+    if (end === "oldest") flushSync(() => setGrow((at) => (at.limit < total ? { ...at, limit: total } : at)));
     const goal = () => (end === "oldest" ? PAD.y : pinY(box, sheet.current!, view.current!.scale));
     if (reducedMotion()) return show({ ...view.current!, y: goal() });
     let began: number | undefined;
@@ -626,8 +628,8 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
         </div>
       </Redraw.Provider>
       <p className="timeline-hint">{t(touch ? "timeline.hintTouch" : "timeline.hintMouse")}<b ref={zoom} /></p>
-      <button type="button" className="timeline-hint" data-end="oldest" onClick={() => glideTo("oldest")}>{t("timeline.oldest")}</button>
-      <button type="button" className="timeline-hint" data-end="newest" onClick={() => glideTo("newest")}>{t("timeline.newest")}</button>
+      <button type="button" className="timeline-hint" data-end="oldest" aria-label={t("timeline.goOldest")} onClick={() => glideTo("oldest")}>{t("timeline.oldest")}</button>
+      <button type="button" className="timeline-hint" data-end="newest" aria-label={t("timeline.goNewest")} onClick={() => glideTo("newest")}>{t("timeline.newest")}</button>
     </div>
   );
 }
