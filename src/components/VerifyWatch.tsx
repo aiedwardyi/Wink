@@ -20,7 +20,8 @@ const RED = "#f05d5d";
 const PARTS: Part[] = ["loads", "links", "phone"];
 const ARROW = typeof Path2D === "undefined" ? null : new Path2D(CURSOR_ARROW);
 const route = (path: string, runId: string) => path.replace(":runId", encodeURIComponent(runId));
-const tileSize = (show: VerifyWatchShow) => show.head?.tiles[show.tile] ?? (show.tile === "phone" ? [392, 800] : [1280, 720]);
+const tileSize = (show: VerifyWatchShow, tile = show.tile) => show.head?.tiles[tile] ?? (tile === "phone" ? [392, 800] : [1280, 720]);
+const tileRatio = (show: VerifyWatchShow, tile: VerifyTile) => tileSize(show, tile)[1] / tileSize(show, tile)[0];
 
 function useVisibility() {
   const [visibility, setVisibility] = useState(() => document.visibilityState);
@@ -57,6 +58,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   const gate = verifyLiveGate(!closing, hidden, visibility);
   const [show, setShow] = useState(() => new VerifyWatchShow(live, verifyChosenTab(card.runId)));
   const [maximized, setMaximized] = useState(false);
+  const [room, setRoom] = useState<number | null>(null);
   const expanded = (hosted ? hosted.maximized : maximized) && !inline && !phone;
   const [, setVersion] = useState(0);
   const [, setDecoded] = useState(0);
@@ -249,6 +251,20 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     }
   }
 
+  // the phone inline frame fits the chat's view, so the whole replay plays on screen
+  useLayoutEffect(() => {
+    const frame = frameRef.current, stage = stageRef.current;
+    let pane = frame?.parentElement;
+    while (pane && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
+    if (!inline || !frame || !stage || !pane) return;
+    const measure = () => setRoom(pane.clientHeight - (frame.offsetHeight - stage.offsetHeight));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [inline]);
+
   const tile = show.tile;
   const head = show.head;
   useLayoutEffect(() => {
@@ -266,6 +282,8 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   const caption = reel && <div className="verify-watch-caption">{captionOf(reel)}</div>;
   // in the chat a caption arriving mid-replay would grow the card, so the slot holds the tallest one from the start
   const held = inline && (show.showing || show.phase === "after") ? [...verifyReel(card.issues ?? []), ...show.reels] : [];
+  // and the stage holds the tallest tile the reel will turn to, letterboxing the others
+  const stageTile = [tile, ...held.map(issue => issue.tile)].reduce((a, b) => tileRatio(show, b) > tileRatio(show, a) ? b : a);
   const issues = show.end?.issues ?? [];
   const seconds = Math.round(show.ms / 1000);
   const current = PARTS.find(part => !show.parts.has(part));
@@ -295,7 +313,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
         <span className="verify-watch-url" title={head?.page}>{head?.site ?? card.site}</span>
       </div>
       {error && <div className="verify-watch-error" role="alert">{c.retry}</div>}
-      <div ref={stageRef} className="verify-watch-stage" data-tile={tile} data-pending={awaiting() || undefined} style={{ aspectRatio: tileSize(show).join(" / ") }}>
+      <div ref={stageRef} className="verify-watch-stage" data-tile={tile} data-pending={awaiting() || undefined} style={{ aspectRatio: tileSize(show, stageTile).join(" / "), ["--verify-room" as string]: room === null ? undefined : `${room}px` }}>
         <canvas ref={canvasRef} aria-label={c.watch} />
         {(show.phase === "after" || show.phase === "done" || show.phase === "reel" || show.phase === "clean") && show.end && (
           <div className="verify-watch-pill" data-top={pillTop || undefined}>{c.checks(show.checks)} · <span data-red={issues.length > 0 || undefined}>{issues.length ? c.problems(issues.length) : c.clean}</span></div>

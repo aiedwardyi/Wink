@@ -246,6 +246,31 @@ it("holds the phone inline caption's room through a bot-fixed chain", async () =
   expect(seen).toEqual(["slot", "end"]);
 });
 
+it("holds the tallest stage through a phone inline reel that turns from desktop to phone", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  const issues: VerifyIssue[] = [
+    { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] },
+    { checker: "NAV", tile: "phone", rule: "phone menu gone", where: "header nav", measured: "Navigation links disappear at phone width", box: [0, 0, 300, 40] },
+  ];
+  const done: VerifyCardData = { ...card, runId: "run-mixed", status: "completed", live: undefined, replay: ["run-1"], issues };
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", issues)));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: done, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  const stage = () => host.querySelector<HTMLElement>(".verify-watch-stage")!;
+  const seen: string[] = [], tiles = new Set<string>();
+  for (let i = 0; i < 200 && !host.querySelector(".verify-watch-again"); i++) {
+    if (seen.at(-1) !== stage().style.aspectRatio) seen.push(stage().style.aspectRatio);
+    tiles.add(stage().dataset.tile!);
+    await tick(1);
+  }
+  expect(tiles).toEqual(new Set(["desktop", "phone"]));
+  expect(seen).toEqual(["392 / 800"]);
+});
+
+it("caps the phone inline stage to the chat view's room", () => {
+  expect(watchRule(".verify-watch-frame[data-inline] .verify-watch-stage")).toContain("var(--verify-room, 460px)");
+});
+
 it.each([false, true])("keeps docked captions outside the target's stage (live=%s)", async live => {
   const tick = animationClock();
   vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [{ checker: "LINKS", tile: "desktop", rule: "self sign-up", where: "a#apply", measured: 'Sign-up link "#apply" points at itself; click the link', box: [540, 300, 200, 64] }])));
