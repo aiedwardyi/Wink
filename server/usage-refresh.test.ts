@@ -53,6 +53,13 @@ it("shares the usage-read availability policy with wait admission", () => {
 });
 
 describe("usage refresh route result", () => {
+  it("omits a background note limit when no usage window was observed", () => {
+    const report = { windows: [], observedAt: reset, noteLimit: { resetsAt: null } };
+    expect(usageRefreshResponse("codex", { report, retryAt: 0 }).report).toBeUndefined();
+    expect(usageRefreshResponse("codex", { report: { ...report, windows: claudeWindows }, retryAt: 0 }).report)
+      .toEqual({ windows: claudeWindows, observedAt: reset, ageMs: expect.any(Number) });
+  });
+
   it("preserves every Codex bucket in a read instead of using only the compatibility bucket", async () => {
     const refresh = createUsageRefresh({ rpc: async () => ({ ...fixtures.codex,
       rateLimitsByLimitId: { spark: { primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Date.parse(reset) / 1000 } } } }) });

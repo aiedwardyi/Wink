@@ -4,7 +4,7 @@ import { usageIdentity } from "../shared/usage-identity.ts";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngineId, UsageBoardEvent, UsageBoardFrame, UsageBoardRun, UsageBoardWindow } from "../src/lib/usage-board.ts";
 import { isInstanceId, type AccountDrain } from "./accounts.ts";
 import { CODEX_CREDIT_NAME } from "./codex-credit.ts";
-import type { RateLimitsReport } from "./rate-limits-store.ts";
+import { observedRateLimits, type RateLimitsReport } from "./rate-limits-store.ts";
 import type { createUsageHistory } from "./usage-history.ts";
 
 type AccountRow = {
@@ -67,7 +67,7 @@ export function createUsageBoard(deps: Deps) {
   const identities = new Map<string, string | null>();
 
   for (const row of deps.accounts.list()) {
-    const report = deps.rateLimits.get(row.id);
+    const report = observedRateLimits(deps.rateLimits.get(row.id));
     const at = report ? Date.parse(report.observedAt) : NaN;
     if (report && Number.isSafeInteger(at) && at >= 0) reports.set(row.id, { generation: row.generation, at, windows: report.windows.map((window) => ({ ...window })) });
   }
@@ -134,6 +134,7 @@ export function createUsageBoard(deps: Deps) {
   }
 
   function recordReport(accountId: string, report: RateLimitsReport) {
+    if (!observedRateLimits(report)) return;
     const row = accounts().find((row) => row.id === accountId);
     const at = Date.parse(report.observedAt);
     if (!row || !Number.isSafeInteger(at) || at < 0) return;
@@ -217,7 +218,7 @@ export function createUsageBoard(deps: Deps) {
       const fallback = row.credit ? CODEX_CREDIT_NAME : engine === "claude" || engine === "codex" || engine === "grok" ? `${titles[engine]} ${number}` : titles[engine];
       // Validated user labels may match the provider's sign-in name.
       const nickname = named?.nickname && named.name === named.nickname && !named.nickname.includes("@") ? named.nickname : null;
-      const report = deps.rateLimits.get(row.id);
+      const report = observedRateLimits(deps.rateLimits.get(row.id));
       const windows: UsageBoardWindow[] = (report?.windows ?? []).filter((window) => Number.isFinite(window.usedPercent)).map((window) => ({
         id: text(window.id, "other"), kind: kind(window), usedPercent: window.usedPercent,
         resetsAt: Number.isFinite(window.resetsAt) ? window.resetsAt : null,

@@ -16,6 +16,7 @@ import { antigravityRateLimitWindows, codexRateLimitWindows, grokRateLimitWindow
 import { createMspChannel, MspRpcError, uuidv7 } from "./drivers/msp/protocol.ts";
 import { augmentedPath, toWslPath } from "./env-path.ts";
 import { execCli, killCliTree, spawnCli } from "./procs.ts";
+import { observedRateLimits, type RateLimitsReport } from "./rate-limits-store.ts";
 import { parseJson, type JsonValue } from "./schema.ts";
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
 import { awaitDyingAppServers, codexHome, retireAppServer } from "./drivers/codex-catalog.ts";
@@ -23,7 +24,7 @@ import { parseCodexAccount } from "./drivers/codex-account.ts";
 import { codexDirect } from "./drivers/codex-direct.ts";
 import { createClaudeUsageProbe, readClaudeUsage } from "./claude-usage-probe.ts";
 
-type Report = { windows: RateLimitWindow[]; observedAt: string };
+type Report = RateLimitsReport;
 export type UsageRefreshStatus =
   | "fresh"
   | "retained"
@@ -41,6 +42,7 @@ const codexUsage = z.object({ limitId: z.string().nullish(), primary: codexUsage
 const rpcMessage = z.object({ id: z.number().optional(), method: z.string().optional(), result: z.json().optional(), error: z.object({ code: z.number() }).optional() });
 
 export function usageReportWithAge(report: Report, now = Date.now()) {
+  if (!observedRateLimits(report)) return;
   return { windows: report.windows, observedAt: report.observedAt, ageMs: Math.max(0, now - Date.parse(report.observedAt)) };
 }
 

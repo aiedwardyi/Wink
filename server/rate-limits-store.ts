@@ -10,6 +10,10 @@ import type { RateLimitWindow } from "./contracts.ts";
 export type RateLimitsReport = { windows: RateLimitWindow[]; observedAt: string; noteLimit?: { resetsAt: number | null } };
 export type RateLimitsMap = Map<string, RateLimitsReport>;
 
+export function observedRateLimits(report: RateLimitsReport | undefined): RateLimitsReport | undefined {
+  return report?.noteLimit && !report.windows.length ? undefined : report;
+}
+
 const windowSchema = z.object({
   id: z.string(),
   usedPercent: z.number().finite(),
