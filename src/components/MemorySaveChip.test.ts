@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import type { Message } from "@/state/store";
 
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
+
+import { landFold, spyReveal } from "./Fold.test-land";
 import { MemorySaveChip, MemorySaveRun } from "./MemorySaveChip";
 
 const store = vi.hoisted(() => ({ dispatch: vi.fn() }));
@@ -78,6 +81,25 @@ describe("MemorySaveRun", () => {
     await act(async () => root.render(createElement(MemorySaveRun, { messages, children: createElement("i", null, "notes") })));
     return { host, root };
   }
+
+  it("brings its first note into view once it has opened, never while closing", async () => {
+    const { host, root } = await renderRun([NOW - 60_000, NOW - 59_000]);
+    const scrolled = spyReveal();
+    try {
+      await act(async () => host.querySelector("button")!.click());
+      expect(scrolled).not.toHaveBeenCalled();
+      await landFold(host.querySelector("i")!);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(host.querySelector("i"));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      await act(async () => host.querySelector("button")!.click());
+      await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      scrolled.mockRestore();
+      await act(async () => root.unmount());
+    }
+  });
 
   it("draws the folded row flat, like the single save", async () => {
     const { host, root } = await renderRun([NOW - 60_000, NOW - 59_000]);

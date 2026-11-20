@@ -19,6 +19,7 @@ vi.mock("@/lib/usage-auto-refresh", async (original) => ({ ...await original<typ
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { LIFT_SCALE } from "@/lib/use-touch-drag";
+import { landFold, spyReveal } from "./Fold.test-land";
 import { UsageDesk } from "./UsageDesk";
 import { ChatPlanMeters } from "./ChatPlanMeters";
 import { AccountPicker } from "./UsageAccounts";
@@ -798,4 +799,27 @@ it("holds the quick view on screen, inert and fading, until its exit has run", a
   expect(view()?.hasAttribute("inert")).toBe(true);
   await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
   expect(view()).toBeNull();
+});
+
+it("brings the first account into view once a pressed engine has opened, never for Expand all or closing", async () => {
+  await mount();
+  const scrolled = spyReveal();
+  try {
+    const fold = '[data-usage-engine="claude"] [data-engine-fold]';
+    await click(fold);
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    await click(fold);
+    expect(scrolled).not.toHaveBeenCalled();
+    await landFold(q('[data-usage-engine="claude"] [data-account-row]')!);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(q('[data-usage-engine="claude"] [data-account-row]'));
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    await click("[data-fold-all]");
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    await click("[data-fold-all]");
+    for (const each of host.querySelectorAll("[data-usage-engine] [data-fold-soft]")) await landFold(each);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  } finally {
+    scrolled.mockRestore();
+  }
 });

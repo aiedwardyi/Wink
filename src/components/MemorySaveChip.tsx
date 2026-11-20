@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Brain, ChevronDown, Loader2 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { useStore, type Message } from "@/state/store";
 import { memorySaveTarget } from "@/lib/memory-recent";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { Fold } from "./Fold";
 
 const FLICKER_MS = 700;
@@ -46,6 +47,7 @@ export function MemorySaveRun({ messages, forceOpen = false, children }: { messa
   const { t } = useI18n();
   const saved = useSaved(messages[messages.length - 1].at);
   const [open, setOpen] = useState(forceOpen);
+  const notes = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
@@ -65,8 +67,8 @@ export function MemorySaveRun({ messages, forceOpen = false, children }: { messa
           <ChevronDown size={13} className={open ? "shrink-0 rotate-180 transition-transform" : "shrink-0 transition-transform"} />
         </button>
       </div>
-      <Fold open={open}>
-        <div className="flex flex-col gap-1 pt-1">{children}</div>
+      <Fold open={open} onOpened={() => revealOnOpen(notes.current?.querySelector<HTMLElement>(":scope > *") ?? null)}>
+        <div ref={notes} className="flex flex-col gap-1 pt-1">{children}</div>
       </Fold>
     </div>
   );

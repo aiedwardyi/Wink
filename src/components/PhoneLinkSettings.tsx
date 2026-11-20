@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import { onThisPc } from "@/lib/devices-setup";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { ConnectDevices } from "./ConnectDevices";
 import { DeviceRow, DevicesGroup, YourPcs } from "./DeviceRows";
 import { PhoneAccessSettings } from "./PhoneAccessSettings";
@@ -27,6 +28,7 @@ export function PhoneLinkSettings() {
     setTailscaleOpen(true);
     otherWays.current?.scrollIntoView?.({ block: "start" });
   }, []);
+  const reveal = (id: string) => () => revealOnOpen(otherWays.current?.querySelector<HTMLElement>(`#${id} > div > *`) ?? null);
 
   if (!onThisPc()) {
     return <div data-phone-settings className="rounded-xl bg-card p-4"><ConnectDevices /></div>;
@@ -41,11 +43,11 @@ export function PhoneLinkSettings() {
           {t("settings.devices.otherWays")}
           <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-transform group-hover:text-ink motion-reduce:transition-none", !othersOpen && "-rotate-90")} />
         </button>
-        <Fold open={othersOpen} id="devices-other">
+        <Fold open={othersOpen} id="devices-other" onOpened={reveal("devices-other")}>
           <DevicesGroup label={t("settings.devices.otherWays")}>
             <DeviceRow name={t("settings.devices.codeInstead")} sub={t("settings.devices.codeInsteadHelp")}
               control={<button type="button" disabled={!on} aria-expanded={pairOpen} aria-controls="phone-pairing" onClick={() => setPairOpen((open) => !open)} className={ROW_BUTTON}>{t("settings.devices.getCode")}</button>}>
-              <Fold open={pairOpen} id="phone-pairing">
+              <Fold open={pairOpen} id="phone-pairing" onOpened={reveal("phone-pairing")}>
                 <div className="pt-3"><PhonePairing onPaired={onPaired} onClose={closePairing} /></div>
               </Fold>
             </DeviceRow>
@@ -53,7 +55,7 @@ export function PhoneLinkSettings() {
               control={<button type="button" aria-expanded={tailscaleOpen} aria-controls="devices-tailscale" onClick={() => setTailscaleOpen((open) => !open)} className={ROW_BUTTON}>{t("settings.devices.setUp")}</button>} />
           </DevicesGroup>
           {/* Below the box: the store QRs need the full width at 360 px. */}
-          <Fold open={tailscaleOpen} id="devices-tailscale">
+          <Fold open={tailscaleOpen} id="devices-tailscale" onOpened={reveal("devices-tailscale")}>
             <div className="pt-3"><ConnectDevices /></div>
           </Fold>
         </Fold>

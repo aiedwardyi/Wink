@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api, useOptionalStoreDispatch, useStore, type InstanceInfo } from "@/state/store";
 import { EngineMark } from "./EngineMark";
@@ -6,6 +6,7 @@ import { AccountConnections, AccountHead, ConnectionRow, SignInRow } from "./Acc
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { groupAccounts } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { engineChecking, installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
@@ -98,6 +99,7 @@ export function EnginesSettings() {
   const groups = groupAccounts(state.instances);
   const reload = refreshInstances;
   const [showAll, setShowAll] = useState(false);
+  const more = useRef<HTMLDivElement>(null);
   // Same guard as the store's focus probe: a rescan can flash a window that
   // steals focus, so only a real trip away (a terminal sign-in) rescans.
   useEffect(() => {
@@ -144,8 +146,8 @@ export function EnginesSettings() {
       {missing.length > 0 && <>
         <button type="button" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}
           className={cn(ROW_BUTTON, "self-start")}>{t("engines.moreEngines")}</button>
-        <Fold open={showAll}>
-          <div className="flex min-w-0 flex-col gap-4">
+        <Fold open={showAll} onOpened={() => revealOnOpen(more.current?.querySelector<HTMLElement>(":scope > *") ?? null)}>
+          <div ref={more} className="flex min-w-0 flex-col gap-4">
             {missing.map((instance) => <EngineRow key={instance.instanceId} instance={instance} />)}
           </div>
         </Fold>

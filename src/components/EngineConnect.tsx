@@ -8,6 +8,7 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
 import { EngineSetup, EngineSignIn, engineChecking, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { ProviderBrandMark } from "./ProviderIcons";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { Fold } from "./Fold";
 import { trackOnboard } from "@/lib/usage-stats";
 
@@ -108,7 +109,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       <div className="flex flex-col gap-2">{primary.map((instance) => row(instance, instance.driverKind === "claudeAgent"))}</div>
       <h2 className="my-5 flex items-center gap-3 text-[12px] text-ink-secondary before:h-px before:flex-1 before:bg-hairline/50 after:h-px after:flex-1 after:bg-hairline/50">{t("engineConnect.others")}</h2>
       <div className="flex flex-col gap-2">{others.map((instance) => row(instance))}</div>
-      <Fold open={commands}>
+      <Fold open={commands} onOpened={() => revealOnOpen(document.getElementById(commandsId)?.querySelector<HTMLElement>(":scope > *") ?? null)}>
         <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
           {engines.filter((instance) => !engineChecking(instance)).map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" />)}
         </div>
