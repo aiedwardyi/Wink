@@ -146,9 +146,13 @@ jobs:
           server/vps-routing.test.ts
 
   node-tests:
-    name: node tests (Windows)
+    name: node tests (Windows, ${{ matrix.shard }}/2)
     runs-on: windows-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
@@ -171,13 +175,22 @@ jobs:
             ~/AppData/Local/electron-builder/Cache
           key: ${{ runner.os }}-${{ runner.arch }}-electron-${{ steps.electron.outputs.version }}-v1
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test:updater
-      - run: pnpm test:desktop-viewer
-      - run: pnpm test:package-link
-      - run: pnpm test:open-file
-      - run: pnpm test:server-boot-probe
-      - run: pnpm test:packaged-server
+      - if: matrix.shard == 1
+        run: pnpm test:updater
+      - if: matrix.shard == 1
+        run: pnpm test:desktop-viewer
+      - if: matrix.shard == 1
+        run: pnpm test:package-link
+      - if: matrix.shard == 2
+        run: pnpm test:open-file
+      - if: matrix.shard == 2
+        run: pnpm test:server-boot-probe
+      - if: matrix.shard == 2
+        run: pnpm test:packaged-server
+      # test:terminal alone ran past the 10-minute cap on slow runners; each job takes half its files.
       - run: pnpm test:terminal
+        env:
+          NODE_OPTIONS: --test-shard=${{ matrix.shard }}/2
 
   test:
     name: typecheck + test (Windows)
