@@ -18,7 +18,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe"><b>Download for Windows</b></a> (10 / 11, x64) · <a href="https://github.com/aiedwardyi/orbit-releases/releases">All releases</a>
+  <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe"><b>Download for Windows</b></a> (10 / 11, x64) · <a href="https://github.com/aiedwardyi/orbit-releases/releases">All releases</a> · <a href="https://getwink.dev">Website</a>
+  <br>
+  <a href="https://youtu.be/dBWTcXMwIsU">Watch the demo</a>
   <br>
   Built by <a href="https://github.com/aiedwardyi">Edward Yi</a>
 </p>
@@ -42,22 +44,61 @@ Each worker is the vendor's own CLI in its own terminal. The lead bot is told to
 
 <img src="./assets/readme/tour-terminal.png" width="748" alt="Terminal tabs labeled LIMITER, DOCS and REVIEW with model and effort, over the LIMITER worker's session.">
 
-**4. Never loses the plot**<br>
+**4. Wink trusts the checks, not the AI**<br>
+Live Verify opens the page in a real browser, clicks through it at phone size and hands anything broken back to the bot.
+
+<!-- VIDEO: en-new.mp4 -->
+<img src="./assets/readme/tour-verify.png" width="880" alt="Live Verify checking a sample music site: check labels over the desktop view, with a nav clicker and a modal clicker beside it, 248 of 662 checks done.">
+
+**5. Memory that carries across sessions and keeps getting better**<br>
 One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carries across models and to your phone, and across PCs with Sync on.
 
 <img src="./assets/readme/tour-memory.png" width="880" alt="Atlas's Memory page: Long-Term Memory, Live Now with the task in progress, Knowledge files and Habits.">
 
-**5. Your bots teach each other**<br>
+**6. Every decision, on a Timeline**<br>
+When you decide something in chat, Wink writes it down: the options, the one you chose, and your exact words. Change your mind later and the old choice gets crossed out.
+
+<!-- VIDEO: timeline-demo-after.mp4 -->
+<img src="./assets/readme/tour-timeline.png" width="440" alt="A Timeline of picks: each one has the chosen option circled and the others crossed out.">
+
+**7. Your bots teach each other**<br>
 Your bots share a private Forum. When one makes a mistake and finds the fix, it posts it. When another gets stuck, it searches the Forum first.
 
 <img src="./assets/readme/tour-forum.png" width="880" alt="The Forum: posts from five bots tagged Fix, Tip, Stuck and Handoff, with the bot, its model and the time on each.">
 
-**6. The same chats on your phone**<br>
+**8. The same chats on your phone**<br>
 Over your Tailscale tailnet or a [relay you host](relay/README.md), with a push when a bot needs you.
 
 <p align="center">
   <img src="./assets/readme/tour-phone.png" width="859" alt="Atlas's chat and worker rows on a phone.">
 </p>
+
+## How it works
+
+```mermaid
+flowchart LR
+  you([You]) --> lead["Lead bot<br/>on any engine"]
+  lead -->|"one pane per worker"| cli["Engine's own CLI<br/>in a pseudo-terminal"]
+  cli -->|"works in"| wt[("Git worktree<br/>per worker")]
+  cli -->|"orbit-msg --report"| lead
+  lead -->|"after a turn that edits a page"| lv["Live Verify<br/>real browser, desktop and phone"]
+  lv -->|"what broke"| lead
+```
+
+- **Official CLIs, no API keys.** Each engine is its vendor's own CLI, signed in with your login, running in a pseudo-terminal (`node-pty`).
+- **Localhost and a token.** The server binds `127.0.0.1`, rejects foreign Host and Origin headers, and makes a fresh token each launch.
+- **Panes get no secrets.** A pane's shell starts without Wink's variables or anything named like a token, secret, password or API key. Its one grant posts its report to the bot that opened it.
+- **Worktrees are a rule, not a lock.** The lead bot's playbook puts each worker in its own git worktree. Wink doesn't enforce it.
+
+## Numbers
+
+| | Wink | Compared with | |
+|---|---|---|---|
+| Launch to typing | 1.15 s | 1.12 s, bare Claude Code | [how](docs/benchmarks.md#launch-to-typing) |
+| Memory with 20 chats | 361 MB | 1,000 MB, bare Claude Code | [how](docs/benchmarks.md#memory-with-20-chats) |
+| Model picker open (`Alt+M`) | 67 ms | 136 ms before [#2048](https://github.com/aiedwardyi/Wink/pull/2048) | [how](docs/benchmarks.md#model-picker-open) |
+
+One run on one Windows PC per row. Method, date, machine and source for each are in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Quickstart
 
@@ -94,6 +135,8 @@ Engine logins stay in each CLI's own store. Wink drives the CLI with the session
 - Usage stats are anonymous and never include chats, files or names. Turn them off at first run or in **Settings > General**. GlitchTip error reports are off by default.
 - Listens on this PC only, behind a per-launch token.
 - Engine logins stay in each CLI's own store.
+- New bots start in **Auto**: every tool request in a turn you start is approved, destructive ones included. On this PC's own screen, destructive or secret-reading actions still ask. In a turn nobody started (a schedule or a wake), Auto skips destructive commands, deletes outside the project folder and desktop control, and the bot says what it skipped.
+- Workers run with their CLI's permission prompts off: `claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`, `muse --yolo`, `grok --always-approve`, `agy --dangerously-skip-permissions`.
 
 <details>
 <summary>Everything Wink listens on, sends and stores</summary>
@@ -140,13 +183,11 @@ This is everything Wink listens on, sends and stores, usage stats included.
 
 **Approvals**
 
-- New bots start in **Auto**: every tool request in a turn you start is approved, destructive ones included. On this PC's own screen, destructive or secret-reading actions still ask. In a turn nobody started (a schedule or a wake), Auto skips destructive commands, deletes outside the project folder and desktop control, and the bot says what it skipped.
 - **Ask** asks before any tool call you haven't always-allowed, and always before destructive or secret-reading ones. Codex runs in its workspace-write sandbox, unless you hand-edit an instance's config to `fullAuto` (no Settings screen does), which turns the sandbox off. Antigravity can't ask in print mode, so Ask has no effect there.
 - Engine CLIs start without a shell and without your `*_KEY`, `*_TOKEN` and `*_SECRET` variables, except what a driver needs.
 
 **Workers**
 
-- Workers run with their CLI's permission prompts off: `claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`, `muse --yolo`, `grok --always-approve`, `agy --dangerously-skip-permissions`.
 - The built-in playbook tells bots to run each worker in its own git worktree, never your checkout. That is an instruction to the bot, not something Wink enforces.
 - Pane shells don't inherit Wink's tokens or secrets, except `ORBIT_MSG_AUTH`: a token that only lets that one pane post its report to the bot that opened it. Panes close when Wink quits.
 
@@ -164,6 +205,9 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
+<details>
+<summary>Platform status and packages</summary>
+
 | Platform | Package | Status |
 |---|---|---|
 | Windows 10 / 11 (x64) | Installer with in-app updates | Supported |
@@ -171,6 +215,8 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md).
 | Linux | Manual workflow (AppImage, deb) | No release yet |
 
 `orbit-msg` reports are Windows only. Elsewhere the planner reads the worker's pane.
+
+</details>
 
 ## Build from source
 
@@ -184,6 +230,9 @@ pnpm package:win    # installer in release/
 ```
 
 ## Troubleshooting
+
+<details>
+<summary>SmartScreen, missing engines, worker reports, phone link, updates</summary>
 
 **SmartScreen blocks the installer**
 The installer isn't code-signed yet. Choose **More info**, then **Run anyway**.
@@ -199,6 +248,8 @@ The **Phone link** card shows once Tailscale is installed and logged in on this 
 
 **Wink is on an old version**
 Updates are checked hourly. Press the update button when it appears, or download the latest [Wink-setup.exe](https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe).
+
+</details>
 
 ## Contributing
 
