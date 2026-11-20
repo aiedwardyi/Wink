@@ -30,9 +30,7 @@
 **1. Switch models mid-thread**<br>
 Pick a model and an effort for each bot, and it keeps its whole thread. `Alt+M` opens the picker.
 
-<p align="center">
-  <img src="./assets/readme/tour-models.png" width="560" alt="The model picker open on Atlas: Opus 5.5 at High effort, ringed in Anthropic orange, with Fable 5 and Sonnet 5.5 above and below.">
-</p>
+<img src="./assets/readme/tour-models-v2.png" width="880" alt="The Dial model picker: GPT-6.2 Sol at High effort, with Intelligence, Coding and Cost for that pick.">
 
 **2. One job. Workers on every engine**<br>
 Ask once. Your orchestrator splits the job, picks each worker's engine, model and effort, and checks the work before it lands. You talk to one chat.
