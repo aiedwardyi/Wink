@@ -536,6 +536,54 @@ describe("a delete a restart cuts short", () => {
     });
     expect(cuts).toBeGreaterThan(2);
   });
+
+  // the refs set the order the pull meets the tombstones in: the lower reply first, the upper first, the lowest first
+  it.each([
+    { deleted: "a reply and the reply above it, lower one first", refs: ["reply:r1", "reply:r2"], order: [1, 0] },
+    { deleted: "a reply and the reply above it, upper one first", refs: ["reply:r2", "reply:r1"], order: [0, 1] },
+    { deleted: "three replies in a row, bottom up", refs: ["reply:r1", "reply:r3", "reply:r2"], order: [2, 1, 0] },
+  ])("a sync cut while it takes another PC's delete of $deleted boots every reply under the nearest post above it and ends as the sync that was not cut", ({ refs, order }) => {
+    const pair = () => {
+      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+      const a = home("pc-a");
+      const b = home("pc-b");
+      const stuck = a.board.post(STUCK);
+      let parent = stuck.id;
+      const replies = refs.map((ref) => (parent = a.board.post({ author_bot_id: BOARD_USER, parent_id: parent, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: ref }).id));
+      const under = a.board.post({ author_bot_id: "carbon", parent_id: parent, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+      for (const board of [a.board, b.board, a.board, b.board]) board.sync(folder, ids);
+      a.clock.at = 2_000;
+      for (const n of order) a.board.remove(replies[n]);
+      a.board.sync(folder, ids);
+      return { folder, a, b, stuck, under };
+    };
+    const settled = (p: ReturnType<typeof pair>) => {
+      const b = restart(p.b.dir, "pc-b");
+      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
+      return [listed(p.a.board), listed(b)];
+    };
+    const kept = new Map(pair().b.board.list().map((post) => [post.id, post.parent_id]));
+    const nearest = (board: Board) => {
+      const shown = new Set(board.list().map((post) => post.id));
+      return board.list().map((post) => {
+        let up = kept.get(post.id) ?? null;
+        while (up && !shown.has(up)) up = kept.get(up) ?? null;
+        return [post.id, up];
+      });
+    };
+    const whole = pair();
+    whole.b.board.sync(whole.folder, ids);
+    const want = settled(whole);
+    const ends = [[whole.stuck.id, null], [whole.under.id, whole.stuck.id]];
+    expect(want).toEqual([ends, ends]);
+    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => {
+      const boot = restart(p.b.dir, "pc-b");
+      expect(listed(boot), at).toEqual(nearest(boot));
+      expect(listed(restart(p.b.dir, "pc-b")), at).toEqual(listed(boot));
+      expect(settled(p), at).toEqual(want);
+    });
+    expect(cuts).toBeGreaterThan(2);
+  });
 });
 
 describe("a post written after its twin was deleted", () => {

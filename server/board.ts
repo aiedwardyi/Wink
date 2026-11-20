@@ -275,6 +275,12 @@ export function createBoard(options: BoardOptions) {
 
   const lift = (id: string, parent: string | null) => {
     const at = now();
+    // past every deleted reply above, as prune walks them, so a reply never lands under a post that is gone
+    const seen = new Set<string>();
+    while (parent && gone().get(parent)?.parent_id && !seen.has(parent)) {
+      seen.add(parent);
+      parent = gone().get(parent)?.parent_id ?? null;
+    }
     for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: parent, updated_at: at, pc_id: options.pcId() });
   };
 
@@ -435,19 +441,34 @@ export function createBoard(options: BoardOptions) {
           else moved.set(from, [post]);
         }
       }
-      for (const [id, tombstone] of tombstones) {
+      const kinds = [...tombstones].map(([id, tombstone]): [string, Tombstone] => {
         const post = candidates.get(id);
         const replyParent = post && ownReply(post) ? post.parent_id : null;
-        const kind = tombstone ?? (replyParent ? { parent_id: replyParent } : null);
-        const lifted = kind?.parent_id ? moved.get(id) : undefined;
-        // the replies the deleting PC moved up land before the post leaves, so none names a missing post
-        if (lifted) {
-          // tombstone first lets a restart finish the delete, but it would also lift a reply this PC left under the post
-          if (!stays.has(id)) keep(id, kind);
-          for (const child of lifted) {
-            write(child);
-            pulled++;
-          }
+        return [id, tombstone ?? (replyParent ? { parent_id: replyParent } : null)];
+      });
+      const above = new Map(kinds.map(([id, kind]) => [id, kind?.parent_id]));
+      const depth = (id: string) => {
+        const seen = new Set<string>();
+        for (let at = posts().get(id)?.parent_id; at && !seen.has(at); at = posts().get(at)?.parent_id) seen.add(at);
+        return seen.size;
+      };
+      // a restart that finds a tombstone beside its post lifts every reply under it, so a reply that stays holds back that tombstone and those below it
+      const late = (id: string) => {
+        const seen = new Set<string>();
+        for (let at = id; above.get(at) && !seen.has(at); at = above.get(at)!) {
+          if (stays.has(at)) return true;
+          seen.add(at);
+        }
+        return false;
+      };
+      kinds.sort(([a], [b]) => depth(a) - depth(b));
+      // tombstones from the top down, so a restart lifts a reply past every deleted reply above it
+      for (const [id, kind] of kinds) if (!late(id)) keep(id, kind);
+      // posts from the bottom up, each after the replies the deleting PC moved off it, so none names a missing post
+      for (const [id, kind] of kinds.reverse()) {
+        for (const child of kind?.parent_id ? moved.get(id) ?? [] : []) {
+          write(child);
+          pulled++;
         }
         if (drop(id, kind)) pulled++;
         candidates.delete(id);
