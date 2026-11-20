@@ -10,6 +10,8 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { coldLoading } from "./cold-thread.ts";
+import type { TailRequest } from "./cold-thread-worker.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { DATA_DIR } from "./config.ts";
 import { SendSequencer } from "./send-idempotency.ts";
@@ -23,10 +25,12 @@ import type { SyncChange } from "./thread-sync-v2.ts";
 const roots: string[] = [];
 const servers: Server[] = [];
 const streams: ServerResponse[] = [];
+const heldLoads: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
   for (const stream of streams.splice(0)) stream.end();
   for (const server of servers.splice(0)) { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
+  for (const release of heldLoads.splice(0)) await release();
   for (const root of roots.splice(0)) await removeTempDir(root);
 });
 
@@ -134,7 +138,34 @@ it("reads only the rows that wrote files, then loads a long chat off the server 
   expect(store.messagesFor(bot.threadId)).toEqual(setup.messagesFor(bot.threadId));
 });
 
-// A chat several pages long that wrote a file, open in Map from a store that has not loaded it, its load's page reads held until `release`.
+function holdChatLoad(threadId: string) {
+  const post = Worker.prototype.postMessage;
+  const requests: TailRequest[] = [];
+  let firstPage: (() => void) | undefined;
+  let holding = true;
+  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: TailRequest, transfer) {
+    if (request.threadId === threadId) {
+      requests.push(request);
+      if (holding && "after" in request) {
+        firstPage = () => post.call(this, request, transfer);
+        return;
+      }
+    }
+    post.call(this, request, transfer);
+  });
+  const release = async () => {
+    holding = false;
+    firstPage?.();
+    firstPage = undefined;
+    await coldLoading(threadId);
+  };
+  heldLoads.push(async () => {
+    try { await release(); } finally { spy.mockRestore(); }
+  });
+  return { requests, release };
+}
+
+// A chat longer than one page, open in Map with its first load request held.
 async function loadingChat(more?: (setup: Store, bot: BotRecord) => void) {
   const { root } = repo();
   rmSync(DATA_DIR, { recursive: true, force: true });
@@ -143,32 +174,23 @@ async function loadingChat(more?: (setup: Store, bot: BotRecord) => void) {
   writeFileSync(join(root, "file.ts"), "const first = 2;\n");
   const { id: _id, at: _at, ...row } = edited([join(root, "file.ts")]);
   setup.appendMessage(bot.threadId, row);
-  for (let n = 0; n < 5_000; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+  withMessageTransaction(() => {
+    for (let n = 0; n < 5_000; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+  });
   more?.(setup, bot);
   const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
-  const post = Worker.prototype.postMessage;
-  const held: Array<() => void> = [];
-  let holding = true;
-  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: { threadId?: string; after?: number }, transfer) {
-    if (holding && request.threadId === bot.threadId && request.after !== undefined) held.push(() => post.call(this, request, transfer));
-    else post.call(this, request, transfer);
-  });
-  onTestFinished(() => spy.mockRestore());
+  const { requests, release } = holdChatLoad(bot.threadId);
   const map = await open([], undefined, undefined, { store, botId: bot.id });
   await map.until(data => data.workers.length > 0);
   map.close();
-  await vi.waitFor(() => expect(held).toHaveLength(1));
-  const release = () => {
-    holding = false;
-    for (const read of held.splice(0)) read();
-  };
+  expect(requests).toContainEqual(expect.objectContaining({ after: 0 }));
   return { store, bot, release };
 }
 
-function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: { sendId?: string }) => Promise<unknown>, pullSyncedThread: () => void, turnClaimed = false) {
+function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: { sendId?: string }) => Promise<unknown>, turnClaimed = false) {
   const noop = () => {};
   const routes = createBotChatRoutes({
-    cfg: {}, store, threadSyncGate: { enabled: false }, sendSequencer: new SendSequencer(), startTurn, pullSyncedThread, noteTalked: noop,
+    cfg: {}, store, threadSyncGate: { enabled: false }, sendSequencer: new SendSequencer(), startTurn, pullSyncedThread: noop, noteTalked: noop,
     ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: () => undefined, botHasActiveTurn: () => turnClaimed, instanceForBot: () => null,
     busyResumeThreads: new Set(), quick: { accountReady: () => true },
   } as unknown as Parameters<typeof createBotChatRoutes>[0]);
@@ -184,16 +206,16 @@ function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: 
 it("starts a send made while Map loads the chat before the load lands", async () => {
   const { store, bot, release } = await loadingChat();
   const loadedAtTurn: boolean[] = [];
-  // the load runs on from the send's pull, so a route that waits for it fails here rather than hangs
   const send = sendRoute(store, async (_botId, text, { sendId }) => {
     loadedAtTurn.push(store.loaded(bot.threadId));
     return { message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId }) };
-  }, release);
+  });
   const sendId = randomUUID();
   const { status, data } = await send(bot.id, { text: "sent right after Map opened", sendId });
   expect(loadedAtTurn).toEqual([false]);
   expect(status).toBe(202);
-  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  await release();
+  expect(store.loaded(bot.threadId)).toBe(true);
   expect(store.messagesFor(bot.threadId).filter(message => message.sendId === sendId).map(message => message.id)).toEqual([data.message.id]);
   expect(store.activeLeaf(bot.threadId)).toBe(data.message.id);
 });
@@ -205,25 +227,26 @@ it("answers a retry of a send stored before Map opened by its key while Map load
     stored = setup.appendMessage(made.threadId, { role: "user", kind: "text", text: "sent before Map opened", sendId });
   });
   const startTurn = vi.fn(async () => ({}));
-  const send = sendRoute(store, startTurn, release);
+  const send = sendRoute(store, startTurn);
   const retry = await send(bot.id, { text: "sent before Map opened", sendId });
   expect(store.loaded(bot.threadId)).toBe(false);
   expect(retry).toMatchObject({ status: 202, data: { message: { id: stored!.id } } });
   await expect(send(bot.id, { text: "something else", sendId })).rejects.toMatchObject({ status: 409 });
   expect(startTurn).not.toHaveBeenCalled();
-  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  await release();
+  expect(store.loaded(bot.threadId)).toBe(true);
 });
 
 it("queues a send made while a turn waits for Map's load without reading the chat", async () => {
   const { store, bot, release } = await loadingChat();
   onTestFinished(() => void cancelQueuedSends(bot.id));
-  const send = sendRoute(store, vi.fn(), () => {}, true);
+  const send = sendRoute(store, vi.fn(), true);
   const { status, data } = await send(bot.id, { text: "one more thing", sendId: randomUUID() });
   expect(store.loaded(bot.threadId)).toBe(false);
   expect(status).toBe(202);
   expect(data).toMatchObject({ queued: true });
-  release();
-  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  await release();
+  expect(store.loaded(bot.threadId)).toBe(true);
 });
 
 it("answers a slim switch back to a chat Map is loading without reading it, and sends its frame only while the bot is on it", async () => {
@@ -252,8 +275,8 @@ it("answers a slim switch back to a chat Map is loading without reading it, and 
   expect(await switchTo(bot.threadId)).toBe(bot.threadId);
   expect(chat()).toEqual([]);
   expect(await switchTo(sibling)).toBe(sibling);
-  release();
-  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  await release();
+  expect(store.loaded(bot.threadId)).toBe(true);
   // the bot left the chat before it loaded, so that frame was never built
   expect(chat()).toEqual([]);
   expect(await switchTo(bot.threadId)).toBe(bot.threadId);
@@ -261,7 +284,7 @@ it("answers a slim switch back to a chat Map is loading without reading it, and 
   expect(broadcast.mock.calls.map(([payload]) => payload.bot.threadId)).toEqual([sibling, sibling, bot.threadId]);
 });
 
-it("keeps serving while it reads an unloaded chat's write rows from a large database", async () => {
+it("reads an unloaded chat's write rows on a worker before the chat loads", async () => {
   const { root } = repo();
   rmSync(DATA_DIR, { recursive: true, force: true });
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
@@ -269,26 +292,14 @@ it("keeps serving while it reads an unloaded chat's write rows from a large data
   writeFileSync(join(root, "file.ts"), "const first = 2;\n");
   const { id: _id, at: _at, ...row } = edited([join(root, "file.ts")]);
   setup.appendMessage(bot.threadId, row);
-  const database = messageDatabase();
-  const insert = database.prepare("INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES ('other', ?, 0, 'bot', 'activity', NULL, ?)");
-  const json = JSON.stringify({ id: "r", at: 0, role: "bot", kind: "activity", tool: { name: "Bash", ok: true, detail: { output: ["x".repeat(4_000)] } } });
-  database.exec("BEGIN");
-  for (let n = 0; n < 40_000; n++) insert.run(`r${n}`, json);
-  database.exec("COMMIT");
   const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
-  const loaded = store.loaded.bind(store);
-  const waits: number[] = [];
-  // Map asks whether the chat is loaded right before it reads the chat: a callback queued then must not wait on the read.
-  vi.spyOn(store, "loaded").mockImplementation(threadId => {
-    const queued = performance.now();
-    setImmediate(() => waits.push(performance.now() - queued));
-    return loaded(threadId);
-  });
+  const { requests } = holdChatLoad(bot.threadId);
   const map = await open([], undefined, undefined, { store, botId: bot.id });
   const shown = await map.until(data => data.workers.length > 0);
   map.close();
   expect(shown.workers[0].files.map(file => file.path)).toEqual(["file.ts"]);
-  expect(Math.max(...waits)).toBeLessThan(50);
+  expect(requests).toContainEqual(expect.objectContaining({ writes: true }));
+  expect(store.loaded(bot.threadId)).toBe(false);
 });
 
 it("reads no note for panes edited after every note of an unloaded chat", async () => {
@@ -336,20 +347,15 @@ function cleanPanes(count: number) {
   return { store: new Store(() => ({ instanceId: "claude", model: "opus" })), botId: bot.id };
 }
 
-it("keeps serving while it reads clean rows' reasons from an unloaded chat's notes", async () => {
-  const real = cleanPanes(10_000);
-  const loaded = real.store.loaded.bind(real.store);
-  const waits: number[] = [];
-  vi.spyOn(real.store, "loaded").mockImplementation(threadId => {
-    const queued = performance.now();
-    setImmediate(() => waits.push(performance.now() - queued));
-    return loaded(threadId);
-  });
+it("reads clean rows' reasons from an unloaded chat's notes on a worker", async () => {
+  const real = cleanPanes(200);
+  const threadId = real.store.bot(real.botId)!.threadId;
+  const { requests } = holdChatLoad(threadId);
   const map = await open([], undefined, undefined, real);
   expect((await map.until(() => true)).workers).toEqual([]);
   map.close();
-  await vi.waitFor(() => expect(loaded(real.store.bot(real.botId)!.threadId)).toBe(true));
-  expect(Math.max(...waits)).toBeLessThan(50);
+  expect(requests).toContainEqual(expect.objectContaining({ notesSince: 0 }));
+  expect(real.store.loaded(threadId)).toBe(false);
 });
 
 it("reads an unloaded chat's write rows and notes once across Map reads of clean rows", async () => {
