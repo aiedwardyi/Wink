@@ -182,7 +182,8 @@ jobs:
   test:
     name: typecheck + test (Windows)
     needs: [checks, vitest, vitest-linux, node-tests]
-    if: ${{ always() }}
+    # A cancelled run skips this check instead of turning it red.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
