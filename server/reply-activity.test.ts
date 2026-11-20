@@ -141,18 +141,15 @@ describe("replyActivity", () => {
 
   it("reads 200k rows in under 50 ms", () => {
     const now = local(11, 4);
-    const insert = messageDatabase().prepare(
-      "INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    );
-    const body = "x".repeat(400);
-    messageDatabase().exec("BEGIN");
-    for (let index = 0; index < 200_000; index++) {
-      const role = index % 3 ? "bot" : "user";
-      const kind = index % 4 ? "text" : "activity";
-      const at = now - Math.floor((index / 200_000) * 365 * 86_400_000);
-      insert.run(`t${index % 50}`, `r${index}`, at, role, kind, body, JSON.stringify({ id: `r${index}`, role, kind, text: body, at, engine: "claudeAgent" }));
-    }
-    messageDatabase().exec("COMMIT");
+    // The 220 MB load took 12 s row by row through the WAL and ran past the test timeout on a busy runner.
+    messageDatabase().exec("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; PRAGMA cache_size = -262144");
+    messageDatabase().prepare(
+      "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 199999), " +
+        "r AS (SELECT i, IIF(i % 3, 'bot', 'user') AS role, IIF(i % 4, 'text', 'activity') AS kind, ?1 - i * 157680 AS at FROM n) " +
+        "INSERT INTO messages (thread_id, id, at, role, kind, text, json) " +
+        "SELECT 't' || (i % 50), 'r' || i, at, role, kind, ?2, json_object('id', 'r' || i, 'role', role, 'kind', kind, 'text', ?2, 'at', at, 'engine', 'claudeAgent') " +
+        "FROM r ORDER BY i % 50, i",
+    ).run(now, "x".repeat(400));
     closeMessageDb();
     messageDatabase();
     const started = performance.now();
