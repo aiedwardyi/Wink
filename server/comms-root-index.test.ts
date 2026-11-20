@@ -87,7 +87,7 @@ it("lists every startTurn caller with its RootStart kind", () => {
 it("lists every runGroupMemberTurn caller with its RootStart kind", () => {
   const starts: Array<{ call: string; kind: RootStart["kind"]; root: string; tail?: string[] }> = [
     { call: "group.id, threadId, botId", kind: "automatic", root: 'rootForStart(threadId, { kind: "automatic" })' },
-    { call: "source.group.id, source.threadId, source.bot.id", kind: "automatic", root: 'rootForStart(source.threadId, { kind: "automatic" })' },
+    { call: "source.group.id, source.threadId, source.bot.id", kind: "automatic", root: 'guestWake ?? rootForStart(source.threadId, { kind: "automatic" })' },
     { call: "room.groupId, threadId, botId", kind: "inherit", root: "room.rootId ?? null", tail: ["room.askId", "room.hands", "room.chainAsk"] },
     { call: "groupId, threadId, next.id", kind: "inherit", root: "rootId", tail: ["undefined", "undefined", "asked"] },
     { call: "groupId, threadId, responder.id", kind: "human", root: "rootId" },
