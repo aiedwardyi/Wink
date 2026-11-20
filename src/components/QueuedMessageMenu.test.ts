@@ -62,10 +62,10 @@ async function mount(room = false, steering = true, coarse = false, locale = "en
     if (init?.method === "POST" && path.endsWith("/messages")) {
       const body = JSON.parse(String(init.body));
       posts.push({ path, body });
-      if (body.deliver === "after") return Response.json({ queued: true, queueId: `queue-${posts.length}`, threadId: bot.threadId });
+      if (body.deliver === "after") return Response.json({ queued: true, queueId: `queue-${posts.length}`, threadId: bot.threadId, actedAt: body.actedAt, sentAfterId: body.sentAfterId });
       return Response.json({ threadId: room ? group.threadId : bot.threadId, message: {
         id: `message-${posts.length}`, at: Date.now(), role: "user", kind: "text", text: body.text,
-        sendId: body.sendId, queueId: body.queueId, steered: !room,
+        sendId: body.sendId, queueId: body.queueId, steered: !room, actedAt: body.actedAt, sendSeq: body.sendSeq, sentAfterId: body.sentAfterId,
       } });
     }
     return Response.json({}, { status: 404 });
@@ -186,12 +186,16 @@ describe("queued message menu", () => {
     const ui = await mount();
     await ui.send("Enter path", false);
     await ui.send("held");
-    await ui.running();
     const queued = ui.posts[1]!;
+    expect(queued.body.sentAfterId).toBe("message-1");
+    await ui.emit({ kind: "message", threadId: "thread-helper", message: {
+      id: "later-reply", parentId: "message-1", at: Date.now(), role: "bot", kind: "text", text: "reply arrived while held",
+    } });
+    await ui.running();
     await ui.open("held");
     await ui.click("[data-menu-send-now]");
     expect(ui.posts[2]).toEqual({ path: ui.posts[0]!.path, body: {
-      text: "held", threadId: "thread-helper", sendId: queued.body.sendId, queueId: "queue-2", actedAt: queued.body.actedAt, sendSeq: queued.body.sendSeq, locale: "en",
+      text: "held", threadId: "thread-helper", sendId: queued.body.sendId, queueId: "queue-2", actedAt: queued.body.actedAt, sendSeq: queued.body.sendSeq, sentAfterId: queued.body.sentAfterId, locale: "en",
     } });
     expect(ui.deletes).toEqual([]);
     expect(ui.store().state.pendingQueued["thread-helper"] ?? []).toEqual([]);

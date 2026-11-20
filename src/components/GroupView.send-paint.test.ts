@@ -57,6 +57,12 @@ afterEach(async () => {
 type Frame = { kind: "hello"; resumed: boolean; cursor: string } | { kind: "message"; threadId: string; message: Message } | { kind: "group"; group: Partial<Group> };
 const frame = (value: Frame) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 const shown = (text: string) => host.querySelector('[role="log"]')?.textContent?.split(text).length ?? 0;
+const roomPosts = () => vi.mocked(fetch).mock.calls
+  .filter(([url]) => String(url) === "/api/groups/g1/messages")
+  .map(([, init]) => {
+    const { sendId, actedAt, waited, sendSeq, sentAfterId } = JSON.parse(String(init?.body)) as Message;
+    return { sendId, actedAt, waited, sendSeq, sentAfterId };
+  });
 
 async function mount(idle = false, messages = room.messages, extra: Partial<Group> = {}) {
   // the send POST never answers, as when the server holds it for sync
@@ -152,9 +158,7 @@ describe("GroupView sent lines", () => {
     // held with Ctrl+Enter at 100_000, sent as the room settled: Send now on the held line sends the same
     await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "held line", sendId: "s1", actedAt: 100_000, waited: true }));
     expect(order()).toEqual(["u1", "m1", "s1"]);
-    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/groups/g1/messages")!;
-    const { actedAt, waited, sendSeq } = JSON.parse(String(init?.body)) as Message;
-    const stored: Message = { ...line("g1", "held line", "s1"), at: 105_200, actedAt, waited, sendSeq };
+    const stored: Message = { ...line("g1", "held line", "s1"), ...roomPosts()[0]!, at: 105_200 };
     await frame({ kind: "message", threadId: "gt", message: stored });
     expect(order()).toEqual(["u1", "m1", "g1"]);
 
@@ -171,11 +175,9 @@ describe("GroupView sent lines", () => {
     await frame({ kind: "message", threadId: "gt", message: { id: "m1", at: 103_000, role: "bot", kind: "text", text: "the reply it waited for", from: { botId: "b1", name: "Atlas", color: "blue" } } });
     vi.setSystemTime(105_000);
     await frame({ kind: "group", group: { id: "g1", threadId: "gt", working: false } });
-    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/groups/g1/messages")!;
-    const { actedAt, waited, sendSeq } = JSON.parse(String(init?.body)) as Message;
     await act(async () => store.dispatch({ type: "select", id: "g1" }));
     expect(order()).toEqual(["u1", "m1", "s1"]);
-    await frame({ kind: "message", threadId: "gt", message: { ...line("g1", "held line", "s1"), at: 105_200, actedAt, waited, sendSeq } });
+    await frame({ kind: "message", threadId: "gt", message: { ...line("g1", "held line", "s1"), ...roomPosts()[0]!, at: 105_200 } });
     expect(order()).toEqual(["u1", "m1", "g1"]);
   });
 
@@ -200,16 +202,17 @@ describe("GroupView sent lines", () => {
       return frame({ kind: "message", threadId: "gt", message });
     };
     const member = (id: string, text: string, at: number): Message => ({ id, at, role: "bot", kind: "text", text, from: { botId: "b1", name: "Atlas", color: "blue" } });
-    const mine = (id: string, sendId: string, text: string, sent: number, at: number): Message => ({ ...line(id, text, sendId), at, steered: true, actedAt: sent, sendSeq: Number(sendId.slice(1)) });
+    const mine = (id: string, sendId: string, text: string, at: number): Message => ({ ...line(id, text, sendId), ...roomPosts().find((body) => body.sendId === sendId)!, at, steered: true });
 
     await at(100_000, () => send("s1", "이거 이상해"));
     await at(100_600, () => land(member("m1", "답장 1", 100_600)));
-    await at(100_900, () => land(mine("g1", "s1", "이거 이상해", 100_000, 100_900)));
+    await at(100_900, () => land(mine("g1", "s1", "이거 이상해", 100_900)));
     await at(101_500, () => send("s2", "메시지들"));
     await at(102_000, () => send("s3", "한 번 더"));
     await at(102_300, () => land(member("m2", "답장 2", 102_300)));
-    await at(102_600, () => land(mine("g2", "s2", "메시지들", 101_500, 102_600)));
-    await at(102_900, () => land(mine("g3", "s3", "한 번 더", 102_000, 102_900)));
+    await at(102_600, () => land(mine("g2", "s2", "메시지들", 102_600)));
+    await at(102_900, () => land(mine("g3", "s3", "한 번 더", 102_900)));
+    expect(roomPosts().map((body) => body.sentAfterId)).toEqual(["u1", "g1", "g1"]);
     expect(seen).toEqual(["U", "L1", "M1", "L2", "L3", "M2"]);
 
     const live = seen;

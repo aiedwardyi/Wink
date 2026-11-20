@@ -98,13 +98,15 @@ describe("gate E residual", () => {
     trace.push(["follow-up sent", order()]);
     const bodies = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/groups/g1/messages").map(([, init]) => JSON.parse(String(init?.body)) as Message & { actedAt?: number });
     expect(bodies).toHaveLength(2);
+    const anchor = extra.hosted ? undefined : reply.id;
+    expect(bodies.map((body) => body.sentAfterId)).toEqual([anchor, anchor]);
     const at1 = 105_000 + gap + 150;
-    const stored1: Message = { ...line("g1", "held line", "s1"), at: at1, actedAt: bodies[0]!.actedAt, waited: bodies[0]!.waited, sendSeq: bodies[0]!.sendSeq } as Message;
+    const stored1: Message = { ...line("g1", "held line", "s1"), at: at1, actedAt: bodies[0]!.actedAt, waited: bodies[0]!.waited, sendSeq: bodies[0]!.sendSeq, sentAfterId: bodies[0]!.sentAfterId };
     vi.setSystemTime(at1);
     await frame({ kind: "message", threadId: "gt", message: stored1 });
     trace.push(["held row stored", order()]);
     const at2 = at1 + 100;
-    const stored2: Message = { ...line("g2", "quick follow-up", "s2"), at: at2, actedAt: bodies[1]!.actedAt === undefined ? undefined : Math.min(bodies[1]!.actedAt, at2), sendSeq: bodies[1]!.sendSeq, steered: true } as Message;
+    const stored2: Message = { ...line("g2", "quick follow-up", "s2"), at: at2, actedAt: bodies[1]!.actedAt === undefined ? undefined : Math.min(bodies[1]!.actedAt, at2), sendSeq: bodies[1]!.sendSeq, sentAfterId: bodies[1]!.sentAfterId, steered: true };
     vi.setSystemTime(at2);
     await frame({ kind: "message", threadId: "gt", message: stored2 });
     trace.push(["follow-up row stored", order()]);
