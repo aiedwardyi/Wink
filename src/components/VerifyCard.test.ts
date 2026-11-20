@@ -410,7 +410,11 @@ it.each([
     replay = { top: 75, height: 1000 };
     await resized();
     expect(below.scrolled).toHaveBeenCalledTimes(2);
-    await act(async () => { below.chat.querySelector(".verify-watch-frame")!.dispatchEvent(new Event("touchmove", { bubbles: true })); });
+    await act(async () => {
+      const frame = below.chat.querySelector(".verify-watch-frame")!;
+      frame.dispatchEvent(new Event("touchmove", { bubbles: true }));
+      frame.dispatchEvent(new Event("scroll"));
+    });
     expect(below.revealed).not.toHaveBeenCalled();
     await act(async () => { below.chat.dispatchEvent(new Event("scroll")); });
     expect(below.revealed).toHaveBeenCalledTimes(1);
@@ -440,8 +444,10 @@ it.each([
   try {
     await act(async () => { moved.chat.dispatchEvent(new Event("touchmove", { bubbles: true })); });
     expect(moved.revealed).not.toHaveBeenCalled();
+    const unlisten = vi.spyOn(document, "removeEventListener");
     await act(async () => { moved.chat.dispatchEvent(new Event("scroll")); });
     expect(moved.revealed).toHaveBeenCalledTimes(1);
+    expect(unlisten).toHaveBeenCalledWith("pointerdown", expect.any(Function), { capture: true });
     replay = { top: 120, height: 677 };
     await resized();
     expect(moved.scrolled).not.toHaveBeenCalled();
