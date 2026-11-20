@@ -2,8 +2,8 @@ import { useState, type FormEvent } from "react";
 import { Check, ExternalLink, KeyRound, Loader2, LockKeyhole, RefreshCw, X } from "lucide-react";
 
 import {
+  credentialCardTarget,
   credentialResumeOutcome,
-  customCredentialId,
   customKeyRecord,
 } from "../../shared/credential-request";
 import { cn } from "@/lib/cn";
@@ -85,7 +85,7 @@ export function SecretRequestCard({
         const next = value.trim();
         const result: { saved: boolean; config: ConfigStatus } = await api("/api/credentials", {
           method: "POST",
-          body: JSON.stringify({ target: service ? customCredentialId(service.host) : secret.target, value: service ? JSON.stringify(customKeyRecord(service, next)) : next }),
+          body: JSON.stringify({ target: credentialCardTarget(secret), value: service ? JSON.stringify(customKeyRecord(service, next)) : next }),
         });
         if (result.saved !== true) throw new Error("credential-save-failed");
         dispatch({ type: "configStatus", config: result.config });

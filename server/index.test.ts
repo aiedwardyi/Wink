@@ -118,7 +118,7 @@ beforeAll(async () => {
         claudeHappy: {
           driver: "claudeAgent",
           displayName: "Fixture Claude Happy",
-          environment: { FAKE_CLAUDE_MODE: "happy" },
+          environment: { FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_PROMPT_LOG: join(home, "happy-prompts.ndjson") },
           config: { cli: FAKE_CLAUDE_CLI },
         },
         claudeStream: {
@@ -278,6 +278,7 @@ beforeAll(async () => {
       OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
       OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
       OMB_STATIC_DIR: staticDir,
+      ORBIT_REMOTE_AUTO: "0",
       // Production uses 15s. Keep the real timer path while making the
       // browser-visible heartbeat assertion fast and deterministic.
       OMB_SSE_HEARTBEAT_MS: "50",
@@ -3515,6 +3516,94 @@ describe("harness HTTP API", () => {
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${first.id}`);
       await api("DELETE", `/api/bots/${second.id}`);
+    }
+  });
+
+  it("settles matching credential cards across bots when settings saves a key", async () => {
+    const bots = await Promise.all(["First", "Second", "Dismissed"].map(async (name) => (await api("POST", "/api/bots", {
+      name,
+      modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
+    })).body.bot));
+    const host = "api.cron-job.org";
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const requestCard = async (bot: { id: string; threadId: string }, serviceHost = host) => {
+      const response = await fetch(`${BASE}/api/internal/request-credential`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, credentialId: "custom", service: { name: "Cron Key", host: serviceHost } }),
+      });
+      expect(response.status).toBe(201);
+      return z.object({ messageId: z.string() }).parse(await response.json()).messageId;
+    };
+    const stream = await openSse(`${BASE}/api/events`);
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = (outcome: string) => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes(`Wink credential update: the user ${outcome} Cron Key.`)).length
+      : 0;
+    const waitForIdle = () => expect.poll(async () => {
+      const current = (await api("GET", "/api/bots?messages=0")).body.bots;
+      return bots.every((bot) => current.find((row: { id: string }) => row.id === bot.id)?.busy === false);
+    }, { timeout: 10_000 }).toBe(true);
+    try {
+      await stream.until((frame) => frame.kind === "hello");
+      const cards = await Promise.all(bots.map((bot) => requestCard(bot)));
+      const other = await requestCard(bots[0], "api.other.example");
+      const cardRoute = (index: number, action: string) => api("POST", `/api/bots/${bots[index].id}/secret-cards/${cards[index]}/${action}`, {
+        threadId: bots[index].threadId,
+      });
+      expect((await cardRoute(2, "dismiss")).status).toBe(200);
+      await expect.poll(() => countResumes("declined to provide"), { timeout: 10_000 }).toBe(1);
+
+      const saved = { customKeys: { [host]: { name: "Cron Key", header: "authorization", prefix: "Bearer ", key: "test-only-cron-key" } } };
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      // The older client still acknowledges its own card after the save.
+      expect((await cardRoute(0, "provided")).status).toBe(200);
+      expect((await cardRoute(2, "provided")).status).toBe(409);
+      for (const messageId of cards.slice(0, 2)) {
+        await stream.until((frame) => frame.kind === "message.patch" && frame.message?.id === messageId && frame.message.secret?.provided, 2_000);
+      }
+      await expect.poll(() => countResumes("securely provided"), { timeout: 10_000 }).toBe(2);
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      expect((await cardRoute(0, "resume")).status).toBe(200);
+      await waitForIdle();
+
+      const hydrated = (await api("GET", "/api/bots")).body.bots;
+      for (const [index, messageId] of cards.entries()) {
+        const message = hydrated.find((bot: { id: string }) => bot.id === bots[index].id).messages.find((row: { id: string }) => row.id === messageId);
+        expect(message.secret).toMatchObject(index < 2 ? { provided: true, resumed: true } : { dismissed: true, resumed: true });
+        expect(message.secret[index < 2 ? "dismissed" : "provided"]).toBeUndefined();
+      }
+      const unrelated = hydrated.find((bot: { id: string }) => bot.id === bots[0].id).messages.find((row: { id: string }) => row.id === other);
+      expect(unrelated.secret.provided).toBeUndefined();
+      expect(countResumes("securely provided")).toBe(2);
+      expect(countResumes("declined to provide")).toBe(1);
+    } finally {
+      stream.close();
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await waitForIdle();
+      for (const bot of bots) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 30_000);
+
+  it("does not post a custom credential card when its host already has a key", async () => {
+    const bot = (await api("POST", "/api/bots", {})).body.bot;
+    const host = "api.already-saved.example";
+    const settings = "/api/config?secretStorage=external";
+    try {
+      expect((await api("PUT", settings, { customKeys: { [host]: { name: "Saved Key", header: "x-api-key", prefix: "", key: "test-only-key" } } })).status).toBe(200);
+      const response = await fetch(`${BASE}/api/internal/request-credential`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" },
+        body: JSON.stringify({ fromBotId: bot.id, credentialId: "custom", service: { name: "Different label", host } }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ alreadyConfigured: true, label: "Different label" });
+      const hydrated = (await api("GET", "/api/bots")).body.bots.find((row: { id: string }) => row.id === bot.id);
+      expect(hydrated.messages.some((row: { kind: string }) => row.kind === "secret")).toBe(false);
+    } finally {
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await api("DELETE", `/api/bots/${bot.id}`);
     }
   });
 
