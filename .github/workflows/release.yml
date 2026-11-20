@@ -185,6 +185,10 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           SHA: ${{ needs.prepare.outputs.sha }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::RELEASES_PAT is not set, so the orbit-releases draft is left to the local publish. Skipping."
+            exit 0
+          fi
           cd assets
           cp "Wink-$VERSION-setup.exe" Wink-setup.exe
           # Old links point at the Orbit name, so keep it as a second identical alias.
