@@ -64,7 +64,6 @@
 //   FAKE_MSP_INIT_DELAY_MS  hold the initialize result this long.
 //   FAKE_MSP_GATE_FILE  gate file for echo-gated.
 //   FAKE_MSP_VERSION   the `--version` line.
-//   FAKE_MSP_VERSION_DELAY_MS  hold the `--version` answer this long.
 //   FAKE_MSP_CONTRIBUTOR  1 = contributor mode on in the user's Muse settings: a
 //                   host without `--contributor-mode off` asks for
 //                   `<model>-contributor`, and a model with no such build fails
@@ -85,7 +84,6 @@ if (process.env.FAKE_MSP_DUMP) {
   writeFileSync(process.env.FAKE_MSP_DUMP, JSON.stringify({ argv, env: dumpEnv, cwd: process.cwd() }, null, 2));
 }
 if (argv.includes("--version")) {
-  if (process.env.FAKE_MSP_VERSION_DELAY_MS) await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_MSP_VERSION_DELAY_MS)));
   console.log(process.env.FAKE_MSP_VERSION ?? "fake-msp 0.0.0");
   process.exit(0);
 }

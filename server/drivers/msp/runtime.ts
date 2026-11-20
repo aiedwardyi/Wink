@@ -278,15 +278,14 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           if (isWslCommand(target) && !wslProbeAllowed()) return resolve(null);
           execCli(target, ["--version"], { timeout: 8000, env: probeEnv }, (err, stdout) => {
             if (!err) cliVersion = stdout.trim();
-            // Killed at the deadline means it started: a busy machine, not a missing CLI. Its version stays unknown.
-            resolve(err ? ("killed" in err && err.killed === true ? "" : null) : stdout.trim());
+            resolve(err ? null : stdout.trim());
           });
         });
       // Same 3-step fallback as the ACP core: bare, wrapped, resolved — one
       // resolution steers snapshot probes and every turn alike.
       const resolveCli = async (probeEnv: NodeJS.ProcessEnv) => {
         const tried = new Set([baseCli]);
-        if ((await probe(baseCli, probeEnv)) !== null) {
+        if (await probe(baseCli, probeEnv)) {
           wslCli = null;
           return true;
         }
@@ -294,14 +293,14 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           const wrapped = support.wslProbeWrapper?.(baseCli) ?? null;
           if (wrapped && !tried.has(wrapped)) {
             tried.add(wrapped);
-            if ((await probe(wrapped, probeEnv)) !== null) {
+            if (await probe(wrapped, probeEnv)) {
               wslCli = wrapped;
               return true;
             }
           }
           if (!wslProbeAllowed()) return false;
           const resolved = await support.wslResolveCli?.(baseCli, probeEnv);
-          if (resolved && !tried.has(resolved) && (await probe(resolved, probeEnv)) !== null) {
+          if (resolved && !tried.has(resolved) && (await probe(resolved, probeEnv))) {
             wslCli = resolved;
             return true;
           }
@@ -1510,7 +1509,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
               if (gated) return lastSnapshot ?? { state: "unavailable", reason: wslBlockedReason(support.displayName) };
               return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
             }
-            const version = (await probe(effectiveCli(), env)) || null;
+            const version = await probe(effectiveCli(), env);
             const authenticated = await support.isAuthenticated(env, config);
             const label = authenticated ? support.account?.(env) : undefined;
             remember(hashOf(label));

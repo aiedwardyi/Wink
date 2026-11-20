@@ -127,7 +127,6 @@ describe("MSP turns (fake host)", () => {
     delete process.env.FAKE_MSP_ITEMS;
     delete process.env.FAKE_MSP_GATE_FILE;
     delete process.env.FAKE_MSP_VERSION;
-    delete process.env.FAKE_MSP_VERSION_DELAY_MS;
     delete process.env.FAKE_MSP_CONTRIBUTOR;
     delete process.env.META_API_KEY;
     recorder?.stop();
@@ -146,13 +145,6 @@ describe("MSP turns (fake host)", () => {
     await instance.adapter.sendTurn({ threadId: "t-serve-args", text: "hi" });
     expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
     expect(JSON.parse(readFileSync(dump, "utf8")).argv).toEqual(argv);
-  });
-
-  it("runs the turn when the CLI is too slow to tell its version", async () => {
-    process.env.FAKE_MSP_VERSION_DELAY_MS = "9000";
-    await create();
-    await instance.adapter.sendTurn({ threadId: "t-slow-version", text: "hi" });
-    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
   });
 
   describe("under the user's contributor mode", () => {
