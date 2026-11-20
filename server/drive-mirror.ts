@@ -103,6 +103,8 @@ export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
 }
 
 function priority(path: string, chatFirst = false, openThread?: string | null): number {
+  // Presence goes first: a PC whose record waits behind a catch-up reads as Offline to the others.
+  if (path.startsWith("devices/")) return -1;
   if (path === "workspace.json") return 0;
   if (path.startsWith("assets/")) return 1;
   const chat = chatPart(path);
@@ -114,7 +116,6 @@ function priority(path: string, chatFirst = false, openThread?: string | null): 
   if (path.startsWith("changes/")) return 4 + offset;
   if (/^memory-v2(?: \([1-9]\d*\))?\//.test(path)) return 6 + offset;
   if (path.endsWith("/head.json")) return 7 + offset;
-  if (path.startsWith("devices/")) return 8 + offset;
   return 5 + offset;
 }
 
