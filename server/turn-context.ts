@@ -528,11 +528,15 @@ const MEMORY_PLAN_PREFIX = "Read first, your plan: ";
 const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?!\w)/giu;
 // a quoted path may hold spaces, so it is read whole before DOC_PATH
 const QUOTED_DOC_PATH = /(["'`])([^"'`\n]+\.(?:md|txt|docx?|pdf))\1/gi;
-// CJK prose runs into names with no space, so the files on disk decide where a name starts and ends; DOC_PATH guesses the rest
+// CJK prose runs into names with no space, so a name is the longest the text or the files on disk support; DOC_PATH guesses the rest
 const NAME_RUN = /[\p{L}\p{M}\p{N}\p{Pc}\p{S}.:\\/-]+/gu;
 const DOC_EXT = /\.(?:md|txt|docx?|pdf)(?!\w)/gi;
 // Windows finds review.txt for "review.txt.", so a name ends only after an extension
 const NAME_END = /\.[A-Za-z\d]+(?!\.*[\w~\\/-])/g;
+// a step in Latin words sets names apart with spaces; in CJK prose a name starts where Latin letters last follow another script
+const LATIN_START = /(?<=^|(?!\p{Script=Latin})\p{L})\p{Script=Latin}/gu;
+const LATIN_WORD = /^\p{Script=Latin}+[.:]*$/u;
+const OTHER_WORD = /^(?:(?!\p{Script=Latin})\p{L})+[.:]*$/u;
 const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
 
 function localPath(ref: string, cwd: string | undefined): string | null {
@@ -543,7 +547,7 @@ function localPath(ref: string, cwd: string | undefined): string | null {
   return cwd ? resolve(cwd, path) : null;
 }
 
-function runFiles(run: string, cwd: string | undefined, listed: (dir: string) => Set<string>): string[] {
+function runFiles(run: string, cwd: string | undefined, listed: (dir: string) => Set<string>, spaced: boolean): string[] {
   const ends = [...run.matchAll(NAME_END)].map((match) => match.index + match[0].length).reverse();
   const refs: [number, string][] = [];
   let rest = run;
@@ -567,8 +571,19 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
         }
       }
     }
-    from = best?.[1] ?? after;
-    if (!best) continue;
+    const named = ends.includes(after);
+    if (named) {
+      const lead = spaced && !from ? 0 : [...run.slice(from, hit.index).matchAll(LATIN_START)].at(-1)?.index;
+      const name = lead === undefined ? undefined : [...run.slice(from + lead, after).matchAll(DOC_PATH)].at(-1)?.[0];
+      // an existing file never replaces a longer planned name it ends, so "Create 新draft.md" keeps 新 while draft.md exists
+      if (name && name.length > hit[0].length && (!best || best[1] - best[0] < name.length)) best = [after - name.length, after];
+    }
+    if (!best) {
+      // a folder like notes.md/ ends no name, so the next name may still start before it
+      if (tails.length) from = after;
+      continue;
+    }
+    from = best[1];
     refs.push([best[0], run.slice(...best)]);
     rest = rest.slice(0, best[0]) + " ".repeat(best[1] - best[0]) + rest.slice(best[1]);
   }
@@ -618,7 +633,11 @@ export function planFiles(record: Pick<TaskRecordContext, "goal" | "plan" | "art
   const cited = [record.goal, ...record.plan.map((item) => item.step)].join("\n").replace(/\w{2,}:\/\/\S+/g, "");
   for (const match of cited.matchAll(QUOTED_DOC_PATH)) refs.push(match[2]!);
   const listed = listedFiles(cwd);
-  for (const [run] of cited.replace(QUOTED_DOC_PATH, " ").matchAll(NAME_RUN)) refs.push(...runFiles(run, cwd, listed));
+  for (const line of cited.replace(QUOTED_DOC_PATH, " ").split("\n")) {
+    const words = line.match(NAME_RUN) ?? [];
+    const spaced = words.some((word) => LATIN_WORD.test(word)) && !words.some((word) => OTHER_WORD.test(word));
+    for (const run of words) refs.push(...runFiles(run, cwd, listed, spaced));
+  }
   return [...new Set(refs.map((ref) => localPath(ref, cwd)).filter((path): path is string => path !== null))];
 }
 

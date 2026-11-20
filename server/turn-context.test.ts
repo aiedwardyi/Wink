@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -1401,22 +1401,70 @@ describe("fresh-session memory block", () => {
     expect(stepPins("Archive report.md旧版.zip tomorrow.", folder)).toEqual([join(folder, "report.md旧版.zip")]);
   });
 
-  it("pins every existing file that random CJK prose touches", () => {
-    const names = ["plan.md", "review.txt", "회의록.md", "v2/計画-final.md", "résumé.txt", "資料/発売.txt", "🚀draft.md", "report.md旧版.zip", "메모.pdf", "会議メモ.docx"];
-    const folder = taskFolder("generated", names);
-    let seed = 2006;
+  const names = ["plan.md", "review.txt", "회의록.md", "v2/計画-final.md", "résumé.txt", "資料/発売.txt", "🚀draft.md", "report.md旧版.zip", "메모.pdf", "会議メモ.docx"];
+  const randomText = (seed: number) => {
     const random = (count: number) => (seed = seed * 48271 % 2147483647) % count;
     const scripts = [[0xac00, 0xd7a3], [0x3041, 0x3096], [0x30a1, 0x30fa], [0x4e00, 0x9fff]] as const;
     const prose = (least: number) => {
       const [first, last] = scripts[random(scripts.length)]!;
       return Array.from({ length: least + random(8) }, () => random(6) ? String.fromCodePoint(first + random(last - first + 1)) : " ，。、"[random(4)]).join("");
     };
+    return { random, prose };
+  };
+  const expectPins = (text: string, named: string[], folder: string) => {
+    const [goal, ...steps] = text.split("\n");
+    const pins = planFiles({ goal: goal!, plan: steps.map((step) => ({ step, status: "active" as const })) }, folder);
+    expect([...pins].sort(), text).toEqual([...new Set(named)].map((name) => join(folder, name)).sort());
+  };
+
+  it("pins every existing file that random CJK prose touches", () => {
+    const folder = taskFolder("generated", names);
+    const { random, prose } = randomText(2006);
     for (let index = 0; index < 500; index++) {
       const named = Array.from({ length: 1 + random(4) }, () => names[random(names.length)]!);
       const text = named.map((name, at) => (at && random(3) === 0 ? "\n" : "") + prose(at ? 1 : 0) + [name, name, `"${name}"`, `「${name}」`][random(4)]).join("") + prose(0);
-      const [goal, ...steps] = text.split("\n");
-      const pins = planFiles({ goal: goal!, plan: steps.map((step) => ({ step, status: "active" as const })) }, folder);
-      expect([...pins].sort(), text).toEqual([...new Set(named)].map((name) => join(folder, name)).sort());
+      expectPins(text, named, folder);
+    }
+  });
+
+  it("a pinned path is the longest name the step text supports, existing or planned; an existing file never replaces a longer planned name it is a suffix of", () => {
+    const lifecycle = taskFolder("lifecycle", ["draft.md"]);
+    for (const prefix of ["新", "別", "새"]) {
+      const step = `Create ${prefix}draft.md tomorrow`;
+      const draft = join(lifecycle, `${prefix}draft.md`);
+      expect(stepPins(step, lifecycle)).toEqual([draft]);
+      writeFileSync(draft, step);
+      expect(stepPins(step, lifecycle)).toEqual([draft]);
+      rmSync(draft);
+      expect(stepPins(step, lifecycle)).toEqual([draft]);
+    }
+    const future = taskFolder("future", ["plan.md", "notes.md/plan.txt"]);
+    for (const [step, ...pinned] of [
+      ["请先读draft.md都要更新", "draft.md"],
+      ["请先读plan.md和draft.md都要更新", "plan.md", "draft.md"],
+      ["まず読むdraft.mdを開く", "draft.md"],
+      ["まず読むplan.mdとdraft.mdを開く", "plan.md", "draft.md"],
+      ["먼저읽기draft.md를열기", "draft.md"],
+      ["먼저읽기plan.md와draft.md를열기", "plan.md", "draft.md"],
+      ["请先读notes.md/plan.txt。", "notes.md/plan.txt"],
+      ["请先读docs/plan.md。", "docs/plan.md"],
+    ]) expect(stepPins(step!, future), step).toEqual(pinned.map((name) => join(future, name)));
+    const folder = taskFolder("planned", names);
+    const { random, prose } = randomText(2015);
+    const planned = ["draft.md", "docs/plan.md", "next-review.txt", "v2/draft.md", "notes.md/todo.txt"];
+    const prefixed = ["新plan.md", "새회의록.md", "別메모.pdf", "新docs/review.txt"];
+    const word = () => Array.from({ length: 1 + random(8) }, () => String.fromCharCode(97 + random(26))).join("");
+    for (let index = 0; index < 500; index++) {
+      const lines = Array.from({ length: 1 + random(3) }, () => {
+        const latin = random(2) === 0;
+        const pool = [...names, ...planned, ...latin ? prefixed : []];
+        const named = Array.from({ length: 1 + random(3) }, () => pool[random(pool.length)]!);
+        const text = latin
+          ? named.map((name) => `${word()} ${[name, name, `"${name}"`][random(3)]}`).join(" ") + ` ${word()}`
+          : named.map((name, at) => prose(at ? 1 : 0) + [name, name, `"${name}"`, `「${name}」`][random(4)]).join("") + prose(0);
+        return { text, named };
+      });
+      expectPins(lines.map((line) => line.text).join("\n"), lines.flatMap((line) => line.named), folder);
     }
   });
 
