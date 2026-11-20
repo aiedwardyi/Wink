@@ -15,7 +15,7 @@ import type { BotCalls } from "./bot-call.ts";
 import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { postRefusalNotice, refusalText } from "./comms-notice.ts";
-import { callerSnapshot, release, reserve, type Reservation } from "./comms-root.ts";
+import { callerSnapshot, guardPeerTools, ownerRoot, release, reserve, type Reservation } from "./comms-root.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import * as composio from "./composio.ts";
 import type { ComputerControl } from "./computer-control.ts";
@@ -108,7 +108,10 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     ? deps.resolveCommsCaller(req?.headers?.authorization) : { botId, threadId };
   const handReply = (botId: string, threadId: string, taskId: string, turnId?: string) => {
     const turn = turnRegistry.current(threadId);
-    if (turn?.botId === botId && turn.turnId === turnId) handMail(deps.store, threadId, taskId, turn.turnId, randomUUID());
+    if (turn?.botId === botId && turn.turnId === turnId) {
+      guardPeerTools(threadId);
+      handMail(deps.store, threadId, taskId, turn.turnId, randomUUID());
+    }
   };
   const {
     cfg,
@@ -466,7 +469,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           ? json(res, 200, { ok: true })
           : json(res, 404, { error: `No pending wake ${body.cancel}. list_routines shows your wakes.` });
       }
-      const result = setWake(routines, { botId: from.id, threadId: fromThreadId, at: body.at, note: body.note });
+      const result = setWake(routines, { botId: from.id, threadId: fromThreadId, at: body.at, note: body.note, owner: ownerRoot(callerSnapshot(from.id, fromThreadId)?.rootId) });
       return result.ok ? json(res, 200, result) : json(res, 400, { error: result.error });
     },
     setKeepGoing: async (req: IncomingMessage, res: ServerResponse) => {
@@ -629,7 +632,10 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromThreadId = source.threadId;
       const from = store.bot(fromBotId);
       if (!from || !connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "unknown sender" });
-      if (delegationMatch[1] === "recent" && url.searchParams.get("list") === "1") return json(res, 200, { tasks: recentDelegations(store, from.id, fromThreadId) });
+      if (delegationMatch[1] === "recent" && url.searchParams.get("list") === "1") {
+        guardPeerTools(fromThreadId);
+        return json(res, 200, { tasks: recentDelegations(store, from.id, fromThreadId) });
+      }
       const runningIds = [...delegationWatch.values()].filter((watch) => watch.sourceThreadId === fromThreadId && watch.taskId).map((watch) => watch.taskId!);
       const resolved = resolveDelegationId(delegationMatch[1], fromThreadId, runningIds);
       if ("error" in resolved) {
@@ -652,6 +658,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       );
       if (polled.code === 200 && "result" in polled.body) {
         const turn = turnRegistry.current(fromThreadId);
+        if (turn?.botId === fromBotId && turn.turnId === requestingTurn) guardPeerTools(fromThreadId);
         polled.body.result = toolMailResult(store, fromThreadId, taskId, polled.body.result, turn?.botId === fromBotId && turn.turnId === requestingTurn ? { turnId: turn.turnId, requestId: randomUUID() } : undefined);
       }
       return json(res, polled.code, polled.body);

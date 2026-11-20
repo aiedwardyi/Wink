@@ -56,6 +56,8 @@ export interface Routine {
   sourceThreadId?: string;
   /** A bot's one-off wake_me: set without a card, gone once it fires. */
   wake?: true;
+  /** Set by a turn in a chain the owner started; any other wake rings with the base peer tools. */
+  ownerChain?: true;
   nextRunAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -81,6 +83,7 @@ export interface RoutineRun {
    * webhook runs execute on the separate `threadId`. */
   sourceThreadId?: string;
   wake?: true;
+  ownerChain?: true;
   /** A wake that rang after Wink was off at its time. */
   late?: true;
   threadId?: string;
@@ -459,7 +462,7 @@ export class RoutineManager {
     );
   }
 
-  create(input: RoutineInput, request?: RoutineRequestCommitFor<"create">, wake?: { threadId: string }): Routine {
+  create(input: RoutineInput, request?: RoutineRequestCommitFor<"create">, wake?: { threadId: string; owner?: boolean }): Routine {
     if (request) {
       const receipt = this.matchingRoutineRequestReceipt(request);
       if (receipt) {
@@ -478,6 +481,7 @@ export class RoutineManager {
       // API cannot choose an arbitrary transcript as a reporting target.
       sourceThreadId: request?.threadId ?? wake?.threadId,
       ...(wake ? { wake: true as const } : {}),
+      ...(wake?.owner ? { ownerChain: true as const } : {}),
       nextRunAt: clean.enabled ? this.initialOccurrence(clean.schedule, at) : null,
       createdAt: at,
       updatedAt: at,
@@ -908,6 +912,7 @@ export class RoutineManager {
       triggerSource: manual ? "manual" : "schedule",
       sourceThreadId: routine.sourceThreadId,
       ...(routine.wake ? { wake: true as const } : {}),
+      ...(routine.ownerChain ? { ownerChain: true as const } : {}),
       createdAt: this.now(),
     };
     this.runs.push(run);

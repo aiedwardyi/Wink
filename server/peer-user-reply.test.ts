@@ -65,7 +65,7 @@ describe("peer user replies", () => {
     settlePeerUserReplies(bot.threadId, "t1");
     drainPeerUserReplies(store, start, () => false);
     drainPeerUserReplies(store, start, () => false);
-    expect(start).toHaveBeenCalledExactlyOnceWith(bot.id, input.message.text, { threadId: bot.threadId, userMessage: input.message, excludeMessageIds: [input.message.id] });
+    expect(start).toHaveBeenCalledExactlyOnceWith(bot.id, input.message.text, { threadId: bot.threadId, userMessage: input.message, excludeMessageIds: [input.message.id], owner: true });
     expect(texts().filter((message) => message.role === "user")).toEqual([input.message]);
   });
 

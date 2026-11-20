@@ -185,7 +185,7 @@ describe("summary grace dispatch", () => {
           return live;
         } },
         instanceId: "claude", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
-        turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
+        turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, othersInPrompt: () => false, carriedEchoes: () => [], composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
         buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge, stampShownAsks: () => {},
         clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
         mailForTurn: () => event === "mail" || event === "held mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes,

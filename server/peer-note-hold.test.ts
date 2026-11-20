@@ -265,7 +265,7 @@ describe("worker notes while a bot answers a bot", () => {
     expect(index.indexOf("finalizeDelegationWatch(event.threadId, event.ok, delegationWatch.get(event.threadId)?.reply.text() ?? \"\");")).toBeGreaterThan(fold);
     for (const line of [
       "  holds: hasPeerWatch,",
-      "    return steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));",
+      "    const steered = steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));",
       "  const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;",
       "  const messagesBeforeSummary = store.activePath(threadId);\n  holdNotes?.(messagesBeforeSummary);\n",
       "  const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);\n  holdNotes?.(activeMessages);\n",

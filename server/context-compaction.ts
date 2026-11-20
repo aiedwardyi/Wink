@@ -450,7 +450,7 @@ export function paneNotesForTurn(
   replaysTranscript: boolean,
   inlineReplay = false,
   contextWindow?: number,
-): { notes: string[]; newestId?: string; ids?: string[]; tokens?: number } {
+): { notes: string[]; newestId?: string; ids: string[]; tokens?: number } {
   const pending = replaysTranscript && !inlineReplay ? [] : pendingPaneNotes(messages, excludeIds, deliveredId);
   const sent = contextWindow ? fitPaneNotes(pending, contextWindow) : pending;
   const notes = sent.map((note) => note.text);
@@ -460,8 +460,9 @@ export function paneNotesForTurn(
     : notes.length || replaysTranscript
       ? messages.findLast((message) => isContextNote(message) && message.text?.trim() && !excludeIds.has(message.id))?.id
       : undefined;
-  if (!contextWindow) return { notes, newestId };
-  return { notes, newestId, ids: sent.map((note) => note.id), tokens: estimateContextTokens(sent) };
+  const ids = sent.map((note) => note.id);
+  if (!contextWindow) return { notes, newestId, ids };
+  return { notes, newestId, ids, tokens: estimateContextTokens(sent) };
 }
 
 /** History without this turn's notes, which the turn text carries instead. */

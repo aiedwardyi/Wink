@@ -10,6 +10,7 @@ import { applyPendingModel, switchHeld } from "./pending-model.ts";
 import { quickAskRecovery, routesAck, routesQuick } from "./quick-ask.ts";
 import { isOrder } from "./quick-route.ts";
 import { coldLoading, sentRow } from "./cold-thread.ts";
+import { guardPeerTools } from "./comms-root.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -45,7 +46,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
   const interruptTurn = vi.fn(async () => {});
   const busyResumeThreads = new Set<string>();
   const scope = {
-    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag,
+    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag, guardPeerTools,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     noteTalked: noop, noteSendLocale: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery, coldLoading, sentRow,

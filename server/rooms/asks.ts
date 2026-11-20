@@ -9,7 +9,7 @@ import { newId, type ProviderInstance } from "../contracts.ts";
 import { cancelQueuedAsk } from "../steer-queue.ts";
 import type { GroupRecord, Store } from "../store.ts";
 import type { RoomAlert } from "./alerts.ts";
-import { appendRoomEntry, roomPeople, RoomError, type RoomGrant } from "./db.ts";
+import { appendRoomEntry, roomEntry, roomPeople, RoomError, type RoomGrant } from "./db.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { PEOPLE_ONLY_LINE, peopleOnlyRoom } from "./people-only.ts";
 
@@ -290,6 +290,14 @@ function askPermission(ask: RoomAsk) {
 }
 
 export const askFromHost = (ask: RoomAsk | null) => Boolean(ask && askPermission(ask) === "host");
+
+/** The host's own line, or a host seat's bot answering one: a host seat's bot answering anyone else asks for them. */
+export function askFromOwner(ask: RoomAsk | null): boolean {
+  if (!ask || !askFromHost(ask)) return false;
+  const entry = roomEntry(ask.roomId, ask.entryId);
+  const origin = entry?.author.kind === "bot" && entry.replyToId ? roomEntry(ask.roomId, entry.replyToId) : entry;
+  return origin?.author.kind === "host";
+}
 
 const askerWorks = (ask: RoomAsk) => askPermission(ask) !== "read-only";
 

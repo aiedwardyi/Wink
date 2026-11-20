@@ -1,3 +1,5 @@
+type PrivatePeer = { role: "source" } | { role: "peer"; key: string };
+
 export interface LiveTurn {
   botId: string;
   threadId: string;
@@ -6,9 +8,10 @@ export interface LiveTurn {
   rootId: string | null;
   nowWatch: unknown[];
   docFix?: string;
+  privatePeer?: PrivatePeer;
 }
 
-type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId"> & { rootId?: string | null };
+type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId" | "privatePeer"> & { rootId?: string | null };
 
 export class TurnRegistry {
   private readonly turns = new Map<string, LiveTurn>();
@@ -46,6 +49,30 @@ export class TurnRegistry {
     const turnId = this.threads.get(threadId);
     const turn = turnId ? this.turns.get(turnId) : undefined;
     return turnId && turn ? { turnId, ...turn } : undefined;
+  }
+
+  /** The root of the thread's turn, still starting or announced. */
+  rootOf(threadId: string): string | null | undefined {
+    const starting = this.starting.get(threadId);
+    return starting ? starting.rootId : this.current(threadId)?.rootId;
+  }
+
+  setPrivatePeer(threadId: string, scope: PrivatePeer): void {
+    const starting = this.starting.get(threadId);
+    if (starting) starting.privatePeer = scope;
+  }
+
+  privatePeerKey(botId: string, threadId: string): string | undefined {
+    const turn = this.starting.get(threadId) ?? this.current(threadId);
+    return turn?.botId === botId && turn.privatePeer?.role === "peer" ? turn.privatePeer.key : undefined;
+  }
+
+  clearPrivatePeer(threadId: string): void {
+    const starting = this.starting.get(threadId);
+    if (starting) delete starting.privatePeer;
+    const turnId = this.threads.get(threadId);
+    const turn = turnId ? this.turns.get(turnId) : undefined;
+    if (turn) delete turn.privatePeer;
   }
 
   adoptRoot(threadId: string, rootId: string): void {

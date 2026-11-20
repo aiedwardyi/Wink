@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, expect, it, vi } from "vitest";
 import { isVoiceLine } from "../shared/live-call.ts";
-import { _resetCommsRoots, adoptHumanRoot, callerSnapshot, rootForStart, type RootStart } from "./comms-root.ts";
+import { _resetCommsRoots, adoptHumanRoot, callerSnapshot, commit, ownerRoot, reserve, ROOT_TURNS, rootForStart, type Reservation, type RootStart } from "./comms-root.ts";
 import { Store } from "./store.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } from "./steer-queue.ts";
 import { turnRegistry } from "./turn-registry.ts";
@@ -51,14 +51,16 @@ it("adopts direct human steers without adopting control or imported messages", (
   expect(error).not.toHaveBeenCalled();
 });
 
-it("inherits the thread root on provider continuation without minting one", () => {
+it("spends the thread root on provider continuation without minting one or taking its owner origin", () => {
   const threadId = "root-index-thread";
   const rootId = rootForStart(threadId, { kind: "human", messageKey: "original" });
   const starts = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "turnRegistry.start");
   expect(starts).toHaveLength(1);
   const options = new Function("botId", "threadId", "rootForStart", `return ${starts[0].arguments[1].getText(source)};`);
+  for (let index = 0; index < ROOT_TURNS; index++) commit((reserve(rootId, "ask") as { reservation: Reservation }).reservation);
   turnRegistry.start("continued", options("bot", threadId, rootForStart));
-  expect(callerSnapshot("bot", threadId)?.rootId).toBe(rootId);
+  const continued = callerSnapshot("bot", threadId)?.rootId;
+  expect([ownerRoot(continued), reserve(continued, "ask")]).toEqual([false, { ok: false, reason: "exhausted" }]);
   expect(options("bot", "detached", rootForStart).rootId).toBeNull();
 });
 
@@ -69,14 +71,15 @@ it("lists every startTurn caller with its RootStart kind", () => {
     { call: "row.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "toBotId, text", kind: "inherit", marker: "commsRoot: root ?? null" },
     { call: "botId, PANE_WAKE_PROMPT", kind: "automatic", marker: "paneNoteWake: true" },
-    { call: "botId, prompt", kind: "human", marker: "userMessage: userMessage ?? undefined" },
+    { call: "botId, prompt", kind: "human", marker: "owner: true" },
     { call: "bot.id, TASK_RESUME_PROMPT", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "automationSource: triggerSource" },
     { call: "source.bot.id, line", kind: "automatic", marker: "automationSource" },
-    { call: "botId, prompt", kind: "human", marker: "transcriptText: typed" },
+    { call: "botId, prompt", kind: "human", marker: "owner: !guest" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
+    { call: "botId, text", kind: "human", marker: "{ ...opts, owner: true, privateOwner: true }" },
   ];
   const calls = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "startTurn");
   expect(calls.map((node) => node.arguments.slice(0, 2).map((arg) => compact(arg.getText(source))).join(", "))).toEqual(starts.map((row) => row.call));
@@ -87,7 +90,7 @@ it("lists every startTurn caller with its RootStart kind", () => {
 it("lists every runGroupMemberTurn caller with its RootStart kind", () => {
   const starts: Array<{ call: string; kind: RootStart["kind"]; root: string; tail?: string[] }> = [
     { call: "group.id, threadId, botId", kind: "automatic", root: 'rootForStart(threadId, { kind: "automatic" })' },
-    { call: "source.group.id, source.threadId, source.bot.id", kind: "automatic", root: 'rootForStart(source.threadId, { kind: "automatic" })' },
+    { call: "source.group.id, source.threadId, source.bot.id", kind: "automatic", root: 'guestWake ?? rootForStart(source.threadId, { kind: "automatic" })' },
     { call: "room.groupId, threadId, botId", kind: "inherit", root: "room.rootId ?? null", tail: ["room.askId", "room.hands", "room.chainAsk"] },
     { call: "groupId, threadId, next.id", kind: "inherit", root: "rootId", tail: ["undefined", "undefined", "asked"] },
     { call: "groupId, threadId, responder.id", kind: "human", root: "rootId" },
@@ -116,8 +119,10 @@ it("classifies accepted starts using server options and the accepted message key
   expect(run(rootForStart, "root-index-thread", {}, 0, message)).toBe(human);
   const fallback = run(rootForStart, "fallback", {}, 0, { id: "without-send" });
   expect(fallback).toBe(rootForStart("fallback", { kind: "human", messageKey: "without-send" }));
+  const automatic = rootForStart("root-index-thread", { kind: "automatic" });
+  expect([automatic === human, ownerRoot(automatic)]).toEqual([false, false]);
   for (const opts of [{ automationSource: "schedule" }, { cardContinuation: true }, { cardContinuation: true, keepGoingWake: true }, { cardContinuation: true, paneNoteWake: true }, { cardContinuation: true, limitWaitId: "wait" }]) {
-    expect(run(rootForStart, "root-index-thread", opts, 0, { id: "control" })).toBe(human);
+    expect(run(rootForStart, "root-index-thread", opts, 0, { id: "control" })).toBe(automatic);
     expect(run(rootForStart, "detached", opts, 0, { id: "control" })).toBeNull();
   }
   expect(run(rootForStart, "peer", { commsDepth: 1, commsRoot: human }, 1, message)).toBe(human);

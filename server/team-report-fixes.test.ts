@@ -62,8 +62,8 @@ function fixture() {
   }) as typeof fetch;
   const store = { bot: (id: string) => ({ ...bot, id }), conversationForBot: (_id: string, thread: string) => thread === bot.threadId ? { bot } : undefined, activePath: () => path } as unknown as Store;
   const service = new TeamReports({ dir: join(dir, "drafts"), store, status: () => ({ ...PHONE_RELAY_OFF, state: "connected", reportOwner: owner }), enrolled: () => enrolled, owner,
-    attachmentsDir: dir, roots: () => [], current: () => current, send: (report) => sendTeamReport({ dataDir: dir, base: () => "team.example", tokens, fetchImpl }, report) });
-  const call = (args: Record<string, unknown>) => service.handle({ fromBotId: bot.id, fromThreadId: bot.threadId, ...args });
+    ownerTurn: () => true, attachmentsDir: dir, roots: () => [], current: () => current, send: (report) => sendTeamReport({ dataDir: dir, base: () => "team.example", tokens, fetchImpl }, report) });
+  const call = (args: Record<string, unknown>) => service.handle({ fromBotId: bot.id, fromThreadId: bot.threadId, ...args }, { botId: bot.id, threadId: bot.threadId });
   const evidence = (request: Message, extra = {}) => collectReport({ owner, bot, threadId: bot.threadId, path, request, attachmentsDir: dir, roots: [], current, ...extra });
   const envelope = (report: TeamReport) => {
     const auth = { idToken: "token", ticket: "ticket", pk: identity.pk, sig: "A".repeat(86) };
@@ -240,12 +240,14 @@ describe("audit evidence and service regressions", () => {
     expect(report.originals.map((m) => m.id)).toEqual(f.path.map((m) => m.id));
     expect(report.originals.reduce((n, m) => n + Buffer.byteLength(m.text), 0)).toBeLessThanOrEqual(48_000);
   });
-  it("N3 group members derive one incident ID and create one relay report", async () => {
+  it("N3 group members each file the incident under their own report ID", async () => {
     const f = fixture(); f.append("user", "Keep export running"); const bad = f.append("bot", "Stopped export"); const request = f.append("user", "에디에게 보내");
-    expect(f.evidence(request).id).toBe(f.evidence(request, { bot: { id: "peer", name: "Peer" } }).id);
-    await f.call({ action: "send", selected_message_id: bad.id });
-    await f.service.handle({ fromBotId: "peer", fromThreadId: "thread", action: "send", selected_message_id: bad.id });
-    expect(readdirSync(join(f.dir, "team-reports"))).toHaveLength(1);
+    expect(f.evidence(request).id).not.toBe(f.evidence(request, { bot: { id: "peer", name: "Peer" } }).id);
+    const first = await f.call({ action: "send", selected_message_id: bad.id });
+    const peer = (raw: Record<string, unknown>) => f.service.handle({ fromBotId: "peer", fromThreadId: "thread", ...raw }, { botId: "peer", threadId: "thread" });
+    expect(await peer({ action: "retry", report_id: first.id })).toEqual({ error: "Saved report does not belong to this branch/sender/team." });
+    await peer({ action: "send", selected_message_id: bad.id });
+    expect(readdirSync(join(f.dir, "team-reports"))).toHaveLength(2);
   });
   it.each([400, 403, 409, 429, 507])("N1 reports definitive HTTP %s refusal", async (status) => {
     const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "에디에게 보내"); f.fail(status);

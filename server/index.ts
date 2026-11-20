@@ -62,7 +62,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askById, askFromOwner, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -71,7 +71,7 @@ import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
-import { roomById } from "./rooms/db.ts";
+import { roomById, roomHostSeats } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { ownerRoomCode } from "./rooms/invites.ts";
 import { joinedRooms, leftByHand, myRoomBotThreads, roomTaskThreads, seatTaken } from "./rooms/joined.ts";
@@ -207,7 +207,7 @@ import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { botRoute, CommsCallers } from "./comms-caller.ts";
-import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
+import { adoptHumanRoot, callerSnapshot, commit, guardPeerTools, othersInPrompt, ownerRoot, privatePeerTask, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
@@ -381,7 +381,7 @@ import { refuseVpsJoin, requestCredentials, roomDoorPath } from "./phone-auth.ts
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks } from "./quick-ask.ts";
-import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
+import { carriedEchoes, hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRelayBase, teamRoute } from "./team-stats.ts";
 import { effectiveModelDial } from "./model-dial-default.ts";
@@ -831,6 +831,7 @@ function askBotAndWait(
     start: (onDispatchError) => startTurn(targetBotId, message, {
       commsDepth: depth + 1,
       commsRoot: peer?.commsRoot ?? null,
+      peerTaskId: peer?.taskId,
       reservation: peer?.reservation,
       unattended: isUnattended(fromBotId),
       transcriptText: peer?.transcriptText,
@@ -1157,6 +1158,7 @@ const teamSnags = snagUserData ? new TeamSnags({
 const teamReports = new TeamReports({
   dir: join(DATA_DIR, "team-report-drafts"), store, status: () => phoneAccess.status(), owner: googleEnv.teamOwner,
   enrolled: () => hasReportEnrollment(DATA_DIR, phoneAccess.base()),
+  ownerTurn: (botId, threadId) => ownerRoot(callerSnapshot(botId, threadId)?.rootId),
   attachmentsDir: ATTACHMENTS_DIR,
   roots: (botId, threadId) => botOutputRoots(store.bot(botId)!, threadId, store.conversationForBot(botId, threadId)?.group?.id),
   current: (botId) => {
@@ -2859,6 +2861,7 @@ async function answerRequest(
   let outcome: RequestOutcome = "unavailable";
   if (instance) {
     try {
+      if (behavior === "answer") guardPeerTools(threadId);
       outcome = await instance.adapter.respondToRequest(threadId, requestId, { behavior, message });
     } catch {
       outcome = "unavailable";
@@ -4708,6 +4711,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     return startTurn(toBotId, text, {
       commsDepth,
       commsRoot: root ?? null,
+      peerTaskId: taskId,
       reservation,
       commsAsk: ask,
       unattended: isUnattended(sourceBotId),
@@ -4821,10 +4825,13 @@ const noteSteer = new NoteSteerer({
     return liveTurnIdByThread.get(threadId);
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
-  steer: (botId, threadId, text) => {
+  steer: (botId, threadId, text, ids) => {
     const bot = store.bot(botId);
     const adapter = bot ? botAccounts.instance(bot, threadId)?.adapter : undefined;
-    return steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));
+    const steered = steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));
+    // At the send, not the ack: an engine can ack only after the model acted on the text.
+    if (steered) othersInPrompt(store, threadId, turnRegistry.rootOf(threadId), ids);
+    return steered;
   },
   messages: (threadId) => store.activePath(threadId),
   deliveredId: (botId, threadId) => store.taskByThread(botId, threadId)?.paneNotesDeliveredId ?? undefined,
@@ -4865,6 +4872,7 @@ function drainQueuedSends() {
       userMessage: userMessage ?? undefined,
       excludeMessageIds: excludeIds,
       onDispatchError: rerunIfIdle,
+      owner: true,
     }), () => isSendCancelled(userMessage?.sendId ?? userMessage?.queueId), terminalBridgeAccess).then(rerunIfIdle).catch((err) => {
       if (writeChatError(`queued message could not start - ${err instanceof Error ? err.message : String(err)}`, terminalBridgeAccess)) store.appendMessage(threadId, {
         role: "bot",
@@ -5035,6 +5043,10 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
+  /** An owner-typed line can start an owner comms root. */
+  owner?: boolean;
+  privateOwner?: true;
+  peerTaskId?: string;
 };
 
 /** True only for a turn a person actually typed - not a pane note wake, a
@@ -5279,6 +5291,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   keepGoing.turnStarted(bot.id, threadId, !opts?.unattended && turnStartedByUser(opts));
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
+  const hasProviderHistory = task.lastInstanceId !== undefined || task.resumeSeed !== undefined || Object.keys(task.resumeCursors).length > 0;
   const latencySendId = opts?.sendId ?? opts?.userMessage?.sendId;
   if (latencySendId) ensureChatLatency({ sendId: latencySendId, threadId });
   // Accepted: ownership and the task exist. Announce here so a busy peer
@@ -5352,7 +5365,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         });
   }
   let rootId = rootForStart(threadId, turnStartedByUser(opts)
-    ? { kind: "human", messageKey: userMessage.sendId ?? userMessage.id }
+    ? { kind: opts?.owner ? "human" : "guest", messageKey: userMessage.sendId ?? userMessage.id }
     : opts?.commsRoot !== undefined || commsDepth > 0
       ? { kind: "inherit", rootId: opts?.commsRoot }
       : { kind: "automatic" });
@@ -5675,7 +5688,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
   if (folded.length) {
-    for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
+    for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id, rootId);
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
   }
@@ -5690,8 +5703,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
     ? importMemoryTurn(activeMessages)
     : { offer: false, tool: false };
+  const importOffer = importMemory.offer ? importOfferNote() : null;
+  const entryText = importOffer ? `${importOffer}\n\n${text}` : text;
   const currentPrompt = [
-    ...(importMemory.offer ? [importOfferNote()] : []),
+    ...(importOffer ? [importOffer] : []),
     composeUserTurnPrompt(text, turnOpts),
     ...folded,
   ].join("\n\n");
@@ -5716,6 +5731,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
+  othersInPrompt(store, threadId, rootId, [...paneNoteIds ?? [], ...mailParts.map((part) => part.id), ...carriedEchoes(threadId)]);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
@@ -6156,7 +6172,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const foldLate = () => {
           const queued = foldPeerQueuedSends(store, bot.id, threadId, claimMark, live.adapter.capabilities.queueing === true);
           if (!queued.length) return;
-          for (const message of store.pathTail(threadId, queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
+          for (const message of store.pathTail(threadId, queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id, rootId);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
@@ -6276,6 +6292,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
+            othersInPrompt(store, threadId, rootId, [...refreshedNotes.ids ?? [], ...carriedEchoes(threadId)]);
             seed.compactionId = compacted.expanded ? null : latestCompactionId;
             if (currentTurnEpoch(bot.id) !== epoch || (opts?.sendId && isSendCancelled(opts.sendId))) {
               throw Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true });
@@ -6311,6 +6328,22 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         trace?.assembled(system, text);
         if (cwd) turnCwdByThread.set(threadId, cwd);
         else turnCwdByThread.delete(threadId);
+        const source = commsDepth === 1 ? privatePeerTask(opts?.peerTaskId, bot.id, threadId, rootId) : null;
+        const owner = commsDepth === 0 && opts?.privateOwner === true && !opts.userMessage && !opts.call && !opts.answersCard;
+        // A clean task must still have a clean final payload after late folds and session recycling.
+        if ((source || owner) && integrations.agents && !readOnly && !hasProviderHistory && !priorTaskPacket && !rewound && !recycled && !systemRecycle &&
+            !notOwnerChats().has(threadId) && !store.groupByThread(threadId) &&
+            text === entryText && !transcript.length && resumeCursor === undefined && !systemUpdate) {
+          const rows = store.messagesFor(threadId);
+          if (rows.at(-1)?.id === userMessage.id) {
+            if (owner && rows.length === 1) turnRegistry.setPrivatePeer(threadId, { role: "source" });
+            if (source && rows.length === 2 && rows[0]?.comm?.peer === "from" && rows[0].comm.withBotId === source.botId) {
+              const key = randomUUID();
+              turnRegistry.setPrivatePeer(threadId, { role: "peer", key });
+              integrations.agents.env.OMB_OWNER_HOP = key;
+            }
+          }
+        }
         return live.adapter.sendTurn({
         ...(trace ? { trace } : {}),
         threadId,
@@ -6515,6 +6548,8 @@ routines = new RoutineManager({
     const source = routineSourceOwner(run);
     if (!source) throw new Error("The routine's chat no longer exists");
     const automationSource = run.triggerSource ?? "schedule";
+    // a wake no owner turn set rings as someone else's chain
+    const guestWake = run.wake && !run.ownerChain ? rootForStart(source.threadId, { kind: "guest", messageKey: run.id }) : undefined;
     if (source.group) {
       // Wait in the routine queue, never the room's: only this one can cancel the run and keeps its trigger.
       if (botHasActiveTurn(source.bot.id, source.threadId)) throw busyRejection("the room is busy");
@@ -6531,7 +6566,7 @@ routines = new RoutineManager({
         () => routines!.isCancelled(run.id),
         undefined,
         run.cardMessageId ? new Set([run.cardMessageId]) : undefined,
-        rootForStart(source.threadId, { kind: "automatic" }),
+        guestWake ?? rootForStart(source.threadId, { kind: "automatic" }),
       ).then((started) => {
         if (!started) onDispatchError("The routine's room is no longer available");
       }, (error) => onDispatchError(error instanceof Error ? error.message : String(error)));
@@ -6543,6 +6578,7 @@ routines = new RoutineManager({
       automationSource,
       excludeMessageIds: run.cardMessageId ? [run.cardMessageId] : undefined,
       onDispatchError,
+      ...(guestWake ? { commsRoot: guestWake } : {}),
     });
   },
   interruptTurn: async (botId, threadId, runOn) => {
@@ -6914,9 +6950,9 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => {
+  startTurn: (botId, threadId, prompt, typed, failed, readOnly, guest) => {
     joinedRoomThreads.add(threadId);
-    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
+    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), owner: !guest });
   },
   readOnlyTurns: (botId, threadId) => {
     const bot = store.bot(botId);
@@ -7114,8 +7150,9 @@ async function runClaimedGroupMemberTurn(
       { recovering, latestUserText: latestUser?.text ?? "", allAsks: isStatusTurn(latestUser?.text ?? "") },
     )
     : "";
+  const roomRows = await roomTurnMessages(group.hosted?.roomId, store.activePath(threadId));
   const prepared = await prepareModelContext({
-    messages: await roomTurnMessages(group.hosted?.roomId, store.activePath(threadId)),
+    messages: roomRows,
     referenceMessages: store.messagesFor(threadId),
     contextWindow: modelContextWindow,
     excludeIds,
@@ -7169,6 +7206,7 @@ async function runClaimedGroupMemberTurn(
     }
   }
   const roomMail = mailForTurn(store, threadId, [], modelContextWindow);
+  const foreign = othersInPrompt(store, threadId, rootId, roomMail.map((part) => part.id), roomRows, group.hosted ? roomHostSeats(group.hosted.roomId) : []);
   const roomContext = [
     prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
     prepared.transcript.map((message) => replayMessageText(message, instance.driverKind, bot.id, selection.model)).join("\n"),
@@ -7186,7 +7224,7 @@ async function runClaimedGroupMemberTurn(
   const lead = asked ? askById(asked) : null;
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
   const works = !asked || Boolean(lead && asksWork([lead, ...riders]));
-  const guestAsked = asked && (!askFromHost(lead) || riders.some((ask) => !askFromHost(ask)));
+  const guestAsked = asked && (!askFromOwner(lead) || riders.some((ask) => !askFromOwner(ask)));
   if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
@@ -7449,7 +7487,7 @@ async function runClaimedGroupMemberTurn(
   if (outcome === "stalled" && authority) void endAsk(authority, "failed");
   if (outcome === "stalled" || outcome === "timed_out") return false;
   if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
-  if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId);
+  if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId, !foreign);
   if (outcome === "settled" && handedOff && !isCancelled?.()) {
     queueBusyRoomMember(groupId, threadId, bot, 0, new Set(), laneHandoffNote(group.name, handedOff.asker, handedOff.ask), undefined, dispatchedInstructionId, rootId, undefined, authority ?? true, asked);
   }
@@ -8209,7 +8247,7 @@ const botChatRoutes = createBotChatRoutes({
   turnStartClaims,
   botHasActiveTurn,
   taskResumes,
-  startTurn,
+  startTurn: (botId, text, opts) => startTurn(botId, text, { ...opts, owner: true, privateOwner: true }),
   resolveAndSendRoutine,
   approvalBus,
   startGroupCardContinuation,
@@ -8320,8 +8358,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
     if (path.startsWith("/api/internal/")) {
+      if (method === "GET" && path === "/api/internal/owner-peer-tools") {
+        const caller = commsCallers.resolve(req.headers.authorization);
+        const key = caller && turnRegistry.privatePeerKey(caller.botId, caller.threadId);
+        return json(res, 200, { allowed: Boolean(key && key === req.headers["x-wink-owner-hop"]) });
+      }
       if (method === "POST" && path === "/api/internal/team-report") {
-        return json(res, 200, await teamReports.handle(await readBody(req)));
+        return json(res, 200, await teamReports.handle(await readBody(req), commsCallers.resolve(req.headers.authorization)));
       }
       if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
@@ -8363,7 +8406,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/ask-bot") {
         return await internalRoutes.askBot(req, res);
       }
-      if (method === "POST" && path === BOARD_ROUTES.search) return await boardRoutes.search(req, res);
+      if (method === "POST" && path === BOARD_ROUTES.search) {
+        const caller = commsCallers.resolve(req.headers.authorization);
+        if (caller) guardPeerTools(caller.threadId);
+        return await boardRoutes.search(req, res);
+      }
       if (method === "POST" && path === BOARD_ROUTES.post) return await boardRoutes.post(req, res);
       if (method === "POST" && path === "/api/internal/my-chats") {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
@@ -8465,6 +8512,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The call_api tool: the saved key is injected here, only toward that
       // credential's own hosts, and never appears in what the bot gets back.
       if (method === "POST" && path === "/api/internal/call-api") {
+        const caller = commsCallers.resolve(req.headers.authorization);
+        if (caller) guardPeerTools(caller.threadId);
         return await internalRoutes.callKeyApi(req, res);
       }
       // Async handoff: the source bot queues a task for a peer and goes

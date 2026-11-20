@@ -121,6 +121,7 @@ export function writeRoomEcho(
   since: number,
   owner: string,
   askId?: string,
+  ownerOnly = false,
 ): Message | null {
   const rows = store.messagesFor(roomThreadId);
   const own = (message: Message) => message.role === "bot" && message.from?.botId === bot.id;
@@ -136,6 +137,7 @@ export function writeRoomEcho(
   ].join("\n");
   const engine = answers[0]?.engine;
   const echo: Omit<Message, "id" | "at"> = { role: "bot", kind: "note", quiet: true, text, roomEcho: { groupId: group.id } };
+  if (ownerOnly) echo.roomEcho = { groupId: group.id, ownerOnly: true };
   if (engine && answers.every((message) => message.engine === engine)) echo.engine = engine;
   return store.appendMessage(bot.threadId, echo);
 }
@@ -168,6 +170,8 @@ export function roomEchoesSinceLastUserTurn(messages: readonly Message[], exclud
   if (!echoes.length) return [];
   return [[head, ...echoes, ...(more ? [`+${more} more room replies not shown.`] : [])].join("\n")];
 }
+
+export const carriedEchoes = (threadId: string): readonly string[] => carried.get(threadId) ?? [];
 
 /** Marks the carried echoes noted on the turn's first model event; a turn that ends before it leaves them for the next. */
 export function roomEchoesTaken(store: Pick<Store, "row" | "patchRow">, event: RuntimeEvent): void {

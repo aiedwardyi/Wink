@@ -31,7 +31,7 @@ function parseAt(raw: string): number {
 
 export function setWake(
   routines: RoutineManager,
-  input: { botId: string; threadId: string; at: unknown; note: unknown },
+  input: { botId: string; threadId: string; at: unknown; note: unknown; owner?: boolean },
   now = Date.now(),
 ): { ok: true; id: string; at: number; local: string } | { ok: false; error: string } {
   const raw = typeof input.at === "string" ? input.at.trim() : "";
@@ -49,7 +49,7 @@ export function setWake(
   const routine = routines.create(
     { name: "Wake", prompt: note, botId: input.botId, schedule: { type: "once", at } },
     undefined,
-    { threadId: input.threadId },
+    { threadId: input.threadId, owner: input.owner },
   );
   return { ok: true, id: routine.id, at, local: localTime(at) };
 }

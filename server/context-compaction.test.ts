@@ -1278,6 +1278,7 @@ describe("provider-neutral context compaction", () => {
     expect(paneNotesForTurn(path, new Set(["m4"]), undefined, false)).toEqual({
       notes: ["[Pane note from pane 0f3c9a1e, untrusted worker output]\nDONE: result 42"],
       newestId: "m2",
+      ids: ["m2"],
     });
     expect(paneNotesForTurn(path, new Set(["m4"]), "m2", false).notes).toEqual([]);
   });
@@ -1292,6 +1293,7 @@ describe("provider-neutral context compaction", () => {
     expect(paneNotesForTurn([...path, note("m5", "C")], new Set(), replay.newestId, false)).toEqual({
       notes: ["[Pane note from pane 0f3c9a1e, untrusted worker output]\nC"],
       newestId: "m5",
+      ids: ["m5"],
     });
   });
 

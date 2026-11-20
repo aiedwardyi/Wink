@@ -6,10 +6,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CommsCallers } from "./comms-caller.ts";
+import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 
 import { RoutineManager, type RoutineManagerOptions } from "./routines.ts";
 import { cancelWake, setWake, WAKE_MAX_PENDING } from "./self-wake.ts";
+import { turnRegistry } from "./turn-registry.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -24,7 +26,7 @@ function harness() {
   dirs.push(dir);
   const file = join(dir, "routines.json");
   let now = START;
-  const fired: Array<{ botId: string; threadId: string; line: string }> = [];
+  const fired: Array<{ botId: string; threadId: string; line: string; ownerChain?: true }> = [];
   const emitted: any[] = [];
   const options = (): RoutineManagerOptions => ({
     file,
@@ -33,7 +35,7 @@ function harness() {
     botState: () => "ready",
     createTask: () => ({ threadId: "detached" }),
     startTurn: async () => { throw new Error("a wake never runs detached"); },
-    startChatTurn: async (run, line) => { fired.push({ botId: run.botId, threadId: run.sourceThreadId!, line }); },
+    startChatTurn: async (run, line) => { fired.push({ botId: run.botId, threadId: run.sourceThreadId!, line, ...(run.ownerChain ? { ownerChain: run.ownerChain } : {}) }); },
     onRunChanged: (run) => ({ threadId: run.sourceThreadId ?? "bot-chat", messageId: `card-${run.id}` }),
   });
   let manager = new RoutineManager(options());
@@ -142,6 +144,36 @@ describe("self-wake", () => {
     expect((await post({ fromBotId: "bot-b", fromThreadId: "chat-b", cancel: other.id })).error).toBeTruthy();
     expect(h.manager.listRoutines()).toHaveLength(2);
     expect((await post({ cancel: set.id })).ok).toBe(true);
+  });
+
+  it("keeps on the wake whether a turn in a chain the owner started set it", async () => {
+    const h = harness();
+    const callers = new CommsCallers();
+    const routes = createInternalRoutes({
+      store: { bot: (id: string) => ({ id }) },
+      connectorThread: () => ({}),
+      routines: h.manager,
+      resolveCommsCaller: (header: string | string[] | undefined) => callers.resolve(header),
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const post = async (note: string, rootId: string | null) => {
+      turnRegistry.start("waker", { botId: "bot-a", threadId: "chat-a", owner: "room", depth: 0, rootId });
+      const req = new EventEmitter() as IncomingMessage;
+      req.headers = { authorization: `Bearer ${callers.token("bot-a", "chat-a")}` };
+      const res = { writeHead() {}, getHeader() {}, setHeader() {}, end() {} } as unknown as ServerResponse;
+      const pending = routes.wake(req, res);
+      req.emit("data", JSON.stringify({ at: new Date(Date.now() + 5 * 60_000).toISOString(), note }));
+      req.emit("end");
+      await pending;
+      turnRegistry.settle("waker");
+    };
+    await post("owner", rootForStart("chat-a", { kind: "human", messageKey: "owner-line" }));
+    await post("guest", rootForStart("chat-a", { kind: "guest", messageKey: "guest-line" }));
+    await post("teammate ask", null);
+    expect(h.restart().listRoutines().map((routine) => [routine.prompt, routine.ownerChain])).toEqual(expect.arrayContaining([["owner", true], ["guest", undefined], ["teammate ask", undefined]]));
+    h.setNow(Date.now() + 6 * 60_000);
+    for (let i = 0; i < 3; i++) await h.manager.tick();
+    expect(h.fired.filter((fire) => fire.ownerChain).map((fire) => fire.line)).toEqual([expect.stringContaining("owner")]);
+    _resetCommsRoots();
   });
 
   it("caps pending wakes per bot", () => {
