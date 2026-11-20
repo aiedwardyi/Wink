@@ -169,6 +169,8 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     let node: HTMLElement | null = null;
     let pointerY = startY;
     let frame = 0;
+    // a press inside an edge band would scroll its own row away on a jiggle; that band waits until the pointer leaves it
+    let still: { top: boolean; bottom: boolean } | null = null;
     const place = () => {
       if (!active.current || !node) return;
       over(null, pointerY);
@@ -178,8 +180,12 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
       const box = scrollParent(list.current);
       if (box && active.current) {
         const rect = box.getBoundingClientRect();
+        const top = pointerY < rect.top + EDGE;
+        const bottom = pointerY > rect.bottom - EDGE;
+        still ??= { top: startY < rect.top + EDGE, bottom: startY > rect.bottom - EDGE };
+        still = { top: still.top && top, bottom: still.bottom && bottom };
         const before = box.scrollTop;
-        box.scrollTop += pointerY < rect.top + EDGE ? -STEP : pointerY > rect.bottom - EDGE ? STEP : 0;
+        box.scrollTop += top && !still.top ? -STEP : bottom && !still.bottom ? STEP : 0;
         if (box.scrollTop !== before) place();
       }
       frame = requestAnimationFrame(edge);

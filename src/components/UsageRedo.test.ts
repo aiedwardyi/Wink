@@ -712,6 +712,42 @@ it.each(["mouse", "touch"])("keeps the small card's scroll height while a %s dra
   await act(async () => void (pointer === "mouse" ? document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })) : touch(rows[0]!, "touchcancel")));
 });
 
+it("keeps a row put when a press on Use near the small card's edge jiggles", async () => {
+  const engine = h.board!.engines[0]!;
+  const names = ["getwinkdev", "rocknblock", "mredwardyi", "aiedwardyi"];
+  engine.accounts = [...names.map((name, index) => ({ ...engine.accounts[2]!, id: `acct-${name}`, number: index + 2, nickname: name, name, main: !index })),
+    { ...engine.accounts[0]!, name: "hitecledtx", main: false }];
+  engine.mainId = "acct-getwinkdev";
+  const order = engine.accounts.map((account) => account.id);
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: order }));
+  await openQuick();
+  const rows = [...quickRows()];
+  expect(quickIds()).toEqual(order);
+  for (const [index, row] of rows.entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, index * 80 - 120, 400, 80));
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+  }
+  const box = document.querySelector<HTMLElement>("[data-quick-scroll]")!;
+  scroller(box, rows);
+  box.scrollTop = 120;
+  const use = rows[3]!.querySelector("[data-use]")!;
+  await act(async () => {
+    use.dispatchEvent(mouse("pointerdown", 300, 170));
+    document.dispatchEvent(mouse("pointermove", 300, 174));
+  });
+  await held(300);
+  await act(async () => document.dispatchEvent(mouse("pointerup", 300, 174)));
+  expect(quickIds()).toEqual(order);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(order);
+  await act(async () => {
+    rows[2]!.dispatchEvent(mouse("pointerdown", 40, 100));
+    document.dispatchEvent(mouse("pointermove", 40, 190));
+  });
+  await held(100);
+  expect(box.scrollTop).toBeGreaterThan(120);
+  await act(async () => document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })));
+});
+
 const dragSpots = async (row: number, pointer: number[]) => {
   await openQuick();
   const rows = [...quickRows()];
