@@ -1243,6 +1243,65 @@ describe("memory pass", () => {
     expect(memoryFileRaw("bot-t1")).toBe(room);
     expect(stored().held).toBeUndefined();
     expect(generate).toHaveBeenCalledTimes(1);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")).toBeUndefined();
+  });
+
+  it.each(["retry", "restart"])("lands a held correction on the quote it was accepted on, never one turned away, after a %s", async (how) => {
+    const old = "- Builds oak kayaks (noted 2026-10-01)";
+    writeMemoryFile("bot-t1", `# Memory\n- Plans cedar shelves\n${old}\n${"- note\n".repeat(196)}`);
+    const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+    const write = atomic.writeFileAtomic;
+    let failed = false;
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementation((target, ...args) => {
+      if (!failed && target === path) {
+        failed = true;
+        throw Object.assign(new Error("locked"), { code: "EBUSY" });
+      }
+      write(target, ...args);
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    generate.mockResolvedValue(JSON.stringify([
+      { fact: "Builds cedar kayaks", quote: "cedar" },
+      { fact: "Builds cedar kayaks", quote: "I build cedar kayaks", replaces: old },
+      { fact: "Collects flutes", quote: "I collect flutes" },
+    ]));
+    say("t1", "I build cedar kayaks");
+    say("t1", "I collect flutes");
+    await settle("t1", 3 * MINUTE);
+    expect(stored().held).toBeDefined();
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toContain("- Builds cedar kayaks (noted 2026-10-15)\n");
+    expect(memoryFileRaw("bot-t1")).not.toContain(old);
+    expect(stored().held).toBeUndefined();
+  });
+
+  it.each(["retry", "restart"])("keeps a later value of its label in recall when a hand edit dates a held row back above an older row, then a next-day %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const top = "# Auto notes overflow\n\n- Likes tea (noted 2026-10-01)\n- Has a cat (noted 2026-10-02)\n";
+    writeFileSync(overflowPath(), `${top}- Plays chess (noted 2026-10-03)\n`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Research station: Cobalt Acme", "my research station is cobalt acme"]));
+    say("t1", "my research station is cobalt acme");
+    await settle("t1", 3 * MINUTE);
+    const edited = `${top}- Research station: Cobalt Acme (noted 2026-10-01)\n- Plays chess (noted 2026-10-03)\n- Research station: Indigo Globex (noted 2026-10-15)\n`;
+    writeFileSync(overflowPath(), edited);
+    vi.setSystemTime(NOW + 24 * 60 * MINUTE);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    await lookup.refresh("bot-t1");
+    expect(lookup.take("bot-t1", "t1", "after", "indigo globex").join("")).toContain("Indigo Globex");
   });
 
   it.each(["rename-save", "open append handle"])("keeps another writer's overflow rows during %s", async (kind) => {

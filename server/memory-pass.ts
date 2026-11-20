@@ -48,8 +48,8 @@ const factsSchema = z
     message_id: z.string().nullish(), question_id: z.string().nullish(),
   }));
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
-// a row by its words and the day it was noted, so rows coming or going around it never move it
-const landedSchema = z.object({ line: z.string(), date: z.string() });
+// a row by its words and the day it was noted, so rows coming or going around it never move it; one written here also keeps the rows in its words above it
+const landedSchema = z.object({ line: z.string(), date: z.string(), copy: z.number().optional() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
   // notes a full MEMORY.md turned away before the overflow file; they are gone, never reported as moved
@@ -450,6 +450,11 @@ function confirmed(sources: UserLine[], said: string, picked: string, before: Pi
 
 /** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
 export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): Note[] {
+  return acceptQuoted(facts, userText, notes, archived).map(({ quote: _quote, ...note }) => note);
+}
+
+// a fact keeps the quote it passed on, so a held batch rechecks that one and never a turned-away twin
+function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): HeldNote[] {
   const sources = Array.isArray(userText) ? userText : [{ text: userText }];
   const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretValue(paragraph));
   const lines = notes.split("\n");
@@ -465,7 +470,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
   const seen = new Set<string>();
   const decided = new Set<string>();
   const taken = new Set<string>();
-  const accept = (fact: Fact): Note | null => {
+  const accept = (fact: Fact): HeldNote | null => {
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
     const tweak = kind === "tweak";
@@ -540,7 +545,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
     const known = words(line).join(" ") || squash(line);
     if (seen.has(known) || noted.some((note) => ` ${note.join(" ")} `.includes(` ${known} `))) return null;
     seen.add(known);
-    const note: Note = { line };
+    const note: HeldNote = { line, quote: said };
     if (target) note.replaces = target;
     return note;
   };
@@ -728,8 +733,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const hold = (threadId: string, batch: Batch, notes: HeldNote[]) => {
     held.set(threadId, batch);
     if (!batch.wrote?.length && !batch.seen?.length) return;
-    const quote = (note: HeldNote) => note.kind ? undefined : note.quote ?? batch.facts.find((fact) => factLine(fact.fact) === note.line)?.quote;
-    replays.set(threadId, { ids: batch.ids, notes: notes.map((note) => ({ line: note.line, replaces: note.replaces, kind: note.kind, quote: quote(note) })), picked: batch.picked, wrote: batch.wrote, seen: batch.seen });
+    replays.set(threadId, { ids: batch.ids, notes: notes.map((note) => ({ line: note.line, replaces: note.replaces, kind: note.kind, quote: note.quote })), picked: batch.picked, wrote: batch.wrote, seen: batch.seen });
     save();
   };
 
@@ -743,10 +747,12 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       console.warn(`[memory-pass] ${PICKS_FILE} read failed (${error instanceof Error ? error.name : "error"})`);
       return arm(botId, threadId);
     }
-    const accepted: HeldNote[] = batch.notes?.flatMap((note) => note.kind || note.quote === undefined ? [note] :
-      acceptFacts([{ fact: note.line, quote: note.quote, replaces: note.replaces }], note.quote, memory.text, timeline).map((kept) => ({ ...kept, quote: note.quote }))) ??
-      acceptFacts(batch.facts, batch.source, memory.text, timeline);
-    if (!accepted.length) {
+    const checked = batch.notes?.map((note) => note.kind || note.quote === undefined ? [note] :
+      acceptQuoted([{ fact: note.line, quote: note.quote, replaces: note.replaces }], note.quote, memory.text, timeline));
+    const accepted = checked?.flat() ?? acceptQuoted(batch.facts, batch.source, memory.text, timeline);
+    // MEMORY.md may have taken a note in before the restart; the overflow row this batch wrote for it still earns its receipt
+    const owed = batch.notes?.filter((note, index) => !checked?.[index]?.length && batch.wrote?.some(({ line }) => line === note.line)) ?? [];
+    if (!accepted.length && !owed.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
     }
@@ -817,13 +823,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
         const { rows, dates, close } = liveRows(current);
-        // a row in its words noted before its day is an older copy when a row below falls between the two days or every row below is older too, so a hand-edited date alone never hides it
-        const older = (index: number, date: string) => {
+        // a row in its words noted before its day is an older copy when every row below is older too, or, if it went under an older copy, a row below falls between the two days, so a hand-edited date alone never hides it
+        const older = (index: number, date: string, copy?: number) => {
           const noted = dates[index]!;
           const below = dates.slice(index + 1).filter(Boolean);
-          return Boolean(noted) && noted < date && (below.some((day) => day > noted && day < date) || below.every((day) => day < date));
+          return Boolean(noted) && noted < date && (below.every((day) => day < date) || (copy !== 0 && below.some((day) => day > noted && day < date)));
         };
-        const stays = ({ line, date }: Landed) => rows.some((row, index) => row === line && !older(index, date));
+        const stays = (landed: Landed) => rows.some((row, index) => row === landed.line && !older(index, landed.date, landed.copy));
         wrote = wrote.filter(stays);
         seen = seen.filter(stays);
         // from its first row gone on, so a later line of the batch still lands after an earlier one written again
@@ -845,7 +851,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
           appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);
           overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.some((row) => row.line === line)).length, since: prior?.since ?? now() });
-          wrote = [...wrote.filter(({ line }) => !fresh.some((note) => note.line === line)), ...fresh.map(({ line }) => ({ line, date: stamp }))];
+          const placed = fresh.map(({ line }) => ({ line, date: stamp, copy: rows.filter((row) => row === line).length }));
+          wrote = [...wrote.filter(({ line }) => !fresh.some((note) => note.line === line)), ...placed];
         }
       } catch (error) {
         hold(threadId, { ...batch, picked, wrote, seen }, accepted);
@@ -873,7 +880,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       return arm(botId, threadId);
     }
     // a repeat left out of the overflow file was not written, so it gets no receipt; one an earlier try wrote does
-    const kept = accepted.filter((note) => (note.kind ? picked : !overflow.includes(note) || [...wrote, ...batch.wrote ?? []].some(({ line }) => line === note.line)));
+    const kept = [...accepted.filter((note) => (note.kind ? picked : !overflow.includes(note) || [...wrote, ...batch.wrote ?? []].some(({ line }) => line === note.line))), ...owed];
     if (!kept.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
