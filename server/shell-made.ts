@@ -187,25 +187,27 @@ function recordMutation(walk: Walk, mutation: Mutation, getStat: typeof statOf) 
   }
 }
 
-/** A named folder's changed files and new folders; past MAX_ENTRIES untouched entries, the folder itself if anything in it changed, never a short list. */
+/** A named folder's changed files and new folders, read up to MAX_ENTRIES untouched entries; past MAX_ENTRIES entries also the folder itself, as base named it, so memory still points where the rest went. */
 function listed(folder: string, stat: Stats, after: number, deep: boolean): string[] {
   const created = stat.birthtimeMs >= after;
   const made: string[] = [];
+  let entries = 0;
   let untouched = 0;
   const dir = opendirSync(folder);
   try {
     for (let entry = dir.readSync(); entry; entry = dir.readSync()) {
+      entries++;
       const path = join(folder, entry.name);
       // everything in a folder the command created is new, whatever times the copy kept
       const inner = created ? undefined : statOf(path);
       if (entry.isFile() && (created || (inner && changed(inner, after)))) made.push(path);
       else if (entry.isDirectory() && deep && (created || (inner && inner.birthtimeMs >= after))) made.push(...tree(path));
-      else if (++untouched > MAX_ENTRIES) return made.length || changed(stat, after) ? [folder] : [];
+      else if (++untouched > MAX_ENTRIES) break;
     }
   } finally {
     dir.closeSync();
   }
-  return made;
+  return entries > MAX_ENTRIES ? [...made, folder] : made;
 }
 
 /** Every file under a folder the command created, or the folder itself for hidden tool state (.git, .venv) or a tree past MAX_ENTRIES (an install, a clone). */

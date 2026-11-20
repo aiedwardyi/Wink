@@ -53,19 +53,29 @@ it("keeps every file a large copy made", () => {
   expect(shellMade(`Copy-Item -Path 'source\\*.png' -Destination '${shots}'`, cwd, since).sort()).toEqual(made);
 });
 
-it("names a folder too large to list only when the command changed it, never a short count", () => {
+it("names a folder past the listing bound even when its first entries are untouched, since a change may sit past the bound", () => {
   const { cwd, shots, made } = copied(514);
   const since = Date.now() + 60_000;
-  expect(shellMade(`ls "${shots}"`, cwd, since)).toEqual([]);
-  for (const path of [made[0]!, shots]) utimesSync(path, new Date(since), new Date(since));
-  expect(shellMade(`cp source/*.png "${shots}"`, cwd, since)).toEqual([shots]);
+  expect(shellMade(`ls "${shots}"`, cwd, since)).toEqual([shots]);
+  utimesSync(made.at(-1)!, new Date(since), new Date(since));
+  const found = shellMade(`Get-ChildItem -LiteralPath '${shots}' -Filter '514.png' | ForEach-Object { Add-Content -LiteralPath $_.FullName -Value 'more' }`, cwd, since);
+  expect(found).toContain(shots);
+  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  expect(memory).toContain("launch outside task 1 (real-shots)");
 });
 
-it("keeps every file past the listing bound in a folder made long before", () => {
-  const { cwd, shots, made } = copied(513);
+it("keeps every file past the listing bound in a folder made long before, and the folder as base named it", () => {
+  const { cwd, shots, made } = copied(523);
   const since = Date.now() + 60_000;
+  const late = made.slice(-11);
+  for (const path of late) utimesSync(path, new Date(since), new Date(since));
+  const found = shellMade(`cp source/*.png "${shots}"`, cwd, since);
+  expect(found.slice().sort()).toEqual([...late, shots].sort());
+  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  expect(memory).toContain(`${join("launch outside task", "real-shots")} 11 (`);
+  expect(memory).toContain("launch outside task 1 (real-shots)");
   for (const path of made) utimesSync(path, new Date(since), new Date(since));
-  expect(shellMade(`cp source/*.png "${shots}"`, cwd, since).sort()).toEqual(made);
+  expect(shellMade(`cp source/*.png "${shots}"`, cwd, since).sort()).toEqual([...made, shots].sort());
 });
 
 it("follows a location the command pushed and popped back", () => {

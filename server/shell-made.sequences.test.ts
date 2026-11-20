@@ -191,6 +191,25 @@ function baseMade(command: string, cwd: string, since: number): string[] {
   return [...made];
 }
 
+// a folder past the listing bound, its old entries sorting before or after what the command changed
+const SETUP = ["inputs/shot-*11", "real-shots/", "phase-a/"];
+const OVER_BOUND: [string, string[], string, Op[]][] = [
+  ["l-route-bigfirst", ["inputs/shot-*11", "real-shots/z-old-*520"], "Copy-Item -Path '{w}/inputs/*.png' -Destination '{w}/real-shots'", [["copy", "inputs", "real-shots"]]],
+  ["l-route-bigrewrite", ["real-shots/a-old-*520", "real-shots/shot-*11"], "Set-Location -Path '{w}/real-shots'\nGet-ChildItem -Filter 'shot-*.png' | ForEach-Object { Add-Content -LiteralPath $_.FullName -Value 'more' }\nSet-Location -Path '..'", [["write", "real-shots/shot-*11"]]],
+  ["l-h1-big-new-first-sh", [...SETUP, "archive/z-old-*520"], 'cp "{w}/inputs"/*.png archive/', [["cp", "inputs", "archive"]]],
+  ["l-h2-big-new-last-sh", [...SETUP, "archive/a-old-*520"], 'cp "{w}/inputs"/*.png archive/', [["cp", "inputs", "archive"]]],
+  ["l-h3-big-rewrite-last-sh", [...SETUP, "archive/a-old-*520", "archive/z-keep-*3"], 'for f in archive/z-keep-*.png; do echo more >> "$f"; done\nls archive > /dev/null', [["write", "archive/z-keep-*3"]]],
+  ["l-h4-big-rewrite-first-sh", [...SETUP, "archive/z-old-*520", "archive/a-keep-*3"], 'for f in archive/a-keep-*.png; do echo more >> "$f"; done\nls archive > /dev/null', [["write", "archive/a-keep-*3"]]],
+  ["l-h5-big-cd-write-ps", [...SETUP, "archive/z-old-*520"], "Set-Location 'archive'\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\nSet-Location '..'", [["copy", "inputs", "archive"]]],
+  ["l-h6-new-513-sh", SETUP, "mkdir bulk\nfor i in $(seq 1 513); do echo x > bulk/f-$i.txt; done\nls bulk > /dev/null", [["mkdir", "bulk"], ["write", "bulk/f-*513"]]],
+  ["l-h7-big-new-subtree-sh", [...SETUP, "archive/a-old-*520"], 'cp -r "{w}/inputs" archive/new-sub\nls archive > /dev/null', [["cp", "inputs", "archive/new-sub"]]],
+  ["l-h8-big-read-only-sh", [...SETUP, "archive/a-old-*520"], 'ls archive > /dev/null\ncp "{w}/inputs"/*.png real-shots/', [["cp", "inputs", "real-shots"]]],
+  ["l-h9-exact512-plus-new-ps", [...SETUP, "archive/z-old-*512"], "Copy-Item -Path '{w}/inputs/*.png' -Destination 'archive'", [["copy", "inputs", "archive"]]],
+  ["l-h10-600-into-existing-sh", SETUP, "for i in $(seq 1 600); do echo x > real-shots/f-$i.txt; done\nls real-shots > /dev/null", [["write", "real-shots/f-*600"]]],
+  ["l-h11-big-rewrite-named-file-sh", [...SETUP, "archive/a-old-*520", "archive/z-keep-*1"], "echo more >> archive/z-keep-001.png", [["write", "archive/z-keep-001.png"]]],
+  ["l-h12-big-rewrite-cd-ps", [...SETUP, "archive/a-old-*520", "archive/z-keep-*3"], "Set-Location 'archive'\nGet-ChildItem z-keep-*.png | ForEach-Object { Add-Content -LiteralPath $_.FullName -Value 'more' }\nSet-Location '..'", [["write", "archive/z-keep-*3"]]],
+];
+
 // what predates the command (a trailing slash is a folder), the command ({w} is the work folder), what it did
 const TABLE: [string, string[], string, Op[]][] = [
   ["left-renamed-ps", ["inputs/shot-*11"], "New-Item -ItemType Directory -Path 'staging' | Out-Null; Set-Location -Path 'staging'; Copy-Item -Path '{w}/inputs/*.png' -Destination '.'; Set-Location -Path '..'; Rename-Item -Path 'staging' -NewName 'real-shots'", [["mkdir", "staging"], ["copy", "inputs", "staging"], ["move", "staging", "real-shots"]]],
@@ -244,6 +263,7 @@ const TABLE: [string, string[], string, Op[]][] = [
   ["j32-include-renamed-ps", ["inputs/shot-*11", "old-2/real-shots/", "real-shots/"], "Remove-Item -Path 'old-2' -Include *.tmp -Recurse\nsl 'old-2'\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'\nSet-Location -Path '..'\nren old-2 ren-1\nSet-Location -Path 'ren-1'\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'\nSet-Location -Path '..'\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["copy", "inputs", "old-2/real-shots"], ["move", "old-2", "ren-1"], ["copy", "inputs", "ren-1/real-shots"], ["copy", "inputs", "real-shots"]]],
   ["j33-git-init-rd-ps", ["inputs/shot-*11", "real-shots/", "t1/"], "Remove-Item -LiteralPath 't1' -Recurse -Force -ErrorAction SilentlyContinue\ngit init -q t1 | Out-Null\nSet-Location -Path 't1'\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\ncd ..\n[IO.Directory]::CreateDirectory((Join-Path $PWD 't1')) | Out-Null\ncd t1\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\ncd ..\nCopy-Item -Path 't1/*.png' -Destination 'real-shots'\ncmd /c rd /s /q t1\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["remove", "t1"], ["mkdir", "t1/.git"], ["copy", "inputs", "t1"], ["copy", "t1", "real-shots"], ["remove", "t1"]]],
   ["j34-guarded-remake-bash", ["inputs/shot-*11", "real-shots/"], "rm -rf t1\nif [ ! -d t1 ]; then mkdir t1; fi\ncd t1\ncp {w}/inputs/*.png .\ncd ..\nmkdir t1\ncd t1\ncp {w}/inputs/*.png .\ncd ..\ncp t1/*.png real-shots/\n[ ! -d t1 ] || rm -rf t1\ncp {w}/inputs/*.png real-shots/", [["mkdir", "t1"], ["cp", "inputs", "t1"], ["cp", "t1", "real-shots"], ["remove", "t1"]]],
+  ...OVER_BOUND,
 ];
 
 function row([name, old, command, ops]: (typeof TABLE)[number]): Sequence {
@@ -577,10 +597,6 @@ function generateRebuilds(seed: number, count: number): Sequence[] {
 
 const files = () => new Map([...disk.entries].filter(([, entry]) => !entry.dir).map(([path, entry]) => [path, `${entry.birth}:${entry.mtime}`]));
 
-// a folder too big to list is named itself, never with a short count
-const tooBig = (refs: Set<string>, path: string) =>
-  [...refs].some((folder) => path.startsWith(folder + sep) && [...disk.entries.keys()].filter((key) => key.startsWith(folder + sep)).length > LISTING_BOUND);
-
 function replay({ name, cwd, command, setup, effects, secondWriter }: Sequence) {
   disk.entries.clear();
   disk.kids.clear();
@@ -595,9 +611,8 @@ function replay({ name, cwd, command, setup, effects, secondWriter }: Sequence) 
   const head = new Set(shellMade(command, cwd, SINCE));
   const kept = [...made].filter((path) => base.has(path));
   const extra = [...head].filter((path) => disk.entries.get(path)?.dir === false && !base.has(path) && !made.has(path));
-  // past the listing bound base names the folder itself, and head names it only when something in it changed
-  const dropped = [...base].filter((path) => !head.has(path) && !tooBig(head, path) && disk.entries.get(path)?.dir !== true);
-  return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path) && !tooBig(head, path)), missing: [...made].filter((path) => !head.has(path)), extra, dropped };
+  const dropped = [...base].filter((path) => !head.has(path));
+  return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path)), missing: [...made].filter((path) => !head.has(path)), extra, dropped };
 }
 
 const SECOND_WRITER = [
@@ -631,13 +646,21 @@ const SECOND_WRITER = [
     const sequence = row([name, ["inputs/shot-*11", "phase-a/", "phase-b/real-shots/", "tmp-render/", "real-shots/"], command, ops]);
     return { ...sequence, secondWriter: () => write(join(dirname(sequence.cwd), "their-notes.md")) };
   }),
+  ...OVER_BOUND.map((entry) => {
+    const sequence = row(entry);
+    const root = dirname(sequence.cwd);
+    return { ...sequence, name: `${sequence.name}-busy`, secondWriter: () => {
+      for (const path of ["their-notes.md", "work/their-notes.md", "work/phase-a/their-notes.md"]) write(join(root, path));
+      for (const folder of ["other-bot-out", "work/other-bot-out", "work/phase-a/other-bot-out"]) for (const name of ["report-1.md", "report-2.md", "report-3.md"]) write(join(root, folder, name));
+    } };
+  }),
 ];
 
 const CONTROL_FLOW = generateControlFlow();
 const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)]), ["control flow", CONTROL_FLOW], ["second writers", SECOND_WRITER], ["rebuilt scratch folders", generateRebuilds(42, 300)]];
 
-it("replays 4684 sequences", () => {
-  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4684);
+it("replays 4712 sequences", () => {
+  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4712);
 });
 
 it.each(GROUPS)("keeps base files and excludes extra files the command never touched in %s", (_, sequences) => {
