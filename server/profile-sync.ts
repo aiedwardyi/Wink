@@ -139,6 +139,7 @@ interface FieldVersion {
 
 export interface ProfileSyncState {
   bots: Record<string, SyncedBot>;
+  botOrigins: Record<string, string>;
   sections: Record<string, SyncedSection>;
   rooms: Record<string, SyncedRoom>;
   order: SyncOrder;
@@ -261,6 +262,7 @@ export function createSyncOperation(input: Omit<ProfileSyncOperation, "format" |
 export function emptyProfileSyncState(): ProfileSyncState {
   return {
     bots: {},
+    botOrigins: {},
     sections: {},
     rooms: {},
     order: { sectionOrder: [], itemOrder: {} },
@@ -368,6 +370,12 @@ export function applySyncOperations(
       continue;
     }
     const changes = validateChanges(operation) ?? {};
+    // A bot's first full profile write identifies its publisher. A peer's edit can arrive before that write.
+    if (operation.entity === "bot" && !Object.hasOwn(state.botOrigins, operation.entityId) &&
+        ["name", "title", "description", "color"].every((key) => Object.hasOwn(changes, key)) &&
+        (!operation.baseCheckpoint || appliedOrder.has(operation.baseCheckpoint))) {
+      state.botOrigins[operation.entityId] = operation.deviceId;
+    }
     for (const [field, value] of Object.entries(changes)) {
       // a bot with no picked style publishes null; it must not erase an icon another device picked
       if (field === "mascotStyle" && value === null) continue;

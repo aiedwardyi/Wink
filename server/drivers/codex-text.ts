@@ -8,6 +8,7 @@ import { spawnCli } from "../procs.ts";
 import { awaitDyingAppServers, codexHome, decodeCodexSelection, retireAppServer } from "./codex-catalog.ts";
 import { codexDirect } from "./codex-direct.ts";
 import { codexLocalProviderArgs } from "./local-inject.ts";
+import { textUsageError } from "./rate-limits.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
 
 export const CODEX_TEXT_TIMEOUT_MS = 90_000;
@@ -126,19 +127,22 @@ export function createCodexText(cli: string, childEnv: () => Record<string, stri
             const call = pending.get(msg.id);
             if (call) {
               pending.delete(msg.id);
-              if (msg.error) call.reject(new Error("Codex text RPC failed"));
+              if (msg.error) call.reject(textUsageError(msg.error.message, msg.error) ?? new Error("Codex text RPC failed"));
               else call.resolve(msg.result);
               continue;
             }
             const params = msg.params ?? {};
-            if (msg.method === "error" && !params.willRetry) return finish(new Error("Codex text generation failed"));
+            if (msg.method === "error" && !params.willRetry) {
+              return finish(textUsageError(params.error?.message, { data: params.error }) ?? new Error("Codex text generation failed"));
+            }
             if (msg.method === "item/completed" && params.item?.type === "agentMessage") {
               const item = params.item;
               messages.set(item.id, item.text ?? "");
               if (item.phase === "final_answer") finals.add(item.id);
             }
             if (msg.method === "turn/completed") {
-              finish(params.turn?.status === "completed" ? undefined : new Error("Codex text turn failed"));
+              const error = params.turn?.error;
+              finish(params.turn?.status === "completed" ? undefined : textUsageError(error?.message, { data: error }) ?? new Error("Codex text turn failed"));
             }
           }
         });

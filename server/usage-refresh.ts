@@ -41,7 +41,7 @@ const codexUsage = z.object({ limitId: z.string().nullish(), primary: codexUsage
 const rpcMessage = z.object({ id: z.number().optional(), method: z.string().optional(), result: z.json().optional(), error: z.object({ code: z.number() }).optional() });
 
 export function usageReportWithAge(report: Report, now = Date.now()) {
-  return { ...report, ageMs: Math.max(0, now - Date.parse(report.observedAt)) };
+  return { windows: report.windows, observedAt: report.observedAt, ageMs: Math.max(0, now - Date.parse(report.observedAt)) };
 }
 
 export function usageRefreshResponse(instanceId: string, result: Result, now = Date.now()) {

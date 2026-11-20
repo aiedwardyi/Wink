@@ -4,9 +4,11 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
+import { exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
@@ -50,7 +52,7 @@ const stateSchema = z.object({
   dropped: z.record(z.string(), droppedSchema).optional(),
 });
 
-export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>;
+export type NoteGenerator = ((prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>) & { engine?: string };
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
@@ -59,10 +61,11 @@ export type DroppedNotes = z.infer<typeof droppedSchema>;
 
 export interface MemoryPassDeps {
   store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot">>;
-  /** The Claude one-shot call, else the bot's own engine; null when neither can run. */
+  /** The selected account's one-shot call, if it can run. */
   generate(botId: string): NoteGenerator | null;
   /** The bot's Auto notes switch, read live. */
   enabled(botId: string): boolean;
+  runsHere?(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
   dataDir: string;
   now?(): number;
@@ -71,6 +74,8 @@ export interface MemoryPassDeps {
 export interface MemoryPass {
   /** Call when a 1:1 turn settles; `flush` runs the pass now, before the engine compacts. */
   onSettled(botId: string, threadId: string, flush?: boolean): void;
+  onTurn(botId: string): void;
+  onOwnerReady(botId: string): void;
   /** Call after a config change: bots switched off drop pending ids and any running pass. */
   onConfigChanged(): void;
   /** Notes turned away because MEMORY.md was full, since the last save. */
@@ -80,15 +85,36 @@ export interface MemoryPass {
   dispose(): void;
 }
 
+type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string };
+export type NoteLimits = { limits: RateLimitsMap; save(): void };
+
 export function noteGenerator(
-  instances: readonly (Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string })[],
+  instances: readonly NoteInstance[],
   account?: { instanceId: string; available: boolean },
-  own?: Pick<ProviderInstance, "enabled" | "generateText"> | null,
+  own?: NoteInstance | null,
+  usage?: NoteLimits,
 ): NoteGenerator | null {
-  const claude = account && !account.available ? undefined
+  const helper = own !== undefined ? own : account && !account.available ? null
     : instances.find((instance) => (!account || instance.instanceId === account.instanceId) && instance.driverKind === "claudeAgent" && instance.enabled && instance.generateText);
-  const helper = claude ?? (own?.enabled && own.generateText ? own : undefined);
-  return helper ? (prompt, signal, onUsage) => helper.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true, ...(onUsage ? { onUsage } : {}) }) : null;
+  if (!helper?.enabled || !helper.generateText) return null;
+  const id = helper.instanceId;
+  const report = id && usage ? usage.limits.get(id) : undefined;
+  const now = Date.now();
+  if (exhaustedWindow(report?.windows, now) || (report?.noteLimit && (report.noteLimit.resetsAt === null || report.noteLimit.resetsAt > now))) return null;
+  const generate: NoteGenerator = async (prompt, signal, onUsage) => {
+    try {
+      return await helper.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true, ...(onUsage ? { onUsage } : {}) });
+    } catch (error) {
+      const limit = !signal.aborted && error instanceof Error && usageLimitFromError(error, true);
+      if (limit && id && usage) {
+        const previous = usage.limits.get(id);
+        usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: limit });
+        usage.save();
+      }
+      throw error;
+    }
+  };
+  return Object.assign(generate, { engine: helper.driverKind.replace(/Agent$/, "") });
 }
 
 /** A user row typed on this PC into the chat, not a bot, routine, peer, draft or attachment. */
@@ -186,15 +212,15 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
   ].join("\n");
 }
 
-export function parseFacts(output: string): Fact[] {
+export function parseFacts(output: string): Fact[] | null {
   const start = output.indexOf("[");
   const end = output.lastIndexOf("]");
-  if (start < 0 || end < start) return [];
+  if (start < 0 || end < start) return null;
   try {
     const parsed = factsSchema.safeParse(JSON.parse(output.slice(start, end + 1)));
-    return parsed.success ? parsed.data : [];
+    return parsed.success ? parsed.data : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -635,7 +661,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const enqueue = (botId: string, threadId: string) => {
-    if (disposed || running.has(threadId) || queue.some((item) => item.threadId === threadId)) return;
+    const active = running.get(threadId);
+    if (disposed || (active && !active.controller.signal.aborted) || queue.some((item) => item.threadId === threadId)) return;
     clearTimeout(timers.get(threadId));
     timers.delete(threadId);
     queue.push({ botId, threadId });
@@ -737,7 +764,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   const run = async (botId: string, threadId: string, signal: AbortSignal) => {
     const ids = [...(pending.get(threadId) ?? [])];
-    if (!ids.length || !deps.enabled(botId)) return;
+    if (!ids.length || !deps.enabled(botId) || deps.runsHere?.(botId) === false) return;
     const kept = held.get(threadId);
     if (kept) {
       land(botId, threadId, kept, readMemoryFile(botId), memoryFileRaw(botId), 0);
@@ -745,7 +772,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       return;
     }
     const generate = deps.generate(botId);
-    if (!generate) return warnOnce("no Claude CLI instance");
+    if (!generate) return;
     const messages = deps.store.messagesFor(sourceThread(threadId));
     const rows = pendingRows(messages, ids);
     const typed = ids.flatMap((id) => {
@@ -775,7 +802,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const memory = readMemoryFile(botId);
     const raw = memoryFileRaw(botId);
     const started = now();
-    const trace = startTurnTrace(() => ({ engine: "claude", botId, threadId, batchId: `${threadId}:${ids.join(":")}`, sourceMessageIds: ids, sourceSendIds: ids.flatMap((id) => rows.get(id)?.sendId ? [rows.get(id)!.sendId!] : []) }));
+    const trace = startTurnTrace(() => ({ engine: generate.engine, botId, threadId, batchId: `${threadId}:${ids.join(":")}`, sourceMessageIds: ids, sourceSendIds: ids.flatMap((id) => rows.get(id)?.sendId ? [rows.get(id)!.sendId!] : []) }));
     const endPass = trace?.span("background_pass");
     let request = 0;
     let outcome = "helper-failed";
@@ -787,9 +814,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       } : undefined);
       outcome = "helper-settled";
     } catch (error) {
-      if (disposed || !deps.enabled(botId)) return;
+      if (disposed || signal.aborted || !deps.enabled(botId)) return;
       if (UNAVAILABLE.test(error instanceof Error ? error.message : String(error))) {
-        return warnOnce("Claude CLI missing or signed out");
+        return warnOnce("engine CLI missing or signed out");
       }
       log({ botId, threadId, lines: lines.length, ms: now() - started, result: "error" });
       return;
@@ -799,8 +826,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       trace?.finish(signal.aborted ? "cancelled" : outcome);
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
-    if (disposed || signal.aborted || !deps.enabled(botId)) return;
-    land(botId, threadId, { ids, facts: parseFacts(output), source: lines }, memory, raw, now() - started);
+    if (disposed || signal.aborted || !deps.enabled(botId) || deps.runsHere?.(botId) === false) return;
+    const facts = parseFacts(output);
+    if (facts === null) return;
+    land(botId, threadId, { ids, facts, source: lines }, memory, raw, now() - started);
   };
 
   const pump = () => {
@@ -887,6 +916,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         if (disposed || !count || !deps.enabled(botId)) continue;
         if (flush || count >= BATCH_MESSAGES || held.has(key)) enqueue(botId, key);
         else arm(botId, key);
+      }
+    },
+    onTurn(botId) {
+      for (const pass of running.values()) if (pass.botId === botId) pass.controller.abort();
+    },
+    onOwnerReady(botId) {
+      for (const threadId of pending.keys()) {
+        if (sourceBot(threadId)?.id === botId && !timers.has(threadId)) arm(botId, threadId);
       }
     },
     onConfigChanged() {

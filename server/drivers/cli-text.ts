@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import type { ProviderInstance } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
+import { textUsageError } from "./rate-limits.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -50,6 +51,7 @@ export function createCliText(spec: CliTextSpec): CliText {
     const cwd = mkdtempSync(join(tmpdir(), "wink-text-"));
     const run: CliTextRun = { cwd, stdout: "", env: {} };
     const failure = () => controller.signal.reason instanceof Error ? controller.signal.reason : new Error(`${spec.name} text aborted`);
+    let stderr = "";
     try {
       const promptFile = join(cwd, "prompt.txt");
       writeFileSync(promptFile, prompt);
@@ -75,10 +77,10 @@ export function createCliText(spec: CliTextSpec): CliText {
         child.on("close", (code) => {
           controller.signal.removeEventListener("abort", abort);
           if (error) reject(error);
-          else if (code !== 0) reject(new Error(`${spec.name} text exited with code ${code}`));
+          else if (code !== 0) reject(textUsageError(stderr) ?? new Error(`${spec.name} text exited with code ${code}`));
           else resolve(stdout);
         });
-        child.stderr!.resume();
+        child.stderr!.setEncoding("utf8").on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-8_192); });
         child.stdout!.setEncoding("utf8");
         child.stdout!.on("data", (chunk: string) => {
           bytes += Buffer.byteLength(chunk);

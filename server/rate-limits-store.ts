@@ -7,7 +7,7 @@ import { z } from "zod";
 import { writeFileAtomic } from "./atomic.ts";
 import type { RateLimitWindow } from "./contracts.ts";
 
-export type RateLimitsReport = { windows: RateLimitWindow[]; observedAt: string };
+export type RateLimitsReport = { windows: RateLimitWindow[]; observedAt: string; noteLimit?: { resetsAt: number | null } };
 export type RateLimitsMap = Map<string, RateLimitsReport>;
 
 const windowSchema = z.object({
@@ -19,6 +19,7 @@ const windowSchema = z.object({
 const reportSchema = z.object({
   windows: z.array(windowSchema),
   observedAt: z.string().refine((value) => !Number.isNaN(Date.parse(value))),
+  noteLimit: z.object({ resetsAt: z.number().finite().nullable() }).optional(),
 });
 const fileSchema = z.record(z.string(), reportSchema);
 

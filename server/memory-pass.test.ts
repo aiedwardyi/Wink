@@ -24,7 +24,9 @@ import { memoryNotesEnabled } from "./config.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { CodexDriver } from "./drivers/codex.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import { pinMemoryJobOwner, tidiesHere, type MemorySyncLedger } from "./memory-sync.ts";
 import { replyTurns } from "./pick-sources.ts";
+import type { RateLimitsMap } from "./rate-limits-store.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
@@ -184,6 +186,7 @@ describe("memory pass", () => {
         busy.add("bot-t1");
         return facts(["Prefers pnpm", "I prefer pnpm"]);
       });
+      generator = Object.assign(generate, { engine: "codex" });
       say("t1", "I prefer pnpm", { sendId: "source-send" });
       await settle("t1", 3 * MINUTE);
       busy.clear();
@@ -191,7 +194,7 @@ describe("memory pass", () => {
       expect(generate).toHaveBeenCalledTimes(1);
       const traces = readFileSync(join(dataDir, "turn-traces.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
       expect(traces).toHaveLength(1);
-      expect(traces[0]).toMatchObject({ botId: "bot-t1", threadId: "t1", sourceSendIds: ["source-send"], requests: [{ id: "request-1", usage: { input: 20, output: 2 }, nested: false }] });
+      expect(traces[0]).toMatchObject({ engine: "codex", botId: "bot-t1", threadId: "t1", sourceSendIds: ["source-send"], requests: [{ id: "request-1", usage: { input: 20, output: 2 }, nested: false }] });
       expect(chips("t1")).toHaveLength(1);
     } finally {
       if (timing === undefined) delete process.env.ORBIT_TURN_TIMING;
@@ -205,6 +208,82 @@ describe("memory pass", () => {
     for (let i = 0; i < 8; i += 1) say("t1", `line ${i}`);
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a malformed batch pending across restart and saves it on a healthy pass", async () => {
+    generate.mockResolvedValueOnce('[{"fact":1}]');
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    await settle("t1");
+    pass.dispose();
+    expect(stored()).toEqual({ threads: { t1: ids } });
+    expect(memoryFileRaw("bot-t1")).toBe("");
+    expect(readMemoryTopic("bot-t1", "decisions.md")).toBeNull();
+    expect(chips("t1")).toHaveLength(0);
+    pass = start();
+    generate.mockResolvedValueOnce(facts(["Prefers pnpm", "I prefer pnpm"]));
+    await settle("t1");
+    expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Prefers pnpm (noted 2026-10-15)\n`);
+    expect(stored()).toEqual({ threads: {} });
+  });
+
+  it("makes five settlements cost one attempt on a limited account", async () => {
+    const limits: RateLimitsMap = new Map();
+    const own = { instanceId: "acct-live", enabled: true, driverKind: "codex", generateText: vi.fn(async () => {
+      throw new Error("HTTP 429");
+    }) };
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, own, { limits, save: () => {} }) });
+    passes.push(pass);
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    for (let i = 0; i < 5; i++) await settle("t1");
+    pass.dispose();
+    expect(own.generateText).toHaveBeenCalledTimes(1);
+    expect(store.rows("t1").map(({ id }) => id)).toEqual(ids);
+    expect(stored()).toEqual({ threads: { t1: ids } });
+  });
+
+  it("leaves a restored batch pending on a mirror and runs it once on the owner", async () => {
+    const ids = Array.from({ length: 8 }, () => say("t1", "I use pnpm").id);
+    pass.dispose();
+    const ledger: MemorySyncLedger = { bots: {}, device: "aaaaaaaaaaaa", jobDevice: "aaaaaaaaaaaa" };
+    pinMemoryJobOwner(ledger, "shared-bot", "pc-a");
+    const startOn = (device: string, path: string) => {
+      const copy = createMemoryPass({ store, dataDir: path, generate: () => generator, enabled: () => true,
+        busy: () => false, runsHere: () => tidiesHere(ledger, "shared-bot", device) });
+      passes.push(copy);
+      return copy;
+    };
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), JSON.stringify({ threads: { t1: ids } }));
+    const mirror = startOn("pc-b", mirrorDir);
+    mirror.onSettled("bot-t1", "t1");
+    await mirror.idle();
+    expect(generate).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(join(mirrorDir, "memory-pass.json"), "utf8"))).toEqual({ threads: { t1: ids } });
+    pass = startOn("pc-a", dataDir);
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(stored()).toEqual({ threads: {} });
+  });
+
+  it("cancels an active extraction when the next turn starts and keeps its pending rows", async () => {
+    let finish: (output: string) => void = () => {};
+    generate.mockReturnValueOnce(new Promise<string>((resolve) => { finish = resolve; }));
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    expect(generate).toHaveBeenCalledTimes(1);
+    say("t1", "I prefer concise replies");
+    pass.onTurn("bot-t1");
+    expect(generate.mock.calls[0]![1].aborted).toBe(true);
+    expect(chips("t1")).toHaveLength(0);
+    pass.onSettled("bot-t1", "t1", true);
+    finish(facts(["Uses pnpm", "I use pnpm"]));
+    await pass.idle();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[1]![0]).toContain("I use pnpm");
+    expect(generate.mock.calls[1]![0]).toContain("I prefer concise replies");
+    expect(stored()).toEqual({ threads: {} });
   });
 
   it("flushes at once before the engine compacts", async () => {
@@ -1020,8 +1099,9 @@ describe("memory pass filters", () => {
 
   it("parses the model's JSON reply", () => {
     expect(parseFacts('```json\n[{"fact":"a","quote":"b"}]\n```')).toEqual([{ fact: "a", quote: "b" }]);
-    expect(parseFacts("nothing")).toEqual([]);
-    expect(parseFacts('[{"fact":1}]')).toEqual([]);
+    expect(parseFacts("[]")).toEqual([]);
+    expect(parseFacts("nothing")).toBeNull();
+    expect(parseFacts('[{"fact":1}]')).toBeNull();
   });
 
   it("appends within the budget only", () => {
@@ -1058,17 +1138,25 @@ describe("note generator", () => {
     expect(noteGenerator([])).toBeNull();
   });
 
-  it("runs on the bot's own engine only when no Claude can", async () => {
-    const codex = instance("codex");
-    const claude = instance("claudeAgent");
+  it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("runs %s on its resolved account even with Main Claude ready", async (engine) => {
+    const own = instance(engine);
+    const claude = { ...instance("claudeAgent"), instanceId: "claude-main" };
+    const base = instance(engine, { text: "wrong account" });
     const signal = new AbortController().signal;
-    await expect(noteGenerator([codex], undefined, codex)?.("prompt", signal)).resolves.toBe("codex");
-    expect(codex.generateText).toHaveBeenCalledWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true });
-    await expect(noteGenerator([codex, claude], undefined, codex)?.("prompt", signal)).resolves.toBe("claudeAgent");
-    await expect(noteGenerator([claude], { instanceId: "claude-bound", available: false }, codex)?.("prompt", signal)).resolves.toBe("codex");
+    const account = { instanceId: "claude-main", available: true };
+    const generate = noteGenerator([base, claude], account, own);
+    await expect(generate?.("prompt", signal)).resolves.toBe(engine);
+    expect(own.generateText).toHaveBeenCalledExactlyOnceWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true });
+    expect(claude.generateText).not.toHaveBeenCalled();
+    expect(base.generateText).not.toHaveBeenCalled();
+    expect(noteGenerator([base, claude], account, null)).toBeNull();
     expect(noteGenerator([], undefined, instance("codex", { enabled: false }))).toBeNull();
     expect(noteGenerator([], undefined, instance("codex", { text: null }))).toBeNull();
-    expect(noteGenerator([], undefined, null)).toBeNull();
+  });
+
+  it("labels the background trace with the engine that runs the pass", async () => {
+    const own = instance("grokAgent");
+    expect(noteGenerator([], undefined, own)?.engine).toBe("grok");
   });
 
   it("passes an optional usage observer without changing the helper call", async () => {
@@ -1088,6 +1176,21 @@ describe("notes on the bot's own engine", () => {
     await codex?.dispose();
     delete process.env.FAKE_CODEX_MESSAGES;
     vi.restoreAllMocks();
+  });
+
+  it("keeps a real helper rejection on its account without submitting again", async () => {
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-limit-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true,
+      environment: { CODEX_HOME: home, FAKE_CODEX_MODE: "text-rate-limited" }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const limits: RateLimitsMap = new Map();
+    const usage = { limits, save: vi.fn() };
+    await expect(noteGenerator([], undefined, own, usage)?.("notes", new AbortController().signal)).rejects.toThrow("Account text rate limit");
+    expect(noteGenerator([], undefined, own, usage)).toBeNull();
+    expect(usage.save).toHaveBeenCalledTimes(1);
+    expect(limits.get("codex")?.noteLimit).toEqual({ resetsAt: null });
   });
 
   it("fills notes and the timeline for a Codex bot on a PC with no Claude", async () => {
@@ -1119,8 +1222,8 @@ describe("memory pass wiring", () => {
   const index = readFileSync(join(here, "index.ts"), "utf8");
   const bots = readFileSync(join(here, "bot-routes.ts"), "utf8");
 
-  it("runs every bot's pass and tidy on Claude, else its own engine, after 1:1 turns, without a session transcript", () => {
-    expect(index).toMatch(/const noteHelper = [\s\S]*?summaryInstance\(instance, selection\.model\)[\s\S]*?return noteGenerator\(registry\.instances\(\)\.filter\(\(instance\) => registry\.accountAvailable\(instance\.instanceId\)\), botAccounts\.noteAccount\(\), own\);/);
+  it("keeps the legacy Claude selector and uses the resolved own account for other bots", () => {
+    expect(index).toContain("botAccounts.notes(bot, { limits: rateLimitsByInstance,");
     expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: noteHelper,[\s\S]*?botHasActiveTurn/);
     expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?generate: noteHelper,/);
     expect(index).toMatch(/memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);\s*if \(!store\.groupByThread\(event\.threadId\)\)/);
@@ -1132,7 +1235,7 @@ describe("memory pass wiring", () => {
   });
 
   it("reads the Settings switch live and drops pending notes on a config change", () => {
-    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?enabled: \(botId\) => \{[\s\S]*?memoryNotesEnabled\(cfg, bot\);[\s\S]*?\}\);/);
+    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?enabled: memoryJobEnabled,/);
     expect(index).toMatch(/saveConfig\(patch\);[\s\S]*?Object\.assign\(cfg, loadConfig\(\)\);\s*\}\s*if \(\(cfg\.profile[^\n]*\n\s*memoryPass\.onConfigChanged\(\);/);
     expect(index).toContain("memoryNotes: memoryNotesEnabled(cfg),");
   });
@@ -1146,7 +1249,7 @@ describe("memory pass wiring", () => {
 
   it("takes notes only for engines that load MEMORY.md", () => {
     expect(index).toMatch(
-      /enabled: \(botId\) => \{\s*const bot = store\.bot\(botId\);\s*const instance = bot && registry\.get\(bot\.modelSelection\.instanceId\);\s*return Boolean\(instance && supportsWorkspaceFiles\(instance\.driverKind\)\) && memoryNotesEnabled\(cfg, bot\);/,
+      /const memoryJobEnabled = \(botId: string\) => \{\s*const bot = store\.bot\(botId\);\s*const instance = bot && registry\.get\(bot\.modelSelection\.instanceId\);\s*return Boolean\(instance && supportsWorkspaceFiles\(instance\.driverKind\)\) && memoryNotesEnabled\(cfg, bot\);/,
     );
   });
 

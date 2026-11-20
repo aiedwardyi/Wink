@@ -67,6 +67,16 @@ function operation(input: Partial<Parameters<typeof createSyncOperation>[0]> = {
 }
 
 describe("profile sync operations", () => {
+  it("keeps the original bot publisher across delayed and out-of-order edits", () => {
+    const original = operation({ changes: { name: "Tutor", title: "", description: "", color: "blue" } });
+    const peer = operation({ operationId: "peer", deviceId: "device-b", recordedAt: original.recordedAt + 1,
+      baseCheckpoint: original.operationId, changes: { name: "Renamed Tutor", title: "", description: "", color: "green" } });
+    expect(applySyncOperations(emptyProfileSyncState(), [peer]).botOrigins).toEqual({});
+    const state = applySyncOperations(emptyProfileSyncState(), [peer, original]);
+    expect(state.botOrigins).toEqual({ "bot-1": "device-a" });
+    expect(state.bots["bot-1"]?.name).toBe("Renamed Tutor");
+  });
+
   it("replays duplicate and out-of-order records idempotently", () => {
     const newer = operation({ operationId: "op-2", deviceId: "device-b", sequence: 2, recordedAt: 1_700_000_000_002, changes: { title: "Teacher" } });
     const older = operation({ operationId: "op-1", deviceId: "device-a", sequence: 1, recordedAt: 1_700_000_000_001 });

@@ -355,6 +355,11 @@ export function usageLimitFromError(
   return { resetsAt: resetFromRejection(data, now) };
 }
 
+export function textUsageError(message: string | undefined, fields?: RejectionFields): Error | undefined {
+  const limit = usageLimitFromError(Object.assign(new Error(message), fields), true) ?? chatUsageLimit("codex", fields?.data)?.usageLimit;
+  return limit ? Object.assign(new Error("Account text rate limit"), { data: limit }) : undefined;
+}
+
 /** The provider ruled a usage limit out, as opposed to saying nothing
  * useful: it named a type that is not one, or the call never reached the
  * account at all. A failure like that keeps its own message — corroborating

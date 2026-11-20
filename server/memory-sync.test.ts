@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { markTalked, memorySyncDir, syncBotMemory, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
+import { markTalked, memorySyncDir, pinMemoryJobOwner, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
 import { MEMORY_SEED } from "./workspace.ts";
 import { applyPicks, currentPicks, parseTimeline } from "./picks.ts";
 
@@ -74,6 +74,18 @@ function seed(text: string, ...all: PC[]) {
 }
 
 describe("memory sync", () => {
+  it("keeps background jobs on the owner if its ledger is copied to another PC", () => {
+    const [owner, mirror] = pcs();
+    seed(MEMORY_SEED, owner);
+    pinMemoryJobOwner(owner.ledger, "bot-1", "pc-a");
+    expect(tidiesHere(owner.ledger, "bot-1", "pc-a")).toBe(true);
+    Object.assign(mirror.ledger, structuredClone(owner.ledger));
+    sync(mirror);
+    expect(tidiesHere(mirror.ledger, "bot-1", "pc-a")).toBe(false);
+    expect(tidiesHere(mirror.ledger, "bot-1", "pc-b")).toBe(false);
+    expect(tidiesHere(owner.ledger, "bot-1", "pc-a")).toBe(true);
+  });
+
   it("recovers a timeline parked by an older build without asking the bot to edit it", () => {
     const [a] = pcs();
     const at = new Date(2026, 10, 17, 10).getTime();

@@ -46,6 +46,7 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
+import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
 import { antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
@@ -1197,12 +1198,18 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           return () => listeners.delete(listener);
         },
       },
-      generateText: async (prompt: string) => {
+      generateText: async (prompt, opts) => {
         // A shared slot, so a computer turn's box token never reaches this child.
-        const releaseMcpLock = await acquireAntigravityMcpLock(false).granted;
+        const signal = opts?.signal;
+        signal?.throwIfAborted();
+        const lock = acquireAntigravityMcpLock(false);
+        signal?.addEventListener("abort", lock.cancel, { once: true });
+        const releaseMcpLock = await lock.granted;
+        signal?.removeEventListener("abort", lock.cancel);
         let restoreMcp = () => {};
         let cwd: string | null = null;
         try {
+          signal?.throwIfAborted();
           restoreMcp = mountAntigravityMcp(null, env);
           cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
           // stdin like a turn: a summary prompt on argv blows the Windows command line
@@ -1214,10 +1221,13 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           return await new Promise<string>((resolve, reject) => {
             let result: { status?: unknown; response?: unknown } | null = null;
             let failure: Error | null = null;
-            const timer = setTimeout(() => {
-              failure = new Error("agy summary timed out");
+            const stop = (error: Error) => {
+              failure ??= error;
               killCliTree(child);
-            }, 120_000);
+            };
+            const abort = () => stop(new Error("agy summary aborted"));
+            signal?.addEventListener("abort", abort, { once: true });
+            const timer = setTimeout(() => stop(new Error("agy summary timed out")), opts?.timeoutMs ?? 120_000);
             timer.unref?.();
             let buf = "";
             child.stdout.setEncoding("utf8");
@@ -1242,10 +1252,11 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             });
             child.on("close", (code) => {
               clearTimeout(timer);
+              signal?.removeEventListener("abort", abort);
               const response = typeof result?.response === "string" ? result.response.trim() : "";
               if (failure) reject(failure);
-              else if (!result) reject(new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
-              else if (result.status !== "SUCCESS" || !response) reject(new Error(`agy summary failed (${String(result.status)})`));
+              else if (!result) reject(textUsageError(stderr) ?? new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
+              else if (result.status !== "SUCCESS" || !response) reject(textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})`));
               else resolve(response);
             });
             child.stdin.end(antigravityStreamUserLine(prompt));

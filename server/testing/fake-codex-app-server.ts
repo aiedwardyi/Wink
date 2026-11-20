@@ -227,6 +227,10 @@ process.stdin.on("data", (chunk) => {
         break;
       }
       case "turn/start": {
+        if (mode === "text-rate-limited") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "HTTP 429" } });
+          break;
+        }
         if (mode === "unauthorized") {
           out({
             jsonrpc: "2.0",
