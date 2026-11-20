@@ -4411,7 +4411,7 @@ SETLOCAL
 CALL :find_dp0
 "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*
 `;
-  const saved = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA };
+  const saved = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA, ProgramFiles: process.env.ProgramFiles };
   let root: string;
   let instance: ProviderInstance | undefined;
 
@@ -4439,8 +4439,9 @@ CALL :find_dp0
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "omb-claude-placeholder-"));
+    // Program Files too: the shims then run this node, not a cold %ProgramFiles%\nodejs\node.exe that can outlast the 8 s version probe.
     Object.assign(process.env, { PATH: join(process.env.SystemRoot ?? "C:\\Windows", "System32"), USERPROFILE: root,
-      APPDATA: join(root, "AppData", "Roaming"), LOCALAPPDATA: join(root, "AppData", "Local") });
+      APPDATA: join(root, "AppData", "Roaming"), LOCALAPPDATA: join(root, "AppData", "Local"), ProgramFiles: join(root, "Program Files") });
     resetPathCacheForTests();
   });
 
