@@ -233,6 +233,14 @@ describe("board handoff eval", () => {
     expect(sent.map((payload) => payload.title)).toEqual(["📞 Carbon is calling"]);
   });
 
+  it("a login call rings and leaves the Forum alone; an engine call still posts", async () => {
+    await blockers(BOTS.astra!, [{ kind: "login", note: "Sign in to Claude on Home so tonight's eval can run." }]);
+    expect(sent.map((payload) => payload.title)).toEqual(["📞 Astra is calling"]);
+    expect(board.list()).toEqual([]);
+    await blockers(BOTS.carbon!, [X("09:30")]);
+    expect(board.list().map((post) => [post.kind, post.author_bot_id])).toEqual([["stuck", "carbon"]]);
+  });
+
   it("an open post with no answer yet holds nothing back", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
     await blockers(BOTS.carbon!, [X("09:30")]);
