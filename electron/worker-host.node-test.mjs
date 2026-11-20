@@ -176,6 +176,25 @@ test("a host record is replaced while a reader still has the old one open", (t) 
   assert.deepEqual(workerHostRecord(file), { nonce: "new" });
 });
 
+test("a host record the system will not replace keeps the old one, even with a reader on it", windows, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-record-"));
+  const file = path.join(dir, "panes.json");
+  writeWorkerHostRecord(file, { panes: [{ id: "finished", exit: 7 }] });
+  const reader = fs.openSync(file, "r");
+  t.after(() => {
+    fs.closeSync(reader);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const rename = fs.renameSync;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (!from.endsWith(".tmp")) return rename(from, to);
+    const blocker = holdWorkerHostLock(from);
+    try { return rename(from, to); } finally { fs.closeSync(blocker); }
+  });
+  assert.throws(() => writeWorkerHostRecord(file, { panes: [{ id: "finished", exit: 7 }, { id: "other", exit: 0 }] }), { code: "EBUSY" });
+  assert.deepEqual(workerHostRecord(file), { panes: [{ id: "finished", exit: 7 }] });
+});
+
 test("a real shell runs in the host: output, input once, resize, mark and exit code", { ...windows, timeout: 120_000 }, async (t) => {
   const f = fixture(t);
   const client = f.make();

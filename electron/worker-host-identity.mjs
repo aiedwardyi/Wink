@@ -21,8 +21,13 @@ export function workerHostRecord(file) {
 
 export function writeWorkerHostRecord(file, value) {
   const temporary = `${file}.${process.pid}.tmp`;
+  const previous = `${file}.${process.pid}.old`;
   fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
-  // Windows will not rename over a record a reader has open, but a removed name is free at once.
-  fs.rmSync(file, { force: true });
-  fs.renameSync(temporary, file);
+  // Windows will not rename over a record a reader has open, but it will move that record aside.
+  let moved = true;
+  try { fs.renameSync(file, previous); }
+  catch (error) { if (error.code !== "ENOENT") throw error; moved = false; }
+  try { fs.renameSync(temporary, file); }
+  catch (error) { if (moved) fs.renameSync(previous, file); throw error; }
+  if (moved) fs.rmSync(previous, { force: true });
 }
