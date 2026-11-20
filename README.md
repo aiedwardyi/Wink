@@ -49,8 +49,8 @@ Each worker runs its engine's own CLI in its own terminal, and the lead bot is t
 **4. Wink trusts the checks, not the AI**<br>
 Every bot is told to fix the root cause and turn each mistake into a test that fails if it comes back. Then Live Verify opens the page in a real browser, clicks through it at phone size and shows you what's broken.
 
-<!-- VIDEO: en-new.mp4 -->
-<img src="./assets/readme/tour-verify-v2.png" width="880" alt="Live Verify running checks on the Starzum page in desktop and phone views.">
+https://github.com/user-attachments/assets/c3883bbd-249b-4bf5-b16d-8a842f9849a1
+
 
 **5. Memory that carries across sessions and keeps getting better**<br>
 Each bot keeps one memory across its chats, models and your phone, and across your PCs with Sync on. It writes down what it learns and keeps a to-do list of what you asked, so a new chat starts with what it already knows.
