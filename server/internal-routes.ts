@@ -15,7 +15,7 @@ import type { BotCalls } from "./bot-call.ts";
 import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { postRefusalNotice, refusalText } from "./comms-notice.ts";
-import { callerSnapshot, release, reserve, type Reservation } from "./comms-root.ts";
+import { callerSnapshot, ownerRoot, release, reserve, type Reservation } from "./comms-root.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import * as composio from "./composio.ts";
 import type { ComputerControl } from "./computer-control.ts";
@@ -466,7 +466,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           ? json(res, 200, { ok: true })
           : json(res, 404, { error: `No pending wake ${body.cancel}. list_routines shows your wakes.` });
       }
-      const result = setWake(routines, { botId: from.id, threadId: fromThreadId, at: body.at, note: body.note });
+      const result = setWake(routines, { botId: from.id, threadId: fromThreadId, at: body.at, note: body.note, owner: ownerRoot(callerSnapshot(from.id, fromThreadId)?.rootId) });
       return result.ok ? json(res, 200, result) : json(res, 400, { error: result.error });
     },
     setKeepGoing: async (req: IncomingMessage, res: ServerResponse) => {

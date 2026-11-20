@@ -12,12 +12,12 @@ import { DATA_DIR } from "../config.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { _resetSteerQueue, drainSteeredMessages, queuedRoomBotIds, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
-import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, closeAsksDb, configureRoomAsks, endAsk, failTeammateAskTurn, hostedTurnRefused, readOnlyAskTurn, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
+import { ASK_DENY_NOTE, askById, askFromHost, askFromOwner, askRiders, asksWork, closeAsksDb, configureRoomAsks, endAsk, failTeammateAskTurn, hostedTurnRefused, readOnlyAskTurn, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
 import { closeInvitesDb, joinRoom, ownerRoomCode, roomCode } from "./invites.ts";
-import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, setPersonWorks, type RoomPerson } from "./db.ts";
+import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomsDatabase, setPersonWorks, type RoomPerson } from "./db.ts";
 import { goLive, openDoorStream } from "./door-streams.ts";
 import { askNote, COLLAB_LINE, publishTurnAnswer, teammatesLine } from "./multiplayer.ts";
-import { hostedSend } from "./send.ts";
+import { hostedSend, teamBotSend } from "./send.ts";
 import { addTeamBot, removeTeamBot } from "./team-bots.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
@@ -283,7 +283,7 @@ describe("a teammate's request under the host's setting for the bot", () => {
     };
     walk(runner);
     expect(spread).toBe(true);
-    const deps = { authority, chainAsk, bot, lane, works, askById, askFromHost, askRiders };
+    const deps = { authority, chainAsk, bot, lane, works, askById, askFromHost, askFromOwner, askRiders };
     const variables = ["riders", "asked", "lead", "guestAsked", "access"].map((name) => `const ${name} = ${runnerConst(name)};`).join("\n");
     return new Function(...Object.keys(deps), `${js(variables)}\nreturn access;`)(...Object.values(deps));
   }
@@ -319,6 +319,23 @@ describe("a teammate's request under the host's setting for the bot", () => {
     expect(startAsk(ask!.id)).toBe(true);
     return ask!;
   };
+
+  it("keeps the next speaker after a host seat's bot answers a teammate off the owner's tools, still working", () => {
+    const seat = addPerson(group.hosted.roomId, "Edward", ["Wink"]);
+    roomsDatabase().prepare("INSERT INTO room_host_seats (room_id, person_id, host_name) VALUES (?, ?, ?)").run(group.hosted.roomId, seat.id, "Edward");
+    const pete = addTeamBot(group.hosted.roomId, seat.id, "Pete", "teal", ["Wink"]);
+    const guestAsked = (chainAsk: string) => new Function("authority", "chainAsk", "askById", "askRiders", "askFromHost", "askFromOwner",
+      js(`const riders = ${runnerConst("riders")};\nconst asked = ${runnerConst("asked")};\nconst lead = ${runnerConst("lead")};\nreturn Boolean(${runnerConst("guestAsked")});`))(undefined, chainAsk, askById, askRiders, askFromHost, askFromOwner) as boolean;
+    const teammate = appendRoomEntry(group.hosted.roomId, { author: { kind: "person", id: sora.id, name: "Sora" }, text: "can a bot run the deploy?" });
+    teamBotSend(group, seat, pete, "@Wink please run the deploy", teammate.id);
+    const relayed = asks().at(-1)!;
+    expect(guestAsked(relayed.id)).toBe(true);
+    expect(turnWorks(undefined, relayed.id)).toBe(true);
+    endAsk(relayed.id, "cancelled");
+    const own = appendRoomEntry(group.hosted.roomId, { author: { kind: "host", id: "host", name: "Edward" }, text: "Pete, get Wink on the deploy" });
+    teamBotSend(group, seat, pete, "@Wink the owner wants the deploy", own.id);
+    expect(guestAsked(asks().at(-1)!.id)).toBe(false);
+  });
 
   it("sends a switched-on teammate's turn read-only in Ask mode and an Auto bot's as it is set", () => {
     expect(turnAccess("ask-1", { autoApprove: false })).toEqual({ approval: "ask", readOnly: true });

@@ -44,17 +44,37 @@ const hopOptions = {
   delegation: (callerRoot: string | null) => new Function("commsDepth", "root", "reservation", "ask", "isUnattended", "sourceBotId", "transcriptText", "peerAttribution", "store", "channel", "reportStartFailure", `return ${js(`(${startTurnOptions("commsRoot: root ?? null")})`)}`)(1, callerRoot ?? undefined, undefined, undefined, () => false, "wink", "", () => ({}), { bot: () => undefined }, undefined, () => {}),
 };
 
-function agentsEnv(mountIndex: number, scope: { commsDepth?: number; hop?: number; rootId?: string | null; guestAsked?: boolean }): Record<string, string> {
+function agentsEnv(mountIndex: number, scope: { commsDepth?: number; hop?: number; rootId?: string | null; asked?: string; guestAsked?: boolean }): Record<string, string> {
   const integration = nodes(ts.isFunctionDeclaration).find((node) => node.name?.text === "agentsIntegration")!;
   const agentsIntegration = new Function("process", "agentsProxyPath", "AGENTS_NODE_FLAG", "PORT", "commsCallers", "teamReports", `${js(integration.getText(source))}; return agentsIntegration;`)(
     { env: {} }, PROXY, {}, 9, { token: () => "fixture-token" }, { prompt: () => "" },
   );
   const mounts = nodes(ts.isIfStatement).filter((node) => node.thenStatement.getText(source).includes("integrations.agents = agentsIntegration("));
   const integrations: { agents?: { env: Record<string, string> } } = {};
-  new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "readOnly", "importMemory", "searchable", "works", "handoff", "guestAsked", "rootId", "ownerRoot", "agentsIntegration", mounts[mountIndex]!.getText(source))(
-    integrations, { adapter: { capabilities: { agentsMcp: true } } }, { id: "evals" }, "evals-thread", scope.commsDepth ?? 0, scope.hop ?? 0, false, { tool: false }, false, true, null, scope.guestAsked ?? false, scope.rootId ?? null, roots.ownerRoot, agentsIntegration,
+  new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "readOnly", "importMemory", "searchable", "works", "handoff", "asked", "guestAsked", "rootId", "ownerRoot", "agentsIntegration", mounts[mountIndex]!.getText(source))(
+    integrations, { adapter: { capabilities: { agentsMcp: true } } }, { id: "evals" }, "evals-thread", scope.commsDepth ?? 0, scope.hop ?? 0, false, { tool: false }, false, true, null, scope.asked, scope.guestAsked ?? false, scope.rootId ?? null, roots.ownerRoot, agentsIntegration,
   );
   return integrations.agents!.env;
+}
+
+async function wakeStart(run: Record<string, unknown>, room: boolean) {
+  const arrow = nodes(ts.isPropertyAssignment).find((node) => node.name.getText(source) === "startChatTurn")!.initializer.getText(source);
+  const seen: { rootId?: string | null; opts?: Record<string, unknown> } = {};
+  const scope = {
+    routineSourceOwner: () => ({ bot: { id: "wink" }, threadId: "wink-thread", ...(room ? { group: { id: "room" } } : {}) }),
+    botHasActiveTurn: () => false, busyRejection: (message: string) => new Error(message), routineTriggerIsUnattended: () => false, markUnattended: () => {},
+    runGroupMemberTurn: (...args: unknown[]) => { seen.rootId = args[10] as string | null; return Promise.resolve(true); },
+    routines: { isCancelled: () => false }, rootForStart: roots.rootForStart,
+    startTurn: async (_botId: string, _line: string, opts: Record<string, unknown>) => { seen.opts = opts; },
+  };
+  await new Function(...Object.keys(scope), `return ${js(arrow)}`)(...Object.values(scope))({ triggerSource: "schedule", ...run }, "[Wake]", () => {});
+  return seen;
+}
+
+function fold(rootId: string | null, from: "activePath" | "pathTail") {
+  const loop = nodes(ts.isForOfStatement).find((node) => node.getText(source).includes(`store.${from}(threadId`) && node.getText(source).includes("adoptHumanRoot"))!;
+  const store = { activePath: () => [{ id: "owner-steer" }], pathTail: () => [{ id: "owner-steer" }] };
+  return new Function("store", "threadId", "folded", "queued", "adoptHumanRoot", "rootId", `${js(loop.getText(source))}\nreturn rootId;`)(store, "evals-thread", ["steer"], ["steer"], roots.adoptHumanRoot, rootId) as string | null;
 }
 
 function listedTools(env: Record<string, string>): Promise<string[]> {
@@ -93,6 +113,33 @@ it.each(["ask", "delegation"] as const)("keeps the opened tools on a %s the owne
 });
 
 it("gives a room hop a guest's ask started only the base peer tools", async () => {
-  expect(await listedTools(agentsEnv(1, { hop: 1, guestAsked: true }))).toEqual(BASE_PEER_TOOLS);
-  expect(await listedTools(agentsEnv(1, { hop: 1, guestAsked: false }))).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
+  expect(await listedTools(agentsEnv(1, { hop: 1, asked: "ask-1", guestAsked: true }))).toEqual(BASE_PEER_TOOLS);
+  expect(await listedTools(agentsEnv(1, { hop: 1, asked: "ask-1", guestAsked: false }))).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
+  const ownerLine = roots.rootForStart("room-thread", { kind: "human", messageKey: "owner-line" });
+  expect(await listedTools(agentsEnv(1, { hop: 1, rootId: ownerLine }))).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
+  expect(await listedTools(agentsEnv(1, { hop: 1 }))).toEqual(BASE_PEER_TOOLS);
+});
+
+it("gives the next room speaker after a wake no owner turn set only the base peer tools", async () => {
+  roots.rootForStart("wink-thread", { kind: "human", messageKey: "owner-line" });
+  const owner = await wakeStart({ id: "owner-wake", wake: true, ownerChain: true }, true);
+  expect(await listedTools(agentsEnv(1, { hop: 1, rootId: owner.rootId }))).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
+  const guest = await wakeStart({ id: "guest-wake", wake: true }, true);
+  expect(await listedTools(agentsEnv(1, { hop: 1, rootId: guest.rootId }))).toEqual(BASE_PEER_TOOLS);
+});
+
+it("gives a hop from a private wake no owner turn set only the base peer tools", async () => {
+  roots.rootForStart("wink-thread", { kind: "human", messageKey: "owner-line" });
+  const { opts } = await wakeStart({ id: "guest-wake", wake: true }, false);
+  const hop = hopOptions.ask(rootFor("wink-thread", opts!, "wake-line"));
+  expect(await listedTools(agentsEnv(0, { commsDepth: Number(hop.commsDepth), rootId: rootFor("evals-thread", hop, "peer-line") }))).toEqual(BASE_PEER_TOOLS);
+});
+
+it.each(["activePath", "pathTail"] as const)("never upgrades a guest-started peer an owner steer folds into (%s)", async (from) => {
+  const guest = hopOptions.ask(rootFor("joined-thread", joinedStart(true), "guest-line"));
+  const guestEnv = agentsEnv(0, { commsDepth: Number(guest.commsDepth), rootId: fold(rootFor("evals-thread", guest, "guest-peer"), from) });
+  expect(await listedTools(guestEnv)).toEqual(BASE_PEER_TOOLS);
+  const owner = hopOptions.ask(rootFor("wink-thread", { threadId: "wink-thread" }, "owner-line"));
+  const ownerEnv = agentsEnv(0, { commsDepth: Number(owner.commsDepth), rootId: fold(rootFor("evals-thread", owner, "owner-peer"), from) });
+  expect(await listedTools(ownerEnv)).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
 });

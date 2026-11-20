@@ -68,13 +68,13 @@ export class TeamReports {
     try { return JSON.parse(readFileSync(join(o.dir, "membership.json"), "utf8")).owner === o.owner && Boolean(o.owner); } catch { return false; }
   }
 
-  async handle(raw: unknown): Promise<Record<string, unknown>> {
+  async handle(raw: unknown, caller: { botId: string; threadId: string } | undefined): Promise<Record<string, unknown>> {
     const parsed = requestSchema.safeParse(raw);
     if (!parsed.success) return { error: "Invalid report request." };
     const body = parsed.data;
     const o = this.options;
     const bot = o.store.bot(body.fromBotId);
-    if (!bot || !o.store.conversationForBot(bot.id, body.fromThreadId)) return { error: "Report conversation does not belong to sender." };
+    if (!bot || caller?.botId !== bot.id || caller.threadId !== body.fromThreadId || !o.store.conversationForBot(bot.id, body.fromThreadId)) return { error: "Report conversation does not belong to sender." };
     this.prompt();
     if (!this.canDraft()) return { error: "Authenticated team reporting unavailable. No report sent." };
     const path = o.store.activePath(body.fromThreadId);

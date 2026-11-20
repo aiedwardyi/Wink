@@ -137,6 +137,15 @@ it("adopts a human fold before the provider announces its turn", () => {
   expect(callerSnapshot(from.id, from.threadId)?.rootId).toBe(folded);
 });
 
+it("keeps a guest root when an owner line folds into its turn", () => {
+  const guest = rootForStart(from.threadId, { kind: "guest", messageKey: "guest-line" });
+  turnRegistry.start("guest-turn", { botId: from.id, threadId: from.threadId, owner: "user", depth: 0, rootId: guest });
+  expect(adoptHumanRoot(from.threadId, "owner-steer")).toBe(guest);
+  expect(adoptHumanRoot("elsewhere", "owner-steer-2", guest)).toBe(guest);
+  expect(ownerRoot(callerSnapshot(from.id, from.threadId)?.rootId)).toBe(false);
+  turnRegistry.settle("guest-turn");
+});
+
 it.each(["routine", "card resume", "keep-going", "pane-note", "limit resume", "control steer"])("never mints a root for %s", () => {
   expect(rootForStart(from.threadId, { kind: "automatic" })).toBeNull();
   const root = start();

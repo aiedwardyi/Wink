@@ -61,7 +61,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askById, askFromOwner, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -5678,7 +5678,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
   if (folded.length) {
-    for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
+    for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id, rootId);
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
   }
@@ -6159,7 +6159,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const foldLate = () => {
           const queued = foldPeerQueuedSends(store, bot.id, threadId, claimMark, live.adapter.capabilities.queueing === true);
           if (!queued.length) return;
-          for (const message of store.pathTail(threadId, queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
+          for (const message of store.pathTail(threadId, queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id, rootId);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
@@ -6518,6 +6518,8 @@ routines = new RoutineManager({
     const source = routineSourceOwner(run);
     if (!source) throw new Error("The routine's chat no longer exists");
     const automationSource = run.triggerSource ?? "schedule";
+    // a wake no owner turn set rings as someone else's chain
+    const guestWake = run.wake && !run.ownerChain ? rootForStart(source.threadId, { kind: "guest", messageKey: run.id }) : undefined;
     if (source.group) {
       // Wait in the routine queue, never the room's: only this one can cancel the run and keeps its trigger.
       if (botHasActiveTurn(source.bot.id, source.threadId)) throw busyRejection("the room is busy");
@@ -6534,7 +6536,7 @@ routines = new RoutineManager({
         () => routines!.isCancelled(run.id),
         undefined,
         run.cardMessageId ? new Set([run.cardMessageId]) : undefined,
-        rootForStart(source.threadId, { kind: "automatic" }),
+        guestWake ?? rootForStart(source.threadId, { kind: "automatic" }),
       ).then((started) => {
         if (!started) onDispatchError("The routine's room is no longer available");
       }, (error) => onDispatchError(error instanceof Error ? error.message : String(error)));
@@ -6546,6 +6548,7 @@ routines = new RoutineManager({
       automationSource,
       excludeMessageIds: run.cardMessageId ? [run.cardMessageId] : undefined,
       onDispatchError,
+      ...(guestWake ? { commsRoot: guestWake } : {}),
     });
   },
   interruptTurn: async (botId, threadId, runOn) => {
@@ -7189,7 +7192,7 @@ async function runClaimedGroupMemberTurn(
   const lead = asked ? askById(asked) : null;
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
   const works = !asked || Boolean(lead && asksWork([lead, ...riders]));
-  const guestAsked = asked && (!askFromHost(lead) || riders.some((ask) => !askFromHost(ask)));
+  const guestAsked = asked && (!askFromOwner(lead) || riders.some((ask) => !askFromOwner(ask)));
   if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
@@ -7206,7 +7209,7 @@ async function runClaimedGroupMemberTurn(
     ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff), false, hop > 0 && !guestAsked);
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff), false, hop > 0 && (asked ? !guestAsked : ownerRoot(rootId)));
   }
   const canMessage = works && Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
@@ -8324,7 +8327,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // discover peers and hand a message to one. Not part of the public API.
     if (path.startsWith("/api/internal/")) {
       if (method === "POST" && path === "/api/internal/team-report") {
-        return json(res, 200, await teamReports.handle(await readBody(req)));
+        return json(res, 200, await teamReports.handle(await readBody(req), commsCallers.resolve(req.headers.authorization)));
       }
       if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {

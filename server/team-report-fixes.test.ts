@@ -63,7 +63,7 @@ function fixture() {
   const store = { bot: (id: string) => ({ ...bot, id }), conversationForBot: (_id: string, thread: string) => thread === bot.threadId ? { bot } : undefined, activePath: () => path } as unknown as Store;
   const service = new TeamReports({ dir: join(dir, "drafts"), store, status: () => ({ ...PHONE_RELAY_OFF, state: "connected", reportOwner: owner }), enrolled: () => enrolled, owner,
     ownerTurn: () => true, attachmentsDir: dir, roots: () => [], current: () => current, send: (report) => sendTeamReport({ dataDir: dir, base: () => "team.example", tokens, fetchImpl }, report) });
-  const call = (args: Record<string, unknown>) => service.handle({ fromBotId: bot.id, fromThreadId: bot.threadId, ...args });
+  const call = (args: Record<string, unknown>) => service.handle({ fromBotId: bot.id, fromThreadId: bot.threadId, ...args }, { botId: bot.id, threadId: bot.threadId });
   const evidence = (request: Message, extra = {}) => collectReport({ owner, bot, threadId: bot.threadId, path, request, attachmentsDir: dir, roots: [], current, ...extra });
   const envelope = (report: TeamReport) => {
     const auth = { idToken: "token", ticket: "ticket", pk: identity.pk, sig: "A".repeat(86) };
@@ -244,7 +244,7 @@ describe("audit evidence and service regressions", () => {
     const f = fixture(); f.append("user", "Keep export running"); const bad = f.append("bot", "Stopped export"); const request = f.append("user", "에디에게 보내");
     expect(f.evidence(request).id).toBe(f.evidence(request, { bot: { id: "peer", name: "Peer" } }).id);
     await f.call({ action: "send", selected_message_id: bad.id });
-    await f.service.handle({ fromBotId: "peer", fromThreadId: "thread", action: "send", selected_message_id: bad.id });
+    await f.service.handle({ fromBotId: "peer", fromThreadId: "thread", action: "send", selected_message_id: bad.id }, { botId: "peer", threadId: "thread" });
     expect(readdirSync(join(f.dir, "team-reports"))).toHaveLength(1);
   });
   it.each([400, 403, 409, 429, 507])("N1 reports definitive HTTP %s refusal", async (status) => {

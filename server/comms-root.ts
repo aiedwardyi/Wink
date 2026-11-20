@@ -71,7 +71,10 @@ export function rootForStart(threadId: string, start: RootStart): string | null 
   return rootId;
 }
 
-export function adoptHumanRoot(threadId: string, messageKey: string): string {
+export function adoptHumanRoot(threadId: string, messageKey: string, current = turnRegistry.current(threadId)?.rootId): string {
+  // an owner line folded into a turn someone else started never upgrades it
+  const live = liveRoot(current);
+  if (live && !owned.has(live)) return live;
   const rootId = rootForStart(threadId, { kind: "human", messageKey })!;
   turnRegistry.adoptRoot(threadId, rootId);
   return rootId;
