@@ -1,11 +1,11 @@
-import { isMainThread, parentPort, workerData } from "node:worker_threads";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { createRequire } from "node:module";
-import { gatedWorker, startTerminal } from "./spawn-gate.mjs";
+import { spawnGate, startTerminal } from "./spawn-gate.mjs";
 
 const require = createRequire(import.meta.url);
 
 export function spawnTerminalPty(modulePath, shell, args, options) {
-  const worker = gatedWorker(new URL(import.meta.url), { workerData: { modulePath, shell, args, options } });
+  const worker = new Worker(new URL(import.meta.url), { workerData: { modulePath, shell, args, options, gate: spawnGate } });
   const dataListeners = new Set();
   const exitListeners = new Set();
   const errorListeners = new Set();
