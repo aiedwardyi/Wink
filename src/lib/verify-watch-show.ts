@@ -22,6 +22,7 @@ const CURSOR_ALONG = [0, 0.6, 0.3];
 const CURSOR_MAX = 6;
 const CURSOR_EXTRA = 3;
 const CURSOR_ROOM = 4;
+const CURSOR_FRESH = 4;
 
 type Row = Record<string, unknown> & { result?: unknown; box: number[] | null };
 
@@ -117,7 +118,7 @@ const nearest = (list: Stored[], y: number) => list.reduce((best, f) => Math.abs
 interface Spot { x: number; y: number; w: number; thing: number; top: number | null; visits: number }
 
 function spotsOf(things: Thing[], [w, h]: readonly number[]) {
-  const spots = new Map<string, Map<string, Spot>>();
+  const spots = new Map<string, Map<string, Spot>>(), places = new Map<string, Spot>();
   things.forEach((thing, i) => {
     for (const row of thing.rows) {
       if (row.result === "skip") continue;
@@ -125,7 +126,10 @@ function spotsOf(things: Thing[], [w, h]: readonly number[]) {
       spots.set(checker, own);
       if (!box) continue;
       const x = box[0]! + Math.min(box[2]! * 0.3, 12), y = box[1]! + Math.min(box[3]! * 0.6, 10);
-      own.set(`${x},${y}`, { x, y, w: box[2]!, thing: i, top: row.pin ? typeof row.mscroll === "number" ? row.mscroll : 0 : null, visits: 0 });
+      // Checkers that share a box share its spot, so a cursor that switches checkers never comes back to a place it just pointed at.
+      const key = `${x},${y}`, spot = places.get(key) ?? { x, y, w: box[2]!, thing: i, top: row.pin ? typeof row.mscroll === "number" ? row.mscroll : 0 : null, visits: 0 };
+      places.set(key, spot);
+      own.set(key, spot);
     }
   });
   // A check with no box looked at the page as a whole.
@@ -139,7 +143,7 @@ function spotsOf(things: Thing[], [w, h]: readonly number[]) {
 interface Lane { id: string; checker: string; extra: number }
 
 /** Each checker's glides over its own checks in view, arriving one cursor at a time; spare cursors join the checker with the most boxes left to visit. */
-function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[], slot: number, play: number, scrollAt: (at: number) => number): Cursor[] {
+function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[], slot: number, play: number, scrollAt: (at: number) => number, stops: readonly number[]): Cursor[] {
   const spots = spotsOf(things, size), route: Cursor[] = [], h = size[1]!;
   const lanes: Lane[] = [...spots.keys()].map(checker => ({ id: checker, checker, extra: 0 }));
   if (!lanes.length) return route;
@@ -148,7 +152,7 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
   // A spare cursor needs boxes of its own to visit, so a check with no box (or a few) lends none.
   const spare = Math.min(CURSOR_EXTRA, CURSOR_MAX - lanes.length, Math.floor(richest.n / CURSOR_ROOM));
   for (let extra = 1; extra <= spare; extra++) lanes.push({ id: `+${extra}`, checker: richest.checker, extra });
-  const now = new Map<string, { x: number; y: number }>(), arrived = new Map<string, number>(), last = new Map<string, Spot>();
+  const now = new Map<string, { x: number; y: number }>(), arrived = new Map<string, number>(), last = new Map<string, { spot: Spot; x: number }>(), recent = new Map<string, Spot[]>();
   const aim = (lane: Lane, at: number) => {
     const top = scrollAt(at), lit = slot ? Math.floor(at / slot) : 0, others = [...now].filter(([id]) => id !== lane.id).map(([, p]) => p), from = now.get(lane.id);
     if (lane.extra) {
@@ -156,9 +160,11 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
       const pick = [...spots.keys()].sort((a, b) => fresh(b) - fresh(a))[0]!;
       if (!fresh(lane.checker) && fresh(pick)) lane.checker = pick;
     }
-    let best: { spot: Spot; x: number; y: number; score: number } | null = null;
+    let best: { spot: Spot; x: number; y: number; score: number } | null = null, held = false;
     for (const spot of spots.get(lane.checker)!) {
       if (!shown(spot, top) || (lane.extra && !spot.w)) continue;
+      // A spot it pointed at a moment ago is no news: it rests on its last one instead of looping over the same few.
+      if (recent.get(lane.id)?.includes(spot)) { held = true; continue; }
       const y = spot.y - (spot.top ?? top);
       const x = spot.x + Math.max(0, spot.w - 30) * CURSOR_ALONG[spot.visits % CURSOR_ALONG.length]!;
       const gap = Math.min(Infinity, ...others.map(p => Math.hypot(p.x - x, p.y - y)));
@@ -167,14 +173,25 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
       const score = (gap < CURSOR_GAP ? 1e6 - gap : 0) + spot.visits * 1000 + Math.abs(spot.thing - lit) + far * 10;
       if (!best || score < best.score) best = { spot, x, y, score };
     }
-    if (best) { best.spot.visits++; last.set(lane.id, best.spot); return { x: best.x, y: best.y }; }
+    if (best) {
+      best.spot.visits++;
+      last.set(lane.id, { spot: best.spot, x: best.x });
+      recent.set(lane.id, [...recent.get(lane.id) ?? [], best.spot].slice(-CURSOR_FRESH));
+      return { x: best.x, y: best.y };
+    }
+    const rest = last.get(lane.id);
+    // It rests on its last spot, and follows it when the page moves under it.
+    if (held && rest && shown(rest.spot, top)) {
+      const y = rest.spot.y - (rest.spot.top ?? top);
+      return from && from.x === rest.x && from.y === y ? null : { x: rest.x, y };
+    }
     // Nothing free of its own in this view: it waits just off the page, on the side its last check went.
-    const gone = last.get(lane.id) ?? spots.get(lane.checker)![0]!;
+    const gone = rest?.spot ?? spots.get(lane.checker)![0]!;
     return { x: gone.x, y: gone.y - (gone.top ?? top) < 0 ? -40 : h + 8 };
   };
   const cursor = (lane: Lane, fields: Pick<Cursor, "from" | "to" | "at" | "duration">): Cursor => ({ checker: lane.checker, tile, ...(lane.extra ? { extra: lane.extra } : {}), ...fields });
   for (const lane of lanes) {
-    const to = aim(lane, 0);
+    const to = aim(lane, 0)!;
     now.set(lane.id, to);
     arrived.set(lane.id, 0);
     route.push(cursor(lane, { from: to, to, at: 0, duration: 0 }));
@@ -182,8 +199,11 @@ function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[]
   const step = CURSOR_MS / lanes.length, lead = Math.max(0, CURSOR_MS * 2 / 3 - step);
   // Everyone is under way within one rest of the start, and the route runs past the end so nobody sits still waiting for the show to close.
   for (let turn = 1; lead + turn * step < play + CURSOR_MS; turn++) {
-    const lane = lanes[(turn - 1) % lanes.length]!, due = lead + turn * step, from = now.get(lane.id)!;
-    const free = due - (CURSOR_MS - CURSOR_REST_MS), at = Math.max(arrived.get(lane.id)!, turn <= lanes.length ? Math.min(free, CURSOR_REST_MS) : free), to = aim(lane, due);
+    const lane = lanes[(turn - 1) % lanes.length]!, beat = lead + turn * step, from = now.get(lane.id)!;
+    // The page moving under a cursor that just landed leaves it on other content, so it lands as the page moves instead.
+    const due = stops.find(t => t > beat && t <= beat + CURSOR_REST_MS && scrollAt(t) !== scrollAt(beat)) ?? beat;
+    const free = beat - (CURSOR_MS - CURSOR_REST_MS), at = Math.max(arrived.get(lane.id)!, turn <= lanes.length ? Math.min(free, CURSOR_REST_MS) : free), to = aim(lane, due);
+    if (!to) continue;
     now.set(lane.id, to);
     arrived.set(lane.id, due);
     route.push(cursor(lane, { from, to, at, duration: due - at }));
@@ -323,9 +343,16 @@ export class VerifyWatchShow {
     const pointTile = (m: typeof marks[number]) => tileOf((m.mark.inp as { tile?: unknown } | undefined)?.tile);
     const atEnd = (m: typeof marks[number]) => m.mark.kind === "point" && m.tileSeen === seen[pointTile(m)];
     const tail = Math.max(...(["desktop", "phone"] as const).map(tile => marks.filter(m => atEnd(m) && pointTile(m) === tile).length)) * RING_MS;
-    const play = Math.max(0, total - tail), clicks = { desktop: 0, phone: 0 };
+    const play = Math.max(0, total - tail);
     const add = (at: number, chunk: VerifyReplayChunk) => this.queue.push({ due: start + at, chunk, at: start + at, scrollY: 0 });
     const views: Record<VerifyTile, Array<{ at: number; y: number }>> = { desktop: [], phone: [] };
+    const stop = (tile: VerifyTile, y: unknown) => this.history[tile].length ? nearest(this.history[tile], typeof y === "number" ? y : 0).scrollY : 0;
+    // A click after its tile's checks plays as the pass down reaches its spot, before the first thing below it, so the view never climbs back up for it.
+    const late = marks.filter(atEnd).map(m => {
+      const tile = pointTile(m), things = lists.find(list => list.tile === tile)!.things, y = stop(tile, m.mark.scrollY), i = things.findIndex(thing => stop(tile, thing.scrollY) > y);
+      return { m, tile, i: i < 0 ? things.length : i };
+    }).sort((a, b) => a.i - b.i);
+    const ahead = (tile: VerifyTile, i: number) => late.filter(c => c.tile === tile && c.i <= i).length * RING_MS;
     const view = (at: number, tile: VerifyTile, y: number) => {
       if (!this.history[tile].length) return;
       const frame = nearest(this.history[tile], y);
@@ -340,20 +367,22 @@ export class VerifyWatchShow {
       }
       const slot = things.length ? play / things.length : 0;
       things.forEach((thing, i) => {
-        view(i * slot, tile, thing.scrollY);
-        for (const ev of outlineOnce(thing, { hold: slot })) add(i * slot, { kind: "mark", mark: { ms: ev.ms as number, kind: "result", ev } });
+        const at = i * slot + ahead(tile, i);
+        view(at, tile, thing.scrollY);
+        for (const ev of outlineOnce(thing, { hold: slot })) add(at, { kind: "mark", mark: { ms: ev.ms as number, kind: "result", ev } });
       });
     }
     for (const m of marks) {
       const { mark, seen: before, tileSeen } = m, tile = pointTile(m);
-      const at = atEnd(m) ? play + clicks[tile]++ * RING_MS : (mark.kind === "point" ? tileSeen / seen[tile]! : rows.length ? before / rows.length : 0) * play;
+      const click = late.find(c => c.m === m), n = lists.find(list => list.tile === tile)!.things.length;
+      const at = click ? (click.i < n ? click.i * (play / n) : play) + late.filter(c => c.tile === tile).indexOf(click) * RING_MS : (mark.kind === "point" ? tileSeen / seen[tile]! : rows.length ? before / rows.length : 0) * play;
       if (mark.kind === "point") view(at, tile, typeof mark.scrollY === "number" ? mark.scrollY : 0);
       add(at, { kind: "mark", mark });
     }
     if (end) add(play + tail, end);
     this.route = lists.flatMap(({ tile, things }) => {
       const size = this.head?.tiles[tile] ?? (tile === "phone" ? [392, 800] : [1280, 720]), scrollAt = (at: number) => views[tile].filter(v => v.at <= at).sort((a, b) => a.at - b.at).at(-1)?.y ?? this.scroll[tile];
-      return cursorRoutes(tile, things, size, things.length ? play / things.length : 0, play, scrollAt);
+      return cursorRoutes(tile, things, size, things.length ? play / things.length : 0, play, scrollAt, views[tile].map(v => v.at).sort((a, b) => a - b));
     }).map(c => ({ ...c, at: start + c.at })).sort((a, b) => a.at - b.at);
     this.set("play");
   }

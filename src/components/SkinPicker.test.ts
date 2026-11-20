@@ -211,6 +211,42 @@ describe("Reveal", () => {
   });
 });
 
+describe("More themes", () => {
+  const more = () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+  const landed = () => act(async () => {
+    const end = new Event("animationend", { bubbles: true });
+    Object.defineProperty(end, "animationName", { value: "fold-open" });
+    document.querySelector("[data-fold]")!.dispatchEvent(end);
+  });
+
+  it("brings its first new row into view once it has opened, never while closing", async () => {
+    await mount();
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {});
+    await act(async () => more().click());
+    expect(scrolled).not.toHaveBeenCalled();
+    await landed();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(document.querySelector("[data-fold] [data-skin-tile]"));
+    expect(scrolled.mock.contexts[0]).toBe(tiles()[featured.length]);
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    await act(async () => more().click());
+    await folded();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    scrolled.mockRestore();
+  });
+
+  it("scrolls at once under reduced motion", async () => {
+    await mount();
+    const media = window.matchMedia.bind(window);
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(media(query), "matches", { value: query.includes("reduce") }));
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {});
+    await act(async () => more().click());
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "instant" });
+    vi.restoreAllMocks();
+  });
+});
+
 describe("New tag", () => {
   it.each(["en", "ko"] as const)("marks the new themes until tried in %s", async (locale) => {
     await mount("precision", "en");

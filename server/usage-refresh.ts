@@ -32,7 +32,7 @@ export type UsageRefreshStatus =
   | "auth_error"
   | "limit_reached";
 type Result = { report?: Report; error?: string; retryAt: number; status?: UsageRefreshStatus; resetsAt?: number | null };
-type Options = { instanceId: string; cli?: string; environment?: NodeJS.ProcessEnv; museModel?: string; account?: AccountContext };
+type Options = { instanceId: string; cli?: string; environment?: NodeJS.ProcessEnv; museModel?: string; account?: AccountContext; fresh?: boolean; maxAgeMs?: number };
 const usableReport = (report: Report | undefined): report is Report =>
   Boolean(report && report.windows.length > 0 && Number.isFinite(Date.parse(report.observedAt)));
 const percent = z.number().finite().nonnegative();
@@ -40,8 +40,14 @@ const codexUsageWindow = z.object({ usedPercent: percent }).passthrough();
 const codexUsage = z.object({ limitId: z.string().nullish(), primary: codexUsageWindow.nullable().optional(), secondary: codexUsageWindow.nullable().optional() }).passthrough();
 const rpcMessage = z.object({ id: z.number().optional(), method: z.string().optional(), result: z.json().optional(), error: z.object({ code: z.number() }).optional() });
 
-export function usageRefreshResponse(instanceId: string, result: Result) {
-  return { instanceId, report: result.report, error: result.error, retryAt: result.retryAt, status: result.status, resetsAt: result.resetsAt };
+export function usageReportWithAge(report: Report, now = Date.now()) {
+  return { ...report, ageMs: Math.max(0, now - Date.parse(report.observedAt)) };
+}
+
+export function usageRefreshResponse(instanceId: string, result: Result, now = Date.now()) {
+  const report = result.report && usageReportWithAge(result.report, now);
+  return { instanceId, report, error: result.error, retryAt: result.retryAt, retryInMs: Math.max(0, result.retryAt - now),
+    status: result.status, resetsAt: result.resetsAt };
 }
 
 export async function readUsageRpc(cli: string, env: NodeJS.ProcessEnv, account?: AccountContext): Promise<JsonValue> {
@@ -617,7 +623,7 @@ export function createUsageRefresh(deps: {
     const key = options.account ? `${options.instanceId}:${options.account.generation}` : options.instanceId;
     const epoch = epochs.get(options.instanceId);
     const cached = driver === "claudeAgent" ? undefined : cache.get(key);
-    if (cached && (!cached.settled || clock() < cached.retryAt)) return cached.pending;
+    if (cached && (!cached.settled || (!options.fresh && clock() < cached.retryAt))) return cached.pending;
     const retryAt = clock() + (deps.throttleMs ?? 30_000);
     active.set(options.instanceId, (active.get(options.instanceId) ?? 0) + 1);
     let released = false;
@@ -675,7 +681,7 @@ export function createUsageRefresh(deps: {
           // One read per login, not per instance: every instance on a config dir shares it.
           const login = options.account?.id ?? (env.CLAUDE_CONFIG_DIR || join(home, ".claude"));
           if (!options.account) credentials.set(options.instanceId, login);
-          const report = await claudeProbe(options.cli || "claude", env, options.account, login);
+          const report = await claudeProbe(options.cli || "claude", env, options.account, login, options);
           if (!report) return { report: previous, retryAt, status: "no_observation" };
           windows = report.windows;
           observedAt = report.observedAt;

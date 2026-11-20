@@ -1,4 +1,5 @@
 import "./ProfileFields.test-dom.ts";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -46,6 +47,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   };
 });
 
+import { landFold, spyReveal } from "./Fold.test-land";
 import { EngineRow, EnginesSettings, isEngineConnected } from "./EnginesSettings";
 import { EngineSetup } from "./EngineSetup";
 import { ROW_BUTTON } from "./SettingsPrimitives";
@@ -401,6 +403,30 @@ describe("EnginesSettings friends Connections list", () => {
       Object.assign(target, previous);
     };
   }
+
+  it("brings its first missing engine into view once More Engines has opened, never while closing", async () => {
+    const restore = stage("muse", { snapshot: { state: "unavailable" } });
+    const { host, root, row } = await renderList();
+    const scrolled = spyReveal();
+    try {
+      const more = () => [...host.querySelectorAll("button")].find((node) => node.textContent === "More Engines")!;
+      await act(async () => more().click());
+      expect(scrolled).not.toHaveBeenCalled();
+      await landFold(row("muse"));
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(row("muse"));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      vi.useFakeTimers();
+      await act(async () => more().click());
+      await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+      vi.useRealTimers();
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      scrolled.mockRestore();
+      await act(async () => root.unmount());
+      restore();
+    }
+  });
 
   it("shows a single account with its label, Sign Out and Add Account", async () => {
     const restore = stage("claude", { cli: OTHER, install: { logout: ["auth", "logout"], signInCommand: "claude auth login", docsUrl: "https://example.com/claude" } });

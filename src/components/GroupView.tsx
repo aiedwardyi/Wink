@@ -91,7 +91,7 @@ import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
-import { turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
+import { inSendOrder, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
 import { useI18n } from "@/lib/i18n";
 import { useRoomTurnStage } from "@/lib/room-turn";
@@ -1080,9 +1080,11 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   // an old jump shows its own window; the live pages below keep taking arrivals
   const accepted = state.acceptedSends[group.threadId];
   // a sent line shows at once, as in a 1:1 chat, while the server still holds it
-  const messages = useMemo(() => withAcceptedMessages(group.messages, accepted), [group.messages, accepted]);
+  // a hosted room draws in room-log order, the order every member sees
+  const hosted = Boolean(group.hosted);
+  const messages = useMemo(() => (hosted ? withAcceptedMessages(group.messages, accepted) : inSendOrder(withAcceptedMessages(group.messages, accepted))), [hosted, group.messages, accepted]);
   const jump = useJumpWindow(dispatch, transcriptKey, group.threadId, group.messages, null, state.olderPatches[group.threadId], state.snapshots, state.focusMessage);
-  const shown = jump.messages ?? messages;
+  const shown = useMemo(() => (jump.messages && !hosted ? inSendOrder(jump.messages) : (jump.messages ?? messages)), [hosted, jump.messages, messages]);
   // rooms have no pane liveness, so a run without a report stays Working
   const workers = useMemo(() => workerRuns(group.messages).map((run) => ({ run, state: shownState(run, null) })), [group.messages]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(group.messages, jump.messages).map((run) => ({ run, state: shownState(run, null) })) : workers, [group.messages, jump.messages, workers]);

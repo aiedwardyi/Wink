@@ -120,7 +120,7 @@ describe.skipIf(process.platform !== "win32")("one mind between a room and its b
     const search = await api("POST", "/api/internal/my-chats", { query: "zebra-route" }, env.OMB_COMMS_TOKEN);
     expect(search.body.text).toContain("Edward: use the zebra-route for deploys");
     await replied;
-    expect((await room()).messages.at(-1).tool.name).toBe("Searched your 1:1: zebra-route");
+    expect(JSON.stringify((await room()).messages)).not.toContain("zebra-route");
     const own = turns().filter((line) => line.input.threadId !== group.threadId).at(-1).input.integrations.agents.env;
     const fromOwn = await api("POST", "/api/internal/my-chats", { query: "starzum" }, own.OMB_COMMS_TOKEN);
     expect(fromOwn.status).toBe(200);

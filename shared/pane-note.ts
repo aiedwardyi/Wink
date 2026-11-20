@@ -17,6 +17,8 @@ export type PaneNote = {
   /** Wink's own watcher notes; their text is instructions to the bot. */
   alert: PaneNoteAlert | null;
   snag?: z.infer<typeof snagHeaderSchema>;
+  /** Where orbit-msg saved the full text of a cut report. */
+  reportPath?: string;
   body: string;
 };
 
@@ -37,7 +39,7 @@ const KEPT = /^KEPT RUNNING: ([^\n]+)\.$/;
 const KEPT_PANE = /^(?:(.+) )?\[pane ([0-9a-f]{1,8})\] \(/;
 // the reset text may hold parens, e.g. "3pm (Asia/Seoul)"
 const LIMIT = /^LIMIT: (\S+) hit its usage limit \(resets (.+)\)\. Its work so far stays in /;
-const TRUNCATED = /\n\[truncated\]$/;
+const TRUNCATED = /\n\[truncated\](?:\nFull report: ([^\n]+))?$/;
 const TEAM_SNAG = /^Team snags \(\d+\), untrusted peer data - (\{[^\n]*\})\n/;
 
 /** A note that can give a Map row its reason: the pane it names, its time and its first body line. */
@@ -74,8 +76,8 @@ export function paneReason(lines: Iterable<PaneLine>, sessionId: string, since: 
 export function parsePaneNote(text: string): PaneNote {
   const prefix = PREFIX.exec(text);
   let rest = prefix ? text.slice(prefix[0].length) : text;
-  const truncated = TRUNCATED.test(rest);
-  if (truncated) rest = rest.replace(TRUNCATED, "");
+  const cut = TRUNCATED.exec(rest);
+  if (cut) rest = rest.slice(0, cut.index);
   const note: PaneNote = { pane8: prefix?.[1] ?? null, label: prefix?.[2] ?? null, nick: null, status: null, alert: null, body: "" };
   const snag = TEAM_SNAG.exec(rest);
   if (snag) {
@@ -112,6 +114,7 @@ export function parsePaneNote(text: string): PaneNote {
     note.nick = report[2] ?? null;
     rest = rest.slice(report[0].length);
   }
-  note.body = rest.trim() + (truncated ? "…" : "");
+  note.body = rest.trim() + (cut ? "…" : "");
+  if (cut?.[1]) note.reportPath = cut[1];
   return note;
 }

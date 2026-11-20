@@ -20,16 +20,18 @@ const reportSchema = z.object({
   observedAt: z.string(),
   windows: z.array(windowSchema),
 });
+const timedReportSchema = reportSchema.extend({ ageMs: z.number().nonnegative() });
 const refreshSchema = z.object({
   instanceId: z.string(),
-  report: reportSchema.optional(),
+  report: timedReportSchema.optional(),
   error: z.string().optional(),
+  retryInMs: z.number().nonnegative(),
   status: z.enum(["fresh", "retained", "no_observation", "transport_error", "auth_error"]).optional(),
 });
 const instanceSchema = z.object({
   instanceId: z.string(),
   models: z.object({ default: z.string() }),
-  rateLimits: reportSchema.optional(),
+  rateLimits: timedReportSchema.optional(),
 }).passthrough();
 const instancesSchema = z.object({ instances: z.array(instanceSchema) });
 const botSchema = z.object({ bot: z.object({ id: z.string() }).passthrough() });
@@ -175,7 +177,7 @@ describe("usage refresh throttle vs runtime reports", () => {
       expect(Date.parse(afterTurn.observedAt)).toBeGreaterThan(Date.parse(firstObserved));
 
       const second = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy")).body);
-      expect(second.report).toEqual(afterTurn);
+      expect(reportSchema.parse(second.report)).toEqual(afterTurn);
       expect(reportSchema.parse((await findHappy()).rateLimits)).toEqual(afterTurn);
     } finally {
       await api("DELETE", `/api/bots/${created.bot.id}`);
@@ -202,5 +204,17 @@ describe("usage refresh throttle vs runtime reports", () => {
     expect(result.status).toBe(status);
     expect(result.error).toBe(error);
     expect(result.report).toBeUndefined();
+  });
+
+  it("reads the provider again for a tapped refresh inside the cooldown", async () => {
+    const auto = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy")).body);
+    const reset = new Date(Date.now() + 3_600_000).toISOString();
+    writeFileSync(join(home, "claude-usage.json"), JSON.stringify({ rate_limits_available: true, rate_limits: {
+      five_hour: { utilization: 28, resets_at: reset }, seven_day: { utilization: 7, resets_at: reset },
+    } }));
+    const cached = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy")).body);
+    expect(reportSchema.parse(cached.report)).toEqual(reportSchema.parse(auto.report));
+    const tap = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy?fresh=1")).body);
+    expect(tap.report?.windows.map((window) => window.usedPercent)).toEqual([28, 7]);
   });
 });

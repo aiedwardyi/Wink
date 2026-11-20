@@ -3,10 +3,12 @@ import { accountReady } from "@/lib/accounts";
 import { usageIdentity } from "../../shared/usage-identity";
 import type { UsageBoard } from "@/lib/usage-board";
 import { api, useStore, type InstanceInfo } from "@/state/store";
+import { localUsageObservation } from "@/state/usage-instances";
 
 const MANUAL_DRIVERS = ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"];
 
-export const AUTO_REFRESH_MS = 5 * 60_000;
+const AUTO_REFRESH_MS = 5 * 60_000;
+const OPEN_REFRESH_MS = 30_000;
 // A failed or empty attempt waits at least this long, or until the server's retryAt.
 const AUTO_RETRY_MS = 60_000;
 // Above the server's serialized Claude account reads (15 s each).
@@ -19,41 +21,57 @@ export const canRefresh = (instance: InstanceInfo) => REFRESH_DRIVERS.has(instan
 export const refreshReady = (instance: InstanceInfo) => instance.snapshot.authenticated !== false
   && (!instance.accountState || accountReady(instance));
 // The open quick view also refreshes what the Refresh button does: Muse, and Gemini once the board shows it.
-const refreshable = (instance: InstanceInfo, board?: UsageBoard) => canRefresh(instance) || Boolean(board && instance.canRefreshUsage !== false
+const refreshable = (instance: InstanceInfo, board?: UsageBoard | null) => canRefresh(instance) || Boolean(board && instance.canRefreshUsage !== false
   && (instance.driverKind === "museAgent" || (instance.driverKind === "antigravityAgent"
     && board.engines.some((engine) => engine.accounts.some((account) => account.id === instance.instanceId)))));
-const eligible = (instance: InstanceInfo, board?: UsageBoard) => refreshable(instance, board) && refreshReady(instance)
+const eligible = (instance: InstanceInfo, board?: UsageBoard | null) => refreshable(instance, board) && refreshReady(instance)
   && (instance.snapshot.state === "available" || Boolean(instance.rateLimits));
 
 const pending = new Map<string, Promise<any>>();
-const retryAfter = new Map<string, number>();
-let pendingIds: ReadonlySet<string> = new Set();
+const manual = new Map<string, Promise<any>>();
+const retryAfter = new Map<string, { identity: ReturnType<typeof usageIdentity>; at: number }>();
+let manualIds: ReadonlySet<string> = new Set();
 const listeners = new Set<() => void>();
-const announce = () => {
-  pendingIds = new Set(pending.keys());
-  listeners.forEach((listener) => listener());
-};
+const announce = () => listeners.forEach((listener) => listener());
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
   return () => void listeners.delete(listener);
 };
 
-/** The accounts with a refresh running, whether automatic, Refresh All or Alt+R. */
-export const useRefreshPending = () => useSyncExternalStore(subscribe, () => pendingIds, () => pendingIds);
+export const useRefreshPending = () => useSyncExternalStore(subscribe, () => manualIds, () => manualIds);
 
-/** One refresh per account at a time: every caller joins the running one, and a hung request is let go after a deadline. */
-export function joinRefresh(instanceId: string, start: () => Promise<any>): Promise<any> {
+function joinRefresh(instanceId: string, start: (signal: AbortSignal) => Promise<any>): Promise<any> {
   const running = pending.get(instanceId);
   if (running) return running;
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Refresh timed out")), REFRESH_TIMEOUT_MS); });
-  const call = Promise.race([start(), deadline]).finally(() => {
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error("Refresh timed out");
+      reject(error);
+      controller.abort(error);
+    }, REFRESH_TIMEOUT_MS);
+  });
+  const work = start(controller.signal);
+  const call = Promise.race([work, deadline]);
+  // Keep the slot until the request settles, even if a caller times out first.
+  const settle = () => {
     clearTimeout(timer);
     pending.delete(instanceId);
     announce();
-  });
+  };
+  void work.then(settle, settle);
   pending.set(instanceId, call);
-  announce();
+  return call;
+}
+
+function joinManualRefresh(instanceId: string, start: () => Promise<any>): Promise<any> {
+  const running = manual.get(instanceId);
+  if (running) return running;
+  const changed = () => { manualIds = new Set(manual.keys()); announce(); };
+  const call = start().finally(() => { manual.delete(instanceId); changed(); });
+  manual.set(instanceId, call);
+  changed();
   return call;
 }
 
@@ -65,16 +83,19 @@ export async function refreshUsage(instances: InstanceInfo[], board: UsageBoard,
     && (!only || only.has(each.instanceId))
     && MANUAL_DRIVERS.includes(each.driverKind)
     && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
-    .map((each) => joinRefresh(each.instanceId, async () => {
-      let result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
-      if (each.driverKind === "museAgent" && result.status === "no_observation" && !result.error) {
-        result = await api(`/api/usage/check/${each.instanceId}`, { method: "POST" });
-      }
-      if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
+    .map(async (each) => {
+      const { instanceId } = each;
+      const result = await joinManualRefresh(instanceId, async () => {
+        let outcome = await joinRefresh(instanceId, (signal) => api(`/api/usage/refresh/${instanceId}?fresh=1`, { method: "POST", signal }));
+        if (each.driverKind === "museAgent" && outcome.status === "no_observation" && !outcome.error) {
+          outcome = await joinRefresh(instanceId, (signal) => api(`/api/usage/check/${instanceId}`, { method: "POST", signal }));
+        }
+        if (outcome.report) dispatch({ type: "rateLimits", instanceId, report: outcome.report, identity: usageIdentity(each.snapshot) });
+        return outcome;
+      });
       if (each.driverKind === "museAgent" && result.status === "auth_error") museAuthFailed = true;
       if (result.error) throw new Error("refresh");
-      return result;
-    })));
+    }));
   return { failed: results.some((each) => each.status === "rejected"), museAuthFailed };
 }
 
@@ -94,35 +115,59 @@ export function useRefreshKey(refresh: (() => void) | null) {
   }, []);
 }
 
-export function staleAccounts(instances: InstanceInfo[], now = Date.now(), board?: UsageBoard): InstanceInfo[] {
-  return instances.filter((instance) => eligible(instance, board)
-    && !pending.has(instance.instanceId)
-    && (retryAfter.get(instance.instanceId) ?? 0) <= now
-    && !(instance.rateLimits && now - Date.parse(instance.rateLimits.observedAt) <= AUTO_REFRESH_MS));
-}
+const refreshAt = (instance: InstanceInfo, maxAge: number) => {
+  const observed = instance.rateLimits ? localUsageObservation(instance.rateLimits) : -Infinity;
+  const retry = retryAfter.get(instance.instanceId);
+  return Math.max(observed + maxAge, retry && retry.identity === usageIdentity(instance.snapshot) ? retry.at : 0);
+};
 
-/** Refreshes every account whose reading is older than 5 minutes when it mounts, when account data
- * changes, and when the tab returns. Pending, fresh and cooling-down accounts are skipped; a failure keeps the old reading. */
-export function useAutoRefresh(board?: UsageBoard) {
+export function useAutoRefresh(board?: UsageBoard | null, surface?: "desk" | "quick") {
   const { state, dispatch } = useStore();
-  const latest = useRef({ instances: state.instances, dispatch, board });
-  latest.current = { instances: state.instances, dispatch, board };
+  const latest = useRef({ instances: state.instances, dispatch });
+  latest.current = { instances: state.instances, dispatch };
   useEffect(() => {
-    const run = () => {
+    if (!surface) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const live = (instance: InstanceInfo) => instance.driverKind !== "museAgent";
+    const maxAge = (instance: InstanceInfo) => live(instance) ? OPEN_REFRESH_MS : AUTO_REFRESH_MS;
+    const candidates = () => latest.current.instances.filter((instance) => (surface === "quick" || live(instance))
+      && eligible(instance, board) && !pending.has(instance.instanceId) && !manual.has(instance.instanceId));
+    const schedule = () => {
+      clearTimeout(timer);
       if (document.visibilityState === "hidden") return;
-      for (const { instanceId, snapshot } of staleAccounts(latest.current.instances, Date.now(), latest.current.board)) {
-        const current = () => usageIdentity(latest.current.instances.find((instance) => instance.instanceId === instanceId)?.snapshot ?? {}) === usageIdentity(snapshot);
-        const cooldown = (retryAt = 0) => retryAfter.set(instanceId, Math.max(retryAt, Date.now() + AUTO_RETRY_MS));
-        joinRefresh(instanceId, () => api(`/api/usage/refresh/${instanceId}`, { method: "POST" }).then((result) => {
+      const next = candidates().filter(live).reduce((at, instance) => Math.min(at, refreshAt(instance, OPEN_REFRESH_MS)), Infinity);
+      if (Number.isFinite(next)) timer = setTimeout(run, Math.max(0, Math.ceil(next - performance.now())));
+    };
+    const run = () => {
+      clearTimeout(timer);
+      if (document.visibilityState === "hidden") return;
+      const now = performance.now();
+      for (const instance of candidates().filter((each) => refreshAt(each, maxAge(each)) <= now)) {
+        const { instanceId, snapshot } = instance;
+        const identity = usageIdentity(snapshot);
+        const current = () => latest.current.instances.some((each) => each.instanceId === instanceId && usageIdentity(each.snapshot) === identity);
+        const defer = (at: number) => retryAfter.set(instanceId, { identity, at });
+        const cooldown = (retryInMs = 0) => defer(performance.now() + Math.max(retryInMs, AUTO_RETRY_MS));
+        joinRefresh(instanceId, (signal) => api(`/api/usage/refresh/${instanceId}`, { method: "POST", signal }).then((result) => {
           if (!current()) return result;
-          if (result.report) latest.current.dispatch({ type: "rateLimits", instanceId, report: result.report });
-          if (!result.report || result.error || result.status === "retained" || result.status === "no_observation") cooldown(result.retryAt);
+          const received = performance.now();
+          const age = maxAge(instance);
+          const due = result.report ? localUsageObservation(result.report, result.status === "retained" ? Infinity : 0) + age : 0;
+          if (result.error || result.status === "no_observation" || due <= received) cooldown(result.retryInMs);
+          else defer(due);
+          if (result.report) latest.current.dispatch({ type: "rateLimits", instanceId, report: result.report, identity });
           return result;
         }, (error) => { if (current()) cooldown(); throw error; })).catch(() => { if (current()) cooldown(); });
       }
+      schedule();
     };
+    const stop = subscribe(schedule);
     run();
     document.addEventListener("visibilitychange", run);
-    return () => document.removeEventListener("visibilitychange", run);
-  }, [state.instances]);
+    return () => {
+      stop();
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", run);
+    };
+  }, [state.instances, board, surface]);
 }
