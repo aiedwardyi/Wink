@@ -1,0 +1,86 @@
+# Scratch loop for CI-FLAKES-4 red/green counts; lives only on loop/* branches.
+name: Flake loop
+
+on:
+  push:
+    branches: ["loop/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: ${{ matrix.flake }} on ${{ matrix.side }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { flake: "hook on a closed old port", side: base, ref: e6a05222e72aacc6e27a91dc63bd7c80f0776109, os: windows-latest, kind: node, file: "electron/worker-session.node-test.mjs", pattern: "skips the closed old port", copies: 1, runs: 20, prep: "hook-test-on-base.mjs" }
+          - { flake: "hook on a closed old port", side: head, ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, os: windows-latest, kind: node, file: "electron/worker-session.node-test.mjs", pattern: "skips the closed old port", copies: 1, runs: 20, prep: "" }
+          - { flake: "terminal discovery restart, alone", side: base, ref: e6a05222e72aacc6e27a91dc63bd7c80f0776109, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 1, runs: 20, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery restart, alone", side: head, ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 1, runs: 20, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery cold 8 at once #1", side: base, ref: e6a05222e72aacc6e27a91dc63bd7c80f0776109, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 8, runs: 16, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery cold 8 at once #1", side: head, ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 8, runs: 16, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery cold 8 at once #2", side: base, ref: e6a05222e72aacc6e27a91dc63bd7c80f0776109, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 8, runs: 16, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery cold 8 at once #2", side: head, ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 8, runs: 16, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery cold 8 at once #3", side: base, ref: e6a05222e72aacc6e27a91dc63bd7c80f0776109, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 8, runs: 16, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery cold 8 at once #3", side: head, ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 8, runs: 16, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery cold 8 at once #4", side: base, ref: e6a05222e72aacc6e27a91dc63bd7c80f0776109, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 8, runs: 16, prep: "td-phases.mjs" }
+          - { flake: "terminal discovery cold 8 at once #4", side: head, ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, os: windows-latest, kind: vitest, file: "electron/terminal-discovery.test.mjs", pattern: "persists bridge identity", copies: 8, runs: 16, prep: "td-phases.mjs" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .loopkit
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Loop
+        shell: bash
+        env:
+          FLAKE: ${{ matrix.flake }}
+          SIDE: ${{ matrix.side }}
+          KIND: ${{ matrix.kind }}
+          FILE: ${{ matrix.file }}
+          PATTERN: ${{ matrix.pattern }}
+          COPIES: ${{ matrix.copies }}
+          RUNS: ${{ matrix.runs }}
+          PREP: ${{ matrix.prep }}
+        run: |
+          set -u +e +o pipefail
+          git rev-parse HEAD
+          if [ -n "$PREP" ]; then node ".loopkit/loopkit/$PREP" && git diff --stat; fi
+          fails=0; total=0; first=""
+          files=("$FILE")
+          if [ "$COPIES" -gt 1 ]; then
+            files=()
+            for k in $(seq 1 "$COPIES"); do c="${FILE%.test.*}.copy$k.test.${FILE##*.test.}"; cp "$FILE" "$c"; files+=("$c"); done
+          fi
+          if [ -n "$PREP" ] && [ "$COPIES" -gt 1 ]; then git checkout -- "$FILE"; for c in "${files[@]}"; do cp "$FILE" "$c"; done; node ".loopkit/loopkit/$PREP"; fi
+          rounds=$((RUNS / COPIES))
+          for r in $(seq 1 "$rounds"); do
+            if [ "$KIND" = vitest ]; then
+              node node_modules/vitest/vitest.mjs run "${files[@]}" -t "$PATTERN" --reporter=default --reporter=json --outputFile.json=loop.json > "out-$r.txt" 2>&1
+              read -r f p d < <(node -e 'const r=require("./loop.json");const a=r.testResults.flatMap(t=>t.assertionResults).filter(a=>a.status!=="skipped"&&a.status!=="pending");console.log(r.numFailedTests,r.numPassedTests,a.map(a=>Math.round(a.duration??0)).join(","))')
+            else
+              s=$(date +%s%3N)
+              if node --test --test-name-pattern="$PATTERN" "$FILE" > "out-$r.txt" 2>&1; then f=0; p=1; else f=1; p=0; fi
+              d=$(( $(date +%s%3N) - s ))
+            fi
+            fails=$((fails + f)); total=$((total + f + p))
+            echo "round $r: failed $f passed $p ms $d"
+            if [ "$f" -gt 0 ] && [ -z "$first" ]; then first="out-$r.txt"; fi
+          done
+          if [ -n "$first" ]; then echo "--- first failing round ($first) ---"; grep -aE "FAIL|×|✖|Error|expected|timed out|not ok" "$first" | head -40; fi
+          echo "--- phases (slowest hooks) ---"; grep -aE " hook " phases.log | sort -t+ -k2 -n -r | head -15; echo "--- tests with no hook lap (hung) ---"; for id in $(cut -d" " -f1 phases.log | sort -u); do grep -aq "^$id hook " phases.log || { grep -a "^$id " phases.log | tr "\n" "|"; echo; }; done; echo "--- ps steps of the 6 slowest ---"; for id in $(grep -aE " hook " phases.log | sort -t+ -k2 -n -r | head -6 | cut -d" " -f1); do grep -a "^$id " phases.log | tr "\n" "|"; echo; done
+          echo "RESULT $FLAKE $SIDE fails=$fails/$total"
+          echo "RESULT $FLAKE $SIDE fails=$fails/$total" >> "$GITHUB_STEP_SUMMARY"
