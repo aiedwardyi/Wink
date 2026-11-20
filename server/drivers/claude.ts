@@ -2473,8 +2473,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       reviewPermission: (prompt, signal) => traceHelperCall("claude", undefined, (onUsage) => generateReview(prompt, signal, undefined, undefined, true, true, onUsage)),
       dispose: async () => {
         for (const { stop } of active.values()) stop();
+        const children = [...sessions.values()].map((s) => s.child);
         for (const threadId of [...sessions.keys()]) closeSession(threadId, "dispose");
         listeners.clear();
+        // A CLI that outlives the server keeps its workspace open.
+        await Promise.all(children.map((child) => (child.exitCode !== null || child.signalCode !== null ? undefined : new Promise((resolve) => child.once("close", resolve)))));
       },
     };
   },
