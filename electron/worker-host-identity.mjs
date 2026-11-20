@@ -10,7 +10,7 @@ export function workerHostLock(file) {
   catch (error) { return error.code === "EBUSY" ? "alive" : "unknown"; }
 }
 
-export function workerHostRecord(file) {
+function readRecord(file) {
   try {
     const record = JSON.parse(fs.readFileSync(file, "utf8"));
     return record && !Array.isArray(record) && Object(record) === record ? record : null;
@@ -19,9 +19,16 @@ export function workerHostRecord(file) {
   }
 }
 
+export function workerHostRecord(file) {
+  if (fs.existsSync(file)) return readRecord(file);
+  // A writer that died between its two renames left the new record in full beside the old one.
+  return readRecord(`${file}.tmp`) ?? readRecord(`${file}.old`);
+}
+
+// Fixed names, not pid ones: only the host holding host.lock writes, and a reader must find what a dead writer left.
 export function writeWorkerHostRecord(file, value) {
-  const temporary = `${file}.${process.pid}.tmp`;
-  const previous = `${file}.${process.pid}.old`;
+  const temporary = `${file}.tmp`;
+  const previous = `${file}.old`;
   fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
   // Windows will not rename over a record a reader has open, but it will move that record aside.
   let moved = true;

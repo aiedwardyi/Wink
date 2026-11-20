@@ -195,6 +195,37 @@ test("a host record the system will not replace keeps the old one, even with a r
   assert.deepEqual(workerHostRecord(file), { panes: [{ id: "finished", exit: 7 }] });
 });
 
+test("a host that dies anywhere in a record save leaves a record with every exit it saved", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-record-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { writeFileSync, renameSync, rmSync } = fs;
+  // Cut n lets the save's first n disk steps (write, move aside, move in, remove) finish and kills the host in the next.
+  const exitAfterCut = (cut, before, after) => {
+    const file = path.join(dir, `panes-${randomUUID()}.json`);
+    writeWorkerHostRecord(file, { panes: [{ id: "finished", pid: 41, exit: before }] });
+    let steps = 0;
+    const live = () => {
+      if (steps++ < cut) return true;
+      steps = Infinity;
+      return false;
+    };
+    t.mock.method(fs, "writeFileSync", (target, data, options) => {
+      if (live()) return writeFileSync(target, data, options);
+      writeFileSync(target, data.slice(0, data.length >> 1), options);
+      throw new Error("host died");
+    });
+    t.mock.method(fs, "renameSync", (from, to) => { if (live()) return renameSync(from, to); throw new Error("host died"); });
+    t.mock.method(fs, "rmSync", (target, options) => { if (live()) return rmSync(target, options); throw new Error("host died"); });
+    try { writeWorkerHostRecord(file, { panes: [{ id: "finished", pid: 41, exit: after }, { id: "other", pid: 42, exit: null }] }); } catch {}
+    t.mock.restoreAll();
+    const record = workerHostRecord(file);
+    return record ? record.panes.find((pane) => pane.id === "finished").exit : "lost";
+  };
+  const cuts = [0, 1, 2, 3, 4];
+  assert.deepEqual(cuts.map((cut) => exitAfterCut(cut, 7, 7)), [7, 7, 7, 7, 7]);
+  assert.deepEqual(cuts.map((cut) => exitAfterCut(cut, null, 7)), [null, null, 7, 7, 7]);
+});
+
 test("a real shell runs in the host: output, input once, resize, mark and exit code", { ...windows, timeout: 120_000 }, async (t) => {
   const f = fixture(t);
   const client = f.make();
