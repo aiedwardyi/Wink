@@ -111,8 +111,6 @@ export function createSyncEngine(input: SyncOptions) {
   database.exec("CREATE TEMP TABLE IF NOT EXISTS sync_v2_ancestry (thread TEXT PRIMARY KEY, mark INTEGER NOT NULL)");
   const statements = new Map<string, StatementSync>();
   const checkedHeads = new Map<string, number>();
-  // Stored packets never change, so the same copy and segment bytes still match.
-  const storedCopies = new Set<string>();
   type Ancestry = { mark: number; seen: SyncSeen; parents: Map<string, string[] | null>; depths: Map<string, number> };
   const ancestries = new Map<string, Ancestry>();
   const sql = (text: string): StatementSync => {
@@ -704,23 +702,17 @@ export function createSyncEngine(input: SyncOptions) {
     return true;
   }
 
-  function olderCopyStored(scope: SyncScope, root: string, head: SyncHead, bytes: Buffer): boolean {
+  function olderCopyStored(scope: SyncScope, root: string, head: SyncHead): boolean {
     const prior = get(peerHeadSchema.optional(), "SELECT generation, cut, last_seq, hash FROM sync_v2_heads WHERE thread = ? AND writer = ?", scope.threadId, head.writerId);
     if (!prior || head.generation >= prior.generation) return false;
+    // A conflict ingest recorded anywhere in the thread, in any root or pass, may still be corrected.
+    if (sql("SELECT 1 FROM sync_v2_quarantine WHERE thread = ?").get(scope.threadId)) return false;
     const dir = join(root, scope.botSyncId, scope.threadId, head.writerId);
     const stored = (versions: SyncPacket[]) => versions.every((packet) => get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?",
       scope.threadId, head.writerId, packet.seq)?.hash === hash(JSON.stringify(packet)));
     try {
-      const sealed = readdirSync(dir).filter((name) => Number(/^seg-([1-9]\d*)-[1-9]\d*\.json\.gz$/.exec(name)?.[1]) <= head.sealedThrough)
-        .map((name) => readFileSync(join(dir, name)));
-      // Keyed on every byte read, so a segment that arrives or changes later is checked again.
-      const key = [bytes, ...sealed].map(hash).join("\n");
-      if (storedCopies.has(key)) return true;
-      // A segment that crosses the cut counts only for the sealed packets this copy names.
-      if (!stored(head.versions) || !sealed.every((segment) => stored(validateHead(gunzipSync(segment, { maxOutputLength: headBytes }), scope, head.writerId)
-        .versions.filter((packet) => packet.seq <= head.sealedThrough)))) return false;
-      storedCopies.add(key);
-      return true;
+      return stored(head.versions) && readdirSync(dir).filter((name) => /^seg-[1-9]\d*-[1-9]\d*\.json\.gz$/.test(name))
+        .every((name) => stored(validateHead(gunzipSync(readFileSync(join(dir, name)), { maxOutputLength: headBytes }), scope, head.writerId).versions));
     } catch {
       return false;
     }
@@ -795,7 +787,7 @@ export function createSyncEngine(input: SyncOptions) {
       }
     }
     // An older copy is judged once every root is read, since a later root can store the packet it disagrees with.
-    for (const { root, head, bytes } of rejected) notePulledHead(result, root, scope, head, bytes, !olderCopyStored(scope, root, head, bytes));
+    for (const { root, head, bytes } of rejected) notePulledHead(result, root, scope, head, bytes, !olderCopyStored(scope, root, head));
     if (!options.staged) drain(scope, result);
     result.sqlRowsTouched = totalChanges() - before;
     return result;

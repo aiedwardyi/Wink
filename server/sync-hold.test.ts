@@ -118,7 +118,7 @@ async function boot(google = false) {
     closeMessageDb();
     close = async () => {};
   };
-  return { dataDir, folder, store, bot, queue, sync, pull, run, contexts, startTurn, steer, drain, post, send, local, own, headPath, head, deliverHead, deliverSegment, disable: () => { enabled = false; } };
+  return { dataDir, folder, store, bot, queue, sync, pull, run, contexts, startTurn, steer, drain, post, send, local, own, headPath, head, versions, deliverHead, deliverSegment, disable: () => { enabled = false; } };
 }
 
 async function googlePC(early?: Awaited<ReturnType<typeof boot>>) {
@@ -657,6 +657,67 @@ describe("sends while a chat catches up", () => {
     ] });
     list(corrected);
     put(copyPath, corrected);
+    await h.sync.pull("thread");
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
+  });
+
+  const conflicts = [1, 2, 3, 4].flatMap((seq) => [
+    { position: "below", seq, cut: seq + 1, first: seq, last: seq },
+    { position: "at", seq, cut: seq, first: 1, last: seq },
+    { position: "above", seq, cut: seq - 1, first: seq, last: 4 },
+    { position: "spanning", seq, cut: 2, first: 1, last: Math.max(seq, 3) },
+  ]).filter(({ cut }) => cut < 4);
+  const matching = [...new Map(conflicts.map((layout) => [`${layout.cut}:${layout.first}-${layout.last}`, { ...layout, seq: 0 }])).values()];
+  const fuzz = [...conflicts, ...matching].flatMap((layout) => (["stored", "same pull", "next pull", "after a matching segment"] as const)
+    .map((arrival) => ({ ...layout, arrival, differs: layout.seq ? `differs at ${layout.seq}, ${layout.position} the seal` : "matches" })));
+  it.each(fuzz)("holds a send beside a copy sealed at $cut whose seg-$first-$last $differs ($arrival) only while a correction is due", async ({ seq, cut, first, last, arrival }) => {
+    const h = await boot(true);
+    h.deliverSegment();
+    const doc: SyncHead = { ...JSON.parse(h.head), generation: 111 };
+    writeFileSync(join(h.folder, h.headPath), JSON.stringify(doc));
+    await h.sync.pull("thread");
+    const { syncHold } = await import("./sync-hold.ts");
+    const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
+    const list = (listed: string) => syncHold.feed(h.folder, new Map([[h.headPath, JSON.stringify(doc)], ["threads-v2 (1)/bot/thread/peer/head.json", listed]].map(([path, data]) => [path, [{
+      id: path, name: "head.json", md5Checksum: createHash("md5").update(data).digest("hex"),
+      createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
+    }]])), ids);
+    const dir = join(h.folder, "threads-v2 (1)/bot/thread/peer");
+    mkdirSync(dir, { recursive: true });
+    // SAFETY: the fixture's rows carry a message.
+    const changed = h.versions.map((packet) => packet.seq !== seq ? packet : { ...packet, value: packet.kind === "row" ? { ...packet.value as Message, text: "different bytes" } : packet.value === "peer-first" ? h.local : "peer-first" });
+    const part = (generation: number, from: number, to: number, packets = h.versions): SyncHead =>
+      ({ ...doc, generation, sealedThrough: from, firstSeq: from + 1, lastSeq: to, seen: { ...doc.seen, peer: to }, versions: packets.slice(from, to) });
+    const segment = (from: number, to: number, packets = h.versions) => () => writeFileSync(join(dir, `seg-${from}-${to}.json.gz`), gzipSync(JSON.stringify(part(1, from - 1, to, packets))));
+    const copy = JSON.stringify(part(5, cut, 4));
+    const head = () => {
+      writeFileSync(join(dir, "head.json"), copy);
+      list(copy);
+    };
+    const conflict = segment(first, last, changed);
+    // What lands before each pull; the send runs the last one.
+    const steps = { "stored": [[conflict], [head]], "same pull": [[conflict, head]], "next pull": [[head], [conflict]], "after a matching segment": [[segment(1, 1), head], [conflict]] }[arrival];
+    for (const [index, step] of steps.entries()) {
+      if (index) {
+        await h.sync.pull("thread");
+        expect(syncHold.until("thread")).toBeUndefined();
+      }
+      for (const land of step) land();
+    }
+    const receipt = await h.send();
+    if (!seq) {
+      expect(receipt.body.queued).not.toBe(true);
+      expect(h.store.messagesFor("thread").find((row) => row.sendId === "sync-hold-send-0001")?.parentId).toBe("peer-tip");
+      return;
+    }
+    expectHeld(receipt);
+    const corrected = JSON.stringify({ ...doc, generation: 113, lastSeq: 6, seen: { ...doc.seen, peer: 6 }, versions: [...doc.versions,
+      { seq: 5, seen: { ...doc.seen, peer: 4 }, kind: "row", rowId: "peer-six", origin: "peer", baseStamp: null, value: { id: "peer-six", parentId: "peer-tip", at: 4, role: "user", kind: "text", text: "peer correction" } },
+      { seq: 6, seen: { ...doc.seen, peer: 5 }, kind: "head", rowId: "", baseStamp: "4:peer", value: "peer-six" },
+    ] });
+    list(corrected);
+    writeFileSync(join(dir, "head.json"), corrected);
     await h.sync.pull("thread");
     await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
     expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
