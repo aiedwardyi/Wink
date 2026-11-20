@@ -41,4 +41,11 @@ describe("chat switch diag", () => {
     expect(send.mock.calls[0]![0]).toMatchObject({ action: "deleteBot" });
     expect(send.mock.calls[0]![0].caller).toBeUndefined();
   });
+
+  it("logs a switch that leaves no chat open", () => {
+    const send = vi.fn();
+    const action: Action = { type: "deleteBot", botId: "wink" };
+    reportChatSwitch(action, "wink", undefined, send);
+    expect(send.mock.calls[0]![0]).toMatchObject({ from: "wink", to: "", action: "deleteBot" });
+  });
 });

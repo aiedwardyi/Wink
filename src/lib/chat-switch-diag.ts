@@ -24,12 +24,13 @@ export function noteDispatch(action: Action) {
 }
 
 /** Called by the reducer when `action` moved the open chat; StrictMode's second run is dropped. */
-export function reportChatSwitch(action: Action, from: string, to: string, send = postChatSwitch) {
+export function reportChatSwitch(action: Action, from: string, to: string | undefined, send = postChatSwitch) {
   if (reported.has(action)) return;
   reported.add(action);
   send({
     from,
-    to,
+    // a delete that leaves no chat open still logs; the server requires "to"
+    to: to ?? "",
     action: action.type,
     ...callers.get(action),
     focused: document.hasFocus(),
