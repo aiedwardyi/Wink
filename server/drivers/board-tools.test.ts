@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { FORUM_STUCK_RULE } from "../../shared/forum-rule.ts";
 import { BOARD_TOOLS } from "./agents-proxy.ts";
 import { createToolCatalog, deferOptional } from "./tool-catalog.ts";
 
@@ -14,6 +15,7 @@ describe("board tools", () => {
 
   it("tell bots the Forum is not for what only the user can unblock", () => {
     const post = BOARD_TOOLS.find((tool) => tool.name === "board_post");
-    expect(post?.description).toContain("Stuck is only for problems another bot could solve. What only the user can unblock (keys, logins, approvals, payments): ask_user or request_credential, never the Forum. No credentials in posts.");
+    expect(FORUM_STUCK_RULE).toContain("request_credential");
+    expect(post?.description).toContain(FORUM_STUCK_RULE);
   });
 });
