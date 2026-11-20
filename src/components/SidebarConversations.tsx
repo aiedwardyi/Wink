@@ -559,6 +559,7 @@ function BotListItem({
           select();
           focusComposerOnActivation({
             activatedElement: event.currentTarget,
+            switchingChat: !selected,
             settingsOpen: state.settingsOpen || state.appSettingsOpen,
           });
         }}
@@ -573,6 +574,7 @@ function BotListItem({
             select();
             focusComposerOnActivation({
               activatedElement: event.currentTarget,
+              switchingChat: !selected,
               settingsOpen: state.settingsOpen || state.appSettingsOpen,
             });
           }

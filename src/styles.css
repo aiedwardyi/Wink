@@ -4527,6 +4527,11 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   opacity: 1;
 }
 
+/* Switching chats transfers focus to a new composer already in its focused state. */
+[data-orbit-composer-frame][data-chat-switch-focus]:focus-within > [data-orbit-rainbow] {
+  transition: none;
+}
+
 [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span,
 [role="radiogroup"]:focus-within > [data-segmented-thumb] > [data-orbit-rainbow] > span {
   animation-play-state: running;

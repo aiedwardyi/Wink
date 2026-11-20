@@ -1,6 +1,7 @@
 export interface FocusComposerOptions {
   activatedElement?: Element | null;
   composer?: HTMLTextAreaElement | null;
+  switchingChat?: boolean;
   targetDocument?: Document;
   settingsOpen?: boolean;
   terminalOpen?: boolean;
@@ -66,7 +67,7 @@ export function isSidebarNavigationActive(doc: Document, activatedElement?: Elem
   return false;
 }
 
-export function focusComposer(doc: Document = document, target?: HTMLTextAreaElement | null): boolean {
+export function focusComposer(doc: Document = document, target?: HTMLTextAreaElement | null, switchingChat = false): boolean {
   let composer: HTMLTextAreaElement | undefined;
   if (target !== undefined) {
     if (!target || target.disabled || target.ownerDocument !== doc) return false;
@@ -79,6 +80,11 @@ export function focusComposer(doc: Document = document, target?: HTMLTextAreaEle
 
   const start = composer.selectionStart;
   const end = composer.selectionEnd;
+  const frame = switchingChat ? composer.closest("[data-orbit-composer-frame]") : null;
+  if (frame && !frame.hasAttribute("data-chat-switch-focus")) {
+    frame.setAttribute("data-chat-switch-focus", "");
+    composer.addEventListener("blur", () => frame.removeAttribute("data-chat-switch-focus"), { once: true });
+  }
   composer.focus({ preventScroll: true });
   if (typeof start === "number" && typeof end === "number") {
     composer.setSelectionRange(start, end);
@@ -147,7 +153,7 @@ export function focusComposerOnActivation(options: FocusComposerOptions = {}): v
       isTerminalActive(doc, options.terminalOpen) ||
       isSearchActive(doc) ||
       isSidebarNavigationActive(doc, options.activatedElement) ||
-      !focusComposer(doc, options.composer)
+      !focusComposer(doc, options.composer, options.switchingChat)
     ) onDeclined?.();
   });
 }
