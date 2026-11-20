@@ -68,7 +68,7 @@ export interface SyncApplyResult {
   conflicts: number;
   quarantined: number;
   rejected: number;
-  heads?: Array<{ path: string; hash: string; writer: string; lastSeq: number; seen: SyncSeen; refused?: boolean }>;
+  heads?: Array<{ path: string; hash: string; writer: string; lastSeq: number; seen: SyncSeen; older?: boolean; refused?: boolean }>;
 }
 
 export interface SyncFlushResult {

@@ -723,6 +723,64 @@ describe("sends while a chat catches up", () => {
     expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
   });
 
+  // The primary folder keeps the applied head, so only the copy's segment lands there.
+  const rooted = [...conflicts.filter(({ seq }) => seq === 2), { position: "head", seq: 2, cut: 1, first: 1, last: 1 }]
+    .flatMap((layout) => [layout, { ...layout, seq: 0 }])
+    .flatMap((layout) => (["own folder", "other dup folder", "primary"] as const).flatMap((root) => (["listed", "unlisted"] as const)
+      .flatMap((listing) => (["before", "after"] as const).map((restart) => ({ ...layout, root, listing, restart, differs: layout.seq ? `differs at ${layout.seq}` : "matches" })))));
+  it.each(rooted)("holds a send $restart a restart beside a copy ($listing) sealed at $cut with seg-$first-$last in the $root that $differs only while a correction is due", async ({ seq, cut, first, last, root, listing, restart }) => {
+    let h = await boot(true);
+    h.deliverSegment();
+    const doc: SyncHead = { ...JSON.parse(h.head), generation: 111 };
+    writeFileSync(join(h.folder, h.headPath), JSON.stringify(doc));
+    await h.sync.pull("thread");
+    // SAFETY: the fixture's rows carry a message.
+    const changed = h.versions.map((packet) => packet.seq !== seq ? packet : { ...packet, value: packet.kind === "row" ? { ...packet.value as Message, text: "different bytes" } : packet.value === "peer-first" ? h.local : "peer-first" });
+    const part = (generation: number, from: number, to: number, packets = h.versions): SyncHead =>
+      ({ ...doc, generation, sealedThrough: from, firstSeq: from + 1, lastSeq: to, seen: { ...doc.seen, peer: to }, versions: packets.slice(from, to) });
+    const folder = { "own folder": "threads-v2 (1)", "other dup folder": "threads-v2 (2)", "primary": "threads-v2" }[root];
+    const copy = `${folder}/bot/thread/peer/head.json`;
+    const heads = new Map([[h.headPath, JSON.stringify(doc)], ["threads-v2 (1)/bot/thread/peer/head.json", JSON.stringify(part(5, cut, 4))]]);
+    if (root !== "primary") heads.set(copy, JSON.stringify(part(5, cut, 4, changed)));
+    const put = (path: string, data: string | Buffer) => {
+      mkdirSync(dirname(join(h.folder, path)), { recursive: true });
+      writeFileSync(join(h.folder, path), data);
+    };
+    for (const [path, data] of heads) put(path, data);
+    put(`${folder}/bot/thread/peer/seg-${first}-${last}.json.gz`, gzipSync(JSON.stringify(part(1, first - 1, last, changed))));
+    await h.sync.pull("thread");
+    if (restart === "after") h = await boot(true);
+    const { syncHold } = await import("./sync-hold.ts");
+    const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
+    const listed = () => [...heads].filter(([path]) => listing === "listed" || path !== copy);
+    const list = () => syncHold.feed(h.folder, new Map(listed().map(([path, data]) => [path, [{
+      id: path, name: "head.json", md5Checksum: createHash("md5").update(data).digest("hex"),
+      createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
+    }]])), ids);
+    list();
+    const receipt = await h.send();
+    // An unlisted copy in its own folder leaves nothing older listed, so base starts too.
+    const due = (first <= seq && seq <= last || seq > cut && root !== "primary") && (root !== "own folder" || listing === "listed");
+    if (!due) {
+      expect(receipt.body.queued).not.toBe(true);
+      expect(h.store.messagesFor("thread").find((row) => row.sendId === "sync-hold-send-0001")?.parentId).toBe("peer-tip");
+      return;
+    }
+    expectHeld(receipt);
+    const corrected = JSON.stringify({ ...doc, generation: 113, lastSeq: 6, seen: { ...doc.seen, peer: 6 }, versions: [...doc.versions,
+      { seq: 5, seen: { ...doc.seen, peer: 4 }, kind: "row", rowId: "peer-six", origin: "peer", baseStamp: null, value: { id: "peer-six", parentId: "peer-tip", at: 4, role: "user", kind: "text", text: "peer correction" } },
+      { seq: 6, seen: { ...doc.seen, peer: 5 }, kind: "head", rowId: "", baseStamp: "4:peer", value: "peer-six" },
+    ] });
+    for (const [path] of listed()) if (path !== h.headPath) {
+      heads.set(path, corrected);
+      put(path, corrected);
+    }
+    list();
+    await h.sync.pull("thread");
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
+  });
+
   it("drops a stale listed hash once the listing matches the applied head", async () => {
     const h = await boot(true);
     const { syncHold } = await import("./sync-hold.ts");
