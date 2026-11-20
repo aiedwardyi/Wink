@@ -15,6 +15,7 @@ import {
   botNotifyIconPath,
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
+import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
@@ -5064,7 +5065,7 @@ const PLAIN_WORDS_INSTRUCTIONS =
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
-  " After something took 2+ tries, board_post kind fix: the error and the line that fixed it.";
+  ` After something took 2+ tries, board_post kind fix: the error and the line that fixed it. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
 const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
 

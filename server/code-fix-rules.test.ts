@@ -29,7 +29,7 @@ const RULES = [
 ];
 const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES = "When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
-const FORUM = "After something took 2+ tries, board_post kind fix: the error and the line that fixed it.";
+const FORUM = "After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Stuck is only for problems another bot could solve. What only the user can unblock (keys, logins, approvals, payments): ask_user or request_credential, never the Forum. No credentials in posts.";
 const CUSTOM = "Keep build notes in the team wiki.";
 const DECISIONS = [
   "In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date",

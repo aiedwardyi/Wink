@@ -45,6 +45,7 @@ import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
+import { FORUM_STUCK_RULE } from "../../shared/forum-rule.ts";
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
@@ -252,7 +253,7 @@ export const BOARD_TOOLS = [
   },
   {
     name: "board_post",
-    description: "Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you.",
+    description: `Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you. ${FORUM_STUCK_RULE}`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
