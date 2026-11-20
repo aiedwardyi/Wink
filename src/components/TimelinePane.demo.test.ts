@@ -7,6 +7,7 @@ import { I18nProvider } from "@/lib/i18n";
 import { noteMemorySnapshot } from "@/lib/memory-clean-events";
 
 import { TimelinePane } from "./TimelinePane";
+import timelineCss from "./TimelinePane.css?raw";
 
 describe("TimelinePane demo", () => {
   const urls: string[] = [];
@@ -60,6 +61,21 @@ describe("TimelinePane demo", () => {
     const before = canvas().querySelector(".timeline-hint b")!.textContent;
     act(() => { canvas().dispatchEvent(zoomEvent); });
     expect(canvas().querySelector(".timeline-hint b")!.textContent).not.toBe(before);
+  });
+
+  it("holds will-change only while a drag moves the sheet, so it re-rasters sharp when it stops", () => {
+    const touch = (type: string, x: number, y: number) => {
+      const event = new PointerEvent(type, { pointerId: 1, pointerType: "touch", bubbles: true, cancelable: true });
+      for (const [key, value] of Object.entries({ clientX: x, clientY: y })) Object.defineProperty(event, key, { value });
+      act(() => { canvas().dispatchEvent(event); });
+    };
+    expect(timelineCss).not.toMatch(/will-change/);
+    expect(sheet().style.willChange).toBe("");
+    touch("pointerdown", 100, 100);
+    touch("pointermove", 100, 160);
+    expect(sheet().style.willChange).toBe("transform");
+    touch("pointerup", 100, 160);
+    expect(sheet().style.willChange).toBe("");
   });
 
   it("has nothing to open, and the demo makes no request beyond the pick list", () => {
