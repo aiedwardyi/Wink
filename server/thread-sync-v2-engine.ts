@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
@@ -63,10 +63,10 @@ export function ensureSyncV2Identity(deviceId: string): void {
   });
 }
 
-function notePulledHead(result: SyncApplyResult, root: string, scope: SyncScope, head: SyncHead, bytes: Buffer): void {
+function notePulledHead(result: SyncApplyResult, root: string, scope: SyncScope, head: SyncHead, bytes: Buffer, copy: { older?: true; refused?: true } = {}): void {
   (result.heads ??= []).push({
     path: `${basename(root)}/${scope.botSyncId}/${scope.threadId}/${head.writerId}/head.json`,
-    hash: createHash("md5").update(bytes).digest("hex"), writer: head.writerId, lastSeq: head.lastSeq, seen: head.seen,
+    hash: createHash("md5").update(bytes).digest("hex"), writer: head.writerId, lastSeq: head.lastSeq, seen: head.seen, ...copy,
   });
 }
 
@@ -111,6 +111,7 @@ export function createSyncEngine(input: SyncOptions) {
   database.exec("CREATE TEMP TABLE IF NOT EXISTS sync_v2_ancestry (thread TEXT PRIMARY KEY, mark INTEGER NOT NULL)");
   const statements = new Map<string, StatementSync>();
   const checkedHeads = new Map<string, number>();
+  const storedSegments = new Map<string, string>();
   type Ancestry = { mark: number; seen: SyncSeen; parents: Map<string, string[] | null>; depths: Map<string, number> };
   const ancestries = new Map<string, Ancestry>();
   const sql = (text: string): StatementSync => {
@@ -702,6 +703,27 @@ export function createSyncEngine(input: SyncOptions) {
     return true;
   }
 
+  const stored = (scope: SyncScope, writer: string, versions: SyncPacket[]) => versions.every((packet) =>
+    get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", scope.threadId, writer, packet.seq)?.hash === hash(JSON.stringify(packet)));
+
+  function olderCopy(scope: SyncScope, head: SyncHead): boolean {
+    const prior = get(peerHeadSchema.optional(), "SELECT generation, cut, last_seq, hash FROM sync_v2_heads WHERE thread = ? AND writer = ?", scope.threadId, head.writerId);
+    return Boolean(prior && head.generation < prior.generation) && stored(scope, head.writerId, head.versions);
+  }
+
+  // Stored packets are never rewritten, so a segment that matched them still does until its size or mtime moves.
+  function segmentStored(scope: SyncScope, writer: string, path: string): boolean {
+    try {
+      const { size, mtimeMs } = statSync(path);
+      if (storedSegments.get(path) === `${size}:${mtimeMs}`) return true;
+      if (!stored(scope, writer, validateHead(gunzipSync(readFileSync(path), { maxOutputLength: headBytes }), scope, writer).versions)) return false;
+      storedSegments.set(path, `${size}:${mtimeMs}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function drain(scope: SyncScope, result: SyncApplyResult, limit = Infinity): void {
     const writers = all(writerSchema, "SELECT DISTINCT writer FROM sync_v2_packets WHERE thread = ? AND applied = 0", scope.threadId);
     for (;;) {
@@ -740,6 +762,9 @@ export function createSyncEngine(input: SyncOptions) {
     scopeDir(scope);
     const result = emptyResult();
     const before = totalChanges();
+    const rejected: { root: string; head: SyncHead; bytes: Buffer }[] = [];
+    const recorded: { writer: string; path: string }[] = [];
+    let disagrees = false;
     for (const root of syncRoots(options.folder, "threads-v2")) {
       const dir = join(root, scope.botSyncId, scope.threadId);
       if (!existsSync(dir)) continue;
@@ -750,7 +775,10 @@ export function createSyncEngine(input: SyncOptions) {
         const names = readdirSync(writerDir).filter((name) => name === "head.json" || /^seg-[1-9]\d*-[1-9]\d*\.json\.gz$/.test(name));
         for (const name of names) {
           const segment = name !== "head.json";
-          if (segment && sql("SELECT 1 FROM sync_v2_files WHERE thread = ? AND writer = ? AND name = ?").get(scope.threadId, writer, name)) continue;
+          if (segment && sql("SELECT 1 FROM sync_v2_files WHERE thread = ? AND writer = ? AND name = ?").get(scope.threadId, writer, name)) {
+            recorded.push({ writer, path: join(writerDir, name) });
+            continue;
+          }
           let bytes: Buffer;
           let head: SyncHead;
           try {
@@ -760,15 +788,21 @@ export function createSyncEngine(input: SyncOptions) {
             if (segment && name !== `seg-${head.firstSeq}-${head.lastSeq}.json.gz`) throw new Error("Segment filename range mismatch");
           } catch {
             result.rejected++;
+            disagrees = true;
             continue;
           }
           if (ingest(scope, writer, head, bytes, segment, result)) {
             if (segment) sql("INSERT OR IGNORE INTO sync_v2_files VALUES (?, ?, ?)").run(scope.threadId, writer, name);
             else notePulledHead(result, root, scope, head, bytes);
-          }
+          } else if (segment) disagrees = true;
+          else rejected.push({ root, head, bytes });
         }
       }
     }
+    // An older copy clears only while every peer file of the thread, in every root, agrees with stored packets.
+    const settled = rejected.length > 0 && !disagrees && rejected.every(({ head }) => olderCopy(scope, head))
+      && recorded.every(({ writer, path }) => segmentStored(scope, writer, path));
+    for (const { root, head, bytes } of rejected) notePulledHead(result, root, scope, head, bytes, settled ? { older: true } : { refused: true });
     if (!options.staged) drain(scope, result);
     result.sqlRowsTouched = totalChanges() - before;
     return result;
