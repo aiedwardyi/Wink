@@ -29,24 +29,76 @@ function load(): Orders {
   } catch { return {}; }
 }
 
+export function ordered<T>(items: T[], order: string[] = [], id: (item: T) => string): T[] {
+  const rank = new Map(order.map((key, index) => [key, index]));
+  return [...items].sort((a, b) => (rank.get(id(a)) ?? order.length) - (rank.get(id(b)) ?? order.length));
+}
+
 type Instance = { instanceId: string; snapshot: Parameters<typeof usageIdentity>[0] };
+type Place = { id?: string; identity?: string };
+const IDENTITY = "identity:";
+const normal = (identity: string) => identity.trim().toLowerCase();
 
 // a sign-out discards an added slot and its re-add gets a new id, so a saved place also names who the account signs in as,
-// lowercased as the server's identity is: a re-add in another case is the same account
-function rankKeys(id: string, instances: Instance[]): string[] {
-  const identity = usageIdentity(instances.find((each) => each.instanceId === id)?.snapshot ?? {})?.trim().toLowerCase();
-  return identity ? [id, `identity:${identity}`] : [id];
+// lowercased as the server's identity is: a re-add in another case is the same account. null is signed out, undefined not checked yet
+function identityOf(id: string, instances: Instance[]) {
+  const identity = usageIdentity(instances.find((each) => each.instanceId === id)?.snapshot ?? {});
+  return identity === null ? null : identity && normal(identity) || undefined;
 }
 
-export function ordered<T>(items: T[], order: string[] = [], keys: (item: T) => string[]): T[] {
-  const rank = new Map(order.map((key, index) => [key, index]));
-  const place = (item: T) => Math.min(order.length, ...keys(item).map((key) => rank.get(key) ?? order.length));
-  return [...items].sort((a, b) => place(a) - place(b));
+// an earlier build saved the email as typed, so saved identities read the way incoming ones do
+function places(order: string[]): Place[] {
+  const list: Place[] = [];
+  for (const key of order) {
+    const last = list.at(-1);
+    if (!key.startsWith(IDENTITY)) list.push({ id: key });
+    else if (last?.id !== undefined && last.identity === undefined) last.identity = normal(key.slice(IDENTITY.length));
+    else list.push({ identity: normal(key.slice(IDENTITY.length)) });
+  }
+  return list;
 }
 
-export function rankAccounts<T>(accounts: T[], order: string[] | undefined, id: (account: T) => string, instances: Instance[]): T[] {
-  return ordered(accounts, order, (account) => rankKeys(id(account), instances));
+const keys = (list: Place[]) => list.flatMap(({ id, identity }) => [...id === undefined ? [] : [id], ...identity === undefined ? [] : [IDENTITY + identity]]);
+
+// each place holds one slot, so two slots signed in as one email keep their own places
+function claim(ids: string[], list: Place[], instances: Instance[]) {
+  const identities = ids.map((id) => identityOf(id, instances));
+  const at: (number | undefined)[] = ids.map(() => undefined);
+  const taken = new Set<number>();
+  const pass = (fits: (place: Place, index: number) => boolean) => ids.forEach((_, index) => {
+    if (at[index] !== undefined) return;
+    const found = list.findIndex((place, slot) => !taken.has(slot) && fits(place, index));
+    if (found >= 0) { at[index] = found; taken.add(found); }
+  });
+  pass((place, index) => place.id === ids[index]);
+  pass((place, index) => !!identities[index] && place.identity === identities[index]);
+  // a slot still checking may be the account that left a place, so it takes that place now rather than jump there once its email arrives
+  pass((place, index) => identities[index] === undefined && place.identity !== undefined);
+  return { at, identities };
 }
+
+export function rankAccounts<T>(accounts: T[], order: string[] = [], id: (account: T) => string, instances: Instance[]): T[] {
+  const { at } = claim(accounts.map(id), places(order), instances);
+  return accounts.map((account, index) => ({ account, place: at[index] ?? order.length })).sort((a, b) => a.place - b.place).map(({ account }) => account);
+}
+
+// the order shown this run binds each slot to its place, never saved: only a drag saves
+function learn(order: string[], ids: string[], instances: Instance[]): string[] {
+  const list = places(order);
+  const { at, identities } = claim(ids, list, instances);
+  const next = [...list];
+  ids.forEach((id, index) => {
+    const place = { id, identity: identities[index] ?? (at[index] === undefined ? undefined : list[at[index]!]!.identity) };
+    if (at[index] === undefined) next.push(place); else next[at[index]!] = place;
+  });
+  return keys(next);
+}
+
+const shown = new Map<string, { from: string; order: string[] }>();
+const remembered = (base: string, order: string[]) => {
+  const kept = shown.get(base);
+  return kept?.from === order.join("\n") ? kept.order : order;
+};
 
 type Drag = {
   node: HTMLElement; items: HTMLElement[]; rects: DOMRect[]; from: number; to: number; key: string; y: number; dy: number; scrollTop: number; travel: Travel;
@@ -58,31 +110,21 @@ function scrollParent(node: HTMLElement | null) {
 }
 
 export function useUsageDrag(engines: { base: string; accounts: { id: string }[] }[], instances: Instance[]) {
-  const [orders, setOrders] = useState(load);
-  const latest = useRef(orders);
-  latest.current = orders;
-  const named = (ids: string[]) => [...new Set(ids.flatMap((id) => rankKeys(id, instances)))];
+  const [saved, setOrders] = useState(load);
+  const latest = useRef(saved);
+  latest.current = saved;
+  const orders: Orders = Object.fromEntries(Object.entries(saved).map(([base, order]) => [base, remembered(base, order)]));
+  const named = (ids: string[]) => keys(ids.map((id) => ({ id, identity: identityOf(id, instances) ?? undefined })));
   const save = (next: Orders) => {
     setOrders(next);
     try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
     window.dispatchEvent(new CustomEvent(CHANGE, { detail: next }));
   };
-  // a saved order binds every shown account's keys at its shown place, so a re-added slot or one never ranked keeps that place from the next start
   useEffect(() => {
-    const before = latest.current;
-    const learned = engines.flatMap(({ base, accounts }) => {
-      const order = before[base];
-      if (!order?.length) return [];
-      const next = rankAccounts(accounts, order, (account) => account.id, instances).reduce((keys, account) => {
-        const own = rankKeys(account.id, instances);
-        const at = keys.findIndex((key) => own.includes(key));
-        const rest = keys.filter((key) => !own.includes(key));
-        rest.splice(at < 0 ? rest.length : at, 0, ...own);
-        return rest;
-      }, order);
-      return next.join("\n") === order.join("\n") ? [] : [[base, next] as const];
-    });
-    if (learned.length) save({ ...before, ...Object.fromEntries(learned) });
+    for (const { base, accounts } of engines) {
+      const order = latest.current[base];
+      if (order?.length) shown.set(base, { from: order.join("\n"), order: learn(remembered(base, order), accounts.map((account) => account.id), instances) });
+    }
   });
   useEffect(() => {
     const changed = (event: Event) => { if (event instanceof CustomEvent) setOrders(event.detail); };
@@ -116,7 +158,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const before = latest.current;
     const visible = new Set(ids);
     let index = 0;
-    const order = accounts ? rankAccounts(accounts, before[drag.key], (account) => account.id, instances)
+    const order = accounts ? rankAccounts(accounts, before[drag.key] && remembered(drag.key, before[drag.key]), (account) => account.id, instances)
       .map((account) => visible.has(account.id) ? ids[index++]! : account.id) : ids;
     save({ ...before, [drag.key]: accounts ? named(order) : order });
   };

@@ -579,7 +579,7 @@ export function UsageDesk({ closing = false }: { closing?: boolean }) {
       {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
       <div data-usage-sections="" ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="usage-sections">
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
-      {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => [each.base]).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
+      {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => each.base).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
         terminal={terminal} clock={clock} label={engineLabel(board, each, store.instances)} folded={folded(each)} onFold={() => fold(each.base, !folded(each))} accountOrder={drag.orders[each.base]} reloadInstances={() => refreshInstances()}
         signIn={() => dispatch({ type: "toggleAppSettings", open: true, section: "connections" })} />)}
       </div>

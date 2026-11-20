@@ -313,7 +313,7 @@ it.each([false, true])("preserves hidden account slots after a collapsed reorder
   expect(rows()).toEqual([full[0], full[1], full[5]]);
   await key(`[data-account-row="${full[0]}"]`, "ArrowDown");
   const expected = [full[1], full[0], ...full.slice(2)];
-  expect(savedIds()).toEqual({ claude: expected, codex: h.board!.engines[1]!.accounts.map((account) => account.id) });
+  expect(savedIds()).toEqual({ claude: expected, codex: ["codex"] });
   await remount();
   await click('[data-usage-engine="claude"] [data-accounts-cap]');
   expect(rows()).toEqual(expected);
@@ -1013,4 +1013,38 @@ it("ranks every surface's accounts through the one identity helper", () => {
     expect(source.match(/\bordered\(.*$/gm)?.filter((line) => !line.includes("drag.orders.engines")) ?? [], name).toEqual([]);
     expect(source, name).toMatch(/\brankAccounts\(/);
   }
+});
+
+it.each(Object.entries(surfaces))("keeps two slots signed in as one email each at its own place in the %s and saves nothing on open", async (_, { open, ids }) => {
+  const [base, a, b] = claudeIds();
+  const slot = (id: string) => h.instances.find((each) => each.instanceId === id)!;
+  slot(a).snapshot.account = "Example.Person@example.test";
+  slot(b).snapshot.account = " example.person@EXAMPLE.test";
+  const saved = JSON.stringify({ claude: [a, base, b] });
+  localStorage.setItem(ORDER, saved);
+  await open();
+  expect(ids()).toEqual([a, base, b]);
+  expect(localStorage.getItem(ORDER)).toBe(saved);
+});
+
+it.each(Object.entries(surfaces))("keeps a replacement first seen while checking at its saved place in the %s when its email arrives", async (_, { open, again, ids }) => {
+  const [base, a, b] = claudeIds();
+  localStorage.setItem(ORDER, JSON.stringify({ claude: [a, "identity:account-2@example.com", b, "identity:account-3@example.com", base, "identity:account-1@example.com"] }));
+  signOutAndReturn(a, "acct-first-sight", "ACCOUNT-2@example.com");
+  const slot = h.instances.find((each) => each.instanceId === "acct-first-sight")!;
+  const ready = slot.snapshot;
+  slot.snapshot = { state: "checking" };
+  await open();
+  expect(ids()).toEqual(["acct-first-sight", b, base]);
+  slot.snapshot = ready;
+  await again();
+  expect(ids()).toEqual(["acct-first-sight", b, base]);
+});
+
+it.each(Object.entries(surfaces))("reads a place an earlier build saved under a mixed-case email in the %s", async (_, { open, ids }) => {
+  const [base, a, b] = claudeIds();
+  signOutAndReturn(a, "acct-back", "example.person@example.test");
+  localStorage.setItem(ORDER, JSON.stringify({ claude: [a, "identity:Example.Person@example.test", b, "identity:account-3@example.com", base, "identity:account-1@example.com"] }));
+  await open();
+  expect(ids()).toEqual(["acct-back", b, base]);
 });
