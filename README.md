@@ -46,7 +46,7 @@ Each worker is the vendor's own CLI in its own terminal. The lead bot is told to
 Live Verify opens the page in a real browser, clicks through it at phone size and hands anything broken back to the bot.
 
 <!-- VIDEO: en-new.mp4 -->
-<img src="./assets/readme/tour-verify.png" width="880" alt="Live Verify checking a sample music site: check labels over the desktop view, with a nav clicker and a modal clicker beside it, 248 of 662 checks done.">
+<img src="./assets/readme/tour-verify.png" width="880" alt="Live Verify running checks on the Starzum page in desktop and phone views.">
 
 **5. Memory that carries across sessions and keeps getting better**<br>
 One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carries across models and to your phone, and across PCs with Sync on.
