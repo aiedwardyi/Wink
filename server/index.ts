@@ -3059,10 +3059,21 @@ const summaryBuild = createSummaryBuild({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   userName: () => cfg.profile?.name?.trim() || "User",
 });
+// with no Claude to run it, a bot takes its notes on its own engine and account
+const noteHelper = (botId: string) => {
+  const bot = store.bot(botId);
+  let own: ProviderInstance | null = null;
+  try {
+    const selection = bot ? botAccounts.resolve(bot) : null;
+    const instance = selection && registry.accountAvailable(selection.instanceId) ? registry.get(selection.instanceId) : undefined;
+    own = instance && selection ? summaryInstance(instance, selection.model) : null;
+  } catch { /* no account can run this bot */ }
+  return noteGenerator(registry.instances().filter((instance) => registry.accountAvailable(instance.instanceId)), botAccounts.noteAccount(), own);
+};
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
-  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
+  generate: noteHelper,
   enabled: (botId) => {
     const bot = store.bot(botId);
     const instance = bot && registry.get(bot.modelSelection.instanceId);
@@ -3074,7 +3085,7 @@ const memoryPass = createMemoryPass({
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
-  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
+  generate: noteHelper,
   enabled: (botId) => {
     const bot = store.bot(botId);
     const instance = bot && registry.get(bot.modelSelection.instanceId);

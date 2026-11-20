@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,9 +21,12 @@ import {
 } from "./memory-pass.ts";
 import * as atomic from "./atomic.ts";
 import { memoryNotesEnabled } from "./config.ts";
+import type { ProviderInstance } from "./contracts.ts";
+import { CodexDriver } from "./drivers/codex.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { replyTurns } from "./pick-sources.ts";
 import type { Message, StoreChange } from "./store.ts";
+import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
@@ -1055,6 +1058,19 @@ describe("note generator", () => {
     expect(noteGenerator([])).toBeNull();
   });
 
+  it("runs on the bot's own engine only when no Claude can", async () => {
+    const codex = instance("codex");
+    const claude = instance("claudeAgent");
+    const signal = new AbortController().signal;
+    await expect(noteGenerator([codex], undefined, codex)?.("prompt", signal)).resolves.toBe("codex");
+    expect(codex.generateText).toHaveBeenCalledWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true });
+    await expect(noteGenerator([codex, claude], undefined, codex)?.("prompt", signal)).resolves.toBe("claudeAgent");
+    await expect(noteGenerator([claude], { instanceId: "claude-bound", available: false }, codex)?.("prompt", signal)).resolves.toBe("codex");
+    expect(noteGenerator([], undefined, instance("codex", { enabled: false }))).toBeNull();
+    expect(noteGenerator([], undefined, instance("codex", { text: null }))).toBeNull();
+    expect(noteGenerator([], undefined, null)).toBeNull();
+  });
+
   it("passes an optional usage observer without changing the helper call", async () => {
     const claude = instance("claudeAgent");
     const signal = new AbortController().signal;
@@ -1064,13 +1080,49 @@ describe("note generator", () => {
   });
 });
 
+describe("notes on the bot's own engine", () => {
+  const FAKE_CODEX = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-codex-app-server.ts");
+  let codex: ProviderInstance | undefined;
+
+  afterEach(async () => {
+    await codex?.dispose();
+    delete process.env.FAKE_CODEX_MESSAGES;
+    vi.restoreAllMocks();
+  });
+
+  it("fills notes and the timeline for a Codex bot on a PC with no Claude", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
+    process.env.FAKE_CODEX_MESSAGES = JSON.stringify([{ text: recorded.reply.text, phase: "final_answer" }]);
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true, environment: { CODEX_HOME: home }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const store = fakeStore();
+    writeMemoryFile("bot-c1", "");
+    rmSync(join(workspaceDir("bot-c1"), "memory"), { recursive: true, force: true });
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), generate: () => noteGenerator([codex!], undefined, own), enabled: () => true, busy: () => false });
+    store.appendMessage("c1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    store.appendMessage("c1", { role: "user", kind: "text", text: "the second one" });
+    store.appendMessage("c1", { role: "user", kind: "text", text: "I use pnpm for my projects." });
+    pass.onSettled("bot-c1", "c1", true);
+    await pass.idle();
+    pass.dispose();
+    expect(memoryFileRaw("bot-c1")).toMatch(/^- Uses pnpm for projects \(noted \d{4}-\d{2}-\d{2}\)$/m);
+    expect(readMemoryTopic("bot-c1", "decisions.md")).toContain("- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n");
+  });
+});
+
 describe("memory pass wiring", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const index = readFileSync(join(here, "index.ts"), "utf8");
   const bots = readFileSync(join(here, "bot-routes.ts"), "utf8");
 
-  it("runs every bot's pass on Claude, after 1:1 turns, without a session transcript", () => {
-    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\), botAccounts\.noteAccount\(\)\),[\s\S]*?botHasActiveTurn/);
+  it("runs every bot's pass and tidy on Claude, else its own engine, after 1:1 turns, without a session transcript", () => {
+    expect(index).toMatch(/const noteHelper = [\s\S]*?summaryInstance\(instance, selection\.model\)[\s\S]*?return noteGenerator\(registry\.instances\(\)\.filter\(\(instance\) => registry\.accountAvailable\(instance\.instanceId\)\), botAccounts\.noteAccount\(\), own\);/);
+    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: noteHelper,[\s\S]*?botHasActiveTurn/);
+    expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?generate: noteHelper,/);
     expect(index).toMatch(/memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);\s*if \(!store\.groupByThread\(event\.threadId\)\)/);
     expect(index).toContain("memoryPass.dispose();");
   });

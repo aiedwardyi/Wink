@@ -59,7 +59,7 @@ export type DroppedNotes = z.infer<typeof droppedSchema>;
 
 export interface MemoryPassDeps {
   store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot">>;
-  /** The Claude one-shot call, whatever engine the bot runs; null when no Claude CLI is set up. */
+  /** The Claude one-shot call, else the bot's own engine; null when neither can run. */
   generate(botId: string): NoteGenerator | null;
   /** The bot's Auto notes switch, read live. */
   enabled(botId: string): boolean;
@@ -83,10 +83,12 @@ export interface MemoryPass {
 export function noteGenerator(
   instances: readonly (Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string })[],
   account?: { instanceId: string; available: boolean },
+  own?: Pick<ProviderInstance, "enabled" | "generateText"> | null,
 ): NoteGenerator | null {
-  if (account && !account.available) return null;
-  const claude = instances.find((instance) => (!account || instance.instanceId === account.instanceId) && instance.driverKind === "claudeAgent" && instance.enabled && instance.generateText);
-  return claude ? (prompt, signal, onUsage) => claude.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true, ...(onUsage ? { onUsage } : {}) }) : null;
+  const claude = account && !account.available ? undefined
+    : instances.find((instance) => (!account || instance.instanceId === account.instanceId) && instance.driverKind === "claudeAgent" && instance.enabled && instance.generateText);
+  const helper = claude ?? (own?.enabled && own.generateText ? own : undefined);
+  return helper ? (prompt, signal, onUsage) => helper.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true, ...(onUsage ? { onUsage } : {}) }) : null;
 }
 
 /** A user row typed on this PC into the chat, not a bot, routine, peer, draft or attachment. */
