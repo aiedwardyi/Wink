@@ -733,26 +733,34 @@ describe("entering a PC's code", () => {
     expect(document.getElementById("code")?.hidden).toBe(true);
   });
 
-  it("keeps the boxes hidden while a remembered PC opens, and never draws them", async () => {
+  const covered = () => document.getElementById("code")?.classList.contains("trying");
+
+  it("keeps the boxes see-through while a remembered PC opens", async () => {
     localStorage.setItem(LAST_PC, LABEL_B);
     open("/signin", [{ label: LABEL_B, name: "Zed" }]);
-    expect(document.getElementById("code")?.hidden).toBe(true);
+    expect(covered()).toBe(true);
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
-    expect(document.getElementById("code")?.hidden).toBe(true);
-    expect(boxes()).toHaveLength(0);
+    expect(covered()).toBe(true);
   });
 
-  it("draws the boxes once when Back restores the page after a remembered PC opened", async () => {
+  it("keeps the boxes usable when the open is stopped and the page stays", async () => {
     localStorage.setItem(LAST_PC, LABEL_B);
     open("/signin", [{ label: LABEL_B, name: "Zed" }]);
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
-    expect(boxes()).toHaveLength(0);
-    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: false }));
-    expect(boxes()).toHaveLength(0);
-    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
-    expect(document.getElementById("code")?.hidden).toBe(false);
     expect(boxes()).toHaveLength(6);
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
+    document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(covered()).toBe(false);
+  });
+
+  it("shows the boxes when Back restores the page after a remembered PC opened", async () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: false }));
+    expect(covered()).toBe(true);
     window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(covered()).toBe(false);
     expect(boxes()).toHaveLength(6);
   });
 
@@ -761,9 +769,9 @@ describe("entering a PC's code", () => {
     localStorage.setItem(LAST_PC, LABEL_B);
     open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "timeout");
     await vi.advanceTimersByTimeAsync(1999);
-    expect(document.getElementById("code")?.hidden).toBe(true);
+    expect(covered()).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
-    expect(document.getElementById("code")?.hidden).toBe(false);
+    expect(covered()).toBe(false);
     expect(boxes()).toHaveLength(6);
   });
 

@@ -278,6 +278,20 @@
 
   const shortCodeChars = (value) => [...value.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(CODE_KEEP, "");
 
+  // Shown at once but see-through while a remembered PC may open, so the boxes do not flash. A stopped load sends the page no event, so a touch or key brings them back too.
+  function coverCode() {
+    const code = $("code");
+    const uncover = () => {
+      code.classList.remove("trying");
+      removeEventListener("pointerdown", uncover, true);
+      removeEventListener("keydown", uncover, true);
+    };
+    code.classList.add("trying");
+    addEventListener("pointerdown", uncover, true);
+    addEventListener("keydown", uncover, true);
+    return uncover;
+  }
+
   function showCode() {
     $("code").hidden = false;
     const boxes = [];
@@ -498,19 +512,19 @@
   async function coldStart(pick) {
     const last = remembered();
     const saved = LABEL_RE.test(last);
+    const uncover = !pick && saved ? coverCode() : () => {};
     if (!pick && saved && await reachable(last)) {
-      // Back restores this page from bfcache as it was left, with no controls: draw them then.
+      // Back restores this page from bfcache as it was left, still covered.
       const restored = (event) => {
         if (!event.persisted) return;
         removeEventListener("pageshow", restored);
-        showCode();
+        uncover();
       };
       addEventListener("pageshow", restored);
       go(last, "?g=1");
       return;
     }
-    // Held back until now: a remembered PC that answers opens at once, so the boxes would only flash.
-    showCode();
+    uncover();
     // From a PC the account is usually known to Google, so try its quiet sign-in before drawing the button.
     if (pick) $("title").textContent = "Choose a PC";
     const token = await requestToken(randomNonce(), pick);
@@ -577,6 +591,7 @@
     const pc = params.get("pc");
     const m = params.get("m");
     if (pc === null && m === null) {
+      showCode();
       void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
