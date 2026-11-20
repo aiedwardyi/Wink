@@ -285,9 +285,13 @@ function fitChoices(card: HTMLDivElement | null) {
   if (!card || !body || typeof ResizeObserver === "undefined") return;
   let pane = card.parentElement;
   while (pane && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
+  // the tray's own cap (30dvh on a phone) is below what three lines and the choices need, and would read as no room
+  if (choices && pane) pane.style.maxHeight = "none";
   const fit = () => {
+    const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
+    // the last fit's snap would be read back as the window's own height
+    body.style.maxHeight = "";
     if (choices) {
-      const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
       // the last fit's min-height would be read back as the text's own height
       body.style.minHeight = "";
       const kept = Math.min(body.scrollHeight, KEPT_LINES * line);
@@ -308,6 +312,10 @@ function fitChoices(card: HTMLDivElement | null) {
         }
       }
     }
+    // a cut question ends on a whole line, never half of one
+    const shown = body.getBoundingClientRect().height;
+    const whole = Math.floor(shown / line + 0.02) * line;
+    if (body.scrollHeight > shown + 1 && whole >= line && whole < shown) body.style.maxHeight = `${whole}px`;
     markCut(body);
   };
   fit();
@@ -321,6 +329,7 @@ function fitChoices(card: HTMLDivElement | null) {
     watch.disconnect();
     window.removeEventListener("resize", fit);
     fold?.removeEventListener("animationend", fit);
+    if (choices && pane) pane.style.maxHeight = "";
   };
 }
 
