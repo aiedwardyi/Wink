@@ -163,6 +163,19 @@ test("a pane's ring holds only the output it still counts", () => {
   assert.deepEqual([pane.seq, pane.bytes, held, pane.ring[pane.head].seq], [1024, 256 * 1024, 256 * 1024, 1021]);
 });
 
+test("a host record is replaced while a reader still has the old one open", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-record-"));
+  const file = path.join(dir, "host.json");
+  writeWorkerHostRecord(file, { nonce: "old" });
+  const reader = fs.openSync(file, "r");
+  t.after(() => {
+    fs.closeSync(reader);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  writeWorkerHostRecord(file, { nonce: "new" });
+  assert.deepEqual(workerHostRecord(file), { nonce: "new" });
+});
+
 test("a real shell runs in the host: output, input once, resize, mark and exit code", { ...windows, timeout: 120_000 }, async (t) => {
   const f = fixture(t);
   const client = f.make();
