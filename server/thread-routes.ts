@@ -148,23 +148,26 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (threadId && !store.botByThread(threadId) && !store.groupByThread(threadId)) {
         return json(res, 404, { error: "no such conversation" });
       }
+      const needle = q.trim().toLowerCase();
+      const found = searchMessages(q, limit + 1, threadId, { before, chips, skip: new Set([...store.trash.threadIds(), ...hidden]) });
+      const page = found.slice(0, limit);
       // whether each hit sits on its thread's visible branch - a click on
-      // one that does not has to switch versions first (and only then)
+      // one that does not has to switch versions first (and only then).
+      // A chat not in memory answers from disk: loading a long one took seconds.
       const activePaths = new Map<string, Set<string>>();
       const onActivePath = (threadId: string, messageId: string) => {
         let ids = activePaths.get(threadId);
-        if (!ids) activePaths.set(threadId, (ids = new Set(store.activePath(threadId).map((m) => m.id))));
+        if (!ids) activePaths.set(threadId, (ids = store.onActivePath(threadId, page.filter((hit) => hit.threadId === threadId).map((hit) => hit.messageId))));
         return ids.has(messageId);
       };
       const threadRows = new Map<string, Map<string, Message>>();
       const messageIn = (threadId: string, messageId: string) => {
+        if (!store.loaded(threadId)) return store.row(threadId, messageId);
         let rows = threadRows.get(threadId);
         if (!rows) threadRows.set(threadId, (rows = new Map(store.messagesFor(threadId).map((m) => [m.id, m]))));
         return rows.get(messageId);
       };
-      const needle = q.trim().toLowerCase();
-      const found = searchMessages(q, limit + 1, threadId, { before, chips, skip: new Set([...store.trash.threadIds(), ...hidden]) });
-      const hits = found.slice(0, limit)
+      const hits = page
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
           const group = bot ? undefined : store.groupByThread(hit.threadId);

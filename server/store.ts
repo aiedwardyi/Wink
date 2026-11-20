@@ -1407,6 +1407,13 @@ export class Store {
     return path;
   }
 
+  /** Which of `ids` lie on the active path; a thread not loaded walks its stored path, never reading every row. */
+  onActivePath(threadId: string, ids: readonly string[]): Set<string> {
+    if (!this.threads.has(threadId)) return mdb.onStoredPath(threadId, ids);
+    const path = new Set(this.activePath(threadId).map((m) => m.id));
+    return new Set(ids.filter((id) => path.has(id)));
+  }
+
   /** activePath newest first, read lazily from disk when the thread is not loaded. */
   activePathBack(threadId: string): Iterable<Message> {
     return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
