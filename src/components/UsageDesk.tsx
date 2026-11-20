@@ -9,7 +9,7 @@ import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
-import { refreshUsage, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
+import { refreshUsage, useAutoRefresh, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
@@ -428,10 +428,11 @@ export function engineLabel(board: UsageBoard, engine: UsageBoardEngine, instanc
 }
 
 /** Settings > Usage: every engine under a header that folds, its accounts in one box, each with a meter per reported window. */
-export function UsageDesk() {
+export function UsageDesk({ closing = false }: { closing?: boolean }) {
   const { t, locale } = useI18n();
   const { state: store, dispatch, refreshInstances } = useStore();
   const state = useUsageBoard();
+  useAutoRefresh(state.board, closing ? undefined : "desk");
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
   const mode = useUsageMode();

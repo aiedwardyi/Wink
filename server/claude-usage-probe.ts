@@ -23,6 +23,7 @@ const response = z.object({
   response: z.object({ subtype: z.literal("success"), request_id: z.string(), response: z.unknown() }),
 });
 type Report = { windows: RateLimitWindow[]; observedAt: string };
+type ProbeRead = { generation: number; retryAt: number; settled: boolean; observedAt?: number; pending: Promise<Report | undefined> };
 // Stays empty, as for the driver's lean helpers: the CLI lists its start folder.
 const LEAN_DIR = join(DATA_DIR, "helper");
 // One per config dir and never killed, as claude.ts's auth check: the CLI can be renewing the OAuth token, and a renewal cut short signs the account out.
@@ -111,20 +112,30 @@ export function createClaudeUsageProbe(deps: {
   read?: typeof readClaudeUsage; now?: () => number; random?: () => number;
 } = {}) {
   const now = deps.now ?? Date.now;
-  const reads = new Map<string, { generation: number; retryAt: number; pending: Promise<Report | undefined> }>();
+  const reads = new Map<string, ProbeRead>();
   let queue: Promise<unknown> = Promise.resolve();
-  const probe = (cli: string, env: NodeJS.ProcessEnv, account: AccountContext | undefined, id = account?.id ?? "") => {
+  const probe = (cli: string, env: NodeJS.ProcessEnv, account: AccountContext | undefined, id = account?.id ?? "",
+    { fresh, maxAgeMs }: { fresh?: boolean; maxAgeMs?: number } = {}) => {
     const generation = account?.generation ?? 0;
     const cached = reads.get(id);
-    if (cached && now() < cached.retryAt) return cached.generation === generation ? cached.pending : Promise.resolve(undefined);
-    const entry = { generation, retryAt: Infinity, pending: Promise.resolve<Report | undefined>(undefined) };
+    if (cached) {
+      const sameGeneration = cached.generation === generation;
+      // The CLI gives no retry hint for a failed read, so only a successful read can be bypassed.
+      const stale = sameGeneration && cached.observedAt !== undefined
+        && (fresh || (maxAgeMs !== undefined && now() - cached.observedAt >= maxAgeMs));
+      if (!cached.settled || (!stale && now() < cached.retryAt)) return sameGeneration ? cached.pending : Promise.resolve(undefined);
+    }
+    const entry: ProbeRead = { generation, retryAt: Infinity, settled: false, pending: Promise.resolve(undefined) };
     entry.pending = queue.then(async () => {
       entry.retryAt = now() + 300_000 + Math.floor((deps.random ?? Math.random)() * 30_000);
       try {
         const windows = await (deps.read ?? readClaudeUsage)(cli, env, account);
-        return { windows, observedAt: new Date(now()).toISOString() };
+        entry.observedAt = now();
+        return { windows, observedAt: new Date(entry.observedAt).toISOString() };
       } catch { return undefined; }
     });
+    const settle = () => { entry.settled = true; };
+    entry.pending.then(settle, settle);
     reads.set(id, entry);
     queue = entry.pending;
     return entry.pending;
