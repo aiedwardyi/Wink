@@ -827,6 +827,7 @@ describe("memory pass", () => {
       const newestWhenSaid = rows().at(-1);
       lockMemoryOnce();
       await tell(c);
+      const heldDay = / \(noted (\d{4}-\d{2}-\d{2})\)$/.exec(overflow()!.trimEnd().split("\n").at(-1)!)?.[1];
       vi.mocked(fs.openSync).mockRestore();
       const asked = generate.mock.calls.length;
       const restartAt = pick(5);
@@ -846,14 +847,16 @@ describe("memory pass", () => {
       const later = [undefined, c, value()][pick(3)];
       if (later !== undefined) say("t1", later);
       restart(3);
-      // a row the older copy dropped is written again, unless it was the newest row already when said
-      const before = swap && newestWhenSaid !== c ? [...rows(), c] : rows();
+      // a row the older copy dropped is written again, unless it was the newest row already when said or a row in its words from that day is still there
+      const twin = swap && prior.split("\n").includes(`- ${c} (noted ${heldDay})`);
+      const before = swap && newestWhenSaid !== c && !twin ? [...rows(), c] : rows();
       await settle("t1", 3 * MINUTE);
       restart(4);
       await settle("t1", 3 * MINUTE);
       const want = later === undefined || later === before.at(-1) ? before : [...before, later];
       expect(rows(), `run ${run}: ${c} held, then ${["no swap", "older copy", `older copy and ${other}`][swap]} and ${later}, restart ${restartAt}`).toEqual(want);
       expect(newest()).toBe(`- ${want.at(-1)}`);
+      expect(rows()).toContain(c);
       expect(generate).toHaveBeenCalledTimes(asked + (later === undefined ? 0 : 1));
       expect(stored().held).toBeUndefined();
       // a hand-kept log keeps copies of a note in any order
@@ -1149,6 +1152,97 @@ describe("memory pass", () => {
     expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual(["Uses npm", "Uses pnpm", "Uses npm"].map((fact) => `- ${fact} (noted 2026-10-15)`));
     expect(chips("t1")).toHaveLength(1);
     expect(pass.droppedNotes("bot-t1")?.dropped).toBe(2);
+  });
+
+  const mine = "- Works at Acme (noted 2026-10-15)\n";
+  const ownEdits: Array<[string, (text: string) => string]> = [
+    ["takes its date off", (text) => text.replace(mine, "- Works at Acme\n")],
+    ["moves its date a day on", (text) => text.replace(mine, "- Works at Acme (noted 2026-10-16)\n")],
+    ["moves its date a day back", (text) => text.replace(mine, "- Works at Acme (noted 2026-10-14)\n")],
+    ["takes every date off", (text) => text.replace(/ \(noted [0-9-]+\)/g, "")],
+  ];
+  it.each(ownEdits.flatMap(([kind, edit]) => [[kind, "retry", edit], [kind, "restart", edit]] as const))("never writes a held note again when a hand edit %s its row, then a %s", async (_kind, how, edit) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), above);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Works at Globex (noted 2026-10-15)\n");
+    const edited = edit(overflow()!);
+    writeFileSync(overflowPath(), edited);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  const twinEdits: Array<[string, (text: string) => string]> = [
+    ["removes", (text) => text.replace(mine, "")],
+    ["comments out", (text) => text.replace(mine, "<!-- old: Works at Acme -->\n")],
+    ["retypes", (text) => text.replace(mine, "- Worked at Acme before (noted 2026-10-15)\n")],
+    ["moves the date of", (text) => text.replace(mine, "- Works at Acme (noted 2026-10-14)\n")],
+  ];
+  it.each(twinEdits.flatMap(([kind, edit]) => [[kind, "retry", edit], [kind, "restart", edit]] as const))("never writes a held note again when a hand edit %s an earlier copy from the same day, then a %s", async (_kind, how, edit) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), `${above}${mine}- Works at Globex (noted 2026-10-15)\n`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Works at Initech (noted 2026-10-15)\n");
+    const edited = edit(overflow()!);
+    writeFileSync(overflowPath(), edited);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it.each(["retry", "restart"])("writes a held note again when the file is swapped for an older copy in its words with a newer value after, then a %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), above);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(overflowPath(), `${above}- Works at Acme (noted 2026-10-14)\n- Works at Globex (noted 2026-10-14)\n`);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- ")).at(-1)).toBe(mine.trim());
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it.each([
+    ["the same note", "# Memory\n- note\n- Works at Acme (noted 2026-10-15)\n"],
+    ["the note in other words", "# Memory\n- note\n- User's job is at Acme\n"],
+    ["the same note, then a newer value", "# Memory\n- note\n- Works at Acme (noted 2026-10-15)\n- Works at Globex (noted 2026-10-15)\n"],
+  ])("checks a held note against MEMORY.md after a restart once room is made with %s in it", async (_kind, room) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme"]));
+    say("t1", "my job is at acme");
+    await settle("t1", 3 * MINUTE);
+    expect(stored().held).toBeDefined();
+    writeMemoryFile("bot-t1", room);
+    pass.dispose();
+    pass = start();
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(room);
+    expect(stored().held).toBeUndefined();
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 
   it.each(["rename-save", "open append handle"])("keeps another writer's overflow rows during %s", async (kind) => {

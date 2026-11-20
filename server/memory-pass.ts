@@ -48,8 +48,8 @@ const factsSchema = z
     message_id: z.string().nullish(), question_id: z.string().nullish(),
   }));
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
-// a row by its words, its date and how many earlier rows share both, so rows coming or going around it never move it
-const landedSchema = z.object({ line: z.string(), date: z.string(), copy: z.number() });
+// a row by its words and the day it was noted, so rows coming or going around it never move it
+const landedSchema = z.object({ line: z.string(), date: z.string() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
   // notes a full MEMORY.md turned away before the overflow file; they are gone, never reported as moved
@@ -58,7 +58,7 @@ const stateSchema = z.object({
   // a held batch as accepted and where its overflow rows are, so a restart lands it as it was and never adds them again
   held: z.record(z.string(), z.object({
     ids: z.array(z.string()),
-    notes: z.array(z.object({ line: z.string(), replaces: z.string().optional(), kind: z.enum(["decision", "tweak"]).optional() })),
+    notes: z.array(z.object({ line: z.string(), replaces: z.string().optional(), kind: z.enum(["decision", "tweak"]).optional(), quote: z.string().optional() })),
     picked: z.boolean().optional(),
     wrote: z.array(landedSchema).optional(),
     seen: z.array(landedSchema).optional(),
@@ -72,6 +72,8 @@ export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak
 export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; thread?: string };
 type DroppedCount = z.infer<typeof droppedSchema>;
 type Landed = z.infer<typeof landedSchema>;
+// the user's words it came from, so a restart checks it against MEMORY.md as a retry does
+type HeldNote = Note & { quote?: string };
 /** Notes sent to the overflow file, and apart from them notes an older version turned away and lost. */
 export type DroppedNotes = DroppedCount & { lost?: DroppedCount };
 
@@ -250,6 +252,7 @@ function quoteWords(quote: string): string[] {
 const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
 const words = (text: string): string[] => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 const sameLine = (line: string, target: string) => line.replace(/\r$/, "") === target;
+const factLine = (fact: string) => fact.replace(/^[-*]\s+/, "").replace(/\s+/g, " ").trim();
 
 /** A line only the note-taker wrote, found exactly once and claimed by one fact. */
 function replaceable(target: string | null | undefined, lines: string[], claims: Map<string, number>): target is string {
@@ -466,7 +469,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
     const tweak = kind === "tweak";
-    const line = fact.fact.replace(/^[-*]\s+/, "").replace(/\s+/g, " ").trim();
+    const line = factLine(fact.fact);
     const key = fact.key?.replace(/\s+/g, " ").trim() ?? "";
     // switching to an option the current pick beat is grounded in that pick's record
     const before = decision ? current.get(pickKey(key || line)) : undefined;
@@ -610,7 +613,7 @@ interface Batch {
   facts: Fact[];
   source: UserLine[];
   // accepted before a restart, since asking the note-taker again can word them another way
-  notes?: Note[];
+  notes?: HeldNote[];
   // its picks are in the timeline, held only for MEMORY.md
   picked?: boolean;
   // its lines an earlier try put in the overflow file, written again only once gone from there
@@ -629,7 +632,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const lost = new Map<string, DroppedCount>();
   // generated but unsaved, so a busy turn or a moved revision never pays for the same batch twice
   const held = new Map<string, Batch>();
-  const replays = new Map<string, Pick<Batch, "ids" | "picked" | "wrote" | "seen"> & { notes: Note[] }>();
+  const replays = new Map<string, Pick<Batch, "ids" | "picked" | "wrote" | "seen"> & { notes: HeldNote[] }>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const queue: Array<{ botId: string; threadId: string }> = [];
   const running = new Map<string, { botId: string; done: Promise<void>; controller: AbortController }>();
@@ -722,10 +725,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     save();
   };
 
-  const hold = (threadId: string, batch: Batch, notes: Note[]) => {
+  const hold = (threadId: string, batch: Batch, notes: HeldNote[]) => {
     held.set(threadId, batch);
     if (!batch.wrote?.length && !batch.seen?.length) return;
-    replays.set(threadId, { ids: batch.ids, notes: notes.map(({ line, replaces, kind }) => ({ line, replaces, kind })), picked: batch.picked, wrote: batch.wrote, seen: batch.seen });
+    const quote = (note: HeldNote) => note.kind ? undefined : note.quote ?? batch.facts.find((fact) => factLine(fact.fact) === note.line)?.quote;
+    replays.set(threadId, { ids: batch.ids, notes: notes.map((note) => ({ line: note.line, replaces: note.replaces, kind: note.kind, quote: quote(note) })), picked: batch.picked, wrote: batch.wrote, seen: batch.seen });
     save();
   };
 
@@ -739,7 +743,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       console.warn(`[memory-pass] ${PICKS_FILE} read failed (${error instanceof Error ? error.name : "error"})`);
       return arm(botId, threadId);
     }
-    const accepted = batch.notes ?? acceptFacts(batch.facts, batch.source, memory.text, timeline);
+    const accepted: HeldNote[] = batch.notes?.flatMap((note) => note.kind || note.quote === undefined ? [note] :
+      acceptFacts([{ fact: note.line, quote: note.quote, replaces: note.replaces }], note.quote, memory.text, timeline).map((kept) => ({ ...kept, quote: note.quote }))) ??
+      acceptFacts(batch.facts, batch.source, memory.text, timeline);
     if (!accepted.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
@@ -811,9 +817,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
         const { rows, dates, close } = liveRows(current);
-        const copies = (line: string, date: string, end = rows.length) => rows.slice(0, end).filter((row, index) => row === line && dates[index] === date).length;
-        // only its own row counts, so an older copy's row in the same words never stands in for it
-        const stays = ({ line, date, copy }: Landed) => copies(line, date) > copy;
+        // a row in its words noted before its day is an older copy when a row below falls between the two days or every row below is older too, so a hand-edited date alone never hides it
+        const older = (index: number, date: string) => {
+          const noted = dates[index]!;
+          const below = dates.slice(index + 1).filter(Boolean);
+          return Boolean(noted) && noted < date && (below.some((day) => day > noted && day < date) || below.every((day) => day < date));
+        };
+        const stays = ({ line, date }: Landed) => rows.some((row, index) => row === line && !older(index, date));
         wrote = wrote.filter(stays);
         seen = seen.filter(stays);
         // from its first row gone on, so a later line of the batch still lands after an earlier one written again
@@ -829,16 +839,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
           newest = line;
           return true;
         });
-        seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => {
-          const at = rows.lastIndexOf(line);
-          return { line, date: dates[at] ?? "", copy: copies(line, dates[at] ?? "", at) };
-        })];
+        seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => ({ line, date: dates[rows.lastIndexOf(line)] ?? "" }))];
         if (fresh.length) {
           const added = fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("");
           appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);
           overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.some((row) => row.line === line)).length, since: prior?.since ?? now() });
-          wrote = [...wrote.filter(({ line }) => !fresh.some((note) => note.line === line)), ...fresh.map(({ line }, index) => ({ line, date: stamp, copy: copies(line, stamp) + fresh.slice(0, index).filter((note) => note.line === line).length }))];
+          wrote = [...wrote.filter(({ line }) => !fresh.some((note) => note.line === line)), ...fresh.map(({ line }) => ({ line, date: stamp }))];
         }
       } catch (error) {
         hold(threadId, { ...batch, picked, wrote, seen }, accepted);
