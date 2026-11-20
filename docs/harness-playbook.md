@@ -98,6 +98,7 @@ What to build or fix, and why. 2-5 lines. Quote the user's latest words verbatim
 - Test browsers run headless: a headed one, even off-screen, takes the user's keyboard focus mid-typing. A check that needs a real window asks first. On Windows, this prints nothing while yours run: `Get-Process chrome,msedge -EA 0 | ? { $_.MainWindowHandle -ne 0 -and $_.Path -match 'ms-playwright' }`
 - Tests and test sign-ins use a throwaway config and home folder, never the PC's real engine profiles.
 - Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive; stop the test browsers and servers you started before your final report.
+- Big files you make (builds, installs, clips, browser profiles, data copies) stay in your worktree or `$ORBIT_SCRATCH`, never elsewhere in temp; delete the ones nobody needs before your final report.
 - Waits over 10 min: start the job hidden, then poll it in the foreground.
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 
@@ -187,6 +188,7 @@ Record paths in the card's progress file.
 
 - Scratch and test data go in one folder per card: use `$ORBIT_SCRATCH`.
   Never reuse another card's folder.
+  Delete the big files in it that nobody needs before the report.
   Wink removes it when the pane closes; close with `keep` to hand it to the next card.
 - Keep evidence files the user still needs (sheet.png, findings) outside temp.
 - Wink removes clean worktrees a day after pane close if all commits are on a remote.
