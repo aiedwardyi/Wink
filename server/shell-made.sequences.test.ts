@@ -210,6 +210,22 @@ const OVER_BOUND: [string, string[], string, Op[]][] = [
   ["l-h12-big-rewrite-cd-ps", [...SETUP, "archive/a-old-*520", "archive/z-keep-*3"], "Set-Location 'archive'\nGet-ChildItem z-keep-*.png | ForEach-Object { Add-Content -LiteralPath $_.FullName -Value 'more' }\nSet-Location '..'", [["write", "archive/z-keep-*3"]]],
 ];
 
+// a big folder the command only listed, reached by a walk base misreads: after a pop, a "$PWD" cd, a failed cd
+const LISTED_BIG = ["inputs/shot-*11", "real-shots/", "phase-a/real-shots/", "archive/a-old-*520"];
+const FOUR = ["out-a/", "out-b/", "out-c/"].map((folder) => [folder, folder.slice(0, -1)] as const);
+const ONLY_LISTED: [string, string[], string, Op[]][] = [
+  ["m-e1-pushd-popd-ls-big-sh", LISTED_BIG, 'pushd phase-a > /dev/null\ncp "{w}/inputs"/*.png real-shots/\npopd > /dev/null\nls archive > /dev/null', [["cp", "inputs", "phase-a/real-shots"]]],
+  ["m-e2-pwd-cd-ls-big-sh", LISTED_BIG, 'cd "$PWD/phase-a"\ncp "{w}/inputs"/*.png real-shots/\ncd ..\nls archive > /dev/null', [["cp", "inputs", "phase-a/real-shots"]]],
+  ["m-e3-failed-cd-ls-big-sh", LISTED_BIG, 'cd nope 2> /dev/null\ncp "{w}/inputs"/*.png real-shots/\nls archive > /dev/null', [["cp", "inputs", "real-shots"]]],
+  ["m-e4-push-pop-list-big-ps", LISTED_BIG, "Push-Location -Path 'phase-a'\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'\nPop-Location\nGet-ChildItem 'archive' | Out-Null", [["copy", "inputs", "phase-a/real-shots"]]],
+  ["m-h1-four-folders-pop-list-big-ps", [...LISTED_BIG, ...FOUR.map(([folder]) => folder)], [...FOUR.map(([, name]) => `Copy-Item -Path '{w}/inputs/*.png' -Destination '${name}'`), "Push-Location -Path 'phase-a'", "Copy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", "Pop-Location", "Get-ChildItem 'archive' | Out-Null"].join("\n"), [...FOUR.map(([, name]): Op => ["copy", "inputs", name]), ["copy", "inputs", "phase-a/real-shots"]]],
+  ["m-h3-four-folders-popd-ls-big-sh", [...LISTED_BIG, ...FOUR.map(([folder]) => folder)], [...FOUR.map(([folder]) => `cp "{w}/inputs"/*.png ${folder}`), "pushd phase-a > /dev/null", 'cp "{w}/inputs"/*.png real-shots/', "popd > /dev/null", "ls archive > /dev/null"].join("\n"), [...FOUR.map(([, name]): Op => ["cp", "inputs", name]), ["cp", "inputs", "phase-a/real-shots"]]],
+  ["m-route-bigpoplist-ps", ["inputs/shot-*11", "../launch outside task/real-shots/", "big-old/a-old-*520"], "Push-Location -Path '{w}/../launch outside task'\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'\nPop-Location\nGet-ChildItem -Path 'big-old' | Out-Null", [["copy", "inputs", "../launch outside task/real-shots"]]],
+  // head's own walk lists the big folder first, then base's walk reaches it by another spelling
+  ["m-pop-then-base-lists-big-sh", LISTED_BIG, "pushd phase-a > /dev/null\npopd > /dev/null\nls archive > /dev/null\nls ../archive > /dev/null", []],
+  ["m-pop-then-base-lists-big-ps", LISTED_BIG, "Push-Location -Path 'phase-a'\nPop-Location\nGet-ChildItem 'archive' | Out-Null\nGet-ChildItem '../archive' | Out-Null", []],
+];
+
 // what predates the command (a trailing slash is a folder), the command ({w} is the work folder), what it did
 const TABLE: [string, string[], string, Op[]][] = [
   ["left-renamed-ps", ["inputs/shot-*11"], "New-Item -ItemType Directory -Path 'staging' | Out-Null; Set-Location -Path 'staging'; Copy-Item -Path '{w}/inputs/*.png' -Destination '.'; Set-Location -Path '..'; Rename-Item -Path 'staging' -NewName 'real-shots'", [["mkdir", "staging"], ["copy", "inputs", "staging"], ["move", "staging", "real-shots"]]],
@@ -264,6 +280,7 @@ const TABLE: [string, string[], string, Op[]][] = [
   ["j33-git-init-rd-ps", ["inputs/shot-*11", "real-shots/", "t1/"], "Remove-Item -LiteralPath 't1' -Recurse -Force -ErrorAction SilentlyContinue\ngit init -q t1 | Out-Null\nSet-Location -Path 't1'\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\ncd ..\n[IO.Directory]::CreateDirectory((Join-Path $PWD 't1')) | Out-Null\ncd t1\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\ncd ..\nCopy-Item -Path 't1/*.png' -Destination 'real-shots'\ncmd /c rd /s /q t1\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["remove", "t1"], ["mkdir", "t1/.git"], ["copy", "inputs", "t1"], ["copy", "t1", "real-shots"], ["remove", "t1"]]],
   ["j34-guarded-remake-bash", ["inputs/shot-*11", "real-shots/"], "rm -rf t1\nif [ ! -d t1 ]; then mkdir t1; fi\ncd t1\ncp {w}/inputs/*.png .\ncd ..\nmkdir t1\ncd t1\ncp {w}/inputs/*.png .\ncd ..\ncp t1/*.png real-shots/\n[ ! -d t1 ] || rm -rf t1\ncp {w}/inputs/*.png real-shots/", [["mkdir", "t1"], ["cp", "inputs", "t1"], ["cp", "t1", "real-shots"], ["remove", "t1"]]],
   ...OVER_BOUND,
+  ...ONLY_LISTED,
 ];
 
 function row([name, old, command, ops]: (typeof TABLE)[number]): Sequence {
@@ -595,22 +612,26 @@ function generateRebuilds(seed: number, count: number): Sequence[] {
   });
 }
 
-const files = () => new Map([...disk.entries].filter(([, entry]) => !entry.dir).map(([path, entry]) => [path, `${entry.birth}:${entry.mtime}`]));
+const stamps = () => new Map([...disk.entries].map(([path, entry]) => [path, `${entry.birth}:${entry.mtime}`]));
+const lineage = (path: string): string[] => (dirname(path) === path ? [path] : [path, ...lineage(dirname(path))]);
 
 function replay({ name, cwd, command, setup, effects, secondWriter }: Sequence) {
   disk.entries.clear();
   disk.kids.clear();
   clock = OLD;
   setup();
-  const before = files();
+  const before = stamps();
   clock = SINCE + 1_000;
   for (const effect of effects) effect();
-  const made = new Set([...files()].filter(([path, stamp]) => before.get(path) !== stamp).map(([path]) => path));
+  const changed = [...stamps()].filter(([path, stamp]) => before.get(path) !== stamp).map(([path]) => path);
+  const made = new Set(changed.filter((path) => !disk.entries.get(path)!.dir));
+  // a folder is the command's when the command changed it or anything in it
+  const touched = new Set(changed.flatMap(lineage));
   secondWriter?.();
   const base = new Set(baseMade(command, cwd, SINCE));
   const head = new Set(shellMade(command, cwd, SINCE));
   const kept = [...made].filter((path) => base.has(path));
-  const extra = [...head].filter((path) => disk.entries.get(path)?.dir === false && !base.has(path) && !made.has(path));
+  const extra = [...head].filter((path) => disk.entries.has(path) && !base.has(path) && !touched.has(path));
   const dropped = [...base].filter((path) => !head.has(path));
   return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path)), missing: [...made].filter((path) => !head.has(path)), extra, dropped };
 }
@@ -646,7 +667,7 @@ const SECOND_WRITER = [
     const sequence = row([name, ["inputs/shot-*11", "phase-a/", "phase-b/real-shots/", "tmp-render/", "real-shots/"], command, ops]);
     return { ...sequence, secondWriter: () => write(join(dirname(sequence.cwd), "their-notes.md")) };
   }),
-  ...OVER_BOUND.map((entry) => {
+  ...[...OVER_BOUND, ...ONLY_LISTED].map((entry) => {
     const sequence = row(entry);
     const root = dirname(sequence.cwd);
     return { ...sequence, name: `${sequence.name}-busy`, secondWriter: () => {
@@ -654,13 +675,24 @@ const SECOND_WRITER = [
       for (const folder of ["other-bot-out", "work/other-bot-out", "work/phase-a/other-bot-out"]) for (const name of ["report-1.md", "report-2.md", "report-3.md"]) write(join(root, folder, name));
     } };
   }),
+  // another bot writes inside a big folder the command named: a note base lists and a new folder base never opened
+  ...([
+    ["m-e12-big-read-other-writer-in-it-sh", 'ls archive > /dev/null\ncp "{w}/inputs"/*.png real-shots/', [["cp", "inputs", "real-shots"]]],
+    ["m-e13-big-write-other-writer-in-it-sh", 'cp "{w}/inputs"/*.png archive/', [["cp", "inputs", "archive"]]],
+  ] satisfies [string, string, Op[]][]).map(([name, command, ops]) => {
+    const sequence = row([name, ["inputs/shot-*11", "real-shots/", "archive/z-old-*520", "archive/their-notes.md"], command, ops]);
+    return { ...sequence, secondWriter: () => {
+      write(join(sequence.cwd, "archive", "their-notes.md"));
+      for (const name of ["report-1.md", "report-2.md", "report-3.md"]) write(join(sequence.cwd, "archive", "other-bot-out", name));
+    } };
+  }),
 ];
 
 const CONTROL_FLOW = generateControlFlow();
 const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)]), ["control flow", CONTROL_FLOW], ["second writers", SECOND_WRITER], ["rebuilt scratch folders", generateRebuilds(42, 300)]];
 
-it("replays 4712 sequences", () => {
-  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4712);
+it("replays 4732 sequences", () => {
+  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4732);
 });
 
 it.each(GROUPS)("keeps base files and excludes extra files the command never touched in %s", (_, sequences) => {

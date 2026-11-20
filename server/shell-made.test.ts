@@ -78,6 +78,31 @@ it("keeps every file past the listing bound in a folder made long before, and th
   expect(shellMade(`cp source/*.png "${shots}"`, cwd, since).sort()).toEqual([...made, shots].sort());
 });
 
+it("leaves out a folder past the listing bound that only a walk base misread listed, so it takes no real folder's place", () => {
+  const { cwd, shots } = copied(0);
+  const since = Date.now() + 60_000;
+  const outputs = ["out-a", "out-b", "out-c"];
+  const made = [...outputs.map((name) => join(cwd, name)), shots].flatMap((folder) => {
+    mkdirSync(folder, { recursive: true });
+    return Array.from({ length: 11 }, (_, index) => join(folder, `${String(index + 1).padStart(2, "0")}.png`));
+  });
+  for (const path of made) {
+    writeFileSync(path, "x");
+    utimesSync(path, new Date(since), new Date(since));
+  }
+  const big = join(cwd, "big-old");
+  mkdirSync(big);
+  for (let index = 0; index < 514; index++) writeFileSync(join(big, `${index}.dat`), "o");
+  const copy = (to: string) => `Copy-Item -Path 'source\\*.png' -Destination '${to}'`;
+  const command = [...outputs.map(copy), `Push-Location -Path '${join(cwd, "launch outside task")}'`, copy("real-shots"), "Pop-Location", "Get-ChildItem -Path 'big-old' | Out-Null"].join("\n");
+  const found = shellMade(command, cwd, since);
+  expect(found.slice().sort()).toEqual(made.slice().sort());
+  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  for (const folder of [...outputs, join("launch outside task", "real-shots")]) expect(memory).toContain(`${folder} 11 (`);
+  expect(memory).not.toContain("big-old");
+  expect(shellMade("Get-ChildItem -Path 'big-old' | Out-Null", cwd, since)).toEqual([big]);
+});
+
 it("follows a location the command pushed and popped back", () => {
   const { cwd, shots, since } = copied();
   const task = join(cwd, "task");

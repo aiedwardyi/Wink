@@ -73,6 +73,8 @@ export function shellMade(command: string, cwd: string, since: number): string[]
   const made = new Set<string>();
   const seen = new Map<string, Stats | undefined>();
   const scanned = new Set<string>();
+  // folders past the bound that head's own walks left unnamed, for base's walk to name if it gets there
+  const quiet = new Set<string>();
   const getStat = (path: string) => {
     if (!seen.has(path)) seen.set(path, statOf(path));
     return seen.get(path);
@@ -152,14 +154,20 @@ export function shellMade(command: string, cwd: string, since: number): string[]
           if (!walk.literal) continue;
         } else if (!mutating && !first && !under(here, key)) walk.changes.push([key, null]);
         const mark = (change ? "cd " : "") + path;
-        if (discover || scanned.has(mark)) continue;
+        if (discover) continue;
+        if (walk.literal && quiet.delete(mark)) made.add(path);
+        if (scanned.has(mark)) continue;
         scanned.add(mark);
         const stat = getStat(path);
         if (stat?.isFile() && changed(stat, after)) made.add(path);
         if (stat?.isDirectory()) {
           try {
             // a new folder above the walk is as likely another writer's, so only base's flat listing is kept there
-            for (const ref of listed(path, stat, after, !change && (key === here || !under(here, key)))) made.add(ref);
+            const [refs, big] = listed(path, stat, after, !change && (key === here || !under(here, key)));
+            for (const ref of refs) made.add(ref);
+            // past the bound base named the folder whatever it held; head's own walks name it only when something in it changed
+            if (big && (walk.literal || refs.length || changed(stat, after))) made.add(path);
+            else if (big) quiet.add(mark);
           } catch {}
         }
       }
@@ -187,10 +195,12 @@ function recordMutation(walk: Walk, mutation: Mutation, getStat: typeof statOf) 
   }
 }
 
-/** A named folder's changed files and new folders, read up to MAX_ENTRIES untouched entries; past MAX_ENTRIES entries also the folder itself, as base named it, so memory still points where the rest went. */
-function listed(folder: string, stat: Stats, after: number, deep: boolean): string[] {
+/** A named folder's changed files and new folders, read up to MAX_ENTRIES untouched entries, and whether it holds more than MAX_ENTRIES entries. */
+function listed(folder: string, stat: Stats, after: number, deep: boolean): [made: string[], big: boolean] {
   const created = stat.birthtimeMs >= after;
   const made: string[] = [];
+  // new folders, opened once the folder's size is known
+  const fresh = new Set<string>();
   let entries = 0;
   let untouched = 0;
   const dir = opendirSync(folder);
@@ -201,13 +211,17 @@ function listed(folder: string, stat: Stats, after: number, deep: boolean): stri
       // everything in a folder the command created is new, whatever times the copy kept
       const inner = created ? undefined : statOf(path);
       if (entry.isFile() && (created || (inner && changed(inner, after)))) made.push(path);
-      else if (entry.isDirectory() && deep && (created || (inner && inner.birthtimeMs >= after))) made.push(...tree(path));
-      else if (++untouched > MAX_ENTRIES) break;
+      else if (entry.isDirectory() && deep && (created || (inner && inner.birthtimeMs >= after))) {
+        made.push(path);
+        fresh.add(path);
+      } else if (++untouched > MAX_ENTRIES) break;
     }
   } finally {
     dir.closeSync();
   }
-  return entries > MAX_ENTRIES ? [...made, folder] : made;
+  const big = entries > MAX_ENTRIES;
+  // a new folder in an old folder that big is as likely another writer's, and base never opened it
+  return [made.flatMap((path) => (!fresh.has(path) ? path : big && !created ? [] : tree(path))), big];
 }
 
 /** Every file under a folder the command created, or the folder itself for hidden tool state (.git, .venv) or a tree past MAX_ENTRIES (an install, a clone). */
