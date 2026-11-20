@@ -71,14 +71,15 @@ it("lists every startTurn caller with its RootStart kind", () => {
     { call: "row.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "toBotId, text", kind: "inherit", marker: "commsRoot: root ?? null" },
     { call: "botId, PANE_WAKE_PROMPT", kind: "automatic", marker: "paneNoteWake: true" },
-    { call: "botId, prompt", kind: "human", marker: "userMessage: userMessage ?? undefined" },
+    { call: "botId, prompt", kind: "human", marker: "owner: true" },
     { call: "bot.id, TASK_RESUME_PROMPT", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "automationSource: triggerSource" },
     { call: "source.bot.id, line", kind: "automatic", marker: "automationSource" },
-    { call: "botId, prompt", kind: "human", marker: "transcriptText: typed" },
+    { call: "botId, prompt", kind: "human", marker: "owner: !guest" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
+    { call: "botId, text", kind: "human", marker: "{ ...opts, owner: true }" },
   ];
   const calls = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "startTurn");
   expect(calls.map((node) => node.arguments.slice(0, 2).map((arg) => compact(arg.getText(source))).join(", "))).toEqual(starts.map((row) => row.call));

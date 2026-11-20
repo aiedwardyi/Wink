@@ -121,6 +121,7 @@ export function writeRoomEcho(
   since: number,
   owner: string,
   askId?: string,
+  ownerOnly = false,
 ): Message | null {
   const rows = store.messagesFor(roomThreadId);
   const own = (message: Message) => message.role === "bot" && message.from?.botId === bot.id;
@@ -136,6 +137,7 @@ export function writeRoomEcho(
   ].join("\n");
   const engine = answers[0]?.engine;
   const echo: Omit<Message, "id" | "at"> = { role: "bot", kind: "note", quiet: true, text, roomEcho: { groupId: group.id } };
+  if (ownerOnly) echo.roomEcho = { groupId: group.id, ownerOnly: true };
   if (engine && answers.every((message) => message.engine === engine)) echo.engine = engine;
   return store.appendMessage(bot.threadId, echo);
 }

@@ -133,7 +133,7 @@ export function cancelPeerUserReplies(botId: string): void {
   }
 }
 
-type ReplyStart = (botId: string, prompt: string, opts: { threadId: string; userMessage: Message; excludeMessageIds: string[] }) => Promise<unknown>;
+type ReplyStart = (botId: string, prompt: string, opts: { threadId: string; userMessage: Message; excludeMessageIds: string[]; owner: true }) => Promise<unknown>;
 
 export function drainPeerUserReplies(store: Pick<Store, "bot" | "taskByThread" | "appendMessage">, start: ReplyStart, busy: (botId: string, threadId: string) => boolean, access: TerminalBridgeAccess | null = null): void {
   const started = new Set<string>();
@@ -150,7 +150,7 @@ export function drainPeerUserReplies(store: Pick<Store, "bot" | "taskByThread" |
       started.add(bot.id);
       const message = input.message;
       const cancelled = () => turns.get(threadId) !== turn || !turn.inputs.has(id);
-      void startQueuedTurn(() => start(bot.id, input.prompt, { threadId, userMessage: message, excludeMessageIds: [message.id] }), cancelled, access).catch((error) => {
+      void startQueuedTurn(() => start(bot.id, input.prompt, { threadId, userMessage: message, excludeMessageIds: [message.id], owner: true }), cancelled, access).catch((error) => {
         if (cancelled()) return;
         const line = `queued message could not start - ${error instanceof Error ? error.message : String(error)}`;
         if (writeChatError(line, access)) store.appendMessage(threadId, {

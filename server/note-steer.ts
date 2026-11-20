@@ -24,7 +24,7 @@ export interface NoteSteerDeps {
   liveTurn(botId: string, threadId: string): string | undefined;
   busy(botId: string, threadId: string): boolean;
   /** True once the model took the text in, false when it never will. Undefined when the engine cannot steer or tell. */
-  steer(botId: string, threadId: string, text: string): Promise<boolean> | undefined;
+  steer(botId: string, threadId: string, text: string, ids: readonly string[]): Promise<boolean> | undefined;
   messages(threadId: string): Message[];
   deliveredId(botId: string, threadId: string): string | undefined;
   markDelivered(botId: string, threadId: string, noteId: string | undefined): void;
@@ -58,9 +58,9 @@ export class NoteSteerer {
     const turnId = this.deps.liveTurn(botId, threadId);
     if (!turnId) return this.wake(botId, threadId, paneId);
     const deliveredId = this.deps.deliveredId(botId, threadId);
-    const { notes, newestId } = paneNotesForTurn(this.deps.messages(threadId), new Set(), deliveredId, false);
+    const { notes, newestId, ids } = paneNotesForTurn(this.deps.messages(threadId), new Set(), deliveredId, false);
     if (!notes.length) return;
-    const steered = this.deps.steer(botId, threadId, notes.join("\n\n"));
+    const steered = this.deps.steer(botId, threadId, notes.join("\n\n"), ids);
     if (!steered || !(await steered.catch(() => false))) return this.wake(botId, threadId, paneId);
     // A turn claimed since read these notes for its own prefix, and its dispatch moves the watermark.
     // A live one may be the CLI running them itself after a failed turn.

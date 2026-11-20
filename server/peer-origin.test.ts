@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, expect, it, vi } from "vitest";
+import { botRoute } from "./comms-caller.ts";
 import * as roots from "./comms-root.ts";
+import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
+import { writeRoomEcho } from "./one-mind.ts";
 import type { Message } from "./store.ts";
 
 const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
@@ -35,6 +38,13 @@ function joinedStart(guest: boolean) {
   const arrow = nodes(ts.isPropertyAssignment).find((node) => node.name.getText(source) === "startTurn" && node.initializer.getText(source).includes("transcriptText: typed"))!.initializer.getText(source);
   let captured: Record<string, unknown> = {};
   new Function("startTurn", "joinedRoomThreads", `return ${js(arrow)}`)((_botId: string, _prompt: string, opts: Record<string, unknown>) => { captured = opts; }, new Set())("bot", "joined-thread", "prompt", "typed", () => {}, false, guest);
+  return captured;
+}
+
+function chatStart() {
+  const arrow = nodes(ts.isPropertyAssignment).find((node) => node.name.getText(source) === "startTurn" && node.initializer.getText(source).includes("...opts"))!.initializer.getText(source);
+  let captured: Record<string, unknown> = {};
+  new Function("startTurn", `return ${js(arrow)}`)((_botId: string, _text: string, opts: Record<string, unknown>) => { captured = opts; })("wink", "line", { threadId: "wink-thread" });
   return captured;
 }
 
@@ -106,6 +116,44 @@ function listedTools(env: Record<string, string>): Promise<string[]> {
   });
 }
 
+function liveSteer(rootId: string, rows: Message[]) {
+  const deps = nodes(ts.isNewExpression).find((node) => node.expression.getText(source) === "NoteSteerer")!.arguments![0] as ts.ObjectLiteralExpression;
+  const steer = deps.properties.find((property): property is ts.PropertyAssignment => ts.isPropertyAssignment(property) && property.name.getText(source) === "steer")!.initializer.getText(source);
+  const adapter = { capabilities: { queueing: true, steerConsumed: true }, steer: async (_threadId: string, _text: string, consumed: (taken: boolean) => void) => { consumed(true); return true; } };
+  const store = { bot: () => ({ id: "chief", threadId: "chief-thread" }), row: (_threadId: string, id: string) => rows.find((row) => row.id === id) };
+  return new NoteSteerer({
+    enabled: () => true, paused: () => false, liveTurn: () => "live-turn", busy: () => true, messages: () => rows, deliveredId: () => undefined, markDelivered: () => {}, wake: () => {},
+    steer: new Function("store", "botAccounts", "steerUntilTaken", "peerInputJoined", "othersInPrompt", "turnRegistry", `return ${js(steer)}`)(store, { instance: () => ({ adapter }) }, steerUntilTaken, () => {}, roots.othersInPrompt, { rootOf: () => rootId }),
+  });
+}
+
+async function afterRoomEcho(foreign: boolean) {
+  const call = nodes(ts.isCallExpression).find((node) => node.expression.getText(source) === "writeRoomEcho")!;
+  const rows = new Map<string, Message[]>([["room-thread", [
+    { id: "ask", at: 1, role: "user", kind: "text", text: "@Wink set up the eval routine" },
+    { id: "answer", at: 2, role: "bot", kind: "text", text: "Drafted it.", from: { botId: "wink", name: "Wink", color: "blue" } },
+  ]]]);
+  const group = { id: "room", name: "Team room", hosted: { roomId: "room" } };
+  const store = {
+    bot: () => undefined,
+    group: () => group,
+    messagesFor: (threadId: string) => rows.get(threadId) ?? [],
+    row: (threadId: string, id: string) => rows.get(threadId)?.find((row) => row.id === id),
+    appendMessage: (threadId: string, row: Omit<Message, "id" | "at">) => {
+      const saved = { ...row, id: "echo", at: 3 };
+      rows.set(threadId, [...(rows.get(threadId) ?? []), saved]);
+      return saved;
+    },
+  };
+  const echo = new Function("writeRoomEcho", "store", "bot", "group", "threadId", "messagesAtStart", "userName", "dispatchedInstructionId", "foreign", `return ${call.getText(source)};`)(
+    writeRoomEcho, store, { id: "wink", threadId: "wink-thread" }, group, "room-thread", 1, "Edward", "ask", foreign,
+  ) as Message;
+  const owner = roots.rootForStart("wink-thread", { kind: "human", messageKey: "owner-line" })!;
+  roots.othersInPrompt(store, "wink-thread", owner, [echo.id]);
+  const hop = hopOptions.delegation(owner);
+  return listedTools(agentsEnv(0, { commsDepth: Number(hop.commsDepth), rootId: rootFor("evals-thread", hop, "peer-line") }));
+}
+
 it.each(["ask", "delegation"] as const)("gives a %s a joined room's other person started only the base peer tools", async (kind) => {
   const callerRoot = rootFor("joined-thread", joinedStart(true), "guest-line");
   expect(callerRoot).not.toBeNull();
@@ -115,7 +163,7 @@ it.each(["ask", "delegation"] as const)("gives a %s a joined room's other person
 });
 
 it.each(["ask", "delegation"] as const)("keeps the opened tools on a %s the owner started, here or in a joined room", async (kind) => {
-  for (const start of [{ threadId: "wink-thread", opts: { threadId: "wink-thread" } }, { threadId: "joined-thread", opts: joinedStart(false) }]) {
+  for (const start of [{ threadId: "wink-thread", opts: chatStart() }, { threadId: "joined-thread", opts: joinedStart(false) }]) {
     const opts = hopOptions[kind](rootFor(start.threadId, start.opts, `${start.threadId}-line`));
     const tools = await listedTools(agentsEnv(0, { commsDepth: Number(opts.commsDepth), rootId: rootFor("evals-thread", opts, "peer-line") }));
     expect(tools).toEqual(expect.arrayContaining(["propose_routine", "propose_routine_action", "set_keep_going"]));
@@ -163,7 +211,7 @@ it("gives the peer of a reply wake only the owner's tools its prompt allows", as
   };
   expect(await peerTools()).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
   const reply: Message = { id: "guest-reply", at: 1, role: "bot", kind: "activity", comm: { groupId: "dm", withBotId: "guest-bot", withName: "Guest", withColor: "blue", peer: "reply", taskId: "guest-task" } };
-  expect(roots.othersInPrompt({ group: () => undefined, row: () => undefined }, "chief-thread", owner, [], [reply])).toBe(true);
+  expect(roots.othersInPrompt({ row: () => undefined }, "chief-thread", owner, [], [reply])).toBe(true);
   expect(await peerTools()).toEqual(BASE_PEER_TOOLS);
 });
 
@@ -183,7 +231,7 @@ it.each(["activePath", "pathTail"] as const)("never upgrades a guest-started pee
   const guest = hopOptions.ask(rootFor("joined-thread", joinedStart(true), "guest-line"));
   const guestEnv = agentsEnv(0, { commsDepth: Number(guest.commsDepth), rootId: fold(rootFor("evals-thread", guest, "guest-peer"), from) });
   expect(await listedTools(guestEnv)).toEqual(BASE_PEER_TOOLS);
-  const owner = hopOptions.ask(rootFor("wink-thread", { threadId: "wink-thread" }, "owner-line"));
+  const owner = hopOptions.ask(rootFor("wink-thread", chatStart(), "owner-line"));
   const ownerEnv = agentsEnv(0, { commsDepth: Number(owner.commsDepth), rootId: fold(rootFor("evals-thread", owner, "owner-peer"), from) });
   expect(await listedTools(ownerEnv)).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
 });
@@ -204,12 +252,13 @@ it("gives a room hop holding someone else's line only the base peer tools, even 
 it("reads every prompt for someone else's text before it mounts the tools", () => {
   const checks = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "othersInPrompt");
   expect(checks.map((node) => compact(node.getText(source)))).toEqual([
+    "othersInPrompt(store, threadId, turnRegistry.rootOf(threadId), ids)",
     "othersInPrompt(store, threadId, rootId, [...paneNoteIds ?? [], ...mailParts.map((part) => part.id), ...carriedEchoes(threadId)])",
     "othersInPrompt(store, threadId, rootId, [...refreshedNotes.ids ?? [], ...carriedEchoes(threadId)])",
     "othersInPrompt(store, threadId, rootId, roomMail.map((part) => part.id), roomRows, group.hosted ? roomHostSeats(group.hosted.roomId) : [])",
   ]);
   const mounts = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "agentsIntegration" && node.arguments.length === 8);
-  expect([checks[0]!.getStart(source) < mounts[0]!.getStart(source), checks[1]!.getText(source) && compact(checks[1]!.parent.getText(source)).includes("delete integrations.agents?.env.OMB_OWNER_HOP"), checks[2]!.getStart(source) < mounts[1]!.getStart(source)]).toEqual([true, true, true]);
+  expect([checks[1]!.getStart(source) < mounts[0]!.getStart(source), checks[2]!.getText(source) && compact(checks[2]!.parent.getText(source)).includes("delete integrations.agents?.env.OMB_OWNER_HOP"), checks[3]!.getStart(source) < mounts[1]!.getStart(source)]).toEqual([true, true, true]);
 });
 
 it("opens a peer turn's tools only from an owner origin minted where the owner acted", () => {
@@ -230,4 +279,44 @@ it("opens a peer turn's tools only from an owner origin minted where the owner a
   expect(roots.ownerOrigin(roots.rootForStart("evals-thread", { kind: "inherit", rootId: owner }))).toBe(owner);
   const starts = [roots.rootForStart("wink-thread", { kind: "automatic" }), roots.rootForStart("joined-thread", { kind: "guest", messageKey: "guest-line" }), roots.adoptHumanRoot("idle-thread", "owner-steer", null)];
   expect(starts.map((rootId) => roots.ownerOrigin(rootId))).toEqual([null, null, null]);
+});
+
+it("gives the peer of a live owner turn only the base peer tools once a teammate report is steered in", async () => {
+  const owner = roots.rootForStart("chief-thread", { kind: "human", messageKey: "owner-line" })!;
+  const peerTools = async (note: Message) => {
+    await liveSteer(owner, [note]).noteArrived("chief", "chief-thread");
+    const hop = hopOptions.ask(owner);
+    return listedTools(agentsEnv(0, { commsDepth: Number(hop.commsDepth), rootId: rootFor("evals-thread", hop, "peer-line") }));
+  };
+  expect(await peerTools({ id: "pane-note", at: 1, role: "bot", kind: "note", text: "[pane 0f3c9a1e] DONE: tests pass" })).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
+  expect(await peerTools({ id: "report", at: 2, role: "bot", kind: "note", text: "Mina reports: the build is red", reportIds: ["mina-report"] })).toEqual(BASE_PEER_TOOLS);
+});
+
+it("keeps the opened tools on the owner's next hop after an owner-only hosted room turn", async () => {
+  expect(await afterRoomEcho(false)).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
+});
+
+it("gives the owner's next hop only the base peer tools after a room turn that held someone else's line", async () => {
+  expect(await afterRoomEcho(true)).toEqual(BASE_PEER_TOOLS);
+});
+
+it("mints an owner origin only for a line the owner's routes mark as theirs", () => {
+  expect(roots.ownerRoot(rootFor("wink-thread", { threadId: "wink-thread" }, "unmarked-line"))).toBe(false);
+  expect(roots.ownerRoot(rootFor("wink-thread", chatStart(), "owner-line"))).toBe(true);
+});
+
+it("marks a line as the owner's only where only the owner reaches", () => {
+  const marked = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "startTurn" && /\bowner\b/.test(node.arguments[2]?.getText(source) ?? ""));
+  expect(marked.map((node) => compact(node.arguments[2]!.getText(source)))).toEqual([
+    "{ threadId, userMessage: userMessage ?? undefined, excludeMessageIds: excludeIds, onDispatchError: rerunIfIdle, owner: true, }",
+    "{ threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), owner: !guest }",
+    "{ ...opts, owner: true }",
+  ]);
+  expect(["/api/bots/wink/messages", "/api/bots/wink/messages/m1/edit"].map((path) => botRoute(path, "wink"))).toEqual([false, false]);
+  const dir = fileURLToPath(new URL(".", import.meta.url));
+  const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts"));
+  const callers = (name: string) => files.filter((path) => readFileSync(join(dir, path), "utf8").includes(`${name}(`)).map((path) => path.replace(/\\/g, "/")).sort();
+  expect(callers("queueSteeredMessage")).toEqual(["bot-chat-routes.ts", "quick-ask.ts", "steer-queue.ts"]);
+  expect(callers("beginPeerUserReply")).toEqual(["bot-chat-routes.ts", "peer-user-reply.ts"]);
+  expect(readFileSync(join(dir, "peer-user-reply.ts"), "utf8")).toContain("excludeMessageIds: [message.id], owner: true }");
 });

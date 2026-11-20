@@ -68,7 +68,7 @@ describe("launchNoteText", () => {
     ];
 
     expect(paneNotesSinceLastUserTurn(path, new Set())).toEqual([]);
-    expect(paneNotesForTurn(path, new Set(), undefined, false)).toEqual({ notes: [], newestId: undefined });
+    expect(paneNotesForTurn(path, new Set(), undefined, false)).toEqual({ notes: [], newestId: undefined, ids: [] });
     expect(paneNotesForTurn(path, new Set(), undefined, true).newestId).toBeUndefined();
     const replay = await prepareModelContext({ messages: path, contextWindow: 8_192, taskRecordText: "Goal: run workers" });
     expect(replay.status).toBe("ready");

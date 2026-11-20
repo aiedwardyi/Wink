@@ -141,13 +141,10 @@ export function ownerRoot(rootId: string | null | undefined): boolean {
 }
 
 /** Someone else's text in a turn's prompt ends the owner origin of the request it carries. */
-export function othersInPrompt(store: Pick<Store, "group" | "row">, threadId: string, rootId: string | null | undefined, ids: readonly string[], rows: readonly Message[] = [], hostSeats: readonly string[] = []): boolean {
+export function othersInPrompt(store: Pick<Store, "row">, threadId: string, rootId: string | null | undefined, ids: readonly string[], rows: readonly Message[] = [], hostSeats: readonly string[] = []): boolean {
   const foreign = [...ids.flatMap((id) => store.row(threadId, id) ?? []), ...rows].some((row) => {
     if (row.reportIds || row.snagIds) return true;
-    if (row.roomEcho) {
-      const group = store.group(row.roomEcho.groupId);
-      return !group || Boolean(group.hosted);
-    }
+    if (row.roomEcho) return !row.roomEcho.ownerOnly;
     if (row.comm?.peer === "reply") return !ownerRoot(row.comm.taskId ? findDelegationReceipt(row.comm.taskId)?.root : null);
     const author = row.author;
     return author?.kind === "person" ? !hostSeats.includes(author.id) : author?.kind === "bot" && author.owner !== undefined && !hostSeats.includes(author.owner);

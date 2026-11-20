@@ -4822,10 +4822,13 @@ const noteSteer = new NoteSteerer({
     return liveTurnIdByThread.get(threadId);
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
-  steer: (botId, threadId, text) => {
+  steer: (botId, threadId, text, ids) => {
     const bot = store.bot(botId);
     const adapter = bot ? botAccounts.instance(bot, threadId)?.adapter : undefined;
-    return steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));
+    const steered = steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));
+    // At the send, not the ack: an engine can ack only after the model acted on the text.
+    if (steered) othersInPrompt(store, threadId, turnRegistry.rootOf(threadId), ids);
+    return steered;
   },
   messages: (threadId) => store.activePath(threadId),
   deliveredId: (botId, threadId) => store.taskByThread(botId, threadId)?.paneNotesDeliveredId ?? undefined,
@@ -4866,6 +4869,7 @@ function drainQueuedSends() {
       userMessage: userMessage ?? undefined,
       excludeMessageIds: excludeIds,
       onDispatchError: rerunIfIdle,
+      owner: true,
     }), () => isSendCancelled(userMessage?.sendId ?? userMessage?.queueId), terminalBridgeAccess).then(rerunIfIdle).catch((err) => {
       if (writeChatError(`queued message could not start - ${err instanceof Error ? err.message : String(err)}`, terminalBridgeAccess)) store.appendMessage(threadId, {
         role: "bot",
@@ -5036,8 +5040,8 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
-  /** Someone else typed this line in a room this PC joined: its peer hops keep the base peer tools. */
-  guest?: boolean;
+  /** The owner typed this line: only then do its peer hops open the owner's tools. */
+  owner?: boolean;
 };
 
 /** True only for a turn a person actually typed - not a pane note wake, a
@@ -5355,7 +5359,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         });
   }
   let rootId = rootForStart(threadId, turnStartedByUser(opts)
-    ? { kind: opts?.guest ? "guest" : "human", messageKey: userMessage.sendId ?? userMessage.id }
+    ? { kind: opts?.owner ? "human" : "guest", messageKey: userMessage.sendId ?? userMessage.id }
     : opts?.commsRoot !== undefined || commsDepth > 0
       ? { kind: "inherit", rootId: opts?.commsRoot }
       : { kind: "automatic" });
@@ -6924,7 +6928,7 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
   },
   startTurn: (botId, threadId, prompt, typed, failed, readOnly, guest) => {
     joinedRoomThreads.add(threadId);
-    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), ...(guest ? { guest } : {}) });
+    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), owner: !guest });
   },
   readOnlyTurns: (botId, threadId) => {
     const bot = store.bot(botId);
@@ -7459,7 +7463,7 @@ async function runClaimedGroupMemberTurn(
   if (outcome === "stalled" && authority) void endAsk(authority, "failed");
   if (outcome === "stalled" || outcome === "timed_out") return false;
   if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
-  if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId);
+  if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId, !foreign);
   if (outcome === "settled" && handedOff && !isCancelled?.()) {
     queueBusyRoomMember(groupId, threadId, bot, 0, new Set(), laneHandoffNote(group.name, handedOff.asker, handedOff.ask), undefined, dispatchedInstructionId, rootId, undefined, authority ?? true, asked);
   }
@@ -8219,7 +8223,7 @@ const botChatRoutes = createBotChatRoutes({
   turnStartClaims,
   botHasActiveTurn,
   taskResumes,
-  startTurn,
+  startTurn: (botId, text, opts) => startTurn(botId, text, { ...opts, owner: true }),
   resolveAndSendRoutine,
   approvalBus,
   startGroupCardContinuation,
