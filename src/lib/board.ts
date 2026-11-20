@@ -121,6 +121,8 @@ export function useBoardPosts(): BoardPostsView {
   const asked = useRef(0);
   // a reply saved here stays until a load asked after the save lands, since one asked before may not carry it
   const mine = useRef(new Map<string, { post: BoardPost; seq: number }>());
+  // once a load carried a post the loads decide, so a late or retried answer never brings back a delete
+  const listed = useRef(new Set<string>());
   // a deleted reply stays gone, even from a load asked before the delete or with the live link down
   const gone = useRef(new Map<string, string | null>());
   // a deleted top-level post takes its whole thread, even replies a later load brings
@@ -153,7 +155,10 @@ export function useBoardPosts(): BoardPostsView {
           if (!live || seq !== asked.current) return;
           const list = Array.isArray(body?.posts) ? body.posts : [];
           for (const [id, held] of mine.current) if (held.seq < seq) mine.current.delete(id);
-          for (const post of list) mine.current.delete(post.id);
+          for (const post of list) {
+            mine.current.delete(post.id);
+            listed.current.add(post.id);
+          }
           setPosts((forumKept.posts = prune([...list, ...[...mine.current.values()].map((held) => held.post)]).map(lift)));
           setFailed(false);
         },
@@ -169,6 +174,7 @@ export function useBoardPosts(): BoardPostsView {
     };
   }, [lift, prune]);
   const saved = useCallback((post: BoardPost) => {
+    if (listed.current.has(post.id)) return;
     mine.current.set(post.id, { post, seq: asked.current });
     setPosts((now) => (forumKept.posts = [...(now ?? []).filter((held) => held.id !== post.id), post]));
   }, []);

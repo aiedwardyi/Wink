@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BOARD_USER, createBoard } from "../../server/board.ts";
+import { createBoardRoutes } from "../../server/board-routes.ts";
 import { createTempDirs } from "../../server/testing/cleanup.ts";
 
 import { BOARD_CHANGED_EVENT, FORUM_SELECTION, forumKept, type BoardPost } from "@/lib/board";
@@ -324,6 +326,99 @@ describe("Forum", () => {
     await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
     await settle();
     expect(rows()).toEqual([other.id]);
+  });
+
+  it("a reply's late answer after another PC deleted its thread never brings the reply back", async () => {
+    const temps = createTempDirs();
+    afterAll(() => temps.remove());
+    const drive = temps.make(join(tmpdir(), "orbit-forum-drive-"));
+    const boot = (pc: string, changed?: () => void) => createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-forum-")), "board"), pcId: () => pc, changed });
+    const [a, b] = [boot("home"), boot("work", () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)))];
+    const ids = { in: (id: string) => id, out: (id: string) => id };
+    const sync = () => {
+      for (const board of [a, b, a, b]) board.sync(drive, ids);
+    };
+    const stuck = a.post({ author_bot_id: "astra", kind: "stuck", title: "Stuck on the staging deploy", body: "Stuck on the staging deploy", source_ref: "call:ta:0:engine:deploy" });
+    const other = a.post({ author_bot_id: "astra", kind: "tip", title: "Pin node 22", body: "Pin node 22", source_ref: "tool:ta:pin" });
+    sync();
+    let answer = () => {};
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url !== "/api/board/reply") return json({ posts: b.list() });
+      const sent = JSON.parse(String(init?.body));
+      const saved = b.post({ author_bot_id: BOARD_USER, parent_id: sent.parent_id, kind: "tip", title: stuck.title, body: sent.body, source_ref: `reply:${sent.client_id}` });
+      await new Promise<void>((resolve) => { answer = resolve; });
+      return new Response(JSON.stringify({ post: saved }), { headers: { "content-type": "application/json" } });
+    }));
+    await render(BoardView);
+    await openRow(stuck.id);
+    await typeIn(box(stuck.id)!, "On it.");
+    await click(`[data-board-reply-box="${stuck.id}"] button[type="submit"]`);
+    await settle();
+    const reply = b.list().find((held) => held.parent_id === stuck.id)!;
+    expect(rows()).toEqual([stuck.id, reply.id]);
+    await act(async () => {
+      a.remove(stuck.id);
+      sync();
+    });
+    await settle();
+    expect(rows()).toEqual([other.id]);
+    await act(async () => answer());
+    await settle();
+    expect(rows()).toEqual([other.id]);
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual([other.id]);
+  });
+
+  it("a retry of a reply whose answer was lost stays gone once another PC deleted the reply", async () => {
+    const temps = createTempDirs();
+    afterAll(() => temps.remove());
+    const drive = temps.make(join(tmpdir(), "orbit-forum-drive-"));
+    const boot = (pc: string, changed?: () => void) => createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-forum-")), "board"), pcId: () => pc, changed });
+    const [a, b] = [boot("home"), boot("work", () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)))];
+    const ids = { in: (id: string) => id, out: (id: string) => id };
+    const sync = () => {
+      for (const board of [a, b, a, b]) board.sync(drive, ids);
+    };
+    const routes = createBoardRoutes({ board: b, caller: () => undefined, known: () => false, projectOf: () => "", roomTurn: () => null });
+    const stuck = a.post({ author_bot_id: "astra", kind: "stuck", title: "Stuck on the staging deploy", body: "Stuck on the staging deploy", source_ref: "call:ta:0:engine:deploy" });
+    sync();
+    const sent: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url !== "/api/board/reply") return json({ posts: b.list() });
+      const raw = String(init?.body);
+      sent.push(JSON.parse(raw).client_id);
+      let answer = "";
+      const req = Object.assign(Readable.from([Buffer.from(raw)]), { headers: { "content-type": "application/json" } });
+      const res = { writeHead: () => res, end: (body: string) => { answer = body; } };
+      // SAFETY: the reply route reads only the request's headers and body, and calls only writeHead and end.
+      await routes.reply(req as never, res as never);
+      // the first answer is lost after the reply was saved
+      if (sent.length === 1) throw new TypeError("connection reset");
+      return new Response(answer, { headers: { "content-type": "application/json" } });
+    }));
+    await render(BoardView);
+    await openRow(stuck.id);
+    await typeIn(box(stuck.id)!, "On it.");
+    await click(`[data-board-reply-box="${stuck.id}"] button[type="submit"]`);
+    await settle();
+    const reply = b.list().find((held) => held.parent_id === stuck.id)!;
+    expect(rows()).toEqual([stuck.id, reply.id]);
+    await act(async () => {
+      sync();
+      a.remove(reply.id);
+      sync();
+    });
+    await settle();
+    expect(rows()).toEqual([stuck.id]);
+    await click(`[data-board-reply-box="${stuck.id}"] button[type="submit"]`);
+    await settle();
+    expect(sent).toEqual([sent[0], sent[0]]);
+    expect(rows()).toEqual([stuck.id]);
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual([stuck.id]);
+    for (const board of [a, b]) expect(board.list().map((held) => held.id)).toEqual([stuck.id]);
   });
 
 it("a deleted reply's own replies stay in the thread, moved up to its parent", async () => {
