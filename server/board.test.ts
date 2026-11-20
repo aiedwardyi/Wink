@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs, { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -321,7 +322,7 @@ describe("board Drive sync", () => {
       interrupt.mockRestore();
       syncBuiltinESMExports();
     }
-    expect(JSON.parse(readFileSync(tombstones, "utf8"))).toEqual([stuck.id, { id: stuck.id, parent_id: null, fix_sha: "" }]);
+    expect(JSON.parse(readFileSync(tombstones, "utf8"))).toEqual([stuck.id, { id: stuck.id, parent_id: null }]);
     const restarted = createBoard({ dir: b.dir, pcId: () => "pc-b" });
     for (let pass = 0; pass < 4; pass++) for (const board of [restarted, a.board, c.board]) board.sync(folder, ids);
     for (const board of [restarted, a.board, c.board]) expect(board.list()).toEqual([]);
@@ -695,19 +696,7 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(a, b, a, b);
       return { live: [{ id: open.id, status: "solved", fix: "second fix" }], dead: [solved.id] };
     }, both],
-    ["D: a PC that missed the delete keeps the fix it told its bot it saved", (w) => {
-      const a = w.boot("pc-a");
-      const b = w.boot("pc-b");
-      const first = call(a);
-      w.sync(a, b);
-      a.board.remove(first.id);
-      w.sync(a);
-      expect(call(b).id).toBe(first.id);
-      expect(clear(b, "fix from the PC that missed the delete")).toEqual([first.id]);
-      w.sync(b, a, b, a);
-      return { live: [{ title: ISSUE.note, status: "solved", fix: "fix from the PC that missed the delete" }], dead: [first.id] };
-    }],
-    ["D: a fix on a call another PC deleted meanwhile is kept", (w) => {
+    ["D: a call that reuses an episode before hearing of its delete goes with the episode", (w) => {
       const a = w.boot("pc-a");
       const b = w.boot("pc-b");
       const first = call(a);
@@ -718,9 +707,10 @@ describe("every delete case: nothing deleted that should live, nothing live that
       b.board.remove(older.id);
       w.sync(b);
       const newer = call(a);
+      expect(newer.id).toBe(older.id);
       expect(clear(a, "new fix after the older copy was deleted")).toEqual([newer.id]);
       w.sync(a, b, a, b);
-      return { live: [{ title: ISSUE.note, status: "solved", fix: "new fix after the older copy was deleted" }], dead: [first.id, older.id, newer.id] };
+      return { live: [], dead: [first.id, older.id] };
     }],
     ["D: a late old-format call whose note ends in #2 keeps its own identity", (w) => {
       const a = w.boot("pc-a");
@@ -888,7 +878,7 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(a, b, a, b);
       return { live: [{ id: live.id, status: "solved", fix: "fix for the live call" }], dead: [old.id] };
     }],
-    ["E: a fix is kept when a PC that missed it writes the same call again and deletes it", (w) => {
+    ["E: the fix goes when a PC that missed it writes the same call again and deletes it", (w) => {
       const a = w.boot("pc-a");
       const b = w.boot("pc-b");
       const first = call(a);
@@ -897,20 +887,63 @@ describe("every delete case: nothing deleted that should live, nothing live that
       expect(call(b).id).toBe(first.id);
       b.board.remove(first.id);
       w.sync(a, b, a, b);
-      return { live: [{ title: ISSUE.note, status: "solved", fix: "fix saved before the other PC deleted" }], dead: [first.id] };
+      return { live: [], dead: [first.id] };
     }],
-    ["E: a fix saved on a PC whose clock runs behind the deleting PC is kept", (w) => {
+    ...(["bare id", "parent only", "fix digest"] as const).flatMap((format) =>
+      (["abc", "acb", "bac", "bca", "cab", "cba"] as const).map((arrival): (typeof cases)[number] => [`H: an unseen fix goes with its thread (${format}, ${arrival})`, (w) => {
+        const a = w.boot("pc-a");
+        const b = w.boot("pc-b", -500);
+        const c = w.boot("pc-c");
+        const pcs = new Map([["a", a], ["b", b], ["c", c]]);
+        const first = call(a);
+        const keep = tip(a, "unrelated post");
+        w.sync(a, b, c);
+        expect(clear(b, "fix saved on the other PC")).toEqual([first.id]);
+        if (arrival[0] !== "a") w.sync(b, c);
+        expect(a.board.remove(first.id)).toBe(true);
+        w.sync(a);
+        const tombstones = join(w.folder, BOARD_DIR, a.name, "deleted.json");
+        const root = { id: first.id, parent_id: null };
+        writeFileSync(tombstones, JSON.stringify(format === "bare id" ? [first.id] : [
+          first.id, format === "fix digest" ? { ...root, fix_sha: "" } : root,
+        ]));
+        const [online, peer, offline] = [...arrival].map((name) => pcs.get(name)!);
+        w.sync(online!, peer!, online!, peer!);
+        for (const pc of [online!, peer!]) expect(pc.board.list().map((post) => post.id), pc.name).toEqual([keep.id]);
+        w.sync(offline!, online!, peer!, offline!, online!, peer!);
+        return { live: [{ id: keep.id }], dead: [first.id] };
+      }]),
+    ),
+    ["H: an older build's copied fix and its replies go with the deleted thread", (w) => {
       const a = w.boot("pc-a");
-      const b = w.boot("pc-b", -500);
+      let b = w.boot("pc-b");
       const first = call(a);
       w.sync(a, b);
-      a.board.remove(first.id);
-      w.sync(a);
-      expect(clear(b, "fix from the PC whose clock is behind")).toEqual([first.id]);
-      w.sync(b, a, b, a);
-      return { live: [{ title: ISSUE.note, status: "solved", fix: "fix from the PC whose clock is behind" }], dead: [first.id] };
+      const fixed = b.board.solve(first.id, "saved fix")!;
+      const sha = createHash("sha256").update(fixed.fix).digest("hex").slice(0, 16);
+      const copy = { ...fixed, id: boardPostId(JSON.stringify([first.id, sha])) };
+      writeFileSync(join(b.dir, `${copy.id}.json`), JSON.stringify(copy));
+      b = w.restart(b);
+      const reply = tip(b, "reply under the copied fix", copy, BOARD_USER);
+      const keep = tip(b, fixed.fix);
+      expect(a.board.remove(first.id)).toBe(true);
+      w.sync(a, b, a, b);
+      return { live: [{ id: keep.id }], dead: [first.id, copy.id, reply.id] };
     }],
-    ...(["after the deleted call's file goes", "before its fix's new post is written"] as const).map((when): (typeof cases)[number] => [`E: a restart ${when} keeps the fix`, (w) => {
+    ["H: replacing a live fix writes no tombstones", (w) => {
+      const a = w.boot("pc-a");
+      const b = w.boot("pc-b");
+      const first = call(a);
+      a.board.solve(first.id, "first fix");
+      a.board.solve(first.id, "latest fix");
+      w.sync(a, b);
+      for (const pc of [a, b]) {
+        expect(readdirSync(pc.dir)).toEqual([`${first.id}.json`]);
+        expect(readdirSync(join(w.folder, BOARD_DIR, pc.name))).toEqual([`${first.id}.json`]);
+      }
+      return { live: [{ id: first.id, status: "solved", fix: "latest fix" }], dead: [] };
+    }],
+    ["H: an unseen fix stays gone after a restart as the deleted call's file goes", (w) => {
       const a = w.boot("pc-a");
       const b = w.boot("pc-b");
       const first = call(a);
@@ -919,16 +952,11 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(a);
       expect(clear(b, "fix that must survive a restart")).toEqual([first.id]);
       const gone = join(b.dir, `${first.id}.json`);
-      const { rmSync, renameSync } = fs;
-      const interrupt = when.startsWith("after")
-        ? vi.spyOn(fs, "rmSync").mockImplementation((path, options) => {
-          rmSync(path, options);
-          if (path === gone) throw new Error("restart");
-        })
-        : vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-          if (String(to).startsWith(join(b.dir, "p"))) throw new Error("restart");
-          renameSync(from, to);
-        });
+      const { rmSync } = fs;
+      const interrupt = vi.spyOn(fs, "rmSync").mockImplementation((path, options) => {
+        rmSync(path, options);
+        if (path === gone) throw new Error("restart");
+      });
       syncBuiltinESMExports();
       try {
         expect(() => b.board.sync(w.folder, ids)).toThrow("restart");
@@ -938,8 +966,8 @@ describe("every delete case: nothing deleted that should live, nothing live that
       }
       const restarted = w.restart(b);
       w.sync(restarted, a, restarted, a);
-      return { live: [{ title: ISSUE.note, status: "solved", fix: "fix that must survive a restart" }], dead: [first.id] };
-    }]),
+      return { live: [], dead: [first.id] };
+    }],
     ["E: one call deleted on two PCs, one of them showing its fix, stays gone", (w) => {
       const a = w.boot("pc-a");
       const b = w.boot("pc-b");

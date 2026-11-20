@@ -28,7 +28,7 @@ const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const
 export const BOARD_REF_MAX = LIMITS.ref;
 
 const idSchema = z.string().regex(/^p[0-9a-f]{24}$/);
-const tombstoneSchema = z.object({ id: idSchema, parent_id: idSchema.nullable(), fix_sha: z.string().optional() });
+const tombstoneSchema = z.object({ id: idSchema, parent_id: idSchema.nullable() });
 /** The author as it looked when it posted, so another PC can show a bot it does not have. */
 const authorSchema = z.object({ name: z.string().max(LIMITS.id), model: z.string().max(LIMITS.id), color: z.string().max(32), mascot_style: z.string().max(64) });
 const postSchema = z.object({
@@ -120,18 +120,10 @@ function readPosts(dir: string): BoardPost[] {
   });
 }
 
-/** A deleted reply names its parent, a deleted thread keeps the fix it showed; null, the original release's bare id, drops that post alone. */
-type Tombstone = { parent_id: string } | { parent_id: null; fix_sha: string } | null;
-const CUT: Tombstone = { parent_id: null, fix_sha: "" };
-// a thread's delete outranks a reply's, which outranks a bare id; a thread delete that showed a fix outranks one that showed none
-const rank = (tombstone: Tombstone | undefined) => (!tombstone ? 0 : tombstone.parent_id === null ? (tombstone.fix_sha ? 3 : 2) : 1);
-const fixSha = (fix: string) => (fix ? createHash("sha256").update(fix).digest("hex").slice(0, 16) : "");
-const movedId = (id: string, sha: string) => boardPostId(JSON.stringify([id, sha]));
-/** The digest of a deleted thread's fix the delete never showed, else "". Clocks differ between PCs, so a delete that showed another fix leaves it to the PC that wrote this copy, never a stale copy elsewhere. */
-const unseenFix = (post: BoardPost, tombstone: Tombstone, mine: string) => {
-  const sha = fixSha(post.fix);
-  return tombstone?.parent_id === null && post.parent_id === null && post.status === "solved" && sha !== tombstone.fix_sha && (!tombstone.fix_sha || post.pc_id === mine) ? sha : "";
-};
+/** A deleted reply names its parent; a thread delete clears its descendants; a bare id drops one post. */
+type Tombstone = { parent_id: string | null } | null;
+const CUT = { parent_id: null };
+const rank = (tombstone: Tombstone | undefined) => (!tombstone ? 0 : tombstone.parent_id === null ? 2 : 1);
 
 function readDeleted(dir: string): Map<string, Tombstone> {
   const deleted = new Map<string, Tombstone>();
@@ -143,8 +135,8 @@ function readDeleted(dir: string): Map<string, Tombstone> {
         if (typeof entry === "string") continue;
         const held = tombstoneSchema.safeParse(entry);
         if (!held.success || !deleted.has(held.data.id)) continue;
-        const { id, parent_id, fix_sha = "" } = held.data;
-        deleted.set(id, parent_id === null ? { parent_id, fix_sha } : { parent_id });
+        const { id, parent_id } = held.data;
+        deleted.set(id, { parent_id });
       }
     }
   } catch {
@@ -231,10 +223,13 @@ export function createBoard(options: BoardOptions) {
       if (siblings) siblings.push(id);
       else children.set(parent, [id]);
     };
-    for (const post of candidates.values()) {
-      if (post.parent_id && !tombstones.has(post.id)) link(post.id, post.parent_id);
-    }
     const doomed = new Set<string>();
+    for (const post of candidates.values()) {
+      if (tombstones.has(post.id)) continue;
+      if (post.parent_id) link(post.id, post.parent_id);
+      // Older builds copied unseen fixes without changing their source refs.
+      else if (post.status === "solved" && tombstones.has(boardPostId(post.source_ref))) doomed.add(post.id);
+    }
     for (const [id, tombstone] of tombstones) {
       // A deleted reply still connects its children to the post they belong to; a bare id drops its post alone.
       if (tombstone?.parent_id) link(id, tombstone.parent_id);
@@ -271,9 +266,6 @@ export function createBoard(options: BoardOptions) {
 
   const solved = (held: BoardPost, fix: string, at: number): BoardPost => {
     const next = { ...held, status: "solved" as const, fix: clean(fix, LIMITS.fix), updated_at: at, pc_id: options.pcId() };
-    // a replaced fix was seen, so a copy still showing it never moves to a new post once the thread is deleted
-    const replaced = fixSha(held.fix);
-    if (replaced && replaced !== fixSha(next.fix)) drop(movedId(held.id, replaced), { parent_id: null, fix_sha: replaced });
     write(next);
     return next;
   };
@@ -348,10 +340,7 @@ export function createBoard(options: BoardOptions) {
       const held = posts().get(id);
       if (!held) return false;
       if (held.parent_id === null) {
-        const sha = fixSha(held.fix);
-        // the fix it showed stays gone, should another PC have moved it to a new post
-        if (sha) drop(movedId(id, sha), { parent_id: null, fix_sha: sha });
-        drop(id, { parent_id: null, fix_sha: sha });
+        drop(id, CUT);
         prune(posts());
       } else {
         const at = now();
@@ -409,15 +398,6 @@ export function createBoard(options: BoardOptions) {
       }
       for (const [id, tombstone] of tombstones) {
         const post = candidates.get(id);
-        // a bot was told that fix was saved before the delete reached its PC, so it lives on as a new post, written before the old one goes
-        const sha = post ? unseenFix(post, tombstone, mine) : "";
-        const moved = sha && movedId(id, sha);
-        if (post && moved && !tombstones.has(moved) && !candidates.has(moved)) {
-          const copy = { ...post, id: moved };
-          write(copy);
-          candidates.set(moved, copy);
-          pulled++;
-        }
         const replyParent = post && ownReply(post) ? post.parent_id : null;
         if (drop(id, tombstone ?? (replyParent ? { parent_id: replyParent } : null))) pulled++;
         candidates.delete(id);
