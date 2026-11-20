@@ -49,6 +49,8 @@ Each worker runs its engine's own CLI in its own terminal, and the lead bot is t
 **4. Wink trusts the checks, not the AI**<br>
 Every bot is told to fix the root cause and turn each mistake into a test that fails if it comes back. Then Live Verify opens the page in a real browser, clicks through it at phone size and shows you what's broken.
 
+**▶ Press play:** 14 seconds of Live Verify clicking through a page at phone size.
+
 https://github.com/user-attachments/assets/c3883bbd-249b-4bf5-b16d-8a842f9849a1
 
 
