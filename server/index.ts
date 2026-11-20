@@ -6224,7 +6224,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
                 .join(" and ")} in their message — bring them in with ask_bot and fold their reply into your answer.`
             : "") +
           tracePart("playbook", harnessPlaybookPrompt(Boolean(integrations.terminal))) +
-          (canMessage ? savedKeysPrompt(cfg) : "") +
+          (canMessage ? savedKeysPrompt(cfg).replace(/^ /, "\n") : "") +
           // a joined room's session answers everyone there, so it never carries the owner's About You
           tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt()) +
           tracePart("memory", memoryParts.content);
@@ -7338,7 +7338,7 @@ async function runClaimedGroupMemberTurn(
     accessRules(instance.adapter.access?.({ ...access, cwd, integrations, leanStartup: memberTurnSelection(selection, bot.leanStartup).leanStartup }), integrations) +
     (handoff ? `\n\n${LANE_HANDOFF_LINE}` : "") +
     harnessPlaybookPrompt(Boolean(integrations.terminal)) +
-    (canMessage ? savedKeysPrompt(cfg) : "") +
+    (canMessage ? savedKeysPrompt(cfg).replace(/^ /, "\n") : "") +
     // a teammate's ask, or a chain one started, answers the whole room: the owner's private facts stay out
     (asked ? "" : aboutYouPrompt()) +
     (workspace ? memoryParts.content.trimEnd() : "");

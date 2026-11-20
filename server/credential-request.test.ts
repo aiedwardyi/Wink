@@ -135,7 +135,7 @@ describe("saved keys prompt", () => {
       [index.match(/const credentialPrompt = (.*);\n/)?.[1], " Ask first."],
       [index.match(/\n\s+(canMessage && .*CREDENTIAL_PROMPT.*),\n/)?.[1], "Ask first."],
     ];
-    const savedSites = [...index.matchAll(/\(canMessage \? savedKeysPrompt\(cfg\) : ""\)/g)];
+    const savedSites = [...index.matchAll(/\(canMessage \? savedKeysPrompt\(cfg\)\.replace\(\/\^ \/, "\\n"\) : ""\)/g)];
     expect(savedSites).toHaveLength(2);
     for (const [i, [site, base]] of sites.entries()) {
       const cfg: CredentialConfig = {};
@@ -146,7 +146,7 @@ describe("saved keys prompt", () => {
       for (const key of ["", "tts-7f3a", ""]) {
         cfg.tts = { key };
         expect(prompt(site, true)).toBe(base);
-        expect(prompt(savedSites[i]?.[0], true)).toBe(key ? line("ElevenLabs API Key (ttsKey)") : "");
+        expect(prompt(savedSites[i]?.[0], true)).toBe(key ? line("ElevenLabs API Key (ttsKey)").replace(/^ /, "\n") : "");
         for (const expression of [site, savedSites[i]?.[0]]) {
           expect(prompt(expression, false)).toBeFalsy();
           expect(prompt(expression, true, 1)).toBeFalsy();

@@ -57,6 +57,7 @@ describe("system prompt order", () => {
     const build = (memoryParts: typeof parts, savedKeys = keys) => runInNewContext(`${isRoom ? room : solo}\n${isRoom ? "roomSystem" : "system"}`, { ...scope, memoryParts, savedKeysPrompt: () => savedKeys }) as string;
     const before = isRoom ? `${stable}${keys}\n${oldMemory.trim()}${playbook}` : `PERSONA CREDENTIAL${keys} ROUTINE RULES${oldMemory}${playbook}`;
     const after = build(parts);
+    expect(after).toContain("\nSaved keys: Example.");
     expect(Buffer.byteLength(after)).toBe(Buffer.byteLength(before));
     expect(parts.guidance + parts.content).toBe(legacyMemory);
     for (const line of lines) {
