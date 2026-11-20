@@ -50,7 +50,7 @@ export const SCREENS = [
   "settings-account", "settings-about-you", "settings-general", "settings-advanced", "settings-connections", "settings-themes", "settings-more-themes",
   "settings-shortcuts", "settings-devices", "settings-usage", "settings-team", "settings-model-index", "settings-sync",
   "palette", "inspector", "watch", "usage-quick", "teams-library", "archived", "call", "live-call", "room-alerts",
-  "message-menu", "attachment-preview", "no-engines", "whats-new",
+  "message-menu", "attachment-preview", "no-engines", "whats-new", "timeline", "map",
 ] as const;
 
 const FLAG = ["on", "off"] as const;
