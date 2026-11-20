@@ -146,11 +146,6 @@ function samePromise(a: string, b: string): boolean {
   const least = Math.min(x.size, y.size);
   return least >= 3 && [...x].filter((word) => y.has(word)).length >= 0.8 * least && marks(a) === marks(b);
 }
-function restated(a: string, b: string): boolean {
-  const [x, y] = [gist(a), gist(b)];
-  const [less, more] = x.size <= y.size ? [x, y] : [y, x];
-  return less.size >= 3 && [...less].every((word) => more.has(word)) && marks(a) === marks(b);
-}
 
 export function fileBotPromises(book: AskBook | undefined, promises: readonly { ask: string; repeats?: TaskAsk }[], done: readonly TaskAsk[], now: number): SavedAsks | null {
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
@@ -167,8 +162,8 @@ export function fileBotPromises(book: AskBook | undefined, promises: readonly { 
   for (const { ask: promise, repeats } of promises) {
     const ask = clip(promise, ASK_LIMITS.ask);
     if (repeats && asks.some((item) => item.kind === "promise" && isOpenAsk(item) && asRead(item, repeats))) continue;
-    // an earlier promise can come back reworded; one from this same batch only restated, adding words but never swapping one
-    if (!ask || asks.some((item, at) => isOpenAsk(item) && (words(item.ask) === words(ask) || (item.kind === "promise" && (at < read ? samePromise(item.ask, ask) : restated(item.ask, ask)))))) continue;
+    // an earlier promise can come back reworded; one from this same batch is another promise, even with more words
+    if (!ask || asks.some((item, at) => isOpenAsk(item) && (words(item.ask) === words(ask) || (item.kind === "promise" && at < read && samePromise(item.ask, ask))))) continue;
     lastAskId += 1;
     asks.push({ id: `A${lastAskId}`, ask, status: "open", kind: "promise", at: now, changedAt: now });
     changed = true;

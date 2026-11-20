@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { createMemoryPass, type NoteGenerator } from "./memory-pass.ts";
+import { createMemoryPass, namesPromise, type NoteGenerator } from "./memory-pass.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { asksNudge, mergeTaskAsks, type AskBook, type SavedAsks } from "./task-asks.ts";
 import { readTaskResumePacket, writeTaskResumePacket, type TaskResumePacket } from "./task-state.ts";
@@ -37,6 +37,8 @@ const promised = (lines: string[]) => JSON.stringify(lines.filter((line) => line
 const filesEvery: NoteGenerator = async (prompt) => promised(botLinesIn(prompt));
 // skips a promise when the same lines report the work done, as the prompt asks
 const skipsDone: NoteGenerator = async (prompt) => botLinesIn(prompt).some((line) => !line.includes("I'll")) ? "[]" : promised(botLinesIn(prompt));
+// the gate's note-taker: every "I'll" or "I will" line it is shown is a promise
+const filesWill: NoteGenerator = async (prompt) => JSON.stringify(botLinesIn(prompt).filter((line) => /\bI(?:'ll| will)\b/i.test(line)).map((line) => ({ kind: "promise", fact: line, quote: line })));
 
 function replay(name: string) {
   const dir = temps.make(join(tmpdir(), "memory-replay-"));
@@ -168,15 +170,23 @@ describe("memory replay: gate 2073 cases", () => {
   });
 
   it.each([
-    { name: "checked", helper: filesEvery, rows: [{ role: "bot", text: `${LAPTOP} I checked the laptop backup just now.` }] },
     { name: "checked", helper: skipsDone, rows: [{ role: "bot", text: `${LAPTOP} I checked the laptop backup just now.` }] },
-    { name: "backed up", helper: filesEvery, rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "I backed it up just now." }] },
     { name: "backed up", helper: skipsDone, rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "I backed it up just now." }] },
-    { name: "withdrawn", helper: filesEvery, rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "Actually, scratch that. I won't be able to do it." }] },
   ] satisfies { name: string; helper: NoteGenerator; rows: MissRow[] }[])("files nothing for a promise $name later in the same reply ($helper.name)", async ({ name, helper, rows }) => {
     const run = replay(`same-reply-${name.replace(/\W+/g, "-")}-${helper.name}`);
     await run.talk([ask, ...rows], helper);
     expect(run.asks()).toEqual([]);
+    run.dispose();
+  });
+
+  it.each([
+    { name: "checked", why: "only the note-taker judges a done line", rows: [{ role: "bot", text: `${LAPTOP} I checked the laptop backup just now.` }] },
+    { name: "backed up", why: "only the note-taker judges a done line", rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "I backed it up just now." }] },
+    { name: "withdrawn", why: "a scratch-that names no promise", rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "Actually, scratch that. I won't be able to do it." }] },
+  ] satisfies { name: string; why: string; rows: MissRow[] }[])("keeps a promise $name later in the same reply (filesEvery): $why", async ({ name, rows }) => {
+    const run = replay(`same-reply-${name.replace(/\W+/g, "-")}-filesEvery`);
+    await run.talk([ask, ...rows], filesEvery);
+    expect(run.asks().map((item) => item.ask)).toEqual([LAPTOP]);
     run.dispose();
   });
 
@@ -198,10 +208,10 @@ describe("memory replay: gate 2073 cases", () => {
     run.dispose();
   });
 
-  it("keeps a new promise after a withdrawn one", async () => {
+  it("keeps the open promise beside a never-mind that names another (no clear tie)", async () => {
     const run = replay("withdrawn-then-new");
     await run.talk([ask, { role: "bot", text: `${LAPTOP} Never mind, I'll check the desktop backup tonight.` }], filesEvery);
-    expect(run.asks().map((item) => item.ask)).toEqual(["Never mind, I'll check the desktop backup tonight."]);
+    expect(run.asks().map((item) => item.ask)).toEqual([LAPTOP, "Never mind, I'll check the desktop backup tonight."]);
     run.dispose();
   });
 
@@ -255,14 +265,12 @@ describe("memory replay: gate 2073B cases", () => {
 describe("memory replay: gate 2073C cases", () => {
   const invoice = "I'll email the signed invoice tomorrow.";
   const notify = "I will notify you tomorrow when the invoice is ready.";
-  // the gate's note-taker: every "I'll" or "I will" line it is shown is a promise
-  const filesWill: NoteGenerator = async (prompt) => JSON.stringify(botLinesIn(prompt).filter((line) => /\bI(?:'ll| will)\b/i.test(line)).map((line) => ({ kind: "promise", fact: line, quote: line })));
   it.each([
     { name: "a promise to notify", rows: [notify], kept: [notify] },
     { name: "a promise before an unrelated report done just now", rows: [invoice, "I checked the laptop backup just now."], kept: [invoice] },
     { name: "a promise before an unrelated refusal", rows: [invoice, "I can't make it to the meeting today."], kept: [invoice] },
-    { name: "only the promise a scratch-that takes back", rows: [invoice, LAPTOP, "Actually, scratch that. I won't be able to do it."], kept: [invoice] },
-    { name: "only the promise a cancel names", rows: [`${invoice} ${LAPTOP} Cancel that invoice email. The backup is still on.`], kept: [LAPTOP] },
+    { name: "both, as a scratch-that names neither", rows: [invoice, LAPTOP, "Actually, scratch that. I won't be able to do it."], kept: [invoice, LAPTOP] },
+    { name: "both, as the cancel never says signed", rows: [`${invoice} ${LAPTOP} Cancel that invoice email. The backup is still on.`], kept: [invoice, LAPTOP] },
     { name: "one ask for a promise restated in the same reply", rows: [LAPTOP, `To confirm, ${LAPTOP}`], kept: [LAPTOP] },
     { name: "nothing for a refusal", rows: ["I will not email the signed invoice tomorrow."], kept: [] },
   ])("files $name", async ({ name, rows, kept }) => {
@@ -293,6 +301,80 @@ describe("memory replay: gate 2073C cases", () => {
     release();
     await pass;
     expect(run.asks().map((item) => item.ask)).toEqual(["Review the tax return", restated]);
+    run.dispose();
+  });
+});
+
+describe("memory replay: gate 2073D cases", () => {
+  const invoice = "I'll email the signed invoice tomorrow.";
+  const agreement = "I'll proofread the agreement tonight.";
+  const contract = "I'll review the contract tomorrow.";
+  const decisions = "I'll document the meeting decisions tomorrow.";
+  const taxes = "I'll file the tax return tomorrow.";
+  const toAlice = "I'll send the agenda to Alice tomorrow.";
+  const toManager = "I'll send the agenda to Alice's manager tomorrow.";
+  const product = "I'll email the product report tomorrow.";
+  const production = "I'll email the production report tomorrow.";
+  const electrician = "I'll call the electrician tomorrow.";
+
+  it("removes a promise only when a line names every word of its object as whole words", () => {
+    const ties: [string, string][] = [
+      ["Cancel that production report.", production],
+      ["Sorry, I won't be able to check the laptop backup.", LAPTOP],
+      ["I called the electrician just now.", electrician],
+    ];
+    const loose: [string, string][] = [
+      ["Cancel that production report.", product],
+      ["Cancel that product report.", production],
+      ["Cancel that contact request.", contract],
+      ["I emailed my sister just now.", invoice],
+      ["Cancel that invoice email.", invoice],
+      ["I backed it up just now.", LAPTOP],
+      ["I won at Go just now.", taxes],
+      ["I sent the agenda to Alice just now.", toManager],
+      ["I did not email the signed invoice just now.", invoice],
+      ["I cannot reach the electrician just now.", electrician],
+    ];
+    expect(ties.filter(([line, promise]) => !namesPromise(line, promise))).toEqual([]);
+    expect(loose.filter(([line, promise]) => namesPromise(line, promise))).toEqual([]);
+  });
+
+  it.each([
+    { name: "an email to a sister done just now", rows: [invoice, agreement, "I emailed my sister just now."], kept: [invoice, agreement] },
+    { name: "a cancelled email subscription", rows: [invoice, agreement, "Cancel that email subscription."], kept: [invoice, agreement] },
+    { name: "a refused club meeting", rows: [decisions, agreement, "I can't make it to the club meeting today."], kept: [decisions, agreement] },
+    { name: "an email not sent just now", rows: [invoice, agreement, "I did not email the signed invoice just now."], kept: [invoice, agreement] },
+    { name: "a cancelled contact request", rows: [contract, agreement, "Cancel that contact request."], kept: [contract, agreement] },
+    { name: "a game won at Go just now", rows: [taxes, "I won at Go just now."], kept: [taxes] },
+    { name: "an extra recipient on the same agenda", rows: [toAlice, toManager], kept: [toAlice, toManager] },
+    { name: "an agenda drafted just now", rows: ["I'll send the agenda tonight. I drafted the agenda just now."], kept: ["I'll send the agenda tonight."] },
+    { name: "an invoice signed just now", rows: [`${invoice} I signed the invoice just now.`], kept: [invoice] },
+    { name: "an electrician emailed just now", rows: [`${electrician} I emailed the electrician just now.`], kept: [electrician] },
+  ])("keeps every promise: $name", async ({ name, rows, kept }) => {
+    const run = replay(name.replace(/\W+/g, "-"));
+    await run.talk([ask, ...rows.map((text) => ({ role: "bot", text }) as const)], filesWill);
+    expect(run.asks().map((item) => item.ask)).toEqual(kept);
+    run.dispose();
+  });
+
+  it.each([
+    { name: "production first", rows: [production, product, "Cancel that production report."] },
+    { name: "product first", rows: [`${product} ${production} Cancel that production report.`] },
+  ])("drops only the production report a cancel names ($name)", async ({ name, rows }) => {
+    const run = replay(`cancel-${name.replace(/\W+/g, "-")}`);
+    await run.talk([ask, ...rows.map((text) => ({ role: "bot", text }) as const)], filesWill);
+    expect(run.asks().map((item) => item.ask)).toEqual([product]);
+    run.dispose();
+  });
+
+  it.each([
+    { report: "I called the electrician just now.", status: "done" },
+    { report: "I called the plumber just now.", status: "open" },
+  ])("lets a done id close a promise only when its quote names it ($report)", async ({ report, status }) => {
+    const run = replay(`done-id-${status}`);
+    await run.talk([{ role: "user", text: "Please call the electrician tomorrow and send the agenda tonight." }, { role: "bot", text: `${electrician} I'll send the agenda tonight.` }], filesWill);
+    await run.talk([{ role: "user", text: "Who did you call today?" }, { role: "bot", text: report }], async (prompt) => JSON.stringify([{ kind: "done", fact: "A1", quote: botLinesIn(prompt)[0] }]));
+    expect(run.asks().map((item) => [item.ask, item.status])).toEqual([[electrician, status], ["I'll send the agenda tonight.", "open"]]);
     run.dispose();
   });
 });
