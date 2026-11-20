@@ -1710,6 +1710,47 @@ describe("Antigravity computer MCP config", () => {
     }
   });
 
+  it("a note helper gives way to a computer turn, which starts at once", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpyield-"));
+    const hold = join(home, "hold");
+    const helperReady = join(home, "helper.ready");
+    const helper = await createIn(home, "helper", { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: helperReady });
+    const computer = await createIn(home, "computer", { FAKE_AGY_HOLD_FILE: hold });
+    const computerRecorder = recordEvents(computer.adapter);
+    try {
+      const notes = helper.generateText!("notes").catch((error: unknown) => error);
+      await expect.poll(() => existsSync(helperReady)).toBe(true);
+      const turn = computer.adapter.sendTurn({ threadId: "t-mcp-yield", text: "click", integrations: boxIntegrations });
+      await computerRecorder.until((event) => event.type === "turn.started", 1_000);
+      expect(await notes).toMatchObject({ message: "agy summary aborted" });
+      await turn;
+      writeFileSync(hold, "");
+      await computerRecorder.until((event) => event.type === "turn.completed");
+      expect(computerRecorder.events.at(-1)).toMatchObject({ ok: true });
+    } finally {
+      writeFileSync(hold, "");
+      computerRecorder.stop();
+      await helper.dispose();
+      await computer.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a note helper's quota failure from the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-notelimit-"));
+    const helper = await createIn(home, "limited", { FAKE_AGY_RESULT_ERROR: "RESOURCE_EXHAUSTED (code 429): Quota exceeded for quota metric Generate requests." });
+    try {
+      await expect(helper.generateText!("notes")).rejects.toThrow("Account text rate limit");
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("reaps a child that hangs after result, restores the mount, and unblocks the next turn", async () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);

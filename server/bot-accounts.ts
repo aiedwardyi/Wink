@@ -128,7 +128,7 @@ export class BotAccounts {
 
   notes(bot: Pick<BotRecord, "modelSelection">, usage?: NoteLimits) {
     if (this.registry.get(bot.modelSelection.instanceId)?.driverKind === "claudeAgent") {
-      return noteGenerator(this.registry.instances(), this.noteAccount(), undefined, usage);
+      return noteGenerator(this.registry.instances(), this.noteAccount());
     }
     try {
       const selection = this.resolve(bot);

@@ -24,7 +24,6 @@ import { memoryNotesEnabled } from "./config.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { CodexDriver } from "./drivers/codex.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { pinMemoryJobOwner, tidiesHere, type MemorySyncLedger } from "./memory-sync.ts";
 import { replyTurns } from "./pick-sources.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import type { Message, StoreChange } from "./store.ts";
@@ -243,28 +242,35 @@ describe("memory pass", () => {
     expect(stored()).toEqual({ threads: { t1: ids } });
   });
 
-  it("leaves a restored batch pending on a mirror and runs it once on the owner", async () => {
-    const ids = Array.from({ length: 8 }, () => say("t1", "I use pnpm").id);
+  it("runs a restored batch only on the PC that saved it", async () => {
+    for (let i = 0; i < 8; i++) say("t1", "I use pnpm");
     pass.dispose();
-    const ledger: MemorySyncLedger = { bots: {}, device: "aaaaaaaaaaaa", jobDevice: "aaaaaaaaaaaa" };
-    pinMemoryJobOwner(ledger, "shared-bot", "pc-a");
-    const startOn = (device: string, path: string) => {
-      const copy = createMemoryPass({ store, dataDir: path, generate: () => generator, enabled: () => true,
-        busy: () => false, runsHere: () => tidiesHere(ledger, "shared-bot", device) });
+    const startOn = (host: string, path: string) => {
+      const copy = createMemoryPass({ store, dataDir: path, host, generate: () => generator, enabled: () => true, busy: () => false });
       passes.push(copy);
       return copy;
     };
+    pass = startOn("pc-a", dataDir);
+    say("t1", "I prefer tabs");
     const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
-    writeFileSync(join(mirrorDir, "memory-pass.json"), JSON.stringify({ threads: { t1: ids } }));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
     const mirror = startOn("pc-b", mirrorDir);
     mirror.onSettled("bot-t1", "t1");
     await mirror.idle();
     expect(generate).not.toHaveBeenCalled();
-    expect(JSON.parse(readFileSync(join(mirrorDir, "memory-pass.json"), "utf8"))).toEqual({ threads: { t1: ids } });
-    pass = startOn("pc-a", dataDir);
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
-    expect(stored()).toEqual({ threads: {} });
+    expect(generate.mock.calls[0]![0]).toContain("I use pnpm");
+    expect(generate.mock.calls[0]![0]).toContain("I prefer tabs");
+    expect(stored()).toEqual({ host: "pc-a", threads: {} });
+  });
+
+  it("starts a pass only after the settling call returns", async () => {
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    expect(generate).not.toHaveBeenCalled();
+    await pass.idle();
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 
   it("cancels an active extraction when the next turn starts and keeps its pending rows", async () => {
@@ -272,6 +278,7 @@ describe("memory pass", () => {
     generate.mockReturnValueOnce(new Promise<string>((resolve) => { finish = resolve; }));
     say("t1", "I use pnpm");
     pass.onSettled("bot-t1", "t1", true);
+    await vi.advanceTimersByTimeAsync(0);
     expect(generate).toHaveBeenCalledTimes(1);
     say("t1", "I prefer concise replies");
     pass.onTurn("bot-t1");
@@ -1102,6 +1109,8 @@ describe("memory pass filters", () => {
     expect(parseFacts("[]")).toEqual([]);
     expect(parseFacts("nothing")).toBeNull();
     expect(parseFacts('[{"fact":1}]')).toBeNull();
+    expect(parseFacts('{"error":"incomplete response","details":[]')).toBeNull();
+    expect(parseFacts('{"facts":[{"fact":"a","quote":"b"}]}')).toBeNull();
   });
 
   it("appends within the budget only", () => {

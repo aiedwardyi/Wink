@@ -220,6 +220,7 @@ export interface AntigravityComputerMcpServer {
 let mcpSharedHolders = 0;
 let mcpExclusiveHeld = false;
 const mcpWaiters: Array<{ exclusive: boolean; grant: () => void }> = [];
+const mcpYielders = new Set<() => void>();
 
 function pumpAntigravityMcpLock() {
   while (mcpWaiters.length && !mcpExclusiveHeld && !(mcpWaiters[0].exclusive && mcpSharedHolders > 0)) {
@@ -228,21 +229,29 @@ function pumpAntigravityMcpLock() {
     else mcpSharedHolders += 1;
     waiter.grant();
   }
+  if (mcpWaiters[0]?.exclusive) for (const giveWay of mcpYielders) giveWay();
 }
 
-/** Resolves with the release once granted; cancel() drops a waiter that was never granted. */
-function acquireAntigravityMcpLock(exclusive: boolean) {
+/** Resolves with the release once granted; cancel() drops a waiter that was never granted. A shared holder with onYield gives way to a waiting computer turn. */
+function acquireAntigravityMcpLock(exclusive: boolean, onYield?: () => void) {
   let cancel = () => {};
   const granted = new Promise<() => void>((resolve) => {
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
+      if (onYield) mcpYielders.delete(onYield);
       if (exclusive) mcpExclusiveHeld = false;
       else mcpSharedHolders -= 1;
       pumpAntigravityMcpLock();
     };
-    const waiter = { exclusive, grant: () => resolve(release) };
+    const waiter = {
+      exclusive,
+      grant: () => {
+        if (onYield) mcpYielders.add(onYield);
+        resolve(release);
+      },
+    };
     cancel = () => {
       const index = mcpWaiters.indexOf(waiter);
       if (index === -1) return;
@@ -691,10 +700,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         },
         turnId,
       });
+      emit({ ...base(threadId, turnId), type: "turn.started" });
       const releaseMcpLock = await mcpLock.granted;
       if (interrupted) {
         releaseMcpLock();
-        emit({ ...base(threadId, turnId), type: "turn.started" });
         settle(false, "interrupted");
         return { turnId };
       }
@@ -1129,8 +1138,6 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       }, 61 * 60_000);
       watchdog.unref?.();
 
-      emit({ ...base(threadId, turnId), type: "turn.started" });
-
       return { turnId };
     };
 
@@ -1202,14 +1209,16 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         // A shared slot, so a computer turn's box token never reaches this child.
         const signal = opts?.signal;
         signal?.throwIfAborted();
-        const lock = acquireAntigravityMcpLock(false);
+        const yielded = new AbortController();
+        const lock = acquireAntigravityMcpLock(false, () => yielded.abort());
         signal?.addEventListener("abort", lock.cancel, { once: true });
         const releaseMcpLock = await lock.granted;
         signal?.removeEventListener("abort", lock.cancel);
+        const stopped = signal ? AbortSignal.any([signal, yielded.signal]) : yielded.signal;
         let restoreMcp = () => {};
         let cwd: string | null = null;
         try {
-          signal?.throwIfAborted();
+          stopped.throwIfAborted();
           restoreMcp = mountAntigravityMcp(null, env);
           cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
           // stdin like a turn: a summary prompt on argv blows the Windows command line
@@ -1219,14 +1228,14 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             { cwd, env, stdio: ["pipe", "pipe", "pipe"] },
           );
           return await new Promise<string>((resolve, reject) => {
-            let result: { status?: unknown; response?: unknown } | null = null;
+            let result: { status?: unknown; response?: unknown; error?: unknown } | null = null;
             let failure: Error | null = null;
             const stop = (error: Error) => {
               failure ??= error;
               killCliTree(child);
             };
             const abort = () => stop(new Error("agy summary aborted"));
-            signal?.addEventListener("abort", abort, { once: true });
+            stopped.addEventListener("abort", abort, { once: true });
             const timer = setTimeout(() => stop(new Error("agy summary timed out")), opts?.timeoutMs ?? 120_000);
             timer.unref?.();
             let buf = "";
@@ -1252,11 +1261,13 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             });
             child.on("close", (code) => {
               clearTimeout(timer);
-              signal?.removeEventListener("abort", abort);
+              stopped.removeEventListener("abort", abort);
               const response = typeof result?.response === "string" ? result.response.trim() : "";
               if (failure) reject(failure);
               else if (!result) reject(textUsageError(stderr) ?? new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
-              else if (result.status !== "SUCCESS" || !response) reject(textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})`));
+              else if (result.status !== "SUCCESS" || !response) {
+                reject(textUsageError(typeof result.error === "string" ? result.error : undefined) ?? textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})`));
+              }
               else resolve(response);
             });
             child.stdin.end(antigravityStreamUserLine(prompt));

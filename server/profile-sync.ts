@@ -276,7 +276,7 @@ export function emptyProfileSyncState(): ProfileSyncState {
 
 function operationSawPrior(
   operation: ProfileSyncOperation,
-  previous: FieldVersion,
+  previous: Pick<FieldVersion, "operationId">,
   appliedOrder: Map<string, number>,
 ): boolean {
   const base = operation.baseCheckpoint;
@@ -352,6 +352,7 @@ export function applySyncOperations(
     appliedOperationIds.add(operationId);
     if (!appliedOrder.has(operationId)) appliedOrder.set(operationId, appliedOrder.size);
   };
+  const fullWrites = new Map<string, ProfileSyncOperation[]>();
   for (const operation of sorted) {
     if (appliedOperationIds.has(operation.operationId)) continue;
     const tombstone = state.tombstones[entityKey(operation)];
@@ -370,11 +371,9 @@ export function applySyncOperations(
       continue;
     }
     const changes = validateChanges(operation) ?? {};
-    // A bot's first full profile write identifies its publisher. A peer's edit can arrive before that write.
     if (operation.entity === "bot" && !Object.hasOwn(state.botOrigins, operation.entityId) &&
-        ["name", "title", "description", "color"].every((key) => Object.hasOwn(changes, key)) &&
-        (!operation.baseCheckpoint || appliedOrder.has(operation.baseCheckpoint))) {
-      state.botOrigins[operation.entityId] = operation.deviceId;
+        ["name", "title", "description", "color"].every((key) => Object.hasOwn(changes, key))) {
+      fullWrites.set(operation.entityId, [...(fullWrites.get(operation.entityId) ?? []), operation]);
     }
     for (const [field, value] of Object.entries(changes)) {
       // a bot with no picked style publishes null; it must not erase an icon another device picked
@@ -382,6 +381,12 @@ export function applySyncOperations(
       setField(state, operation, field, value, appliedOrder);
     }
     markApplied(operation.operationId);
+  }
+  // A bot's publisher is its first full write that saw no other; a skewed clock or a peer's edit can sort first.
+  for (const [botId, writes] of fullWrites) {
+    const origin = writes.find((write) => (!write.baseCheckpoint || appliedOrder.has(write.baseCheckpoint)) &&
+      !writes.some((other) => other !== write && operationSawPrior(write, other, appliedOrder)));
+    if (origin) state.botOrigins[botId] = origin.deviceId;
   }
   state.appliedOperationIds = [...appliedOperationIds].slice(-10_000);
   state.checkpoint = state.appliedOperationIds.at(-1) ?? state.checkpoint;

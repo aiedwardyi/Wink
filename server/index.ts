@@ -1847,10 +1847,7 @@ async function importProfileChanges(): Promise<void> {
     for (const [botId, syncId] of Object.entries(profileSyncSettings.botMap)) {
       const owner = Object.hasOwn(state.botOrigins, syncId) ? state.botOrigins[syncId] : undefined;
       if (!owner || !pinMemoryJobOwner(memorySyncLedger, syncId, owner)) continue;
-      if (memoryJobsHere(botId)) {
-        memoryPass.onOwnerReady(botId);
-        memorySleep.onSettled(botId);
-      }
+      if (memoryJobsHere(botId)) memorySleep.onSettled(botId);
     }
     saveMemoryLedger();
   }
@@ -2482,8 +2479,9 @@ function saveMemoryLedger(): void {
 }
 
 function memoryJobsHere(botId: string): boolean {
-  const syncId = profileSyncSettings.botMap[botId];
-  return !syncId || tidiesHere(memorySyncLedger, syncId, profileSyncSettings.deviceId);
+  const folder = profileSyncSettings.folder;
+  const syncId = chatSyncBotId(profileSyncSettings, botId);
+  return !syncId || Boolean(folder && existsSync(folder) && tidiesHere(memorySyncLedger, syncId, profileSyncSettings.deviceId));
 }
 
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
@@ -3082,20 +3080,21 @@ const memoryJobEnabled = (botId: string) => {
   const instance = bot && registry.get(bot.modelSelection.instanceId);
   return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
 };
+const ownNoteEngine = (botId: string) => registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.driverKind !== "claudeAgent";
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
   generate: noteHelper,
   enabled: memoryJobEnabled,
-  runsHere: memoryJobsHere,
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  host: deviceMachine,
 });
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
   generate: noteHelper,
-  requiresGenerator: (botId) => registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.driverKind !== "claudeAgent",
+  requiresGenerator: ownNoteEngine,
   enabled: (botId) => memoryJobEnabled(botId) && memoryJobsHere(botId),
   busy: (botId) => botHasActiveTurn(botId),
   changed: (botId) => broadcast({ kind: "memory.changed", botId }),
@@ -3920,7 +3919,7 @@ bus.subscribe((event: RuntimeEvent) => {
       limitWaits.bind(event.threadId, event.turnId);
       unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
       if (turnOwnerId) {
-        memoryPass.onTurn(turnOwnerId);
+        if (ownNoteEngine(turnOwnerId)) memoryPass.onTurn(turnOwnerId);
         memorySleep.onTurn(turnOwnerId);
       }
       break;

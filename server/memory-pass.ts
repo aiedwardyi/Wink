@@ -48,6 +48,7 @@ const factsSchema = z
   .max(20);
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
 const stateSchema = z.object({
+  host: z.string().optional(),
   threads: z.record(z.string(), z.array(z.string())),
   dropped: z.record(z.string(), droppedSchema).optional(),
 });
@@ -65,9 +66,10 @@ export interface MemoryPassDeps {
   generate(botId: string): NoteGenerator | null;
   /** The bot's Auto notes switch, read live. */
   enabled(botId: string): boolean;
-  runsHere?(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
   dataDir: string;
+  /** This PC; pending ids restored from another PC stay that PC's work. */
+  host?: string;
   now?(): number;
 }
 
@@ -75,7 +77,6 @@ export interface MemoryPass {
   /** Call when a 1:1 turn settles; `flush` runs the pass now, before the engine compacts. */
   onSettled(botId: string, threadId: string, flush?: boolean): void;
   onTurn(botId: string): void;
-  onOwnerReady(botId: string): void;
   /** Call after a config change: bots switched off drop pending ids and any running pass. */
   onConfigChanged(): void;
   /** Notes turned away because MEMORY.md was full, since the last save. */
@@ -215,7 +216,8 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
 export function parseFacts(output: string): Fact[] | null {
   const start = output.indexOf("[");
   const end = output.lastIndexOf("]");
-  if (start < 0 || end < start) return null;
+  // a list inside an object is not the reply's fact list
+  if (start < 0 || end < start || output.slice(0, start).includes("{")) return null;
   try {
     const parsed = factsSchema.safeParse(JSON.parse(output.slice(start, end + 1)));
     return parsed.success ? parsed.data : null;
@@ -623,12 +625,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
   const busy = (botId: string, key: string) => deps.busy(botId, sourceThread(key));
 
+  let claim = false;
   try {
     const state = stateSchema.parse(JSON.parse(readFileSync(statePath, "utf8")));
+    const restored = Boolean(state.host && deps.host && state.host !== deps.host);
     for (const [threadId, ids] of Object.entries(state.threads)) {
-      if (ids.length) pending.set(threadId, ids);
+      if (ids.length && !restored) pending.set(threadId, ids);
     }
     for (const [botId, record] of Object.entries(state.dropped ?? {})) dropped.set(botId, record);
+    claim = Boolean(deps.host && state.host !== deps.host);
   } catch {
     // first run or unreadable: start empty
   }
@@ -637,13 +642,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     clearTimeout(saveTimer);
     saveTimer = undefined;
     try {
-      const state: z.infer<typeof stateSchema> = { threads: Object.fromEntries(pending) };
+      const state: z.infer<typeof stateSchema> = { host: deps.host, threads: Object.fromEntries(pending) };
       if (dropped.size) state.dropped = Object.fromEntries(dropped);
       writeFileAtomic(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
     } catch (error) {
       console.warn(`[memory-pass] state save failed (${error instanceof Error ? error.name : "error"})`);
     }
   };
+  // stamp a legacy or copied file at once, so a copy taken before the next save cannot run these rows again
+  if (claim) save();
   const saveSoon = () => {
     if (saveTimer || disposed) return;
     saveTimer = setTimeout(save, SAVE_DELAY_MS);
@@ -764,7 +771,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   const run = async (botId: string, threadId: string, signal: AbortSignal) => {
     const ids = [...(pending.get(threadId) ?? [])];
-    if (!ids.length || !deps.enabled(botId) || deps.runsHere?.(botId) === false) return;
+    if (!ids.length || signal.aborted || !deps.enabled(botId)) return;
     const kept = held.get(threadId);
     if (kept) {
       land(botId, threadId, kept, readMemoryFile(botId), memoryFileRaw(botId), 0);
@@ -826,7 +833,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       trace?.finish(signal.aborted ? "cancelled" : outcome);
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
-    if (disposed || signal.aborted || !deps.enabled(botId) || deps.runsHere?.(botId) === false) return;
+    if (disposed || signal.aborted || !deps.enabled(botId)) return;
     const facts = parseFacts(output);
     if (facts === null) return;
     land(botId, threadId, { ids, facts, source: lines }, memory, raw, now() - started);
@@ -849,7 +856,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       timer.unref?.();
       const pass = { botId, controller, done: Promise.resolve() };
       running.set(threadId, pass);
-      pass.done = run(botId, threadId, controller.signal)
+      // started off the caller's stack, so a settling turn never waits on a pass
+      pass.done = Promise.resolve().then(() => run(botId, threadId, controller.signal))
         .catch((error) => console.warn(`[memory-pass] pass failed (${error instanceof Error ? error.name : "error"})`))
         .finally(() => {
           clearTimeout(timer);
@@ -920,11 +928,6 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     },
     onTurn(botId) {
       for (const pass of running.values()) if (pass.botId === botId) pass.controller.abort();
-    },
-    onOwnerReady(botId) {
-      for (const threadId of pending.keys()) {
-        if (sourceBot(threadId)?.id === botId && !timers.has(threadId)) arm(botId, threadId);
-      }
     },
     onConfigChanged() {
       if (!disposed) stop();
