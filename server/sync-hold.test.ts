@@ -603,7 +603,7 @@ describe("sends while a chat catches up", () => {
   });
 
   const copies = (["lower", "equal", "higher"] as const).flatMap((generation) => (["same", "different"] as const)
-    .flatMap((bytes) => (["stored", "later", "sealed"] as const).map((packets) => ({ generation, bytes, packets }))));
+    .flatMap((bytes) => (["stored", "later", "next", "sealed", "spanning"] as const).map((packets) => ({ generation, bytes, packets }))));
   it.each(copies)("holds a $generation generation copy with $bytes $packets packets only while a correction is due", async ({ generation, bytes, packets }) => {
     const h = await boot(true);
     h.deliverSegment();
@@ -627,17 +627,25 @@ describe("sends while a chat catches up", () => {
     // An equal or newer head cannot shrink its sealed prefix, so only an older copy carries the packets a later root supplies.
     const unsealed = packets === "later" && generation === "lower" ? { sealedThrough: 0, firstSeq: 1, versions: [...sealed.versions, ...doc.versions] } : {};
     const copy: SyncHead = structuredClone({ ...doc, generation: { lower: 110, equal: 111, higher: 112 }[generation], ...unsealed });
-    const own = structuredClone(sealed);
+    // The copy's folder seals 1-2 before the first pull or after it, or in one segment that runs past its cut.
+    const own: SyncHead = structuredClone(packets === "spanning" ? { ...sealed, lastSeq: 3, seen: { ...sealed.seen, peer: 3 }, versions: [...sealed.versions, doc.versions[0]!] } : sealed);
+    const segment = packets === "next" || packets === "sealed" || packets === "spanning";
     // SAFETY: the first version each copy carries is a text row.
-    const first = (packets === "sealed" ? own : copy).versions[0]!.value as Message;
+    const first = (segment ? own : copy).versions[0]!.value as Message;
     if (bytes === "different") first.text = "different bytes";
+    const seal = () => put(`threads-v2 (1)/bot/thread/peer/seg-1-${own.lastSeq}.json.gz`, gzipSync(JSON.stringify(own)));
     if (packets === "later") put("threads-v2 (2)/bot/thread/peer/seg-1-2.json.gz", gzipSync(JSON.stringify(sealed)));
-    if (packets === "sealed") put("threads-v2 (1)/bot/thread/peer/seg-1-2.json.gz", gzipSync(JSON.stringify(own)));
+    if (packets === "sealed" || packets === "spanning") seal();
     put(copyPath, JSON.stringify(copy));
     list(JSON.stringify(copy));
+    if (packets === "next") {
+      await h.sync.pull("thread");
+      expect(syncHold.until("thread")).toBeUndefined();
+      seal();
+    }
     const receipt = await h.send();
-    // Equal and newer copies keep base, which never rereads a segment name it has recorded.
-    if (bytes === "same" || (generation !== "lower" && packets === "sealed")) {
+    // Equal and newer copies keep base, where a segment beside an applied head never holds a send.
+    if (bytes === "same" || (generation !== "lower" && segment)) {
       expect(receipt.body.queued).not.toBe(true);
       expect(h.store.messagesFor("thread").find((row) => row.sendId === "sync-hold-send-0001")?.parentId).toBe("peer-tip");
       return;

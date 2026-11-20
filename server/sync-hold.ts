@@ -122,6 +122,12 @@ export const syncHold = {
       .all(scope.threadId).map((row) => [String(row.writer), Number(row.seq)])));
     let ahead = false;
     for (const head of heads) {
+      // A listed head this pull could not apply waits again, whatever an earlier pull found.
+      if (head.refused) {
+        hashes.delete(head.path);
+        if (peers.get(scope.threadId)?.get(`${key}/${head.path}`)?.feed === head.hash) pending.get(key)?.set(head.path, head.hash);
+        continue;
+      }
       notePeer(scope.threadId, `${key}/${head.path}`, "pull", head.hash);
       const unmet = head.lastSeq > (seen.get(head.writer) ?? 0)
         || Object.entries(head.seen).some(([peer, seq]) => seq > (seen.get(peer) ?? 0));
