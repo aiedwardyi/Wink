@@ -224,10 +224,12 @@ function stampSend(state: AppState, send: Extract<Action, { type: "send" }>, sta
   const held = send.queueId ? state.pendingQueued[threadId]?.find((entry) => entry.queueId === send.queueId) : undefined;
   const at = send.actedAt ?? held?.at ?? Math.max(threadSendClock(state, threadId, messages), stamps.times.get(threadId) ?? 0);
   const knownSeq = nextSendSeq(bot?.threadId === threadId ? bot.messages : undefined, state.acceptedSends[threadId], state.pendingQueued[threadId]);
+  // null means "first line of the chat", so an unloaded transcript sends no anchor and falls back to time order
+  const anchor = !messages || (bot?.hasMore && !messages.length) ? undefined : messages.at(-1)?.id ?? null;
   return {
     ...send,
     ...reserveSend(stamps, threadId, at, knownSeq, send.sendSeq ?? held?.sendSeq, send.after || held?.waited || held?.reason === "sync"),
-    sentAfterId: send.sentAfterId !== undefined ? send.sentAfterId : held ? held.sentAfterId : messages?.at(-1)?.id ?? null,
+    sentAfterId: send.sentAfterId !== undefined ? send.sentAfterId : held ? held.sentAfterId : anchor,
   };
 }
 

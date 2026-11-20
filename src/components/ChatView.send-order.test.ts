@@ -80,10 +80,10 @@ async function answer(sendId: string, receipt: object) {
 
 const frame = (value: object) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 
-async function mount(driverKind: string, queueing: boolean, messages: Message[], queued: object[] = [], hello: object = {}, flat = false) {
+async function mount(driverKind: string, queueing: boolean, messages: Message[], queued: object[] = [], hello: object = {}, flat = false, bot: Partial<Bot> = {}) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url) === "/api/bots?messages=200") {
-      return Response.json({ bots: [{ ...teacher, messages, activeLeafId: flat ? null : messages.at(-1)?.id }], groups: [], computerControl: {}, queued: { t1: queued } });
+      return Response.json({ bots: [{ ...teacher, messages, activeLeafId: flat ? null : messages.at(-1)?.id, ...bot }], groups: [], computerControl: {}, queued: { t1: queued } });
     }
     if (String(url) === "/api/bots/b1/messages" && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { sendId: string; sendSeq?: number; actedAt?: number; sentAfterId?: string | null };
@@ -171,6 +171,22 @@ describe("ChatView send order", () => {
     await unmount?.();
     await mount("codex", true, [peer, ...c.landed]);
     expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
+  });
+
+  it("anchors a send only to a loaded transcript", async () => {
+    await mount("codex", true, history(4), [], {}, false, { activeLeafId: "older-leaf", hasMore: true });
+    expect(host.querySelectorAll("[data-mid]")).toHaveLength(0);
+    await act(async () => store.dispatch({ type: "send", botId: "b1", text: "while paging", sendId: "s1" }));
+    await unmount?.();
+    await mount("codex", true, history(2));
+    await act(async () => store.dispatch({ type: "send", botId: "b1", threadId: "t2", text: "other thread", sendId: "s2" }));
+    await unmount?.();
+    await mount("codex", true, []);
+    await act(async () => store.dispatch({ type: "send", botId: "b1", text: "first line", sendId: "s3" }));
+    expect(bodies.get("s1")).not.toHaveProperty("sentAfterId");
+    expect(bodies.get("s2")).toMatchObject({ threadId: "t2" });
+    expect(bodies.get("s2")).not.toHaveProperty("sentAfterId");
+    expect(bodies.get("s3")).toHaveProperty("sentAfterId", null);
   });
 
   it("allocates consecutive sequences and keeps stamps through a late ping before React renders", async () => {
