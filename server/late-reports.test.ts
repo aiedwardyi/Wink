@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -136,7 +136,7 @@ it.skipIf(process.platform !== "win32")("links a cut local report to its full te
   const note = f.notes()[0]!.text!;
   const reportPath = note.split("\n").at(-1)!.replace(/^Full report: /, "");
   expect(reportPath.toLowerCase()).toMatch(/^\w:\\/);
-  expect(join(reportPath, "..").toLowerCase()).toBe(reports.toLowerCase());
+  expect(realpathSync.native(join(reportPath, "..")).toLowerCase()).toBe(realpathSync.native(reports).toLowerCase());
   expect(readFileSync(reportPath, "utf8")).toBe(text);
   expect(readdirSync(reports)).toHaveLength(100);
   expect(readdirSync(reports)).not.toContain("0000000000000000000-00000000-0000-0000-0000-000000000000.txt");
