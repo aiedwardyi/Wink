@@ -170,6 +170,9 @@ beforeAll(async () => {
         lastCredentialBody = JSON.parse(data);
         res.writeHead(200, { "content-type": "application/json" });
         if (lastCredentialBody.credentialId === "custom") {
+          if (lastCredentialBody.service.host === "api.saved.example") {
+            return res.end(JSON.stringify({ alreadyConfigured: true, label: "Saved Key" }));
+          }
           return res.end(JSON.stringify({ messageId: "msg-custom", label: "Acme" }));
         }
         if (lastCredentialBody.credentialId === "openaiImageApiKey") {
@@ -1018,6 +1021,11 @@ describe("agents-proxy MCP surface", () => {
     const call = await callTool("call_api", { credential_id: "custom:api.acme.dev", method: "GET", url: "https://api.acme.dev/v1" });
     expect(call.result.content[0].text).not.toContain("secret");
     expect(lastCallApiBody.credentialId).toBe("custom:api.acme.dev");
+  });
+
+  it("points a saved custom key at call_api without asking the user again", async () => {
+    const res = await callTool("request_credential", { credential_id: "custom", service: { name: "Saved Key", host: "api.saved.example" } });
+    expect(res.result.content[0].text).toBe("Saved Key is already configured. Use call_api with credential_id custom:api.saved.example.");
   });
 
   it("rejects credential ids outside the fixed allowlist locally", async () => {

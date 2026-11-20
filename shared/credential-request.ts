@@ -84,6 +84,10 @@ export function isCustomCredentialId(value: unknown): value is CustomCredentialI
 
 export const customCredentialId = (host: string): CustomCredentialId => `custom:${host}`;
 
+export function credentialCardTarget(card: { target: CredentialId; service?: Pick<CustomService, "host"> }): CredentialId {
+  return card.service ? customCredentialId(card.service.host) : card.target;
+}
+
 export function parseCustomService(value: unknown): { service: CustomService } | { error: string } {
   const input = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const name = typeof input.name === "string" ? input.name.trim() : "";

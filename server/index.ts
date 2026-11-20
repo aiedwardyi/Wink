@@ -19,7 +19,7 @@ import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
-import { savedKeysPrompt } from "../shared/credential-request.ts";
+import { CREDENTIAL_TARGETS, credentialCardTarget, credentialIsConfigured, customCredentialId, isCredentialTargetId, savedKeysPrompt, type CredentialConfig } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
 
 import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE, UNATTENDED_DENY_NOTE, UNCHECKED_DESKTOP_DENY_NOTE } from "./auto-approve.ts";
@@ -183,7 +183,7 @@ import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.t
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, coldLoading, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoading, coldOpenCredentialCards, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -7808,14 +7808,14 @@ const pendingSecretResumes = new Map<string, SecretResumeEntry>();
 
 function secretMessage(botId: string, threadId: string, messageId: string): Message | null {
   if (!connectorThread(botId, threadId)) return null;
-  const message = store.messagesFor(threadId).find((candidate) => candidate.id === messageId);
+  const message = store.row(threadId, messageId);
   return message?.kind === "secret" && message.secret ? message : null;
 }
 
 function markSecretResumeFailed(threadId: string, messageId: string, error: string) {
-  const message = store.messagesFor(threadId).find((candidate) => candidate.id === messageId);
+  const message = store.row(threadId, messageId);
   if (!message?.secret) return;
-  store.patchMessage(threadId, message.id, {
+  store.patchRow(threadId, message.id, {
     secret: { ...message.secret, resumed: false, error: error.slice(0, 180) },
   });
 }
@@ -7888,7 +7888,7 @@ function resumeSecretCard(botId: string, threadId: string, messageId: string, ou
   const message = secretMessage(botId, threadId, messageId);
   if (!message?.secret) return false;
   if (message.secret.resumed) return true;
-  store.patchMessage(threadId, message.id, {
+  store.patchRow(threadId, message.id, {
     secret: {
       ...message.secret,
       provided: outcome === "provided" ? true : message.secret.provided,
@@ -7899,6 +7899,23 @@ function resumeSecretCard(botId: string, threadId: string, messageId: string, ou
   });
   if (!isCallKeyCard(message.secret)) dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome });
   return true;
+}
+
+async function resumeSavedCredentialCards(saved: CredentialConfig) {
+  const targets = [
+    ...Object.keys(CREDENTIAL_TARGETS).filter(isCredentialTargetId),
+    ...Object.keys(saved.customKeys ?? {}).map(customCredentialId),
+  ];
+  if (!targets.some((target) => credentialIsConfigured(saved, target))) return;
+  for (const { threadId, messageId } of await coldOpenCredentialCards()) {
+    const message = store.row(threadId, messageId);
+    const secret = message?.secret;
+    if (!secret || secret.provided || secret.dismissed) continue;
+    const target = credentialCardTarget(secret);
+    if (!credentialIsConfigured(saved, target) || !credentialIsConfigured(cfg, target)) continue;
+    const botId = store.groupByThread(threadId) ? message.from?.botId : store.botByThread(threadId)?.id;
+    if (botId) resumeSecretCard(botId, threadId, messageId, "provided");
+  }
 }
 
 function drainSecretResumes() {
@@ -9543,6 +9560,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           key !== "features",
       );
       if (reloadKeys.length > 0) await reloadProviders();
+      try {
+        await resumeSavedCredentialCards(patch);
+      } catch (error) {
+        console.error("Credential card settlement failed", error);
+      }
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
@@ -9771,6 +9793,7 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
   reportThreads: store.bots.map((bot) => bot.threadId),
 }));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
+startupTiming.afterPaint("credentialCards", () => resumeSavedCredentialCards(cfg));
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
 startupTiming.afterPaint("probes", async () => {
