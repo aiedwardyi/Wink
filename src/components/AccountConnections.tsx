@@ -12,7 +12,7 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { ordered, rankKeys, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
+import { rankAccounts, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 import { Fold } from "./Fold";
 import { engineChecking, useEngineSignIn } from "./EngineSetup";
@@ -235,7 +235,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       <ConnectionRow mark={<ProviderBrandMark driverKind={accounts[0]!.driverKind} size={16} />}
         label={<span className="min-w-0 truncate text-[14px] font-semibold text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined} />
       <AccountGroup label={accounts[0]!.displayName} terminal={terminal}>
-        {ordered(accounts, drag.orders[base], (account) => rankKeys(account.instanceId, accounts)).map((account) => {
+        {rankAccounts(accounts, drag.orders[base], (account) => account.instanceId, accounts).map((account) => {
           const drain = account.drain;
           const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
           const hasDestination = accounts.some((other) => other !== account && accountReady(other));

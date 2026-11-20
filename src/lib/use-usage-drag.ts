@@ -31,9 +31,10 @@ function load(): Orders {
 
 type Instance = { instanceId: string; snapshot: Parameters<typeof usageIdentity>[0] };
 
-// a sign-out discards an added slot and its re-add gets a new id, so a saved place also names who the account signs in as
-export function rankKeys(id: string, instances: Instance[]): string[] {
-  const identity = usageIdentity(instances.find((each) => each.instanceId === id)?.snapshot ?? {});
+// a sign-out discards an added slot and its re-add gets a new id, so a saved place also names who the account signs in as,
+// lowercased as the server's identity is: a re-add in another case is the same account
+function rankKeys(id: string, instances: Instance[]): string[] {
+  const identity = usageIdentity(instances.find((each) => each.instanceId === id)?.snapshot ?? {})?.trim().toLowerCase();
   return identity ? [id, `identity:${identity}`] : [id];
 }
 
@@ -41,6 +42,10 @@ export function ordered<T>(items: T[], order: string[] = [], keys: (item: T) => 
   const rank = new Map(order.map((key, index) => [key, index]));
   const place = (item: T) => Math.min(order.length, ...keys(item).map((key) => rank.get(key) ?? order.length));
   return [...items].sort((a, b) => place(a) - place(b));
+}
+
+export function rankAccounts<T>(accounts: T[], order: string[] | undefined, id: (account: T) => string, instances: Instance[]): T[] {
+  return ordered(accounts, order, (account) => rankKeys(id(account), instances));
 }
 
 type Drag = {
@@ -62,13 +67,20 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
     window.dispatchEvent(new CustomEvent(CHANGE, { detail: next }));
   };
-  // an order saved by slot id alone learns who each signed-in slot is, so that slot's later re-add keeps its place
+  // a saved order binds every shown account's keys at its shown place, so a re-added slot or one never ranked keeps that place from the next start
   useEffect(() => {
     const before = latest.current;
-    const learned = engines.flatMap(({ base }) => {
-      const order = before[base] ?? [];
-      const next = named(order);
-      return next.length > order.length ? [[base, next] as const] : [];
+    const learned = engines.flatMap(({ base, accounts }) => {
+      const order = before[base];
+      if (!order?.length) return [];
+      const next = rankAccounts(accounts, order, (account) => account.id, instances).reduce((keys, account) => {
+        const own = rankKeys(account.id, instances);
+        const at = keys.findIndex((key) => own.includes(key));
+        const rest = keys.filter((key) => !own.includes(key));
+        rest.splice(at < 0 ? rest.length : at, 0, ...own);
+        return rest;
+      }, order);
+      return next.join("\n") === order.join("\n") ? [] : [[base, next] as const];
     });
     if (learned.length) save({ ...before, ...Object.fromEntries(learned) });
   });
@@ -104,7 +116,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const before = latest.current;
     const visible = new Set(ids);
     let index = 0;
-    const order = accounts ? ordered(accounts, before[drag.key], (account) => rankKeys(account.id, instances))
+    const order = accounts ? rankAccounts(accounts, before[drag.key], (account) => account.id, instances)
       .map((account) => visible.has(account.id) ? ids[index++]! : account.id) : ids;
     save({ ...before, [drag.key]: accounts ? named(order) : order });
   };
@@ -211,7 +223,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const move = (next: globalThis.PointerEvent) => {
       pointerY = next.clientY;
       if (!node) {
-        if (Math.hypot(next.clientX - startX, next.clientY - startY) < SLOP) return;
+        if (Math.hypot(next.clientX - startX, next.clientY - startY) <= SLOP) return;
         node = lift(pressed);
         if (!node || !active.current) { unbind.current(); return; }
         active.current.y = startY;

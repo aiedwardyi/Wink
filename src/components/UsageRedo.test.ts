@@ -313,7 +313,7 @@ it.each([false, true])("preserves hidden account slots after a collapsed reorder
   expect(rows()).toEqual([full[0], full[1], full[5]]);
   await key(`[data-account-row="${full[0]}"]`, "ArrowDown");
   const expected = [full[1], full[0], ...full.slice(2)];
-  expect(savedIds()).toEqual({ claude: expected, codex: ["codex"] });
+  expect(savedIds()).toEqual({ claude: expected, codex: h.board!.engines[1]!.accounts.map((account) => account.id) });
   await remount();
   await click('[data-usage-engine="claude"] [data-accounts-cap]');
   expect(rows()).toEqual(expected);
@@ -872,6 +872,12 @@ const gestures = [
   ["Use jiggle into bottom by 4px", 150, [154], 5],
   ["Use jiggle across top from inside", 46, [50, 46], 5],
   ["Use jiggle across bottom from inside", 154, [150, 154], 5],
+  ["row jiggle inside top", 22, [18], 5],
+  ["row jiggle inside bottom", 174, [178], 5],
+  ["row jiggle into top by 4px", 50, [46], 5],
+  ["row jiggle into bottom by 4px", 150, [154], 5],
+  ["row jiggle across top from inside", 46, [50, 46], 5],
+  ["row jiggle across bottom from inside", 154, [150, 154], 5],
   ["drag middle to first", 100, [2], 0],
   ["drag middle to last", 100, [198], 11],
   ["drag out of top band and back", 42, [95, 2], 0],
@@ -945,4 +951,66 @@ it.each(Object.entries(surfaces).flatMap(([name, surface]) => [[name, "saved bef
   await again();
   if (q('[data-usage-engine="claude"] [data-accounts-cap][aria-expanded="false"]')) await click('[data-usage-engine="claude"] [data-accounts-cap]');
   expect(ids()).toEqual([b, "acct-back", base, "acct-new"]);
+});
+
+const signOutAndReturn = (gone: string, back: string, email: string) => {
+  const engine = h.board!.engines[0]!;
+  engine.accounts = engine.accounts.map((account) => account.id === gone ? { ...account, id: back, main: false } : account);
+  engine.accounts.push(engine.accounts.splice(engine.accounts.findIndex((account) => account.id === back), 1)[0]!);
+  const instance = h.instances.find((each) => each.instanceId === gone)!;
+  h.instances = [...h.instances.filter((each) => each !== instance), { ...instance, instanceId: back, snapshot: { ...instance.snapshot, account: email } }];
+};
+const coldStart = async (open: () => Promise<void>) => {
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await open();
+};
+const claudeIds = () => {
+  const [base, a, b] = h.board!.engines[0]!.accounts.map((account) => account.id);
+  if (!base || !a || !b) throw new Error("the fixture has three Claude accounts");
+  return [base, a, b] as const;
+};
+
+it.each(Object.entries(surfaces))("keeps a returning account's place in the %s when its email comes back in another case", async (_, { open, again, ids }) => {
+  const [base, a, b] = claudeIds();
+  localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, base] }));
+  await open();
+  expect(ids()).toEqual([a, b, base]);
+  signOutAndReturn(a, "acct-back", "ACCOUNT-2@Example.COM");
+  await again();
+  expect(ids()).toEqual(["acct-back", b, base]);
+});
+
+it.each(Object.entries(surfaces))("shows the saved order in the %s from the first frame while a returning account is still checking", async (_, { open, again, ids }) => {
+  const [base, a, b] = claudeIds();
+  localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, base] }));
+  await open();
+  signOutAndReturn(a, "acct-back", "account-2@example.com");
+  await again();
+  expect(ids()).toEqual(["acct-back", b, base]);
+  const ready = h.instances.find((each) => each.instanceId === "acct-back")!;
+  h.instances = h.instances.map((each) => each === ready ? { ...each, snapshot: { state: "checking" } } : each);
+  await coldStart(open);
+  expect(ids()).toEqual(["acct-back", b, base]);
+  h.instances = h.instances.map((each) => each.instanceId === "acct-back" ? ready : each);
+  await again();
+  expect(ids()).toEqual(["acct-back", b, base]);
+});
+
+it.each(Object.entries(surfaces))("keeps an unranked account's place in the %s after it signs out and back in", async (_, { open, again, ids }) => {
+  const [base, a, b] = claudeIds();
+  localStorage.setItem(ORDER, JSON.stringify({ claude: [base] }));
+  await open();
+  expect(ids()).toEqual([base, a, b]);
+  signOutAndReturn(a, "acct-back", "account-2@example.com");
+  await again();
+  expect(ids()).toEqual([base, "acct-back", b]);
+});
+
+it("ranks every surface's accounts through the one identity helper", () => {
+  for (const name of ["UsageDesk", "UsageQuickView", "AccountConnections"]) {
+    const source = readFileSync(resolve(process.cwd(), `src/components/${name}.tsx`), "utf8");
+    expect(source.match(/\bordered\(.*$/gm)?.filter((line) => !line.includes("drag.orders.engines")) ?? [], name).toEqual([]);
+    expect(source, name).toMatch(/\brankAccounts\(/);
+  }
 });

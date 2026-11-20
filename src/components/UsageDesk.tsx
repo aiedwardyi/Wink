@@ -20,7 +20,7 @@ import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { setUsageMode, useUsageMode } from "@/lib/usage-preferences";
-import { ordered, rankKeys, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
+import { ordered, rankAccounts, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { useUsageSwitch } from "@/lib/use-usage-switch";
 import { EngineSignIn } from "./EngineSetup";
 import { Fold } from "./Fold";
@@ -401,7 +401,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
   const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
     checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} settings {...slots} />;
-  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => rankKeys(each.id, store.instances)), checked, t, row,
+  const capped = useCappedAccounts({ accounts: rankAccounts(engine.accounts, accountOrder, (each) => each.id, store.instances), checked, t, row,
     loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
   const head = (arrows?: ReactNode) => (
     <div data-engine-head="" {...(board.engines.filter((each) => each.accounts.length).length > 1 && reorderable(t("usage.desk.reorder", { name: label })))} className="usage-engine-head">
