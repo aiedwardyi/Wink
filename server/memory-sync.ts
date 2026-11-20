@@ -371,15 +371,15 @@ function covered(main: string, copy: string): boolean {
   return true;
 }
 
-// a set-aside copy its file already holds has nothing left to merge
-function dropMergedCopies(workspace: string, files: Iterable<string>): string[] {
+// a set-aside copy its file already holds, as published, has nothing left to merge
+function dropMergedCopies(workspace: string, texts: Map<string, string | null>): string[] {
   const dropped: string[] = [];
-  for (const file of files) {
+  for (const file of texts.keys()) {
     const stem = PARKED_FILE.exec(file)?.[1];
     const parked = stem ? readText(join(workspace, file), file) : null;
     if (!stem || !parked) continue;
     const source = stem === "MEMORY" ? MEMORY_FILE : `memory/${stem}.md`;
-    const main = readText(join(workspace, source), source);
+    const main = texts.get(source);
     if (!main) continue;
     const body = parked.startsWith(PARKED_NOTE) ? parked.slice(parked.indexOf("\n") + 1) : parked;
     if (!covered(main, body)) continue;
@@ -402,7 +402,8 @@ export function memorySyncUnchanged(folder: string, botSyncId: string, workspace
   }
 }
 
-export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: SnapshotsRead };
+// merge: what a peer's copy of a file is written as here; its versions and hash stay the peer's
+export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string; snapshots?: SnapshotsRead; merge?: (file: string, text: string | null) => string | null };
 
 /** Syncs one bot's memory through one snapshot per PC: a copy is replaced only by one that includes it, and a tie sets the losing copy aside. */
 export function syncBotMemory(
@@ -410,7 +411,7 @@ export function syncBotMemory(
   botSyncId: string,
   workspace: string,
   ledger: MemorySyncLedger,
-  { now = Date.now(), legacy, host = machine(), snapshots: read }: MemorySyncOptions = {},
+  { now = Date.now(), legacy, host = machine(), snapshots: read, merge = (_file, text) => text }: MemorySyncOptions = {},
 ): Record<string, MemorySyncResult> {
   memorySyncDir(folder, botSyncId);
   const me = deviceId(ledger, host);
@@ -486,7 +487,7 @@ export function syncBotMemory(
       if (!state || theirs === state.hash) {
         // nothing here yet, or the same text: take what it knows
         if (!state && theirs !== null) {
-          writeText(path, entry.text);
+          writeText(path, merge(file, entry.text));
           text = entry.text;
           result = "pulled";
         }
@@ -497,7 +498,7 @@ export function syncBotMemory(
       const older = covers(state.vv, entry.vv);
       if (older && !newer) continue;
       if (newer && !older) {
-        writeText(path, entry.text);
+        writeText(path, merge(file, entry.text));
         text = entry.text;
         state = bot.files[file] = { vv: entry.vv, hash: theirs, at: entry.at, by, tidied: entry.tidied };
         result = "pulled";
@@ -517,7 +518,7 @@ export function syncBotMemory(
       const ours: boolean = Boolean(state.tidied && !entry.tidied && covers(entry.vv, state.tidied));
       if (ours || (entry.tidied && !state.tidied && covers(state.vv, entry.tidied))) {
         if (ours) {
-          writeText(path, entry.text);
+          writeText(path, merge(file, entry.text));
           text = entry.text;
           result = "pulled";
         }
@@ -534,7 +535,7 @@ export function syncBotMemory(
         texts.set(parked.name, parked.body);
       }
       if (!keep) {
-        writeText(path, entry.text);
+        writeText(path, merge(file, entry.text));
         text = entry.text;
       }
       state = bot.files[file] = keep ? { ...state, vv } : { vv, hash: theirs, at: entry.at, by, tidied: entry.tidied };
@@ -557,7 +558,7 @@ export function syncBotMemory(
     results[file] = result;
     texts.set(file, text);
   }
-  for (const file of dropMergedCopies(workspace, texts.keys())) {
+  for (const file of dropMergedCopies(workspace, texts)) {
     const state = bot.files[file];
     texts.set(file, null);
     if (state?.hash) bot.files[file] = { vv: { ...state.vv, [me]: tick(ledger) }, hash: null, at: now };

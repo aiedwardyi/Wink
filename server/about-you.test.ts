@@ -1,16 +1,17 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { aboutYouPrompt, aboutYouRoutes, aboutYouSources, addToAboutYou, factsOf, removeAboutYouSource } from "./about-you.ts";
+import { aboutYouFacts, aboutYouPrompt, aboutYouRoutes, aboutYouSources, addToAboutYou, factsOf, removeAboutYouSource } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
 import { buildBrief } from "./live-call.ts";
 import { Store } from "./store.ts";
 
 const file = join(DATA_DIR, "about-you", "MEMORY.md");
+const savedFacts = () => readFileSync(file, "utf8").split("\n").filter((line) => !line.startsWith("<!--"));
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const index = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, true);
 const paste = [
@@ -35,13 +36,13 @@ describe("About You save", () => {
     const fetch = vi.spyOn(globalThis, "fetch");
     const result = addToAboutYou(paste, "2026-11-16");
     expect(result).toEqual({ source: "ChatGPT", found: 4, added: 4, duplicates: 0, hidden: 1, full: 0 });
-    expect(readFileSync(file, "utf8")).toBe([
+    expect(savedFacts()).toEqual([
       "- The user is Dana Park; call her Dana. (from ChatGPT, 2026-11-16)",
       "- Speaks Korean and English. (from ChatGPT, 2026-11-16)",
       "- Lives in Seoul (UTC+9). (from ChatGPT, 2026-11-16)",
       "- Moved to Seoul (from Busan) in 2024. (from ChatGPT, 2026-11-16)",
       "",
-    ].join("\n"));
+    ]);
     expect(readFileSync(file, "utf8")).not.toContain("hunter2");
     expect(aboutYouSources()).toEqual([{ source: "ChatGPT", facts: [
       "The user is Dana Park; call her Dana.", "Speaks Korean and English.", "Lives in Seoul (UTC+9).", "Moved to Seoul (from Busan) in 2024.",
@@ -93,6 +94,35 @@ describe("About You save", () => {
     expect(status).toBe(400);
   });
 
+  it("past the cap the prompt keeps every hand line, then the newest imports, and the Memory page lists every line", () => {
+    const old = Array.from({ length: 100 }, (_, i) => `- Old fact ${i}. (from ChatGPT, 2026-10-01)`);
+    const fresh = Array.from({ length: 105 }, (_, i) => `- New fact ${i}. (from Claude, 2026-11-16)`);
+    mkdirSync(join(DATA_DIR, "about-you"), { recursive: true });
+    writeFileSync(file, [...fresh.slice(0, 50), "- Allergic to peanuts.", ...old, "- !!!", ...fresh.slice(50), ""].join("\n"));
+    const shown = aboutYouFacts().split("\n");
+    expect(shown).toHaveLength(200);
+    expect(shown).toContain("- Allergic to peanuts.");
+    expect(shown).toContain("- !!!");
+    expect(shown.filter((line) => line.startsWith("- New fact"))).toHaveLength(105);
+    expect(shown.filter((line) => line.startsWith("- Old fact"))).toEqual(Array.from({ length: 93 }, (_, i) => `- Old fact ${i + 7}. (noted 2026-10-01)`));
+    expect(shown.indexOf("- Allergic to peanuts.")).toBe(50);
+    expect(aboutYouSources().map(({ source, facts }) => [source, facts.length])).toEqual([["Claude", 105], ["", 2], ["ChatGPT", 100]]);
+  });
+
+  it("past the byte cap the prompt skips a line that does not fit and keeps filling with ones that do", () => {
+    mkdirSync(join(DATA_DIR, "about-you"), { recursive: true });
+    const line = (fact: string) => `- ${fact} (from Atlas, 2026-11-16)`;
+    // 99 prompt lines of 240 bytes leave 240 of the 24,000
+    const filler = Array.from({ length: 99 }, (_, i) => `Filler fact ${String(i).padStart(3, "0")}. `).map((head) => head + "x".repeat(218 - head.length));
+    const big = `Big fact ${"y".repeat(222)}`;
+    writeFileSync(file, [line("Likes tea."), line(big), ...filler.map(line), "- Personal history " + "my past workplace ".repeat(1400), ""].join("\n"));
+    const shown = aboutYouFacts().split("\n");
+    expect(shown).toHaveLength(100);
+    expect(shown).toContain("- Likes tea. (noted 2026-11-16)");
+    expect(shown.some((fact) => fact.includes("Big fact") || fact.includes("Personal history"))).toBe(false);
+    expect(aboutYouSources().map(({ source, facts }) => [source, facts.length])).toEqual([["Atlas", 101], ["", 1]]);
+  });
+
   it("refuses an empty or oversized paste and saves nothing", () => {
     expect(addToAboutYou("  \n", "2026-11-16")).toEqual({ error: "empty" });
     expect(addToAboutYou("x".repeat(4 * 1024 * 1024 + 1), "2026-11-16")).toEqual({ error: "too-large" });
@@ -117,7 +147,7 @@ describe("About You dedupe", () => {
     addToAboutYou(paste, "2026-11-16");
     const again = addToAboutYou(`${paste}\n- speaks korean and english!!\n- Speaks Korean and English.\n- Plays tennis on Sundays.`.replace("ChatGPT", "Claude"), "2026-11-17");
     expect(again).toMatchObject({ source: "Claude", found: 7, added: 1, duplicates: 6 });
-    expect(readFileSync(file, "utf8").split("\n").filter(Boolean)).toHaveLength(5);
+    expect(savedFacts().filter(Boolean)).toHaveLength(5);
     expect(aboutYouSources().map((group) => [group.source, group.facts.length])).toEqual([["ChatGPT", 4], ["Claude", 1]]);
   });
 });

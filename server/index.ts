@@ -334,7 +334,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
-import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
+import { ABOUT_YOU_SYNC_ID, aboutYouDir, aboutYouPrompt, aboutYouRoutes, syncAboutYou } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
@@ -2449,8 +2449,8 @@ else void remoteRetry.refresh();
 const memorySyncs = new Map<string, Promise<void>>();
 
 // one pass per bot at a time: a pass applies against the snapshots it read
-function syncMemory(botId: string): void {
-  const run = (memorySyncs.get(botId) ?? Promise.resolve()).then(() => syncMemoryOnce(botId));
+function syncMemory(botId: string, pass = () => syncMemoryPass(botId)): void {
+  const run = (memorySyncs.get(botId) ?? Promise.resolve()).then(() => syncMemoryOnce(pass));
   memorySyncs.set(botId, run);
   void run.finally(() => { if (memorySyncs.get(botId) === run) memorySyncs.delete(botId); });
 }
@@ -2490,10 +2490,21 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   return true;
 }
 
-async function syncMemoryOnce(botId: string): Promise<void> {
+// Import Memory is shared by every bot, so it syncs once under its own id
+async function syncAboutYouPass(): Promise<boolean> {
+  const folder = profileSyncSettings.folder;
+  if (!folder || !existsSync(folder)) return false;
+  if (memorySyncUnchanged(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), memorySyncLedger)) return false;
+  const snapshots = await readMemorySnapshots(folder, ABOUT_YOU_SYNC_ID);
+  if (profileSyncSettings.folder !== folder) return false;
+  syncAboutYou(folder, memorySyncLedger, { snapshots });
+  return true;
+}
+
+async function syncMemoryOnce(pass: () => Promise<boolean>): Promise<void> {
   let ran = false;
   try {
-    ran = await syncMemoryPass(botId);
+    ran = await pass();
   } catch (error) {
     ran = true;
     console.warn("memory sync: failed", error);
@@ -2532,6 +2543,7 @@ function syncProfiles(): void | Promise<void> {
     for (const bot of store.bots) {
       if (!botHasActiveTurn(bot.id)) syncMemory(bot.id);
     }
+    syncMemory(ABOUT_YOU_SYNC_ID, syncAboutYouPass);
     profileSyncPassed = true;
     emptyExpiredTrash();
   };
@@ -2593,7 +2605,7 @@ const googleSync = createGoogleSync({
   kindsReady: () => googleKindsReady,
   pull: pullSyncedThread,
   picture: (name) => broadcast({ kind: "picture", name }),
-  memory: (botSyncId) => peerMemoryLanded(botSyncId, profileSyncSettings.botMap, (botId) => botHasActiveTurn(botId), syncMemory),
+  memory: (botSyncId) => botSyncId === ABOUT_YOU_SYNC_ID ? syncMemory(botSyncId, syncAboutYouPass) : peerMemoryLanded(botSyncId, profileSyncSettings.botMap, (botId) => botHasActiveTurn(botId), syncMemory),
   openThread: () => threadRoutes.openThread(),
 });
 const uploadCloudRoots = cloudSyncRoots();
