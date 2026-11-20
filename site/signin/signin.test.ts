@@ -733,6 +733,26 @@ describe("entering a PC's code", () => {
     expect(document.getElementById("code")?.hidden).toBe(true);
   });
 
+  it("keeps the boxes hidden while a remembered PC opens, and never draws them", async () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    expect(document.getElementById("code")?.hidden).toBe(true);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(document.getElementById("code")?.hidden).toBe(true);
+    expect(boxes()).toHaveLength(0);
+  });
+
+  it("shows the boxes when the remembered PC does not answer, and not before", async () => {
+    vi.useFakeTimers();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "timeout");
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(document.getElementById("code")?.hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(document.getElementById("code")?.hidden).toBe(false);
+    expect(boxes()).toHaveLength(6);
+  });
+
   it("is six boxes that ask the phone for a one-time code, and no Open button", () => {
     open("/signin", []);
     expect(boxes()).toHaveLength(6);

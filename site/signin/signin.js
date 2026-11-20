@@ -502,6 +502,8 @@
       go(last, "?g=1");
       return;
     }
+    // Held back until now: a remembered PC that answers opens at once, so the boxes would only flash.
+    showCode();
     // From a PC the account is usually known to Google, so try its quiet sign-in before drawing the button.
     if (pick) $("title").textContent = "Choose a PC";
     const token = await requestToken(randomNonce(), pick);
@@ -568,7 +570,6 @@
     const pc = params.get("pc");
     const m = params.get("m");
     if (pc === null && m === null) {
-      showCode();
       void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
