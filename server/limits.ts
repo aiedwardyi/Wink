@@ -45,6 +45,7 @@ export const KEPT_LIMITS: Limits = {
     "Read, Glob or Grep, at most 3": PROMPT,
   },
   "server/early-listen.ts": { MAX_QUEUED_EARLY_REQUESTS: "Crash: requests buffered before the server is up are held in memory." },
+  "server/forum-lessons.ts": { MAX_BEFORE: "Crash: bounds the memory held for unmatched Live Verify runs and in-flight predictions." },
   "server/group-routes.ts": {
     "channel name must be at most": BODY,
     "context must be at most": BODY,

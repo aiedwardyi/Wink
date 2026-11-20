@@ -6350,13 +6350,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         cwd,
       });
       });
+      bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
+      if (reservation) commit(reservation);
       if (forumOffer) {
         const accepted = forumOffer;
         forumOffer = undefined;
         setImmediate(() => { try { accepted.accept(); } catch (error) { console.warn("[forum-lesson]", error); } });
       }
-      bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
-      if (reservation) commit(reservation);
       if (holdNotes) newestPaneNoteId = undefined;
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded
@@ -6428,8 +6428,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       drainConnectorResumes();
       drainSecretResumes();
     } finally {
-      forumOffer?.release();
       releaseStarting();
+      forumOffer?.release();
       logSummaryWait();
       settleTrace?.();
       store.settleTaskPacket(threadId);

@@ -151,6 +151,7 @@ try {
   await import("../server/index.ts");
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 }, locale: "en-US",
+    reducedMotion: "reduce",
     extraHTTPHeaders: { Authorization: `Bearer ${process.env.OMB_COMMS_TOKEN}` },
   });
   await context.addInitScript(() => {
@@ -165,9 +166,12 @@ try {
     try { if ((await fetch(`${app}/api/health`)).ok) break; } catch {}
     await delay(250);
   }
+  const loaded = page.waitForResponse(response => response.ok() && new URL(response.url()).pathname === "/api/bots");
   await page.goto(app);
+  await loaded;
+  await page.locator('[data-sidebar-row-kind="bot"]').filter({ hasText: bot.name }).waitFor();
   await page.locator("[data-board-button]").first().click();
-  await page.getByText(post.title, { exact: true }).click();
+  await page.locator(`[data-board-list] [data-board-post="${post.id}"] > button`).click();
   const article = page.locator(`article[data-board-post="${post.id}"]`);
   await article.getByText("Expected", { exact: true }).waitFor();
   await article.getByText("What happened", { exact: true }).waitFor();
@@ -177,7 +181,7 @@ try {
   await page.screenshot({ path: picture, animations: "disabled" });
   const evidence = article.getByRole("button", { name: "Open Live Verify evidence" });
   await evidence.click();
-  await page.getByText(/Desktop and phone: no problems found|No problems found/i).first().waitFor();
+  await page.locator("[data-verify-card] .verify-card-title").filter({ hasText: "index.html" }).waitFor();
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ root, picture, postId: post.id, before: before.runId, after: after.runId, opens }));
   await browser.close();

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { closedAskNotes } from "./ask-user.ts";
@@ -24,9 +25,10 @@ const messaging = source.slice(source.indexOf("      const canMessage ="), sourc
 const preparation = source.slice(source.indexOf("  const folded = currentTurnEpoch"), source.indexOf("\n  const persona = [", source.indexOf("  const folded = currentTurnEpoch")));
 const marker = "const started = await dispatchAdapterTurn(threadId, async () => {";
 const start = source.indexOf(marker) + marker.length;
-const dispatch = source.slice(start, source.indexOf("\n      });\n      bindInterruptedTurn", start)).replace("(base: string)", "(base)").replace("const late: string[]", "const late");
+const dispatch = source.slice(start, source.indexOf("\n      });\n      bindInterruptedTurn", start));
 const delivery = source.slice(source.indexOf("      if (holdNotes) newestPaneNoteId = undefined;"), source.indexOf("      store.markReactionsDelivered", start));
-const runDispatch = new Function("scope", `with (scope) { return (async () => {${messaging}\n${preparation}\nconst started = await (async () => {${dispatch}})();\n${delivery}\nreturn started;})(); }`);
+const script = `with (scope) { return (async () => {${messaging}\n${preparation}\nconst started = await (async () => {${dispatch}})();\n${delivery}\nreturn started;})(); }`;
+const runDispatch = new Function("scope", ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -207,7 +209,7 @@ describe("summary grace dispatch", () => {
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
-        leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
+        leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false, forumOffer: undefined,
       };
       const dispatched = runDispatch(scope);
       await vi.advanceTimersByTimeAsync(0);
