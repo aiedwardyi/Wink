@@ -191,9 +191,9 @@ export function botLines(messages: readonly Message[], ids: readonly string[], o
 const botPrompt = ({ commits, reports, open }: BotLines) => [
   "",
   "BOT LINES are the bot's own words at the end of its replies:",
-  "- promise: an unfinished task the bot said it will do later, on a time or trigger. fact: that task in the bot's first-person words and language, like \"I'll check laptop sync once you're on it\", 80 characters max; quote: its exact words from BOT LINES.",
-  "- Not a promise: an offer waiting on the user's yes, a rule for how it will behave, work done in the same lines, or one OPEN PROMISES has.",
-  ...(open.length ? ["- done: an OPEN PROMISES item BOT LINES say is finished; fact: its id; quote: the words that say so."] : []),
+  "- kind \"promise\": an unfinished task the bot said it will do later, on a time or trigger. fact: that task in the bot's first-person words and language, like \"I'll check laptop sync once you're on it\", 80 characters max; quote: its exact words from BOT LINES.",
+  "- Not a promise: an offer waiting on the user's yes, a rule for how it will behave, work done in the same lines, or one OPEN PROMISES already has, even reworded.",
+  ...(open.length ? ["- kind \"done\": an OPEN PROMISES item BOT LINES say is finished; fact: its id; quote: the words that say so."] : []),
   "",
   "BOT LINES:",
   "<bot_lines>",

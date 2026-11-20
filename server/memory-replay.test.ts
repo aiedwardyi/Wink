@@ -24,8 +24,8 @@ const eager = (careful: boolean): NoteGenerator => async (prompt) => {
   const open = [...(/<promises>\n([\s\S]*?)\n<\/promises>/.exec(prompt)?.[1] ?? "").matchAll(/^(A\d+): (.*)$/gm)];
   return JSON.stringify(lines.flatMap((line) => {
     if (open.length && /\bchecked\b/i.test(line)) return [{ kind: "done", fact: open[0]![1], quote: line }];
-    // restates the open promise in its words, so the asks list merges it
-    if (open.length) return [{ kind: "promise", fact: open[0]![2], quote: line }];
+    // files a repeat in the repeat's own words, as the real note-taker did on 11-20
+    if (open.length) return [{ kind: "promise", fact: line, quote: line }];
     if (careful) return [];
     return [{ kind: "promise", fact: line.slice(0, 80), quote: line }];
   }));

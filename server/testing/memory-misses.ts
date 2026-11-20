@@ -34,8 +34,8 @@ export const MISSES: Miss[] = [
     promise: "Once your laptop is on, I'll check the conversation order there myself.",
     guard: "code",
     probe: "btw i turned on my laptop, did you want to check the conversation thing u mentioend",
-    kept: /conversation|chat order|order/i,
-    lost: /which one did i mention|can't find|cannot find|never (?:said|mentioned)|didn't (?:say|mention)/i,
+    kept: /conversation order|chat order|ssh\b.*\blaptop/i,
+    lost: /lost what|don't have it|which one did i mention|can't find|cannot find|never (?:said|mentioned)|didn't (?:say|mention)/i,
   },
   {
     id: "release-line",

@@ -137,6 +137,14 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
 }
 
 /** Files the bot's own promises as open asks and closes the promise ids it finished; null when nothing changes. An open ask with the same words is a repeat. */
+// the note-taker rewords a repeat, so a promise sharing most of its words with an open one is that one
+const gist = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{4,}|[가-힣]{2,}/gu) ?? []);
+function samePromise(a: string, b: string): boolean {
+  const [x, y] = [gist(a), gist(b)];
+  const least = Math.min(x.size, y.size);
+  return least >= 3 && [...x].filter((word) => y.has(word)).length >= 0.8 * least;
+}
+
 export function fileBotPromises(book: AskBook | undefined, promises: readonly string[], done: readonly string[], now: number): SavedAsks | null {
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
   let lastAskId = lastAskIdOf(book);
@@ -148,7 +156,7 @@ export function fileBotPromises(book: AskBook | undefined, promises: readonly st
   }
   for (const promise of promises) {
     const ask = clip(promise, ASK_LIMITS.ask);
-    if (!ask || asks.some((item) => isOpenAsk(item) && words(item.ask) === words(ask))) continue;
+    if (!ask || asks.some((item) => isOpenAsk(item) && (words(item.ask) === words(ask) || (item.kind === "promise" && samePromise(item.ask, ask))))) continue;
     lastAskId += 1;
     asks.push({ id: `A${lastAskId}`, ask, status: "open", kind: "promise", at: now, changedAt: now });
     changed = true;
@@ -209,10 +217,9 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   const waiting = ordered.length - shown.length;
   const rotated = waiting ? ` ${waiting} more wait for the next turn, least recently shown first.` : "";
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
-  const promises = shown.some((ask) => ask.kind === "promise") ? " A promise is your own word to the user: keep it, and close it once done or moot." : "";
   const back = Math.min(...parked.map((ask) => ask.until!));
   return [
-    `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}${promises}]`,
+    `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
     ...shown.map(line),
     ...(parked.length ? [`${parked.length} parked, next back ${day(back)}`] : []),
   ].join("\n");
