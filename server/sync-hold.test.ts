@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDrive } from "./testing/fake-drive.ts";
@@ -500,6 +501,39 @@ describe("sends while a chat catches up", () => {
     h.drive.add(encodeDrivePath(h.headPath), { ph: drivePathHash(h.headPath) }, Buffer.from(h.head), [h.drive.root().id]);
     await h.google.kick();
     expect((await h.send("first listing", "sync-hold-first-listing-0001")).body.queued).not.toBe(true);
+  });
+
+  it("starts at once after a restart when an idle chat lists only this PC's head", async () => {
+    await boot(true);
+    const h = await boot(true);
+    const { syncHold } = await import("./sync-hold.ts");
+    const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
+    syncHold.feed(h.folder, new Map([[`threads-v2/bot/thread/${h.own}/head.json`, [{
+      id: "own", name: "head.json", md5Checksum: "a".repeat(32), createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
+    }]]]), ids);
+    expect((await h.send()).body.queued).not.toBe(true);
+    expect(h.startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts at once after a restart when Drive still lists an older copy of an applied peer head", async () => {
+    const first = await boot(true);
+    first.deliverSegment();
+    first.deliverHead();
+    await first.sync.pull("thread");
+    const stalePath = "threads-v2 (1)/bot/thread/peer/head.json";
+    const stale = gunzipSync(readFileSync(join(first.folder, "threads-v2/bot/thread/peer/seg-1-2.json.gz")));
+    mkdirSync(dirname(join(first.folder, stalePath)), { recursive: true });
+    writeFileSync(join(first.folder, stalePath), stale);
+    const h = await boot(true);
+    const { syncHold } = await import("./sync-hold.ts");
+    const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
+    const listed = (id: string, bytes: string | Buffer) => [{
+      id, name: "head.json", md5Checksum: createHash("md5").update(bytes).digest("hex"),
+      createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
+    }];
+    syncHold.feed(h.folder, new Map([[h.headPath, listed("head", h.head)], [stalePath, listed("stale", stale)]]), ids);
+    expect((await h.send()).body.queued).not.toBe(true);
+    expect(h.startTurn).toHaveBeenCalledTimes(1);
   });
 
   it("drops a stale listed hash once the listing matches the applied head", async () => {

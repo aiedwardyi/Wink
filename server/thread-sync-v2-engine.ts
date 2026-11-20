@@ -762,10 +762,10 @@ export function createSyncEngine(input: SyncOptions) {
             result.rejected++;
             continue;
           }
-          if (ingest(scope, writer, head, bytes, segment, result)) {
-            if (segment) sql("INSERT OR IGNORE INTO sync_v2_files VALUES (?, ?, ?)").run(scope.threadId, writer, name);
-            else notePulledHead(result, root, scope, head, bytes);
-          }
+          const ingested = ingest(scope, writer, head, bytes, segment, result);
+          if (segment && ingested) sql("INSERT OR IGNORE INTO sync_v2_files VALUES (?, ?, ?)").run(scope.threadId, writer, name);
+          // A rejected older copy still counts as read, or the send hold waits on a head it can never apply.
+          else if (!segment) notePulledHead(result, root, scope, head, bytes);
         }
       }
     }
