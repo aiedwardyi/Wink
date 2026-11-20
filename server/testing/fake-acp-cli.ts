@@ -493,12 +493,18 @@ function handle(msg: any) {
         }
         break;
       }
+      if (mode === "hang" && runningPromptId !== undefined) {
+        // a send during the hung prompt is a steer: drop it the way Grok does, or the sender waits on it forever
+        result(msg.id, { stopReason: "cancelled", _meta: { promptId: "injected-1", completionKind: "removedFromQueue" } });
+        break;
+      }
       if (process.env.FAKE_ACP_DUMP) {
         dumpState.prompt = msg.params?.prompt;
         writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
       }
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt
+        runningPromptId = msg.id;
         setInterval(() => {}, 1_000);
         return;
       }
@@ -810,6 +816,7 @@ function handle(msg: any) {
         result(runningPromptId, { stopReason: "cancelled", _meta: { cancellationCategory: "UserRequested" } });
         runningPromptId = undefined;
       }
+      if (mode === "hang") runningPromptId = undefined;
       break;
     default:
       recordMethod(`${msg.method}.error`);
