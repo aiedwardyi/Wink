@@ -423,10 +423,33 @@ export function createBoard(options: BoardOptions) {
           candidates.set(post.id, held ? mergeBoardPosts(held, incoming) : incoming);
         }
       }
+      const moved = new Map<string, BoardPost[]>();
+      const stays = new Set<string>();
+      for (const post of candidates.values()) {
+        const from = posts().get(post.id)?.parent_id;
+        if (!from || tombstones.has(post.id)) continue;
+        if (from === post.parent_id) stays.add(from);
+        else {
+          const siblings = moved.get(from);
+          if (siblings) siblings.push(post);
+          else moved.set(from, [post]);
+        }
+      }
       for (const [id, tombstone] of tombstones) {
         const post = candidates.get(id);
         const replyParent = post && ownReply(post) ? post.parent_id : null;
-        if (drop(id, tombstone ?? (replyParent ? { parent_id: replyParent } : null))) pulled++;
+        const kind = tombstone ?? (replyParent ? { parent_id: replyParent } : null);
+        const lifted = kind?.parent_id ? moved.get(id) : undefined;
+        // the replies the deleting PC moved up land before the post leaves, so none names a missing post
+        if (lifted) {
+          // tombstone first lets a restart finish the delete, but it would also lift a reply this PC left under the post
+          if (!stays.has(id)) keep(id, kind);
+          for (const child of lifted) {
+            write(child);
+            pulled++;
+          }
+        }
+        if (drop(id, kind)) pulled++;
         candidates.delete(id);
       }
       pulled += prune(candidates);

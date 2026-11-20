@@ -469,6 +469,73 @@ describe("a delete a restart cuts short", () => {
     const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => expect(settled(p), at).toEqual(want));
     expect(cuts).toBeGreaterThan(2);
   });
+
+  it("a sync cut while it takes another PC's reply delete boots without Drive to that delete whole or not at all", () => {
+    const pair = () => {
+      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+      const a = home("pc-a");
+      const b = home("pc-b");
+      const stuck = a.board.post(STUCK);
+      const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+      const under = a.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+      for (const board of [a.board, b.board, a.board, b.board]) board.sync(folder, ids);
+      a.clock.at = 2_000;
+      // A moves the reply under it up to the root
+      a.board.remove(reply.id);
+      a.board.sync(folder, ids);
+      return { folder, a, b, stuck, reply, under };
+    };
+    const settled = (p: ReturnType<typeof pair>) => {
+      const b = restart(p.b.dir, "pc-b");
+      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
+      return [listed(p.a.board), listed(b)];
+    };
+    const before = pair();
+    const kept = listed(before.b.board);
+    expect(kept).toEqual([[before.stuck.id, null], [before.reply.id, before.stuck.id], [before.under.id, before.reply.id]]);
+    const whole = pair();
+    whole.b.board.sync(whole.folder, ids);
+    const deleted = listed(restart(whole.b.dir, "pc-b"));
+    expect(deleted).toEqual([[whole.stuck.id, null], [whole.under.id, whole.stuck.id]]);
+    const want = settled(whole);
+    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => {
+      const boot = listed(restart(p.b.dir, "pc-b"));
+      expect([kept, deleted], at).toContainEqual(boot);
+      expect(listed(restart(p.b.dir, "pc-b")), at).toEqual(boot);
+      expect(settled(p), at).toEqual(want);
+    });
+    expect(cuts).toBeGreaterThan(2);
+  });
+
+  it("a sync cut while it takes another PC's reply delete with an offline answer under it too never leaves the moved reply under a missing post", () => {
+    const pair = () => {
+      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+      const a = home("pc-a");
+      const b = home("pc-b");
+      const stuck = a.board.post(STUCK);
+      const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+      const under = a.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+      for (const board of [a.board, b.board, a.board, b.board]) board.sync(folder, ids);
+      b.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome again.", source_ref: "tool:tc:2" });
+      a.clock.at = 2_000;
+      a.board.remove(reply.id);
+      a.board.sync(folder, ids);
+      return { folder, a, b, under };
+    };
+    const settled = (p: ReturnType<typeof pair>) => {
+      const b = restart(p.b.dir, "pc-b");
+      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
+      return [listed(p.a.board), listed(b)];
+    };
+    const whole = pair();
+    whole.b.board.sync(whole.folder, ids);
+    const want = settled(whole);
+    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => {
+      for (const boot of [restart(p.b.dir, "pc-b"), restart(p.b.dir, "pc-b")]) expect(boot.get(boot.get(p.under.id)!.parent_id!), at).toBeDefined();
+      expect(settled(p), at).toEqual(want);
+    });
+    expect(cuts).toBeGreaterThan(2);
+  });
 });
 
 describe("a post written after its twin was deleted", () => {
