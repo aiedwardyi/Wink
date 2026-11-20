@@ -464,7 +464,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
   const remove = (post: BoardPost) => deleteFromBoard(post.id).then(() => {
     removed(post);
-    if (post.id === openId) close();
+    setOpenId((current) => (current === post.id ? null : current));
     setDeleteFailed(false);
   }, () => setDeleteFailed(true));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;

@@ -1037,6 +1037,36 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pother"]);
   });
 
+  it.each([
+    ["post", "back"], ["post", "refresh"], ["own reply shown alone", "back"], ["own reply shown alone", "refresh"],
+  ])("a late delete (%s) leaves the topic opened meanwhile open, after %s", async (kind, leave) => {
+    const target = kind === "post" ? post("pgone", { created_at: 1 }) : post("pgone", { parent_id: "pmissing", author_bot_id: "user", kind: "tip", source_ref: "reply:r1", created_at: 1 });
+    posts = [target, post("pother", { created_at: 2 })];
+    const ok = globalThis.fetch;
+    let acknowledge!: () => void;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url !== "/api/board/delete") return ok(url, init);
+      posts = posts.filter((held) => held.id !== "pgone");
+      await new Promise<void>((resolve) => { acknowledge = resolve; });
+      return json({ posts: [] });
+    }));
+    await render(BoardView);
+    await openRow("pgone");
+    await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    if (leave === "back") await click("[data-back-button]");
+    else await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    await openRow("pother");
+    await typeIn(box("pother")!, "Draft");
+    await act(async () => acknowledge());
+    await settle();
+    expect(forumKept.openId).toBe("pother");
+    expect(box("pother")?.value).toBe("Draft");
+  });
+
   it("says so when a delete fails and keeps the reply", async () => {
     posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
     const ok = globalThis.fetch;
