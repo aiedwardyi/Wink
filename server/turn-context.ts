@@ -522,7 +522,7 @@ function replayPreamble(input: TurnContextInput): string {
 
 const MEMORY_FOLDERS = 4;
 const MEMORY_NAMES = 2;
-const DOC_PATH = /(?:[A-Za-z]:)?[\w.~\\/-]*\.(?:md|txt|docx?|pdf)\b/gi;
+const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?![\p{L}\p{M}\p{N}\p{Pc}])/giu;
 // a quoted path may hold spaces, so it is read whole before DOC_PATH
 const QUOTED_DOC_PATH = /(["'`])([^"'`\n]+\.(?:md|txt|docx?|pdf))\1/gi;
 const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
@@ -530,6 +530,7 @@ const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
 function localPath(ref: string, cwd: string | undefined): string | null {
   const path = ref.trim();
   if (!path || /^\w{2,}:\/\//.test(path)) return null;
+  if (/^~[\\/]/.test(path)) return join(homedir(), path.slice(2));
   if (isAbsolute(path)) return resolve(path);
   return cwd ? resolve(cwd, path) : null;
 }
@@ -572,19 +573,22 @@ export function memoryBlock(input: MemoryBlockInput): string {
     newest.delete(path);
     newest.set(path, true);
   }
-  const folders = new Map<string, string[]>();
+  const folders = new Map<string, { count: number; names: string[] }>();
   for (const path of [...newest.keys()].reverse()) {
-    const names = folders.get(dirname(path)) ?? [];
-    folders.set(dirname(path), [...names, basename(path)]);
+    const dir = dirname(path);
+    const folder = folders.get(dir) ?? { count: 0, names: [] };
+    folder.count++;
+    if (folder.names.length < MEMORY_NAMES) folder.names.push(basename(path));
+    folders.set(dir, folder);
   }
-  const shown = [...folders].slice(0, MEMORY_FOLDERS).map(([dir, names]) => {
+  const shown = [...folders].slice(0, MEMORY_FOLDERS).map(([dir, { count, names }]) => {
     const label = input.cwd && resolve(input.cwd) === dir ? "task folder" : [input.cwd, input.home ?? homedir()].map((root) => root ? relative(root, dir) : "")
       .map((inside, index) => inside && !inside.startsWith("..") && !isAbsolute(inside) ? (index ? join("~", inside) : inside) : "")
       .find(Boolean) ?? dir;
-    return `${label} ${names.length} (${names.slice(0, MEMORY_NAMES).join(", ")})`;
+    return `${label} ${count} (${names.join(", ")})`;
   });
   const rest = [...folders.values()].slice(MEMORY_FOLDERS);
-  if (rest.length) shown.push(`+${rest.length} older folders (${rest.flat().length} files)`);
+  if (rest.length) shown.push(`+${rest.length} older folders (${rest.reduce((total, folder) => total + folder.count, 0)} files)`);
   const plans = input.plans ?? [];
   const lines = [
     ...(plans.length ? [`Read first, your plan: ${plans.join("; ")}`] : []),

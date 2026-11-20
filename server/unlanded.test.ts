@@ -30,7 +30,7 @@ function fakeGh(views: ReadonlyMap<string, View>, compare: ReadonlyMap<string, s
       if (status.startsWith("!")) throw new Error(status.slice(1));
       return `${status}\n`;
     }
-    const view = views.get(args[2]!);
+    const view = views.get(`${args[4]}#${args[2]}`) ?? views.get(args[2]!);
     if (!view) throw new Error("no pull requests found");
     return JSON.stringify({ ...view, url: `https://github.com/${view.repo ?? "aiedwardyi/Wink"}/pull/${view.number}` });
   };
@@ -139,7 +139,7 @@ describe("createUnlandedWork", () => {
     expect(work.work("t-a")).toBe("");
     await work.refresh("bot-1", "t-a");
     const asked = calls.length;
-    expect(work.work("t-a")).toBe("Your work, newest 4: fix/launch-post abc1234 (unfinished branch, no PR); #1640 fix: tell bots what has not landed (open PR); #1641 feat: merged and installed (merged)");
+    expect(work.work("t-a")).toBe("Your work, newest 4: fix/launch-post abc1234 (unfinished branch, no PR); aiedwardyi/wink#1640 fix: tell bots what has not landed (open PR); aiedwardyi/wink#1641 feat: merged and installed (merged)");
     expect(calls.length).toBe(asked);
   });
 
@@ -149,6 +149,17 @@ describe("createUnlandedWork", () => {
     const work = createUnlandedWork({ reportsBack: () => reports.toReversed(), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     await work.refresh("bot-1", "t-a");
     expect(work.work("t-a")).toBe("Your work, newest 4: fix/b5 abc1234 (unfinished branch, no PR); fix/b4 abc1234 (unfinished branch, no PR); fix/b3 abc1234 (unfinished branch, no PR); fix/b2 abc1234 (unfinished branch, no PR); +2 older");
+  });
+
+  it("identifies work with the same PR number in different repositories", async () => {
+    const { gh } = fakeGh(new Map([
+      ["me/site#7", { number: 7, title: "fix: title", state: "OPEN", repo: "me/site" }],
+      ["me/app#7", { number: 7, title: "fix: title", state: "OPEN", repo: "me/app" }],
+    ]));
+    const reports = [report(NOW, "https://github.com/me/site/pull/7 and https://github.com/me/app/pull/7")];
+    const work = createUnlandedWork({ reportsBack: () => reports, repoDir: () => undefined, version: "", gh, now: () => NOW });
+    await work.refresh("bot-1", "t-a");
+    expect(work.work("t-a")).toBe("Your work, newest 4: me/site#7 fix: title (open PR); me/app#7 fix: title (open PR)");
   });
 
   it("lists what is open or not in the installed build and drops merged+installed and closed", async () => {

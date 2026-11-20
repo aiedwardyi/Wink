@@ -38,6 +38,7 @@ const MARKETING = {
   threadId: "compaction-marketing-thread",
   fatSession: "marketing-fat-session",
 };
+const ENGINE_SWITCH = { botId: "engine-switch-bot", threadId: "engine-switch-thread" };
 const CLAUDE_FAT_STOP = {
   botId: "compaction-claude-fat-stop-bot",
   threadId: "compaction-claude-fat-stop-thread",
@@ -63,6 +64,7 @@ function claudeResumeBot(input: {
   name: string;
   color: string;
   session: string;
+  previousSelection?: { instanceId: string; model: string };
   /** a spare task whose fresh turn shows the system text the server sends this bot */
   probeThreadId?: string;
 }) {
@@ -85,8 +87,8 @@ function claudeResumeBot(input: {
       resumeCursors: { claude: input.session },
       // a prior turn certified this session with no summary
       resumeSeed: { instanceId: "claude", cursor: input.session, compactionId: null },
-      lastInstanceId: "claude",
-      lastModel: "claude-fake",
+      lastInstanceId: input.previousSelection?.instanceId ?? "claude",
+      lastModel: input.previousSelection?.model ?? "claude-fake",
     }, ...(input.probeThreadId
       ? [{ threadId: input.probeThreadId, title: "Probe", createdAt: 2, resumeCursors: {} }]
       : [])],
@@ -287,6 +289,14 @@ describe("context compaction e2e", () => {
         name: "Marketing",
         color: "pink",
         session: MARKETING.fatSession,
+      }),
+      claudeResumeBot({
+        id: ENGINE_SWITCH.botId,
+        threadId: ENGINE_SWITCH.threadId,
+        name: "Engine switch",
+        color: "pink",
+        session: "older-claude-session",
+        previousSelection: { instanceId: "codex", model: "gpt-fake-default" },
       }),
       claudeResumeBot({
         id: CLAUDE_FAT_STOP.botId,
@@ -650,7 +660,7 @@ describe("context compaction e2e", () => {
     const slimMessages = [
       { id: "s0", at: 1, parentId: null, role: "user", kind: "text", text: "say hi" },
       { id: "st0", at: 2, parentId: "s0", role: "bot", kind: "activity", tool: { name: "Read: readme.md", ok: true } },
-      { id: "st1", at: 3, parentId: "st0", role: "bot", kind: "activity", tool: { name: "Read: note.md", ok: true } },
+      { id: "st1", at: 3, parentId: "st0", role: "bot", kind: "activity", tool: { name: "Bash", ok: true, made: [join(home, "launch", "real-shots", "cover.png")] } },
       { id: "sa", at: 4, parentId: "st1", role: "bot", kind: "text", text: "hello" },
     ];
     writeFileSync(join(dataDir, `messages-${CLAUDE_FAT.threadId}.json`), JSON.stringify({
@@ -661,7 +671,7 @@ describe("context compaction e2e", () => {
       activeLeafId: "fa",
       messages: fatMessages,
     }));
-    for (const threadId of [CLAUDE_SLIM.threadId, CLAUDE_UPDATE_DAY.threadId]) {
+    for (const threadId of [CLAUDE_SLIM.threadId, CLAUDE_UPDATE_DAY.threadId, ENGINE_SWITCH.threadId]) {
       writeFileSync(join(dataDir, `messages-${threadId}.json`), JSON.stringify({
         activeLeafId: "sa",
         messages: slimMessages,
@@ -913,6 +923,27 @@ describe("context compaction e2e", () => {
     expect(next.text).not.toContain("The conversation so far");
   }, 60_000);
 
+  it("keeps saved files on an engine switch and the next resumed turn", async () => {
+    const send = async (text: string) => {
+      expect((await api("POST", `/api/bots/${ENGINE_SWITCH.botId}/messages`, { text })).status).toBe(202);
+      await waitFor(async () => (await botById(ENGINE_SWITCH.botId))?.busy === false);
+    };
+    rmSync(claudeDumpPath, { force: true });
+    await send("continue with Claude");
+    const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
+    expect(dump.argv).not.toContain("--resume");
+    const fresh = String(dump.prompt.message.content);
+    expect(fresh).toContain("The conversation so far");
+    expect(fresh).not.toContain("Wink compacted this conversation");
+    await send("what should I do next?");
+    const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
+      .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
+      .filter((line) => line.pid === dump.pid).at(-1)!;
+    expect(next.text).toContain("what should I do next?");
+    expect(next.text).not.toContain("The conversation so far");
+    expect([fresh, next.text].map((prompt) => prompt.includes("real-shots 1 (cover.png)"))).toEqual([true, true]);
+  }, 30_000);
+
   it("still --resumes Stop recovery on an uncompacted fat Claude soak", async () => {
     const system = await seedSessionSystem(CLAUDE_FAT_STOP, CLAUDE_FAT_STOP.fatSession);
     rmSync(claudeDumpPath, { force: true });
@@ -956,6 +987,7 @@ describe("context compaction e2e", () => {
     expect(dump.argv).toContain("--resume");
     expect(dump.argv).toContain(CLAUDE_SLIM.session);
     const prompt = typeof dump.prompt === "string" ? dump.prompt : JSON.stringify(dump.prompt);
+    expect(prompt).not.toContain("[Wink memory");
     expect(prompt).not.toContain("fresh provider session");
     expect(prompt).not.toContain("Wink compacted this conversation");
     expect(dump.systemPrompt).toBe(system);

@@ -1,4 +1,4 @@
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -1330,6 +1330,26 @@ describe("fresh-session memory block", () => {
 
   it("pins a quoted plan file name that holds spaces", () => {
     expect(planFiles({ goal: `Follow "Launch Plan.md" step by step`, plan: [], artifacts: [] }, cwd)).toEqual([join(cwd, "Launch Plan.md")]);
+  });
+
+  it("pins unquoted Unicode paths from the goal and plan", () => {
+    const document = join(home, "準備", "계획.md");
+    const relative = join("資料", "発売.txt");
+    expect(planFiles({
+      goal: `Follow ${document} and ignore https://example.com/계획.md`,
+      plan: [{ step: `Open ${relative}`, status: "active" }],
+    }, cwd)).toEqual([document, join(cwd, relative)]);
+  });
+
+  it("expands home-relative plan files with or without a task folder", () => {
+    const record = {
+      goal: "Follow ~/plans/release.md",
+      plan: [{ step: 'Open "~/More Plans/brief.txt"', status: "active" as const }],
+      artifacts: [{ ref: "~/plans/checklist.txt", label: "Release plan" }],
+    };
+    const expected = [join(homedir(), "plans", "checklist.txt"), join(homedir(), "More Plans", "brief.txt"), join(homedir(), "plans", "release.md")];
+    expect(planFiles(record, cwd)).toEqual(expected);
+    expect(planFiles(record)).toEqual(expected);
   });
 
   it("pins a plan the record moved to its sidecar", () => {

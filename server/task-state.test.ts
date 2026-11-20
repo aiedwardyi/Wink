@@ -694,6 +694,19 @@ describe("artifact overflow", () => {
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "task-overflow-")); });
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
+  it("skips reading the sidecar when all artifacts fit", () => {
+    const old = JSON.stringify({ ref: "older/plan.md", label: "Saved plan" });
+    writeFileSync(join(dir, "thread-1.artifacts.jsonl"), old + "\n");
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      writeTaskResumePacket(packet(), { dir });
+      expect(parse).not.toHaveBeenCalledWith(old);
+    } finally {
+      parse.mockRestore();
+    }
+    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual([JSON.parse(old)]);
+  });
+
   it("moves artifacts past the cap to the overflow file instead of deleting them", () => {
     const shots = Array.from({ length: 25 }, (_, index) => ({ ref: join(dir, "shots", `shot-${index}.png`), label: `Shot ${index}` }));
     const saved = writeTaskResumePacket(packet({ artifacts: shots }), { dir });

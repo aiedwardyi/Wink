@@ -187,7 +187,7 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
       const id = pr ? `${pr.repo}#${pr.number}` : `branch ${ref.branch}`;
       if (!work.has(id) && (pr || entry.noPr)) {
         const state = !entry.pr ? "merged" : entry.pr.state.startsWith("merged") ? entry.pr.state : "open PR";
-        work.set(id, { at: ref.at, text: pr ? `#${pr.number} ${clip(pr.title)} (${state})` : `${ref.branch}${ref.sha ? ` ${ref.sha.slice(0, 7)}` : ""} (unfinished branch, no PR)` });
+        work.set(id, { at: ref.at, text: pr ? `${id} ${clip(pr.title)} (${state})` : `${ref.branch}${ref.sha ? ` ${ref.sha.slice(0, 7)}` : ""} (unfinished branch, no PR)` });
       }
       if (!entry.pr) continue;
       const seen = found.get(id);

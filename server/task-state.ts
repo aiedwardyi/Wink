@@ -231,13 +231,18 @@ function sealed(packet: TaskResumePacket, dir: string): { path: string; serializ
 
 /** Artifacts the cap or byte budget cut from the record go here instead of being lost. */
 function overflowArtifacts(path: string, given: TaskResumePacket["artifacts"], kept: TaskResumePacket["artifacts"]): void {
-  const seen = new Set([...kept, ...overflowOf(path)].map((item) => item.ref));
-  const lines: string[] = [];
-  for (const item of given) {
+  const keptRefs = new Set(kept.map((item) => item.ref));
+  const omitted = given.flatMap((item) => {
     const ref = clean(item.ref, LIMITS.ref);
-    if (!ref || seen.has(ref)) continue;
+    return ref && !keptRefs.has(ref) ? [{ ref, label: item.label }] : [];
+  });
+  if (!omitted.length) return;
+  const seen = new Set(overflowOf(path).map((item) => item.ref));
+  const lines: string[] = [];
+  for (const { ref, label } of omitted) {
+    if (seen.has(ref)) continue;
     seen.add(ref);
-    lines.push(JSON.stringify({ ref, label: clean(item.label, LIMITS.label) || ref }));
+    lines.push(JSON.stringify({ ref, label: clean(label, LIMITS.label) || ref }));
   }
   if (!lines.length) return;
   const added = `${lines.join("\n")}\n`;

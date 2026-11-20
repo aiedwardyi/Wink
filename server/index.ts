@@ -1336,6 +1336,7 @@ const wireTask = ({
   lastInstanceId: _lastInstanceId,
   lastModel: _lastModel,
   providerSessionBoundId: _providerSessionBoundId,
+  hasFreshProviderSession: _hasFreshProviderSession,
   resumeSeed: _resumeSeed,
   paneNotesDeliveredId: _paneNotesDeliveredId,
   reactionsDelivered: _reactionsDelivered,
@@ -5671,7 +5672,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   // from the first fresh provider session on, every turn keeps the bot's saved paths
-  const restarted = commsDepth === 0 && (recycled || latestCompactionId !== null || Boolean(store.taskByThread(bot.id, threadId)?.providerSessionBoundId));
+  const sessionTask = store.taskByThread(bot.id, threadId);
+  const restarted = commsDepth === 0 && (fresh || recycled || latestCompactionId !== null || sessionTask?.providerSessionBoundId || sessionTask?.hasFreshProviderSession);
   const memoryText = restarted ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : "";
   const { turnText, resume } = buildTurnContext({
     driverKind: instance.driverKind,
@@ -6300,7 +6302,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // dispatched: the rewind is spent
       if (rewound) store.patchBot(bot.id, { rewound: false });
       // and this engine now owns the thread's most recent turn
-      store.markTaskDispatched(bot.id, threadId, instanceId, model);
+      store.markTaskDispatched(bot.id, threadId, instanceId, model, commsDepth === 0 && fresh);
       // a turn can settle before dispatch returns, and a poller started
       // after its own turn.completed would never be torn down — it would
       // keep polling the box forever, carrying dead per-turn state. busy
