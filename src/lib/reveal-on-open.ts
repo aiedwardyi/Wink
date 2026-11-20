@@ -12,37 +12,33 @@ export function revealInChat(node: HTMLElement | null): (() => void) | undefined
   const chat = node?.closest<HTMLElement>("[data-orbit-transcript]");
   if (!node || !chat) return;
   node.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true }));
-  const landed = () => {
-    sized.disconnect();
-    chat.removeEventListener("scrollend", landed);
-  };
   // Older rows loading right after landing shift the scroll by the bottom, which reads as the reader resuming follow.
-  let held = true, reading = false;
+  let held = true, reading = false, aiming = false;
   const release = () => {
     if (!held) return;
     held = false;
-    landed();
-    for (const [type, on] of gestures) chat.removeEventListener(type, on);
+    sized.disconnect();
+    for (const [target, type, on] of listeners) target.removeEventListener(type, on);
     chat.dispatchEvent(new Event(REVEALED_EVENT));
   };
-  // only a gesture that scrolls the chat hands it back; one an inner scroller takes does not
-  const gestures: [string, () => void][] = [
-    ["wheel", () => (reading = true)],
-    ["touchmove", () => (reading = true)],
-    ["touchend", () => (reading = false)],
-    ["touchcancel", () => (reading = false)],
-    ["scroll", () => reading && release()],
+  const read = () => (reading = true), rest = () => (reading = false), doc = chat.ownerDocument;
+  // only a scroll during the reader's gesture hands the chat back: focus, layout and a swipe an inner scroller takes do not
+  const listeners: [EventTarget, string, () => void][] = [
+    [doc, "wheel", read], [doc, "touchmove", read], [doc, "pointerdown", read], [doc, "keydown", read],
+    [doc, "touchend", rest], [doc, "touchcancel", rest], [doc, "pointerup", rest],
+    [chat, "scroll", () => reading && release()],
+    [chat, "scrollend", () => aiming && sized.disconnect()],
   ];
   // The box grows as its view loads, and a smooth scroll stops at the room there was when it began: re-aim until it lands.
   const sized = new ResizeObserver(() => {
     const box = node.getBoundingClientRect(), view = chat.getBoundingClientRect();
     if (!box.height || (box.top >= view.top && box.bottom <= view.bottom)) return;
-    const instant = reducedMotion();
-    chat.scrollTo({ top: chat.scrollTop + box.top - view.top, behavior: instant ? "instant" : "smooth" });
-    if (instant) landed();
-    else chat.addEventListener("scrollend", landed);
+    const top = Math.min(chat.scrollTop + box.top - view.top, chat.scrollHeight - chat.clientHeight);
+    if (Math.abs(top - chat.scrollTop) < 1) return;
+    aiming = true;
+    chat.scrollTo({ top, behavior: reducedMotion() ? "instant" : "smooth" });
   });
-  for (const [type, on] of gestures) chat.addEventListener(type, on, { passive: true });
+  for (const [target, type, on] of listeners) target.addEventListener(type, on, { capture: true, passive: true });
   sized.observe(node);
   return release;
 }

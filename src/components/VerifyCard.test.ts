@@ -387,6 +387,8 @@ it.each([
     const revealed = vi.fn();
     chat.addEventListener(REVEALED_EVENT, revealed);
     chat.scrollTo = vi.fn() as typeof chat.scrollTo;
+    Object.defineProperty(chat, "scrollHeight", { configurable: true, value: 5000 });
+    Object.defineProperty(chat, "clientHeight", { configurable: true, value: 692 });
     const view = await mounted(data, true, chat);
     replay = { top, height };
     before.call(chat);
@@ -402,6 +404,8 @@ it.each([
     replay = { top: 300, height: 900 };
     await resized();
     expect(below.scrolled.mock.calls[1]).toEqual([{ top: 240, behavior: "smooth" }]);
+    await act(async () => { below.chat.dispatchEvent(new Event("scroll")); });
+    expect(below.revealed).not.toHaveBeenCalled();
     await act(async () => { below.chat.dispatchEvent(new Event("scrollend")); });
     replay = { top: 75, height: 1000 };
     await resized();
@@ -417,13 +421,24 @@ it.each([
   try {
     expect(shown.stops).toHaveBeenCalledTimes(1);
     expect(shown.scrolled).not.toHaveBeenCalled();
+    await act(async () => { shown.chat.dispatchEvent(new Event("scroll")); shown.chat.dispatchEvent(new Event("scrollend")); });
     replay = { top: 120, height: 677 };
     await resized();
     expect(shown.scrolled.mock.calls).toEqual([[{ top: 60, behavior: "smooth" }]]);
   } finally { await shown.close(); }
+  const railed = await open(120, 600);
+  try {
+    await act(async () => { railed.chat.dispatchEvent(new Event("scroll")); });
+    expect(railed.revealed).not.toHaveBeenCalled();
+    await act(async () => { document.dispatchEvent(new Event("pointerdown")); railed.chat.dispatchEvent(new Event("scroll")); });
+    expect(railed.revealed).toHaveBeenCalledTimes(1);
+    replay = { top: 120, height: 677 };
+    await resized();
+    expect(railed.scrolled).not.toHaveBeenCalled();
+  } finally { await railed.close(); }
   const moved = await open(120, 600);
   try {
-    await act(async () => { moved.chat.dispatchEvent(new Event("touchmove")); });
+    await act(async () => { moved.chat.dispatchEvent(new Event("touchmove", { bubbles: true })); });
     expect(moved.revealed).not.toHaveBeenCalled();
     await act(async () => { moved.chat.dispatchEvent(new Event("scroll")); });
     expect(moved.revealed).toHaveBeenCalledTimes(1);
