@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -141,13 +142,13 @@ it("reads only the rows that wrote files, then loads a long chat off the server 
 function holdChatLoad(threadId: string) {
   const post = Worker.prototype.postMessage;
   const requests: TailRequest[] = [];
-  let firstPage: (() => void) | undefined;
+  const pages: (() => void)[] = [];
   let holding = true;
   const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: TailRequest, transfer) {
     if (request.threadId === threadId) {
       requests.push(request);
       if (holding && "after" in request) {
-        firstPage = () => post.call(this, request, transfer);
+        pages.push(() => post.call(this, request, transfer));
         return;
       }
     }
@@ -155,8 +156,7 @@ function holdChatLoad(threadId: string) {
   });
   const release = async () => {
     holding = false;
-    firstPage?.();
-    firstPage = undefined;
+    for (const page of pages.splice(0)) page();
     await coldLoading(threadId);
   };
   heldLoads.push(async () => {
@@ -164,6 +164,27 @@ function holdChatLoad(threadId: string) {
   });
   return { requests, release };
 }
+
+it("releases every held chat page in request order", async () => {
+  const worker = new Worker(`
+    const { parentPort } = require("node:worker_threads");
+    const pages = [];
+    parentPort.on("message", ({ after }) => {
+      if (after !== undefined) pages.push(after);
+      else {
+        parentPort.postMessage(pages);
+        parentPort.close();
+      }
+    });
+  `, { eval: true });
+  const reply = once(worker, "message");
+  const { release } = holdChatLoad("thread");
+  worker.postMessage({ threadId: "thread", after: 0 });
+  worker.postMessage({ threadId: "thread", after: 1_024 });
+  await release();
+  worker.postMessage({});
+  expect(await reply).toEqual([[0, 1_024]]);
+});
 
 // A chat longer than one page, open in Map with its first load request held.
 async function loadingChat(more?: (setup: Store, bot: BotRecord) => void) {
