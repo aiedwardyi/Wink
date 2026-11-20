@@ -163,17 +163,16 @@ describe("sendClock", () => {
     expect(sendClock([], 4_000)).toBe(4_000);
   });
 
-  it("never stamps a later send before an earlier one when a late ping re-anchors the server's clock", () => {
+  it("follows the latest server clock sample after a step back", () => {
     vi.useFakeTimers({ toFake: ["performance"] });
     try {
       noteServerTime(10_000);
       vi.advanceTimersByTime(400);
       expect(sendClock()).toBe(10_400);
-      // the server wrote this ping 3 s before the network handed it over
-      noteServerTime(10_400 - 3_000);
-      expect(sendClock()).toBe(10_400);
-      vi.advanceTimersByTime(3_100);
-      expect(sendClock()).toBe(10_500);
+      noteServerTime(8_400);
+      expect(sendClock()).toBe(8_400);
+      vi.advanceTimersByTime(100);
+      expect(sendClock()).toBe(8_500);
     } finally {
       noteServerTime();
       vi.useRealTimers();

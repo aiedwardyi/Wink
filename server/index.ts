@@ -228,6 +228,7 @@ import {
   type Hands,
 } from "./steer-queue.ts";
 import { startedTurn } from "./send-receipt.ts";
+import { serverClockSample } from "./send-clock.ts";
 import "./send-deliver.ts";
 import {
   SendSequencer,
@@ -8518,7 +8519,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           // what a cold start should do.
           resumed,
           // a window stamps its sends by this clock, so a cap here never moves a line
-          now: Date.now(),
+          now: serverClockSample(),
         })}\n\n`,
       );
       if (resumed) {
@@ -8536,7 +8537,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // liveness watchdog. Heartbeats carry no id and never advance replay.
       const keepalive = setInterval(() => {
         try {
-          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping", now: Date.now() })}\n\n`);
+          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping", now: serverClockSample() })}\n\n`);
         } catch {}
       }, SSE_HEARTBEAT_MS);
       req.on("close", () => {

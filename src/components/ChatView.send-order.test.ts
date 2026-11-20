@@ -317,6 +317,7 @@ describe("ChatView send order", () => {
     // the server wrote this ping `late` ms before the network handed it over, and the first line has not landed
     await c.at(400, () => frame({ kind: "ping", now: T0 + 400 - late }));
     await c.at(800, () => c.send("s2", "둘째 줄"));
+    expect(bodies.get("s2")!.actedAt).toBeGreaterThanOrEqual(bodies.get("s1")!.actedAt!);
     await c.at(900, () => c.land(mine("s1", "첫 줄", 900)));
     await c.at(910, () => answer("s1", { steered: true, threadId: "t1", message: c.landed.at(-1) }));
     await c.at(950, () => c.land(mine("s2", "둘째 줄", 950)));
@@ -325,6 +326,28 @@ describe("ChatView send order", () => {
 
     await unmount?.();
     await mount("claude", true, [...earlier, ...c.landed], [], { now: T0 + 1000 });
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
+  });
+
+  it("keeps a line above progress through a two-second server clock step back", async () => {
+    const earlier = history(2);
+    await mount("codex", true, earlier, [], { now: T0 });
+    const c = chat(earlier);
+    c.name("L1", "s1", "row-s1");
+    c.name("P1", "p1");
+
+    await act(async () => c.send("cancelled", "cancelled line"));
+    await act(() => answer("cancelled", { ok: true, cancelled: true, threadId: "t1" }));
+    const serverNow = T0 - 2_000;
+    await frame({ kind: "ping", now: serverNow });
+    expect(await c.at(0, () => c.send("s1", "my line"))).toEqual(["H", "L1"]);
+    const actedAt = Math.min(bodies.get("s1")!.actedAt!, serverNow + 10);
+    await c.at(50, () => c.land({ id: "p1", text: "progress", at: serverNow + 50 }));
+    const final = await c.at(70, () => c.land({ id: "row-s1", sendId: "s1", text: "my line", role: "user", steered: true, actedAt, at: serverNow + 70, sendSeq: bodies.get("s1")?.sendSeq }));
+    expect(final).toEqual(["H", "L1", "P1"]);
+
+    await unmount?.();
+    await mount("codex", true, [...earlier, ...c.landed], [], { now: serverNow + 100 });
     expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
   });
 

@@ -194,6 +194,18 @@ function consumeFocus(state: AppState, threadId?: string): AppState {
   return { ...state, focusMessage: { ...focus, consumed: true } };
 }
 
+// a late ping can lower the estimate while an earlier line in this chat is still on its way
+function threadSendClock(state: AppState, threadId: string, messages?: readonly Message[]): number {
+  let at = sendClock(messages);
+  for (const send of state.acceptedSends[threadId] ?? []) {
+    if (!send.after && !send.waited) at = Math.max(at, send.at ?? 0);
+  }
+  for (const send of state.pendingQueued[threadId] ?? []) {
+    if (!send.waited && send.reason !== "sync") at = Math.max(at, send.at ?? 0);
+  }
+  return at;
+}
+
 // one sent time and send order per line, kept through Send now, so a reload draws it where it was drawn
 function stampSend(state: AppState, send: Extract<Action, { type: "send" }>): Action {
   const bot = state.bots.find((candidate) => candidate.id === send.botId);
@@ -201,17 +213,20 @@ function stampSend(state: AppState, send: Extract<Action, { type: "send" }>): Ac
   const held = send.queueId ? state.pendingQueued[threadId]?.find((entry) => entry.queueId === send.queueId) : undefined;
   return {
     ...send,
-    actedAt: send.actedAt ?? held?.at ?? sendClock(bot?.messages),
+    actedAt: send.actedAt ?? held?.at ?? threadSendClock(state, threadId, bot?.messages),
     sendSeq: send.sendSeq ?? held?.sendSeq ?? nextSendSeq(bot?.messages, state.acceptedSends[threadId], state.pendingQueued[threadId]),
   };
 }
 
 function stampGroupSend(state: AppState, send: Extract<Action, { type: "sendGroup" }>): Action {
   const group = state.groups.find((candidate) => candidate.id === send.groupId);
+  const threadId = send.threadId ?? group?.threadId ?? "";
+  const releasingHold = send.waited && group && !group.hosted;
   return {
     ...send,
-    actedAt: send.actedAt ?? sendClock(group?.messages),
-    sendSeq: send.sendSeq ?? nextSendSeq(group?.messages, state.acceptedSends[send.threadId ?? group?.threadId ?? ""]),
+    actedAt: (releasingHold ? undefined : send.actedAt) ?? threadSendClock(state, threadId, group?.messages),
+    waited: releasingHold ? undefined : send.waited,
+    sendSeq: send.sendSeq ?? nextSendSeq(group?.messages, state.acceptedSends[threadId]),
   };
 }
 

@@ -5,7 +5,7 @@ import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
-import { sendClock } from "../shared/send-clock.ts";
+import { serverSendClock } from "./send-clock.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
@@ -365,7 +365,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const asked = typeof body.cardId === "string" ? store.activePath(threadId).find((message) => message.id === body.cardId) : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       // capped by the client's own rule, so a row stamped ahead of this clock cannot reorder the line on reload
-      const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, sendClock(store.messagesFor(threadId))) : undefined;
+      const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, serverSendClock(store.messagesFor(threadId))) : undefined;
       // Send now on a held send: the user acted when they queued it
       const queuedSend = queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId) : null;
       const actedAt = queuedSend?.actedAt ?? sentAt;

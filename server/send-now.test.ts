@@ -14,6 +14,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 import * as queue from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
 import { sendClock } from "../shared/send-clock.ts";
+import { serverSendClock } from "./send-clock.ts";
 
 const source = readFileSync(new URL("./bot-chat-routes.ts", import.meta.url), "utf8");
 const start = source.indexOf('      const body = await readBody(req);', source.indexOf('    send: async ('));
@@ -44,7 +45,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
   const interruptTurn = vi.fn(async () => {});
   const busyResumeThreads = new Set<string>();
   const scope = {
-    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag, sendClock,
+    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag, serverSendClock,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     noteTalked: noop, noteSendLocale: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery,
@@ -338,4 +339,28 @@ describe("a send while a row stamped ahead of this clock is newest", () => {
     const kept = steers ? h.messages.slice(1).map((message) => ({ text: message.text, at: message.actedAt, sendSeq: message.sendSeq })) : queue.waitingSends()[h.bot.threadId];
     expect(kept).toMatchObject([{ text: "second", at: actedAt, sendSeq: 2 }, { text: "first", at: actedAt, sendSeq: 1 }]);
   });
+});
+
+it("keeps overlapping sends in order when the server clock steps back between their POSTs", async () => {
+  const before = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(before);
+  let finish!: (taken: boolean) => void;
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const steer = vi.fn(async () => true).mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+    finish = resolve;
+    enter();
+  }));
+  const h = harness(steer);
+  const first = h.post({ text: "first", sendId: "send-now-clock-first", actedAt: before, sendSeq: 1 });
+  await entered;
+  clock.mockReturnValue(before - 2_000);
+  const second = h.post({ text: "second", sendId: "send-now-clock-second", actedAt: before, sendSeq: 2 });
+  try {
+    expect((await second).body.message).toMatchObject({ actedAt: before, sendSeq: 2 });
+  } finally {
+    finish(true);
+    await first;
+  }
+  expect((await first).body.message).toMatchObject({ actedAt: before, sendSeq: 1 });
 });
