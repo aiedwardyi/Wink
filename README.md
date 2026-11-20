@@ -18,14 +18,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe"><b>Download for Windows</b></a> (10 / 11, x64) · <a href="https://github.com/aiedwardyi/orbit-releases/releases">All releases</a> · <a href="https://getwink.dev">Website</a>
-  <br>
-  <a href="https://youtu.be/dBWTcXMwIsU">Watch the demo</a>
+  <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe"><b>Download for Windows</b></a> (10 / 11, x64) · <a href="https://youtu.be/dBWTcXMwIsU">Watch the demo</a> · <a href="https://github.com/aiedwardyi/orbit-releases/releases">All releases</a> · <a href="https://getwink.dev">Website</a>
   <br>
   Built by <a href="https://github.com/aiedwardyi">Edward Yi</a>
 </p>
 
-<img src="./assets/readme/hero.png" alt="Wink with a team of five bots on five engines. Atlas picks up a plan from its notes and runs five workers, two of them done.">
+<img src="./assets/readme/hero.png" alt="Wink on desktop and phone: Atlas runs the card tests on the Home PC, Live Verify checkout 15 passed, and the same chat on the phone.">
 
 ## Tour
 
@@ -48,7 +46,7 @@ Each worker is the vendor's own CLI in its own terminal. The lead bot is told to
 Live Verify opens the page in a real browser, clicks through it at phone size and hands anything broken back to the bot.
 
 <!-- VIDEO: en-new.mp4 -->
-<img src="./assets/readme/tour-verify.png" width="880" alt="Live Verify checking a sample music site: check labels over the desktop view, with a nav clicker and a modal clicker beside it, 248 of 662 checks done.">
+<img src="./assets/readme/tour-verify.png" width="880" alt="Live Verify running checks on the Starzum page in desktop and phone views.">
 
 **5. Memory that carries across sessions and keeps getting better**<br>
 One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carries across models and to your phone, and across PCs with Sync on.
@@ -59,7 +57,7 @@ One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carr
 When you decide something in chat, Wink writes it down: the options, the one you chose, and your exact words. Change your mind later and the old choice gets crossed out.
 
 <!-- VIDEO: timeline-demo-after.mp4 -->
-<img src="./assets/readme/tour-timeline.png" width="440" alt="A Timeline of picks: each one has the chosen option circled and the others crossed out.">
+<img src="./assets/readme/tour-timeline.png" width="880" alt="Chat with Atlas next to its Timeline: each pick has the chosen option circled, the others crossed out, and your exact words beside it.">
 
 **7. Your bots teach each other**<br>
 Your bots share a private Forum. When one makes a mistake and finds the fix, it posts it. When another gets stuck, it searches the Forum first.
