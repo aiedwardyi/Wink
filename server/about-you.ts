@@ -293,51 +293,21 @@ export function removeAboutYouSource(source: string): void {
   save(state, raw);
 }
 
-type KeptFile = { text: string; atime: Date; mtime: Date };
-
-// MEMORY.md and memory/*, with their edit times; undefined when the folder is not there
-function keepFiles(): Map<string, KeptFile> | undefined {
-  if (!existsSync(aboutYouDir())) return undefined;
-  const kept = new Map<string, KeptFile>();
-  for (const name of filesHere()) {
-    const path = join(aboutYouDir(), name);
-    const { atime, mtime } = statSync(path);
-    kept.set(name, { text: readFileSync(path, "utf8"), atime, mtime });
-  }
-  return kept;
-}
-
-function filesHere(): string[] {
-  const names = existsSync(aboutYouFile()) ? ["MEMORY.md"] : [];
-  try {
-    return [...names, ...readdirSync(join(aboutYouDir(), "memory"), { withFileTypes: true }).filter((entry) => entry.isFile()).map(({ name }) => join("memory", name))];
-  } catch {
-    return names;
-  }
-}
-
-function putBack(kept: Map<string, KeptFile> | undefined): void {
-  if (!kept) return rmSync(aboutYouDir(), { recursive: true, force: true });
-  for (const name of filesHere()) if (!kept.has(name)) rmSync(join(aboutYouDir(), name), { force: true });
-  for (const [name, { text, atime, mtime }] of kept) {
-    const path = join(aboutYouDir(), name);
-    if (readSaved(path) === text) continue;
-    writeFileAtomic(path, text, { mode: 0o600 });
-    utimesSync(path, atime, mtime);
-  }
-}
-
 /** Syncs Import Memory by keeping every add ID its peers have not explicitly removed. */
 export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?: MemorySyncOptions): Record<string, MemorySyncResult> {
   const before = readSaved();
   const local = localEdits(before);
   // Keep the transport's existing display order when recording IDs for hand edits.
   save(local, before, true);
-  // the transport can swap in the peer's file before a later write fails, and the next pass would read this PC's own lines as erased
-  const kept = keepFiles();
+  // a peer's copy is written with this PC's lines in it, so a pass cut short at any write never leaves them only in memory
+  const merge = (file: string, text: string | null) => {
+    if (file !== "MEMORY.md") return text;
+    const merged = fold([parse(text ?? ""), local]);
+    return render([...merged.lines, ...metadata(merged)]) || text;
+  };
   const known = ledger.bots[ABOUT_YOU_SYNC_ID] && structuredClone(ledger.bots[ABOUT_YOU_SYNC_ID]);
   try {
-    const results = syncBotMemory(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), ledger, options);
+    const results = syncBotMemory(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), ledger, { ...options, merge });
     const dir = join(aboutYouDir(), "memory");
     let copies: string[];
     try {
@@ -358,7 +328,6 @@ export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?:
   } catch (error) {
     if (known) ledger.bots[ABOUT_YOU_SYNC_ID] = known;
     else delete ledger.bots[ABOUT_YOU_SYNC_ID];
-    putBack(kept);
     throw error;
   }
 }
