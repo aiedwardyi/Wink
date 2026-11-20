@@ -265,35 +265,6 @@ describe("board Drive sync", () => {
     for (const side of [a, b]) expect(side.board.list().map((post) => post.id)).toEqual([keep.id]);
   });
 
-  it.each(["together", "tombstone first", "legacy tombstone first"])("a fresh PC keeps the newer reparented reply with copies arriving %s", (order) => {
-    const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
-    const a = home("pc-a");
-    const b = home("pc-b");
-    const c = home("pc-c");
-    const ids = { out: (id: string) => id, in: (id: string) => id };
-    const stuck = a.board.post(STUCK);
-    const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
-    const child = a.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
-    a.board.sync(folder, ids);
-    b.board.sync(folder, ids);
-    a.clock.at++;
-    a.board.remove(reply.id);
-    a.board.sync(folder, ids);
-    expect(a.board.get(child.id)?.parent_id).toBe(stuck.id);
-    expect(b.board.get(child.id)?.parent_id).toBe(reply.id);
-
-    const newest = join(folder, BOARD_DIR, "pc-a", `${child.id}.json`);
-    if (order === "legacy tombstone first") writeFileSync(join(folder, BOARD_DIR, "pc-a", "deleted.json"), JSON.stringify([reply.id]));
-    if (order !== "together") {
-      const delayed = join(folder, `${child.id}.json`);
-      fs.renameSync(newest, delayed);
-      c.board.sync(folder, ids);
-      fs.renameSync(delayed, newest);
-    }
-    for (let pass = 0; pass < 3; pass++) for (const side of [c, a]) side.board.sync(folder, ids);
-    expect(c.board.get(child.id)?.parent_id).toBe(stuck.id);
-    expect(a.board.get(child.id)?.parent_id).toBe(stuck.id);
-  });
 
   it("resumes dropping an offline reply and its child after the root tombstone is renamed into place", () => {
     const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
@@ -358,14 +329,6 @@ describe("board Drive sync", () => {
     expect(c.board.list()).toEqual([]);
   });
 
-  it("removing a reply still moves the replies under it up to its parent", () => {
-    const { board } = home("pc-a");
-    const stuck = board.post(STUCK);
-    const reply = board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
-    const under = board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
-    board.remove(reply.id);
-    expect(board.get(under.id)).toMatchObject({ parent_id: stuck.id });
-  });
 });
 
 describe("a delete a restart cuts short", () => {
@@ -425,201 +388,40 @@ describe("a delete a restart cuts short", () => {
     expect(cuts).toBeGreaterThan(2);
   });
 
-  it("an own reply delete moves no reply under it before its tombstone is on disk, and a restart after finishes it", () => {
-    const answered = () => {
-      const pc = home("pc-a");
-      const stuck = pc.board.post(STUCK);
-      const reply = pc.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
-      for (const n of [1, 2]) pc.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: `Welcome ${n}.`, source_ref: `tool:tc:${n}` });
-      return { ...pc, reply };
-    };
-    const kept = listed(answered().board);
-    const done = answered();
-    done.board.remove(done.reply.id);
-    const deleted = listed(restart(done.dir));
-    const cuts = everyCut(answered, (t) => t.board.remove(t.reply.id), (t, at) => {
-      expect(listed(restart(t.dir)), at).toEqual(fs.existsSync(join(t.dir, "deleted.json")) ? deleted : kept);
-    });
-    expect(cuts).toBeGreaterThan(2);
-  });
-
-  it("a sync cut while it takes another PC's reply delete ends as the sync that was not cut", () => {
+  it("a sync cut while it takes another PC's thread delete boots without Drive to that delete whole or not at all", () => {
     const pair = () => {
       const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
       const a = home("pc-a");
       const b = home("pc-b");
       const stuck = a.board.post(STUCK);
       const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
-      a.board.sync(folder, ids);
-      b.board.sync(folder, ids);
-      // B answers the reply offline while A deletes it
-      b.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
-      a.board.remove(reply.id);
-      a.board.sync(folder, ids);
-      return { folder, a, b };
-    };
-    const settled = (p: ReturnType<typeof pair>) => {
-      const b = restart(p.b.dir, "pc-b");
-      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
-      return [listed(p.a.board), listed(b)];
-    };
-    const whole = pair();
-    whole.b.board.sync(whole.folder, ids);
-    const want = settled(whole);
-    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => expect(settled(p), at).toEqual(want));
-    expect(cuts).toBeGreaterThan(2);
-  });
-
-  it("a sync cut while it takes another PC's reply delete boots without Drive to that delete whole or not at all", () => {
-    const pair = () => {
-      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
-      const a = home("pc-a");
-      const b = home("pc-b");
-      const stuck = a.board.post(STUCK);
-      const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
-      const under = a.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+      a.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+      const other = a.board.post({ ...STUCK, title: "Pin node 22", body: "Pin node 22.", source_ref: "tool:tc:pin" });
       for (const board of [a.board, b.board, a.board, b.board]) board.sync(folder, ids);
-      a.clock.at = 2_000;
-      // A moves the reply under it up to the root
-      a.board.remove(reply.id);
+      // B answers offline while A deletes the thread
+      b.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome again.", source_ref: "tool:tc:2" });
+      a.board.remove(stuck.id);
       a.board.sync(folder, ids);
-      return { folder, a, b, stuck, reply, under };
+      return { folder, a, b, other };
     };
     const settled = (p: ReturnType<typeof pair>) => {
       const b = restart(p.b.dir, "pc-b");
       for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
       return [listed(p.a.board), listed(b)];
     };
-    const before = pair();
-    const kept = listed(before.b.board);
-    expect(kept).toEqual([[before.stuck.id, null], [before.reply.id, before.stuck.id], [before.under.id, before.reply.id]]);
+    const kept = listed(restart(pair().b.dir, "pc-b"));
+    expect(kept).toHaveLength(5);
     const whole = pair();
     whole.b.board.sync(whole.folder, ids);
     const deleted = listed(restart(whole.b.dir, "pc-b"));
-    expect(deleted).toEqual([[whole.stuck.id, null], [whole.under.id, whole.stuck.id]]);
-    const want = settled(whole);
+    expect(deleted).toEqual([[whole.other.id, null]]);
+    expect(settled(whole)).toEqual([deleted, deleted]);
     const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => {
       const boot = listed(restart(p.b.dir, "pc-b"));
       expect([kept, deleted], at).toContainEqual(boot);
       expect(listed(restart(p.b.dir, "pc-b")), at).toEqual(boot);
-      expect(settled(p), at).toEqual(want);
+      expect(settled(p), at).toEqual([deleted, deleted]);
     });
-    expect(cuts).toBeGreaterThan(2);
-  });
-
-  it("a sync cut while it takes another PC's reply delete with an offline answer under it too never leaves the moved reply under a missing post", () => {
-    const pair = () => {
-      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
-      const a = home("pc-a");
-      const b = home("pc-b");
-      const stuck = a.board.post(STUCK);
-      const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
-      const under = a.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
-      for (const board of [a.board, b.board, a.board, b.board]) board.sync(folder, ids);
-      b.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome again.", source_ref: "tool:tc:2" });
-      a.clock.at = 2_000;
-      a.board.remove(reply.id);
-      a.board.sync(folder, ids);
-      return { folder, a, b, under };
-    };
-    const settled = (p: ReturnType<typeof pair>) => {
-      const b = restart(p.b.dir, "pc-b");
-      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
-      return [listed(p.a.board), listed(b)];
-    };
-    const whole = pair();
-    whole.b.board.sync(whole.folder, ids);
-    const want = settled(whole);
-    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => {
-      for (const boot of [restart(p.b.dir, "pc-b"), restart(p.b.dir, "pc-b")]) expect(boot.get(boot.get(p.under.id)!.parent_id!), at).toBeDefined();
-      expect(settled(p), at).toEqual(want);
-    });
-    expect(cuts).toBeGreaterThan(2);
-  });
-
-  // the refs set the order the pull meets the tombstones in: the lower reply first, the upper first, the lowest first
-  it.each([
-    { deleted: "a reply and the reply above it, lower one first", refs: ["reply:r1", "reply:r2"], order: [1, 0] },
-    { deleted: "a reply and the reply above it, upper one first", refs: ["reply:r2", "reply:r1"], order: [0, 1] },
-    { deleted: "three replies in a row, bottom up", refs: ["reply:r1", "reply:r3", "reply:r2"], order: [2, 1, 0] },
-    { deleted: "a reply while this PC deletes the reply above it", refs: ["reply:r1", "reply:r2"], order: [1], own: [0] },
-    { deleted: "a reply while this PC deletes the reply under it", refs: ["reply:r1", "reply:r2"], order: [0], own: [1] },
-    { deleted: "the middle reply while this PC deletes the ones above and under it", refs: ["reply:r1", "reply:r2", "reply:r3"], order: [1], own: [2, 0] },
-  ])("a sync cut while it takes another PC's delete of $deleted boots every reply under the nearest post above it and ends as the sync that was not cut", ({ refs, order, own = [] }) => {
-    const pair = () => {
-      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
-      const a = home("pc-a");
-      const b = home("pc-b");
-      const stuck = a.board.post(STUCK);
-      let parent = stuck.id;
-      const replies = refs.map((ref) => (parent = a.board.post({ author_bot_id: BOARD_USER, parent_id: parent, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: ref }).id));
-      const under = a.board.post({ author_bot_id: "carbon", parent_id: parent, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
-      for (const board of [a.board, b.board, a.board, b.board]) board.sync(folder, ids);
-      a.clock.at = 2_000;
-      for (const n of order) a.board.remove(replies[n]);
-      a.board.sync(folder, ids);
-      b.clock.at = 3_000;
-      for (const n of own) b.board.remove(replies[n]);
-      return { folder, a, b, stuck, under };
-    };
-    const settled = (p: ReturnType<typeof pair>) => {
-      const b = restart(p.b.dir, "pc-b");
-      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
-      return [listed(p.a.board), listed(b)];
-    };
-    const kept = new Map(pair().b.board.list().map((post) => [post.id, post.parent_id]));
-    const nearest = (board: Board) => {
-      const shown = new Set(board.list().map((post) => post.id));
-      return board.list().map((post) => {
-        let up = kept.get(post.id) ?? null;
-        while (up && !shown.has(up)) up = kept.get(up) ?? null;
-        return [post.id, up];
-      });
-    };
-    const whole = pair();
-    whole.b.board.sync(whole.folder, ids);
-    const want = settled(whole);
-    const ends = [[whole.stuck.id, null], [whole.under.id, whole.stuck.id]];
-    expect(want).toEqual([ends, ends]);
-    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => {
-      const boot = restart(p.b.dir, "pc-b");
-      expect(listed(boot), at).toEqual(nearest(boot));
-      expect(listed(restart(p.b.dir, "pc-b")), at).toEqual(listed(boot));
-      expect(settled(p), at).toEqual(want);
-    });
-    expect(cuts).toBeGreaterThan(2);
-  });
-
-  it("a sync cut while it takes another PC's delete of the replies above an answer keeps the answer's newest fix", () => {
-    const NEWEST = "Top it up from the billing page.";
-    const pair = () => {
-      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
-      const a = home("pc-a");
-      const b = home("pc-b");
-      const stuck = a.board.post(STUCK);
-      const upper = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
-      const lower = a.board.post({ author_bot_id: BOARD_USER, parent_id: upper.id, kind: "tip", title: STUCK.title, body: "Still stuck.", source_ref: "reply:r2" });
-      const answer = a.board.post({ author_bot_id: "carbon", parent_id: lower.id, kind: "tip", title: STUCK.title, body: "Top it up.", source_ref: "tool:tc:1" });
-      const fix = (text: string, ref: string) => a.board.post({ author_bot_id: "carbon", parent_id: answer.id, kind: "fix", title: STUCK.title, body: text, fix: text, source_ref: ref });
-      fix("Top it up in settings.", "tool:tc:2");
-      for (const board of [a.board, b.board, a.board, b.board]) board.sync(folder, ids);
-      a.clock.at = 2_000;
-      fix(NEWEST, "tool:tc:3");
-      a.board.remove(lower.id);
-      a.board.remove(upper.id);
-      a.board.sync(folder, ids);
-      return { folder, a, b, stuck, answer };
-    };
-    const settled = (p: ReturnType<typeof pair>) => {
-      const b = restart(p.b.dir, "pc-b");
-      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
-      return [p.a.board, b].map((board) => [board.get(p.answer.id)?.parent_id, board.get(p.answer.id)?.fix]);
-    };
-    const whole = pair();
-    whole.b.board.sync(whole.folder, ids);
-    const want = [[whole.stuck.id, NEWEST], [whole.stuck.id, NEWEST]];
-    expect(settled(whole)).toEqual(want);
-    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => expect(settled(p), at).toEqual(want));
     expect(cuts).toBeGreaterThan(2);
   });
 });
@@ -747,17 +549,6 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(a, b, a, b);
       return { live: [{ id: keep.id }], dead: [stuck.id, reply.id, deep.id] };
     }, both],
-    ["A: a deleted own reply leaves its answers in the thread", (w) => {
-      const a = w.boot("pc-a");
-      const b = w.boot("pc-b");
-      const stuck = tip(a, "stuck");
-      const reply = tip(a, "reply", stuck, BOARD_USER);
-      const under = tip(a, "under", reply);
-      w.sync(a, b);
-      a.board.remove(reply.id);
-      w.sync(a, b, a, b);
-      return { live: [{ id: stuck.id }, { id: under.id, parent_id: stuck.id }], dead: [reply.id] };
-    }, both],
     ["B: replies written offline under a deleted post drop, nested ones too", (w) => {
       const a = w.boot("pc-a");
       const b = w.boot("pc-b");
@@ -799,19 +590,6 @@ describe("every delete case: nothing deleted that should live, nothing live that
       fs.renameSync(held, file);
       w.sync(c, b, c);
       return { live: [{ id: p.id }, { id: q.id, parent_id: p.id }], dead: [] };
-    }],
-    ["B: a fresh PC keeps the answers of a deleted own reply", (w) => {
-      const a = w.boot("pc-a");
-      const b = w.boot("pc-b");
-      const c = w.boot("pc-c");
-      const p = tip(a, "live");
-      const reply = tip(a, "user reply", p, BOARD_USER);
-      const answer = tip(a, "answer", reply);
-      w.sync(a, b);
-      a.board.remove(reply.id);
-      w.sync(a);
-      w.sync(c, b, c);
-      return { live: [{ id: p.id }, { id: answer.id, parent_id: p.id }], dead: [reply.id] };
     }],
     ["B: a PC restarted halfway through a delete finishes it", (w) => {
       const a = w.boot("pc-a");
@@ -876,25 +654,6 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(a, b, a, b);
       return { live: [{ id: live.id, helped_bot_ids: ["scout"] }, { id: good.id }], dead: [dead.id] };
     }],
-    ["B: a fresh PC keeps the newer reparented reply when a bare tombstone came first", (w) => {
-      const a = w.boot("pc-a");
-      const b = w.boot("pc-b");
-      const c = w.boot("pc-c");
-      const stuck = tip(a, "stuck");
-      const reply = tip(a, "reply", stuck, BOARD_USER);
-      const child = tip(a, "child", reply);
-      w.sync(a, b);
-      a.board.remove(reply.id);
-      w.sync(a);
-      const drive = join(w.folder, BOARD_DIR, "pc-a");
-      oldTombstones(drive, reply.id);
-      const held = join(w.folder, "held.json");
-      fs.renameSync(join(drive, `${child.id}.json`), held);
-      w.sync(c);
-      fs.renameSync(held, join(drive, `${child.id}.json`));
-      w.sync(c, a, b, c, a, b);
-      return { live: [{ id: stuck.id }, { id: child.id, parent_id: stuck.id }], dead: [reply.id] };
-    }],
     ["C: a repeat call after its post was deleted is a new post that keeps its fix", (w) => {
       const a = w.boot("pc-a");
       const b = w.boot("pc-b");
@@ -923,18 +682,20 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(a, b, a, b);
       return { live: [{ id: again.body.id, title: "Use pnpm 10" }], dead: [first.body.id] };
     }, both],
-    ["D: a retried reply with the same client id stays deleted", async (w) => {
+    ["D: a retried reply with the same client id stays deleted with its thread", async (w) => {
       const a = w.boot("pc-a");
       const b = w.boot("pc-b");
+      const other = tip(a, "other");
       const root = tip(a, "live parent");
       const reply = { parent_id: root.id, body: "Original reply", client_id: "saved-reply-1111" };
       const first = await send(a.routes.reply, reply);
       w.sync(a, b);
-      expect((await send(a.routes.remove, { id: first.body.post.id })).status).toBe(200);
+      expect((await send(a.routes.remove, { id: first.body.post.id })).status).toBe(403);
+      expect((await send(a.routes.remove, { id: root.id })).status).toBe(200);
       w.sync(a, b, a, b);
-      expect((await send(a.routes.reply, reply)).status).toBe(200);
+      expect((await send(a.routes.reply, reply)).status).toBe(404);
       w.sync(a, b, a, b);
-      return { live: [{ id: root.id }], dead: [first.body.post.id] };
+      return { live: [{ id: other.id }], dead: [root.id, first.body.post.id] };
     }, both],
     ["D: deleting an earlier solved call leaves one live call, and it takes the fix", (w) => {
       const a = w.boot("pc-a");
@@ -1003,13 +764,14 @@ describe("every delete case: nothing deleted that should live, nothing live that
       const reply = tip(a, "user reply", p, BOARD_USER);
       w.sync(a, b);
       const answer = tip(b, "answer", reply);
-      a.board.remove(reply.id);
-      w.sync(a, b, a, b);
-      for (const dir of [a.dir, b.dir, join(w.folder, BOARD_DIR, "pc-a"), join(w.folder, BOARD_DIR, "pc-b")]) oldTombstones(dir, reply.id);
+      // the original release deleted the reply alone: its file gone and a bare id
+      fs.rmSync(join(a.dir, `${reply.id}.json`));
+      oldTombstones(a.dir, reply.id);
       const updatedA = w.restart(a);
+      w.sync(updatedA, b, updatedA, b);
       const updatedB = w.restart(b);
-      w.sync(updatedA, updatedB, updatedA, updatedB, updatedA, updatedB);
-      return { live: [{ id: p.id }, { id: answer.id }], dead: [reply.id] };
+      w.sync(updatedA, updatedB, updatedA, updatedB);
+      return { live: [{ id: p.id }, { id: answer.id, parent_id: reply.id }], dead: [reply.id] };
     }],
     ["D: a fresh PC that hears of a reply delete only from the original release keeps the answer", (w) => {
       const a = w.boot("pc-a");
@@ -1019,13 +781,15 @@ describe("every delete case: nothing deleted that should live, nothing live that
       const reply = tip(a, "user reply", p, BOARD_USER);
       w.sync(a, b);
       const answer = tip(b, "late answer", reply);
-      a.board.remove(reply.id);
-      w.sync(a, b, a, b);
+      fs.rmSync(join(a.dir, `${reply.id}.json`));
+      oldTombstones(a.dir, reply.id);
+      const updated = w.restart(a);
+      w.sync(updated, b, updated, b);
       const only = temps.make(join(tmpdir(), "orbit-board-drive-"));
       fs.cpSync(join(w.folder, BOARD_DIR, "pc-b"), join(only, BOARD_DIR, "pc-b"), { recursive: true });
       oldTombstones(join(only, BOARD_DIR, "pc-b"), reply.id);
       c.board.sync(only, ids);
-      w.sync(c, a, b, c, a, b);
+      w.sync(c, updated, b, c, updated, b);
       return { live: [{ id: p.id }, { id: answer.id }], dead: [reply.id] };
     }],
     ["D: a thread delete the original release relays as a bare id still takes the thread", (w) => {
@@ -1043,18 +807,6 @@ describe("every delete case: nothing deleted that should live, nothing live that
       const updated = w.restart(b);
       w.sync(updated, a, updated, a);
       return { live: [{ id: keep.id }], dead: [stuck.id, late.id] };
-    }],
-    ["D: an answer written under a reply another PC is deleting is kept", (w) => {
-      const a = w.boot("pc-a");
-      const b = w.boot("pc-b");
-      const c = w.boot("pc-c");
-      const p = tip(a, "live");
-      const reply = tip(a, "user reply", p, BOARD_USER);
-      w.sync(a, b);
-      const answer = tip(b, "answer", reply);
-      a.board.remove(reply.id);
-      w.sync(a, b, c, a, b, c, a, b, c);
-      return { live: [{ id: p.id }, { id: answer.id }], dead: [reply.id] };
     }],
     ["D: two PCs calling before they sync share one live call, delete after delete", (w) => {
       const a = w.boot("pc-a");
@@ -1274,51 +1026,28 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(b, b);
       return { live: [], dead: [stuck.body.id], on: [b] };
     }],
-    ...(["pc-a", "pc-b"] as const).flatMap((first): (typeof cases)[number][] => {
-      const fix = (pc: Pc, answer: BoardPost, text: string) =>
-        pc.board.post({ author_bot_id: "carbon", kind: "fix", title: text, body: text, fix: text, parent_id: answer.id, source_ref: `tool:tc:${text}` });
-      const settle = (w: World, a: Pc, b: Pc) => (first === "pc-a" ? w.sync(a, b, a, b) : w.sync(b, a, b, a));
-      const newest = (answer: BoardPost, ...pcs: Pc[]) => {
-        for (const pc of pcs) expect(pc.board.search({ query: "answer" })[0], pc.name).toMatchObject({ id: answer.id, fix: "newest fix" });
-      };
-      return [
-        [`L: an answer keeps its newest fix when a PC that missed it deletes the replies above it (${first} syncs first)`, (w) => {
-          const a = w.boot("pc-a");
-          const b = w.boot("pc-b");
-          const keep = tip(a, "keep");
-          const stuck = tip(a, "stuck");
-          const upper = tip(a, "upper", stuck, BOARD_USER);
-          const lower = tip(a, "lower", upper, BOARD_USER);
-          w.sync(a, b, a, b);
-          const answer = tip(a, "answer", lower);
-          const old = fix(a, answer, "first fix");
-          b.board.remove(lower.id);
-          w.sync(b, a, b, a);
-          const now = fix(a, answer, "newest fix");
-          b.board.remove(upper.id);
-          settle(w, a, b);
-          newest(answer, a, b);
-          return { live: [{ id: keep.id }, { id: stuck.id }, { id: answer.id, parent_id: stuck.id, fix: "newest fix" }, { id: old.id }, { id: now.id }], dead: [upper.id, lower.id] };
-        }],
-        [`L: an answer keeps its newest fix when one PC replaces it and deletes the upper reply while the other deletes the lower (${first} syncs first)`, (w) => {
-          const a = w.boot("pc-a");
-          const b = w.boot("pc-b");
-          const keep = tip(a, "keep");
-          const stuck = tip(a, "stuck");
-          const upper = tip(a, "upper", stuck, BOARD_USER);
-          const lower = tip(a, "lower", upper, BOARD_USER);
-          const answer = tip(a, "answer", lower);
-          const old = fix(a, answer, "first fix");
-          w.sync(a, b, a, b);
-          const now = fix(a, answer, "newest fix");
-          a.board.remove(upper.id);
-          b.board.remove(lower.id);
-          settle(w, a, b);
-          newest(answer, a, b);
-          return { live: [{ id: keep.id }, { id: stuck.id }, { id: answer.id, parent_id: stuck.id, fix: "newest fix" }, { id: old.id }, { id: now.id }], dead: [upper.id, lower.id] };
-        }],
-      ];
-    }),
+    ...(["clear", "call"] as const).flatMap((then) =>
+      (["pc-a", "pc-b"] as const).map((first): (typeof cases)[number] => [`M: an upgraded call history with no delete ends as the release does (${then}, ${first} syncing first)`, (w) => {
+        const a = w.boot("pc-a");
+        const b = w.boot("pc-b");
+        const old = oldCall(a, 0);
+        expect(clear(a, "First fix")).toEqual([old.id]);
+        const modern = call(b);
+        expect(modern.id).not.toBe(old.id);
+        const order = first === "pc-a" ? [a, b, a, b] : [b, a, b, a];
+        w.sync(...order);
+        const live = [{ id: old.id, status: "solved" as const, fix: "First fix" }, { id: modern.id, status: "open" as const, fix: "" }];
+        if (then === "clear") {
+          expect(clear(b, "Second fix")).toEqual([]);
+          w.sync(...order);
+          return { live, dead: [] };
+        }
+        const again = call(b);
+        expect([old.id, modern.id]).not.toContain(again.id);
+        w.sync(...order);
+        return { live: [...live, { id: again.id, status: "open" }], dead: [] };
+      }]),
+    ),
   ];
 
   it.each(cases.flatMap(([name, run, modes = ["Drive"]]) => modes.map((mode) => [`${name} (${mode})`, run, mode] as const)))("%s", async (_name, run, mode) => {
@@ -1401,21 +1130,11 @@ describe("a delete or a sync never rewrites a post it leaves", () => {
   };
   const THREAD: Name[] = ["stuck", "upper", "side", "lower", "answer", "fix"];
   const paths: Array<{ path: string; gone: Name[]; run: (w: World, die: (file: string) => void) => void; setup?: (w: World) => string[] }> = [
-    { path: "this PC deletes a reply", gone: ["lower"], run: (w) => w.pcs.a.board.remove(w.posts.lower.id) },
-    { path: "this PC deletes a reply and the reply above it", gone: ["lower", "upper"], run: (w) => {
-      w.pcs.a.board.remove(w.posts.lower.id);
-      w.pcs.a.board.remove(w.posts.upper.id);
-    } },
     { path: "this PC deletes a thread", gone: THREAD, run: (w) => w.pcs.a.board.remove(w.posts.stuck.id) },
-    { path: "two PCs delete the same reply", gone: ["lower"], run: (w) => {
-      w.pcs.a.board.remove(w.posts.lower.id);
-      w.pcs.b.board.remove(w.posts.lower.id);
+    { path: "two PCs delete the same thread", gone: THREAD, run: (w) => {
+      w.pcs.a.board.remove(w.posts.stuck.id);
+      w.pcs.b.board.remove(w.posts.stuck.id);
     } },
-    ...(["a", "b"] as const).map((first) => ({ path: `two PCs each delete one of two nested replies, pc-${first} syncing first`, gone: ["lower", "upper"] as Name[], run: (w: World) => {
-      w.pcs.a.board.remove(w.posts.lower.id);
-      w.pcs.b.board.remove(w.posts.upper.id);
-      w.sync(first);
-    } })),
     { path: "a sync takes a reply delete an older build kept as a bare id", gone: ["lower"], setup: (w) => {
       const old = join(w.folder, BOARD_DIR, "pc-old");
       mkdirSync(old, { recursive: true });
@@ -1431,18 +1150,13 @@ describe("a delete or a sync never rewrites a post it leaves", () => {
       w.restart("b");
       return [copy.id];
     }, run: (w) => w.pcs.a.board.remove(w.posts.stuck.id) },
-    { path: "a restart finishes a reply delete it cut short", gone: ["lower"], run: (w, die) => {
-      die(join(w.pcs.a.dir, "deleted.json"));
-      expect(() => w.pcs.a.board.remove(w.posts.lower.id)).toThrow("restart");
-      w.restart("a");
-    } },
     { path: "a restart finishes a thread delete it cut short", gone: THREAD, run: (w, die) => {
       die(join(w.pcs.a.dir, "deleted.json"));
       expect(() => w.pcs.a.board.remove(w.posts.stuck.id)).toThrow("restart");
       w.restart("a");
     } },
-    { path: "a restart finishes a pulled reply delete it cut short", gone: ["lower"], run: (w, die) => {
-      w.pcs.a.board.remove(w.posts.lower.id);
+    { path: "a restart finishes a pulled thread delete it cut short", gone: THREAD, run: (w, die) => {
+      w.pcs.a.board.remove(w.posts.stuck.id);
       w.sync("a");
       die(join(w.pcs.b.dir, "deleted.json"));
       expect(() => w.sync("b")).toThrow("restart");
@@ -1454,11 +1168,7 @@ describe("a delete or a sync never rewrites a post it leaves", () => {
     const w = world();
     const dead = new Set([...gone.map((name) => w.posts[name].id), ...(setup?.(w) ?? [])]);
     const rows = (dir: string) => Object.fromEntries((fs.existsSync(dir) ? readdirSync(dir) : []).filter((name) => /^p[0-9a-f]{24}\.json$/.test(name)).map((name) => [name.slice(0, -5), readFileSync(join(dir, name), "utf8")]));
-    // a published copy shows its first live ancestor, so only its parent may differ
-    const published = (pc: keyof World["pcs"]) => Object.fromEntries(Object.entries(rows(join(w.folder, BOARD_DIR, w.pcs[pc].name))).map(([id, text]) => {
-      const { parent_id: _, ...post } = JSON.parse(text) as BoardPost;
-      return [id, post];
-    }));
+    const published = (pc: keyof World["pcs"]) => rows(join(w.folder, BOARD_DIR, w.pcs[pc].name));
     const left = <T>(held: Record<string, T>) => Object.fromEntries(Object.entries(held).filter(([id]) => !dead.has(id)));
     const state = () => ({ a: rows(w.pcs.a.dir), b: rows(w.pcs.b.dir), driveA: published("a"), driveB: published("b") });
     const before = state();

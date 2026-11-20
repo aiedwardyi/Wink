@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BOARD_USER, createBoard } from "../../server/board.ts";
-import { createBoardRoutes } from "../../server/board-routes.ts";
 import { createTempDirs } from "../../server/testing/cleanup.ts";
 
 import { BOARD_CHANGED_EVENT, FORUM_SELECTION, forumKept, type BoardPost } from "@/lib/board";
@@ -187,7 +185,7 @@ describe("Forum", () => {
     expect(document.activeElement).toBe(host.querySelector('[data-board-post="p10"] > button'));
   });
 
-  it("a keyboard user reaches Copy and Delete on their own plain reply", async () => {
+  it("a keyboard user reaches Copy, and no Delete, on their own reply", async () => {
     posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
     await render(BoardView);
     await openRow("pbot");
@@ -195,7 +193,7 @@ describe("Forum", () => {
     expect(opener).not.toBeNull();
     opener.focus();
     await act(async () => { opener.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })); });
-    expect([...document.body.querySelectorAll("[data-message-menu] [role=menuitem]")].map((item) => item.textContent)).toEqual(["Copy", "Delete"]);
+    expect([...document.body.querySelectorAll("[data-message-menu] [role=menuitem]")].map((item) => item.textContent)).toEqual(["Copy"]);
   });
 
   it("draws the person icon, not a letter, on the user's reply with no profile name", async () => {
@@ -215,7 +213,7 @@ describe("Forum", () => {
     expect(host.querySelector('[data-board-post="pmine"]')!.textContent).toContain("MP");
   });
 
-  it("asks before deleting the user's own reply, and Cancel keeps it", async () => {
+  it("asks before deleting a post, and Cancel keeps it", async () => {
     posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
     const ok = globalThis.fetch;
     const deletes: string[] = [];
@@ -224,26 +222,25 @@ describe("Forum", () => {
       return ok(url, init);
     }));
     await render(BoardView);
-    await openRow("pbot");
     const askDelete = async () => {
-      await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+      await act(async () => { host.querySelector('[data-board-post="pbot"] button')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
       await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
     };
     await askDelete();
-    expect(document.body.querySelector("[role=dialog] h2")!.textContent).toBe("Delete this reply?");
+    expect(document.body.querySelector("[role=dialog] h2")!.textContent).toBe("Delete this post?");
     expect(deletes).toEqual([]);
     await dialogButton("Cancel");
     await settle();
     expect(deletes).toEqual([]);
-    expect(host.querySelector('[data-board-post="pmine"]')).not.toBeNull();
+    expect(host.querySelector('[data-board-post="pbot"]')).not.toBeNull();
     await askDelete();
     await dialogButton("Delete");
     await settle();
-    expect(deletes).toEqual(["pmine"]);
+    expect(deletes).toEqual(["pbot"]);
   });
 
-  it("a deleted reply stays gone: no ghost from the saved reply or a load asked before the delete", async () => {
-    posts = [post("pbot", { created_at: 1 })];
+  it("a deleted thread stays gone: no ghost from the reply saved in it or a load asked before the delete", async () => {
+    posts = [post("pbot", { created_at: 1 }), post("pother", { created_at: 0 })];
     const ok = globalThis.fetch;
     let hold: ((value: Response) => void) | null = null;
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -252,6 +249,10 @@ describe("Forum", () => {
         const mine = post("pmine", { parent_id: sent.parent_id, author_bot_id: "user", kind: "tip", body: sent.body, source_ref: `reply:${sent.client_id}`, created_at: 2 });
         posts.push(mine);
         return new Response(JSON.stringify({ post: mine }), { headers: { "content-type": "application/json" } });
+      }
+      if (url === "/api/board/delete") {
+        posts = posts.filter((held) => held.id !== "pbot" && held.parent_id !== "pbot");
+        return json({ posts: [] });
       }
       // a load asked before the delete that answers after it
       if (url === "/api/board" && hold === null && posts.some((held) => held.id === "pmine")) {
@@ -267,17 +268,48 @@ describe("Forum", () => {
     await settle();
     expect(rows()).toContain("pmine");
     await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
-    await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
     await dialogButton("Delete");
     await settle();
-    expect(rows()).not.toContain("pmine");
+    expect(rows()).toEqual(["pother"]);
     await act(async () => hold!(new Response()));
     await settle();
-    expect(rows()).not.toContain("pmine");
+    expect(rows()).toEqual(["pother"]);
     await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
     await settle();
-    expect(rows()).toEqual(["pbot"]);
+    expect(rows()).toEqual(["pother"]);
+  });
+
+  it("a reply whose answer lands after its thread was deleted here never shows", async () => {
+    posts = [post("pbot", { created_at: 1 }), post("pother", { created_at: 0 })];
+    const ok = globalThis.fetch;
+    let answer = () => {};
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/reply") {
+        const sent = JSON.parse(String(init?.body));
+        const mine = post("pmine", { parent_id: sent.parent_id, author_bot_id: "user", kind: "tip", body: sent.body, source_ref: `reply:${sent.client_id}`, created_at: 2 });
+        await new Promise<void>((resolve) => { answer = resolve; });
+        return new Response(JSON.stringify({ post: mine }), { headers: { "content-type": "application/json" } });
+      }
+      if (url === "/api/board/delete") {
+        posts = posts.filter((held) => held.id !== "pbot");
+        return json({ posts: [] });
+      }
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pbot");
+    await typeIn(box("pbot")!, "Mine.");
+    await click('[data-board-reply-box="pbot"] button[type="submit"]');
+    await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    expect(rows()).toEqual(["pother"]);
+    await act(async () => answer());
+    await settle();
+    expect(rows()).toEqual(["pother"]);
   });
 
   it("a reply saved here that another PC deleted before any load carried it leaves on the next load", async () => {
@@ -370,125 +402,8 @@ describe("Forum", () => {
     expect(rows()).toEqual([other.id]);
   });
 
-  it("a retry of a reply whose answer was lost stays gone once another PC deleted the reply", async () => {
-    const temps = createTempDirs();
-    afterAll(() => temps.remove());
-    const drive = temps.make(join(tmpdir(), "orbit-forum-drive-"));
-    const boot = (pc: string, changed?: () => void) => createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-forum-")), "board"), pcId: () => pc, changed });
-    const [a, b] = [boot("home"), boot("work", () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)))];
-    const ids = { in: (id: string) => id, out: (id: string) => id };
-    const sync = () => {
-      for (const board of [a, b, a, b]) board.sync(drive, ids);
-    };
-    const routes = createBoardRoutes({ board: b, caller: () => undefined, known: () => false, projectOf: () => "", roomTurn: () => null });
-    const stuck = a.post({ author_bot_id: "astra", kind: "stuck", title: "Stuck on the staging deploy", body: "Stuck on the staging deploy", source_ref: "call:ta:0:engine:deploy" });
-    sync();
-    const sent: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-      if (url !== "/api/board/reply") return json({ posts: b.list() });
-      const raw = String(init?.body);
-      sent.push(JSON.parse(raw).client_id);
-      let answer = "";
-      const req = Object.assign(Readable.from([Buffer.from(raw)]), { headers: { "content-type": "application/json" } });
-      const res = { writeHead: () => res, end: (body: string) => { answer = body; } };
-      // SAFETY: the reply route reads only the request's headers and body, and calls only writeHead and end.
-      await routes.reply(req as never, res as never);
-      // the first answer is lost after the reply was saved
-      if (sent.length === 1) throw new TypeError("connection reset");
-      return new Response(answer, { headers: { "content-type": "application/json" } });
-    }));
-    await render(BoardView);
-    await openRow(stuck.id);
-    await typeIn(box(stuck.id)!, "On it.");
-    await click(`[data-board-reply-box="${stuck.id}"] button[type="submit"]`);
-    await settle();
-    const reply = b.list().find((held) => held.parent_id === stuck.id)!;
-    expect(rows()).toEqual([stuck.id, reply.id]);
-    await act(async () => {
-      sync();
-      a.remove(reply.id);
-      sync();
-    });
-    await settle();
-    expect(rows()).toEqual([stuck.id]);
-    await click(`[data-board-reply-box="${stuck.id}"] button[type="submit"]`);
-    await settle();
-    expect(sent).toEqual([sent[0], sent[0]]);
-    expect(rows()).toEqual([stuck.id]);
-    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
-    await settle();
-    expect(rows()).toEqual([stuck.id]);
-    for (const board of [a, b]) expect(board.list().map((held) => held.id)).toEqual([stuck.id]);
-  });
 
-  it("two PCs each deleting one of two nested replies keep the answer under them in its thread, and the thread's Delete takes it", async () => {
-    const temps = createTempDirs();
-    afterAll(() => temps.remove());
-    const drive = temps.make(join(tmpdir(), "orbit-forum-drive-"));
-    const boot = (pc: string, dir = join(temps.make(join(tmpdir(), "orbit-forum-")), "board")) => createBoard({ dir, pcId: () => pc });
-    let [a, b] = [boot("home"), boot("work")];
-    const ids = { in: (id: string) => id, out: (id: string) => id };
-    const sync = () => {
-      for (const board of [a, b, a, b]) board.sync(drive, ids);
-    };
-    const stuck = a.post({ author_bot_id: "astra", kind: "stuck", title: "Stuck on the staging deploy", body: "Stuck on the staging deploy", source_ref: "call:ta:0:engine:deploy" });
-    const other = a.post({ author_bot_id: "astra", kind: "tip", title: "Pin node 22", body: "Pin node 22", source_ref: "tool:ta:pin" });
-    const upper = a.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: stuck.title, body: "On it.", source_ref: "reply:r1" });
-    const lower = a.post({ author_bot_id: BOARD_USER, parent_id: upper.id, kind: "tip", title: stuck.title, body: "Still stuck.", source_ref: "reply:r2" });
-    const answer = a.post({ author_bot_id: "carbon", parent_id: lower.id, kind: "tip", title: stuck.title, body: "Redeploy from main.", source_ref: "tool:tc:redeploy" });
-    sync();
-    a.remove(lower.id);
-    b.remove(upper.id);
-    sync();
-    [a, b] = [boot("home", a.dir), boot("work", b.dir)];
-    sync();
-    const routes = createBoardRoutes({ board: b, caller: () => undefined, known: () => false, projectOf: () => "", roomTurn: () => null });
-    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-      if (url !== "/api/board/delete") return json({ posts: b.list() });
-      let status = 0;
-      let answer = "";
-      const req = Object.assign(Readable.from([Buffer.from(String(init?.body))]), { headers: { "content-type": "application/json" } });
-      const res = { writeHead: (code: number) => { status = code; return res; }, end: (body: string) => { answer = body; } };
-      // SAFETY: the delete route reads only the request's headers and body, and calls only writeHead and end.
-      await routes.remove(req as never, res as never);
-      return new Response(answer, { status, headers: { "content-type": "application/json" } });
-    }));
-    await render(BoardView);
-    expect(rows().sort()).toEqual([stuck.id, other.id].sort());
-    await openRow(stuck.id);
-    expect(rows()).toEqual([stuck.id, answer.id]);
-    await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
-    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
-    await dialogButton("Delete");
-    await settle();
-    expect(rows()).toEqual([other.id]);
-    sync();
-    for (const board of [a, b]) expect(board.list().map((held) => held.id)).toEqual([other.id]);
-  });
 
-it("a deleted reply's own replies stay in the thread, moved up to its parent", async () => {
-    posts = [
-      post("pbot", { created_at: 1 }),
-      post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 }),
-      post("pchild", { parent_id: "pmine", author_bot_id: "carbon", kind: "tip", body: "Child.", created_at: 3 }),
-    ];
-    const ok = globalThis.fetch;
-    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (url === "/api/board/delete" ? json({ posts: [] }) : ok(url, init))));
-    await render(BoardView);
-    await openRow("pbot");
-    await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
-    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
-    await dialogButton("Delete");
-    await settle();
-    const inThread = () => host.querySelector('[data-side-panel] [data-board-post="pchild"]');
-    expect(host.querySelector('[data-board-post="pmine"]')).toBeNull();
-    expect(inThread()).not.toBeNull();
-    // a load asked before the delete still names the deleted parent
-    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
-    await settle();
-    expect(host.querySelector('[data-board-post="pmine"]')).toBeNull();
-    expect(inThread()).not.toBeNull();
-  });
 
   it("a newer send of the same draft keeps its retry id when an older send finishes", async () => {
     posts = [post("pop", { created_at: 1 })];
@@ -933,7 +848,7 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     expect([...host.querySelectorAll("article, [role=list]")].map((part) => part.textContent).join(" ")).not.toMatch(/Edward|EY|coool|push it/);
   });
 
-  it("right-click opens the chat's menu: Copy on bot replies, Copy and Delete on any top-level post and the user's own reply", async () => {
+  it("right-click opens the chat's menu: Copy on any reply, Copy and Delete on a top-level post", async () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     posts = [
@@ -953,14 +868,7 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pbot"] button')!.click());
     expect(await menuFor("article")).toEqual(["Copy", "Delete"]);
     expect(await menuFor('[data-board-post="pcarbon"] [data-board-author]')).toEqual(["Copy"]);
-    expect(await menuFor('[data-board-post="pmine"] p')).toEqual(["Copy", "Delete"]);
-    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
-    await dialogButton("Delete");
-    await settle();
-    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
-    await settle();
-    expect(rows()).toEqual(["pbot", "pcarbon"]);
-    expect(host.querySelector("article")!.textContent).toContain("1 reply");
+    expect(await menuFor('[data-board-post="pmine"] p')).toEqual(["Copy"]);
     // Escape takes the menu, not the open post
     await menuFor("article");
     await esc();
@@ -1003,13 +911,13 @@ it("a deleted reply's own replies stay in the thread, moved up to its parent", a
     expect(rows()).toEqual(["pother"]);
   });
 
-  it("says so when a delete fails and keeps the reply", async () => {
+  it("says so when a delete fails and keeps the post", async () => {
     posts = [post("pbot", { created_at: 1 }), post("pmine", { parent_id: "pbot", author_bot_id: "user", kind: "tip", body: "Mine.", source_ref: "reply:r1", created_at: 2 })];
     const ok = globalThis.fetch;
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (url === "/api/board/delete" ? new Response("{}", { status: 500 }) : ok(url, init))));
     await render(BoardView);
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pbot"] button')!.click());
-    await act(async () => { host.querySelector('[data-board-post="pmine"] p')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
     await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
     await dialogButton("Delete");
     await settle();

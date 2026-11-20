@@ -89,13 +89,13 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       });
       return json(res, 200, { post });
     },
-    /** The user deletes their own replies and any top-level post; a bot has no route here. */
+    /** The user deletes a top-level post with its whole thread; a bot has no route here. */
     async remove(req: IncomingMessage, res: ServerResponse) {
       const body = removeSchema.safeParse(await readBody(req));
       if (!body.success) return json(res, 400, { error: "a delete needs id" });
       const post = deps.board.get(body.data.id);
       if (!post) return json(res, 404, { error: `no Board post ${body.data.id}` });
-      if (!removable(post)) return json(res, 403, { error: "only your own replies and top-level posts can be deleted" });
+      if (!removable(post)) return json(res, 403, { error: "only a top-level post can be deleted" });
       deps.board.remove(post.id);
       return json(res, 200, { id: post.id });
     },
