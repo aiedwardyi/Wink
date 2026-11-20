@@ -156,11 +156,14 @@ export interface BotLines { lines: string[]; commits: string[]; open: TaskAsk[] 
 export interface KeptPromises { promises: string[]; done: TaskAsk[] }
 
 // "I'll do X when Y": a first-person commitment tied to a time or trigger; in-turn work ("let me check", "one moment") never counts
-const COMMIT = /\b(?:i['’]ll|i will|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
-const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|when|once|after|before|next|by|(?:mon|tues|wednes|thurs|fri|satur|sun)day|this (?:morning|afternoon|evening|week|weekend)|in (?:an?|\d+) (?:minutes?|hours?|days?|weeks?))\b|\b\d{1,2}(?::\d{2})?\s?[ap]\.?m\b|\bat \d{1,2}(?::\d{2})?\b|나중에|내일|오늘|이따|다음에|되면|끝나면|켜시면|하시면|후에|\d{1,2}시/i;
+const COMMIT = /\b(?:i['’]ll|i will(?! not)|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
+const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|noon|midnight|when|once|after|before|next|by|(?:mon|tues|wednes|thurs|fri|satur|sun)day|this (?:morning|afternoon|evening|week|weekend)|in (?:an?|\d+) (?:minutes?|hours?|days?|weeks?))\b|\b\d{1,2}(?::\d{2})?\s?[ap]\.?m\b|\bat \d{1,2}(?::\d{2})?\b|나중에|내일|오늘|이따|다음에|되면|끝나면|켜시면|하시면|후에|\d{1,2}시/i;
 const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
 const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
+// later in the same reply: "scratch that" takes the last promise back, "I backed it up just now" says it is already done
+const WITHDRAWN = /\b(?:scratch that|never ?mind|cancel that|(?:won['’]t|will not|can['’]t|cannot) (?:be able to|make it))\b|취소할게요|못 할 것 같/i;
+const DONE_NOW = /\bi(?:['’]ve| have)?\s.*\bjust now\b|방금/i;
 
 /** The bot's text after the last tool of its reply to each of these user rows, as sentences in order: commitments, and reports of finished work. */
 export function botLines(messages: readonly Message[], ids: readonly string[], open: readonly TaskAsk[]): BotLines | null {
@@ -176,14 +179,18 @@ export function botLines(messages: readonly Message[], ids: readonly string[], o
       if (row.kind === "text" && row.text?.trim()) tail.push(row.text.replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1").replace(CONTEXT_TAGS, " "));
       else if (row.tool && row.tool.name !== MEMORY_SAVE_TOOL) tail = [];
     }
+    const reply: string[] = [];
     for (const part of tail.join("\n").split(SENTENCE)) {
       const sentence = part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
       if (!sentence || sentence.length > SAID_CHARS || sentence.endsWith("?") || secretLike(sentence)) continue;
-      if (COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence)) commits.push(sentence);
-      // a report rides along so the note-taker sees a promise already done, or an open one finished
+      if (WITHDRAWN.test(sentence)) reply.pop();
+      if (COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence)) reply.push(sentence);
+      else if (DONE_NOW.test(sentence)) reply.pop();
+      // a report rides along so the note-taker sees an open one finished
       else if (!REPORT.test(sentence)) continue;
       lines.push(sentence);
     }
+    commits.push(...reply);
   }
   return commits.length || (open.length && lines.length) ? { lines, commits, open: [...open] } : null;
 }
@@ -192,8 +199,8 @@ const botPrompt = ({ lines, open }: BotLines) => [
   "",
   "BOT LINES are the bot's own words at the end of its replies:",
   "- kind \"promise\": an unfinished task the bot said it will do later, on a time or trigger. fact: that task in the bot's first-person words and language, like \"I'll check laptop sync once you're on it\", 80 characters max; quote: its exact words from BOT LINES.",
-  "- Not a promise: an offer waiting on the user's yes, a rule for how it will behave, work done in the same lines, or one OPEN PROMISES already has, even reworded.",
-  ...(open.length ? ["- kind \"done\": an OPEN PROMISES item BOT LINES say is finished; fact: its id; quote: the words that say so."] : []),
+  "- Not a promise: an offer waiting on the user's yes, a rule for how it will behave, or work done in the same lines.",
+  ...(open.length ? ["- A promise OPEN PROMISES already has, even reworded: add replaces: its id.", "- kind \"done\": an OPEN PROMISES item BOT LINES say is finished; fact: its id; quote: the words that say so."] : []),
   "",
   "BOT LINES:",
   "<bot_lines>",
@@ -207,9 +214,10 @@ export function acceptPromises(facts: Fact[], said: BotLines): KeptPromises {
   const promises: string[] = [];
   const done: TaskAsk[] = [];
   const quoted = (lines: string[], quote: string) => Boolean(quote.trim()) && lines.some((line) => squash(line).includes(squash(quote)));
-  for (const { kind, fact, quote } of facts) {
+  for (const { kind, fact, quote, replaces } of facts) {
     const line = fact.replace(/\s+/g, " ").trim();
-    if (kind === "promise" && line && line.length <= ASK_LIMITS.ask && !secretLike(line) && quoted(said.commits, quote) && !promises.includes(line)) promises.push(line);
+    const repeat = said.open.some((ask) => ask.id === replaces?.trim().toUpperCase());
+    if (kind === "promise" && !repeat && line && line.length <= ASK_LIMITS.ask && !secretLike(line) && quoted(said.commits, quote) && !promises.includes(line)) promises.push(line);
     const finished = kind === "done" ? said.open.find((ask) => ask.id === line.toUpperCase()) : undefined;
     if (finished && quoted(said.lines, quote) && !done.includes(finished)) done.push(finished);
   }

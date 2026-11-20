@@ -140,7 +140,7 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
 // the note-taker rewords a repeat, so a promise sharing most of its words with an open one is that one
 const gist = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{4,}|[가-힣]{2,}/gu) ?? []);
 // "PC A" and "PC B", or 4 pm and 5 pm: a number or one-letter name only one of them has keeps them apart
-const marks = (text: string) => [...new Set(text.match(/\p{N}+|(?<![\p{L}\p{N}'’])\p{Lu}(?![\p{L}\p{N}'’])/gu)?.filter((mark) => mark !== "I"))].sort().join(" ");
+const marks = (text: string) => [...new Set(text.replace(/\b(\d{1,2}):00\b/g, "$1").match(/\p{N}+|(?<![\p{L}\p{N}'’])\p{Lu}(?![\p{L}\p{N}'’])/gu)?.filter((mark) => mark !== "I"))].sort().join(" ");
 function samePromise(a: string, b: string): boolean {
   const [x, y] = [gist(a), gist(b)];
   const least = Math.min(x.size, y.size);
@@ -157,9 +157,11 @@ export function fileBotPromises(book: AskBook | undefined, promises: readonly st
     Object.assign(item, { status: "done", changedAt: now });
     changed = true;
   }
+  const read = asks.length;
   for (const promise of promises) {
     const ask = clip(promise, ASK_LIMITS.ask);
-    if (!ask || asks.some((item) => isOpenAsk(item) && (words(item.ask) === words(ask) || (item.kind === "promise" && samePromise(item.ask, ask))))) continue;
+    // promises quoted from separate sentences now are separate; only an earlier one can come back reworded
+    if (!ask || asks.some((item, at) => isOpenAsk(item) && (words(item.ask) === words(ask) || (at < read && item.kind === "promise" && samePromise(item.ask, ask))))) continue;
     lastAskId += 1;
     asks.push({ id: `A${lastAskId}`, ask, status: "open", kind: "promise", at: now, changedAt: now });
     changed = true;

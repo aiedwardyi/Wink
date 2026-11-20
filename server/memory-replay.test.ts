@@ -167,10 +167,15 @@ describe("memory replay: gate 2073 cases", () => {
     run.dispose();
   });
 
-  it("shows the note-taker a promise done in the same reply, which files nothing", async () => {
-    const run = replay("same-turn-done");
-    await run.talk([ask, { role: "bot", text: `${LAPTOP} I checked the laptop backup just now.` }], skipsDone);
-    expect(botLinesIn(run.prompts[0]!)).toEqual([LAPTOP, "I checked the laptop backup just now."]);
+  it.each([
+    { name: "checked", helper: filesEvery, rows: [{ role: "bot", text: `${LAPTOP} I checked the laptop backup just now.` }] },
+    { name: "checked", helper: skipsDone, rows: [{ role: "bot", text: `${LAPTOP} I checked the laptop backup just now.` }] },
+    { name: "backed up", helper: filesEvery, rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "I backed it up just now." }] },
+    { name: "backed up", helper: skipsDone, rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "I backed it up just now." }] },
+    { name: "withdrawn", helper: filesEvery, rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "Actually, scratch that. I won't be able to do it." }] },
+  ] satisfies { name: string; helper: NoteGenerator; rows: MissRow[] }[])("files nothing for a promise $name later in the same reply ($helper.name)", async ({ name, helper, rows }) => {
+    const run = replay(`same-reply-${name.replace(/\W+/g, "-")}-${helper.name}`);
+    await run.talk([ask, ...rows], helper);
     expect(run.asks()).toEqual([]);
     run.dispose();
   });
@@ -193,11 +198,56 @@ describe("memory replay: gate 2073 cases", () => {
     run.dispose();
   });
 
+  it("keeps a new promise after a withdrawn one", async () => {
+    const run = replay("withdrawn-then-new");
+    await run.talk([ask, { role: "bot", text: `${LAPTOP} Never mind, I'll check the desktop backup tonight.` }], filesEvery);
+    expect(run.asks().map((item) => item.ask)).toEqual(["Never mind, I'll check the desktop backup tonight."]);
+    run.dispose();
+  });
+
   it("keeps a later promise for PC B apart from the open one for PC A", async () => {
     const run = replay("pc-b-later");
     await run.talk([ask, { role: "bot", text: "I'll check the nightly backup on PC A tomorrow." }], filesEvery);
     await run.talk([ask, { role: "bot", text: "I'll check the nightly backup on PC B tomorrow." }], filesEvery);
     expect(run.asks().map((item) => item.ask)).toEqual(["I'll check the nightly backup on PC A tomorrow.", "I'll check the nightly backup on PC B tomorrow."]);
+    run.dispose();
+  });
+});
+
+describe("memory replay: gate 2073B cases", () => {
+  const invoice = "I'll email the signed invoice tomorrow at 4 pm.";
+  it("merges the same deadline written as 4:00 pm", async () => {
+    const run = replay("clock-repeat");
+    await run.talk([ask, { role: "bot", text: invoice }], filesEvery);
+    await run.talk([{ role: "user", text: "Please confirm." }, { role: "bot", text: invoice.replace("4 pm", "4:00 pm") }], filesEvery);
+    expect(run.asks().map((item) => item.ask)).toEqual([invoice]);
+    run.dispose();
+  });
+
+  it("keeps 4 pm and 4:30 pm apart", async () => {
+    const run = replay("clock-distinct");
+    await run.talk([ask, { role: "bot", text: invoice }], filesEvery);
+    await run.talk([ask, { role: "bot", text: invoice.replace("4 pm", "4:30 pm") }], filesEvery);
+    expect(run.asks()).toHaveLength(2);
+    run.dispose();
+  });
+
+  it("merges a reworded repeat the note-taker ties to the open promise", async () => {
+    const run = replay("tied-repeat");
+    await run.talk([ask, { role: "bot", text: LAPTOP }], filesEvery);
+    const restated = "I'll verify the notebook backup later.";
+    await run.talk([ask, { role: "bot", text: restated }], async () => JSON.stringify([{ kind: "promise", fact: restated, quote: restated, replaces: "A1" }]));
+    expect(run.asks().map((item) => item.ask)).toEqual([LAPTOP]);
+    run.dispose();
+  });
+
+  it.each([
+    { name: "payroll and billing backups in one reply", text: "I'll check the nightly payroll backup tomorrow. I'll check the nightly billing backup tomorrow.", kept: ["I'll check the nightly payroll backup tomorrow.", "I'll check the nightly billing backup tomorrow."] },
+    { name: "a promise at noon", text: "I'll email the signed invoice at noon.", kept: ["I'll email the signed invoice at noon."] },
+  ])("files $name", async ({ name, text, kept }) => {
+    const run = replay(name.replace(/\W+/g, "-"));
+    await run.talk([ask, { role: "bot", text }], filesEvery);
+    expect(run.asks().map((item) => item.ask)).toEqual(kept);
     run.dispose();
   });
 });
