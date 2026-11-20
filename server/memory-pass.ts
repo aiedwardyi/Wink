@@ -9,6 +9,7 @@ import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } fro
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
+import { ASK_LIMITS, fileBotPromises, isOpenAsk, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import {
   ensureWorkspace,
@@ -34,6 +35,8 @@ const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
 const SUMMARY_MAX = 120;
+const SAID_MAX = 8;
+const SAID_CHARS = 240;
 const STATE_FILE = "memory-pass.json";
 
 const listSchema = z.union([z.array(z.string()), z.string()]).nullish();
@@ -64,6 +67,10 @@ export interface MemoryPassDeps {
   /** The bot's Auto notes switch, read live. */
   enabled(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
+  /** A 1:1 chat's asks, where the bot's own promises are filed. */
+  asks?(threadId: string): AskBook | null | undefined;
+  /** Saves what `change` returns to the chat's asks; null saves nothing. */
+  saveAsks?(threadId: string, change: (book: AskBook | undefined) => SavedAsks | null): void;
   dataDir: string;
   now?(): number;
 }
@@ -145,7 +152,71 @@ const promptLine = ({ id, questionId, text, context, pictures, prior }: UserLine
     text,
   ].join("\n");
 
-export function notePrompt(notes: string, lines: UserLine[], picks = ""): string {
+/** The bot's own words at the end of its replies: its promises, and reports that may finish an open one. */
+export interface BotLines { commits: string[]; reports: string[]; open: TaskAsk[] }
+export interface KeptPromises { promises: string[]; done: string[] }
+
+// "I'll do X when Y": a first-person commitment tied to a time or trigger; in-turn work ("let me check", "one moment") never counts
+const COMMIT = /\b(?:i['’]ll|i will|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
+const DEFERRED = /\b(?:later|tomorrow|tonight|overnight|when|once|after|before|next|by)\b|나중에|내일|이따|다음에|되면|끝나면|켜시면|하시면|후에/i;
+const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
+const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
+const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
+
+/** The last text of the bot's reply to each of these user rows, when no tool ran after it, as sentences. */
+export function botLines(messages: readonly Message[], ids: readonly string[], open: readonly TaskAsk[]): BotLines | null {
+  const wanted = new Set(ids);
+  const commits: string[] = [];
+  const reports: string[] = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (!wanted.has(messages[i]!.id)) continue;
+    let last: string | undefined;
+    for (let j = i + 1; j < messages.length && messages[j]!.role !== "user"; j += 1) {
+      const row = messages[j]!;
+      if (row.role !== "bot") continue;
+      if (row.kind === "text" && row.text?.trim()) last = row.text;
+      else if (row.tool && row.tool.name !== MEMORY_SAVE_TOOL) last = undefined;
+    }
+    const plain = last?.replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1").replace(CONTEXT_TAGS, " ") ?? "";
+    for (const part of plain.split(SENTENCE)) {
+      const sentence = part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+      if (!sentence || sentence.length > SAID_CHARS || sentence.endsWith("?") || secretLike(sentence)) continue;
+      if (COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence)) commits.push(sentence);
+      else if (open.length && REPORT.test(sentence)) reports.push(sentence);
+    }
+  }
+  return commits.length || reports.length ? { commits: commits.slice(-SAID_MAX), reports: reports.slice(-SAID_MAX), open: [...open] } : null;
+}
+
+const botPrompt = ({ commits, reports, open }: BotLines) => [
+  "",
+  "BOT LINES are the bot's own words at the end of its replies:",
+  "- promise: an unfinished task the bot said it will do later, on a time or trigger. fact: that task in the bot's first-person words and language, like \"I'll check laptop sync once you're on it\", 80 characters max; quote: its exact words from BOT LINES.",
+  "- Not a promise: an offer waiting on the user's yes, a rule for how it will behave, work done in the same lines, or one OPEN PROMISES has.",
+  ...(open.length ? ["- done: an OPEN PROMISES item BOT LINES say is finished; fact: its id; quote: the words that say so."] : []),
+  "",
+  "BOT LINES:",
+  "<bot_lines>",
+  ...[...commits, ...reports].map((line) => `- ${line}`),
+  "</bot_lines>",
+  ...(open.length ? ["", "OPEN PROMISES:", "<promises>", ...open.map((ask) => `${ask.id}: ${ask.ask}`), "</promises>"] : []),
+];
+
+/** Promises quoted from a commitment, and open promise ids a quoted line finished. */
+export function acceptPromises(facts: Fact[], said: BotLines): KeptPromises {
+  const promises: string[] = [];
+  const done: string[] = [];
+  const quoted = (lines: string[], quote: string) => Boolean(quote.trim()) && lines.some((line) => squash(line).includes(squash(quote)));
+  for (const { kind, fact, quote } of facts) {
+    const line = fact.replace(/\s+/g, " ").trim();
+    if (kind === "promise" && line && line.length <= ASK_LIMITS.ask && !secretLike(line) && quoted(said.commits, quote) && !promises.includes(line)) promises.push(line);
+    const id = line.toUpperCase();
+    if (kind === "done" && said.open.some((ask) => ask.id === id) && quoted([...said.reports, ...said.commits], quote) && !done.includes(id)) done.push(id);
+  }
+  return { promises, done };
+}
+
+export function notePrompt(notes: string, lines: UserLine[], picks = "", said?: BotLines | null): string {
   return [
     "You pick durable facts and decisions out of the user's own chat messages, for their notes file.",
     "",
@@ -165,7 +236,7 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "- Copy the decision's message_id from <source>. Use <prior> and its question_id only for a continued question.",
     "- replaces: only when the fact makes a CURRENT NOTES line untrue or outdated, that whole line copied exactly. Otherwise leave it out.",
     "",
-    "Reply with a JSON array of facts, decisions and tweaks, or [] when nothing qualifies.",
+    `Reply with a JSON array of facts, decisions and tweaks${said ? ", promises and dones" : ""}, or [] when nothing qualifies.`,
     "",
     "CURRENT NOTES:",
     "<notes>",
@@ -181,6 +252,7 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "<user_lines>",
     lines.map(promptLine).join("\n\n"),
     "</user_lines>",
+    ...(said ? botPrompt(said) : []),
   ].join("\n");
 }
 
@@ -553,6 +625,8 @@ interface PassLog {
   decisions?: number;
   replaced?: number;
   tweaks?: number;
+  promises?: number;
+  closed?: number;
   ms: number;
   result: "saved" | "none" | "busy" | "too-large" | "conflict" | "error";
 }
@@ -769,7 +843,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (files.length) line.files = files;
       return line;
     });
-    if (!lines.length) return done(threadId, ids);
+    const book = roomSource(threadId) || !deps.saveAsks ? undefined : deps.asks?.(threadId);
+    const said = roomSource(threadId) || !deps.saveAsks ? null : botLines(messages, ids, (book?.asks ?? []).filter((ask) => ask.kind === "promise" && isOpenAsk(ask)));
+    if (!lines.length && !said) return done(threadId, ids);
     const memory = readMemoryFile(botId);
     const raw = memoryFileRaw(botId);
     const started = now();
@@ -779,7 +855,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     let outcome = "helper-failed";
     let output: string;
     try {
-      output = await generate(notePrompt(memory.text, lines, pickKeysList(readMemoryTopic(botId, PICKS_FILE))), signal, trace ? (usage, id) => {
+      output = await generate(notePrompt(memory.text, lines, pickKeysList(readMemoryTopic(botId, PICKS_FILE)), said), signal, trace ? (usage, id) => {
         request++;
         trace.request(id ?? `helper:${request}`, usage);
       } : undefined);
@@ -798,7 +874,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
-    land(botId, threadId, { ids, facts: parseFacts(output), source: lines }, memory, raw, now() - started);
+    const facts = parseFacts(output);
+    const promised = acceptPromises(facts, said ?? { commits: [], reports: [], open: [] });
+    if (promised.promises.length || promised.done.length) {
+      deps.saveAsks?.(threadId, (current) => fileBotPromises(current, promised.promises, promised.done, now()));
+      log({ botId, threadId, promises: promised.promises.length, closed: promised.done.length, ms: now() - started, result: "saved" });
+    }
+    land(botId, threadId, { ids, facts: facts.filter(({ kind }) => kind !== "promise" && kind !== "done"), source: lines }, memory, raw, now() - started);
   };
 
   const pump = () => {

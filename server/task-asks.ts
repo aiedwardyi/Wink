@@ -16,8 +16,8 @@ export const taskAskSchema = z.object({
   ask: z.string().min(1).max(ASK_LIMITS.ask),
   status: z.enum(ASK_STATUSES),
   ref: z.string().min(1).max(ASK_LIMITS.ref).optional(),
-  /** the bot's own ask_user card left unanswered; Wink adds these, not the bot */
-  kind: z.literal("question").optional(),
+  /** question: the bot's own ask_user card left unanswered; promise: its own "I'll do X" from a reply. Wink adds these, not the bot */
+  kind: z.enum(["question", "promise"]).optional(),
   choices: z.string().min(1).max(ASK_LIMITS.ref).optional(),
   due: z.number().int().nonnegative().optional(),
   /** the wake Wink set for due, so moving or closing the ask cancels it */
@@ -136,6 +136,28 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
+/** Files the bot's own promises as open asks and closes the promise ids it finished; null when nothing changes. An open ask with the same words is a repeat. */
+export function fileBotPromises(book: AskBook | undefined, promises: readonly string[], done: readonly string[], now: number): SavedAsks | null {
+  const asks = (book?.asks ?? []).map((item) => ({ ...item }));
+  let lastAskId = lastAskIdOf(book);
+  let changed = false;
+  for (const item of asks) {
+    if (!done.includes(item.id) || item.kind !== "promise" || !isOpenAsk(item)) continue;
+    Object.assign(item, { status: "done", changedAt: now });
+    changed = true;
+  }
+  for (const promise of promises) {
+    const ask = clip(promise, ASK_LIMITS.ask);
+    if (!ask || asks.some((item) => isOpenAsk(item) && words(item.ask) === words(ask))) continue;
+    lastAskId += 1;
+    asks.push({ id: `A${lastAskId}`, ask, status: "open", kind: "promise", at: now, changedAt: now });
+    changed = true;
+  }
+  if (!changed) return null;
+  trimClosed(asks);
+  return { asks, lastAskId };
+}
+
 /** A card answered after its question was filed: one filed for this card goes, an older one closes done. Null when none matches. */
 export function answerQuestionAsk(existing: readonly TaskAsk[] | undefined, question: string, cardAt: number, now: number): TaskAsk[] | null {
   const ask = words(clip(question, ASK_LIMITS.ask));
@@ -159,7 +181,7 @@ function listed(asks: readonly TaskAsk[] | undefined, now: number) {
   const due = open.filter((ask) => needsVerdict(ask, now)).sort(byAge);
   const rest = open.filter((ask) => !needsVerdict(ask, now)).sort(byAge);
   const ordered = [...due, ...rest.filter((ask) => !isQuestion(ask)), ...rest.filter(isQuestion)];
-  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${ask.kind ? ` ${ask.kind}` : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
   const bytes = (ask: TaskAsk) => Buffer.byteLength(line(ask), "utf8") + 1;
   if (ordered.reduce((sum, ask) => sum + bytes(ask), 0) <= MAX_STATUS_ASKS_BYTES) return { ordered, due, shown: ordered, line };
   const picked = new Set<TaskAsk>();
@@ -187,9 +209,10 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   const waiting = ordered.length - shown.length;
   const rotated = waiting ? ` ${waiting} more wait for the next turn, least recently shown first.` : "";
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
+  const promises = shown.some((ask) => ask.kind === "promise") ? " A promise is your own word to the user: keep it, and close it once done or moot." : "";
   const back = Math.min(...parked.map((ask) => ask.until!));
   return [
-    `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
+    `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}${promises}]`,
     ...shown.map(line),
     ...(parked.length ? [`${parked.length} parked, next back ${day(back)}`] : []),
   ].join("\n");
