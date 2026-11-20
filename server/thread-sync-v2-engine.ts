@@ -671,10 +671,14 @@ export function createSyncEngine(input: SyncOptions) {
 
   function ingest(scope: SyncScope, writer: string, head: SyncHead, bytes: Buffer, segment: boolean, result: SyncApplyResult): "applied" | "older" | "rejected" {
     const prior = get(peerHeadSchema.optional(), "SELECT generation, cut, last_seq, hash FROM sync_v2_heads WHERE thread = ? AND writer = ?", scope.threadId, writer);
+    const conflict = () => head.versions.find((packet) => {
+      const known = get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", scope.threadId, writer, packet.seq);
+      return known && known.hash !== hash(JSON.stringify(packet));
+    });
     if (!segment && prior) {
       if (head.generation < prior.generation || head.sealedThrough < prior.cut || head.lastSeq < prior.last_seq) {
         result.rejected++;
-        return head.generation < prior.generation ? "older" : "rejected";
+        return head.generation < prior.generation && !conflict() ? "older" : "rejected";
       }
       if (head.generation === prior.generation && hash(bytes) !== prior.hash) {
         result.quarantined += quarantine(scope.threadId, writer, bytes, "Head generation changed bytes");
@@ -683,13 +687,11 @@ export function createSyncEngine(input: SyncOptions) {
       }
       if (head.generation === prior.generation) return "applied";
     }
-    for (const packet of head.versions) {
-      const known = get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", scope.threadId, writer, packet.seq);
-      if (known && known.hash !== hash(JSON.stringify(packet))) {
-        result.quarantined += quarantine(scope.threadId, writer, bytes, `Conflicting bytes for sequence ${packet.seq}`);
-        result.rejected++;
-        return "rejected";
-      }
+    const conflicting = conflict();
+    if (conflicting) {
+      result.quarantined += quarantine(scope.threadId, writer, bytes, `Conflicting bytes for sequence ${conflicting.seq}`);
+      result.rejected++;
+      return "rejected";
     }
     withMessageTransaction(() => {
       for (const packet of head.versions) {

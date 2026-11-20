@@ -565,6 +565,43 @@ describe("sends while a chat catches up", () => {
     expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
   });
 
+  it.each(["matching", "different"])("checks an older copy with %s stored packets before it clears the hold", async (kind) => {
+    const h = await boot(true);
+    h.deliverSegment();
+    const doc: SyncHead = { ...JSON.parse(h.head), generation: 111 };
+    writeFileSync(join(h.folder, h.headPath), JSON.stringify(doc));
+    await h.sync.pull("thread");
+    const { syncHold } = await import("./sync-hold.ts");
+    const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
+    const copyPath = "threads-v2 (1)/bot/thread/peer/head.json";
+    const list = (bytes: string) => syncHold.feed(h.folder, new Map([[h.headPath, JSON.stringify(doc)], [copyPath, bytes]].map(([path, data]) => [path, [{
+      id: path, name: "head.json", md5Checksum: createHash("md5").update(data).digest("hex"),
+      createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
+    }]])), ids);
+    const older: SyncHead = structuredClone({ ...doc, generation: 110, lastSeq: 3, seen: { ...doc.seen, peer: 3 }, versions: doc.versions.slice(0, 1) });
+    if (kind === "different") (older.versions[0]!.value as Message).text = "different sequence three";
+    mkdirSync(dirname(join(h.folder, copyPath)), { recursive: true });
+    writeFileSync(join(h.folder, copyPath), JSON.stringify(older));
+    await h.sync.pull("thread");
+    list(JSON.stringify(older));
+    const receipt = await h.send();
+    if (kind === "matching") {
+      expect(receipt.body.queued).not.toBe(true);
+      expect(h.startTurn).toHaveBeenCalledTimes(1);
+      return;
+    }
+    expectHeld(receipt);
+    const corrected = JSON.stringify({ ...doc, generation: 113, lastSeq: 6, seen: { ...doc.seen, peer: 6 }, versions: [...doc.versions,
+      { seq: 5, seen: { ...doc.seen, peer: 4 }, kind: "row", rowId: "peer-six", origin: "peer", baseStamp: null, value: { id: "peer-six", parentId: "peer-tip", at: 4, role: "user", kind: "text", text: "peer correction" } },
+      { seq: 6, seen: { ...doc.seen, peer: 5 }, kind: "head", rowId: "", baseStamp: "4:peer", value: "peer-six" },
+    ] });
+    list(corrected);
+    writeFileSync(join(h.folder, copyPath), corrected);
+    await h.sync.pull("thread");
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
+  });
+
   it("drops a stale listed hash once the listing matches the applied head", async () => {
     const h = await boot(true);
     const { syncHold } = await import("./sync-hold.ts");
