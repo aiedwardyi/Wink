@@ -50,6 +50,7 @@ export interface Snapshot {
   conflictScans: number;
   memo: number | null;
   pulls: string[];
+  filing: boolean;
   logs: string[];
 }
 
@@ -302,7 +303,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         const pending = hasSync ? Number(db.prepare("SELECT COUNT(*) AS n FROM sync_v2_packets WHERE applied = 0").get()!.n) : 0;
         const disk = db.prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid").all(threadId).map((row) => JSON.parse(String(row.json)));
         value = { rows: store.messagesFor(threadId), disk, leaf: store.activeLeaf(threadId), events: events.splice(0), tasks: store.tasks(bot.id), outbox, pending, files: readdirSync(input.dataDir), hasSync, noticeChecks, historyScans, headChecks, conflictScans,
-          memo: hasSync ? Number(db.prepare("SELECT cursor FROM sync_v2_notices WHERE thread = ?").get(threadId)?.cursor ?? NaN) : null, pulls: pulls.splice(0), logs };
+          memo: hasSync ? Number(db.prepare("SELECT cursor FROM sync_v2_notices WHERE thread = ?").get(threadId)?.cursor ?? NaN) : null, pulls: pulls.splice(0), filing: sync?.filing() ?? false, logs };
         break;
       }
       case "close":

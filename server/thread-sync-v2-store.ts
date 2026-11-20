@@ -744,6 +744,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
 
   let polls: Promise<unknown> = Promise.resolve();
   let filing = 0;
+  let pulls = 0;
   function pollAll(): Promise<void> {
     const next = polls.then(async () => {
       filing = 1;
@@ -773,15 +774,18 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       timers.delete(threadId);
       return publish(threadId);
     },
-    pull: (threadId: string) => serial(() => pull(threadId)),
+    pull: (threadId: string) => {
+      pulls += 1;
+      return serial(() => pull(threadId)).finally(() => { pulls -= 1; });
+    },
     poll: pollAll,
     /** Sends every sealed segment and fresh picture again; files the folder already holds are kept. */
     republish(): void {
       republishChats();
     },
     republishing: () => republishing > 0,
-    /** A poll is still filing chats; true for the whole first poll after a join. */
-    filing: () => filing > 0,
+    /** A poll or pull is still filing chats; true for the whole first poll after a join. */
+    filing: () => filing > 0 || pulls > 0,
     /** Rebuilds a returning bot's chats from this PC's own sync records. */
     rebuild(botId: string): void {
       const tasks = withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store WHERE botId = ?").all(botId)))

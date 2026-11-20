@@ -562,6 +562,23 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await poll;
   });
 
+  it("counts a chat pulled outside the poll as filing until it lands", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const c = pc(folder, "c");
+    await a.call("seed", { threadId: "t" });
+    await a.call("append", { threadId: "t", text: "t" });
+    await a.call("flush", { threadId: "t" });
+    await c.call("poll");
+    await a.call("append", { threadId: "t", text: "t new" });
+    await a.call("flush", { threadId: "t" });
+    await c.call("slowPulls", { at: 500 });
+    const pull = c.call("pull", { threadId: "t" });
+    expect((await c.snapshot()).filing).toBe(true);
+    await pull;
+    expect((await c.snapshot()).filing).toBe(false);
+  });
+
   it("keeps a chat on its newest message when its own pull lands between the poll's pages", async () => {
     const folder = temp();
     const a = pc(folder, "a");
@@ -655,7 +672,8 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await c.call("open", { threadId: "t19" });
     await poll;
     pulls.push(...(await c.snapshot()).pulls);
-    expect(pulls.indexOf("t19")).toBeLessThan(pulls.indexOf("t10"));
+    expect(pulls.indexOf("t19")).toBeGreaterThanOrEqual(0);
+    expect(pulls.indexOf("t10")).toBeGreaterThan(pulls.indexOf("t19"));
   });
 
   it("polls the most recently opened thread first, once per poll", async () => {

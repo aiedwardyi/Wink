@@ -256,7 +256,7 @@ export function createGoogleSync(options: Options) {
     }
     if (problem === "offline" || accountStatus.state === "offline") return { ...base, state: "offline" };
     if (fullStrikes) return { ...base, state: "drive-full" };
-    if (catching && firstSync()) return { ...base, state: "syncing", progress: progress(), firstSync: true };
+    if (catching && (firstRun || firstSync())) return { ...base, state: "syncing", progress: progress(), firstSync: true };
     if (catching || lastSyncAt === null) return { ...base, state: "syncing", progress: catching ? progress() : null };
     if (firstRun && options.filing?.()) return { ...base, state: "up-to-date", firstSync: true, finishing: true };
     firstRun = false;

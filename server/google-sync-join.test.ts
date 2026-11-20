@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeDeviceRecord } from "./device-sync.ts";
 import { GoogleAccount, type GoogleSession } from "./google-account.ts";
 import { decodeDrivePath } from "./drive-mirror.ts";
-import { createGoogleSync, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
+import { createGoogleSync, GOOGLE_KINDS_FILE, readGoogleBinding, type GoogleSync, type GoogleSyncStatus } from "./google-sync.ts";
 import { ensureMemorySyncDevice, type MemorySyncLedger } from "./memory-sync.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
 import type { BotRecord, Message, TaskRecord } from "./store.ts";
@@ -204,6 +204,21 @@ describe("Google sync first join", { timeout: 60_000 }, () => {
     expect(work.sync.status().firstSync).toBeUndefined();
     work.filing = true;
     await settle(work);
+    expect(work.sync.status().firstSync).toBeUndefined();
+  });
+
+  it("keeps the first sync marked while it catches up after the kinds receipt lands", async () => {
+    const work = await joinWithChats();
+    const kinds = join(work.dataDir, GOOGLE_KINDS_FILE);
+    const seen: GoogleSyncStatus[] = [];
+    work.fault = fault((method, url) => {
+      if (listing(method, url) && existsSync(kinds)) seen.push(work.sync.status());
+      return false;
+    }, driveError(500, "global", "backendError"));
+    await work.sync.idle();
+    const catching = seen.filter((status) => status.state === "syncing");
+    expect(catching.length).toBeGreaterThan(0);
+    expect(catching.every((status) => status.firstSync)).toBe(true);
     expect(work.sync.status().firstSync).toBeUndefined();
   });
 });
