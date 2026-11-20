@@ -522,6 +522,8 @@ function replayPreamble(input: TurnContextInput): string {
 
 const MEMORY_FOLDERS = 4;
 const MEMORY_NAMES = 2;
+export const MAX_MEMORY_PLAN_BYTES = 4096;
+const MEMORY_PLAN_PREFIX = "Read first, your plan: ";
 const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?![\p{L}\p{M}\p{N}\p{Pc}])/giu;
 // a quoted path may hold spaces, so it is read whole before DOC_PATH
 const QUOTED_DOC_PATH = /(["'`])([^"'`\n]+\.(?:md|txt|docx?|pdf))\1/gi;
@@ -558,13 +560,31 @@ export interface MemoryBlockInput {
   files: readonly string[];
   cwd?: string;
   plans?: readonly string[];
+  savePlanSidecar?: (paths: readonly string[]) => string;
   builtList?: string | null;
   /** the open-work line unlanded.ts built */
   work?: string;
   home?: string;
 }
 
-/** Paths only, never file contents: plans and the built list in full, the newest MEMORY_FOLDERS folders, then a count of the rest. */
+function memoryPlanLines(paths: readonly string[], savePlanSidecar: MemoryBlockInput["savePlanSidecar"]): string[] {
+  const shown: string[] = [];
+  let bytes = Buffer.byteLength(MEMORY_PLAN_PREFIX);
+  for (const path of paths) {
+    bytes += Buffer.byteLength(path) + (shown.length ? 2 : 0);
+    if (bytes > MAX_MEMORY_PLAN_BYTES) break;
+    shown.push(path);
+  }
+  const lines = shown.length ? [MEMORY_PLAN_PREFIX + shown.join("; ")] : [];
+  const more = paths.length - shown.length;
+  if (more) {
+    if (!savePlanSidecar) throw new Error("plan memory overflow needs a sidecar");
+    lines.push(`+${more} more paths in ${savePlanSidecar(paths)}`);
+  }
+  return lines;
+}
+
+/** Paths only: plan refs, the built list, the newest MEMORY_FOLDERS folders, then a count of the rest. */
 export function memoryBlock(input: MemoryBlockInput): string {
   const newest = new Map<string, true>();
   for (const ref of input.files) {
@@ -589,9 +609,8 @@ export function memoryBlock(input: MemoryBlockInput): string {
   });
   const rest = [...folders.values()].slice(MEMORY_FOLDERS);
   if (rest.length) shown.push(`+${rest.length} older folders (${rest.reduce((total, folder) => total + folder.count, 0)} files)`);
-  const plans = input.plans ?? [];
   const lines = [
-    ...(plans.length ? [`Read first, your plan: ${plans.join("; ")}`] : []),
+    ...memoryPlanLines(input.plans ?? [], input.savePlanSidecar),
     ...(input.builtList ? [`Built list: ${input.builtList}`] : []),
     ...(shown.length ? [`Files, newest ${MEMORY_FOLDERS} folders: ${shown.join("; ")}`] : []),
     ...(input.work ? [input.work] : []),
@@ -608,6 +627,7 @@ export interface ChatMemoryInput {
   overflow: readonly RecordedFile[];
   messages: readonly { recorded?: RecordedFile[]; tool?: { writes?: string[]; made?: string[] } }[];
   cwd?: string;
+  savePlanSidecar?: MemoryBlockInput["savePlanSidecar"];
   builtList?: string | null;
   work?: string;
 }
@@ -621,6 +641,7 @@ export function chatMemory(input: ChatMemoryInput): string {
       .concat(input.messages.flatMap((message) => [...(message.recorded ?? []).map((item) => item.ref), ...message.tool?.writes ?? [], ...message.tool?.made ?? []])),
     cwd: input.cwd,
     plans: planFiles({ goal: input.record?.goal ?? "", plan: input.record?.plan ?? [], artifacts: recorded }, input.cwd),
+    savePlanSidecar: input.savePlanSidecar,
     builtList: input.builtList,
     work: input.work,
   });

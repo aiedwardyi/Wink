@@ -275,7 +275,7 @@ import {
 import "../shared/task-resume.ts";
 import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
 import "./task-state.ts";
-import { readTaskArtifactOverflow, type TaskResumePacket } from "./task-state.ts";
+import { readTaskArtifactOverflow, writeTaskPlanSidecar, type TaskResumePacket } from "./task-state.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import {
@@ -2947,6 +2947,7 @@ function freshSessionMemory(botId: string, threadId: string, record: TaskResumeP
     overflow: readTaskArtifactOverflow(threadId),
     messages,
     cwd: store.taskByThread(botId, threadId)?.cwd ?? undefined,
+    savePlanSidecar: (paths) => writeTaskPlanSidecar(threadId, paths),
     builtList: builtListPath(memoryFileRaw(botId)),
     work: unlandedWork.work(threadId),
   });

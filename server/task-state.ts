@@ -209,6 +209,7 @@ function serializeBounded(packet: TaskResumePacket): string {
 const MARK_BYTES = 65;
 const stagedPath = (path: string): string => `${path}.staged`;
 const overflowPath = (path: string): string => path.replace(/\.json$/, ".artifacts.jsonl");
+const planSidecarPath = (path: string): string => path.replace(/\.json$/, ".plans.jsonl");
 // the reader's cap too: a full sidecar moves to the next archive, so every file reads and no ref is lost
 const OVERFLOW_MAX_BYTES = TASK_STATE_READ_MAX_BYTES;
 const archivePath = (path: string, index: number): string => path.replace(/\.json$/, `.artifacts.${index}.jsonl`);
@@ -274,6 +275,14 @@ function overflowOf(path: string): TaskResumePacket["artifacts"] {
 /** Artifacts the record no longer holds, oldest first. */
 export function readTaskArtifactOverflow(threadId: ThreadId, options: TaskStateOptions = {}): TaskResumePacket["artifacts"] {
   return overflowOf(taskStatePath(threadId, options.dir ?? TASK_STATE_DIR));
+}
+
+export function writeTaskPlanSidecar(threadId: ThreadId, paths: readonly string[], options: TaskStateOptions = {}): string {
+  const dir = options.dir ?? TASK_STATE_DIR;
+  const path = planSidecarPath(taskStatePath(threadId, dir));
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileAtomic(path, paths.map((ref) => JSON.stringify(ref)).join("\n") + "\n", { mode: 0o600 });
+  return path;
 }
 
 function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {
@@ -365,7 +374,7 @@ export function deleteTaskResumePacket(
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
   const staged = existsSync(stagedPath(path));
   rmSync(stagedPath(path), { force: true });
-  for (const file of [...overflowArchives(path), overflowPath(path)]) rmSync(file, { force: true });
+  for (const file of [...overflowArchives(path), overflowPath(path), planSidecarPath(path)]) rmSync(file, { force: true });
   if (!existsSync(path)) return staged;
   const status = lstatSync(path);
   if (!status.isFile() || status.isSymbolicLink()) return staged;

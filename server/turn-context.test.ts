@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +11,7 @@ import {
   countLastTurnToolRounds,
   countSessionToolRounds,
   engineIsFresh,
+  MAX_MEMORY_PLAN_BYTES,
   NATIVE_PROMPT_BUDGET_CAP,
   nativePromptBudget,
   nativeSessionTokenBudget,
@@ -33,7 +35,7 @@ import {
 } from "./turn-context.ts";
 import { isRecoveringPacket, unsettledRequest } from "./task-recovery-flush.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stampTaskResumePacket } from "./task-state-fold.ts";
-import type { TaskResumePacket } from "./task-state.ts";
+import { deleteTaskResumePacket, writeTaskPlanSidecar, type TaskResumePacket } from "./task-state.ts";
 
 const transcript = [
   { role: "user" as const, text: "my dog is named Biscuit" },
@@ -1281,7 +1283,7 @@ describe("fresh-session memory block", () => {
     expect(memoryBlock({ files: ["MEMORY.md"], cwd })).toContain("Files, newest 4 folders: task folder 1 (MEMORY.md)");
   });
 
-  it("lists four folders and counts the rest, and never cuts a plan", () => {
+  it("lists four folders and counts the rest, keeping ordinary plan paths inline", () => {
     const files = Array.from({ length: 7 }, (_, index) => join(home, `dir-${index}`, "a.md")).concat(join(home, "dir-6", "b.md"));
     const plans = Array.from({ length: 6 }, (_, index) => join(home, "plans", `plan-${index}.md`));
     const text = memoryBlock({ files, plans });
@@ -1289,6 +1291,30 @@ describe("fresh-session memory block", () => {
     expect(text).not.toContain("dir-2");
     expect(text).toContain("; +3 older folders (3 files)");
     for (const path of plans) expect(text).toContain(path);
+  });
+
+  it("keeps 1,000 full plan paths on disk and shows a bounded list with a pointer", () => {
+    const dir = join(homedir(), "plan-state");
+    const threadId = "large-plan";
+    const paths = Array.from({ length: 1000 }, (_, index) => join(cwd, "계획".repeat(30), `release-${index}.md`));
+    const sidecar = join(dir, `${threadId}.plans.jsonl`);
+    const text = chatMemory({
+      record: null, messages: [], cwd,
+      overflow: paths.map((ref) => ({ ref, label: "Launch plan" })),
+      savePlanSidecar: (refs) => writeTaskPlanSidecar(threadId, refs, { dir }),
+    });
+    const prefix = "Read first, your plan: ";
+    const [, line = "", pointer] = text.split("\n");
+    expect(line).toMatch(/^Read first, your plan: /);
+    const shown = line.slice(prefix.length).split("; ");
+    expect(shown).toEqual(paths.slice(0, shown.length));
+    expect(Buffer.byteLength(line)).toBeLessThanOrEqual(MAX_MEMORY_PLAN_BYTES);
+    expect(Buffer.byteLength(`${line}; ${paths[shown.length]}`)).toBeGreaterThan(MAX_MEMORY_PLAN_BYTES);
+    expect(pointer).toBe(`+${paths.length - shown.length} more paths in ${sidecar}`);
+    expect(text).not.toContain(paths.at(-1));
+    expect(readFileSync(sidecar, "utf8").trimEnd().split("\n").map((row) => JSON.parse(row))).toEqual(paths);
+    deleteTaskResumePacket(threadId, { dir });
+    expect(existsSync(sidecar)).toBe(false);
   });
 
   it("stays small", () => {
