@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ChevronRight, History, Paperclip, Pencil, Search } from "lucide-react";
+import { flushSync } from "react-dom";
 import { z } from "zod";
 
 import { request } from "@/lib/api-request";
@@ -9,6 +10,7 @@ import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import { adjacentMedia, type MediaReference, type PreviewImage } from "@/lib/media-viewer";
 import { watchMemorySave } from "@/lib/memory-clean-events";
 import { fileOpen, openFile } from "@/lib/open-file";
+import { reducedMotion } from "@/lib/phone-swipe";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
 import { entryTime, pickStamp } from "../../shared/timeline-time";
 import { wheelZoomFactor } from "./image-zoom";
@@ -131,6 +133,7 @@ function dayLabel(day: string, now: Date, t: (key: MessageKey) => string, locale
 const ZOOM = { min: 0.3, max: 2.5 };
 const SLOP = 4;
 const KEY_PAN = 40;
+const GLIDE_MS = 360;
 const ARROWS = new Map<string, [number, number]>([["ArrowLeft", [1, 0]], ["ArrowRight", [-1, 0]], ["ArrowUp", [0, 1]], ["ArrowDown", [0, -1]]]);
 // Hundreds of picks mount in one task too slowly, so the newest draw first and the rest follow a batch a frame.
 const FIRST = 8;
@@ -383,6 +386,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   const zoom = useRef<HTMLElement>(null);
   const view = useRef<View | null>(null);
   const pinned = useRef(false);
+  const gliding = useRef(0);
   const laid = useRef({ rows: "", first: "", height: 0, opened: null as ReadonlySet<string> | null });
   const searched = useRef(needle);
   const wasClosing = useRef(closing);
@@ -429,6 +433,31 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
   }, []);
 
+  const stopGlide = useCallback(() => {
+    cancelAnimationFrame(gliding.current);
+    gliding.current = 0;
+  }, []);
+
+  // the newest end is read each frame, so a pick landing mid-glide is still where it ends
+  const glideTo = useCallback((end: "oldest" | "newest") => {
+    stopGlide();
+    const box = frame.current!;
+    // the older rows lay out first, so the move below starts from the expanded sheet
+    if (end === "oldest") flushSync(() => setGrow((at) => (at.limit < total ? { ...at, limit: total } : at)));
+    const goal = () => (end === "oldest" ? PAD.y : pinY(box, sheet.current!, view.current!.scale));
+    if (reducedMotion()) return show({ ...view.current!, y: goal() });
+    let began: number | undefined;
+    let from = 0;
+    const step = (now: number) => {
+      began ??= now;
+      if (now === began) from = view.current!.y;
+      const done = Math.min(1, (now - began) / GLIDE_MS);
+      show({ ...view.current!, y: from + (goal() - from) * (1 - (1 - done) ** 3) });
+      gliding.current = done < 1 ? requestAnimationFrame(step) : 0;
+    };
+    gliding.current = requestAnimationFrame(step);
+  }, [show, stopGlide, total]);
+
   const zoomAt = useCallback((x: number, y: number, factor: number, at = view.current!) => {
     const scale = Math.min(ZOOM.max, Math.max(ZOOM.min, at.scale * factor));
     const ratio = scale / at.scale;
@@ -456,6 +485,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     const floor = (scale: number) => pinY(box, sheet.current!, scale);
     let next: View;
     if (!at || reopened || changed) {
+      stopGlide();
       const scale = !at || reopened || !needle ? fit : at.scale;
       next = { x: PAD.x, y: floor(scale), scale };
     // the same picks keep the view, unless one grew (a tweak landed) while it sat on the newest pick
@@ -467,7 +497,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     wasClosing.current = closing;
     searched.current = needle;
     show(next, true);
-  }, [closing, drawn, needle, opened, redraw, show]);
+  }, [closing, drawn, needle, opened, redraw, show, stopGlide]);
 
   useEffect(() => {
     const box = frame.current!;
@@ -481,6 +511,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     resized?.observe(box);
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
+      stopGlide();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? box.clientHeight : 1;
       const rect = box.getBoundingClientRect();
       if (event.ctrlKey || event.metaKey) return zoomAt(event.clientX - rect.left, event.clientY - rect.top, wheelZoomFactor(event.deltaY * unit));
@@ -497,8 +528,9 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       box.removeEventListener("wheel", onWheel);
       box.removeEventListener("gesturestart", prevent);
       box.removeEventListener("gesturechange", prevent);
+      stopGlide();
     };
-  }, [redraw, show, zoomAt]);
+  }, [redraw, show, stopGlide, zoomAt]);
 
   const spot = (event: ReactPointerEvent) => {
     const rect = frame.current!.getBoundingClientRect();
@@ -506,6 +538,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   };
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    stopGlide();
     if (!pointers.current.size) dragged.current = false;
     pointers.current.set(event.pointerId, spot(event));
   };
@@ -567,11 +600,12 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
         const step = ARROWS.get(event.key);
         if (!step || event.altKey || event.ctrlKey || event.metaKey) return;
         event.preventDefault();
+        stopGlide();
         const at = view.current!;
         show({ ...at, x: at.x + step[0] * KEY_PAN, y: at.y + step[1] * KEY_PAN });
       }}
       onFocus={(event) => {
-        if (!(event.target instanceof HTMLElement) || !event.target.matches(":focus-visible")) return;
+        if (!(event.target instanceof HTMLElement) || !event.target.matches(":focus-visible") || event.target.dataset.end) return;
         const to = event.target.getBoundingClientRect();
         const box = frame.current!.getBoundingClientRect();
         if (to.top >= box.top + PAD.y && to.bottom <= box.bottom && to.left >= box.left && to.right <= box.right) return;
@@ -594,8 +628,8 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
         </div>
       </Redraw.Provider>
       <p className="timeline-hint">{t(touch ? "timeline.hintTouch" : "timeline.hintMouse")}<b ref={zoom} /></p>
-      <p className="timeline-hint" data-end="oldest">{t("timeline.oldest")}</p>
-      <p className="timeline-hint" data-end="newest">{t("timeline.newest")}</p>
+      <button type="button" className="timeline-hint" data-end="oldest" aria-label={t("timeline.goOldest")} onClick={() => glideTo("oldest")}>{t("timeline.oldest")}</button>
+      <button type="button" className="timeline-hint" data-end="newest" aria-label={t("timeline.goNewest")} onClick={() => glideTo("newest")}>{t("timeline.newest")}</button>
     </div>
   );
 }
