@@ -18,6 +18,7 @@ const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/
 
 const PROXY = join(dirname(fileURLToPath(import.meta.url)), "agents-proxy.ts");
 const TOKEN = "test-comms-token";
+const OWNER_HOP = "private-peer-fixture";
 
 // scripted harness stub
 let stub: Server;
@@ -100,6 +101,10 @@ beforeAll(async () => {
     if (req.headers.authorization !== `Bearer ${TOKEN}`) {
       res.writeHead(401, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    if (req.method === "GET" && req.url === "/api/internal/owner-peer-tools") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ allowed: req.headers["x-wink-owner-hop"] === OWNER_HOP }));
     }
     if (req.method === "GET" && req.url?.startsWith("/api/internal/agents")) {
       res.writeHead(200, { "content-type": "application/json" });
@@ -1373,11 +1378,15 @@ describe("agents-proxy identity gate", () => {
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
 
-  it.each([1, 2])("gives a peer turn the owner started at depth %s every tool but another hop", async (depth) => {
-    const names = async (turnDepth: number) => (await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(turnDepth), OMB_TEAM_REPORTS: "1", OMB_OWNER_HOP: "1" })).list.result.tools.map((t: { name: string }) => t.name);
+  it("opens only a depth-one peer holding a live private grant", async () => {
+    const names = async (turnDepth: number, key = OWNER_HOP) => (await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(turnDepth), OMB_OWNER_HOP: key, OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` })).list.result.tools.map((t: { name: string }) => t.name);
     const hops = ["ask_bot", "delegate_bot", "create_bot", "create_channel"];
-    expect(await names(depth)).toEqual((await names(0)).filter((name: string) => !hops.includes(name)));
-    expect(await names(depth)).toEqual(expect.arrayContaining(["propose_routine", "propose_routine_action", "set_keep_going", "call_api", "request_credential"]));
+    const opened = await names(1);
+    expect(opened).toEqual((await names(0)).filter((name: string) => !hops.includes(name)));
+    expect(opened).toHaveLength(20);
+    expect(opened).toEqual(expect.arrayContaining(["propose_routine", "propose_routine_action", "set_keep_going", "call_api", "request_credential"]));
+    expect(await names(1, "1")).toHaveLength(5);
+    expect(await names(2)).toHaveLength(5);
   });
 
   it.each([1, 2])("lists only safe peer tools at depth %s when the owner did not start the chain", async (depth) => {
@@ -1395,13 +1404,13 @@ describe("agents-proxy identity gate", () => {
 
   it("lets a peer turn propose a routine, which still only opens a confirmation card", async () => {
     lastRoutineRequestBody = null;
-    const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_OWNER_HOP: "1", OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` }, "propose_routine", { name: "Brief", instructions: "Check things.", schedule: { type: "daily", time: "09:00" } });
+    const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_OWNER_HOP: OWNER_HOP, OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` }, "propose_routine", { name: "Brief", instructions: "Check things.", schedule: { type: "daily", time: "09:00" } });
     expect(call.result.isError).toBeFalsy();
     expect(lastRoutineRequestBody).toMatchObject({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", action: "create" });
   });
 
   it.each(["ask_bot", "delegate_bot", "create_bot", "create_channel"])("refuses %s from a peer turn before calling the harness", async (name) => {
-    const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_TEAM_REPORTS: "1" }, name);
+    const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_OWNER_HOP: OWNER_HOP, OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` }, name);
     expect(call.result.isError).toBe(true);
     expect(call.result.content[0].text).toContain("unavailable in peer turns");
   });
@@ -1491,18 +1500,18 @@ describe("agents-proxy catalog", () => {
     expect(JSON.parse(call.result.content[0].text).tools).toEqual([]);
   });
 
-  it.each([1, 2])("folds no hop tool into the catalog at depth %s", async (depth) => {
-    const { list, call } = await probeWithIdentity({ ...identity(depth), OMB_OWNER_HOP: "1" }, "find_wink_tool", { query: "routine bot image api credential" });
+  it("folds no hop tool into the catalog for a fresh private peer", async () => {
+    const { list, call } = await probeWithIdentity({ ...identity(1), OMB_OWNER_HOP: OWNER_HOP }, "find_wink_tool", { query: "routine bot image api credential" });
     expect(names(list)).toEqual(expect.arrayContaining(["propose_routine", "find_wink_tool", "call_wink_tool"]));
     const found = JSON.parse(call.result.content[0].text).tools.map((tool: { name: string }) => tool.name);
     expect(found).toEqual(expect.arrayContaining(["generate_image", "call_api", "request_credential"]));
     expect(found).not.toEqual(expect.arrayContaining(["create_bot"]));
     expect(found).not.toEqual(expect.arrayContaining(["create_channel"]));
-    const refused = await probeWithIdentity({ ...identity(depth), OMB_OWNER_HOP: "1" }, "call_wink_tool", { name: "create_bot", arguments: { name: "X", role: "Y", instructions: "Z" } });
+    const refused = await probeWithIdentity({ ...identity(1), OMB_OWNER_HOP: OWNER_HOP }, "call_wink_tool", { name: "create_bot", arguments: { name: "X", role: "Y", instructions: "Z" } });
     expect(refused.call.result.isError).toBe(true);
   });
 
-  it.each([[0, "0"], [1, "0"], [1, "1"], [2, "0"], [2, "1"]] as const)("reaches the plain tool set through catalog and defer modes at depth %s (owner hop %s)", async (depth, ownerHop) => {
+  it.each([[0, ""], [1, ""], [1, OWNER_HOP], [2, ""], [2, OWNER_HOP]] as const)("reaches the plain tool set through catalog and defer modes at depth %s (owner hop %s)", async (depth, ownerHop) => {
     const env = { ...identity(depth), OMB_TEAM_REPORTS: "1", OMB_OWNER_HOP: ownerHop };
     const plain = names((await probeWithIdentity({ ...env, OMB_WINK_TOOL_CATALOG: "0" })).list).sort();
     const deferred = names((await probeWithIdentity({ ...env, OMB_WINK_TOOL_CATALOG: "0", OMB_WINK_TOOL_DEFER: "1" })).list).sort();
@@ -1584,7 +1593,7 @@ describe("agents-proxy verify_site", () => {
   });
 
   it.each<[Record<string, string>, boolean]>([[{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, true], [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, true], [{ OMB_TEAM_REPORTS: "1" }, false]])("lists verify_site at depth > 0 the owner started only with its env (%o)", async (flags, listed) => {
-    const { list } = await probe(identity(1, { ...flags, OMB_OWNER_HOP: "1" }));
+    const { list } = await probe(identity(1, { ...flags, OMB_OWNER_HOP: OWNER_HOP }));
     expect(names(list).includes("verify_site")).toBe(listed);
   });
 
@@ -1598,7 +1607,7 @@ describe("agents-proxy verify_site", () => {
 
   it("runs a peer turn's verify_site through the harness", async () => {
     lastVerify = null;
-    const { call } = await probe(identity(1, { OMB_LIVE_VERIFY: "1", OMB_OWNER_HOP: "1" }), "verify_site", { entry: "site" });
+    const { call } = await probe(identity(1, { OMB_LIVE_VERIFY: "1", OMB_OWNER_HOP: OWNER_HOP }), "verify_site", { entry: "site" });
     expect(call.error).toBeUndefined();
     expect(lastVerify).not.toBeNull();
   });

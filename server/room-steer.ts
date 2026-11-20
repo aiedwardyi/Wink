@@ -1,5 +1,6 @@
 // A busy room's plain send joins the working member's turn, the same steer a 1:1 send makes.
 import type { ProviderInstance } from "./contracts.ts";
+import { guardPeerTools } from "./comms-root.ts";
 import { promptWithReply } from "./replies.ts";
 import type { HostedGroup } from "./rooms/asks.ts";
 import { hostSend } from "./rooms/send.ts";
@@ -31,6 +32,7 @@ export async function steerRoomSend(
   const threadId = group.threadId;
   const adapter = instanceForBot?.(busy, threadId)?.adapter;
   if (!steersSend(adapter, busy.busy, false)) return null;
+  guardPeerTools(threadId);
   const steered = await adapter.steer(threadId, promptWithReply(text, replyTo, userName()), undefined, { fromUser: true }).catch(() => false);
   if (!steered) return null;
   const current = store.group(group.id);

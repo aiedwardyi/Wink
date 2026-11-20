@@ -18,9 +18,6 @@ export interface CallerSnapshot {
   depth: number;
 }
 
-/** A live root an owner-typed line minted, or a stored room ask the owner wrote, carried with the work: the only key to a peer turn's opened tools. */
-export type OwnerOrigin = string & { readonly __ownerOrigin: true };
-
 export const ROOT_TURNS = 24;
 export type StartKind = "ask" | "delegation" | "rerun" | "wake" | "room";
 export interface Reservation { readonly id: string; readonly rootId: string; readonly kind: StartKind }
@@ -35,6 +32,7 @@ const threads = new Map<string, string | null>();
 const homes = new Map<string, string>();
 const budgets = new Map<string, { committed: number; pending: Set<string> }>();
 const owned = new Set<string>();
+const privateSources = new Map<string, Pick<CallerSnapshot, "botId" | "threadId" | "turnId">>();
 // handles that spend their root's budget but never carry its owner origin
 const shadows = new Map<string, string>();
 const budgetRoot = (rootId: string) => shadows.get(rootId) ?? rootId;
@@ -55,6 +53,7 @@ function liveRoot(rootId: string | null | undefined): string | null {
   if (now - touched >= MAX_IDLE) {
     roots.delete(base);
     owned.delete(base);
+    privateSources.delete(base);
     return null;
   }
   roots.set(base, now);
@@ -71,6 +70,7 @@ export function rootForStart(threadId: string, start: RootStart): string | null 
       homes.delete(id);
       budgets.delete(id);
       owned.delete(id);
+      privateSources.delete(id);
     }
     for (const [id, base] of shadows) if (!roots.has(base)) shadows.delete(id);
     for (const [key, id] of messages) if (!roots.has(id)) messages.delete(key);
@@ -79,7 +79,10 @@ export function rootForStart(threadId: string, start: RootStart): string | null 
     messages.set(start.messageKey, rootId);
     roots.set(rootId, now);
     if (start.kind === "human") owned.add(rootId);
-    else owned.delete(rootId);
+    else {
+      owned.delete(rootId);
+      privateSources.delete(rootId);
+    }
     if (!homes.has(rootId)) homes.set(rootId, threadId);
   } else if (start.kind === "inherit") {
     rootId = liveRoot(start.rootId);
@@ -92,6 +95,7 @@ export function rootForStart(threadId: string, start: RootStart): string | null 
 }
 
 export function adoptHumanRoot(threadId: string, messageKey: string, current = turnRegistry.rootOf(threadId)): string {
+  guardPeerTools(threadId);
   // an owner line folded into a turn someone else started never upgrades it
   const live = liveRoot(current);
   if (live && !owned.has(budgetRoot(live))) return live;
@@ -105,7 +109,27 @@ export function adoptHumanRoot(threadId: string, messageKey: string, current = t
 export function callerSnapshot(botId: string, threadId: string): CallerSnapshot | null {
   const turn = turnRegistry.current(threadId);
   if (!turn || turn.botId !== botId) return null;
-  return { botId, threadId, turnId: turn.turnId, rootId: liveRoot(turn.rootId), depth: turn.depth };
+  const rootId = liveRoot(turn.rootId);
+  if (rootId && owned.has(rootId) && homes.get(rootId) === threadId && turn.depth === 0 && turn.privatePeer?.role === "source") {
+    privateSources.set(rootId, { botId, threadId, turnId: turn.turnId });
+  }
+  return { botId, threadId, turnId: turn.turnId, rootId, depth: turn.depth };
+}
+
+export function guardPeerTools(threadId: string): void {
+  const rootId = turnRegistry.rootOf(threadId);
+  if (rootId && homes.get(rootId) === threadId) privateSources.delete(rootId);
+  turnRegistry.clearPrivatePeer(threadId);
+}
+
+export function privatePeerTask(taskId: string | undefined, botId: string, threadId: string, rootId: string | null) {
+  if (!taskId || !rootId || !ownerRoot(rootId)) return null;
+  const proof = privateSources.get(rootId);
+  if (!proof) return null;
+  const task = findDelegationReceipt(taskId);
+  if (!task?.kind || (task.state !== "dispatching" && task.state !== "running") ||
+      task.root !== rootId || task.target?.botId !== botId || task.target.threadId !== threadId) return null;
+  return task.source?.turnId === proof.turnId && task.source.botId === proof.botId && task.source.threadId === proof.threadId ? task.source : null;
 }
 
 export function reserve(rootId: string | null | undefined, kind: StartKind): ReserveResult {
@@ -130,14 +154,9 @@ export function release(reservation: Reservation): void {
   budgets.get(budgetRoot(reservation.rootId))?.pending.delete(reservation.id);
 }
 
-export function ownerOrigin(rootId: string | null | undefined): OwnerOrigin | null {
-  const live = liveRoot(rootId);
-  // SAFETY: owned holds only live roots an owner-typed line minted.
-  return live && owned.has(live) ? (live as OwnerOrigin) : null;
-}
-
 export function ownerRoot(rootId: string | null | undefined): boolean {
-  return ownerOrigin(rootId) !== null;
+  const live = liveRoot(rootId);
+  return live !== null && owned.has(live);
 }
 
 /** Someone else's text in a turn's prompt ends the owner origin of the request it carries. */
@@ -149,7 +168,10 @@ export function othersInPrompt(store: Pick<Store, "row">, threadId: string, root
     const author = row.author;
     return author?.kind === "person" ? !hostSeats.includes(author.id) : author?.kind === "bot" && author.owner !== undefined && !hostSeats.includes(author.owner);
   });
-  if (foreign && rootId) owned.delete(rootId);
+  if (foreign && rootId) {
+    owned.delete(rootId);
+    privateSources.delete(rootId);
+  }
   return foreign;
 }
 
@@ -164,5 +186,6 @@ export function _resetCommsRoots(): void {
   homes.clear();
   budgets.clear();
   owned.clear();
+  privateSources.clear();
   shadows.clear();
 }

@@ -133,7 +133,7 @@ describe("import_memory saves through the Settings path", () => {
     const mounts = index.split("\n").filter((line) => line.includes("agentsIntegration(bot.id"));
     expect(mounts.filter((line) => line.includes("importMemory")).map((line) => line.trim())).toEqual([
       "const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1).tool) : undefined;",
-      "integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool, commsDepth > 0 ? ownerOrigin(rootId) : null);",
+      "integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);",
     ]);
     expect(mounts.find((line) => line.includes("hop"))).not.toContain("importMemory");
   });

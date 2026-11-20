@@ -7,6 +7,7 @@ import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
 import { coldLoading, sentRow } from "./cold-thread.ts";
+import { guardPeerTools } from "./comms-root.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -192,6 +193,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       ].join("\n\n");
       peerInput = beginPeerUserReply(bot.id, threadId, prompt);
       const reactions = consumable ? userTurnReactionKeys(turnOpts) : [];
+      guardPeerTools(threadId);
       steered = await adapter
         .steer(threadId, peerInput?.prompt ?? prompt, (taken) => {
           if (taken) store.addReactionsDelivered(bot.id, threadId, reactions);
@@ -309,6 +311,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         const adapter = instanceForBot(current, threadId)?.adapter;
         if (current.busy && (current.activeThreadId ?? current.threadId) === threadId && adapter?.steer) {
           const note = ackMissed(store.activePath(threadId), sent, true);
+          guardPeerTools(threadId);
           if (await (steerUntilTaken(adapter, threadId, note) ?? adapter.steer(threadId, note)).catch(() => false)) return;
           if (!owed()) return;
         }

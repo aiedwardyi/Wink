@@ -79,7 +79,7 @@ it("lists every startTurn caller with its RootStart kind", () => {
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
-    { call: "botId, text", kind: "human", marker: "{ ...opts, owner: true }" },
+    { call: "botId, text", kind: "human", marker: "{ ...opts, owner: true, privateOwner: true }" },
   ];
   const calls = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "startTurn");
   expect(calls.map((node) => node.arguments.slice(0, 2).map((arg) => compact(arg.getText(source))).join(", "))).toEqual(starts.map((row) => row.call));

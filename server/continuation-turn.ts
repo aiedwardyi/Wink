@@ -2,6 +2,7 @@
 // after `result` (a background task's notification) and the driver opened a
 // continuation turn. An idle 1:1 bot adopts it like a user-sent turn, so the
 // composer locks, the watchdog runs, and queued sends wait for its settle.
+import { guardPeerTools } from "./comms-root.ts";
 import type { ProviderAdapter, SendTurnInput, TurnStartResult } from "./contracts.ts";
 
 export interface ContinuationBot {
@@ -45,5 +46,6 @@ export async function joinRunningTurn(
   if (!runningTurnId || adapter.capabilities.queueing !== true || !adapter.steer || !adapter.hasSession(turn.threadId)) return null;
   // a fresh session's text replays the thread, and a steer carries no systemUpdate
   if (turn.resumeCursor === undefined || turn.systemUpdate) return null;
+  guardPeerTools(turn.threadId);
   return (await adapter.steer(turn.threadId, turn.text).catch(() => false)) ? { turnId: runningTurnId } : null;
 }

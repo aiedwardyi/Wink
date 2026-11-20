@@ -41,7 +41,7 @@
 //   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
-//   OMB_OWNER_HOP    a peer turn in a chain the owner started: every tool but another hop
+//   OMB_OWNER_HOP    live grant for a fresh private peer turn
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
@@ -57,13 +57,13 @@ const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
 const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
 const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
+const OWNER_HOP = process.env.OMB_OWNER_HOP;
 // Machine-wide mounts outside a bot turn have no identity and get no tools.
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 // Routine inspection and delegation waits stay callable without proactive prompt guidance.
 const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
 // The harness refuses another hop from a peer turn, so these stay unlisted there.
 const HOP_TOOLS = new Set(["ask_bot", "delegate_bot", "create_bot", "create_channel"]);
-const peerTool = process.env.OMB_OWNER_HOP === "1" ? (name: string) => !HOP_TOOLS.has(name) : (name: string) => PEER_TOOLS.has(name);
 // A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
 export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
 const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
@@ -1208,9 +1208,24 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
-const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => (DEPTH === 0 || peerTool(tool.name)) && (!READ_ONLY || READ_ONLY_TOOLS.has(tool.name))) : [];
-const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
-const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligibleTools) : eligibleTools);
+function toolView(open: boolean) {
+  const peerTool = (name: string) => open ? !HOP_TOOLS.has(name) : PEER_TOOLS.has(name);
+  const eligible = TOOLS_ENABLED ? TOOLS.filter((tool) => (DEPTH === 0 || peerTool(tool.name)) && (!READ_ONLY || READ_ONLY_TOOLS.has(tool.name))) : [];
+  const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligible) : undefined;
+  const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligible) : eligible);
+  return { peerTool, catalog, listedTools };
+}
+
+const guardedView = toolView(false);
+const privateView = TOOLS_ENABLED && DEPTH === 1 && OWNER_HOP && !READ_ONLY ? toolView(true) : undefined;
+
+async function currentToolView() {
+  if (privateView && OWNER_HOP) {
+    const verdict = await api("/api/internal/owner-peer-tools", { headers: { "x-wink-owner-hop": OWNER_HOP } }).catch(() => null);
+    if (verdict?.allowed === true) return privateView;
+  }
+  return guardedView;
+}
 
 export async function handle(msg: Json) {
   const id = msg.id;
@@ -1233,12 +1248,15 @@ export async function handle(msg: Json) {
     case "ping":
       ok(id, {});
       return;
-    case "tools/list":
+    case "tools/list": {
+      const { listedTools } = await currentToolView();
       recordToolSchemas(() => listedTools);
       ok(id, { tools: listedTools });
       return;
+    }
     case "tools/call": {
       if (!TOOLS_ENABLED) return rpcErr(id, -32602, `Unknown tool: ${params.name}`);
+      const { catalog, peerTool } = await currentToolView();
       let name = params.name as string;
       let args = (params.arguments ?? {}) as Json;
       const gateway = name === "call_wink_tool" && catalog;

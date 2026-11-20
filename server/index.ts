@@ -61,7 +61,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askById, askFromOwner, askOrigin, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askById, askFromOwner, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -206,7 +206,7 @@ import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { botRoute, CommsCallers } from "./comms-caller.ts";
-import { adoptHumanRoot, callerSnapshot, commit, othersInPrompt, ownerOrigin, ownerRoot, release, rootForStart, type OwnerOrigin, type Reservation } from "./comms-root.ts";
+import { adoptHumanRoot, callerSnapshot, commit, guardPeerTools, othersInPrompt, ownerRoot, privatePeerTask, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
@@ -714,7 +714,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false, origin: OwnerOrigin | null = null) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -730,7 +730,6 @@ function agentsIntegration(botId: string, threadId: string, depth: number, searc
       ...(readOnly ? { OMB_READ_ONLY_TURN: "1" } : {}),
       ...(handOff ? { OMB_HAND_OFF: "1" } : {}),
       ...(importMemory ? { OMB_IMPORT_MEMORY: "1" } : {}),
-      ...(origin ? { OMB_OWNER_HOP: "1" } : {}),
     },
   };
 }
@@ -831,6 +830,7 @@ function askBotAndWait(
     start: (onDispatchError) => startTurn(targetBotId, message, {
       commsDepth: depth + 1,
       commsRoot: peer?.commsRoot ?? null,
+      peerTaskId: peer?.taskId,
       reservation: peer?.reservation,
       unattended: isUnattended(fromBotId),
       transcriptText: peer?.transcriptText,
@@ -2860,6 +2860,7 @@ async function answerRequest(
   let outcome: RequestOutcome = "unavailable";
   if (instance) {
     try {
+      if (behavior === "answer") guardPeerTools(threadId);
       outcome = await instance.adapter.respondToRequest(threadId, requestId, { behavior, message });
     } catch {
       outcome = "unavailable";
@@ -4709,6 +4710,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     return startTurn(toBotId, text, {
       commsDepth,
       commsRoot: root ?? null,
+      peerTaskId: taskId,
       reservation,
       commsAsk: ask,
       unattended: isUnattended(sourceBotId),
@@ -5040,8 +5042,10 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
-  /** The owner typed this line: only then do its peer hops open the owner's tools. */
+  /** An owner-typed line can start an owner comms root. */
   owner?: boolean;
+  privateOwner?: true;
+  peerTaskId?: string;
 };
 
 /** True only for a turn a person actually typed - not a pane note wake, a
@@ -5253,6 +5257,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
 }
 
 async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOptions) {
+  const entryText = text;
   const trace = currentTurnTrace();
   const epoch = currentTurnEpoch(botId);
   // Sends queued before this claim belong to drain, not to this turn's folds.
@@ -5286,6 +5291,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   keepGoing.turnStarted(bot.id, threadId, !opts?.unattended && turnStartedByUser(opts));
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
+  const hasProviderHistory = task.lastInstanceId !== undefined || task.resumeSeed !== undefined || Object.keys(task.resumeCursors).length > 0;
   const latencySendId = opts?.sendId ?? opts?.userMessage?.sendId;
   if (latencySendId) ensureChatLatency({ sendId: latencySendId, threadId });
   // Accepted: ownership and the task exist. Announce here so a busy peer
@@ -6099,7 +6105,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool, commsDepth > 0 ? ownerOrigin(rootId) : null);
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6284,7 +6290,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
-            if (othersInPrompt(store, threadId, rootId, [...refreshedNotes.ids ?? [], ...carriedEchoes(threadId)])) delete integrations.agents?.env.OMB_OWNER_HOP;
+            othersInPrompt(store, threadId, rootId, [...refreshedNotes.ids ?? [], ...carriedEchoes(threadId)]);
             seed.compactionId = compacted.expanded ? null : latestCompactionId;
             if (currentTurnEpoch(bot.id) !== epoch || (opts?.sendId && isSendCancelled(opts.sendId))) {
               throw Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true });
@@ -6320,6 +6326,22 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         trace?.assembled(system, text);
         if (cwd) turnCwdByThread.set(threadId, cwd);
         else turnCwdByThread.delete(threadId);
+        const source = commsDepth === 1 ? privatePeerTask(opts?.peerTaskId, bot.id, threadId, rootId) : null;
+        const owner = commsDepth === 0 && opts?.privateOwner === true && !opts.userMessage && !opts.call && !opts.answersCard;
+        // A clean task must still have a clean final payload after late folds and session recycling.
+        if ((source || owner) && integrations.agents && !readOnly && !hasProviderHistory && !priorTaskPacket && !rewound && !recycled && !systemRecycle &&
+            !notOwnerChats().has(threadId) && !store.groupByThread(threadId) &&
+            text === entryText && !transcript.length && resumeCursor === undefined && !systemUpdate) {
+          const rows = store.messagesFor(threadId);
+          if (rows.at(-1)?.id === userMessage.id) {
+            if (owner && rows.length === 1) turnRegistry.setPrivatePeer(threadId, { role: "source" });
+            if (source && rows.length === 2 && rows[0]?.comm?.peer === "from" && rows[0].comm.withBotId === source.botId) {
+              const key = randomUUID();
+              turnRegistry.setPrivatePeer(threadId, { role: "peer", key });
+              integrations.agents.env.OMB_OWNER_HOP = key;
+            }
+          }
+        }
         return live.adapter.sendTurn({
         ...(trace ? { trace } : {}),
         threadId,
@@ -7217,7 +7239,7 @@ async function runClaimedGroupMemberTurn(
     ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff), false, hop > 0 && !foreign ? (asked ? (guestAsked ? null : askOrigin(lead)) : ownerOrigin(rootId)) : null);
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff));
   }
   const canMessage = works && Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
@@ -8223,7 +8245,7 @@ const botChatRoutes = createBotChatRoutes({
   turnStartClaims,
   botHasActiveTurn,
   taskResumes,
-  startTurn: (botId, text, opts) => startTurn(botId, text, { ...opts, owner: true }),
+  startTurn: (botId, text, opts) => startTurn(botId, text, { ...opts, owner: true, privateOwner: true }),
   resolveAndSendRoutine,
   approvalBus,
   startGroupCardContinuation,
@@ -8334,6 +8356,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
     if (path.startsWith("/api/internal/")) {
+      if (method === "GET" && path === "/api/internal/owner-peer-tools") {
+        const caller = commsCallers.resolve(req.headers.authorization);
+        const key = caller && turnRegistry.privatePeerKey(caller.botId, caller.threadId);
+        return json(res, 200, { allowed: Boolean(key && key === req.headers["x-wink-owner-hop"]) });
+      }
       if (method === "POST" && path === "/api/internal/team-report") {
         return json(res, 200, await teamReports.handle(await readBody(req), commsCallers.resolve(req.headers.authorization)));
       }
@@ -8377,7 +8404,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/ask-bot") {
         return await internalRoutes.askBot(req, res);
       }
-      if (method === "POST" && path === BOARD_ROUTES.search) return await boardRoutes.search(req, res);
+      if (method === "POST" && path === BOARD_ROUTES.search) {
+        const caller = commsCallers.resolve(req.headers.authorization);
+        if (caller) guardPeerTools(caller.threadId);
+        return await boardRoutes.search(req, res);
+      }
       if (method === "POST" && path === BOARD_ROUTES.post) return await boardRoutes.post(req, res);
       if (method === "POST" && path === "/api/internal/my-chats") {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
@@ -8479,6 +8510,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The call_api tool: the saved key is injected here, only toward that
       // credential's own hosts, and never appears in what the bot gets back.
       if (method === "POST" && path === "/api/internal/call-api") {
+        const caller = commsCallers.resolve(req.headers.authorization);
+        if (caller) guardPeerTools(caller.threadId);
         return await internalRoutes.callKeyApi(req, res);
       }
       // Async handoff: the source bot queues a task for a peer and goes
