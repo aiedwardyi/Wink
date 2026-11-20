@@ -1499,6 +1499,40 @@ describe("fresh-session memory block", () => {
     }
   });
 
+  it("the pinned set always includes the full token up to its last path extension; inner extensions never cut a planned path", () => {
+    const compound = taskFolder("compound", []);
+    for (const name of ["报告.md新版.md", "計画.md改訂.md", "계획.md수정.md"]) {
+      for (const step of [name, `docs/${name}`]) {
+        const path = join(compound, step);
+        expect(stepPins(step, compound), step).toContain(path);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, step);
+        expect(stepPins(step, compound), step).toContain(path);
+      }
+    }
+    const made = ["報告.md新版.md", "計画.json改訂.txt", "계획.md수정.txt새.md", "資料/會議.txt草稿.md"];
+    const glued = ["plan.md改訂.md", "brief.txt新版.json草稿.md", "notes.json수정.txt", "docs/計画.md改訂.md", "v2/계획.json수정.md새.txt"];
+    const spaced = ["新plan.md版.md", "資料/報告.md新版.txt", "计划.txt改订.json新版.md", "새.md수정.md"];
+    const folder = taskFolder("compounds", [...names, ...made]);
+    const { random, prose, word } = randomText(2017);
+    for (let index = 0; index < 500; index++) {
+      const lines = Array.from({ length: 1 + random(3) }, () => {
+        const style = random(3);
+        if (!style) {
+          const name = [...made, ...glued, ...spaced][random(made.length + glued.length + spaced.length)]!;
+          return { text: name, named: [name] };
+        }
+        const pool = [...made, ...glued, ...style === 1 ? spaced : [], ...names, ...planned];
+        const named = Array.from({ length: 1 + random(3) }, () => pool[random(pool.length)]!);
+        const text = style === 1
+          ? named.map((name) => `${word()} ${[name, name, `"${name}"`][random(3)]}`).join(" ") + ` ${word()}`
+          : named.map((name, at) => prose(at ? 1 : 0) + [name, name, `"${name}"`, `「${name}」`][random(4)]).join("") + prose(0);
+        return { text, named };
+      });
+      expectPins(lines.map((line) => line.text).join("\n"), lines.flatMap((line) => line.named), folder);
+    }
+  });
+
   it("reads a max-size CJK plan within the restart budget", () => {
     const folder = taskFolder("budget", ["plan.md", "review.txt", "회의록.md"]);
     const glued = (ends: number) => "가".repeat(3 * ends) + ".md" + ".a가".repeat(ends);

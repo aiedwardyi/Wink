@@ -550,7 +550,7 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
   const refs: [number, string][] = [];
   let rest = run;
   let from = 0;
-  let token = 0;
+  const starts = [0];
   for (const hit of run.matchAll(DOC_EXT)) {
     if (hit.index < from) continue;
     const after = hit.index + hit[0].length;
@@ -572,10 +572,10 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
     }
     const spans = best ? [best] : [];
     if (ends.includes(after)) {
-      // 请先读plan.md is prose then a name and 新draft.md one name, and no rule tells them apart, so the whole token and every Latin start are pinned too
-      for (const lead of [0, ...[...run.slice(token, hit.index).matchAll(LATIN_START)].map((match) => match.index)]) {
-        const name = [...run.slice(token + lead, after).matchAll(DOC_PATH)].at(-1)?.[0];
-        if (name && name.length > hit[0].length) spans.push([after - name.length, after]);
+      // 请先读plan.md is prose then a name, 新draft.md and 計画.md改訂.md one name each, and no rule tells them apart, so every start (the token, each earlier name end, each Latin start) is pinned up to each end
+      const token = [...run.slice(0, after).matchAll(DOC_PATH)].at(-1)!;
+      for (const start of new Set([...starts, ...[...run.slice(0, hit.index).matchAll(LATIN_START)].map((match) => match.index)].map((start) => Math.max(start, token.index)))) {
+        if (start < hit.index) spans.push([start, after]);
       }
     }
     if (!spans.length) {
@@ -583,11 +583,11 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
       if (tails.length) from = after;
       continue;
     }
-    from = token = Math.max(...spans.map(([, end]) => end));
-    for (const [start, end] of spans) {
-      refs.push([start, run.slice(start, end)]);
-      rest = rest.slice(0, start) + " ".repeat(end - start) + rest.slice(end);
-    }
+    from = Math.max(...spans.map(([, end]) => end));
+    starts.push(from);
+    for (const [start, end] of spans) refs.push([start, run.slice(start, end)]);
+    const blank = Math.min(...spans.map(([start]) => start));
+    rest = rest.slice(0, blank) + " ".repeat(from - blank) + rest.slice(from);
   }
   for (const match of rest.matchAll(DOC_PATH)) refs.push([match.index, match[0]]);
   return refs.sort(([a], [b]) => a - b).map(([, ref]) => ref);

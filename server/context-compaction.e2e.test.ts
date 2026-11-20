@@ -37,6 +37,7 @@ const MARKETING = {
   botId: "compaction-marketing-bot",
   threadId: "compaction-marketing-thread",
   fatSession: "marketing-fat-session",
+  compounds: ["报告.md新版.md", "計画.md改訂.md", "계획.md수정.md"].flatMap((name) => [name, `docs/${name}`]),
 };
 const ENGINE_SWITCH = { botId: "engine-switch-bot", threadId: "engine-switch-thread" };
 const ENGINE_SWITCH_BRANCH = { botId: "engine-switch-branch-bot", threadId: "engine-switch-branch-thread" };
@@ -717,7 +718,7 @@ describe("context compaction e2e", () => {
       threadId: MARKETING.threadId,
       botId: MARKETING.botId,
       goal: "Run the Reddit launch",
-      plan: [{ step: "Post Thursday", status: "active" }, { step: "plan.md和review.txt都要更新。", status: "pending" }, { step: "Create 新draft.md tomorrow", status: "pending" }, { step: "Then 请先读brief.md", status: "pending" }, { step: "docs/新agenda.md", status: "pending" }],
+      plan: [{ step: "Post Thursday", status: "active" }, { step: "plan.md和review.txt都要更新。", status: "pending" }, { step: "Create 新draft.md tomorrow", status: "pending" }, { step: "Then 请先读brief.md", status: "pending" }, { step: "docs/新agenda.md", status: "pending" }, ...MARKETING.compounds.map((step) => ({ step, status: "pending" }))],
       completed: [],
       evidence: [],
       artifacts: [
@@ -922,7 +923,7 @@ describe("context compaction e2e", () => {
       await waitFor(async () => (await botById(MARKETING.botId))?.busy === false);
     };
     const launch = join(home, "launch");
-    const plans = [join(launch, "paste", "03-thursday.md"), join(launch, "plan.md"), join(launch, "review.txt"), join(launch, "新draft.md"), join(launch, "brief.md"), join(launch, "docs", "新agenda.md")];
+    const plans = [join(launch, "paste", "03-thursday.md"), join(launch, "plan.md"), join(launch, "review.txt"), join(launch, "新draft.md"), join(launch, "brief.md"), join(launch, "docs", "新agenda.md"), ...MARKETING.compounds.map((name) => join(launch, name))];
     const pinned = (prompt: string) => prompt.match(/^Read first, your plan: (.*)$/m)?.[1]?.split("; ");
     rmSync(claudeDumpPath, { force: true });
     await send("post thursday");
