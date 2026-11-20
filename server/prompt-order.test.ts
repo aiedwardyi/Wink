@@ -6,9 +6,13 @@ import { harnessPlaybookPrompt } from "./harness-playbook.ts";
 import { asksBlock, type TaskAsk } from "./task-asks.ts";
 import { ensureWorkspace, memorySystemParts, memorySystemPrompt } from "./workspace.ts";
 
-const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+const normalizeSource = (text: string) => text.replace(/\r\n/g, "\n");
+const source = normalizeSource(readFileSync(new URL("./index.ts", import.meta.url), "utf8"));
 
 describe("system prompt order", () => {
+  it("reads Windows and Unix checkouts alike", () => {
+    expect(normalizeSource(source.replace(/\n/g, "\r\n"))).toBe(source);
+  });
   it("places stable instructions and playbook before saved keys and memory in both dispatch paths", () => {
     const solo = source.slice(source.indexOf("        const system =\n", source.indexOf("const credentialPrompt")), source.indexOf("        // a rewound, Orbit-compacted"));
     const room = source.slice(source.indexOf("  const roomSystem ="), source.indexOf("  if (handoff) laneHandoffs.open"));
