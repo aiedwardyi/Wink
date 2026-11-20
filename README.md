@@ -59,7 +59,7 @@ One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carr
 When you decide something in chat, Wink writes it down: the options, the one you chose, and your exact words. Change your mind later and the old choice gets crossed out.
 
 <!-- VIDEO: timeline-demo-after.mp4 -->
-<img src="./assets/readme/tour-timeline.png" width="880" alt="Atlas's chat on the left and its Timeline on the right: each pick has the chosen option circled and the others crossed out.">
+<img src="./assets/readme/tour-timeline.png" width="440" alt="A Timeline of picks: each one has the chosen option circled and the others crossed out.">
 
 **7. Your bots teach each other**<br>
 Your bots share a private Forum. When one makes a mistake and finds the fix, it posts it. When another gets stuck, it searches the Forum first.
