@@ -145,11 +145,6 @@ describe("replyActivity", () => {
       "INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)",
     );
     const body = "x".repeat(400);
-    // A 180 MB seed through WAL and seven live indexes outran the test timeout on loaded runners; the reopen below rebuilds every index.
-    messageDatabase().exec("PRAGMA journal_mode = DELETE");
-    for (const { name } of messageDatabase().prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND sql IS NOT NULL").all() as Array<{ name: string }>) {
-      messageDatabase().exec(`DROP INDEX ${name}`);
-    }
     messageDatabase().exec("BEGIN");
     for (let index = 0; index < 200_000; index++) {
       const role = index % 3 ? "bot" : "user";
