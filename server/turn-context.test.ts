@@ -1385,9 +1385,16 @@ describe("fresh-session memory block", () => {
   const stepPins = (step: string, folder: string) => planFiles({ goal: "Ship it", plan: [{ step, status: "active" }] }, folder);
 
   it("pins both files a CJK conjunction joins", () => {
-    const folder = taskFolder("joined", ["plan.md", "review.txt"]);
-    for (const step of ["plan.md和review.txt都要更新。", "plan.mdとreview.txt", "plan.md와review.txt"]) {
-      expect(stepPins(step, folder)).toEqual(expect.arrayContaining([join(folder, "plan.md"), join(folder, "review.txt")]));
+    const folder = taskFolder("joined", ["plan.md", "review.txt", "회의록.md", "메모.pdf"]);
+    for (const [step, ...both] of [
+      ["plan.md和review.txt都要更新。", "plan.md", "review.txt"],
+      ["plan.mdとreview.txt", "plan.md", "review.txt"],
+      ["plan.md와review.txt", "plan.md", "review.txt"],
+      ["회의록.md메모.pdf", "회의록.md", "메모.pdf"],
+    ]) {
+      const pins = stepPins(step!, folder);
+      expect(pins, step).toEqual(expect.arrayContaining(both.map((name) => join(folder, name))));
+      expect(pins.filter((pin) => both.every((name) => pin.includes(name))), step).toEqual([]);
     }
   });
 
@@ -1417,7 +1424,11 @@ describe("fresh-session memory block", () => {
     const [goal, ...steps] = text.split("\n");
     const pins = planFiles({ goal: goal!, plan: steps.map((step) => ({ step, status: "active" as const })) }, folder);
     expect(pins, text).toEqual(expect.arrayContaining(named.map((name) => join(folder, name))));
-    for (const pin of pins) expect(text, pin).toContain(relative(folder, pin).split(sep).join("/"));
+    for (const pin of pins) {
+      const name = relative(folder, pin).split(sep).join("/");
+      expect(text, pin).toContain(name);
+      if (!existsSync(pin)) expect(names.filter((real) => name.includes(real)).length, pin).toBeLessThan(2);
+    }
   };
 
   it("pins every existing file that random CJK prose touches", () => {
@@ -1539,6 +1550,16 @@ describe("fresh-session memory block", () => {
     const started = performance.now();
     planFiles({ goal: glued(82), plan: Array.from({ length: 20 }, () => ({ step: glued(32), status: "active" as const })) }, folder);
     expect(performance.now() - started).toBeLessThan(100);
+  });
+
+  it("pins a number of readings linear in the names a dense plan glues together", () => {
+    const folder = taskFolder("dense", ["plan.md", "review.txt", "회의록.md"]);
+    for (const latin of ["", "a"]) {
+      let count = 0;
+      const glued = (chars: number) => Array.from({ length: Math.floor(chars / (4 + latin.length)) }, () => String.fromCodePoint(0xac00 + count++) + latin + ".md").join("");
+      const pins = planFiles({ goal: glued(500), plan: Array.from({ length: 20 }, () => ({ step: glued(200), status: "active" as const })) }, folder);
+      expect(pins.length, latin).toBeLessThan(4 * count);
+    }
   });
 
   it("expands home-relative plan files with or without a task folder", () => {

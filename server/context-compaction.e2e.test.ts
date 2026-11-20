@@ -931,6 +931,7 @@ describe("context compaction e2e", () => {
     const fresh = { dump, prompt: String(dump.prompt.message.content) };
     expect(fresh.dump.argv).not.toContain("--resume");
     expect(pinned(fresh.prompt)).toEqual(expect.arrayContaining(plans));
+    expect(pinned(fresh.prompt)).not.toContain(join(launch, "plan.md和review.txt"));
     expect(fresh.prompt).toMatch(/real-shots 11 \(workers-11\.png, workers-10\.png\)/);
     expect(fresh.prompt).toContain(`Built list: ${join(launch, "built.md")}`);
     expect(fresh.prompt).not.toContain("search_my_chats");
@@ -941,6 +942,7 @@ describe("context compaction e2e", () => {
       .filter((line) => line.pid === dump.pid).at(-1)!;
     expect(next.text).toContain("and friday?");
     expect(pinned(next.text)).toEqual(expect.arrayContaining(plans));
+    expect(pinned(next.text)).not.toContain(join(launch, "plan.md和review.txt"));
     expect(next.text).not.toContain("The conversation so far");
   }, 60_000);
 

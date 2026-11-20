@@ -551,6 +551,8 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
   let rest = run;
   let from = 0;
   const starts = [0];
+  const latin = [...run.matchAll(LATIN_START)].map((match) => match.index);
+  const named = [...latin, ...[...run.matchAll(/[\\/]/g)].map((match) => match.index)];
   for (const hit of run.matchAll(DOC_EXT)) {
     if (hit.index < from) continue;
     const after = hit.index + hit[0].length;
@@ -558,7 +560,7 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
     let best: [number, number] | undefined;
     for (let start = from; start <= hit.index && tails.length > 0 && (!best || tails[0]! - start > best[1] - best[0]); start++) {
       // a name starts after a character no ASCII name holds, so release-plan.md never pins plan.md
-      if (start && /[\w.~:\\/-]/.test(run[start - 1]!) || /[\uDC00-\uDFFF]/.test(run[start]!)) continue;
+      if (start && start !== starts.at(-1) && /[\w.~:\\/-]/.test(run[start - 1]!) || /[\uDC00-\uDFFF]/.test(run[start]!)) continue;
       const head = localPath(run.slice(start, after), cwd);
       if (!head || !listed(dirname(head)).has(fileKey(basename(head)))) continue;
       for (const end of tails) {
@@ -572,9 +574,12 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
     }
     const spans = best ? [best] : [];
     if (ends.includes(after)) {
-      // 请先读plan.md is prose then a name, 新draft.md and 計画.md改訂.md one name each, and no rule tells them apart, so every start (the token, each earlier name end, each Latin start) is pinned up to each end
+      // 请先读plan.md is prose then a name, 新draft.md and 計画.md改訂.md one name each, and no rule tells them apart, so the token and each start since the name before this one are pinned up to this end, but never past a name end into a later name's start (a Latin start, a folder, a file on disk)
       const token = [...run.slice(0, after).matchAll(DOC_PATH)].at(-1)!;
-      for (const start of new Set([...starts, ...[...run.slice(0, hit.index).matchAll(LATIN_START)].map((match) => match.index)].map((start) => Math.max(start, token.index)))) {
+      const next = Math.max(best?.[0] ?? 0, ...named.filter((at) => at < hit.index));
+      const lead = Math.max(token.index, ends.find((end) => end <= next) ?? 0);
+      const near = Math.max(lead, starts.at(-2) ?? 0);
+      for (const start of new Set([lead, ...[...starts, ...latin].filter((start) => start >= near)])) {
         if (start < hit.index) spans.push([start, after]);
       }
     }
