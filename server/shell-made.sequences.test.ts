@@ -232,6 +232,18 @@ const TABLE: [string, string[], string, Op[]][] = [
   ["remove-include-ps", ["inputs/shot-*11", "stage/real-shots/"], "Remove-Item -Path 'stage' -Include *.tmp -Recurse; Set-Location -Path 'stage'; Copy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["copy", "inputs", "stage/real-shots"]]],
   ["rmdir-not-empty-bash", ["inputs/shot-*11", "stage/real-shots/"], "rmdir stage 2> /dev/null; cd stage; cp {w}/inputs/*.png real-shots/", [["cp", "inputs", "stage/real-shots"]]],
   ["rename-fails-ps", ["inputs/shot-*11", "stage/real-shots/", "phase-b/"], "Rename-Item -Path 'stage' -NewName 'phase-b' -ErrorAction SilentlyContinue; Set-Location -Path 'stage'; Copy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["copy", "inputs", "stage/real-shots"]]],
+  ["k-scratch-tree-bash", ["inputs/shot-*11", "real-shots/"], "rm -rf tmp && mkdir tmp && cp -r {w}/inputs tmp/shots && cd tmp/shots && cp *.png ../../real-shots/ && cd ../.. && rm -rf tmp", [["mkdir", "tmp"], ["cp", "inputs", "tmp/shots"], ["cp", "tmp/shots", "real-shots"], ["remove", "tmp"]]],
+  ["k-rebuild-guarded-cleanup-ps", ["inputs/shot-*11", "real-shots/"], "Remove-Item -LiteralPath 'stage' -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -Path '{w}/inputs' -Destination 'stage' -Recurse; Set-Location -Path 'stage'; Copy-Item -Path '*.png' -Destination '../real-shots'; Set-Location -Path '..'; if (Test-Path 'stage') { Remove-Item 'stage' -Recurse -Force }", [["copy", "inputs", "stage"], ["copy", "stage", "real-shots"], ["remove", "stage"]]],
+  ["k-rebuild-find-delete-bash", ["inputs/shot-*11", "real-shots/"], "rm -rf stage; cp -r {w}/inputs stage; cd stage; cp *.png ../real-shots/; cd ..; find stage -delete", [["cp", "inputs", "stage"], ["cp", "stage", "real-shots"], ["remove", "stage"]]],
+  ["k-ctl-rebuild-read-cleanup-bash", ["inputs/shot-*11", "real-shots/"], "rm -rf stage; cp -r {w}/inputs stage; cd stage; cp *.png ../real-shots/; cd ..; rm -rf stage", [["cp", "inputs", "stage"], ["cp", "stage", "real-shots"], ["remove", "stage"]]],
+  ["k-subshell-find-bash", ["inputs/shot-*11", "real-shots/"], "rm -rf stage\ncp -r {w}/inputs stage\n(cd stage && cp *.png ../real-shots/)\nfind stage -delete", [["cp", "inputs", "stage"], ["cp", "stage", "real-shots"], ["remove", "stage"]]],
+  ["k-trap-cleanup-bash", ["inputs/shot-*11", "real-shots/"], "trap 'rm -rf stage' EXIT\nrm -rf stage\ncp -r {w}/inputs stage\ncd stage\ncp *.png ../real-shots/\ncd ..", [["cp", "inputs", "stage"], ["cp", "stage", "real-shots"], ["remove", "stage"]]],
+  ["k-rd-cmd", ["inputs/shot-*11", "real-shots/"], 'rmdir /s /q stage & xcopy /e /i /q "{w}/inputs" stage >nul & cd stage & copy *.png ../real-shots >nul & cd .. & rd /s /q stage', [["copy", "inputs", "stage"], ["copy", "stage", "real-shots"], ["remove", "stage"]]],
+  ["k-renamed-remade-gone-bash", ["inputs/shot-*11", "real-shots/", "phase-a/"], "mv phase-a phase-z\ncp -r {w}/inputs phase-a\ncd phase-a\ncp *.png ../real-shots/\ncd ..\nfind phase-a -delete", [["move", "phase-a", "phase-z"], ["cp", "inputs", "phase-a"], ["cp", "phase-a", "real-shots"], ["remove", "phase-a"]]],
+  ["j32-rebuilt-outside-bash", ["inputs/shot-*11", "../launch outside/real-shots/"], 'cd "{w}/../launch outside"\nrm -rf t1\ncp -r {w}/inputs t1\ncd t1\ncp {w}/inputs/*.png ../real-shots/\ncd ..\ncp {w}/inputs/*.png real-shots/\nmkdir -p t1\ncd t1\ncp {w}/inputs/*.png .\ncd ..\ncp t1/*.png real-shots/\nfind t1 -delete\ncp {w}/inputs/*.png real-shots/', [["cp", "inputs", "../launch outside/t1"], ["cp", "inputs", "../launch outside/real-shots"], ["remove", "../launch outside/t1"]]],
+  ["j32-include-renamed-ps", ["inputs/shot-*11", "old-2/real-shots/", "real-shots/"], "Remove-Item -Path 'old-2' -Include *.tmp -Recurse\nsl 'old-2'\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'\nSet-Location -Path '..'\nren old-2 ren-1\nSet-Location -Path 'ren-1'\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'\nSet-Location -Path '..'\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["copy", "inputs", "old-2/real-shots"], ["move", "old-2", "ren-1"], ["copy", "inputs", "ren-1/real-shots"], ["copy", "inputs", "real-shots"]]],
+  ["j33-git-init-rd-ps", ["inputs/shot-*11", "real-shots/", "t1/"], "Remove-Item -LiteralPath 't1' -Recurse -Force -ErrorAction SilentlyContinue\ngit init -q t1 | Out-Null\nSet-Location -Path 't1'\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\ncd ..\n[IO.Directory]::CreateDirectory((Join-Path $PWD 't1')) | Out-Null\ncd t1\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\ncd ..\nCopy-Item -Path 't1/*.png' -Destination 'real-shots'\ncmd /c rd /s /q t1\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'", [["remove", "t1"], ["mkdir", "t1/.git"], ["copy", "inputs", "t1"], ["copy", "t1", "real-shots"], ["remove", "t1"]]],
+  ["j34-guarded-remake-bash", ["inputs/shot-*11", "real-shots/"], "rm -rf t1\nif [ ! -d t1 ]; then mkdir t1; fi\ncd t1\ncp {w}/inputs/*.png .\ncd ..\nmkdir t1\ncd t1\ncp {w}/inputs/*.png .\ncd ..\ncp t1/*.png real-shots/\n[ ! -d t1 ] || rm -rf t1\ncp {w}/inputs/*.png real-shots/", [["mkdir", "t1"], ["cp", "inputs", "t1"], ["cp", "t1", "real-shots"], ["remove", "t1"]]],
 ];
 
 function row([name, old, command, ops]: (typeof TABLE)[number]): Sequence {
@@ -505,6 +517,64 @@ function generateControlFlow(): Sequence[] {
   });
 }
 
+// rebuilds: a scratch folder removed, made again, entered, written from, then gone before the scan
+function generateRebuilds(seed: number, count: number): Sequence[] {
+  let state = seed >>> 0;
+  const rnd = () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = <T,>(list: readonly T[]): T => list[Math.floor(rnd() * list.length)]!;
+  return Array.from({ length: count }, (_, index) => {
+    const ps = index % 2 === 0;
+    const at = pick(["", "phase-a", "../launch outside"]);
+    const scratch = pick(["stage", "t1", "old-3", "tmp/shots", "scratch-1/sub-2"]);
+    const top = scratch.split("/")[0]!;
+    const up = scratch.split("/").map(() => "..").join("/");
+    const here = (path: string) => (at ? `${at}/${path}` : path);
+    const old = rnd() < 0.5;
+    const steps = at ? [ps ? `Set-Location -Path '{w}/${at}'` : `cd "{w}/${at}"`] : [];
+    const ops: Op[] = [];
+    const removal = Math.floor(rnd() * 4);
+    if (removal < 2) {
+      steps.push(ps ? [`Remove-Item -LiteralPath '${top}' -Recurse -Force -ErrorAction SilentlyContinue`, `Remove-Item '${top}' -Recurse -Force -ErrorAction SilentlyContinue`][removal]! : [`rm -rf ${top}`, `rm -rf ${top} 2> /dev/null`][removal]!);
+      if (old) ops.push(["remove", here(top)]);
+    } else if (removal === 2) steps.push(ps ? `if ($false) { Remove-Item '${top}' -Recurse -Force }` : `[ "$CLEAN" = 1 ] && rm -rf ${top}`);
+    const copied = !(old && removal > 1 && top === scratch) && rnd() < 0.5;
+    if (top !== scratch) steps.push(ps ? `New-Item -ItemType Directory -Path '${top}' -Force | Out-Null` : `mkdir -p ${top}`);
+    steps.push(copied
+      ? ps ? `Copy-Item -Path '{w}/inputs' -Destination '${scratch}' -Recurse` : `cp -r {w}/inputs ${scratch}`
+      : pick(ps
+        ? [`New-Item -ItemType Directory -Path '${scratch}' -Force | Out-Null`, `[void](mkdir '${scratch}' -Force)`, `$null = New-Item -ItemType Directory -Path '${scratch}' -Force`, `git init -q ${scratch} | Out-Null`, `if (-not (Test-Path '${scratch}')) { New-Item -ItemType Directory -Path '${scratch}' | Out-Null }`]
+        : [`mkdir -p ${scratch}`, `git init -q ${scratch}`, `[ -d ${scratch} ] || mkdir -p ${scratch}`, `if [ ! -d ${scratch} ]; then mkdir -p ${scratch}; fi`, `for d in ${scratch}; do mkdir -p $d; done`]));
+    ops.push(copied ? [ps ? "copy" : "cp", "inputs", here(scratch)] : ["mkdir", here(scratch)]);
+    const pushed = rnd() < 0.3;
+    steps.push(pushed ? ps ? `Push-Location -Path '${scratch}'` : `pushd ${scratch} > /dev/null` : ps ? pick([`Set-Location -Path '${scratch}'`, `sl '${scratch}'`, `cd ${scratch}`]) : `cd ${scratch}`);
+    const from = copied ? "*.png" : "{w}/inputs/*.png";
+    steps.push(ps ? `Copy-Item -Path '${from}' -Destination '${up}/real-shots'` : `cp ${from} ${up}/real-shots/`);
+    ops.push([ps ? "copy" : "cp", "inputs", here("real-shots")]);
+    steps.push(pushed ? ps ? "Pop-Location" : "popd > /dev/null" : ps ? `Set-Location -Path '${up}'` : `cd ${up}`);
+    const cleanup = pick(ps
+      ? [`Remove-Item -LiteralPath '${top}' -Recurse -Force`, `if (Test-Path '${top}') { Remove-Item '${top}' -Recurse -Force }`, `ri -r -fo '${top}'`, `cmd /c rd /s /q ${top}`, `rd '${top}' -Recurse -Force`]
+      : [`rm -rf ${top}`, `find ${top} -delete`, `if [ -d ${top} ]; then rm -rf ${top}; fi`, `[ ! -d ${top} ] || rm -rf ${top}`, `rm -rfv ${top} > /dev/null`, `mv ${top} "${top}-$(date +%s)"`]);
+    steps.push(cleanup);
+    ops.push(cleanup.startsWith("mv") ? ["move", here(top), here(`${top}-1700000000`)] : ["remove", here(top)]);
+    if (rnd() < 0.5) {
+      steps.push(ps ? "Copy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'" : "cp {w}/inputs/*.png real-shots/");
+      ops.push([ps ? "copy" : "cp", "inputs", here("real-shots")]);
+    }
+    const joiner = ps ? pick(["\n", "; "]) : removal === 2 ? "\n" : pick(["\n", "; ", " && "]);
+    const sequence = row([`rebuild-${index}`, ["inputs/shot-*11", here("real-shots/"), ...(old ? [here(`${top}/`)] : [])], steps.join(joiner), ops]);
+    if (index % 3) return sequence;
+    return { ...sequence, secondWriter: () => {
+      for (const path of ["../their-notes.md", "their-notes.md", "other-bot-out/report-1.md", "other-bot-out/report-2.md", "../launch outside/their-notes.md"]) write(resolve(sequence.cwd, path));
+    } };
+  });
+}
+
 const files = () => new Map([...disk.entries].filter(([, entry]) => !entry.dir).map(([path, entry]) => [path, `${entry.birth}:${entry.mtime}`]));
 
 // a folder too big to list is named itself, never with a short count
@@ -525,7 +595,9 @@ function replay({ name, cwd, command, setup, effects, secondWriter }: Sequence) 
   const head = new Set(shellMade(command, cwd, SINCE));
   const kept = [...made].filter((path) => base.has(path));
   const extra = [...head].filter((path) => disk.entries.get(path)?.dir === false && !base.has(path) && !made.has(path));
-  return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path) && !tooBig(head, path)), missing: [...made].filter((path) => !head.has(path)), extra };
+  // past the listing bound base names the folder itself, and head names it only when something in it changed
+  const dropped = [...base].filter((path) => !head.has(path) && !tooBig(head, path) && disk.entries.get(path)?.dir !== true);
+  return { name, command, kept: kept.length, lost: kept.filter((path) => !head.has(path) && !tooBig(head, path)), missing: [...made].filter((path) => !head.has(path)), extra, dropped };
 }
 
 const SECOND_WRITER = [
@@ -546,13 +618,26 @@ const SECOND_WRITER = [
     ]);
     return { ...sequence, secondWriter: () => write(join(sequence.cwd, "real-shots", "their-output.png")) };
   }),
+  ...([
+    ["guard-pop-exit-code-ps", "Push-Location 'phase-a'\ngit --version | Out-Null\nif ($LASTEXITCODE -ne 0) {\n  Pop-Location\n  exit $LASTEXITCODE\n}\nGet-ChildItem .. | Out-Null\nCopy-Item -Path '{w}/inputs/*.png' -Destination '../phase-b/real-shots'\nPop-Location", [["copy", "inputs", "phase-b/real-shots"]]],
+    ["guard-pop-message-ps", "Push-Location 'phase-a'\ngit --version | Out-Null\nif ($LASTEXITCODE -ne 0) {\n  Write-Host 'git missing'\n  Pop-Location\n  exit 1\n}\nGet-ChildItem .. | Out-Null\nCopy-Item -Path '{w}/inputs/*.png' -Destination '../phase-b/real-shots'\nPop-Location", [["copy", "inputs", "phase-b/real-shots"]]],
+    ["guard-pop-throw-ps", "Push-Location 'phase-a'\ngit --version | Out-Null\nif ($LASTEXITCODE -ne 0) {\n  Pop-Location\n  throw 'git missing'\n}\nGet-ChildItem .. | Out-Null\nCopy-Item -Path '{w}/inputs/*.png' -Destination '../phase-b/real-shots'\nPop-Location", [["copy", "inputs", "phase-b/real-shots"]]],
+    ["guard-pop-echo-bash", 'pushd phase-a > /dev/null\ncommand -v git > /dev/null || {\n  echo "git missing" >&2\n  popd > /dev/null\n  exit 1\n}\nls .. > /dev/null\ncp {w}/inputs/*.png ../phase-b/real-shots/\npopd > /dev/null', [["cp", "inputs", "phase-b/real-shots"]]],
+    ["guard-pop-status-bash", "pushd phase-a > /dev/null\ncommand -v git > /dev/null || {\n  popd > /dev/null\n  exit $?\n}\nls .. > /dev/null\ncp {w}/inputs/*.png ../phase-b/real-shots/\npopd > /dev/null", [["cp", "inputs", "phase-b/real-shots"]]],
+    ["failed-push-removed-ps", "Remove-Item 'phase-a' -Recurse -Force\nPush-Location 'phase-a' -ErrorAction SilentlyContinue\nPop-Location\nSet-Location -Path 'tmp-render'\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\nSet-Location -Path '..'\nCopy-Item -Path 'tmp-render/*.png' -Destination 'real-shots'\nRename-Item -Path 'tmp-render' -NewName 'kept-render'", [["remove", "phase-a"], ["copy", "inputs", "tmp-render"], ["copy", "tmp-render", "real-shots"], ["move", "tmp-render", "kept-render"]]],
+    ["failed-cd-removed-bash", "rm -rf phase-a\ncd phase-a 2> /dev/null\ncd tmp-render && cp {w}/inputs/*.png . && cd .. && mv tmp-render/*.png real-shots/ && rmdir tmp-render", [["remove", "phase-a"], ["cp", "inputs", "tmp-render"], ["moveAll", "tmp-render", "real-shots"], ["remove", "tmp-render"]]],
+    ["failed-cd-renamed-ps", "Rename-Item -Path 'phase-a' -NewName 'phase-z'\nSet-Location -Path 'phase-a' -ErrorAction SilentlyContinue\nSet-Location -Path 'tmp-render'\nCopy-Item -Path '{w}/inputs/*.png' -Destination '.'\nSet-Location -Path '..'\nCopy-Item -Path 'tmp-render/*.png' -Destination 'real-shots'\nRename-Item -Path 'tmp-render' -NewName 'kept-render'", [["move", "phase-a", "phase-z"], ["copy", "inputs", "tmp-render"], ["copy", "tmp-render", "real-shots"], ["move", "tmp-render", "kept-render"]]],
+  ] satisfies [string, string, Op[]][]).map(([name, command, ops]) => {
+    const sequence = row([name, ["inputs/shot-*11", "phase-a/", "phase-b/real-shots/", "tmp-render/", "real-shots/"], command, ops]);
+    return { ...sequence, secondWriter: () => write(join(dirname(sequence.cwd), "their-notes.md")) };
+  }),
 ];
 
 const CONTROL_FLOW = generateControlFlow();
-const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)]), ["control flow", CONTROL_FLOW], ["second writers", SECOND_WRITER]];
+const GROUPS: [string, Sequence[]][] = [["the gate's cases", TABLE.map(row)], ...[11, 12, 13, 14, 21, 22, 23].map((seed): [string, Sequence[]] => [`seed ${seed}`, generate(seed, 600)]), ["control flow", CONTROL_FLOW], ["second writers", SECOND_WRITER], ["rebuilt scratch folders", generateRebuilds(42, 300)]];
 
-it("replays 4364 sequences", () => {
-  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4364);
+it("replays 4684 sequences", () => {
+  expect(GROUPS.flatMap(([, sequences]) => sequences)).toHaveLength(4684);
 });
 
 it.each(GROUPS)("keeps base files and excludes extra files the command never touched in %s", (_, sequences) => {
@@ -563,12 +648,26 @@ it.each(GROUPS)("keeps base files and excludes extra files the command never tou
   expect(runs.filter((run) => run.extra.length).map(({ name, command, extra }) => ({ name, command, extra }))).toEqual([]);
 });
 
+// base's walk runs unchanged inside head's, so no command can name less than base did
+it.each(GROUPS)("names every path base named in %s", (_, sequences) => {
+  const runs = sequences.map(replay);
+  expect(runs.filter((run) => run.dropped.length).map(({ name, command, dropped }) => ({ name, command, dropped }))).toEqual([]);
+});
+
 it.each([
   ["removed", "mkdir scratch; rmdir scratch; cd scratch 2>/dev/null; cp inputs/*.png .", [["mkdir", "scratch"], ["remove", "scratch"], ["cp", "inputs", "."]]],
   ["renamed", "mkdir scratch; mv scratch moved; cd scratch 2>/dev/null; cp inputs/*.png .", [["mkdir", "scratch"], ["move", "scratch", "moved"], ["cp", "inputs", "."]]],
   ["renamed using named arguments", "New-Item -ItemType Directory scratch; Rename-Item -NewName moved -LiteralPath scratch; Set-Location scratch -ErrorAction SilentlyContinue; Copy-Item inputs/*.png .", [["mkdir", "scratch"], ["move", "scratch", "moved"], ["copy", "inputs", "."]]],
 ] satisfies [string, string, Op[]][])("stays put when the cd target was already %s", (name, command, ops) => {
   const run = replay(row([name, ["inputs/shot-*11"], command, ops]));
+  expect(run.missing).toEqual([]);
+});
+
+it.each([
+  ["removed", "cd nope 2> /dev/null\ncp {w}/inputs/*.png real-shots/\nmkdir nope\nrmdir nope", [["cp", "inputs", "real-shots"], ["mkdir", "nope"], ["remove", "nope"]]],
+  ["renamed", "Set-Location 'nope' -ErrorAction SilentlyContinue\nCopy-Item -Path '{w}/inputs/*.png' -Destination 'real-shots'\nmkdir nope | Out-Null\nRename-Item -Path 'nope' -NewName 'kept'", [["copy", "inputs", "real-shots"], ["mkdir", "nope"], ["move", "nope", "kept"]]],
+] satisfies [string, string, Op[]][])("stays put when the cd target is made only later and %s", (name, command, ops) => {
+  const run = replay(row([`made-later-${name}`, ["inputs/shot-*11", "real-shots/"], command, ops]));
   expect(run.missing).toEqual([]);
 });
 
