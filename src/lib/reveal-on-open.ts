@@ -17,16 +17,22 @@ export function revealInChat(node: HTMLElement | null): (() => void) | undefined
     chat.removeEventListener("scrollend", landed);
   };
   // Older rows loading right after landing shift the scroll by the bottom, which reads as the reader resuming follow.
-  let held = true;
-  const release = (e?: Event) => {
-    // a gesture on the box scrolls the box, not the chat
-    if (!held || (e?.target instanceof Node && node.contains(e.target))) return;
+  let held = true, reading = false;
+  const release = () => {
+    if (!held) return;
     held = false;
     landed();
-    chat.removeEventListener("wheel", release);
-    chat.removeEventListener("touchmove", release);
+    for (const [type, on] of gestures) chat.removeEventListener(type, on);
     chat.dispatchEvent(new Event(REVEALED_EVENT));
   };
+  // only a gesture that scrolls the chat hands it back; one an inner scroller takes does not
+  const gestures: [string, () => void][] = [
+    ["wheel", () => (reading = true)],
+    ["touchmove", () => (reading = true)],
+    ["touchend", () => (reading = false)],
+    ["touchcancel", () => (reading = false)],
+    ["scroll", () => reading && release()],
+  ];
   // The box grows as its view loads, and a smooth scroll stops at the room there was when it began: re-aim until it lands.
   const sized = new ResizeObserver(() => {
     const box = node.getBoundingClientRect(), view = chat.getBoundingClientRect();
@@ -36,8 +42,7 @@ export function revealInChat(node: HTMLElement | null): (() => void) | undefined
     if (instant) landed();
     else chat.addEventListener("scrollend", landed);
   });
-  chat.addEventListener("wheel", release, { passive: true });
-  chat.addEventListener("touchmove", release, { passive: true });
+  for (const [type, on] of gestures) chat.addEventListener(type, on, { passive: true });
   sized.observe(node);
   return release;
 }

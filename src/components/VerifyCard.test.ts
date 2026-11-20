@@ -408,7 +408,7 @@ it.each([
     expect(below.scrolled).toHaveBeenCalledTimes(2);
     await act(async () => { below.chat.querySelector(".verify-watch-frame")!.dispatchEvent(new Event("touchmove", { bubbles: true })); });
     expect(below.revealed).not.toHaveBeenCalled();
-    await act(async () => { below.chat.dispatchEvent(new Event("touchmove")); });
+    await act(async () => { below.chat.dispatchEvent(new Event("scroll")); });
     expect(below.revealed).toHaveBeenCalledTimes(1);
   } finally { await below.close(); }
   const tall = await open(300, 1000);
@@ -424,6 +424,8 @@ it.each([
   const moved = await open(120, 600);
   try {
     await act(async () => { moved.chat.dispatchEvent(new Event("touchmove")); });
+    expect(moved.revealed).not.toHaveBeenCalled();
+    await act(async () => { moved.chat.dispatchEvent(new Event("scroll")); });
     expect(moved.revealed).toHaveBeenCalledTimes(1);
     replay = { top: 120, height: 677 };
     await resized();
