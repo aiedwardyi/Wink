@@ -7,10 +7,16 @@ const followScrollEvents = new WeakSet<Event>();
 
 /** Bubbles from a box opening in place: following the bottom would push it out of view. */
 export const STOP_FOLLOW_EVENT = "orbit:stop-follow";
+/** Sent to the chat once that box has scrolled into view: older rows held until then may load. */
+export const REVEALED_EVENT = "orbit:revealed";
 
-export function onStopFollow(el: HTMLElement | null, stop: () => void): () => void {
+export function onStopFollow(el: HTMLElement | null, stop: () => void, revealed: () => void): () => void {
   el?.addEventListener(STOP_FOLLOW_EVENT, stop);
-  return () => el?.removeEventListener(STOP_FOLLOW_EVENT, stop);
+  el?.addEventListener(REVEALED_EVENT, revealed);
+  return () => {
+    el?.removeEventListener(STOP_FOLLOW_EVENT, stop);
+    el?.removeEventListener(REVEALED_EVENT, revealed);
+  };
 }
 
 export function scrollToFollowBottom(el: HTMLElement): number {

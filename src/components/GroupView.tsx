@@ -1154,7 +1154,9 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   }, []);
 
   useEffect(() => setBottomFollow(true), [transcriptKey, setBottomFollow]);
-  useEffect(() => onStopFollow(scrollRef.current, () => setBottomFollow(false)), [setBottomFollow]);
+  // older rows mounting above a box mid-scroll would leave it short of view
+  const [revealing, setRevealing] = useState(false);
+  useEffect(() => onStopFollow(scrollRef.current, () => { setBottomFollow(false); setRevealing(true); }, () => setRevealing(false)), [setBottomFollow]);
 
   // Docks like a 1:1 chat: under the reply while its text is streaming.
   const liveTail = laterCount === 0 && !jump.messages;
@@ -1334,7 +1336,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
       if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
     },
   });
-  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && (!phone || !follow), follow, showEarlier);
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && !revealing && (!phone || !follow), follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,

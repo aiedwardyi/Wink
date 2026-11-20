@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
+import { REVEALED_EVENT, STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
 import { applyLocale } from "@/lib/i18n";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
@@ -384,22 +384,30 @@ it.each([
     chat.setAttribute("data-orbit-transcript", "");
     const stops = vi.fn();
     chat.addEventListener(STOP_FOLLOW_EVENT, stops);
-    chat.scrollBy = vi.fn() as typeof chat.scrollBy;
+    const revealed = vi.fn();
+    chat.addEventListener(REVEALED_EVENT, revealed);
+    chat.scrollTo = vi.fn() as typeof chat.scrollTo;
     const view = await mounted(data, true, chat);
     replay = { top, height };
     before.call(chat);
     await act(async () => view.host.querySelector<HTMLButtonElement>("[data-verify-watch]")!.click());
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     await resized();
-    return { chat, stops, scrolled: chat.scrollBy as ReturnType<typeof vi.fn>, close: async () => { await view.close(); chat.remove(); } };
+    return { chat, stops, revealed, scrolled: chat.scrollTo as ReturnType<typeof vi.fn>, close: async () => { await view.close(); chat.remove(); } };
   };
   const below = await open(700, 677);
   try {
     expect(below.stops).toHaveBeenCalledTimes(1);
     expect(below.scrolled.mock.calls).toEqual([[{ top: 640, behavior: "smooth" }]]);
-    replay = { top: 75, height: 900 };
+    replay = { top: 300, height: 900 };
     await resized();
-    expect(below.scrolled).toHaveBeenCalledTimes(1);
+    expect(below.scrolled.mock.calls[1]).toEqual([{ top: 240, behavior: "smooth" }]);
+    expect(below.revealed).not.toHaveBeenCalled();
+    await act(async () => { below.chat.dispatchEvent(new Event("scrollend")); });
+    expect(below.revealed).toHaveBeenCalledTimes(1);
+    replay = { top: 75, height: 1000 };
+    await resized();
+    expect(below.scrolled).toHaveBeenCalledTimes(2);
   } finally { await below.close(); }
   const tall = await open(300, 1000);
   try { expect(tall.scrolled.mock.calls).toEqual([[{ top: 240, behavior: "smooth" }]]); } finally { await tall.close(); }
@@ -414,6 +422,7 @@ it.each([
   const moved = await open(120, 600);
   try {
     await act(async () => { moved.chat.dispatchEvent(new Event("touchmove")); });
+    expect(moved.revealed).toHaveBeenCalledTimes(1);
     replay = { top: 120, height: 677 };
     await resized();
     expect(moved.scrolled).not.toHaveBeenCalled();
