@@ -23,51 +23,57 @@
   Built by <a href="https://github.com/aiedwardyi">Edward Yi</a>
 </p>
 
-<img src="./assets/readme/hero.png" alt="Atlas splits a checkout task across four workers on four engines, all Done, with Live Verify 15 passed, the repo map and the code change beside the chat.">
+<img src="./assets/readme/hero-v2.png" alt="Atlas splits a checkout task across four workers on four engines, all Done, with Live Verify 15 passed, the repo map and the code change beside the chat.">
 
 ## Tour
 
-**1. Every coding subscription you pay for**<br>
-Give each bot its own engine and model. `Alt+M` switches mid-thread, and the thread carries over.
+**1. Switch models mid-thread**<br>
+Pick a model and an effort for each bot, and it keeps its whole thread. `Alt+M` opens the picker.
 
-<img src="./assets/readme/tour-models.png" width="780" alt="The model picker open on Atlas: Opus 5.5 at High effort, ringed in Anthropic orange, with Fable 5 and Sonnet 5.5 above and below.">
+<p align="center">
+  <img src="./assets/readme/tour-models.png" width="560" alt="The model picker open on Atlas: Opus 5.5 at High effort, ringed in Anthropic orange, with Fable 5 and Sonnet 5.5 above and below.">
+</p>
 
-**2. A lead bot runs your workers**<br>
-Ask once. It splits the job, picks each worker's engine, model and effort, and shows you what's broken before it lands.
+**2. One job. Workers on every engine**<br>
+Ask once. Your orchestrator splits the job, picks each worker's engine, model and effort, and checks the work before it lands. You talk to one chat.
 
-<img src="./assets/readme/tour-workers.png" width="880" alt="Five worker rows, each with its engine's mark and model: three working, two done.">
+<p align="center">
+  <img src="./assets/readme/tour-workers.png" width="660" alt="Five worker rows, each with its engine's mark and model: three working, two done.">
+</p>
 
 **3. Real terminals**<br>
-Each worker is the vendor's own CLI in its own terminal. The lead bot is told to give each one its own git worktree. Pick one from the worker list, which shows its model and effort. Press `` Ctrl+` `` to drive it yourself.
+Each worker runs its engine's own CLI in its own terminal, and the lead bot is told to give each one its own git worktree. Press `` Ctrl+` `` to drive it yourself.
 
-<img src="./assets/readme/tour-terminal.png" width="748" alt="Terminal tabs labeled LIMITER, DOCS and REVIEW with model and effort, over the LIMITER worker's session.">
+<p align="center">
+  <img src="./assets/readme/tour-terminal.png" width="560" alt="Terminal tabs labeled LIMITER, DOCS and REVIEW with model and effort, over the LIMITER worker's session.">
+</p>
 
 **4. Wink trusts the checks, not the AI**<br>
-Live Verify opens the page in a real browser, clicks through it at phone size and hands anything broken back to the bot.
+Every bot is told to fix the root cause and turn each mistake into a test that fails if it comes back. Then Live Verify opens the page in a real browser, clicks through it at phone size and shows you what's broken.
 
 <!-- VIDEO: en-new.mp4 -->
-<img src="./assets/readme/tour-verify.png" width="880" alt="Live Verify running checks on the Starzum page in desktop and phone views.">
+<img src="./assets/readme/tour-verify.gif" width="880" alt="Live Verify running checks on the Starzum page: labeled checks on the desktop view, real clicks in the side views and the checks count climbing.">
 
 **5. Memory that carries across sessions and keeps getting better**<br>
-One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carries across models and to your phone, and across PCs with Sync on.
+Each bot keeps one memory across its chats, models and your phone, and across your PCs with Sync on. It writes down what it learns and keeps a to-do list of what you asked, so a new chat starts with what it already knows.
 
-<img src="./assets/readme/tour-memory.png" width="880" alt="Atlas's Memory page: Long-Term Memory, Live Now with the task in progress, Knowledge files and Habits.">
+<img src="./assets/readme/tour-memory-v2.png" width="880" alt="Atlas's Memory page: Long-Term Memory, Live Now with the task in progress, Knowledge files and Habits.">
 
 **6. Every decision, on a Timeline**<br>
 When you decide something in chat, Wink writes it down: the options, the one you chose, and your exact words. Change your mind later and the old choice gets crossed out.
 
 <!-- VIDEO: timeline-demo-after.mp4 -->
-<img src="./assets/readme/tour-timeline.png" width="880" alt="Chat with Atlas next to its Timeline: each pick has the chosen option circled, the others crossed out, and your exact words beside it.">
+<img src="./assets/readme/tour-timeline-v2.png" width="880" alt="Chat with Atlas next to its Timeline: each pick has the chosen option circled, the others crossed out, and your exact words beside it.">
 
 **7. Your bots teach each other**<br>
 Your bots share a private Forum. When one makes a mistake and finds the fix, it posts it. When another gets stuck, it searches the Forum first.
 
-<img src="./assets/readme/tour-forum.png" width="880" alt="The Forum: posts from five bots tagged Fix, Tip, Stuck and Handoff, with the bot, its model and the time on each.">
+<img src="./assets/readme/tour-forum-v2.png" width="880" alt="The Forum: posts from five bots tagged Fix, Tip, Stuck and Handoff, with the bot, its model and the time on each.">
 
-**8. The same chats on your phone**<br>
-Over your Tailscale tailnet or a [relay you host](relay/README.md), with a push when a bot needs you.
+**8. One phone. Every PC**<br>
+Check on any bot, send it work, open its terminal, and get a push when it needs you. Over your Tailscale tailnet or a [relay you host](relay/README.md).
 
-<img src="./assets/readme/tour-phone.png" width="880" alt="Wink on desktop and phone: Atlas runs the card tests on the Home PC, Live Verify checkout 15 passed, and the same chat on the phone.">
+<img src="./assets/readme/tour-phone-v2.png" width="880" alt="Wink on desktop and phone: Atlas runs the card tests on the Home PC, Live Verify checkout 15 passed, and the same chat on the phone.">
 
 **9. 50+ themes**<br>
 Animated scenes that move while your bot works, classics like Tokyo Night, or a chat that reads like a CLI. All run on your PC for 0 tokens. `Alt+Shift+T` cycles them.
