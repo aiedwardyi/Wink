@@ -1,0 +1,80 @@
+# Scratch loop for CI-FLAKES-4; lives only on loop/* branches.
+name: Flake loop
+
+on:
+  push:
+    branches: ["loop/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: ${{ matrix.name }}
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      npm_config_node_gyp: ${{ github.workspace }}\node_modules\node-gyp\bin\node-gyp.js
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "hang hunt, shard 2/2, head + record fix #1", ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, mode: hunt, rounds: 4 }
+          - { name: "hang hunt, shard 2/2, head + record fix #2", ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, mode: hunt, rounds: 4 }
+          - { name: "hang hunt, shard 2/2, head + record fix #3", ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, mode: hunt, rounds: 4 }
+          - { name: "hang hunt, shard 2/2, head + record fix #4", ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, mode: hunt, rounds: 4 }
+          - { name: "hang hunt, shard 2/2, head + record fix #5", ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, mode: hunt, rounds: 4 }
+          - { name: "hang hunt, shard 2/2, head + record fix #6", ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9, mode: hunt, rounds: 4 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .loopkit
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Hunt
+        if: matrix.mode == 'hunt'
+        shell: bash
+        env:
+          ROUNDS: ${{ matrix.rounds }}
+        run: |
+          set -u +e +o pipefail
+          git rev-parse HEAD
+          cp .loopkit/loopkit/node-test-stalls.mjs scripts/node-test-stalls.mjs
+          node .loopkit/loopkit/apply-fix.mjs && git diff --stat
+          for r in $(seq 1 "$ROUNDS"); do
+            s=$(date +%s)
+            NODE_TEST_STALL_MS=90000 NODE_OPTIONS="--test-shard=2/2 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/node-test-stalls.mjs --test-reporter-destination=stderr" timeout 420 pnpm test:terminal > "out-$r.txt" 2>&1
+            code=$?
+            echo "round $r: exit $code secs $(( $(date +%s) - s ))"
+            grep -a "still running" "out-$r.txt" | sort -u | head -20
+            grep -aE "^✖ |test timed out|crashed|0xC0000005|3221225477" "out-$r.txt" | sort -u | head -20
+            taskkill //F //IM node.exe > /dev/null 2>&1
+          done
+          echo "RESULT hunt done"
+      - name: Cold thread
+        if: matrix.mode == 'ct'
+        shell: bash
+        env:
+          ROUNDS: ${{ matrix.rounds }}
+        run: |
+          set -u +e +o pipefail
+          files=()
+          for k in $(seq 1 8); do cp server/cold-thread.test.ts "server/cold-thread.copy$k.test.ts"; files+=("server/cold-thread.copy$k.test.ts"); done
+          node .loopkit/loopkit/ct-phases.mjs
+          for r in $(seq 1 "$ROUNDS"); do
+            s=$(date +%s)
+            node node_modules/vitest/vitest.mjs run "${files[@]}" > "out-$r.txt" 2>&1
+            echo "round $r: exit $? secs $(( $(date +%s) - s ))"
+            grep -aE "×|Test Files|takes a send made" "out-$r.txt" | sort -u | head -20
+          done
+          echo "--- phases ---"; sort -t' ' -k1,1 -s phases.log
+          echo "RESULT ct done"
