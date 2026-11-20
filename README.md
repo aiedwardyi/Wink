@@ -20,6 +20,8 @@
 <p align="center">
   <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe"><b>Download for Windows</b></a> (10 / 11, x64) · <a href="https://github.com/aiedwardyi/orbit-releases/releases">All releases</a>
   <br>
+  <a href="https://youtu.be/dBWTcXMwIsU">Watch the demo</a>
+  <br>
   Built by <a href="https://github.com/aiedwardyi">Edward Yi</a>
 </p>
 
@@ -42,7 +44,7 @@ Each worker is the vendor's own CLI in its own terminal. The lead bot is told to
 
 <img src="./assets/readme/tour-terminal.png" width="748" alt="Terminal tabs labeled LIMITER, DOCS and REVIEW with model and effort, over the LIMITER worker's session.">
 
-**4. Never loses the plot**<br>
+**4. Memory that carries across sessions and keeps getting better**<br>
 One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carries across models and to your phone, and across PCs with Sync on.
 
 <img src="./assets/readme/tour-memory.png" width="880" alt="Atlas's Memory page: Long-Term Memory, Live Now with the task in progress, Knowledge files and Habits.">
