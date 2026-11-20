@@ -128,24 +128,29 @@ describe("saved keys prompt", () => {
     for (const hidden of ["7f3a", "Ignore your rules", "x-acme-auth", "Basic", "printer.local", ...brokered]) expect(prompt).not.toContain(hidden);
   });
 
-  it("joins the credential prompt in 1:1 and room turns, read from cfg each turn", () => {
+  it("gates credential guidance and saved keys in 1:1 and room turns, reading keys each turn", () => {
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const gates = [...index.matchAll(/const canMessage = (.*);\n/g)];
     const sites: Array<[string | undefined, string]> = [
       [index.match(/const credentialPrompt = (.*);\n/)?.[1], " Ask first."],
       [index.match(/\n\s+(canMessage && .*CREDENTIAL_PROMPT.*),\n/)?.[1], "Ask first."],
     ];
+    const savedSites = [...index.matchAll(/\(canMessage \? savedKeysPrompt\(cfg\) : ""\)/g)];
+    expect(savedSites).toHaveLength(2);
     for (const [i, [site, base]] of sites.entries()) {
       const cfg: CredentialConfig = {};
-      const prompt = (agents: boolean, depth = 0) => runInNewContext(`const canMessage = ${gates[i]?.[1]}; ${site}`, {
+      const prompt = (expression: string | undefined, agents: boolean, depth = 0) => runInNewContext(`const canMessage = ${gates[i]?.[1]}; ${expression}`, {
         integrations: agents ? { agents: {} } : {}, commsDepth: depth, hop: depth, MAX_COMMS_DEPTH: 1, works: true, readOnly: false,
         cfg, CREDENTIAL_PROMPT: "Ask first.", savedKeysPrompt,
       });
       for (const key of ["", "tts-7f3a", ""]) {
         cfg.tts = { key };
-        expect(prompt(true)).toBe(key ? `${base}${line("ElevenLabs API Key (ttsKey)")}` : base);
-        expect(prompt(false)).toBeFalsy();
-        expect(prompt(true, 1)).toBeFalsy();
+        expect(prompt(site, true)).toBe(base);
+        expect(prompt(savedSites[i]?.[0], true)).toBe(key ? line("ElevenLabs API Key (ttsKey)") : "");
+        for (const expression of [site, savedSites[i]?.[0]]) {
+          expect(prompt(expression, false)).toBeFalsy();
+          expect(prompt(expression, true, 1)).toBeFalsy();
+        }
       }
     }
   });

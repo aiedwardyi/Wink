@@ -319,7 +319,7 @@ describe("flags off", () => {
     const head = "        const system =\n";
     const system = section(head, "\n        // a rewound, Orbit-compacted").slice(head.length);
     const image = section("      const showImagePrompt =", "\n");
-    const untraced = (code: string) => code.replace(/tracePart\("\w+", (.*)\) \+$/gm, "($1) +").replace(/slimStaticText\((\w+), [\w.]+\)/, "$1");
+    const untraced = (code: string) => code.replace(/tracePart\("\w+", (.*)\)( \+|;)$/gm, "($1)$2").replace(/slimStaticText\((\w+), [\w.]+\)/, "$1");
     expect(untraced(system)).not.toContain("tracePart");
     const wrapped = build(`${image}\nconst system = ${system};\nreturn system;`);
     expect(wrapped).toBe(build(`${untraced(image)}\nconst system = ${untraced(system)};\nreturn system;`));
