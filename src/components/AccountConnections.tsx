@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { safeProviderText } from "@/lib/safe-provider-text";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
@@ -154,7 +155,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
             className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
       </>} />}
       {named?.codexPromo && <p className="pb-2 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
-      <Fold open={menu} id={`${id}-actions`}>
+      <Fold open={menu} id={`${id}-actions`} onOpened={() => revealOnOpen(actions.current)}>
         <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pt-2"
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>
           {controls}
