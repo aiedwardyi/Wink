@@ -53,6 +53,8 @@ const stateSchema = z.object({
   // notes a full MEMORY.md turned away before the overflow file; they are gone, never reported as moved
   dropped: z.record(z.string(), droppedSchema).optional(),
   overflow: z.record(z.string(), droppedSchema).optional(),
+  // a held batch's lines already in the overflow file, so its replay after a restart never adds them again
+  held: z.record(z.string(), z.object({ ids: z.array(z.string()), wrote: z.array(z.string()).optional(), seen: z.array(z.string()).optional() })).optional(),
 });
 
 export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>;
@@ -598,6 +600,8 @@ interface Batch {
   picked?: boolean;
   // its lines an earlier try put in the overflow file, written again only once gone from there
   wrote?: string[];
+  // its lines an earlier try left out as already the newest row, so a row landing after them never makes a retry add them
+  seen?: string[];
 }
 
 /** Notes passing facts from new user lines into MEMORY.md once a 1:1 chat goes quiet. Never on the reply path. */
@@ -610,6 +614,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const lost = new Map<string, DroppedCount>();
   // generated but unsaved, so a busy turn or a moved revision never pays for the same batch twice
   const held = new Map<string, Batch>();
+  const replays = new Map<string, Pick<Batch, "ids" | "wrote" | "seen">>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const queue: Array<{ botId: string; threadId: string }> = [];
   const running = new Map<string, { botId: string; done: Promise<void>; controller: AbortController }>();
@@ -639,6 +644,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     for (const [botId, record] of Object.entries(state.dropped ?? {})) lost.set(botId, record);
     for (const [botId, record] of Object.entries(state.overflow ?? {})) overflowed.set(botId, record);
+    for (const [threadId, batch] of Object.entries(state.held ?? {})) replays.set(threadId, batch);
   } catch {
     // first run or unreadable: start empty
   }
@@ -650,6 +656,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const state: z.infer<typeof stateSchema> = { threads: Object.fromEntries(pending) };
       if (lost.size) state.dropped = Object.fromEntries(lost);
       if (overflowed.size) state.overflow = Object.fromEntries(overflowed);
+      if (replays.size) state.held = Object.fromEntries(replays);
       writeFileAtomic(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
     } catch (error) {
       console.warn(`[memory-pass] state save failed (${error instanceof Error ? error.name : "error"})`);
@@ -689,10 +696,18 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   const done = (threadId: string, ids: string[]) => {
     held.delete(threadId);
+    replays.delete(threadId);
     const taken = new Set(ids);
     const rest = (pending.get(threadId) ?? []).filter((id) => !taken.has(id));
     if (rest.length) pending.set(threadId, rest);
     else pending.delete(threadId);
+    save();
+  };
+
+  const hold = (threadId: string, batch: Batch) => {
+    held.set(threadId, batch);
+    if (!batch.wrote?.length && !batch.seen?.length) return;
+    replays.set(threadId, { ids: batch.ids, wrote: batch.wrote, seen: batch.seen });
     save();
   };
 
@@ -771,6 +786,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const saved = pointer ?? text ?? corrected;
     // before MEMORY.md drops a corrected line, so a failed write never loses the new value; a retry finds it written
     let wrote = batch.wrote ?? [];
+    let seen = batch.seen ?? [];
     if (overflow.length) {
       const path = join(ensureWorkspace(botId), "memory", OVERFLOW_FILE);
       try {
@@ -779,7 +795,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         const { rows, close } = liveRows(current);
         const known = new Set(rows);
         wrote = wrote.filter((line) => known.has(line));
-        const due = overflow.filter(({ line }) => !wrote.includes(line));
+        seen = seen.filter((line) => known.has(line));
+        const due = overflow.filter(({ line }) => !wrote.includes(line) && !seen.includes(line));
         // a restart can replay a batch whose notes already landed in order
         let ends = due.length;
         while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line)) ends -= 1;
@@ -790,6 +807,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
           newest = line;
           return true;
         });
+        seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => line)];
         if (fresh.length) {
           const added = fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("");
           appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
@@ -798,7 +816,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
           wrote = [...wrote, ...fresh.map(({ line }) => line)];
         }
       } catch (error) {
-        held.set(threadId, { ...batch, picked, wrote });
+        hold(threadId, { ...batch, picked, wrote, seen });
         log({ botId, threadId, facts: accepted.length, ms, result: "error" });
         console.warn(`[memory-pass] ${OVERFLOW_FILE} write failed (${error instanceof Error ? error.name : "error"})`);
         return arm(botId, threadId);
@@ -812,13 +830,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (tail !== null && !conflict) appendLines(join(ensureWorkspace(botId), "MEMORY.md"), tail);
     } catch (error) {
       // the overflow notes are on disk; a retry finds them there, then finishes MEMORY.md and the receipt
-      held.set(threadId, { ...batch, picked, wrote });
+      hold(threadId, { ...batch, picked, wrote, seen });
       log({ botId, threadId, facts: accepted.length, ms, result: "error" });
       console.warn(`[memory-pass] MEMORY.md write failed (${error instanceof Error ? error.name : "error"})`);
       return arm(botId, threadId);
     }
     if (conflict) {
-      held.set(threadId, { ...batch, picked, wrote });
+      hold(threadId, { ...batch, picked, wrote, seen });
       log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
       return arm(botId, threadId);
     }
@@ -845,14 +863,18 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const run = async (botId: string, threadId: string, signal: AbortSignal) => {
-    const ids = [...(pending.get(threadId) ?? [])];
-    if (!ids.length || !deps.enabled(botId)) return;
+    const queued = pending.get(threadId) ?? [];
+    if (!queued.length || !deps.enabled(botId)) return;
     const kept = held.get(threadId);
     if (kept) {
       land(botId, threadId, kept, readMemoryFile(botId), memoryFileRaw(botId), 0);
       if (pending.has(threadId) && !held.has(threadId)) arm(botId, threadId);
       return;
     }
+    // after a restart a held batch runs again alone, so its lines never land twice and a later line still does
+    const replay = replays.get(threadId);
+    const again = replay?.ids.filter((id) => queued.includes(id)) ?? [];
+    const ids = again.length ? again : [...queued];
     const generate = deps.generate(botId);
     if (!generate) return warnOnce("no Claude CLI instance");
     const messages = deps.store.messagesFor(sourceThread(threadId));
@@ -909,7 +931,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
-    land(botId, threadId, { ids, facts: parseFacts(output), source: lines }, memory, raw, now() - started);
+    land(botId, threadId, { ids, facts: parseFacts(output), source: lines, wrote: again.length ? replay?.wrote : undefined, seen: again.length ? replay?.seen : undefined }, memory, raw, now() - started);
+    if (again.length && pending.has(threadId) && !held.has(threadId)) arm(botId, threadId);
   };
 
   const pump = () => {
@@ -976,6 +999,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     for (let i = queue.length - 1; i >= 0; i -= 1) if (off(queue[i]!.threadId)) queue.splice(i, 1);
     for (const [threadId, pass] of running) if (off(threadId)) pass.controller.abort();
     for (const threadId of held.keys()) if (off(threadId)) held.delete(threadId);
+    for (const threadId of replays.keys()) if (off(threadId)) replays.delete(threadId);
     const before = pending.size;
     for (const threadId of pending.keys()) if (off(threadId)) pending.delete(threadId);
     if (pending.size !== before) save();

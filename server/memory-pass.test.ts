@@ -758,7 +758,7 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(3);
   });
 
-  it("keeps what was said last as the newest overflow row in any script, and a plain repeat changes nothing", async () => {
+  it("keeps what was said last as the newest overflow row in any script, through a held batch and a restart, recalls the newest-dated copy in any file order, and a plain repeat changes nothing", async () => {
     writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
     // seeded, so a failing run replays
     let seed = 1991;
@@ -782,12 +782,21 @@ describe("memory pass", () => {
       if (!said.includes(text)) said.push(text);
       return text;
     };
+    // the model says back what each message said, so a replay after a restart extracts the batch it held
+    generate.mockImplementation(async (prompt) => facts(...[...prompt.matchAll(/message_id="([^"]+)"/g)].map(([, id]): [string, string] => {
+      const text = store.rows("t1").find((message) => message.id === id)!.text!;
+      return [text, text];
+    })));
     const tell = async (...lines: string[]) => {
-      generate.mockResolvedValue(facts(...lines.map((line): [string, string] => [line, line])));
       for (const line of lines) say("t1", line);
       await settle("t1", 3 * MINUTE);
     };
     const newest = () => overflow()?.trimEnd().split("\n").at(-1)?.replace(/ \(noted \d{4}-\d{2}-\d{2}\)$/, "");
+    const rows = () => (overflow() ?? "").split("\n").filter((row) => row.startsWith("- ")).map((row) => row.slice(2).replace(/ \(noted \d{4}-\d{2}-\d{2}\)$/, ""));
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-log"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    const log = join(workspaceDir("bot-log"), "memory", "log.md");
+    mkdirSync(dirname(log), { recursive: true });
     for (let run = 0; run < 100; run++) {
       const a = value();
       let b = value();
@@ -810,6 +819,41 @@ describe("memory pass", () => {
       expect(overflow(), `run ${run}: ${a} again`).toBe(text);
       expect(chips("t1")).toHaveLength(saved);
       expect(pass.droppedNotes("bot-t1")).toEqual(count);
+      // held after its overflow step, then another writer's row and the same chat again, then a retry or a restart
+      const c = pick(2) ? a : value();
+      writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+      lockMemoryOnce();
+      await tell(c);
+      vi.mocked(fs.openSync).mockRestore();
+      let other = value();
+      while (other === c) other = value();
+      if (pick(2)) fs.appendFileSync(overflowPath(), `- ${other} (noted 2026-10-15)\n`);
+      const later = [undefined, c, value()][pick(3)];
+      if (later !== undefined) say("t1", later);
+      const before = rows();
+      const restart = Boolean(pick(2));
+      if (restart) {
+        pass.dispose();
+        pass = start();
+      }
+      await settle("t1", 3 * MINUTE);
+      await settle("t1", 3 * MINUTE);
+      const want = later === undefined || later === before.at(-1) ? before : [...before, later];
+      expect(rows(), `run ${run}: ${c} held, then ${before.at(-1)} and ${later}, ${restart ? "restart" : "retry"}`).toEqual(want);
+      expect(newest()).toBe(`- ${want.at(-1)}`);
+      // a hand-kept log keeps copies of a note in any order
+      const key = Array.from({ length: 2 }, () => Array.from({ length: 6 }, () => glyph(0)).join("")).join(" ");
+      const dates = Array.from({ length: 2 + pick(3) }, () => `2026-0${1 + pick(9)}-${10 + pick(19)}`);
+      const copies = [...dates.map((date) => `- ${key} ${a} (noted ${date})`), ...said.slice(-3).map((note) => `- ${note}`)];
+      for (let at = copies.length - 1; at > 0; at--) {
+        const swap = pick(at + 1);
+        [copies[at], copies[swap]] = [copies[swap]!, copies[at]!];
+      }
+      writeFileSync(log, `# Log\n${copies.join("\n")}\n`);
+      await lookup.refresh("bot-log");
+      const answer = lookup.take("bot-log", "t1", run, key).join("\n");
+      const latest = dates.reduce((top, date) => (date > top ? date : top));
+      expect([...new Set(dates)].filter((date) => answer.includes(`(noted ${date})`)), `run ${run}: ${copies.join(" | ")}`).toEqual([latest]);
     }
   }, 120_000);
 
