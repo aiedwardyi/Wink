@@ -11,10 +11,10 @@ index 5f63978b07ab50aaf7523219a2170ec737a6b5db..1cb496118e973af3c6d5b1197870d5ae
        "<!(node -p \"require('node-addon-api').targets\"):node_addon_api_except",
      ],
 diff --git a/deps/winpty/src/winpty.gyp b/deps/winpty/src/winpty.gyp
-index 1ac5758bedd8cf54f32280dea4e4aeb5afdee30d..2345706899eff2a003fec2cbcc30b79ee674bff4 100644
+index 1ac5758bedd8cf54f32280dea4e4aeb5afdee30d..21700c1dc6df60a1af3c68d91cbbb4f4bd5489f6 100644
 --- a/deps/winpty/src/winpty.gyp
 +++ b/deps/winpty/src/winpty.gyp
-@@ -10,7 +10,8 @@
+@@ -10,9 +10,14 @@
      #    make -j4 CXX=i686-w64-mingw32-g++ LDFLAGS="-static -static-libgcc -static-libstdc++"
  
      'variables': {
@@ -23,8 +23,14 @@ index 1ac5758bedd8cf54f32280dea4e4aeb5afdee30d..2345706899eff2a003fec2cbcc30b79e
 +        'WINPTY_COMMIT_HASH%': 'none',
      },
      'target_defaults' : {
++        # Beside node-pty's own objects, 16 characters shallower: cl.exe cannot write an object path past 260, long paths or not.
++        'msvs_configuration_attributes': {
++            'IntermediateDirectory': '$(SolutionDir)$(Configuration)\\obj\\$(ProjectName)\\',
++        },
          'defines' : [
-@@ -22,7 +23,8 @@
+             'UNICODE',
+             '_UNICODE',
+@@ -22,7 +27,8 @@
          'include_dirs': [
              # Add the 'src/gen' directory to the include path and force gyp to
              # run the script (re)generating the version header.
