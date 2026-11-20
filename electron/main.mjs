@@ -349,7 +349,8 @@ const paneRuns = createPaneRuns(path.join(app.getPath("userData"), "pane-runs.js
 const scratchRoot = process.env.ORBIT_TEMP_ROOT || os.tmpdir();
 const ptyModule = () => require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty");
 // The runtime lives outside the install folder, so an update can replace the app while the host keeps running.
-const workerHost = createWorkerHostClient({ root: path.join(app.getPath("userData"), "worker-host"), runtimeRoot: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), app.isPackaged ? "Wink" : "Wink-dev", "worker-host"), ptyModule, adopt: true, log: slog });
+// Installed hosts from before the patch marker already run the patched build; only a dev checkout can load the stock one.
+const workerHost = createWorkerHostClient({ root: path.join(app.getPath("userData"), "worker-host"), runtimeRoot: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), app.isPackaged ? "Wink" : "Wink-dev", "worker-host"), ptyModule, adopt: true, patchedPty: !app.isPackaged, log: slog });
 const terminalHost = createTerminalHost({
   authorize(event) {
     const origin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;

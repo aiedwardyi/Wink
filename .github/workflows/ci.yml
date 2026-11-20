@@ -19,6 +19,9 @@ jobs:
     name: typecheck + build + checks (Windows)
     runs-on: windows-latest
     timeout-minutes: 10
+    env:
+      # pnpm's bundled node-gyp cannot find Visual Studio 2026, and node-pty builds from source on Windows.
+      npm_config_node_gyp: ${{ github.workspace }}\node_modules\node-gyp\bin\node-gyp.js
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,6 +66,9 @@ jobs:
     name: vitest (Windows, shard ${{ matrix.shard }})
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      # pnpm's bundled node-gyp cannot find Visual Studio 2026, and node-pty builds from source on Windows.
+      npm_config_node_gyp: ${{ github.workspace }}\node_modules\node-gyp\bin\node-gyp.js
     strategy:
       fail-fast: false
       matrix:
@@ -149,6 +155,9 @@ jobs:
     name: node tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 10
+    env:
+      # pnpm's bundled node-gyp cannot find Visual Studio 2026, and node-pty builds from source on Windows.
+      npm_config_node_gyp: ${{ github.workspace }}\node_modules\node-gyp\bin\node-gyp.js
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10

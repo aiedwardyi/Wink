@@ -236,3 +236,28 @@ test("the host keeps none of the app's inheritable handles, so a closed port is 
   process.kill(host);
   await until(() => !alive(host), 15_000);
 });
+
+test("the terminal library loads its patched native build, not the stock prebuild", windows, () => {
+  const { loadNativeModule } = require(path.join(path.dirname(require.resolve("node-pty")), "utils.js"));
+  const { dir, module } = loadNativeModule("conpty");
+  assert.deepEqual({ dir: path.normalize(dir), lockedHandles: module.lockedHandles }, { dir: path.normalize("../build/Release/"), lockedHandles: true });
+});
+
+test("eight terminals started and stopped together for 20 rounds never crash the process", { ...windows, timeout: 180_000 }, (t) => {
+  const url = (name) => JSON.stringify(pathToFileURL(path.join(import.meta.dirname, name)).href);
+  const source = `import os from "node:os";
+import { terminalEnvironment } from ${url("terminal-host.mjs")};
+import { spawnTerminalPty } from ${url("terminal-pty.mjs")};
+const shell = ${JSON.stringify(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe"))};
+for (let round = 0; round < 20; round++) {
+  const ptys = Array.from({ length: 8 }, () => spawnTerminalPty(${JSON.stringify(require.resolve("node-pty"))}, shell, ["/d"], { name: "xterm-256color", cols: 80, rows: 24, cwd: os.tmpdir(), env: terminalEnvironment(process.env), useConptyDll: true }));
+  await Promise.all(ptys.map((pty) => pty.ready));
+  await Promise.all(ptys.map(async (pty) => { void pty.kill().catch(() => {}); await pty.exited; pty.terminate(); }));
+  console.log(round);
+}
+`;
+  const burst = path.join(scratch(t), "burst.mjs");
+  fs.writeFileSync(burst, source);
+  const run = spawnSync(process.execPath, [burst], { windowsHide: true, encoding: "utf8", timeout: 170_000 });
+  assert.deepEqual({ status: run.status, rounds: run.stdout.trim().split(/\s+/).length }, { status: 0, rounds: 20 }, run.stderr);
+});
