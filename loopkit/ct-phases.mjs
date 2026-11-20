@@ -1,0 +1,11 @@
+// Times the phases of the cold-thread "takes a send made during the load by key" test into phases.log.
+import fs from "node:fs";
+const pairs = [["afterEach(() => vi.restoreAllMocks());\n","afterEach(() => vi.restoreAllMocks());\nimport __fs from \"node:fs\";\nconst __id = Math.random().toString(36).slice(2, 6); let __prev = 0; let __t0 = 0;\nconst __lap = (n: string) => { const t = Date.now(); __fs.appendFileSync(\"phases.log\", __id + \" \" + n + \" +\" + (t - __prev) + \" @\" + (t - __t0) + \"\\n\"); __prev = t; };\n"],["  it(\"takes a send made during the load by key, and loads it with the chat\", async () => {\n    const setup = fresh();\n    const bot = setup.createBot({});\n    for (let n = 0; n < 2_500; n++) setup.appendMessage(bot.threadId, { role: \"bot\", kind: \"text\", text: `step ${n}` });\n","  it(\"takes a send made during the load by key, and loads it with the chat\", async () => {\n    __t0 = __prev = Date.now();\n    const setup = fresh();\n    const bot = setup.createBot({});\n    __lap(\"createBot\");\n    let __slow = 0;\n    for (let n = 0; n < 2_500; n++) { const __s = Date.now(); setup.appendMessage(bot.threadId, { role: \"bot\", kind: \"text\", text: `step ${n}` }); __slow = Math.max(__slow, Date.now() - __s); }\n    __lap(\"seed 2500 (slowest append \" + __slow + \" ms)\");\n"],["    const load = coldLoad(store, bot.threadId);\n    const sent","    const load = coldLoad(store, bot.threadId);\n    __lap(\"coldLoad start\");\n    const sent"],["    expect(sent.parentId).toBe(head);\n    await load;\n","    expect(sent.parentId).toBe(head);\n    __lap(\"send\");\n    await load;\n    __lap(\"load done\");\n"]];
+const files = process.argv.slice(2).length ? process.argv.slice(2) : ["server/cold-thread.test.ts"];
+for (const file of files) {
+  let text = fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+  for (const [a, b] of pairs) { if (!text.includes(a)) throw new Error("anchor not found: " + a.slice(0, 80)); text = text.replace(a, () => b); }
+  fs.writeFileSync(file, text);
+}
+for (let k = 1; k <= 16; k++) { const c = "server/cold-thread.copy" + k + ".test.ts"; if (fs.existsSync(c)) fs.copyFileSync(files[0], c); }
+console.log("injected", files.join(" "));
