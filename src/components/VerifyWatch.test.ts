@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { Fragment, act, createElement } from "react";
 import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,7 +7,7 @@ import type { VerifyCardData, VerifyIssue } from "../../shared/live-verify";
 import { chunk } from "../../electron/verify-replay.mjs";
 import { applyLocale } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
-import { chooseVerifyTab } from "@/lib/verify-watch";
+import { chooseVerifyTab, useVerifyShowing } from "@/lib/verify-watch";
 import { VerifyWatchShow } from "@/lib/verify-watch-show";
 import { ShowPane } from "./ShowPane";
 import { VerifyWatchFrame } from "./VerifyWatch";
@@ -244,6 +244,25 @@ it("holds the phone inline caption's room through a bot-fixed chain", async () =
   }
   expect(fixedShown).toBe(true);
   expect(seen).toEqual(["slot", "end"]);
+});
+
+it("keeps the card's check rows up through each handoff of a bot-fixed chain", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  const issue: VerifyIssue = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] };
+  const fixed: VerifyCardData = { ...card, status: "completed", live: undefined, replay: ["run-1", "run-2"], issues: [] };
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => bufferedRun("completed", url.includes("run-1") ? [issue] : [])));
+  let showing = false;
+  const Rows = () => { showing = useVerifyShowing(fixed.runId) !== null; return null; };
+  await act(async () => root.render(createElement(Fragment, null, createElement(VerifyWatchFrame, { card: fixed, threadId: "t", live: false, hidden: false, inline: true, onClose() {} }), createElement(Rows))));
+  const seen: string[] = [];
+  for (let i = 0; i < 200 && !host.querySelector(".verify-watch-again"); i++) {
+    await tick(1);
+    const state = host.querySelector(".verify-watch-again") ? "end" : showing ? "rows" : "result";
+    if (seen.at(-1) !== state) seen.push(state);
+  }
+  expect(seen).toEqual(["rows", "end"]);
+  expect(showing).toBe(false);
 });
 
 it("holds the tallest stage through a phone inline reel that turns from desktop to phone", async () => {

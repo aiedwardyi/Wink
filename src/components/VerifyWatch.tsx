@@ -78,8 +78,8 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   useEffect(() => {
     if (!streaming || show.phase === "done") return;
     const abort = new AbortController();
-    const play = async (path: string) => {
-      show.beginRun();
+    const play = async (path: string, last = true) => {
+      show.beginRun(last);
       const res = await fetch(path, { cache: "no-store", signal: abort.signal });
       if (res.status === 404) { show.unavailable(); return false; }
       if (!res.ok || !res.body) { show.fail(); return false; }
@@ -101,12 +101,9 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
         return;
       }
       for (const [i, runId] of runs.current.entries()) {
-        const previous = { head: show.head, end: show.end };
         const last = i === runs.current.length - 1;
-        if (await play(route(VERIFY_ROUTES.replay, runId))) {
-          const fixed = Boolean(previous.head?.site && previous.head.page && previous.head.site === show.head?.site && previous.head.page === show.head.page
-            && previous.end?.status === "completed" && previous.end.issues.length && show.end?.status === "completed" && !show.end.issues.length);
-          if (fixed || !last) await show.between(fixed);
+        if (await play(route(VERIFY_ROUTES.replay, runId), last)) {
+          if (show.mended || !last) await show.between(show.mended);
         }
         // a recorded blocked check is one run of the chain; a replay that would not load ends it
         else if (last || abort.signal.aborted || show.end?.status !== "blocked") return;
