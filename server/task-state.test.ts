@@ -33,7 +33,7 @@ import {
   type TaskResumePacket,
 } from "./task-state.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
-import type { TaskAsk } from "./task-asks.ts";
+import { taskAskSchema, type TaskAsk } from "./task-asks.ts";
 
 const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => ({
   v: 1,
@@ -156,6 +156,24 @@ describe("task resume packets", () => {
     const kept = [{ id: "A1", ask: "Renew the domain", status: "open" as const, until: 1_800_000_000_000, shown: 1_700_000_000_000, at: 100, changedAt: 100 }];
     expect(writeTaskResumePacket(packet({ asks: kept }), { dir }).asks).toEqual(kept);
     expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(kept);
+  });
+
+  it("keeps a promise's kind beside the record, so an older build still reads its goal and asks", () => {
+    const promise: TaskAsk = { id: "A4", ask: "I'll check the laptop backup tomorrow.", status: "open", kind: "promise", at: 130, changedAt: 130 };
+    writeTaskResumePacket(packet({ asks: [...asks, promise] }), { dir });
+    const raw = JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"));
+    // 24ae8a240's reader: strict asks whose kind is question or none
+    const older = z.array(taskAskSchema.extend({ kind: z.literal("question").optional() }).strict());
+    expect(older.parse(raw.asks)).toEqual([...asks, { ...promise, kind: undefined }].map((item) => JSON.parse(JSON.stringify(item))));
+    expect(raw.goal).toBe(packet().goal);
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual([...asks, promise]);
+    // an older build saving it again keeps the id and creation time the kind is filed under
+    writeFileSync(join(dir, "thread-1.json"), JSON.stringify({ ...raw, nextAction: "Saved by an older build" }));
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual([...asks, promise]);
+    writeFileSync(join(dir, "thread-1.json"), JSON.stringify({ ...raw, asks: raw.asks.map((item: TaskAsk) => item.id === "A4" ? { ...item, at: 999 } : item) }));
+    expect(readTaskResumePacket("thread-1", { dir })?.asks?.at(-1)).not.toHaveProperty("kind");
+    expect(deleteTaskResumePacket("thread-1", { dir })).toBe(true);
+    expect(existsSync(join(dir, "thread-1.promises.json"))).toBe(false);
   });
 
   it("loads a record saved with an ask due time and wake id, asks and plan intact", () => {

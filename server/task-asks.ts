@@ -136,21 +136,24 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
-/** Files the bot's own promises as open asks and closes the promise ids it finished; null when nothing changes. An open ask with the same words is a repeat. */
+/** Files the bot's own promises as open asks and closes the promises it finished, each only while it is still as the note-taker read it; null when nothing changes. An open ask with the same words is a repeat. */
 // the note-taker rewords a repeat, so a promise sharing most of its words with an open one is that one
 const gist = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{4,}|[가-힣]{2,}/gu) ?? []);
+// "PC A" and "PC B", or 4 pm and 5 pm: a number or one-letter name only one of them has keeps them apart
+const marks = (text: string) => [...new Set(text.match(/\p{N}+|(?<![\p{L}\p{N}'’])\p{Lu}(?![\p{L}\p{N}'’])/gu)?.filter((mark) => mark !== "I"))].sort().join(" ");
 function samePromise(a: string, b: string): boolean {
   const [x, y] = [gist(a), gist(b)];
   const least = Math.min(x.size, y.size);
-  return least >= 3 && [...x].filter((word) => y.has(word)).length >= 0.8 * least;
+  return least >= 3 && [...x].filter((word) => y.has(word)).length >= 0.8 * least && marks(a) === marks(b);
 }
 
-export function fileBotPromises(book: AskBook | undefined, promises: readonly string[], done: readonly string[], now: number): SavedAsks | null {
+export function fileBotPromises(book: AskBook | undefined, promises: readonly string[], done: readonly TaskAsk[], now: number): SavedAsks | null {
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
   let lastAskId = lastAskIdOf(book);
   let changed = false;
   for (const item of asks) {
-    if (!done.includes(item.id) || item.kind !== "promise" || !isOpenAsk(item)) continue;
+    // retitled or changed since the note-taker read it: the report was about another commitment
+    if (item.kind !== "promise" || !isOpenAsk(item) || !done.some((read) => read.id === item.id && read.ask === item.ask && read.changedAt === item.changedAt)) continue;
     Object.assign(item, { status: "done", changedAt: now });
     changed = true;
   }

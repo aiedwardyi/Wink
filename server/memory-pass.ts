@@ -35,8 +35,8 @@ const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
 const SUMMARY_MAX = 120;
-const SAID_MAX = 8;
 const SAID_CHARS = 240;
+const NOTES_PER_PASS = 20;
 const STATE_FILE = "memory-pass.json";
 
 const listSchema = z.union([z.array(z.string()), z.string()]).nullish();
@@ -45,8 +45,7 @@ const factsSchema = z
     kind: z.string().nullish(), fact: z.string(), quote: z.string(), replaces: z.string().nullish(),
     key: z.string().nullish(), over: listSchema, picture: z.string().nullish(), over_pictures: listSchema,
     message_id: z.string().nullish(), question_id: z.string().nullish(),
-  }))
-  .max(20);
+  }));
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
@@ -153,42 +152,43 @@ const promptLine = ({ id, questionId, text, context, pictures, prior }: UserLine
   ].join("\n");
 
 /** The bot's own words at the end of its replies: its promises, and reports that may finish an open one. */
-export interface BotLines { commits: string[]; reports: string[]; open: TaskAsk[] }
-export interface KeptPromises { promises: string[]; done: string[] }
+export interface BotLines { lines: string[]; commits: string[]; open: TaskAsk[] }
+export interface KeptPromises { promises: string[]; done: TaskAsk[] }
 
 // "I'll do X when Y": a first-person commitment tied to a time or trigger; in-turn work ("let me check", "one moment") never counts
 const COMMIT = /\b(?:i['’]ll|i will|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
-const DEFERRED = /\b(?:later|tomorrow|tonight|overnight|when|once|after|before|next|by)\b|나중에|내일|이따|다음에|되면|끝나면|켜시면|하시면|후에/i;
+const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|when|once|after|before|next|by|(?:mon|tues|wednes|thurs|fri|satur|sun)day|this (?:morning|afternoon|evening|week|weekend)|in (?:an?|\d+) (?:minutes?|hours?|days?|weeks?))\b|\b\d{1,2}(?::\d{2})?\s?[ap]\.?m\b|\bat \d{1,2}(?::\d{2})?\b|나중에|내일|오늘|이따|다음에|되면|끝나면|켜시면|하시면|후에|\d{1,2}시/i;
 const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
 const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
 
-/** The last text of the bot's reply to each of these user rows, when no tool ran after it, as sentences. */
+/** The bot's text after the last tool of its reply to each of these user rows, as sentences in order: commitments, and reports of finished work. */
 export function botLines(messages: readonly Message[], ids: readonly string[], open: readonly TaskAsk[]): BotLines | null {
   const wanted = new Set(ids);
+  const lines: string[] = [];
   const commits: string[] = [];
-  const reports: string[] = [];
   for (let i = 0; i < messages.length; i += 1) {
     if (!wanted.has(messages[i]!.id)) continue;
-    let last: string | undefined;
+    let tail: string[] = [];
     for (let j = i + 1; j < messages.length && messages[j]!.role !== "user"; j += 1) {
       const row = messages[j]!;
       if (row.role !== "bot") continue;
-      if (row.kind === "text" && row.text?.trim()) last = row.text;
-      else if (row.tool && row.tool.name !== MEMORY_SAVE_TOOL) last = undefined;
+      if (row.kind === "text" && row.text?.trim()) tail.push(row.text.replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1").replace(CONTEXT_TAGS, " "));
+      else if (row.tool && row.tool.name !== MEMORY_SAVE_TOOL) tail = [];
     }
-    const plain = last?.replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1").replace(CONTEXT_TAGS, " ") ?? "";
-    for (const part of plain.split(SENTENCE)) {
+    for (const part of tail.join("\n").split(SENTENCE)) {
       const sentence = part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
       if (!sentence || sentence.length > SAID_CHARS || sentence.endsWith("?") || secretLike(sentence)) continue;
       if (COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence)) commits.push(sentence);
-      else if (open.length && REPORT.test(sentence)) reports.push(sentence);
+      // a report rides along so the note-taker sees a promise already done, or an open one finished
+      else if (!REPORT.test(sentence)) continue;
+      lines.push(sentence);
     }
   }
-  return commits.length || reports.length ? { commits: commits.slice(-SAID_MAX), reports: reports.slice(-SAID_MAX), open: [...open] } : null;
+  return commits.length || (open.length && lines.length) ? { lines, commits, open: [...open] } : null;
 }
 
-const botPrompt = ({ commits, reports, open }: BotLines) => [
+const botPrompt = ({ lines, open }: BotLines) => [
   "",
   "BOT LINES are the bot's own words at the end of its replies:",
   "- kind \"promise\": an unfinished task the bot said it will do later, on a time or trigger. fact: that task in the bot's first-person words and language, like \"I'll check laptop sync once you're on it\", 80 characters max; quote: its exact words from BOT LINES.",
@@ -197,21 +197,21 @@ const botPrompt = ({ commits, reports, open }: BotLines) => [
   "",
   "BOT LINES:",
   "<bot_lines>",
-  ...[...commits, ...reports].map((line) => `- ${line}`),
+  ...lines.map((line) => `- ${line}`),
   "</bot_lines>",
   ...(open.length ? ["", "OPEN PROMISES:", "<promises>", ...open.map((ask) => `${ask.id}: ${ask.ask}`), "</promises>"] : []),
 ];
 
-/** Promises quoted from a commitment, and open promise ids a quoted line finished. */
+/** Promises quoted from a commitment, and the open promises, as read, that a quoted line finished. */
 export function acceptPromises(facts: Fact[], said: BotLines): KeptPromises {
   const promises: string[] = [];
-  const done: string[] = [];
+  const done: TaskAsk[] = [];
   const quoted = (lines: string[], quote: string) => Boolean(quote.trim()) && lines.some((line) => squash(line).includes(squash(quote)));
   for (const { kind, fact, quote } of facts) {
     const line = fact.replace(/\s+/g, " ").trim();
     if (kind === "promise" && line && line.length <= ASK_LIMITS.ask && !secretLike(line) && quoted(said.commits, quote) && !promises.includes(line)) promises.push(line);
-    const id = line.toUpperCase();
-    if (kind === "done" && said.open.some((ask) => ask.id === id) && quoted([...said.reports, ...said.commits], quote) && !done.includes(id)) done.push(id);
+    const finished = kind === "done" ? said.open.find((ask) => ask.id === line.toUpperCase()) : undefined;
+    if (finished && quoted(said.lines, quote) && !done.includes(finished)) done.push(finished);
   }
   return { promises, done };
 }
@@ -262,7 +262,10 @@ export function parseFacts(output: string): Fact[] {
   if (start < 0 || end < start) return [];
   try {
     const parsed = factsSchema.safeParse(JSON.parse(output.slice(start, end + 1)));
-    return parsed.success ? parsed.data : [];
+    if (!parsed.success) return [];
+    // a runaway list of notes still lands none; promises are bounded by the bot lines they must quote
+    const promise = ({ kind }: Fact) => kind === "promise" || kind === "done";
+    return parsed.data.filter((fact) => !promise(fact)).length > NOTES_PER_PASS ? parsed.data.filter(promise) : parsed.data;
   } catch {
     return [];
   }
@@ -875,7 +878,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
     const facts = parseFacts(output);
-    const promised = acceptPromises(facts, said ?? { commits: [], reports: [], open: [] });
+    const promised = acceptPromises(facts, said ?? { lines: [], commits: [], open: [] });
     if (promised.promises.length || promised.done.length) {
       deps.saveAsks?.(threadId, (current) => fileBotPromises(current, promised.promises, promised.done, now()));
       log({ botId, threadId, promises: promised.promises.length, closed: promised.done.length, ms: now() - started, result: "saved" });
