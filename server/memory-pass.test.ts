@@ -1307,6 +1307,9 @@ describe("memory pass", () => {
   const restores: Array<[string, string, string]> = [
     ["dates it above two later rows", "- Has a cat (noted 2026-10-02)\n", "- Research station: Cobalt Acme (noted 2026-10-01)\n- Plays chess (noted 2026-10-03)\n- Research station: Indigo Globex (noted 2026-10-15)\n"],
     ["keeps only an older copy", "- Research station: Cobalt Acme (noted 2026-10-14)\n- Research station: Indigo Globex (noted 2026-10-15)\n", "- Research station: Cobalt Acme (noted 2026-10-14)\n- Research station: Indigo Globex (noted 2026-10-15)\n"],
+    ["moves an older copy to the end", "- Has a cat (noted 2026-10-02)\n", "- Research station: Indigo Globex (noted 2026-10-15)\n- Plays chess (noted 2026-10-03)\n- Research station: Cobalt Acme (noted 2026-10-01)\n"],
+    ["has an older copy above and at the end", "- Has a cat (noted 2026-10-02)\n", "- Research station: Cobalt Acme (noted 2026-10-01)\n- Research station: Indigo Globex (noted 2026-10-15)\n- Plays chess (noted 2026-10-03)\n- Research station: Cobalt Acme (noted 2026-10-01)\n"],
+    ["names a later day in an older row", "- Has a cat (noted 2026-10-02)\n", "- Has a cat (noted 2026-10-02)\n- Research station: Indigo Globex until 2026-10-16 (noted 2026-10-14)\n"],
   ];
   it.each(restores.flatMap(([kind, before, restored]) => [[kind, "retry", before, restored], [kind, "restart", before, restored]] as const))("keeps a held return in recall and in its chip when a restored older file %s, then a %s", async (_kind, how, before, restored) => {
     writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
@@ -1350,6 +1353,33 @@ describe("memory pass", () => {
       pass = start();
     }
     await settle("t1", 3 * MINUTE);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    await lookup.refresh("bot-t1");
+    expect(lookup.take("bot-t1", "t1", "after", "indigo globex").join("")).toContain("Indigo Globex");
+  });
+
+  it.each(["retry", "restart"])("keeps another chat's newer value of its label in recall when a removed held row that names a later day is written back, then a next-day %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const top = "# Auto notes overflow\n\n- Likes tea (noted 2026-10-01)\n";
+    writeFileSync(overflowPath(), top);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Field assignment: Cobalt Acme through 2027-01-31", "my field assignment is cobalt acme through 2027-01-31"]));
+    say("t1", "my field assignment is cobalt acme through 2027-01-31");
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(overflowPath(), top);
+    vi.setSystemTime(NOW + 24 * 60 * MINUTE);
+    generate.mockResolvedValue(facts(["Field assignment: Indigo Globex", "my new field assignment is indigo globex"]));
+    say("t2", "my new field assignment is indigo globex");
+    pass.onSettled("bot-t1", "t2", true);
+    await pass.idle();
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${top}- Field assignment: Indigo Globex (noted 2026-10-16)\n- Field assignment: Cobalt Acme through 2027-01-31 (noted 2026-10-15)\n`);
     writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
     const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
     await lookup.refresh("bot-t1");

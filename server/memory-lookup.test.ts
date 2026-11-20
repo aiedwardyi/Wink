@@ -207,6 +207,15 @@ describe("corpus", () => {
     expect(ask(lookup, botId, "olive tram Tuesday morning airport").join("")).not.toContain("Tuesday");
   });
 
+  it("ranks a note-taker row by the day it was noted, never a later day its words name", async () => {
+    const text = "- Dentist: Dr. Smith on Main Street\n- Dentist: Dr. Lee on Harbor Road, cleaning 2026-11-20 (noted 2026-10-10)\n";
+    const index = await buildRecallIndex([{ source: "memory/health.md", tier: 0, text, mtime: new Date(2026, 9, 15, 12).getTime() }]);
+    const found = (query: string) => index.hits(index.terms(query)).map((hit) => hit.text).join("\n");
+    expect(found("dentist main street")).toContain("Dr. Smith");
+    expect(found("dentist harbor road")).not.toContain("Dr. Lee");
+    index.close();
+  });
+
   it("lets a word that occurs once count as rare in a small corpus", async () => {
     const small = Array.from({ length: 28 }, (_, n) => `- Filler kettle${n} harbor${n} note`).join("\n");
     const { botId, lookup } = await lookupFor(`${small}\n- COBALT WALRUS: invoice goes to the north office\n`);
