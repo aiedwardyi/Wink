@@ -72,33 +72,15 @@ function claim(ids: string[], list: Place[], instances: Instance[]) {
   });
   pass((place, index) => place.id === ids[index]);
   pass((place, index) => !!identities[index] && place.identity === identities[index]);
-  // a slot still checking may be the account that left a place, so it takes that place now rather than jump there once its email arrives
+  // a slot still checking may be the account that left a place, so it holds that place until its email arrives; a new account then goes last
   pass((place, index) => identities[index] === undefined && place.identity !== undefined);
-  return { at, identities };
+  return at;
 }
 
 export function rankAccounts<T>(accounts: T[], order: string[] = [], id: (account: T) => string, instances: Instance[]): T[] {
-  const { at } = claim(accounts.map(id), places(order), instances);
+  const at = claim(accounts.map(id), places(order), instances);
   return accounts.map((account, index) => ({ account, place: at[index] ?? order.length })).sort((a, b) => a.place - b.place).map(({ account }) => account);
 }
-
-// the order shown this run binds each slot to its place, never saved: only a drag saves
-function learn(order: string[], ids: string[], instances: Instance[]): string[] {
-  const list = places(order);
-  const { at, identities } = claim(ids, list, instances);
-  const next = [...list];
-  ids.forEach((id, index) => {
-    const place = { id, identity: identities[index] ?? (at[index] === undefined ? undefined : list[at[index]!]!.identity) };
-    if (at[index] === undefined) next.push(place); else next[at[index]!] = place;
-  });
-  return keys(next);
-}
-
-const shown = new Map<string, { from: string; order: string[] }>();
-const remembered = (base: string, order: string[]) => {
-  const kept = shown.get(base);
-  return kept?.from === order.join("\n") ? kept.order : order;
-};
 
 type Drag = {
   node: HTMLElement; items: HTMLElement[]; rects: DOMRect[]; from: number; to: number; key: string; y: number; dy: number; scrollTop: number; travel: Travel;
@@ -110,22 +92,15 @@ function scrollParent(node: HTMLElement | null) {
 }
 
 export function useUsageDrag(engines: { base: string; accounts: { id: string }[] }[], instances: Instance[]) {
-  const [saved, setOrders] = useState(load);
-  const latest = useRef(saved);
-  latest.current = saved;
-  const orders: Orders = Object.fromEntries(Object.entries(saved).map(([base, order]) => [base, remembered(base, order)]));
+  const [orders, setOrders] = useState(load);
+  const latest = useRef(orders);
+  latest.current = orders;
   const named = (ids: string[]) => keys(ids.map((id) => ({ id, identity: identityOf(id, instances) ?? undefined })));
   const save = (next: Orders) => {
     setOrders(next);
     try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
     window.dispatchEvent(new CustomEvent(CHANGE, { detail: next }));
   };
-  useEffect(() => {
-    for (const { base, accounts } of engines) {
-      const order = latest.current[base];
-      if (order?.length) shown.set(base, { from: order.join("\n"), order: learn(remembered(base, order), accounts.map((account) => account.id), instances) });
-    }
-  });
   useEffect(() => {
     const changed = (event: Event) => { if (event instanceof CustomEvent) setOrders(event.detail); };
     const stored = (event: StorageEvent) => { if (event.key === KEY || event.key === null) setOrders(load()); };
@@ -158,7 +133,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const before = latest.current;
     const visible = new Set(ids);
     let index = 0;
-    const order = accounts ? rankAccounts(accounts, before[drag.key] && remembered(drag.key, before[drag.key]), (account) => account.id, instances)
+    const order = accounts ? rankAccounts(accounts, before[drag.key], (account) => account.id, instances)
       .map((account) => visible.has(account.id) ? ids[index++]! : account.id) : ids;
     save({ ...before, [drag.key]: accounts ? named(order) : order });
   };

@@ -5,6 +5,7 @@ import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
+import { USAGE_ORDER_SPEC, usageSnapshot } from "@/lib/usage-order.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
 import { setUsageMode } from "@/lib/usage-preferences";
 
@@ -933,7 +934,7 @@ it.each(Object.entries(surfaces).flatMap(([name, surface]) => [[name, "saved bef
   const engine = h.board!.engines[0]!;
   const [base, a, b] = engine.accounts.map((account) => account.id);
   if (!base || !a || !b) throw new Error("the fixture has three Claude accounts");
-  if (how === "saved before") localStorage.setItem(ORDER, JSON.stringify({ claude: [b, a, base] }));
+  if (how === "saved before") localStorage.setItem(ORDER, JSON.stringify({ claude: dragged(b, a, base) }));
   await open();
   const press = (id: string) => act(async () => void document.querySelector(row(id))!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true })));
   if (how === "moved now") for (const id of [b, b, a]) await press(id);
@@ -970,10 +971,12 @@ const claudeIds = () => {
   if (!base || !a || !b) throw new Error("the fixture has three Claude accounts");
   return [base, a, b] as const;
 };
+// a drag saves each slot with the email it signs in as
+const dragged = (...ids: string[]) => ids.flatMap((id) => [id, `identity:account-${h.board!.engines[0]!.accounts.find((account) => account.id === id)!.number}@example.com`]);
 
 it.each(Object.entries(surfaces))("keeps a returning account's place in the %s when its email comes back in another case", async (_, { open, again, ids }) => {
   const [base, a, b] = claudeIds();
-  localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, base] }));
+  localStorage.setItem(ORDER, JSON.stringify({ claude: dragged(a, b, base) }));
   await open();
   expect(ids()).toEqual([a, b, base]);
   signOutAndReturn(a, "acct-back", "ACCOUNT-2@Example.COM");
@@ -983,7 +986,7 @@ it.each(Object.entries(surfaces))("keeps a returning account's place in the %s w
 
 it.each(Object.entries(surfaces))("shows the saved order in the %s from the first frame while a returning account is still checking", async (_, { open, again, ids }) => {
   const [base, a, b] = claudeIds();
-  localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, base] }));
+  localStorage.setItem(ORDER, JSON.stringify({ claude: dragged(a, b, base) }));
   await open();
   signOutAndReturn(a, "acct-back", "account-2@example.com");
   await again();
@@ -997,14 +1000,25 @@ it.each(Object.entries(surfaces))("shows the saved order in the %s from the firs
   expect(ids()).toEqual(["acct-back", b, base]);
 });
 
-it.each(Object.entries(surfaces))("keeps an unranked account's place in the %s after it signs out and back in", async (_, { open, again, ids }) => {
-  const [base, a, b] = claudeIds();
-  localStorage.setItem(ORDER, JSON.stringify({ claude: [base] }));
-  await open();
-  expect(ids()).toEqual([base, a, b]);
-  signOutAndReturn(a, "acct-back", "account-2@example.com");
-  await again();
-  expect(ids()).toEqual([base, "acct-back", b]);
+// the spec table through each account list: one window lives through a row's moments, and opening never writes
+it.each(Object.entries(surfaces).flatMap(([name, surface]) => USAGE_ORDER_SPEC.map((row, index) => [name, `${row.gate} ${row.row}`, surface, row, index] as const)))("shows the %s order for %s", async (name, _, { open, again, ids }, { saved, moments }, index) => {
+  // ids differ per run, so nothing one run's window kept can rank another
+  const slot = (id: string) => id === "s1" ? "claude" : `${name.replace(" ", "-")}-${index}-${id}`;
+  const bytes = JSON.stringify({ claude: saved.map((key) => key.startsWith("identity:") ? key : slot(key)) });
+  localStorage.setItem(ORDER, bytes);
+  const engine = h.board!.engines[0]!;
+  const account = engine.accounts[0]!;
+  const instance = h.instances.find((each) => each.instanceId === account.id)!;
+  const others = h.instances.filter((each) => each.accountOf !== "claude");
+  for (const [at, { accounts, main = "s1", shows }] of moments.entries()) {
+    engine.mainId = slot(main);
+    engine.accounts = accounts.map(([id], number) => ({ ...account, id: slot(id), number: number + 1, main: id === main }));
+    h.instances = [...others, ...accounts.map(([id, signIn]) => ({ ...instance, instanceId: slot(id), snapshot: usageSnapshot(signIn) }))];
+    await (at ? again : open)();
+    if (q('[data-usage-engine="claude"] [data-accounts-cap][aria-expanded="false"]')) await click('[data-usage-engine="claude"] [data-accounts-cap]');
+    expect(ids(), `moment ${at + 1}`).toEqual(shows.map(slot));
+    expect(localStorage.getItem(ORDER)).toBe(bytes);
+  }
 });
 
 it("ranks every surface's accounts through the one identity helper", () => {
