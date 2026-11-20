@@ -368,6 +368,109 @@ describe("board Drive sync", () => {
   });
 });
 
+describe("a delete a restart cuts short", () => {
+  const ids = { out: (id: string) => id, in: (id: string) => id };
+  const listed = (board: Board) => board.list().map((post) => [post.id, post.parent_id]);
+  const restart = (dir: string, pc = "pc-a") => createBoard({ dir, pcId: () => pc });
+  // runs on a fresh copy once per rename or remove it makes, the process dying just before or just after that one
+  const everyCut = <T>(build: () => T, run: (world: T) => void, check: (world: T, at: string) => void): number => {
+    const rename = fs.renameSync;
+    const remove = fs.rmSync;
+    for (let step = 0, cuts = 0; ; step++) {
+      for (const after of [false, true]) {
+        const world = build();
+        let seen = 0;
+        const at = (real: () => void) => {
+          const now = seen++;
+          if (now === step && !after) throw new Error("restart");
+          real();
+          if (now === step) throw new Error("restart");
+        };
+        const spies = [
+          vi.spyOn(fs, "renameSync").mockImplementation((from, to) => at(() => rename(from, to))),
+          vi.spyOn(fs, "rmSync").mockImplementation((path, options) => at(() => remove(path, options))),
+        ];
+        syncBuiltinESMExports();
+        try {
+          run(world);
+          return cuts;
+        } catch (error) {
+          if (!(error instanceof Error && error.message === "restart")) throw error;
+        } finally {
+          for (const spy of spies) spy.mockRestore();
+          syncBuiltinESMExports();
+        }
+        check(world, `${after ? "after" : "before"} write ${step}`);
+        cuts++;
+      }
+    }
+  };
+
+  it("a thread delete without Drive comes back whole or not at all: once its tombstone is on disk the restart finishes it", () => {
+    const thread = () => {
+      const pc = home("pc-a");
+      const stuck = pc.board.post(STUCK);
+      const answer = pc.board.post({ author_bot_id: "carbon", parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Top it up.", source_ref: "tool:tc:1" });
+      pc.board.post({ author_bot_id: BOARD_USER, parent_id: answer.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+      pc.board.post({ ...STUCK, title: "Pin node 22", body: "Pin node 22.", source_ref: "tool:tc:pin" });
+      return { ...pc, stuck };
+    };
+    const kept = listed(thread().board);
+    const done = thread();
+    done.board.remove(done.stuck.id);
+    const deleted = listed(restart(done.dir));
+    const cuts = everyCut(thread, (t) => t.board.remove(t.stuck.id), (t, at) => {
+      expect(listed(restart(t.dir)), at).toEqual(fs.existsSync(join(t.dir, "deleted.json")) ? deleted : kept);
+    });
+    expect(cuts).toBeGreaterThan(2);
+  });
+
+  it("an own reply delete moves no reply under it before its tombstone is on disk, and a restart after finishes it", () => {
+    const answered = () => {
+      const pc = home("pc-a");
+      const stuck = pc.board.post(STUCK);
+      const reply = pc.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+      for (const n of [1, 2]) pc.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: `Welcome ${n}.`, source_ref: `tool:tc:${n}` });
+      return { ...pc, reply };
+    };
+    const kept = listed(answered().board);
+    const done = answered();
+    done.board.remove(done.reply.id);
+    const deleted = listed(restart(done.dir));
+    const cuts = everyCut(answered, (t) => t.board.remove(t.reply.id), (t, at) => {
+      expect(listed(restart(t.dir)), at).toEqual(fs.existsSync(join(t.dir, "deleted.json")) ? deleted : kept);
+    });
+    expect(cuts).toBeGreaterThan(2);
+  });
+
+  it("a sync cut while it takes another PC's reply delete ends as the sync that was not cut", () => {
+    const pair = () => {
+      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+      const a = home("pc-a");
+      const b = home("pc-b");
+      const stuck = a.board.post(STUCK);
+      const reply = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+      a.board.sync(folder, ids);
+      b.board.sync(folder, ids);
+      // B answers the reply offline while A deletes it
+      b.board.post({ author_bot_id: "carbon", parent_id: reply.id, kind: "tip", title: STUCK.title, body: "Welcome.", source_ref: "tool:tc:1" });
+      a.board.remove(reply.id);
+      a.board.sync(folder, ids);
+      return { folder, a, b };
+    };
+    const settled = (p: ReturnType<typeof pair>) => {
+      const b = restart(p.b.dir, "pc-b");
+      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
+      return [listed(p.a.board), listed(b)];
+    };
+    const whole = pair();
+    whole.b.board.sync(whole.folder, ids);
+    const want = settled(whole);
+    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => expect(settled(p), at).toEqual(want));
+    expect(cuts).toBeGreaterThan(2);
+  });
+});
+
 describe("a post written after its twin was deleted", () => {
   const ids = { out: (id: string) => id, in: (id: string) => id };
   const BLOCKER = { kind: "engine" as const, note: "pnpm install fails with EPERM on node_modules" };

@@ -184,7 +184,18 @@ export interface BoardOptions {
 export function createBoard(options: BoardOptions) {
   const now = options.now ?? Date.now;
   let cache: Map<string, BoardPost> | null = null;
-  const posts = () => (cache ??= new Map(readPosts(options.dir).map((post) => [post.id, post])));
+  const posts = (): Map<string, BoardPost> => {
+    if (cache) return cache;
+    cache = new Map(readPosts(options.dir).map((post) => [post.id, post]));
+    // a tombstone beside its post is a delete a restart cut short, so it finishes before anything reads the board
+    for (const [id, tombstone] of gone()) {
+      if (!cache.has(id)) continue;
+      if (tombstone?.parent_id) lift(id, tombstone.parent_id);
+      forget(id);
+    }
+    prune(cache);
+    return cache;
+  };
   let view: Map<string, BoardPost> | null = null;
   let deleted: Map<string, Tombstone> | null = null;
   const gone = () => (deleted ??= readDeleted(options.dir));
@@ -199,19 +210,30 @@ export function createBoard(options: BoardOptions) {
     return words;
   };
 
-  const drop = (id: string, tombstone: Tombstone): boolean => {
-    if (!gone().has(id) || rank(tombstone) > rank(gone().get(id))) {
-      const next = new Map(gone()).set(id, tombstone);
-      mkdirSync(options.dir, { recursive: true });
-      writeFileAtomic(join(options.dir, DELETED), deletedJson(next));
-      deleted = next;
-    }
+  const keep = (id: string, tombstone: Tombstone) => {
+    if (gone().has(id) && rank(tombstone) <= rank(gone().get(id))) return;
+    const next = new Map(gone()).set(id, tombstone);
+    mkdirSync(options.dir, { recursive: true });
+    writeFileAtomic(join(options.dir, DELETED), deletedJson(next));
+    deleted = next;
+  };
+  const forget = (id: string): boolean => {
     if (!posts().has(id)) return false;
     rmSync(join(options.dir, `${id}.json`), { force: true });
     view = null;
     wordSets.delete(id);
     posts().delete(id);
     return true;
+  };
+  const drop = (id: string, tombstone: Tombstone): boolean => {
+    if (!tombstone?.parent_id) {
+      keep(id, tombstone);
+      return forget(id);
+    }
+    // a pulled reply delete leaves no tombstone beside its post, which a restart would take for an own delete cut short
+    const removed = forget(id);
+    keep(id, tombstone);
+    return removed;
   };
 
   const prune = (candidates: Map<string, BoardPost>): number => {
@@ -249,6 +271,11 @@ export function createBoard(options: BoardOptions) {
     mkdirSync(options.dir, { recursive: true });
     writeFileAtomic(join(options.dir, `${post.id}.json`), `${JSON.stringify(post, null, 2)}\n`);
     posts().set(post.id, post);
+  };
+
+  const lift = (id: string, parent: string | null) => {
+    const at = now();
+    for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: parent, updated_at: at, pc_id: options.pcId() });
   };
 
   // copied chat stays on disk but is never read back, nor the fix it wrote into its parent
@@ -343,9 +370,9 @@ export function createBoard(options: BoardOptions) {
         drop(id, CUT);
         prune(posts());
       } else {
-        const at = now();
-        for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: held.parent_id, updated_at: at, pc_id: options.pcId() });
-        drop(id, { parent_id: held.parent_id });
+        keep(id, { parent_id: held.parent_id });
+        lift(id, held.parent_id);
+        forget(id);
       }
       options.changed?.();
       return true;
