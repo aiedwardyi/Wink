@@ -293,30 +293,74 @@ export function removeAboutYouSource(source: string): void {
   save(state, raw);
 }
 
+type KeptFile = { text: string; atime: Date; mtime: Date };
+
+// MEMORY.md and memory/*, with their edit times; undefined when the folder is not there
+function keepFiles(): Map<string, KeptFile> | undefined {
+  if (!existsSync(aboutYouDir())) return undefined;
+  const kept = new Map<string, KeptFile>();
+  for (const name of filesHere()) {
+    const path = join(aboutYouDir(), name);
+    const { atime, mtime } = statSync(path);
+    kept.set(name, { text: readFileSync(path, "utf8"), atime, mtime });
+  }
+  return kept;
+}
+
+function filesHere(): string[] {
+  const names = existsSync(aboutYouFile()) ? ["MEMORY.md"] : [];
+  try {
+    return [...names, ...readdirSync(join(aboutYouDir(), "memory"), { withFileTypes: true }).filter((entry) => entry.isFile()).map(({ name }) => join("memory", name))];
+  } catch {
+    return names;
+  }
+}
+
+function putBack(kept: Map<string, KeptFile> | undefined): void {
+  if (!kept) return rmSync(aboutYouDir(), { recursive: true, force: true });
+  for (const name of filesHere()) if (!kept.has(name)) rmSync(join(aboutYouDir(), name), { force: true });
+  for (const [name, { text, atime, mtime }] of kept) {
+    const path = join(aboutYouDir(), name);
+    if (readSaved(path) === text) continue;
+    writeFileAtomic(path, text, { mode: 0o600 });
+    utimesSync(path, atime, mtime);
+  }
+}
+
 /** Syncs Import Memory by keeping every add ID its peers have not explicitly removed. */
 export function syncAboutYou(folder: string, ledger: MemorySyncLedger, options?: MemorySyncOptions): Record<string, MemorySyncResult> {
   const before = readSaved();
   const local = localEdits(before);
   // Keep the transport's existing display order when recording IDs for hand edits.
   save(local, before, true);
-  const results = syncBotMemory(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), ledger, options);
-  const dir = join(aboutYouDir(), "memory");
-  let copies: string[];
+  // the transport can swap in the peer's file before a later write fails, and the next pass would read this PC's own lines as erased
+  const kept = keepFiles();
+  const known = ledger.bots[ABOUT_YOU_SYNC_ID] && structuredClone(ledger.bots[ABOUT_YOU_SYNC_ID]);
   try {
-    copies = readdirSync(dir).filter((name) => SET_ASIDE.test(name)).sort();
-  } catch {
-    copies = [];
+    const results = syncBotMemory(folder, ABOUT_YOU_SYNC_ID, aboutYouDir(), ledger, options);
+    const dir = join(aboutYouDir(), "memory");
+    let copies: string[];
+    try {
+      copies = readdirSync(dir).filter((name) => SET_ASIDE.test(name)).sort();
+    } catch {
+      copies = [];
+    }
+    if (existsSync(aboutYouDir())) {
+      const raw = readSaved();
+      // A newer file version can omit an add ID, for example after the peer's folder was wiped.
+      const merged = fold([parse(raw), ...copies.map((name) => parse(readFileSync(join(dir, name), "utf8"))), local]);
+      save(merged, raw);
+      for (const name of copies) rmSync(join(dir, name), { force: true });
+      const last = render(metadata(merged));
+      if (readSaved(lastSyncFile()) !== last) writeFileAtomic(lastSyncFile(), last, { mode: 0o600 });
+    }
+    return results;
+  } catch (error) {
+    if (known) ledger.bots[ABOUT_YOU_SYNC_ID] = known;
+    else delete ledger.bots[ABOUT_YOU_SYNC_ID];
+    putBack(kept);
+    throw error;
   }
-  if (existsSync(aboutYouDir())) {
-    const raw = readSaved();
-    // A newer file version can omit an add ID, for example after the peer's folder was wiped.
-    const merged = fold([parse(raw), ...copies.map((name) => parse(readFileSync(join(dir, name), "utf8"))), local]);
-    save(merged, raw);
-    for (const name of copies) rmSync(join(dir, name), { force: true });
-    const last = render(metadata(merged));
-    if (readSaved(lastSyncFile()) !== last) writeFileAtomic(lastSyncFile(), last, { mode: 0o600 });
-  }
-  return results;
 }
 
 /** The saved facts as every bot reads them, one per line; empty until something is added. */

@@ -1,6 +1,6 @@
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { expect, it, vi } from "vitest";
 
 import { ABOUT_YOU_SYNC_ID, aboutYouPrompt, aboutYouSources, addToAboutYou, removeAboutYouSource, syncAboutYou } from "./about-you.ts";
@@ -11,6 +11,22 @@ vi.mock("./config.ts", async (original) => ({
   ...await original<typeof import("./config.ts")>(),
   get DATA_DIR() { return pc.dir; },
 }));
+// at: the write that fails, counted from 1
+const fault = vi.hoisted(() => ({ at: 0, hit: false }));
+// oxlint-disable-next-line anti-slop/no-module-mocking -- fails one real write, as a file another program holds open does.
+vi.mock("./atomic.ts", async (original) => {
+  const real = await original<typeof import("./atomic.ts")>();
+  return {
+    ...real,
+    writeFileAtomic: (...args: Parameters<typeof real.writeFileAtomic>) => {
+      if (fault.at && !--fault.at) {
+        fault.hit = true;
+        throw Object.assign(new Error("EPERM: held open"), { code: "EPERM" });
+      }
+      return real.writeFileAtomic(...args);
+    },
+  };
+});
 
 function orders<T>(steps: T[]): T[][] {
   if (!steps.length) return [[]];
@@ -194,3 +210,86 @@ it("keeps a line typed back unless a later hand Remove took it, in all 360 order
     rmSync(root, { recursive: true, force: true });
   }
 }, 240_000);
+
+const faultSteps = ["addA", "addB", "syncA", "syncB", "fail"] as const;
+
+// A imports its line and B types its own
+function faultWorld(dir: string) {
+  const [a, b, shared] = ["a", "b", "shared"].map((name) => join(dir, name));
+  // a failed pass still saves its ledger, as index.ts does; the host is a name so a copied world keeps its PCs
+  const pass = (data: string, failAt = 0) => {
+    pc.dir = data;
+    const ledger = loadMemorySyncLedger(data);
+    fault.at = failAt;
+    fault.hit = false;
+    try {
+      syncAboutYou(shared, ledger, { host: basename(data) });
+    } catch (error) {
+      if (!fault.hit) throw error;
+    }
+    fault.at = 0;
+    saveMemorySyncLedger(data, ledger);
+    return fault.hit;
+  };
+  const view = (data: string) => {
+    pc.dir = data;
+    const listed = aboutYouSources().flatMap(({ facts }) => facts).sort();
+    const lines = existsSync(file(data)) ? readFileSync(file(data), "utf8") : "";
+    const prompt = aboutYouPrompt();
+    return listed.map((fact) => `${fact} ${lines.includes(`- ${fact}`) && prompt.includes(`- ${fact}`)}`).join(", ");
+  };
+  const step = (name: typeof faultSteps[number]) => {
+    if (name === "addA") {
+      pc.dir = a;
+      addToAboutYou("- Alpha line.\nSource: Alpha", "2026-11-20");
+    } else if (name === "addB") appendFileSync(file(b), "- Bravo line.\n");
+    else if (name === "syncA") pass(a);
+    else if (name === "syncB") pass(b);
+  };
+  return { a, b, pass, step, view };
+}
+
+it("keeps an import on one PC and a hand line on the other when one write of a pass fails, in all 120 orders at every write", () => {
+  const root = mkdtempSync(join(tmpdir(), "orbit-about-you-fault-"));
+  const copy = (from: string, to: string) => cpSync(from, to, { recursive: true, preserveTimestamps: true });
+  const want = "Alpha line. true, Bravo line. true, Control stays here. true";
+  const failures: string[] = [];
+  let faults = 0;
+  try {
+    // A and B both hold Control
+    const seeded = join(root, "seed");
+    const seed = faultWorld(seeded);
+    pc.dir = seed.a;
+    addToAboutYou("- Control stays here.\nSource: Control", "2026-11-20");
+    seed.pass(seed.a);
+    seed.pass(seed.b);
+    for (const [i, order] of orders([...faultSteps]).entries()) {
+      const at = order.indexOf("fail");
+      const prefix = join(root, String(i));
+      copy(seeded, prefix);
+      const before = faultWorld(prefix);
+      for (const name of order.slice(0, at)) before.step(name);
+      for (const failing of ["a", "b"] as const) {
+        for (let write = 1; ; write++) {
+          const dir = join(root, `${i}-${failing}-${write}`);
+          copy(prefix, dir);
+          const w = faultWorld(dir);
+          if (!w.pass(w[failing], write)) break;
+          faults++;
+          for (const name of order.slice(at + 1)) w.step(name);
+          for (let round = 0; round < 2; round++) {
+            w.pass(w.a);
+            w.pass(w.b);
+          }
+          const got = [w.view(w.a), w.view(w.b)];
+          if (got.some((view) => view !== want)) failures.push(`${order.join(" → ")}, ${failing} write ${write} fails: got ${got.join(" / ")}`);
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    }
+    expect(faults).toBeGreaterThan(240);
+    expect(failures).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 600_000);
