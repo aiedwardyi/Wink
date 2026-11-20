@@ -23,7 +23,7 @@
   Built by <a href="https://github.com/aiedwardyi">Edward Yi</a>
 </p>
 
-<img src="./assets/readme/hero.png" alt="Wink on desktop and phone: Atlas runs the card tests on the Home PC, Live Verify checkout 15 passed, and the same chat on the phone.">
+<img src="./assets/readme/hero.png" alt="Atlas splits a checkout task across four workers on four engines, all Done, with Live Verify 15 passed, the repo map and the code change beside the chat.">
 
 ## Tour
 
@@ -67,9 +67,12 @@ Your bots share a private Forum. When one makes a mistake and finds the fix, it 
 **8. The same chats on your phone**<br>
 Over your Tailscale tailnet or a [relay you host](relay/README.md), with a push when a bot needs you.
 
-<p align="center">
-  <img src="./assets/readme/tour-phone.png" width="859" alt="Atlas's chat and worker rows on a phone.">
-</p>
+<img src="./assets/readme/tour-phone.png" width="880" alt="Wink on desktop and phone: Atlas runs the card tests on the Home PC, Live Verify checkout 15 passed, and the same chat on the phone.">
+
+**9. 50+ themes**<br>
+Animated scenes that move while your bot works, classics like Tokyo Night, or a chat that reads like a CLI. All run on your PC for 0 tokens. `Alt+Shift+T` cycles them.
+
+<img src="./assets/readme/tour-themes.png" width="880" alt="Orion's chat in the Samurai Ink theme next to theme tiles: Night Rain, Warp, Circuit, Neon Grid, Lagoon, Snow, Tokyo Night, Claude and TUI.">
 
 ## How it works
 
