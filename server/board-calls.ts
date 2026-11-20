@@ -20,6 +20,8 @@ const ASK_MIN_HITS = 3;
 
 /** Only an engine blocker is one another bot could clear; a login is the user's alone, so it never reaches the Forum. */
 const forumKind = (blocker: Blocker) => blocker.kind === "engine";
+/** A login post from before the rule is still open on the Board; clearing its login closes it. */
+const closable = (blocker: Blocker) => forumKind(blocker) || blocker.kind === "login";
 const keyOf = (blocker: Blocker) => `${blocker.kind}\n${blocker.note}`;
 const callRef = (threadId: string) => `call:${threadId}:`;
 
@@ -144,7 +146,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
     cleared(threadId: string, before: readonly Blocker[], after: readonly Blocker[], note = ""): BoardPost[] {
       if (deps.room(threadId) || !note.trim()) return [];
       const left = new Set(after.map(keyOf));
-      const open = before.filter((blocker) => forumKind(blocker) && !left.has(keyOf(blocker))).flatMap((blocker) => {
+      const open = before.filter((blocker) => closable(blocker) && !left.has(keyOf(blocker))).flatMap((blocker) => {
         const post = episodePost(threadId, blocker, episodeOf(threadId, blocker));
         return post?.kind === "stuck" && post.status === "open" ? [post] : [];
       });

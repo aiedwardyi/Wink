@@ -241,6 +241,14 @@ describe("board handoff eval", () => {
     expect(board.list().map((post) => [post.kind, post.author_bot_id])).toEqual([["stuck", "carbon"]]);
   });
 
+  it("a login stuck post made before the rule still closes when its login clears", () => {
+    const LOGIN = { kind: "login" as const, note: "Sign in to Claude on Home so tonight's eval can run." };
+    const old = board.post({ author_bot_id: "astra", kind: "stuck", title: LOGIN.note, body: LOGIN.note, project_id: "wink", source_ref: `call:ta:0:login:${LOGIN.note}` });
+    const solved = boardCalls.cleared("ta", [LOGIN], [], "Signed in to Claude on Home.");
+    expect(solved.map((post) => [post.id, post.status])).toEqual([[old.id, "solved"]]);
+    expect(boardCalls.called("astra", "ta", LOGIN)).toBeUndefined();
+  });
+
   it("an open post with no answer yet holds nothing back", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
     await blockers(BOTS.carbon!, [X("09:30")]);
