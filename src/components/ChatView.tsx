@@ -98,7 +98,7 @@ import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
-import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, isBottomFollowScroll, newestBelowView, restoreTranscriptScroll, scrollToFollowBottom, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
+import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, isBottomFollowScroll, newestBelowView, onStopFollow, restoreTranscriptScroll, scrollToFollowBottom, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -1181,6 +1181,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     followRef.current = next;
     setFollow(next);
   }, []);
+  useEffect(() => onStopFollow(scrollRef.current, () => setBottomFollow(false)), [setBottomFollow]);
 
   // one message at a time may be in edit mode
   const [editingId, setEditingId] = useState<string | null>(null);

@@ -86,7 +86,7 @@ import { useFindCurrentId } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
-import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
+import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, onStopFollow, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -1154,6 +1154,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   }, []);
 
   useEffect(() => setBottomFollow(true), [transcriptKey, setBottomFollow]);
+  useEffect(() => onStopFollow(scrollRef.current, () => setBottomFollow(false)), [setBottomFollow]);
 
   // Docks like a 1:1 chat: under the reply while its text is streaming.
   const liveTail = laterCount === 0 && !jump.messages;
