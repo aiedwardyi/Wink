@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { Window } from "happy-dom";
 import { afterEach, expect, it, vi } from "vitest";
 
-const f = vi.hoisted(() => ({ observations: [], failures: new Set(), commands: [], calls: [], events: {}, values: new Map(), targets: [], windows: new Map(), failInput: false, onClick: null }));
+const f = vi.hoisted(() => ({ observations: [], failures: new Set(), commands: [], calls: [], events: {}, values: new Map(), targets: [], windows: new Map(), failInput: false, onClick: null, viewport: null, scrollFails: 0 }));
 vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
   async send(method, params) {
     f.commands.push(method); f.calls.push({ tile: page.tile, method, params });
@@ -22,6 +22,9 @@ vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
     if (expression.includes("!!document.querySelector")) return true;
     if (expression.includes("const { all, visible, where }")) return f.targets;
     if (expression.includes("const n = globalThis.lvWatchTargets")) return { x: 20, y: 30, scrollY: 40 };
+    if (expression.startsWith("({ height: innerHeight")) return f.viewport ?? [...f.values.values()].find(v => v.viewport)?.viewport;
+    if (expression.includes("scrollTo({ top:") && f.scrollFails-- > 0) throw new Error("Scroll failed");
+    if (expression.includes("scrollTo({ top:")) return Number(/top: (\d+)/.exec(expression)[1]);
     const rule = expression.includes('const rows = [], range') ? "wraps" : expression.includes('const rows = [], nodes') ? "details" : expression.includes('all("img[src]') ? "errors" : expression.includes('all("a[href]").filter(visible)') ? "links" : expression.includes("scrollWidth") ? "scroll" : expression.includes("const controls") ? "menu" : "copy";
     f.observations.push(`${page.tile}:${rule}`);
     if (f.failures.has(`${page.tile}:${rule}`)) throw new Error("Unsupported color or removed node");
@@ -34,7 +37,7 @@ import { runHiddenVerify } from "./verify-hidden.mjs";
 import { createVerifyFonts } from "./verify-fonts.mjs";
 import { siteRevision, startSiteServer } from "./verify-site-server.mjs";
 
-afterEach(async () => { vi.useRealTimers(); f.observations = []; f.failures.clear(); f.commands = []; f.calls = []; f.events = {}; f.values.clear(); f.targets = []; f.failInput = false; f.onClick = null; for (const window of f.windows.values()) await window.happyDOM.close(); f.windows.clear(); });
+afterEach(async () => { vi.useRealTimers(); f.observations = []; f.failures.clear(); f.commands = []; f.calls = []; f.events = {}; f.values.clear(); f.targets = []; f.failInput = false; f.onClick = null; f.viewport = null; f.scrollFails = 0; for (const window of f.windows.values()) await window.happyDOM.close(); f.windows.clear(); });
 function input() {
   const aborter = new AbortController();
   const pages = Object.fromEntries(["desktop", "phone"].map(tile => [tile, Object.assign(new EventEmitter(), { tile, loadURL: vi.fn(async () => {}) })]));
@@ -310,6 +313,40 @@ it("records a picture of every new scroll stop before moving on, even on a fast 
   expect(order.filter(kind => kind === "scroll").length).toBeGreaterThan(0);
   expect(order[order.indexOf("scroll") + 1]).toBe("frame");
   expect(order.indexOf("frame")).toBeLessThan(order.indexOf("checks"));
+});
+
+it("checks every rule in one pass down the page, so the live view never climbs back up", async () => {
+  const viewport = { y: 0, height: 720, maxScroll: 4_000 };
+  f.values.set("copy", { texts: [{ where: "p#a", text: "Hello", box: [1, 100, 30, 40], scrollY: 0 }, { where: "p#b", text: "undefined", box: [1, 1_500, 30, 40], scrollY: 0 }, { where: "p#c", text: "Bye", box: [1, 3_000, 30, 40], scrollY: 0 }], viewport });
+  f.values.set("details", { rows: [{ where: "a#x", rule: "tap size", measured: "48 x 48", bad: false, box: [5, 50, 48, 48], scrollY: 0 }, { where: "a#y", rule: "tap size", measured: "20 x 20", bad: true, box: [5, 1_600, 20, 20], scrollY: 0 }, { where: "a#z", rule: "tap size", measured: "48 x 48", bad: false, box: [5, 3_100, 48, 48], scrollY: 0 }], viewport });
+  f.values.set("wraps", { rows: [{ where: "button#out", text: "Sign Out", length: 8, words: 2, lines: 2, control: true, split: "", box: [283, 2_900, 48, 44], scrollY: 0 }], viewport });
+  const i = input(), result = await runHiddenVerify(i).done;
+  const found = rows => rows.map(row => [row.tile, row.checker, row.where, row.box, row.scrollY + row.box[1]]).sort();
+  expect(found(result.issues)).toEqual([["desktop", "FIT", "button#out", [283, 500, 48, 44], 2_900], ["desktop", "TEXT_A", "p#b", [1, 300, 30, 40], 1_500]]);
+  expect(found(result.details)).toEqual([["phone", "FIT", "a#y", [5, 400, 20, 20], 1_600]]);
+  for (const tile of ["desktop", "phone"]) {
+    const ys = i.emit.mock.calls.map(([event]) => event).filter(event => event.kind === "scroll" && event.tile === tile).map(event => event.y);
+    expect(ys.length).toBeGreaterThan(1);
+    expect(ys.filter((y, k) => k && y < ys[k - 1])).toEqual([]);
+  }
+});
+
+it("scrolls to rules below the bounds first seen when the page has grown since", async () => {
+  f.values.set("copy", { texts: [{ where: "p#far", text: "undefined", box: [1, 3_000, 30, 40], scrollY: 0 }], viewport: { y: 0, height: 720, maxScroll: 700 } });
+  f.viewport = { y: 0, height: 720, maxScroll: 4_000 };
+  const result = await runHiddenVerify(input()).done;
+  expect(result.issues.map(row => row.box[1])).toEqual([600]);
+});
+
+it("keeps checking other rules when one stop fails to scroll", async () => {
+  const viewport = { y: 0, height: 720, maxScroll: 4_000 };
+  f.values.set("copy", { texts: [{ where: "p#a", text: "undefined", box: [1, 1_500, 30, 40], scrollY: 0 }], viewport });
+  f.values.set("wraps", { rows: [{ where: "button#out", text: "Sign Out", length: 8, words: 2, lines: 2, control: true, split: "", box: [283, 2_900, 48, 44], scrollY: 0 }], viewport });
+  f.scrollFails = 1;
+  const result = await runHiddenVerify(input()).done;
+  expect(result.errorCode).toBeUndefined();
+  expect(result.notChecked.filter(reason => /\(desktop\)$/.test(reason))).toHaveLength(1);
+  expect(result.issues.filter(row => row.checker === "FIT" && row.tile === "desktop").map(row => row.box[1])).toEqual([500]);
 });
 
 it("does not let a hung capture fail the run", async () => {
