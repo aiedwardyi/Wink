@@ -143,6 +143,13 @@ export interface Message {
   /** steer-queue entry this drained user line came from. Pending chips
    * match on this id, not on equal text. Absent on ordinary sends. */
   queueId?: string;
+  /** When the person acted; a queue or card persistence can land the row later. */
+  actedAt?: number;
+  /** Waited below the turn (after this turn, sync hold, Send now): drawn where it landed, not by actedAt. */
+  waited?: boolean;
+  /** One past every send the sending window knew: orders two lines the server stamped alike. */
+  sendSeq?: number;
+  sentAfterId?: string | null;
 }
 
 export type GroupDefaultResponder =
@@ -547,7 +554,7 @@ export interface AppState {
   } | null;
   /** 1:1 queue-fallback lines waiting for drain; keyed by threadId.
    * Each entry is identified by the server queueId, not by text. */
-  pendingQueued: Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync" }>>;
+  pendingQueued: Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }>>;
   /** queueIds whose drain frame beat the POST continuation. One-shot and
    * bounded to a short event window so other clients cannot grow it forever. */
   consumedQueueIds: Record<string, true>;
@@ -619,6 +626,9 @@ export type Action =
       groupId: string;
       text: string;
       actedAt?: number;
+      waited?: boolean;
+      sendSeq?: number;
+      sentAfterId?: string | null;
       sendId?: string;
       replyToId?: string;
       threadId?: string;
@@ -649,9 +659,12 @@ export type Action =
       /** Wait for the running turn instead of steering into it. */
       after?: boolean;
       queueId?: string;
+      actedAt?: number;
+      sendSeq?: number;
+      sentAfterId?: string | null;
       onError?: () => void;
     }
-  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync" }
+  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }
   | { type: "sendQueuedNow"; botId: string; threadId: string; queueId: string }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; threadId: string; queueId: string }

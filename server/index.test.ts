@@ -1347,6 +1347,21 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("stores the send order a room line was sent with", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Order room", memberIds: [bot.id] })).body.group;
+    try {
+      await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" });
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "in order", sendId: "send-order-0123456789", actedAt: 1, sendSeq: 3 })).status).toBe(202);
+      const current = (await api("GET", "/api/bots?messages=20")).body.groups.find((candidate: { id: string }) => candidate.id === room.id);
+      expect(current.messages.at(-1)).toMatchObject({ text: "in order", sendSeq: 3 });
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("tells the sender a line nobody was asked to answer starts no turn", async () => {
     const alpha = (await api("POST", "/api/bots")).body.bot;
     const room = (await api("POST", "/api/groups", { name: "Mention room", memberIds: [alpha.id] })).body.group;
@@ -4696,7 +4711,8 @@ describe("resumable event stream", () => {
     const hello = await first.until((frame) => frame.kind === "hello");
     let cursor = hello.cursor;
     try {
-      expect(await first.until((frame) => frame.kind === "ping")).toEqual({ kind: "ping" });
+      expect(hello.now).toEqual(expect.any(Number));
+      expect(await first.until((frame) => frame.kind === "ping")).toEqual({ kind: "ping", now: expect.any(Number) });
       await nudge(botId);
       const next = await first.until((frame) => frame.kind === "bot" && frame.bot?.id === botId);
       const since = Number(hello.cursor.split(":")[1]);
