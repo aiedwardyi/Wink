@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -1372,6 +1372,60 @@ describe("fresh-session memory block", () => {
       goal: "plan.md를 읽어 주세요.",
       plan: [{ step: "review.txtを開いてください。", status: "active" }],
     }, cwd)).toEqual([join(cwd, "plan.md"), join(cwd, "review.txt")]);
+  });
+
+  const taskFolder = (name: string, files: string[]) => {
+    const folder = join(homedir(), name);
+    for (const file of files) {
+      mkdirSync(dirname(join(folder, file)), { recursive: true });
+      writeFileSync(join(folder, file), file);
+    }
+    return folder;
+  };
+  const stepPins = (step: string, folder: string) => planFiles({ goal: "Ship it", plan: [{ step, status: "active" }] }, folder);
+
+  it("pins both files a CJK conjunction joins", () => {
+    const folder = taskFolder("joined", ["plan.md", "review.txt"]);
+    for (const step of ["plan.md和review.txt都要更新。", "plan.mdとreview.txt", "plan.md와review.txt"]) {
+      expect(stepPins(step, folder)).toEqual([join(folder, "plan.md"), join(folder, "review.txt")]);
+    }
+  });
+
+  it("pins the files CJK prose runs into, not the prose", () => {
+    const folder = taskFolder("prefixed", ["plan.md", "review.txt"]);
+    expect(stepPins("请先读plan.md，再打开review.txt。", folder)).toEqual([join(folder, "plan.md"), join(folder, "review.txt")]);
+  });
+
+  it("pins an archive whose name holds a document name", () => {
+    const folder = taskFolder("archive", ["report.md旧版.zip"]);
+    expect(stepPins("Archive report.md旧版.zip tomorrow.", folder)).toEqual([join(folder, "report.md旧版.zip")]);
+  });
+
+  it("pins every existing file that random CJK prose touches", () => {
+    const names = ["plan.md", "review.txt", "회의록.md", "v2/計画-final.md", "résumé.txt", "資料/発売.txt", "🚀draft.md", "report.md旧版.zip", "메모.pdf", "会議メモ.docx"];
+    const folder = taskFolder("generated", names);
+    let seed = 2006;
+    const random = (count: number) => (seed = seed * 48271 % 2147483647) % count;
+    const scripts = [[0xac00, 0xd7a3], [0x3041, 0x3096], [0x30a1, 0x30fa], [0x4e00, 0x9fff]] as const;
+    const prose = (least: number) => {
+      const [first, last] = scripts[random(scripts.length)]!;
+      return Array.from({ length: least + random(8) }, () => random(6) ? String.fromCodePoint(first + random(last - first + 1)) : " ，。、"[random(4)]).join("");
+    };
+    for (let index = 0; index < 500; index++) {
+      const named = Array.from({ length: 1 + random(4) }, () => names[random(names.length)]!);
+      const text = named.map((name, at) => (at && random(3) === 0 ? "\n" : "") + prose(at ? 1 : 0) + [name, name, `"${name}"`, `「${name}」`][random(4)]).join("") + prose(0);
+      const [goal, ...steps] = text.split("\n");
+      const pins = planFiles({ goal: goal!, plan: steps.map((step) => ({ step, status: "active" as const })) }, folder);
+      expect([...pins].sort(), text).toEqual([...new Set(named)].map((name) => join(folder, name)).sort());
+    }
+  });
+
+  it("reads a max-size CJK plan within the restart budget", () => {
+    const folder = taskFolder("budget", ["plan.md", "review.txt", "회의록.md"]);
+    const glued = (ends: number) => "가".repeat(3 * ends) + ".md" + ".a가".repeat(ends);
+    const started = performance.now();
+    planFiles({ goal: glued(82), plan: Array.from({ length: 20 }, () => ({ step: glued(32), status: "active" as const })) }, folder);
+    expect(performance.now() - started).toBeLessThan(100);
   });
 
   it("expands home-relative plan files with or without a task folder", () => {

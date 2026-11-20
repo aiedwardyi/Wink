@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 import { redactSecretsInText } from "./redact.ts";
 import { asksBlock, type TaskAsk } from "./task-asks.ts";
@@ -528,6 +528,11 @@ const MEMORY_PLAN_PREFIX = "Read first, your plan: ";
 const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?!\w)/giu;
 // a quoted path may hold spaces, so it is read whole before DOC_PATH
 const QUOTED_DOC_PATH = /(["'`])([^"'`\n]+\.(?:md|txt|docx?|pdf))\1/gi;
+// CJK prose runs into names with no space, so the files on disk decide where a name starts and ends; DOC_PATH guesses the rest
+const NAME_RUN = /[\p{L}\p{M}\p{N}\p{Pc}\p{S}.:\\/-]+/gu;
+const DOC_EXT = /\.(?:md|txt|docx?|pdf)(?!\w)/gi;
+// Windows finds review.txt for "review.txt.", so a name ends only after an extension
+const NAME_END = /\.[A-Za-z\d]+(?!\.*[\w~\\/-])/g;
 const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
 
 function localPath(ref: string, cwd: string | undefined): string | null {
@@ -538,12 +543,82 @@ function localPath(ref: string, cwd: string | undefined): string | null {
   return cwd ? resolve(cwd, path) : null;
 }
 
+function runFiles(run: string, cwd: string | undefined, listed: (dir: string) => Set<string>): string[] {
+  const ends = [...run.matchAll(NAME_END)].map((match) => match.index + match[0].length).reverse();
+  const refs: [number, string][] = [];
+  let rest = run;
+  let from = 0;
+  for (const hit of run.matchAll(DOC_EXT)) {
+    if (hit.index < from) continue;
+    const after = hit.index + hit[0].length;
+    const tails = ends.filter((end) => end >= after && !/[\\/]/.test(run.slice(after, end)));
+    let best: [number, number] | undefined;
+    for (let start = from; start <= hit.index && tails.length > 0 && (!best || tails[0]! - start > best[1] - best[0]); start++) {
+      // a name starts after a character no ASCII name holds, so release-plan.md never pins plan.md
+      if (start && /[\w.~:\\/-]/.test(run[start - 1]!) || /[\uDC00-\uDFFF]/.test(run[start]!)) continue;
+      const head = localPath(run.slice(start, after), cwd);
+      if (!head || !listed(dirname(head)).has(fileKey(basename(head)))) continue;
+      for (const end of tails) {
+        if (best && end - start <= best[1] - best[0]) break;
+        const path = localPath(run.slice(start, end), cwd)!;
+        if (listed(dirname(path)).has(fileKey(basename(path))) && existsSync(path)) {
+          best = [start, end];
+          break;
+        }
+      }
+    }
+    from = best?.[1] ?? after;
+    if (!best) continue;
+    refs.push([best[0], run.slice(...best)]);
+    rest = rest.slice(0, best[0]) + " ".repeat(best[1] - best[0]) + rest.slice(best[1]);
+  }
+  for (const match of rest.matchAll(DOC_PATH)) refs.push([match.index, match[0]]);
+  return refs.sort(([a], [b]) => a - b).map(([, ref]) => ref);
+}
+
+function fileKey(name: string): string {
+  return name.normalize("NFC").toUpperCase();
+}
+
+// a CJK plan tries a name start per character, so folders are listed once and walked down from cwd or the drive root, never a stat per guess
+function listedFiles(cwd: string | undefined): (dir: string) => Set<string> {
+  const base = cwd ? resolve(cwd) : undefined;
+  const listed = new Map<string, Set<string>>();
+  const none = new Set<string>();
+  const read = (dir: string) => {
+    let names = listed.get(dir);
+    if (!names) {
+      names = new Set();
+      listed.set(dir, names);
+      try {
+        for (const name of readdirSync(dir)) {
+          const key = fileKey(name);
+          names.add(key);
+          // a name start goes on only when a file name begins with it up to its extension
+          for (const match of key.matchAll(DOC_EXT)) names.add(key.slice(0, match.index + match[0].length));
+        }
+      } catch {}
+    }
+    return names;
+  };
+  return (dir) => {
+    let at = base && (dir === base || dir.startsWith(base + sep)) ? base : parse(dir).root;
+    for (const part of dir.slice(at.length).split(sep)) {
+      if (!part) continue;
+      if (!read(at).has(fileKey(part))) return none;
+      at = join(at, part);
+    }
+    return read(at);
+  };
+}
+
 /** Files the record names as its plan: artifacts labeled or named plan, and any document path the goal or plan steps cite. */
 export function planFiles(record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts">, cwd?: string): string[] {
   const refs = (record.artifacts ?? []).filter((item) => /plan/i.test(item.label) || /plan/i.test(basename(item.ref))).map((item) => item.ref);
   const cited = [record.goal, ...record.plan.map((item) => item.step)].join("\n").replace(/\w{2,}:\/\/\S+/g, "");
   for (const match of cited.matchAll(QUOTED_DOC_PATH)) refs.push(match[2]!);
-  for (const match of cited.replace(QUOTED_DOC_PATH, " ").matchAll(DOC_PATH)) refs.push(match[0]);
+  const listed = listedFiles(cwd);
+  for (const [run] of cited.replace(QUOTED_DOC_PATH, " ").matchAll(NAME_RUN)) refs.push(...runFiles(run, cwd, listed));
   return [...new Set(refs.map((ref) => localPath(ref, cwd)).filter((path): path is string => path !== null))];
 }
 

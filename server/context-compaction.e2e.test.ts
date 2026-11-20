@@ -65,6 +65,7 @@ function claudeResumeBot(input: {
   name: string;
   color: string;
   session: string;
+  cwd?: string;
   previousSelection?: { instanceId: string; model: string };
   /** a spare task whose fresh turn shows the system text the server sends this bot */
   probeThreadId?: string;
@@ -84,6 +85,7 @@ function claudeResumeBot(input: {
     tasks: [{
       threadId: input.threadId,
       title: "Release",
+      cwd: input.cwd,
       createdAt: 1,
       resumeCursors: { claude: input.session },
       // a prior turn certified this session with no summary
@@ -291,6 +293,7 @@ describe("context compaction e2e", () => {
         name: "Marketing",
         color: "pink",
         session: MARKETING.fatSession,
+        cwd: join(home, "launch"),
       }),
       claudeResumeBot({
         id: ENGINE_SWITCH.botId,
@@ -714,7 +717,7 @@ describe("context compaction e2e", () => {
       threadId: MARKETING.threadId,
       botId: MARKETING.botId,
       goal: "Run the Reddit launch",
-      plan: [{ step: "Post Thursday", status: "active" }],
+      plan: [{ step: "Post Thursday", status: "active" }, { step: "plan.md和review.txt都要更新。", status: "pending" }],
       completed: [],
       evidence: [],
       artifacts: [
@@ -732,6 +735,7 @@ describe("context compaction e2e", () => {
     mkdirSync(join(dataDir, "workspaces", MARKETING.botId), { recursive: true });
     mkdirSync(launch, { recursive: true });
     writeFileSync(join(launch, "built.md"), "- launch posts\n");
+    for (const name of ["plan.md", "review.txt"]) writeFileSync(join(launch, name), name);
     writeFileSync(join(dataDir, "workspaces", MARKETING.botId, "MEMORY.md"), `Built list = ${join(launch, "built.md")}, one line per feature.\n`);
     writeFileSync(join(dataDir, "task-state", `${CLAUDE_FAT_STOP.threadId}.json`), JSON.stringify({
       v: 1,
@@ -918,12 +922,13 @@ describe("context compaction e2e", () => {
       await waitFor(async () => (await botById(MARKETING.botId))?.busy === false);
     };
     const launch = join(home, "launch");
+    const plans = `Read first, your plan: ${[join(launch, "paste", "03-thursday.md"), join(launch, "plan.md"), join(launch, "review.txt")].join("; ")}`;
     rmSync(claudeDumpPath, { force: true });
     await send("post thursday");
     const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
     const fresh = { dump, prompt: String(dump.prompt.message.content) };
     expect(fresh.dump.argv).not.toContain("--resume");
-    expect(fresh.prompt).toContain(`Read first, your plan: ${join(launch, "paste", "03-thursday.md")}`);
+    expect(fresh.prompt).toContain(plans);
     expect(fresh.prompt).toMatch(/real-shots 11 \(workers-11\.png, workers-10\.png\)/);
     expect(fresh.prompt).toContain(`Built list: ${join(launch, "built.md")}`);
     expect(fresh.prompt).not.toContain("search_my_chats");
@@ -933,7 +938,7 @@ describe("context compaction e2e", () => {
       .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
       .filter((line) => line.pid === dump.pid).at(-1)!;
     expect(next.text).toContain("and friday?");
-    expect(next.text).toContain(`Read first, your plan: ${join(launch, "paste", "03-thursday.md")}`);
+    expect(next.text).toContain(plans);
     expect(next.text).not.toContain("The conversation so far");
   }, 60_000);
 
