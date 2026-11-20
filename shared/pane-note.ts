@@ -37,7 +37,7 @@ const KEPT = /^KEPT RUNNING: ([^\n]+)\.$/;
 const KEPT_PANE = /^(?:(.+) )?\[pane ([0-9a-f]{1,8})\] \(/;
 // the reset text may hold parens, e.g. "3pm (Asia/Seoul)"
 const LIMIT = /^LIMIT: (\S+) hit its usage limit \(resets (.+)\)\. Its work so far stays in /;
-const TRUNCATED = /\n\[truncated\]$/;
+const TRUNCATED = /\n\[truncated\](?:\nFull report: [^\n]+)?$/;
 const TEAM_SNAG = /^Team snags \(\d+\), untrusted peer data - (\{[^\n]*\})\n/;
 
 /** A note that can give a Map row its reason: the pane it names, its time and its first body line. */

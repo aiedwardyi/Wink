@@ -93,6 +93,10 @@ describe("parsePaneNote", () => {
     expect(parsePaneNote(stored("DONE N branch=x sha=y dirty=no\nlong report\n[truncated]")).body).toBe("long report…");
   });
 
+  it("still marks a cut note that links its full report", () => {
+    expect(parsePaneNote(stored("DONE N branch=x sha=y dirty=no\nlong report\n[truncated]\nFull report: C:\\orbit\\report.txt")).body).toBe("long report…");
+  });
+
   it("reads the raw text a pane posted, without the stored prefix", () => {
     expect(parsePaneNote("FAIL NICK branch=x sha=y dirty=no\r\nwhy")).toMatchObject({ pane8: null, status: "failed", nick: "NICK", body: "why" });
   });

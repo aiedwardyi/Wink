@@ -142,6 +142,21 @@ it.skipIf(process.platform !== "win32")("links a cut local report to its full te
   expect(readdirSync(reports)).not.toContain("0000000000000000000-00000000-0000-0000-0000-000000000000.txt");
 }, 30_000);
 
+it.skipIf(process.platform !== "win32")("sends the plain cut note when the full report cannot be saved", async () => {
+  const f = await fixture();
+  const file = join(f.root, "blocked.txt");
+  writeFileSync(file, "x".repeat(9000));
+  writeFileSync(join(f.profile, "mailbox-reports"), "not a folder");
+  const result = await new Promise<{ code: number | string; stderr: string }>(resolve => {
+    const child = execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(f.bin, "orbit-msg.ps1"), "--report", "FAIL", "BLOCKED-SAVE", "--file", file], { env: f.env, cwd: f.root, windowsHide: true }, (error, _stdout, stderr) => resolve({ code: error?.code ?? 0, stderr }));
+    child.stdin!.end();
+  });
+  expect(result.code, result.stderr).toBe(0);
+  expect(f.notes()).toHaveLength(1);
+  expect(f.notes()[0]!.text).toMatch(/\n\[truncated\]$/);
+  expect(f.notes()[0]!.text).not.toContain("Full report:");
+}, 30_000);
+
 it.skipIf(process.platform !== "win32")("leaves remote reports truncated without a local file", async () => {
   const f = await fixture();
   const file = join(f.root, "remote.txt");
