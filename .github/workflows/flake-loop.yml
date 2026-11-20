@@ -46,6 +46,8 @@ jobs:
           PREP: ${{ matrix.prep }}
           CMD: ${{ matrix.cmd }}
           ROUNDS: ${{ matrix.rounds }}
+          NO_COLOR: "1"
+          FORCE_COLOR: "0"
         run: |
           set -u +e +o pipefail
           git rev-parse HEAD
@@ -53,8 +55,8 @@ jobs:
           fails=0; first=""
           for r in $(seq 1 "$ROUNDS"); do
             if eval "$CMD" > "out-$r.txt" 2>&1; then f=0; else f=1; fi
-            grep -aqE "Test Files +1 passed" "out-$r.txt" || f=1
-            fails=$((fails + f)); echo "round $r: failed $f"; grep -aE "Duration" "out-$r.txt"
+            sed 's/\x1b\[[0-9;]*m//g' "out-$r.txt" | grep -aqE "Test Files +1 passed" || f=1
+            fails=$((fails + f)); echo "round $r: failed $f"; sed 's/\x1b\[[0-9;]*m//g' "out-$r.txt" | grep -aE "Tests |Duration|EPERM"
             if [ "$f" -gt 0 ] && [ -z "$first" ]; then first="out-$r.txt"; fi
           done
           if [ -n "$first" ]; then echo "--- first failing round ($first) ---"; grep -aE "×|FAIL|Error|EPERM|expected|\"ok\"|Tests " "$first" | head -60; fi
