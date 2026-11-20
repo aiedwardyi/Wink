@@ -119,8 +119,8 @@ export function useBoardPosts(): BoardPostsView {
   const [failed, setFailed] = useState(false);
   // only the newest load lands: an older one finishing late would drop posts the newer one has
   const asked = useRef(0);
-  // a reply saved here stays until a load carries it, since that load may have been asked before the save
-  const mine = useRef(new Map<string, BoardPost>());
+  // a reply saved here stays until a load asked after the save lands, since one asked before may not carry it
+  const mine = useRef(new Map<string, { post: BoardPost; seq: number }>());
   // a deleted reply stays gone, even from a load asked before the delete or with the live link down
   const gone = useRef(new Map<string, string | null>());
   // a deleted top-level post takes its whole thread, even replies a later load brings
@@ -152,8 +152,9 @@ export function useBoardPosts(): BoardPostsView {
         (body: { posts?: BoardPost[] }) => {
           if (!live || seq !== asked.current) return;
           const list = Array.isArray(body?.posts) ? body.posts : [];
+          for (const [id, held] of mine.current) if (held.seq < seq) mine.current.delete(id);
           for (const post of list) mine.current.delete(post.id);
-          setPosts((forumKept.posts = prune([...list, ...mine.current.values()]).map(lift)));
+          setPosts((forumKept.posts = prune([...list, ...[...mine.current.values()].map((held) => held.post)]).map(lift)));
           setFailed(false);
         },
         () => live && seq === asked.current && setFailed(true),
@@ -168,7 +169,7 @@ export function useBoardPosts(): BoardPostsView {
     };
   }, [lift, prune]);
   const saved = useCallback((post: BoardPost) => {
-    mine.current.set(post.id, post);
+    mine.current.set(post.id, { post, seq: asked.current });
     setPosts((now) => (forumKept.posts = [...(now ?? []).filter((held) => held.id !== post.id), post]));
   }, []);
   const removed = useCallback((post: BoardPost) => {

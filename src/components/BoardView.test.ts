@@ -278,6 +278,54 @@ describe("Forum", () => {
     expect(rows()).toEqual(["pbot"]);
   });
 
+  it("a reply saved here that another PC deleted before any load carried it leaves on the next load", async () => {
+    posts = [post("pop", { created_at: 1 }), post("pother", { created_at: 2 })];
+    await render(BoardView);
+    await openRow("pop");
+    await typeIn(box("pop")!, "On it.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    expect(rows()).toEqual(["pop", "puser"]);
+    posts = posts.filter((held) => held.id === "pother");
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual(["pother"]);
+  });
+
+  it("a thread another PC deletes leaves the open Forum on the next load, with the reply saved here", async () => {
+    const temps = createTempDirs();
+    afterAll(() => temps.remove());
+    const drive = temps.make(join(tmpdir(), "orbit-forum-drive-"));
+    const boot = (pc: string) => createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-forum-")), "board"), pcId: () => pc });
+    const [a, b] = [boot("home"), boot("work")];
+    const ids = { in: (id: string) => id, out: (id: string) => id };
+    const sync = () => {
+      for (const board of [a, b, a, b]) board.sync(drive, ids);
+    };
+    const stuck = a.post({ author_bot_id: "astra", kind: "stuck", title: "Stuck on the staging deploy", body: "Stuck on the staging deploy", source_ref: "call:ta:0:engine:deploy" });
+    const other = a.post({ author_bot_id: "astra", kind: "tip", title: "Pin node 22", body: "Pin node 22", source_ref: "tool:ta:pin" });
+    sync();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url !== "/api/board/reply") return json({ posts: b.list() });
+      const sent = JSON.parse(String(init?.body));
+      const saved = b.post({ author_bot_id: BOARD_USER, parent_id: sent.parent_id, kind: "tip", title: stuck.title, body: sent.body, source_ref: `reply:${sent.client_id}` });
+      return new Response(JSON.stringify({ post: saved }), { headers: { "content-type": "application/json" } });
+    }));
+    await render(BoardView);
+    await openRow(stuck.id);
+    await typeIn(box(stuck.id)!, "On it.");
+    await click(`[data-board-reply-box="${stuck.id}"] button[type="submit"]`);
+    await settle();
+    const reply = b.list().find((held) => held.parent_id === stuck.id)!;
+    expect(rows()).toEqual([stuck.id, reply.id]);
+    a.remove(stuck.id);
+    sync();
+    expect(b.list().map((held) => held.id)).toEqual([other.id]);
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual([other.id]);
+  });
+
 it("a deleted reply's own replies stay in the thread, moved up to its parent", async () => {
     posts = [
       post("pbot", { created_at: 1 }),
