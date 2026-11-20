@@ -15,6 +15,7 @@ import {
   botNotifyIconPath,
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
+import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
@@ -61,7 +62,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askById, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -70,8 +71,10 @@ import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
+import { roomById } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
-import { joinedRooms, myRoomBotThreads, roomTaskThreads } from "./rooms/joined.ts";
+import { ownerRoomCode } from "./rooms/invites.ts";
+import { joinedRooms, leftByHand, myRoomBotThreads, roomTaskThreads, seatTaken } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
@@ -140,7 +143,7 @@ import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
-import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
+import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse, usageReportWithAge } from "./usage-refresh.ts";
 import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { usageStatusText } from "./usage-status.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
@@ -181,7 +184,7 @@ import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.t
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoading, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -331,6 +334,7 @@ import {
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
+import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
@@ -361,8 +365,10 @@ import {
   detectLaptop,
   deviceDisplayName,
   deviceNameSchema,
+  heldRemovals,
   listDevices,
   loadDeviceName,
+  machineKey,
   namedDevicePeers,
   pickerDevices,
   saveDeviceName,
@@ -430,7 +436,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -488,7 +494,7 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { BotTrash, type TrashEntry } from "./bot-trash.ts";
 import { createBotTrashActions } from "./bot-trash-actions.ts";
 import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "./bot-trash-sync.ts";
-import { importRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "./room-sync.ts";
+import { importRooms, joinTeamRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "./room-sync.ts";
 import { createRoomThreads } from "./room-thread-sync.ts";
 import { syncHold } from "./sync-hold.ts";
 import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
@@ -1403,7 +1409,7 @@ const limitWaits = new LimitWaits({
     const controlKey = createHash("sha256").update(JSON.stringify([
       bot.modelSelection, bot.pendingModelSelection, instanceConfigs(cfg, accounts.snapshot)[instanceId ?? bot.modelSelection.instanceId],
       ...(accounts.snapshot.length ? [accounts.defaultFor(bot.modelSelection.instanceId), bot.pendingModelSelection && accounts.defaultFor(bot.pendingModelSelection.instanceId)] : []),
-      lastUserInstruction(store.activePath(bot.threadId))?.messageId,
+      store.findLastOnPath(bot.threadId, (message) => lastUserInstruction([message]) !== null)?.id,
     ])).digest("hex");
     return { threadId: bot.threadId, controlKey, busy: botHasActiveTurn(botId) || hasQueuedSends(botId) };
   },
@@ -1427,8 +1433,8 @@ const limitWaits = new LimitWaits({
   dispatch: (row, prompt) => startTurn(row.botId, prompt, { ...row.origin, threadId: row.threadId, cardContinuation: true, limitWaitId: row.id, onDispatchError: () => limitWaits.dispatchFailed(row.id) }).then(() => undefined),
   changed: (row, usageWait) => {
     if (!store.taskByThread(row.botId, row.threadId)) return;
-    const message = store.messagesFor(row.threadId).find((message) => message.id === row.messageId);
-    if (message?.tool && JSON.stringify(message.tool.usageWait) !== JSON.stringify(usageWait)) store.patchMessage(row.threadId, row.messageId, { tool: { ...message.tool, usageWait } });
+    const message = store.row(row.threadId, row.messageId);
+    if (message?.tool && JSON.stringify(message.tool.usageWait) !== JSON.stringify(usageWait)) store.patchRow(row.threadId, row.messageId, { tool: { ...message.tool, usageWait } });
   },
 });
 
@@ -2382,13 +2388,16 @@ function scheduleProfilePublish(): void {
 
 let deviceName = loadDeviceName(DATA_DIR);
 let deviceLaptop = false;
+const removedPcs: Record<string, number> = {};
+const deviceMachine = machineKey(DATA_DIR);
 
 function publishDeviceRecord(): void {
   const folder = profileSyncSettings.folder;
   if (!folder) return;
   try {
     const relayHost = phoneAccess.presenceHost() ?? undefined;
-    const previous = REMOTE_HOST ? undefined : listDevices(folder, profileSyncSettings.deviceId, Date.now()).find((record) => record.current);
+    const own = listDevices(folder, profileSyncSettings.deviceId, Date.now()).find((record) => record.current);
+    const previous = REMOTE_HOST ? undefined : own;
     // A relay-only PC repeats its relay host as host, so older PCs still read the record.
     const host = REMOTE_HOST ?? (previous?.host !== previous?.relayHost ? previous?.host : undefined) ?? relayHost;
     if (!host) return;
@@ -2401,6 +2410,8 @@ function publishDeviceRecord(): void {
         relayHost,
         laptop: deviceLaptop,
         chatSync: 2,
+        machine: deviceMachine,
+        removed: heldRemovals(folder, { ...own?.removed, ...removedPcs }),
       },
       Date.now(),
     );
@@ -2457,6 +2468,9 @@ function saveMemoryLedger(): void {
   }
 }
 
+// whether this PC is the one that tidies each synced bot, as of its last sync pass
+const memoryTidyHere = new Map<string, boolean>();
+
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
 async function syncMemoryPass(botId: string): Promise<boolean> {
   // a missing workspace is restored from Drive, so a deleted bot must not be a target
@@ -2468,6 +2482,7 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
+  memoryTidyHere.set(botId, tidiesHere(memorySyncLedger, botSyncId, snapshots));
   // the poll runs for every idle bot, so only pulled changes refresh the page and check
   if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
     memoryHealthCheck.refresh(botId);
@@ -2915,7 +2930,7 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
-const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchMessage(threadId, id, { summarized: true, restated }); });
+const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); });
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
@@ -3055,6 +3070,30 @@ const memoryPass = createMemoryPass({
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
 });
+// the same switch as Auto Notes: it edits the same file
+const memorySleep = createMemorySleep({
+  dataDir: DATA_DIR,
+  bots: () => store.bots.map((bot) => bot.id),
+  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
+  enabled: (botId) => {
+    const bot = store.bot(botId);
+    const instance = bot && registry.get(bot.modelSelection.instanceId);
+    const folder = profileSyncSettings.folder;
+    // two PCs tidying the same notes apart would leave parked copies, so a synced bot is tidied on one, and not while its folder is out of reach
+    const synced = Boolean(folder && chatSyncBotId(profileSyncSettings, botId));
+    const tidier = memoryTidyHere.get(botId) === true && Boolean(folder && existsSync(folder));
+    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot) && (!synced || tidier);
+  },
+  busy: (botId) => botHasActiveTurn(botId),
+  changed: (botId) => broadcast({ kind: "memory.changed", botId }),
+  // saved now, so a restart before the next sync pass still knows the tidy alone made this change
+  tidied: (botId, before, after) => {
+    const botSyncId = chatSyncBotId(profileSyncSettings, botId);
+    if (!botSyncId) return;
+    markTidied(memorySyncLedger, botSyncId, before, after);
+    saveMemoryLedger();
+  },
+});
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
   reportTimes: (botId) => {
@@ -3192,7 +3231,7 @@ function releaseInterruptedBot(botId: string, threadId: string, lane = roomLanes
   const speaker = groupSpeakers.get(threadId);
   if (group && group.busyBotId === botId) {
     if (speaker?.botId === botId) groupSpeakers.delete(threadId);
-    const addedMessage = unreadTurns.settle(threadId, undefined, store.messagesFor(threadId));
+    const addedMessage = unreadTurns.settle(threadId, undefined, (start) => store.rowsSince(threadId, start));
     store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
   }
   if (!lane && store.bot(botId)?.busy) store.setActivity(botId, "idle");
@@ -3364,7 +3403,7 @@ function withRateLimits<T extends Awaited<ReturnType<typeof registry.describe>>[
   usageBoard.sync();
   return instances.map((instance) => {
     const rateLimits = rateLimitsByInstance.get(instance.instanceId);
-    return rateLimits ? { ...instance, rateLimits } : instance;
+    return rateLimits ? { ...instance, rateLimits: usageReportWithAge(rateLimits) } : instance;
   });
 }
 
@@ -3630,10 +3669,20 @@ let profileSyncPassed = false;
 const trashSyncHost = (): TrashSyncHost => ({ dataDir: DATA_DIR, store, trash: botTrash!, settings: () => profileSyncSettings, now: Date.now });
 const roomSyncHost = (): RoomSyncHost => ({
   dataDir: DATA_DIR, store, settings: () => profileSyncSettings, now: Date.now, working: groupIsWorking, syncing: (threadId) => threadSyncV2?.holds(threadId) ?? false,
+  invite: (roomId, deviceId) => {
+    const relayHost = phoneAccess.presenceHost();
+    if (!relayHost || !roomById(roomId)) return null;
+    const code = ownerRoomCode(roomId, deviceId);
+    return `wkr1:${relayHost}:${code.id}.${code.secret}`;
+  },
+  join: (code, roomId) => guestClient.seat(code, roomId),
+  joined: seatTaken,
+  left: leftByHand,
 });
 
 function publishRoomsSafely(folder: string): number {
   try {
+    joinTeamRooms(roomSyncHost(), folder);
     return publishRooms(roomSyncHost(), folder);
   } catch (error) {
     console.warn("room sync: publish failed", error);
@@ -3856,7 +3905,8 @@ bus.subscribe((event: RuntimeEvent) => {
         bindPeerTurn(event.threadId, event.turnId);
       }
       limitWaits.bind(event.threadId, event.turnId);
-      unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
+      unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
+      if (turnOwnerId) memorySleep.onTurn(turnOwnerId);
       break;
     case "session.started":
       if (bot && event.sessionId && event.providerInstanceId && !staleTurnEvent(event.threadId, event.turnId)) {
@@ -3877,7 +3927,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown and is never hidden as restated: the final does not repeat it
-        const anchor = event.summarized ? undefined : store.messagesFor(event.threadId).findLast((m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
+        const anchor = event.summarized ? undefined : store.findLast(event.threadId, (m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
         const message = pushMessage(
           event.summarized
@@ -3900,9 +3950,9 @@ bus.subscribe((event: RuntimeEvent) => {
           : undefined;
         let toolName = "tool";
         if (messageId) {
-          const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId)?.tool;
+          const existing = store.row(event.threadId, messageId)?.tool;
           toolName = existing?.name ?? "tool";
-          store.patchMessage(event.threadId, messageId, {
+          store.patchRow(event.threadId, messageId, {
             tool: completedTool(existing, event),
           });
           toolMessageByItem.delete(itemKey);
@@ -4235,7 +4285,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // this is the branch where a card actually reached a human. Anything
       // auto mode answered took the early return above and never buzzes.
       const notifyHuman = () => {
-        const card = store.messagesFor(event.threadId).find((candidate) => candidate.id === message.id)?.card;
+        const card = store.row(event.threadId, message.id)?.card;
         if (!card || card.answered) return;
         routineRun = routines?.requestWaiting(event, routineOwnerId) ?? routineRun;
         if (!asker) return;
@@ -4285,9 +4335,9 @@ bus.subscribe((event: RuntimeEvent) => {
       if (waiting?.activity === "waiting-on-you" && roomLanes.thread(waiting.id) !== event.threadId) store.setActivity(waiting.id, "working");
       const messageId = event.requestId ? askMessageByRequest.get(`${event.threadId}:${event.requestId}`) : null;
       if (messageId) {
-        const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
+        const existing = store.row(event.threadId, messageId);
         if (existing?.card && !existing.card.answered) {
-          store.patchMessage(event.threadId, messageId, {
+          store.patchRow(event.threadId, messageId, {
             card: { ...existing.card, answered: event.behavior, dismissed: event.source !== "user" },
           });
         }
@@ -4314,8 +4364,8 @@ bus.subscribe((event: RuntimeEvent) => {
       // the activity chip keeps the bot visibly busy through the backoff,
       // one chip per streak
       const tool = { name: retryLine(event, busyResumeThreads.has(event.threadId)), ok: true };
-      const last = store.messagesFor(event.threadId).at(-1);
-      if (last?.kind === "activity" && isRetryLine(last.tool?.name)) store.patchMessage(event.threadId, last.id, { tool });
+      const last = store.findLast(event.threadId, () => true);
+      if (last?.kind === "activity" && isRetryLine(last.tool?.name)) store.patchRow(event.threadId, last.id, { tool });
       else pushMessage({ role: "bot", kind: "activity", tool });
       break;
     }
@@ -4323,11 +4373,11 @@ bus.subscribe((event: RuntimeEvent) => {
       refreshCodexPromo(event.message, usageBoard.touch);
       if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
-      unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
+      unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
       const previousId = event.usageLimit ? limitWaits.messageId(event.threadId) : undefined;
       const tool = runtimeErrorTool(event, (id) => Boolean(accounts.get(id)));
       const row = previousId
-        ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
+        ? store.patchRow(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });
       if (event.signedOut && event.providerInstanceId) void accountRuntime.signedOut(event.providerInstanceId).catch(() => console.error("Signed-out account could not be saved"));
       if (event.usageLimit && row) limitWaits.failed(event.threadId, event.turnId, event.usageLimit, row.id,
@@ -4353,8 +4403,8 @@ bus.subscribe((event: RuntimeEvent) => {
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
-      for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchMessage(event.threadId, id, { summarized: undefined });
-      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, store.messagesFor(event.threadId));
+      for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
+      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
       const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       roomTurnInstruction.delete(event.threadId);
@@ -4450,10 +4500,17 @@ bus.subscribe((event: RuntimeEvent) => {
           // settled → idle; a setup failure already marked it dead, keep that
           if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
           clearSendRunning(bot.id);
+          memorySleep.onSettled(bot.id);
           memoryPass.onSettled(bot.id, event.threadId, flushNotes);
           if (!store.groupByThread(event.threadId)) {
-            summaryBuild.onSettled(bot.id, event.threadId);
-            summaryRepair.onSettled(bot.id, event.threadId);
+            const summaries = () => {
+              summaryBuild.onSettled(bot.id, event.threadId);
+              summaryRepair.onSettled(bot.id, event.threadId);
+            };
+            // both read the whole chat, so a chat Map is still loading settles them once it lands
+            const load = coldLoading(event.threadId);
+            if (load) void load.then(summaries);
+            else summaries();
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void unlandedWork.refresh(bot.id, event.threadId);
@@ -4502,6 +4559,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (speaker && group?.busyBotId === speaker.botId) {
         memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
+        memorySleep.onSettled(speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
         const speakingBot = store.bot(speaker.botId);
@@ -4513,7 +4571,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // after a Stop already cleared the speaker too
       roomLanes.settle(event.threadId);
       // Before the queue drain subscribers append the next send.
-      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && message.text?.trim());
+      const human = store.findLastOnPath(event.threadId, message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && Boolean(message.text?.trim()));
       setImmediate(() => {
         const owner = verifyOwner && store.bot(verifyOwner.botId);
         void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, docFix: verifyOwner?.docFix, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
@@ -5007,7 +5065,7 @@ const PLAIN_WORDS_INSTRUCTIONS =
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
-  " After something took 2+ tries, board_post kind fix: the error and the line that fixed it.";
+  ` After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
 const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
 
@@ -5170,7 +5228,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePath(bot.threadId), 1).tool) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1).tool) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5180,7 +5238,8 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
         pin: bot.cwd,
         remembered: bot.lastProjectCwd,
         continuation: false,
-        userTexts: userProjectTexts(store.messagesFor(bot.threadId), undefined, { since: bot.projectFolderClearedAt }),
+        // an unloaded chat's folder cues wait for the send; a process prepared in another folder is not reused
+        userTexts: store.loaded(bot.threadId) ? userProjectTexts(store.messagesFor(bot.threadId), undefined, { since: bot.projectFolderClearedAt }) : [],
         recentPaths: projectPathsFromRecords({ bots: store.bots, groups: store.groups }),
       }).cwd ?? ensureWorkspace(bot.id);
   return { integrations, cwd: cwd ?? undefined, leanStartup: bot.leanStartup === true ? true : undefined };
@@ -5322,6 +5381,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         });
     persistTaskPacket(packet, { staged: true });
   }
+
+  // Map may be loading this chat off the server thread, and the model context below reads all of it
+  const loading = coldLoading(threadId);
+  if (loading) await loading;
 
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
@@ -6093,7 +6156,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const foldLate = () => {
           const queued = foldPeerQueuedSends(store, bot.id, threadId, claimMark, live.adapter.capabilities.queueing === true);
           if (!queued.length) return;
-          for (const message of store.activePath(threadId).slice(-queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
+          for (const message of store.pathTail(threadId, queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
@@ -6191,6 +6254,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             const waitedMs = await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), {
               sendId: latencySendId, grace: finalGraceInputs, onWait: onSummaryWait,
             });
+            // the context below reads the whole chat, which Map may still be loading off the server thread
+            const load = coldLoading(threadId);
+            if (load) await load;
             foldLate();
             const messages = store.activePath(threadId);
             const replayedIds = new Set(activeMessages.map((message) => message.id));
@@ -7120,6 +7186,7 @@ async function runClaimedGroupMemberTurn(
   const lead = asked ? askById(asked) : null;
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
   const works = !asked || Boolean(lead && asksWork([lead, ...riders]));
+  const guestAsked = asked && (!askFromHost(lead) || riders.some((ask) => !askFromHost(ask)));
   if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
@@ -7133,7 +7200,7 @@ async function runClaimedGroupMemberTurn(
   const searchable = instance.adapter.capabilities.agentsMcp === true && hasOwnerChat(store, owned);
   // hand_off is a tool, so only an engine with Wink's tools gets a lane hand-off
   const handoff = instance.adapter.capabilities.agentsMcp === true
-    ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority) } : {}) })
+    ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff));
@@ -7255,7 +7322,7 @@ async function runClaimedGroupMemberTurn(
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
   // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
-  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (asked && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
+  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (guestAsked && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
@@ -7598,7 +7665,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
 function resolveReplyTarget(threadId: string, value: unknown): Message | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (typeof value !== "string") throw Object.assign(new Error("replyToId must be a message id"), { status: 400 });
-  const target = store.messagesFor(threadId).find((message) => message.id === value);
+  const target = store.row(threadId, value);
   if (!target || target.kind !== "text" || !target.text?.trim()) {
     throw Object.assign(new Error("the message being replied to is no longer available"), { status: 404 });
   }
@@ -8650,6 +8717,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
     }
+    if (method === "DELETE" && path.startsWith("/api/devices/")) {
+      if (!credentials.bearerOk || !isLoopbackHost(req.headers.host)) return json(res, 403, { error: "Manage devices on this PC" });
+      const deviceId = decodeURIComponent(path.slice("/api/devices/".length));
+      // The same presence the list showed, so a PC shown offline can be removed.
+      const shown = devicePresence(syncedDevices(), REMOTE_HOST, remoteRetry.status().state === "checking").find((device) => device.deviceId === deviceId);
+      if (!shown) return json(res, 409, { error: "PC is no longer listed", code: "pc-gone" });
+      if (shown.current || !shown.offline || shown.checking) return json(res, 409, { error: "Only an offline PC can be removed", code: "pc-online" });
+      removedPcs[deviceId] = Date.now();
+      publishDeviceRecord();
+      // A PC with no tailnet or relay host has no record of its own to hold the removal.
+      if (syncedDevices().some((device) => device.deviceId === deviceId)) return json(res, 409, { error: "This PC cannot hold a removal yet", code: "no-own-record" });
+      return json(res, 200, { ok: true });
+    }
     if (method === "PUT" && path === "/api/devices/name") {
       const body = await readBody(req);
       const name = deviceNameSchema.safeParse(body?.name);
@@ -9163,9 +9243,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           console.warn("chat sync: delete failed", error);
         }
       }
-      const fresh = botWithThread(updated);
-      broadcast({ kind: "bot", bot: fresh });
-      return json(res, 200, { bot: fresh });
+      return json(res, 200, { bot: await botChatRoutes.taskFrame(updated, botWithThread, { answer: true }) });
     }
 
     // identity handshake for the packaged app's port fallback: the forked
@@ -9207,7 +9285,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             ...usageOptions,
             museModel: museCheckModel(store.bots.filter((bot) => bot.modelSelection.instanceId === instanceId).map((bot) => bot.modelSelection.model)),
           }, previous)
-        : await refreshUsage(instance.driverKind, usageOptions, previous);
+        : await refreshUsage(instance.driverKind, { ...usageOptions, fresh: url.searchParams.get("fresh") === "1", maxAgeMs: 30_000 }, previous);
       if (result.report) {
         const current = rateLimitsByInstance.get(instanceId);
         if (!current || Date.parse(result.report.observedAt) >= Date.parse(current.observedAt)) {
@@ -9749,6 +9827,7 @@ hostShutdown = () => {
   summaryBuild.dispose();
   summaryRepair.dispose();
   memoryPass.dispose();
+  memorySleep.dispose();
   accountRuntime.dispose();
   void registry.disposeAll().finally(() => {
     store.flushSaves();

@@ -96,7 +96,7 @@ describe("search_my_chats", () => {
     for (const leak of ["joined room task", "another bot", "room B", "Mina"]) expect(text).not.toContain(leak);
   });
 
-  it("answers only a bot turn's own token, scoped to that bot, and leaves an owner-only chip in the room", async () => {
+  it("answers only a bot turn's own token, scoped to that bot, and leaves no chip in the room", async () => {
     const { store, rando, other, say } = starzum();
     say(other.threadId, "user", "starzum secret of another bot");
     const room = store.createGroup("New group", [rando.id]);
@@ -106,9 +106,9 @@ describe("search_my_chats", () => {
     expect(ok.status).toBe(200);
     expect(ok.body.text).toContain("Plan for starzum.com");
     expect(ok.body.text).not.toContain("another bot");
-    const chip = store.messagesFor(room.threadId).at(-1)!;
-    expect(chip).toMatchObject({ role: "bot", kind: "activity", from: { botId: rando.id }, tool: { name: "Searched your 1:1: starzum", ok: true } });
-    expect(JSON.stringify(store.messagesFor(room.threadId))).not.toContain(CANARY);
+    const rows = JSON.stringify(store.messagesFor(room.threadId));
+    expect(rows).not.toContain("starzum");
+    expect(rows).not.toContain(CANARY);
   });
 });
 
@@ -120,6 +120,7 @@ describe("search_my_chats outside a room", () => {
     expect(ok.status).toBe(200);
     expect(ok.body.text).toContain("Plan for starzum.com");
     expect(ok.body.text).not.toContain("another bot");
+    expect(store.messagesFor(rando.threadId).at(-1)).toMatchObject({ role: "bot", kind: "activity", from: { botId: rando.id }, tool: { name: "Searched your 1:1: starzum", ok: true } });
   });
 });
 

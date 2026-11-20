@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { t, translate } from "@/lib/i18n";
-import { parsePaneNote } from "../../shared/pane-note";
+import { newestPaneLines, paneLines, paneReason, parsePaneNote } from "../../shared/pane-note";
 import { notePreview, noteText, noteTitle } from "./pane-note";
 
 const BOT = "61902933-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
@@ -139,5 +139,34 @@ describe("team snag notes", () => {
       expect(noteText(note, t)).toBe(text);
       expect(noteTitle(note, t)).toBe("Note");
     }
+  });
+});
+
+describe("paneReason", () => {
+  it("answers every cutoff from the newest lines since a lower one as from the whole thread", () => {
+    const note = (pane: string, at: number, text: string) => ({ kind: "note", at, text: `[pane ${pane}] ${text}` });
+    // newest first, with times out of insertion order
+    const notes = [
+      note("aa11", 500, "first line\nsecond line"), note("aa11bb22", 300, "longer prefix"), note("aa11", 700, "older insert, newer time"),
+      note("cc33", 900, "STALLED: no screen change for 5 min and no report."), note("aa11", 300, "   "), { kind: "text", at: 950, text: "[pane aa11] not a note" },
+      note("cc33", 100, "only cc"), note("aa11", 900, "oldest insert, newest time"), { kind: "note", at: 800, text: "no pane" },
+    ];
+    for (const sessionId of ["aa11bb22ffff", "aa11ffff", "cc33ffff", "dd44ffff"]) {
+      for (const since of [0, 100, 299, 300, 301, 500, 700, 701, 900, 901]) {
+        const whole = paneReason(paneLines(notes, since), sessionId, since);
+        expect(paneReason(paneLines(notes, since, sessionId), sessionId, since), `${sessionId} since ${since}, its own lines`).toBe(whole);
+        for (const lower of [0, 300, since].filter(lower => lower <= since)) expect(paneReason(newestPaneLines(paneLines(notes, lower)), sessionId, since), `${sessionId} since ${since} from ${lower}`).toBe(whole);
+      }
+    }
+    expect(paneReason(paneLines(notes, 0), "aa11ffff", 0)).toBe("first line");
+    expect(paneReason(paneLines(notes, 600), "aa11ffff", 600)).toBe("older insert, newer time");
+    expect(paneReason(paneLines(notes, 0), "aa11bb22ffff", 0)).toBe("first line");
+    expect(paneReason(paneLines(notes, 301), "aa11bb22ffff", 301)).toBe("first line");
+    expect(paneReason(paneLines(notes, 0), "cc33ffff", 0)).toBe("only cc");
+  });
+
+  it("builds only the asked pane's lines", () => {
+    const notes = [{ kind: "note", at: 2, text: "[pane aa11] mine\nmore" }, { kind: "note", at: 1, text: "[pane cc33] theirs" }];
+    expect([...paneLines(notes, 0, "aa11ffff")]).toEqual([{ pane8: "aa11", at: 2, line: "mine" }]);
   });
 });

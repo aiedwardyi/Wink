@@ -6,6 +6,7 @@ import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
+import { coldLoading, sentRow } from "./cold-thread.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -146,6 +147,17 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     return true;
+  };
+  // A task frame carries the whole chat: one Map is loading lands first rather than be read here, and goes out only while the bot is still on it.
+  const taskFrame = async <Frame>(bot: BotRecord, botWithThread: (bot: BotRecord) => Frame, { answer = false, announce = true } = {}) => {
+    const { threadId } = bot;
+    const loading = coldLoading(threadId);
+    if (loading) await loading;
+    const shown = announce && store.bot(bot.id)?.threadId === threadId;
+    if (!answer && !shown) return undefined;
+    const frame = botWithThread({ ...bot, threadId });
+    if (shown) broadcast({ kind: "bot", bot: frame });
+    return frame;
   };
   // Today's busy send: steer into the live turn, else queue for after it. A quick ask row stands in for the new line.
   const deliverBusy = async (
@@ -307,6 +319,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       .catch((error) => console.warn(`[quick] owed ack failed: ${error instanceof Error ? error.message : String(error)}`));
   };
   return {
+    taskFrame,
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
       cancelUsageWait?.(m[1]!, m[2]);
@@ -362,7 +375,11 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       }
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
       const call = parseCallTag(body.call);
-      const asked = typeof body.cardId === "string" ? store.activePath(threadId).find((message) => message.id === body.cardId) : undefined;
+      const cardId = typeof body.cardId === "string" ? body.cardId : undefined;
+      // the card must be on the active branch: a chat Map is loading lands first rather than be read here
+      const loading = cardId === undefined ? undefined : coldLoading(threadId);
+      if (loading) await loading;
+      const asked = cardId === undefined ? undefined : store.activePath(threadId).find((message) => message.id === cardId);
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
       // Send now on a held send: the user acted when they queued it
@@ -372,7 +389,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         sendFingerprint(text, replyTo?.id),
         async () => withQueuedSend(bot.id, threadId, queueId, sendId, async () => {
           if (sendId) {
-            const accepted = acceptedSendMatch(store.messagesFor(threadId), sendId, text, replyTo?.id);
+            const sent = await sentRow(store, threadId, sendId);
+            const accepted = acceptedSendMatch(sent ? [sent] : [], sendId, text, replyTo?.id);
             if (accepted.kind === "conflict") {
               throw Object.assign(new Error("sendId already belongs to another message"), { status: 409 });
             }
@@ -397,6 +415,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             }
           }
 
+          // a busy send is routed and steered off the active branch: a chat Map is loading lands first rather than be read here
+          const busyLoad = store.bot(bot.id)?.busy ? coldLoading(threadId) : undefined;
+          if (busyLoad) await busyLoad;
           if (sendId && isSendCancelled(sendId)) {
             return { ok: true as const, cancelled: true as const, threadId };
           }
@@ -423,7 +444,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             const after = body.deliver === "after";
             // a call order waited for a yes; it goes to the bot, never to Quick answers
             const gate: QuickGate | undefined = !call?.order && quick && !switchHeld(currentAtStart) ? {
-              bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
+              bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId),
+              // read only once a rule needs it: a claimed turn may still be waiting for Map's load of this chat
+              get messages() { return store.activePath(threadId); },
               deliverAfter: after, replyTo, queueId, answersCard, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
             } : undefined;
             if (quick && gate && routesQuick(gate)) {
@@ -703,7 +726,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       // one chat per bot: native clients and MCP create_task get the chat it already has
       const task = store.activeTask(bot.id);
       if (!task) return json(res, 500, { error: "this bot has no chat" });
-      return json(res, 200, { bot: botWithThread(bot), task: wireTask(task) });
+      return json(res, 200, { bot: await taskFrame(bot, botWithThread, { answer: true, announce: false }), task: wireTask(task) });
     },
     switchTask: async (res: ServerResponse, m: RegExpMatchArray, url: URL, botWithThread: (bot: BotRecord) => Record<string, unknown>) => {
       const bot = store.bot(m[1]);
@@ -733,19 +756,16 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (bot.threadId !== m[2] && store.taskByThread(bot.id, m[2]!)) cancelUsageWait?.(bot.id);
       const switched = store.switchTask(bot.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such task" });
-      const fresh = botWithThread(switched);
-      broadcast({ kind: "bot", bot: fresh });
-      const responseBot = url.searchParams.get("messages") === "0"
-        ? { ...wireBot(switched), tasks: store.tasks(switched.id).map(wireTask) }
-        : fresh;
-      return json(res, 200, { bot: responseBot });
+      if (url.searchParams.get("messages") !== "0") return json(res, 200, { bot: await taskFrame(switched, botWithThread, { answer: true }) });
+      // the slim answer never waits on the chat
+      void taskFrame(switched, botWithThread).catch((error) => console.error("task switch frame failed", switched.id, error));
+      return json(res, 200, { bot: { ...wireBot(switched), tasks: store.tasks(switched.id).map(wireTask) } });
     },
     patchTask: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray, botWithThread: (bot: BotRecord) => Record<string, unknown>) => {
       const body = await readBody(req);
       const task = store.renameTask(m[1], m[2], String(body.title ?? ""));
       if (!task) return json(res, 404, { error: "no such task" });
-      const fresh = botWithThread(store.bot(m[1])!);
-      broadcast({ kind: "bot", bot: fresh });
+      await taskFrame(store.bot(m[1])!, botWithThread);
       return json(res, 200, { task: wireTask(task) });
     },
     secretCard: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {

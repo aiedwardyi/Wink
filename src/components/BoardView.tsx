@@ -25,6 +25,7 @@ import type { Bot } from "@/state/store-types";
 
 import { InitialsAvatar, profileInitials, RoomBotAvatar } from "./Avatar";
 import { BackButton } from "./BackButton";
+import { useToggleForum } from "./BoardButton";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MessageMenu, messageMenuProps, SelectionMenu, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
@@ -423,6 +424,9 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   const isOpen = Boolean(open);
   const page = usePresence(open);
   const phone = useIsPhone();
+  const leave = useToggleForum();
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
   const pageRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLElement>(null);
   // a closing Forum overlays the chat at the width it had, so the chat takes the column back on the first frame
@@ -465,19 +469,20 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   }, () => setDeleteFailed(true));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
-    if (!isOpen || hidden) return;
+    if (hidden || closing || (!isOpen && phone)) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return;
+      if (event.target instanceof Element && event.target.closest('[aria-modal="true"], [data-sidebar-search]')) return;
       if ([...document.querySelectorAll<HTMLInputElement>("[data-board-view] [data-board-reply-box] input")].some((input) => input.value)) return;
       // the open menu takes this Escape
-      if (document.querySelector("[data-message-menu], [data-selection-menu]")) return;
+      if (document.querySelector("[data-message-menu], [data-selection-menu], [data-bot-menu], [data-room-menu], [data-section-picker], [data-new-menu]")) return;
       event.preventDefault();
-      setOpenId(null);
+      if (isOpen) setOpenId(null);
+      else leaveRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, hidden]);
+  }, [isOpen, hidden, closing, phone]);
   return (
     <main
       ref={viewRef}
@@ -498,7 +503,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
         </div>
       </div>
       <div className="relative min-h-0 flex-1 md:animate-fade-in">
-        <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto md:px-5">
+        <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] md:px-5">
           <section className={SHEET}>
             {failed && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{retryButton}</div>}
             {!posts && !failed && (

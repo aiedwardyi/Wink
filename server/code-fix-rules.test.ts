@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 
@@ -29,7 +30,7 @@ const RULES = [
 ];
 const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES = "When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
-const FORUM = "After something took 2+ tries, board_post kind fix: the error and the line that fixed it.";
+const FORUM = `After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 const CUSTOM = "Keep build notes in the team wiki.";
 const DECISIONS = [
   "In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date",

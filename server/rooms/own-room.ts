@@ -22,7 +22,7 @@ export function dropOwnJoins(groups: readonly GroupRecord[]): string[] {
   const hosted = new Set(groups.flatMap((group) => (group.hosted ? [group.hosted.roomId] : [])));
   if (!hosted.size) return [];
   return joinedRooms().filter((room) => hosted.has(room.roomId)).flatMap((room) => {
-    if (roomPeople(room.roomId).some((person) => person.id === room.me.id)) removeGuest(room.roomId, room.me.id);
+    if (roomPeople(room.roomId, true).some((person) => person.id === room.me.id)) removeGuest(room.roomId, room.me.id);
     endJoined(room.roomId, "left");
     if (!removeJoined(room.roomId)) return [];
     void removeJoinedFiles(room.roomId).catch(() => {});

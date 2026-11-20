@@ -258,7 +258,7 @@ function legacyLine(key: string, lines: string[], taken: Set<string>): string | 
 }
 
 /** The `## Decisions` section as [heading index, end index), or null. */
-function decisionSpan(lines: string[]): [number, number] | null {
+export function decisionSpan(lines: string[]): [number, number] | null {
   const start = lines.findIndex((line) => /^##\s+decisions\b/i.test(line));
   if (start < 0) return null;
   const next = lines.findIndex((line, index) => index > start && HEADING.test(line));

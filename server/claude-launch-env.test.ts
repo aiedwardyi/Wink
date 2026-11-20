@@ -31,7 +31,7 @@ const SITES = {
   "electron/worker-host-client.mjs": { launches: 1 },
   "electron/worker-host-entry.mjs": { launches: 1 },
   "electron/worker-host-runtime.mjs": { launches: 2 },
-  "server/device-sync.ts": { launches: 1 },
+  "server/device-sync.ts": { launches: 3 },
   "server/drivers/acp/core.ts": { launches: 2 },
   "server/drivers/acp/muse.ts": { launches: 1 },
   "server/drivers/antigravity.ts": { launches: 3 },

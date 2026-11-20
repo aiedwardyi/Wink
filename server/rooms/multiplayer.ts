@@ -4,6 +4,7 @@ import type { Message, Store } from "../store.ts";
 import { askById, settleAsk, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, committedRoomText, roomEntry, roomPeople } from "./db.ts";
 import { broadcastDoorEntry } from "./door-streams.ts";
+import { alertHostMention } from "./send.ts";
 import { teamBots } from "./team-bots.ts";
 
 /** The turn's last line to the bot: the teammates and words it answers, in order, so a delayed turn never answers the host's task instead. */
@@ -66,4 +67,5 @@ export function publishTurnAnswer(store: Pick<Store, "messagesFor" | "patchMessa
   });
   broadcastDoorEntry(group.hosted.roomId, entry);
   store.patchMessage(threadId, rows.at(-1)!.id, { roomEntryId: entry.id });
+  alertHostMention(group, entry);
 }

@@ -718,7 +718,7 @@ describe("Usage desk", () => {
       { ...accountOf(server.board, "muse").windows[1]!, usedPercent: 20 },
     ] };
     h.api = async (path, init) => {
-      if (path === "/api/usage/refresh/muse" || path === "/api/usage/check/muse") {
+      if (path === "/api/usage/refresh/muse?fresh=1" || path === "/api/usage/check/muse") {
         server.calls.push(`${init?.method} ${path}`);
         return path.includes("/check/") ? check.promise : { status: "no_observation" };
       }
@@ -747,7 +747,7 @@ describe("Usage desk", () => {
     server.board.engines.push(museEngine(usageBoardNow));
     await mount();
     const api = h.api;
-    h.api = async (path, init) => path === "/api/usage/refresh/muse" ? { status: "fresh" } : api(path, init);
+    h.api = async (path, init) => path === "/api/usage/refresh/muse?fresh=1" ? { status: "fresh" } : api(path, init);
     await click(q("[data-usage-refresh]"));
     expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
   });
@@ -761,8 +761,9 @@ describe("Usage desk", () => {
       return { status: "no_observation" };
     };
     await mount();
+    expect(server.calls).not.toContain("POST /api/usage/refresh/muse");
     const { useAutoRefresh } = await import("@/lib/usage-auto-refresh");
-    function QuickRefresh() { useAutoRefresh(server.board); return null; }
+    function QuickRefresh() { useAutoRefresh(server.board, "quick"); return null; }
     await act(async () => root.render(createElement(QuickRefresh)));
     await settle();
     expect(server.calls).toContain("POST /api/usage/refresh/muse");
@@ -783,7 +784,7 @@ describe("Usage desk", () => {
     await mount({ locale });
     const api = h.api;
     h.api = async (path, init) => {
-      if (path === "/api/usage/refresh/muse") return { status: "no_observation" };
+      if (path === "/api/usage/refresh/muse?fresh=1") return { status: "no_observation" };
       if (path === "/api/usage/check/muse") {
         server.calls.push(`${init?.method} ${path}`);
         if (status === "reject") throw new Error("offline");

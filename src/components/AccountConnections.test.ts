@@ -17,6 +17,8 @@ vi.mock("@/state/store", async (original) => ({
   useStore: () => ({ state, dispatch: vi.fn(), refreshInstances }),
 }));
 import { EnginesSettings } from "./EnginesSettings";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
+import { landFold, spyReveal } from "./Fold.test-land";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 
 let root: Root;
@@ -391,6 +393,30 @@ it.each([false, true])("retries a failed drain with its recorded destination whe
   expect(request).toHaveBeenCalledWith("/api/accounts/account-1/sign-out", {
     method: "POST", body: JSON.stringify({ destinationId: "claude" }),
   });
+});
+
+it("brings an opened phone menu into view, never while closing", async () => {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- a partial MediaQueryList, as the tests below build it.
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: !query.includes("reduce"), addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList));
+  await render();
+  const row = host.querySelector('[data-connection-account="account-1"]')!;
+  const menu = () => row.querySelector<HTMLButtonElement>("[data-connection-menu]")!;
+  const scrolled = spyReveal();
+  try {
+    await act(async () => menu().click());
+    expect(scrolled).not.toHaveBeenCalled();
+    await landFold(row.querySelector("[data-fold]")!);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(row.querySelector("[data-fold] > div > div"));
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    vi.useFakeTimers();
+    await act(async () => menu().click());
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+    scrolled.mockRestore();
+  }
 });
 
 it("drops Sign Out from an open phone menu when the account starts draining", async () => {

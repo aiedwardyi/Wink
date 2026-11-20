@@ -84,7 +84,7 @@ import { holdToSendAfter, markSent, stopTooSoon } from "@/lib/send-hold";
 import { fitComposerHeight } from "@/lib/composer-dock";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } from "@/lib/room-drafts";
-import { filesProblem, isRoomPicture, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
+import { filesProblem, isRoomPicture, roomHostSeats, roomMentionPeople, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -600,9 +600,10 @@ export function Composer({
 
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
   const mention = mentionQueryAt(text, caret);
+  const hostName = state.config?.profile?.name;
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
-    const people = room?.people ?? (group?.hosted ? roomPeople(group) : []);
+    const people = room?.people ?? (group?.hosted ? roomMentionPeople(roomPeople(group), roomHostSeats(group)?.length ? hostName || t("teamRoom.host") : undefined) : []);
     const pool: MentionChoice[] = room
       ? [
           ...(room.bots ?? []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, owner: roomBot.owner, agent: true })),
@@ -626,7 +627,7 @@ export function Composer({
       const owner = peer.owner && people.find((person) => person.id === peer.owner);
       return owner ? { ...peer, label: t("teamRoom.botOwner", { name: peer.name, owner: owner.name }) } : peer;
     });
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, t]);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, hostName, t]);
   const pickerOpen = candidates.length > 0;
   useBackLayer(!preview && pickerOpen, () => setDismissedAt(mention?.start ?? null));
   const pickerRef = useRef<HTMLDivElement>(null);

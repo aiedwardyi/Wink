@@ -2,6 +2,44 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.290] - 2026-11-20
+
+### Fixed
+- Sections you open in Settings, Usage, Devices and elsewhere scroll their first row into view.
+- The Bot Details header sits flush under the tabs, with no text peeking above it as you scroll.
+- A room bot's search of your 1:1 chats no longer leaves a chip in the room.
+- Refresh on the Usage page asks your provider again instead of showing the last read.
+- Settings > More themes scrolls its first row into view when it opens.
+- The Timeline's Oldest and Newest take you there with a glide.
+- The Map opens in a blink on long chats.
+
+## [1.0.289] - 2026-11-20
+
+### Added
+- Your bots tidy their memory while idle and keep every line they take out, so you can copy it back.
+- A short code beside the Devices QR opens this PC from app.getwink.dev on another device.
+- The sign-in page takes that code in six boxes and opens your PC on the last one.
+- Team rooms show on every PC you use.
+
+### Fixed
+- Esc on the Forum goes back to your chat, and switching filters no longer shifts the list.
+- The short code in Settings > Devices stays readable on a phone.
+- A reinstalled PC shows once in Devices, and offline PCs can be removed.
+- Swiping between chats on a phone is smooth again on scene themes.
+- Turning on Devices opens the dashboard only once this PC is on it.
+- A profile with no name shows a gray person icon instead of "?".
+- An order the sidekick promised to pass on reaches your bot, and an answered message gets no second reply.
+- A check that ran on another PC shows its result, not a Watch that can't play here.
+- Bots keep to the plan, building asks and the asks list, with no extra list files.
+- The Timeline runs oldest to newest and opens at your newest pick.
+- Unattended turns can't delete files after a folder change Wink can't follow.
+- The Memory page shows your bot's memory at once while the latest loads.
+- Archived bots stay archived on your other PCs.
+- Opening a PC from the browser shows one calm Opening screen.
+- Activity keeps the right engine for replies synced from your other PCs.
+- Forum avatars stay plain, with no working ring.
+- After Google sign-in, a PC joins sync by itself when your other PCs already sync.
+
 ## [1.0.288] - 2026-11-19
 
 ### Fixed

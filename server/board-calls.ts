@@ -1,4 +1,4 @@
-// Bot calls feed the Board: a call leaves a stuck post, the bot clearing that blocker with a note solves it, and a later
+// Bot calls feed the Board: an engine call leaves a stuck post, the bot clearing that blocker with a note solves it, and a later
 // bot with the same blocker, or about to ask the user a plain fact, gets the fix instead. No model calls.
 import { createHash } from "node:crypto";
 
@@ -18,7 +18,10 @@ const HIT_CHARS = 240;
 const MIN_SHARE = 0.6;
 const ASK_MIN_HITS = 3;
 
-const calls = (blocker: Blocker) => blocker.kind === "login" || blocker.kind === "engine";
+/** Only an engine blocker is one another bot could clear; a login is the user's alone, so it never reaches the Forum. */
+const forumKind = (blocker: Blocker) => blocker.kind === "engine";
+/** A login post from before the rule is still open on the Board; clearing its login closes it. */
+const closable = (blocker: Blocker) => forumKind(blocker) || blocker.kind === "login";
 const keyOf = (blocker: Blocker) => `${blocker.kind}\n${blocker.note}`;
 const callRef = (threadId: string) => `call:${threadId}:`;
 
@@ -121,9 +124,9 @@ export function createBoardCalls(deps: BoardCallDeps) {
       deps.held?.({ kind: "ask", botId, threadId, postIds: posts.map((post) => post.id) });
       return `Not asked yet: the Forum may answer this:\n${posts.map((post) => boardLine(post, HIT_CHARS)).join("\n")}\nIf it answers you, close this question with ask_user close:true. If not, it posts when your turn ends.`;
     },
-    /** A call went out: the blocker becomes an open stuck post, a fresh one once the last call was solved. */
+    /** A call went out: an engine blocker becomes an open stuck post, a fresh one once the last call was solved. */
     called(botId: string, threadId: string, blocker: Blocker): BoardPost | undefined {
-      if (deps.room(threadId)) return undefined;
+      if (deps.room(threadId) || !forumKind(blocker)) return undefined;
       return deps.board.post({
         author_bot_id: botId,
         kind: "stuck",
@@ -138,7 +141,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
     cleared(threadId: string, before: readonly Blocker[], after: readonly Blocker[], note = ""): BoardPost[] {
       if (deps.room(threadId) || !note.trim()) return [];
       const left = new Set(after.map(keyOf));
-      const open = before.filter((blocker) => calls(blocker) && !left.has(keyOf(blocker))).flatMap((blocker) => {
+      const open = before.filter((blocker) => closable(blocker) && !left.has(keyOf(blocker))).flatMap((blocker) => {
         const post = deps.board.get(boardPostId(currentRef(threadId, blocker)));
         return post?.kind === "stuck" && post.status === "open" ? [post] : [];
       });
