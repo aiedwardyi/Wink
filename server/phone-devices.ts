@@ -129,8 +129,9 @@ export class PhoneDevices {
     }
   }
 
-  private persist(): void {
-    const phones = this.phones.filter((phone) => !phone.revoked);
+  /** Writes `next` and only then adopts it, so a failed write leaves memory as the file still has it. */
+  private persist(next = this.phones): void {
+    const phones = next.filter((phone) => !phone.revoked);
     mkdirSync(this.dataDir, { recursive: true });
     writeFileAtomic(join(this.dataDir, PHONES_FILE), `${JSON.stringify({ phones }, null, 2)}\n`, { mode: 0o600 });
     this.phones = phones;
@@ -253,6 +254,17 @@ export class PhoneDevices {
     } catch {
       // The record stays valid in memory; the timestamp can wait.
     }
+  }
+
+  /** A browser signing itself out: gone from the file first, so a failed write leaves it signed in and a retry finds it. Its id, or null. */
+  signOut(token: string | null): string | null {
+    if (!token?.startsWith(TOKEN_PREFIX)) return null;
+    const hash = sha256(token);
+    const record = this.phones.find((phone) => sameText(phone.tokenHash, hash));
+    if (!record) return null;
+    this.persist(this.phones.filter((phone) => phone !== record));
+    this.lastSeenWrites.delete(record.id);
+    return record.id;
   }
 
   revoke(id: string): boolean {

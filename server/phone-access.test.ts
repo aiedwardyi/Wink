@@ -965,15 +965,43 @@ describe("phone management", () => {
     const out = await viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: a, origin: w.origin } });
     expect(out.status).toBe(200);
     expect(out.headers["set-cookie"]).toEqual(["__Host-wink_phone=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"]);
-    expect(out.headers["clear-site-data"]).toBe('"cache", "cookies", "storage"');
+    expect(out.headers["clear-site-data"]).toBe('"cache", "storage"');
     await closed;
     expect(phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body)).phones.map((phone) => phone.name)).toEqual(["B"]);
     expect(loadPushSubscriptions(w.r.dataDir).map((sub) => sub.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/b"]);
-    expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: a } })).status).toBe(401);
+    const refused = await viaRelay(w.r, "/api/bots", { headers: { cookie: a } });
+    expect(refused.status).toBe(401);
+    expect(JSON.parse(refused.body)).toEqual({ error: "unauthorized", code: "SIGNED_OUT" });
     expect((await viaRelay(w.r, "/", { headers: { cookie: a } })).headers.location).toBe("/pair");
     expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: b } })).status).toBe(200);
     expect((await viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: a, origin: w.origin } })).status).toBe(200);
     streamB.socket.destroy();
+  });
+
+  it("keeps a browser signed in when its sign-out can't be saved, and saves the retry", async () => {
+    const w = await world();
+    const session = await pairPhone(w, "Lost phone");
+    const stream = await streamViaRelay(w.r, "/api/events", { cookie: session });
+    await once(stream.res, "data");
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementationOnce(() => {
+      throw Object.assign(new Error("phone registry is busy"), { code: "EBUSY" });
+    });
+    const signOut = () => viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: session, origin: w.origin } });
+
+    const failed = await signOut();
+    expect(failed.status).toBe(500);
+    expect(failed.headers["set-cookie"]).toBeUndefined();
+    expect(failed.headers["clear-site-data"]).toBeUndefined();
+    const live = once(stream.res, "data");
+    w.broadcast('data: {"kind":"ping"}\n\n');
+    await live;
+    expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: session } })).status).toBe(200);
+    expect(new PhoneDevices(w.r.dataDir).list().map((phone) => phone.name)).toEqual(["Lost phone"]);
+
+    expect((await signOut()).status).toBe(200);
+    expect(new PhoneDevices(w.r.dataDir).list()).toEqual([]);
+    expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: session } })).status).toBe(401);
+    stream.socket.destroy();
   });
 
   it("takes sign-out only as this PC's own POST from a relay browser", async () => {

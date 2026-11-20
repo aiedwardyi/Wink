@@ -66,6 +66,8 @@ import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
 import { relaySignInSite } from "@/lib/devices-setup";
+import { ConnectionError } from "@/lib/error-text";
+import { leaveSignedOut, sessionGone, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -977,12 +979,17 @@ export function Sidebar({
   };
 
   const signOut = async (site: string) => {
+    signedOutLanding(`${site}/?signedout=1`);
     try {
       await api("/api/phone/sign-out", { method: "POST" });
-      location.replace(`${site}/?signedout=1`);
-    } catch {
-      setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
+    } catch (error) {
+      // A reply lost after the revoke landed still signed this browser out.
+      if (!(error instanceof ConnectionError && await sessionGone())) {
+        signedOutLanding();
+        return setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
+      }
     }
+    leaveSignedOut();
   };
 
   useEffect(() => {

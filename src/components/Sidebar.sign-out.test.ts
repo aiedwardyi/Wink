@@ -12,6 +12,7 @@ const RELAY = "aaaaaaaaaaaaaaaa.app.getwink.dev";
 let host: HTMLDivElement;
 let root: Root;
 let signOut: () => Promise<Response>;
+let events: () => Promise<Response>;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -20,8 +21,10 @@ beforeEach(() => {
     close() {}
   });
   signOut = async () => new Response('{"ok":true}', { status: 200 });
+  events = async () => new Response("", { status: 200 });
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     if (String(path).includes("/api/phone/sign-out")) return signOut();
+    if (String(path).includes("/api/events")) return events();
     if (String(path).includes("/api/bots")) return new Response(JSON.stringify({ bots: [], groups: [], computerControl: {} }));
     return new Response("{}", { status: 200 });
   }));
@@ -88,6 +91,19 @@ describe("signing a browser out from the avatar", () => {
     await click(menuItems().at(-1));
     await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("lands on the sign-in page when the reply is lost after the sign-out landed", async () => {
+    signOut = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
+    const replace = await renderSidebar(RELAY);
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 
   it.each([

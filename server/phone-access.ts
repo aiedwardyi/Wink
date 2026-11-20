@@ -462,7 +462,7 @@ export class PhoneAccess {
     const path = new URL(req.url ?? "/", "https://relay.invalid").pathname;
     if (linkedFileGrant(req.method, path, (holder) => this.phones.paired(holder))) return { handled: false, phone: null };
     if (path.startsWith("/api/")) {
-      send(res, 401, { error: "unauthorized" });
+      send(res, 401, { error: "unauthorized", code: "SIGNED_OUT" });
       return HANDLED;
     }
     if (shellNavigation(req.method ?? "GET", path)) {
@@ -493,25 +493,34 @@ export class PhoneAccess {
     return auth.phone;
   }
 
-  /** A browser's own Sign Out: the same revoke as Remove on this PC, then the browser drops this site's cookie, storage and cache. */
+  /** A browser's own Sign Out: it stays signed in until the file drops it, then loses this site's cookie, storage and cache. */
   private signOut(req: IncomingMessage, res: ServerResponse): void {
-    const token = phoneCookieToken(req.headers.cookie);
-    const auth = token ? this.phones.authenticate(token) : null;
-    if (auth) this.revoke(auth.phone.id, req.socket);
-    send(res, 200, { ok: true }, { "set-cookie": PHONE_CLEAR_COOKIE, "clear-site-data": '"cache", "cookies", "storage"', connection: "close" });
+    let id: string | null;
+    try {
+      id = this.phones.signOut(phoneCookieToken(req.headers.cookie));
+    } catch {
+      return send(res, 500, { error: "save-failed" });
+    }
+    if (id) this.cut(id, req.socket);
+    // "cookies" would clear every PC host under the shared base, not just this one.
+    send(res, 200, { ok: true }, { "set-cookie": PHONE_CLEAR_COOKIE, "clear-site-data": '"cache", "storage"', connection: "close" });
   }
 
-  /** Signs a phone out everywhere it is open. `answering` is the socket still owed a reply. */
-  private revoke(id: string, answering?: Duplex): boolean {
+  private revoke(id: string): boolean {
     try {
       return this.phones.revoke(id);
     } finally {
       // A revoke whose write failed still refuses the phone, so cut it either way.
-      this.google?.dropPhone(id);
-      for (const socket of this.sockets.get(id) ?? []) if (socket !== answering) socket.destroy();
-      this.sockets.delete(id);
-      removePhonePushSubscriptions(this.options.dataDir, id);
+      this.cut(id);
     }
+  }
+
+  /** Ends a phone everywhere it is open. `answering` is the socket still owed a reply. */
+  private cut(id: string, answering?: Duplex): void {
+    this.google?.dropPhone(id);
+    for (const socket of this.sockets.get(id) ?? []) if (socket !== answering) socket.destroy();
+    this.sockets.delete(id);
+    removePhonePushSubscriptions(this.options.dataDir, id);
   }
 
   /** Remembers which sockets a phone used, so revoking it can cut them. */
