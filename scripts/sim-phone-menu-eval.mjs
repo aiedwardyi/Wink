@@ -55,7 +55,7 @@ function costs(off, on, cohort) {
     const firstOff = left.marks?.first_visible_text, firstOn = right.marks?.first_visible_text;
     if (!x || !y || ![buildOff, buildOn, lookupOff, lookupOn, firstOff, firstOn].every(observed)) return undefined;
     return {
-      promptMs: buildOn + lookupOn - buildOff - lookupOff,
+      promptMs: buildOn - buildOff,
       lookupMs: lookupOn - lookupOff,
       firstVisibleMs: firstOn - firstOff,
       inputTokens: y.input - x.input,

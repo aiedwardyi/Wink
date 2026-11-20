@@ -2,8 +2,8 @@ import { expect, it } from "vitest";
 
 import { phoneMenuRows } from "./sim-phone-menu-eval.mjs";
 
-const trace = input => ({
-  spans: [{ phase: "prompt_build", start: 0, end: 10 }, { phase: "forum_lesson", start: 4, end: 5 }],
+const trace = (input, lookup = 1) => ({
+  spans: [{ phase: "prompt_build", start: 0, end: 10 }, { phase: "forum_lesson", start: 4, end: 4 + lookup }],
   marks: { first_visible_text: 25 },
   requests: [{ usage: { input, output: 20 } }],
 });
@@ -16,7 +16,7 @@ const seed = {
   lesson: { beforeRunId: "before", afterRunId: "after", predictedAt: 2, outcome: "fixed" },
 };
 const off = { ...seed, threadId: "thread-1", sessionId: "session-1", lessonOffered: false, traces: { ordinary: [trace(300)], matching: [trace(300)] }, cycles: [{ ...checks, opens: false }, checks] };
-const on = { ...seed, threadId: "thread-2", sessionId: "session-2", lessonOffered: true, traces: { ordinary: [trace(300)], matching: [trace(350)] }, cycles: [checks] };
+const on = { ...seed, threadId: "thread-2", sessionId: "session-2", lessonOffered: true, traces: { ordinary: [trace(300)], matching: [trace(350, 2)] }, cycles: [checks] };
 const pair = { id: "same-model", off, on };
 
 it("grades the paired fixture, including real input usage and the first working menu", () => {
@@ -27,7 +27,7 @@ it("grades the paired fixture, including real input usage and the first working 
   expect(metric("repeatsBeforePass")).toEqual([1, 0]);
   expect(metric("scope")).toEqual([1, 1]);
   expect(metric("cost")).toEqual([1, 1]);
-  expect(rows.find(row => row.metric.endsWith("/cost")).matching.samples[0].inputTokens).toBe(50);
+  expect(rows.find(row => row.metric.endsWith("/cost")).matching.samples[0]).toMatchObject({ inputTokens: 50, promptMs: 0, lookupMs: 1 });
 });
 
 it("keeps blocked, missing and mismatched pairs as rows without measurements", () => {
