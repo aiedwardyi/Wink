@@ -416,6 +416,31 @@ test("a host of an unknown version is left alone", windows, async (t) => {
   assert.equal(launched, 0);
 });
 
+test("a dev app never adopts a host that loaded node-pty without its patch", { ...windows, timeout: 120_000 }, async (t) => {
+  const f = fixture(t, { retryMs: 0 });
+  const stock = path.join(f.root, "stock", "lib");
+  fs.mkdirSync(stock, { recursive: true });
+  fs.writeFileSync(path.join(stock, "index.js"), `module.exports = require(${JSON.stringify(require.resolve("node-pty"))});\n`);
+  fs.writeFileSync(path.join(stock, "utils.js"), 'exports.loadNativeModule = () => ({ dir: "../prebuilds/win32-x64/", module: {} });\n');
+  const before = f.make({ adopt: true, ptyModule: () => path.join(stock, "index.js") });
+  assert.equal(await before.prewarm(), true);
+  const kept = before.spawn(f.pane("kept"), noLocal);
+  await kept.ready;
+  assert.equal(kept.detach(), true);
+  before.close();
+
+  const after = f.make({ adopt: true, patchedPty: true });
+  assert.equal(await after.prewarm(), false);
+  assert.equal(after.spawn(f.pane("new"), noLocal), null);
+  assert.equal(f.lines.at(-1), "worker host unknown version (host runs node-pty without its patch): panes open locally");
+  assert.equal(alive(kept.pid), true);
+  process.kill(kept.pid);
+  await until(() => workerHostLock(path.join(f.slot, "host.lock")) === "dead", 15_000);
+  assert.equal(await after.prewarm(), true);
+  assert.equal(f.hosts.length, 2);
+  assert.equal(workerHostRecord(path.join(f.slot, "host.json")).lockedHandles, true);
+});
+
 test("two older hosts still running are the cap", windows, async (t) => {
   let launched = 0;
   const f = fixture(t, { launch: async () => { launched++; throw new Error("Launched a third host"); } });

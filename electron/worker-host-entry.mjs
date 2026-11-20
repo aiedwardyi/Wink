@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +43,10 @@ if (config.install && [process.execPath, self, config.ptyModule].some((target) =
 try { holdWorkerHostLock(file("host.lock")); } catch { refuse("Another worker host holds this slot"); }
 // An open file keeps this layer from being renamed away while panes still start from it.
 fs.openSync(self, "r");
+// Every pane of this host loads this build for its whole life, through any reinstall, so a dev app can refuse a stock one.
+const lockedHandles = (() => {
+  try { return createRequire(import.meta.url)(path.join(path.dirname(config.ptyModule), "utils.js")).loadNativeModule("conpty").module.lockedHandles === true; } catch { return false; }
+})();
 
 const panes = new Map();
 let controller = null;
@@ -263,7 +268,7 @@ const server = net.createServer((socket) => {
 });
 server.on("error", refuse);
 server.listen(config.pipe, () => {
-  writeWorkerHostRecord(file("host.json"), { protocol: WORKER_HOST_PROTOCOL, pid: process.pid, nonce: config.nonce, secret: config.secret, pipe: config.pipe });
+  writeWorkerHostRecord(file("host.json"), { protocol: WORKER_HOST_PROTOCOL, pid: process.pid, nonce: config.nonce, secret: config.secret, pipe: config.pipe, lockedHandles });
   try { fs.unlinkSync(file("launch.json")); } catch {}
   settle();
 });

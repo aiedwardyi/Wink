@@ -22,7 +22,7 @@ const fire = (listeners, value) => {
   }
 };
 
-export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "runtime"), executable = process.execPath, ptyModule, install = path.dirname(executable), adopt = false, platform = process.platform, env = process.env, launch = launchWorkerHost, log = () => {}, answerMs = 2_000, retryMs = 30_000, publishMs = 20_000 }) {
+export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "runtime"), executable = process.execPath, ptyModule, install = path.dirname(executable), adopt = false, patchedPty = false, platform = process.platform, env = process.env, launch = launchWorkerHost, log = () => {}, answerMs = 2_000, retryMs = 30_000, publishMs = 20_000 }) {
   const slot = path.join(root, `v${WORKER_HOST_PROTOCOL}`);
   const handles = new Map();
   const orphans = new Set();
@@ -234,6 +234,7 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
       if (state === "alive") {
         const record = await readRecord(path.join(slot, "host.json"));
         if (record?.protocol !== WORKER_HOST_PROTOCOL || !record.pipe || !record.secret) throw down("unknown version", record ? `protocol ${record.protocol}` : "no host record");
+        if (patchedPty && record.lockedHandles !== true) throw down("unknown version", "host runs node-pty without its patch");
         return await reach(record);
       }
       const slots = await fs.promises.readdir(root, { withFileTypes: true });
