@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { COLD_OPEN_FILE, COLD_OPEN_KEEP, COLD_OPEN_MAX_BYTES, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { COLD_OPEN_FILE, COLD_OPEN_KEEP, COLD_OPEN_MAX_BYTES, receiveChatSwitch, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { startupTiming } from "./startup-timing.ts";
 
 const dirs: string[] = [];
@@ -166,5 +166,38 @@ describe("cold-open diagnostics", () => {
     const dir = freshDir();
     expect((await receiveColdOpen(post(body), dir)).status).toBe(400);
     expect(existsSync(join(dir, COLD_OPEN_FILE))).toBe(false);
+  });
+});
+
+describe("receiveChatSwitch", () => {
+  const line = {
+    from: "wink",
+    to: "marketing",
+    action: "select",
+    event: "popstate",
+    trusted: true,
+    active: false,
+    caller: ["at close (App.tsx:751:30)"],
+    focused: true,
+    visibility: "visible",
+    desktop: false,
+    userAgent: "Mozilla/5.0 orbit-desktop/1.0.289",
+  };
+
+  it("logs one [chat-switch] line naming the path", async () => {
+    const log = vi.fn();
+    expect(await receiveChatSwitch(post(JSON.stringify(line)), log)).toEqual({ status: 200 });
+    expect(log).toHaveBeenCalledWith(`[chat-switch] ${JSON.stringify(line)}`);
+  });
+
+  it.each([
+    ["broken JSON", "{", 400],
+    ["an unknown field", JSON.stringify({ ...line, stack: "x" }), 400],
+    ["a long caller", JSON.stringify({ ...line, caller: Array(9).fill("at x") }), 400],
+    ["an oversized body", JSON.stringify({ ...line, userAgent: "x".repeat(COLD_OPEN_MAX_BYTES) }), 413],
+  ])("refuses %s", async (_name, body, status) => {
+    const log = vi.fn();
+    expect((await receiveChatSwitch(post(body), log)).status).toBe(status);
+    expect(log).not.toHaveBeenCalled();
   });
 });
