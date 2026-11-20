@@ -1,4 +1,5 @@
 import "./ProfileFields.test-dom.ts";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -46,7 +47,6 @@ vi.mock("@/state/store", async (importOriginal) => {
   };
 });
 
-import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { landFold, spyReveal } from "./Fold.test-land";
 import { EngineRow, EnginesSettings, isEngineConnected } from "./EnginesSettings";
 import { EngineSetup } from "./EngineSetup";
@@ -416,8 +416,10 @@ describe("EnginesSettings friends Connections list", () => {
       expect(scrolled).toHaveBeenCalledTimes(1);
       expect(scrolled.mock.contexts[0]).toBe(row("muse"));
       expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      vi.useFakeTimers();
       await act(async () => more().click());
-      await act(async () => new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)));
+      await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+      vi.useRealTimers();
       expect(scrolled).toHaveBeenCalledTimes(1);
     } finally {
       scrolled.mockRestore();

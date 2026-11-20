@@ -46,8 +46,10 @@ it("brings the first done ask into view once the list has opened, never while cl
     expect(scrolled).toHaveBeenCalledTimes(1);
     expect(scrolled.mock.contexts[0]).toBe(host.querySelector(".mm-asks-closed > *"));
     expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    vi.useFakeTimers();
     await act(async () => toggle().click());
-    await act(async () => new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)));
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    vi.useRealTimers();
     expect(scrolled).toHaveBeenCalledTimes(1);
   } finally {
     scrolled.mockRestore();

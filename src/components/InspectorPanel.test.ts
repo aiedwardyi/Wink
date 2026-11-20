@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import type { Bot } from "@/state/store";
 
 import { landFold, spyReveal } from "./Fold.test-land";
@@ -45,8 +45,10 @@ it("brings an opened row's data into view once it has landed, never while closin
     expect(scrolled).toHaveBeenCalledTimes(1);
     expect(scrolled.mock.contexts[0]).toBe(host.querySelector("pre"));
     expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    vi.useFakeTimers();
     await act(async () => toggle().click());
-    await act(async () => new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)));
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    vi.useRealTimers();
     expect(scrolled).toHaveBeenCalledTimes(1);
   } finally {
     scrolled.mockRestore();

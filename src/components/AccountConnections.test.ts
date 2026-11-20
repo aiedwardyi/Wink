@@ -407,8 +407,10 @@ it("brings an opened phone menu into view, never while closing", async () => {
   expect(scrolled).toHaveBeenCalledTimes(1);
   expect(scrolled.mock.contexts[0]).toBe(row.querySelector("[data-fold] > div > div"));
   expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+  vi.useFakeTimers();
   await act(async () => menu().click());
-  await act(async () => new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)));
+  await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+  vi.useRealTimers();
   expect(scrolled).toHaveBeenCalledTimes(1);
 });
 
