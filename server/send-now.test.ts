@@ -68,6 +68,19 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
 }
 
 describe("queued send through the message POST", () => {
+  it("persists a plain send's insertion point through its queue and drain", async () => {
+    const h = harness(vi.fn(async () => false));
+    const sendId = "send-now-anchor-00000";
+    h.messages.push({ id: "peer", role: "bot", kind: "text", at: Date.now() + 300 });
+    const receipt = await h.post({ text: "one", sendId, sendSeq: 1, sentAfterId: "peer", actedAt: sendClock(h.messages) });
+    expect(receipt.body).toMatchObject({ queued: true, sentAfterId: "peer" });
+    queue._resetSteerQueue();
+    queue.initializeSteerQueue({ ...h.store, onChange: () => () => {} });
+    expect(queue.waitingSends()[h.bot.threadId]?.[0]).toMatchObject({ sentAfterId: "peer" });
+    h.bot.busy = false;
+    h.drain();
+    expect(h.messages.at(-1)).toMatchObject({ sendId, sentAfterId: "peer" });
+  });
   it.each([true, false])("splits the user's live reply or follows its original row (marked: %s)", async (marked) => {
     const h = harness();
     const end = watchPeerTurn(h.bot.threadId);

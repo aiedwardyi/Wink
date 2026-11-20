@@ -152,6 +152,33 @@ describe("inSendOrder", () => {
     expect(inSendOrder(messages)).toBe(messages);
     expect(ids(inSendOrder([...messages, row("reply", 50_010), line("mine", 50_005, 50_020)])).slice(-3)).toEqual(["r4999", "mine", "reply"]);
   });
+
+  it("uses the whole prefix when a raw tail was displayed earlier", () => {
+    const first = row("peer", 3_000);
+    const reply = row("reply", 1_500);
+    const earlier = line("earlier", 1_000, 2_000);
+    const next = line("next", 3_001, 2_100, { sentAfterId: earlier.id });
+    expect(ids(inSendOrder([first, reply, earlier, next]))).toEqual(["earlier", "peer", "reply", "next"]);
+  });
+
+  it("orders reversed receipts at the same insertion point by sequence", () => {
+    const peer = row("peer", 3_000);
+    const first = line("first", 3_001, 1_800, { sentAfterId: peer.id });
+    const second = line("second", 1_900, 1_700, { sentAfterId: peer.id, sendSeq: 2 });
+    expect(ids(inSendOrder([peer, second, first]))).toEqual(["peer", "first", "second"]);
+  });
+
+  it("keeps many late sends in their gaps around fixed replies and a held send", () => {
+    const first = row("first", 1_000);
+    const between = row("between", 2_000);
+    const tail = Array.from({ length: 200 }, (_, i) => row(`r${i}`, 3_000 + i));
+    const sends = Array.from({ length: 100 }, (_, i) => line(`s${i}`, i % 2 ? 2_001 : 1_001, 4_000 + i, { sendSeq: 100 - i }));
+    const held = line("held", 4_000, 4_300);
+    const ordered = inSendOrder([first, between, ...tail, held, ...sends], new Set([held.id]));
+    const before = sends.filter((_, i) => i % 2 === 0).reverse();
+    const after = sends.filter((_, i) => i % 2 === 1).reverse();
+    expect(ordered).toEqual([first, ...before, between, ...after, ...tail, held]);
+  });
 });
 
 describe("sendClock", () => {
@@ -161,6 +188,7 @@ describe("sendClock", () => {
     expect(sendClock([{ at: 5_000, actedAt: 9_000, waited: true }], 4_000)).toBe(5_001);
     expect(sendClock([{ at: 3_000 }], 4_000)).toBe(4_000);
     expect(sendClock([], 4_000)).toBe(4_000);
+    expect(sendClock([{ at: 9_000 }, { at: 3_000, actedAt: 2_000 }], 4_000)).toBe(9_001);
   });
 
   it("follows the latest server clock sample after a step back", () => {

@@ -24,6 +24,7 @@ export async function steerRoomSend(
   actedAt?: number,
   waited?: boolean,
   sendSeq?: number,
+  sentAfterId?: string | null,
 ): Promise<Message | null> {
   const busy = group.busyBotId ? store.bot(group.busyBotId) : null;
   if (!busy?.busy) return null;
@@ -39,7 +40,7 @@ export async function steerRoomSend(
   if (current?.threadId !== threadId || current.busyBotId !== busy.id) {
     throw Object.assign(new Error("the running turn ended before the steered message could be recorded"), { status: 409 });
   }
-  if (!current.hosted) return store.appendMessage(threadId, { role: "user", kind: "text", text, replyToId: replyTo?.id, sendId, steered: true, answersCard, actedAt, waited, sendSeq });
+  if (!current.hosted) return store.appendMessage(threadId, { role: "user", kind: "text", text, replyToId: replyTo?.id, sendId, steered: true, answersCard, actedAt, waited, sendSeq, sentAfterId });
   const { message } = hostSend(current as HostedGroup, text, replyTo, sendId, roomFileIds);
   return store.patchMessage(threadId, message.id, { steered: true, answersCard, actedAt, waited }) ?? message;
 }

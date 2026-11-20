@@ -220,6 +220,8 @@ export interface Message {
   waited?: boolean;
   /** One past every send the sending window knew: orders two lines the server stamped alike. */
   sendSeq?: number;
+  /** Last transcript row visible at send time, or null for an empty transcript. */
+  sentAfterId?: string | null;
   origin?: string;
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;

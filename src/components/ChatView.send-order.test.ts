@@ -42,7 +42,7 @@ let store: ReturnType<typeof useStore>;
 let host: HTMLDivElement;
 let unmount: (() => Promise<void>) | undefined;
 const posts = new Map<string, (receipt: object) => void>();
-const bodies = new Map<string, { sendSeq?: number; actedAt?: number }>();
+const bodies = new Map<string, { sendSeq?: number; actedAt?: number; sentAfterId?: string | null }>();
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -80,13 +80,13 @@ async function answer(sendId: string, receipt: object) {
 
 const frame = (value: object) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 
-async function mount(driverKind: string, queueing: boolean, messages: Message[], queued: object[] = [], hello: object = {}) {
+async function mount(driverKind: string, queueing: boolean, messages: Message[], queued: object[] = [], hello: object = {}, flat = false) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url) === "/api/bots?messages=200") {
-      return Response.json({ bots: [{ ...teacher, messages, activeLeafId: messages.at(-1)?.id }], groups: [], computerControl: {}, queued: { t1: queued } });
+      return Response.json({ bots: [{ ...teacher, messages, activeLeafId: flat ? null : messages.at(-1)?.id }], groups: [], computerControl: {}, queued: { t1: queued } });
     }
     if (String(url) === "/api/bots/b1/messages" && init?.method === "POST") {
-      const body = JSON.parse(String(init.body)) as { sendId: string; sendSeq?: number; actedAt?: number };
+      const body = JSON.parse(String(init.body)) as { sendId: string; sendSeq?: number; actedAt?: number; sentAfterId?: string | null };
       bodies.set(body.sendId, body);
       return new Promise<Response>((resolve) => posts.set(body.sendId, (receipt) => resolve(Response.json(receipt, { status: 202 }))));
     }
@@ -147,6 +147,46 @@ function chat(earlier: Message[]) {
 }
 
 describe("ChatView send order", () => {
+  it("keeps the sender's order across a 300 ms peer skew, queue receipt and reload", async () => {
+    const peer: Message = { id: "peer", parentId: null, role: "bot", kind: "text", text: "peer", at: T0 + 300 };
+    await mount("codex", true, [peer], [], { now: T0 });
+    const c = chat([peer]);
+    c.name("L1", "s1", "q1", "row-s1");
+    c.name("L2", "s2", "row-s2");
+    c.name("R1", "r1");
+    await c.at(100, () => c.send("s1", "one"));
+    await c.at(150, () => c.land({ id: "r1", at: T0 + 150, text: "progress" }));
+    await c.at(200, () => c.send("s2", "two"));
+    expect(bodies.get("s1")?.sentAfterId).toBe("peer");
+    expect(bodies.get("s2")?.sentAfterId).toBe("r1");
+    const { sendSeq, sentAfterId, actedAt } = bodies.get("s1")!;
+    await c.at(210, () => answer("s1", { queued: true, threadId: "t1", queueId: "q1", actedAt, sentAfterId }));
+    await c.at(260, () => c.land({ ...bodies.get("s2"), id: "row-s2", at: T0 + 260, role: "user", sendId: "s2", text: "two" }));
+    await c.at(270, () => answer("s2", { threadId: "t1", message: c.landed.at(-1) }));
+
+    await unmount?.();
+    await mount("codex", true, [peer, ...c.landed], [{ queueId: "q1", text: "one", sendId: "s1", at: actedAt, sendSeq, sentAfterId }]);
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(["H", "L1", "R1", "L2"]);
+    const final = await c.at(280, () => c.land({ id: "row-s1", at: T0 + 280, role: "user", sendId: "s1", queueId: "q1", text: "one", actedAt, sendSeq, sentAfterId }));
+    await unmount?.();
+    await mount("codex", true, [peer, ...c.landed]);
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
+  });
+
+  it("allocates consecutive sequences and keeps stamps through a late ping before React renders", async () => {
+    const earlier = history(2);
+    earlier[0]!.sendSeq = 42;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
+    await mount("codex", true, earlier, [], { now: T0 });
+    const c = chat(earlier);
+    await act(async () => {
+      c.send("s1", "one");
+      FakeEventSource.last.onmessage?.({ data: JSON.stringify({ kind: "ping", now: T0 - 2_000 }), lastEventId: "" });
+      c.send("s2", "two");
+    });
+    expect([bodies.get("s1"), bodies.get("s2")]).toMatchObject([{ actedAt: T0, sendSeq: 43 }, { actedAt: T0, sendSeq: 44 }]);
+  });
+
   it.each([
     ["claude", 0],
     ["codex", 0],
@@ -312,7 +352,7 @@ describe("ChatView send order", () => {
     c.name("L1", "s1", "row-s1");
     c.name("L2", "s2", "row-s2");
     const mine = (sendId: string, text: string, at: number) =>
-      ({ id: `row-${sendId}`, sendId, text, role: "user" as const, steered: true, actedAt: bodies.get(sendId)?.actedAt, at: T0 + at, sendSeq: bodies.get(sendId)?.sendSeq });
+      ({ ...bodies.get(sendId), id: `row-${sendId}`, sendId, text, role: "user" as const, steered: true, at: T0 + at });
     await c.at(0, () => c.send("s1", "첫 줄"));
     // the server wrote this ping `late` ms before the network handed it over, and the first line has not landed
     await c.at(400, () => frame({ kind: "ping", now: T0 + 400 - late }));
@@ -397,6 +437,17 @@ describe("ChatView send order", () => {
     expect(host.querySelector('[data-mid="s1"]')?.textContent).toContain("Sends next");
     await act(() => answer("s1", { queued: true, threadId: "t1", queueId: "q1" }));
     expect(host.querySelector('[data-mid="q1"]')?.textContent).toContain("Sends next");
+  });
+
+  it("renders two first replies with distinct keys", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const stored: Message[] = [
+      { id: "r1", parentId: null, role: "bot", kind: "text", text: "first reply", at: T0 },
+      { id: "r2", parentId: null, role: "bot", kind: "text", text: "second reply", at: T0 + 1 },
+    ];
+    await mount("codex", true, stored, [], {}, true);
+    expect(host.querySelectorAll('[data-mid="r1"], [data-mid="r2"]')).toHaveLength(2);
+    expect(errors.mock.calls.flat().join(" ")).not.toContain("same key");
   });
 
   it.each([60, 125])("keeps a Ctrl+Enter line and its Sends next after a reload with %i later rows", async (later) => {

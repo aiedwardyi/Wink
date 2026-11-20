@@ -207,26 +207,42 @@ function threadSendClock(state: AppState, threadId: string, messages?: readonly 
 }
 
 // one sent time and send order per line, kept through Send now, so a reload draws it where it was drawn
-function stampSend(state: AppState, send: Extract<Action, { type: "send" }>): Action {
+type SendStamps = { sequences: Map<string, number>; times: Map<string, number> };
+
+function reserveSend(stamps: SendStamps, threadId: string, at: number, knownSeq: number, seq: number | undefined, waited?: boolean) {
+  const previousSeq = stamps.sequences.get(threadId) ?? 0;
+  const sendSeq = seq ?? Math.max(knownSeq, previousSeq + 1);
+  stamps.sequences.set(threadId, Math.max(sendSeq, previousSeq));
+  if (!waited) stamps.times.set(threadId, Math.max(at, stamps.times.get(threadId) ?? 0));
+  return { actedAt: at, sendSeq };
+}
+
+function stampSend(state: AppState, send: Extract<Action, { type: "send" }>, stamps: SendStamps): typeof send {
   const bot = state.bots.find((candidate) => candidate.id === send.botId);
   const threadId = send.threadId ?? bot?.threadId ?? "";
+  const messages = bot && bot.threadId === threadId ? visibleMessages(bot) : undefined;
   const held = send.queueId ? state.pendingQueued[threadId]?.find((entry) => entry.queueId === send.queueId) : undefined;
+  const at = send.actedAt ?? held?.at ?? Math.max(threadSendClock(state, threadId, messages), stamps.times.get(threadId) ?? 0);
+  const knownSeq = nextSendSeq(bot?.threadId === threadId ? bot.messages : undefined, state.acceptedSends[threadId], state.pendingQueued[threadId]);
   return {
     ...send,
-    actedAt: send.actedAt ?? held?.at ?? threadSendClock(state, threadId, bot?.messages),
-    sendSeq: send.sendSeq ?? held?.sendSeq ?? nextSendSeq(bot?.messages, state.acceptedSends[threadId], state.pendingQueued[threadId]),
+    ...reserveSend(stamps, threadId, at, knownSeq, send.sendSeq ?? held?.sendSeq, send.after || held?.waited || held?.reason === "sync"),
+    sentAfterId: send.sentAfterId !== undefined ? send.sentAfterId : held ? held.sentAfterId : messages?.at(-1)?.id ?? null,
   };
 }
 
-function stampGroupSend(state: AppState, send: Extract<Action, { type: "sendGroup" }>): Action {
+function stampGroupSend(state: AppState, send: Extract<Action, { type: "sendGroup" }>, stamps: SendStamps): typeof send {
   const group = state.groups.find((candidate) => candidate.id === send.groupId);
   const threadId = send.threadId ?? group?.threadId ?? "";
   const releasingHold = send.waited && group && !group.hosted;
+  const messages = group?.threadId === threadId ? group.messages : undefined;
+  const at = (releasingHold ? undefined : send.actedAt) ?? Math.max(threadSendClock(state, threadId, messages), stamps.times.get(threadId) ?? 0);
+  const waited = releasingHold ? undefined : send.waited;
   return {
     ...send,
-    actedAt: (releasingHold ? undefined : send.actedAt) ?? threadSendClock(state, threadId, group?.messages),
-    waited: releasingHold ? undefined : send.waited,
-    sendSeq: send.sendSeq ?? nextSendSeq(group?.messages, state.acceptedSends[threadId]),
+    ...reserveSend(stamps, threadId, at, nextSendSeq(messages, state.acceptedSends[threadId]), send.sendSeq, waited),
+    waited,
+    sentAfterId: group?.hosted ? undefined : !releasingHold && send.sentAfterId !== undefined ? send.sentAfterId : messages?.at(-1)?.id ?? null,
   };
 }
 
@@ -810,7 +826,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         pendingQueued: {
           ...state.pendingQueued,
-          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason, waited: action.waited, sendSeq: action.sendSeq }],
+          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason, waited: action.waited, sendSeq: action.sendSeq, sentAfterId: action.sentAfterId }],
         },
       };
     }
@@ -858,6 +874,7 @@ export function reducer(state: AppState, action: Action): AppState {
           text: action.text,
           at: action.actedAt ?? sendClock(bot.messages),
           sendSeq: action.sendSeq,
+          sentAfterId: action.sentAfterId,
           after: action.after,
         }),
       };
@@ -883,6 +900,7 @@ export function reducer(state: AppState, action: Action): AppState {
           text: action.text,
           at: action.actedAt ?? sendClock(group.messages),
           sendSeq: action.sendSeq,
+          sentAfterId: action.sentAfterId,
           waited: action.waited,
           replyToId: action.replyToId,
           posting: true,
@@ -1190,6 +1208,8 @@ const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, rawDispatch] = useReducer(reducer, initialState, withCachedSnapshot);
   const stateRef = useRef(state);
+  const sendStamps = useRef<SendStamps>({ sequences: new Map(), times: new Map() });
+  if (stateRef.current !== state) sendStamps.current.times.clear();
   const viewedReplies = useRef(createViewedReplies());
   stateRef.current = state;
   useMascotMotionExpiry(state.mascotMotion?.nonce, rawDispatch);
@@ -1440,7 +1460,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const wrapped: React.Dispatch<Action> = (dispatched) => {
-      const rawAction: Action = dispatched.type === "send" ? stampSend(stateRef.current, dispatched) : dispatched.type === "sendGroup" ? stampGroupSend(stateRef.current, dispatched) : dispatched;
+      const rawAction: Action = dispatched.type === "send" ? stampSend(stateRef.current, dispatched, sendStamps.current) : dispatched.type === "sendGroup" ? stampGroupSend(stateRef.current, dispatched, sendStamps.current) : dispatched;
       const action =
         (rawAction.type === "send" || rawAction.type === "sendGroup") && !rawAction.sendId
           ? { ...rawAction, sendId: crypto.randomUUID() }
@@ -1553,6 +1573,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 queueId: action.queueId,
                 actedAt,
                 sendSeq: action.sendSeq,
+                sentAfterId: action.sentAfterId,
                 locale: activeLocale(),
               }),
             });
@@ -1600,6 +1621,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 at: typeof body.actedAt === "number" ? body.actedAt : accepted?.at ?? Date.now(),
                 sendId,
                 sendSeq: action.sendSeq,
+                sentAfterId: body.sentAfterId !== undefined ? body.sentAfterId : action.sentAfterId,
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
                 waited: action.after || undefined,
@@ -1728,14 +1750,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "answerGroupCard": {
-          const actedAt = sendClock();
           const room = stateRef.current.groups.find((group) => group.id === action.groupId);
           const messages = room?.messages ?? [];
           if (!canAnswerCard(messages, action.messageId)) break;
           const asked = messages.find((m) => m.id === action.messageId);
           const text = asked ? answerText(messages, asked, action.answer) : action.answer;
+          const send = stampGroupSend(stateRef.current, { type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId }, sendStamps.current);
           void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
-            .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId, actedAt }); }));
+            .then((open) => { if (open) wrapped(send); }));
           break;
         }
         case "dismissGroupCard":
@@ -1888,7 +1910,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? sendClock(stateRef.current.groups.find((group) => group.id === action.groupId)?.messages), waited: action.waited, sendSeq: action.sendSeq }),
+            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? sendClock(stateRef.current.groups.find((group) => group.id === action.groupId)?.messages), waited: action.waited, sendSeq: action.sendSeq, sentAfterId: action.sentAfterId }),
           })
             .then((body) => {
               if (receiptRejectsAcceptedSend(body)) {

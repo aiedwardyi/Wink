@@ -44,7 +44,7 @@ type GroupRouteDeps = {
   lastReply: Map<string, { text: string; messageId: string }>;
   sendSequencer: SendSequencer;
   resolveReplyTarget: (threadId: string, value: unknown) => Message | undefined;
-  startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds?: readonly string[], actedAt?: number, waited?: boolean, sendSeq?: number) => Message;
+  startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds?: readonly string[], actedAt?: number, waited?: boolean, sendSeq?: number, sentAfterId?: string | null) => Message;
   /** A bot's own call: its line keeps file names, never the host's files, as on the host's room file routes. */
   botCaller?: (req: IncomingMessage) => boolean;
   userName: () => string;
@@ -458,6 +458,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const actedAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, serverSendClock(store.messagesFor(threadId))) : undefined;
       const waited = body.waited === true || undefined;
       const sendSeq = typeof body.sendSeq === "number" && Number.isSafeInteger(body.sendSeq) && body.sendSeq > 0 ? body.sendSeq : undefined;
+      const anchor = body.sentAfterId;
+      const sentAfterId = anchor === null || typeof anchor === "string" ? anchor : undefined;
       // nobody was asked to answer: no busy patch will come to end the sender's Thinking
       const idle = () => !groupIsWorking(store.group(group.id) ?? group);
       const receipt = await sendSequencer.run(
@@ -483,11 +485,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               status: 409,
             });
           }
-          const steered = askerId && askerId !== current.busyBotId ? null : await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId, answersCard, roomFileIds, actedAt, waited, sendSeq);
+          const steered = askerId && askerId !== current.busyBotId ? null : await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId, answersCard, roomFileIds, actedAt, waited, sendSeq, sentAfterId);
           // a Stop during the steer await hands the line back, as a 1:1 Send now
           if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };
           // a typed line answers the open question, so its asker takes it; a mention still wins
-          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId, askerId ?? scanQuestion(store.messagesFor(threadId))?.from?.botId, answersCard, roomFileIds, actedAt, waited, sendSeq);
+          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId, askerId ?? scanQuestion(store.messagesFor(threadId))?.from?.botId, answersCard, roomFileIds, actedAt, waited, sendSeq, sentAfterId);
           const roomIdle = idle();
           if (sendId && roomIdle) broadcast({ kind: "group.send.idle", threadId, sendId });
           return { ok: true as const, threadId, message, idle: roomIdle };

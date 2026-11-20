@@ -735,6 +735,8 @@ const MessagesList = memo(function MessagesList({
   const focusedId = focus && !focus.consumed && focus.threadId === bot.threadId ? focus.messageId : null;
   // the current find hit shows even when the tool-call setting hides its row
   const findCurrent = useFindCurrentId();
+  const dockTarget = dock ? items.findLast((item, i) => rows[i].visible && item.kind === "message" && item.message.role === "bot" && item.message.kind === "text" && !isVoiceLine(item.message)) : undefined;
+  const slots = new Set<string>();
   return (
     <>
       {idleAfterOnboarding && !bot.busy && (
@@ -884,7 +886,7 @@ const MessagesList = memo(function MessagesList({
                   streaming={streaming}
                   pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)}
                   peerReply={Boolean(replyComm)}
-                  dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
+                  dock={dockTarget === item && dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
                   onSubmitEdit={onSubmitEdit}
@@ -899,7 +901,10 @@ const MessagesList = memo(function MessagesList({
         })();
         // a call line that opens a day keeps the divider, now that the card may sit further down
         if (!row && !callHere && !(callId && newDay)) return null;
-        const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
+        const slot = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : null;
+        const fallbackKey = slot ? m.id : m.sendId ?? m.id;
+        const key = slot && !slots.has(slot) ? slot : fallbackKey;
+        slots.add(key);
         return (
           <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
