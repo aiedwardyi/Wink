@@ -377,7 +377,7 @@ it("persists Connections order in Usage and brings Usage changes back", async ()
   await move(row(), "ArrowDown");
   const changed = [ids[1], ids[0], ids[2]];
   expect(connectionOrder()).toEqual(changed);
-  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(changed);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude.filter((key: string) => !key.startsWith("identity:"))).toEqual(changed);
   await act(async () => store.dispatch({ type: "toggleAppSettings", section: "usage", open: true }));
   await settle();
   expect(usageOrder()).toEqual(changed);

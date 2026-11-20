@@ -12,7 +12,7 @@ import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSpinUntilTurnEnds } from "@/lib/use-spin-until-turn-ends";
-import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
+import { rankAccounts, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { refreshUsage, useAutoRefresh, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
@@ -95,7 +95,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const soon = viewed.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR);
   const clock: Clock = { t, locale: localeTag(locale), now: useVisibleClock(soon) };
   const checked = checkedMain(state, engine.base);
-  const drag = useUsageDrag([engine]);
+  const drag = useUsageDrag([engine], store.instances);
   const accountOrder = drag.orders[engine.base];
   const shown = new Set(usageAccounts(engine).map((each) => each.id));
   const refreshing = [...useRefreshPending()].some((id) => shown.has(id));
@@ -205,10 +205,10 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
           {buttons}
         </div>}
         <div data-quick-scroll="" data-usage-engine={engine.engine} data-usage-base={engine.base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
-          {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={ordered(engine.accounts, accountOrder, (each) => each.id)} select={setViewedId} foldChart
+          {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={rankAccounts(engine.accounts, accountOrder, (each) => each.id, store.instances)} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
           <AccountGroup label={engineName(engine.engine)} terminal={terminal}>
-            {ordered(usageAccounts(engine), accountOrder, (each) => each.id).map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
+            {rankAccounts(usageAccounts(engine), accountOrder, (each) => each.id, store.instances).map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
               terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
           </AccountGroup>
           {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{mainFailedText(state, engine.base, t)}</div>}
