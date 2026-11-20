@@ -553,6 +553,7 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
   const starts = [0];
   const latin = [...run.matchAll(LATIN_START)].map((match) => match.index);
   const named = [...latin, ...[...run.matchAll(/[\\/]/g)].map((match) => match.index)];
+  const real: number[] = [];
   for (const hit of run.matchAll(DOC_EXT)) {
     if (hit.index < from) continue;
     const after = hit.index + hit[0].length;
@@ -572,12 +573,14 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
         }
       }
     }
+    if (best) real.push(best[1]);
     const spans = best ? [best] : [];
     if (ends.includes(after)) {
-      // 请先读plan.md is prose then a name, 新draft.md and 計画.md改訂.md one name each, and no rule tells them apart, so the token and each start since the name before this one are pinned up to this end, but never past a name end into a later name's start (a Latin start, a folder, a file on disk)
+      // 请先读plan.md is prose then a name, 新draft.md and 計画.md改訂.md one name each, and no rule tells them apart, so the token and each start since the name before this one are pinned up to this end; only a file on disk ending at a name end or starting a later name (a Latin start, a folder) shows plan.md和review.txt is two names, so only then does no reading run past that end
       const token = [...run.slice(0, after).matchAll(DOC_PATH)].at(-1)!;
       const next = Math.max(best?.[0] ?? 0, ...named.filter((at) => at < hit.index));
-      const lead = Math.max(token.index, ends.find((end) => end <= next) ?? 0);
+      const cut = ends.find((end) => end <= next && (real.includes(end) || best && best[0] >= end)) ?? 0;
+      const lead = Math.max(token.index, cut);
       const near = Math.max(lead, starts.at(-2) ?? 0);
       for (const start of new Set([lead, ...[...starts, ...latin].filter((start) => start >= near)])) {
         if (start < hit.index) spans.push([start, after]);

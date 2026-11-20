@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 
@@ -36,6 +36,7 @@ import {
 import { isRecoveringPacket, unsettledRequest } from "./task-recovery-flush.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stampTaskResumePacket } from "./task-state-fold.ts";
 import { deleteTaskResumePacket, writeTaskPlanSidecar, type TaskResumePacket } from "./task-state.ts";
+import { planFiles as oldPlanFiles } from "./testing/plan-files-c9206fd80.ts";
 
 const transcript = [
   { role: "user" as const, text: "my dog is named Biscuit" },
@@ -1398,6 +1399,18 @@ describe("fresh-session memory block", () => {
     }
   });
 
+  it("pins both files a joiner separates, whichever of them is on disk", () => {
+    for (const [index, files] of [["plan.md", "review.txt"], ["plan.md"], ["review.txt"]].entries()) {
+      const folder = taskFolder(`joiner-${index}`, files);
+      for (const joiner of ["和", "と", "와", " and ", ",", "，", "、"]) {
+        const step = `plan.md${joiner}review.txt`;
+        const pins = stepPins(step, folder);
+        expect(pins, step).toEqual(expect.arrayContaining([join(folder, "plan.md"), join(folder, "review.txt")]));
+        expect(pins.filter((pin) => pin.includes("plan.md") && pin.includes("review.txt")), step).toEqual([]);
+      }
+    }
+  });
+
   it("pins the files CJK prose runs into", () => {
     const folder = taskFolder("prefixed", ["plan.md", "review.txt"]);
     expect(stepPins("请先读plan.md，再打开review.txt。", folder)).toEqual(expect.arrayContaining([join(folder, "plan.md"), join(folder, "review.txt")]));
@@ -1422,14 +1435,90 @@ describe("fresh-session memory block", () => {
   const planned = ["draft.md", "docs/plan.md", "next-review.txt", "v2/draft.md", "notes.md/todo.txt"];
   const expectPins = (text: string, named: string[], folder: string) => {
     const [goal, ...steps] = text.split("\n");
-    const pins = planFiles({ goal: goal!, plan: steps.map((step) => ({ step, status: "active" as const })) }, folder);
+    const record = { goal: goal!, plan: steps.map((step) => ({ step, status: "active" as const })) };
+    const pins = planFiles(record, folder);
+    expectOldReadingsKept(record, folder);
     expect(pins, text).toEqual(expect.arrayContaining(named.map((name) => join(folder, name))));
+    const files = diskFiles(folder);
     for (const pin of pins) {
       const name = relative(folder, pin).split(sep).join("/");
       expect(text, pin).toContain(name);
-      if (!existsSync(pin)) expect(names.filter((real) => name.includes(real)).length, pin).toBeLessThan(2);
+      expect(splitByFile(text, files, name), pin).toBe(false);
     }
   };
+
+  // c9206fd80 pinned every start (the token, each earlier name end, each Latin start) up to each end; a later rule may drop a reading only when a file on disk splits it where a later name starts, or when it starts past the name before its end, which keeps dense plans linear
+  const nameEnd = (text: string, at: number) => /\.[A-Za-z\d]+$/.test(text.slice(0, at)) && !/[\w~\\/.-]/.test(text[at] ?? " ");
+  const latinAt = (text: string, at: number) => /\p{Script=Latin}/u.test(text[at]!) && /\p{L}/u.test(text[at - 1] ?? "") && !/\p{Script=Latin}/u.test(text[at - 1]!);
+  const places = (text: string, name: string) => {
+    const found: number[] = [];
+    for (let at = text.indexOf(name); at >= 0; at = text.indexOf(name, at + 1)) found.push(at);
+    return found;
+  };
+  const nameStart = (text: string, at: number) => !at || !/[\w.~:\\/-]/.test(text[at - 1]!);
+  const splitByFile = (text: string, files: string[], name: string) => !files.includes(name) && places(text, name).some((at) => {
+    for (let cut = at + 1; cut < at + name.length; cut++) {
+      if (!nameEnd(text, cut)) continue;
+      const left = files.some((file) => text.slice(cut - file.length, cut) === file && nameStart(text, cut - file.length));
+      for (let next = cut; next < at + name.length; next++) {
+        const right = nameStart(text, next) && files.some((file) => text.startsWith(file, next));
+        if ((left || right) && (right || latinAt(text, next) || /[\\/]/.test(text[next]!))) return true;
+      }
+    }
+    return false;
+  });
+  const pastNameBefore = (text: string, name: string) => places(text, name).some((at) => at > 0 && /[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]/u.test(text[at - 1]!)
+    && [...name.matchAll(/\.(?:md|txt|docx?|pdf)(?!\w)/gi)].filter((hit) => hit.index + hit[0].length < name.length && nameEnd(text, at + hit.index + hit[0].length)).length >= 2);
+  const diskFiles = (folder: string) => !existsSync(folder) ? [] : readdirSync(folder, { recursive: true, encoding: "utf8" }).filter((name) => statSync(join(folder, name)).isFile()).map((name) => name.split(sep).join("/"));
+  function expectOldReadingsKept(record: { goal: string; plan: { step: string; status: "active" }[] }, folder: string) {
+    const files = diskFiles(folder);
+    const text = [record.goal, ...record.plan.map((item) => item.step)].join("\n");
+    const pins = new Set(planFiles(record, folder));
+    for (const pin of oldPlanFiles(record, folder)) {
+      const name = relative(folder, pin).split(sep).join("/");
+      if (!pins.has(pin)) expect(splitByFile(text, files, name) || pastNameBefore(text, name), `${name} in ${text}`).toBe(true);
+    }
+  }
+
+  it("keeps every reading c9206fd80 pinned unless a file on disk splits it where a later name starts, or it starts past the name before its end", () => {
+    const archived: [string[], string[]][] = [];
+    const add = (step: string, ...states: string[][]) => { for (const files of states) archived.push([[step], files]); };
+    for (const joiner of ["和", "と", "와", " and ", ",", "，", "、", "and"]) add(`plan.md${joiner}review.txt`, ["plan.md", "review.txt"], ["plan.md"], ["review.txt"], []);
+    for (const name of ["plan.md新Review.md", "docs/plan.md新Review.md", "計画.md改訂Final.md", "資料.md新規/計画.md", "계획.md수정.md새.md최종.md", "plan.md改訂.md", "新plan.md版.md", "计划.txt改订.json新版.md", "报告.md新版.md", "計画.md改訂.md", "계획.md수정.md", "docs/报告.md新版.md", "docs/計画.md改訂.md", "docs/계획.md수정.md"]) {
+      add(name, [], [name]);
+      add(`"${name}"`, [], [name]);
+    }
+    add("Create 新plan.md版.md tomorrow", ["plan.md"], ["plan.md", "plan.md版.md"], ["plan.md", "新plan.md版.md", "plan.md版.md"]);
+    add("Then 请先读plan.md改訂.md", ["plan.md"], ["plan.md", "请先读plan.md改訂.md"], ["plan.md", "plan.md改訂.md", "请先读plan.md改訂.md"]);
+    add("Save notes.md.bak", [], ["notes.md.bak"]);
+    add("Then 请先读2027.md", [], ["2027.md"]);
+    add("Please read release notes.md", [], ["release notes.md"]);
+    for (const [read, and, prefix, old, tail] of [["请先读", "和", "新", "旧版", "都要更新"], ["まず読む", "と", "仮", "旧版", "を開く"], ["먼저읽기", "와", "새", "구버전", "를열기"]]) {
+      add(`plan.md${and}review.txt${tail}`, ["plan.md", "review.txt"]);
+      add(`${read}plan.md，${read}review.txt。`, ["plan.md", "review.txt"]);
+      add(`${read}report.md${old}.zip`, [`report.md${old}.zip`]);
+      add(`${read}draft.md${tail}`, [], ["draft.md"]);
+      add(`${read}plan.md${and}draft.md${tail}`, ["plan.md"], ["plan.md", "draft.md"]);
+      add(`Create ${prefix}draft.md tomorrow`, ["draft.md"], ["draft.md", `${prefix}draft.md`]);
+      add(`Then ${read}brief.md`, ["brief.md"]);
+      add(`Then ${read} "brief.md"`, ["brief.md"]);
+      add(`Then ${read}plan.md`, ["plan.md"]);
+      add(`Then ${read}draft.md`, []);
+      for (const name of [`${prefix}draft.md`, `docs/${prefix}draft.md`, `${prefix}agenda.md`, `docs/${prefix}agenda.md`]) add(name, [], [name]);
+    }
+    add("Create future.md", []);
+    add('Create "新draft.md" tomorrow', ["draft.md"]);
+    add('先读"release notes.md"和"v2/check list.txt"。', ["release notes.md", "v2/check list.txt"]);
+    add("先读release notes.md。", ["release notes.md"]);
+    add("请先读a/plan.md和b/plan.md。", ["a/plan.md", "b/plan.md"]);
+    add("Read a/plan.md and b/plan.md", ["a/plan.md", "b/plan.md"]);
+    add("请先读notes.md/plan.txt。", [], ["notes.md/plan.txt"]);
+    add("请先读docs/plan.md。", [], ["docs/plan.md"]);
+    add("Read report.md旧版.zip", ["report.md", "report.md旧版.zip"]);
+    add('Then 请先读"plan.md"', ["plan.md"]);
+    archived.push([Array.from({ length: 20 }, (_, index) => `${"先".repeat(125)}查阅file${index}.md和review.txt。`), [...Array.from({ length: 20 }, (_, index) => `file${index}.md`), "review.txt"]]);
+    archived.forEach(([steps, files], index) => expectOldReadingsKept({ goal: "Ship it", plan: steps.map((step) => ({ step, status: "active" as const })) }, taskFolder(`kept-${index}`, files)));
+  });
 
   it("pins every existing file that random CJK prose touches", () => {
     const folder = taskFolder("generated", names);
@@ -1512,7 +1601,7 @@ describe("fresh-session memory block", () => {
 
   it("the pinned set always includes the full token up to its last path extension; inner extensions never cut a planned path", () => {
     const compound = taskFolder("compound", []);
-    for (const name of ["报告.md新版.md", "計画.md改訂.md", "계획.md수정.md"]) {
+    for (const name of ["报告.md新版.md", "計画.md改訂.md", "계획.md수정.md", "plan.md新Review.md", "資料.md新規/計画.md"]) {
       for (const step of [name, `docs/${name}`]) {
         const path = join(compound, step);
         expect(stepPins(step, compound), step).toContain(path);
