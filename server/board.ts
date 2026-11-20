@@ -271,6 +271,9 @@ export function createBoard(options: BoardOptions) {
 
   const solved = (held: BoardPost, fix: string, at: number): BoardPost => {
     const next = { ...held, status: "solved" as const, fix: clean(fix, LIMITS.fix), updated_at: at, pc_id: options.pcId() };
+    // a replaced fix was seen, so a copy still showing it never moves to a new post once the thread is deleted
+    const replaced = fixSha(held.fix);
+    if (replaced && replaced !== fixSha(next.fix)) drop(movedId(held.id, replaced), { parent_id: null, fix_sha: replaced });
     write(next);
     return next;
   };

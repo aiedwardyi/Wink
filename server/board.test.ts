@@ -966,6 +966,30 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(b, a, c, b, a, c);
       return { live: [], dead: [stuck.body.id] };
     }],
+    ["F: an off PC holding an older fix brings nothing back once the post is deleted with a newer one", async (w) => {
+      const a = w.boot("pc-a");
+      const b = w.boot("pc-b");
+      const c = w.boot("pc-c");
+      const stuck = await send(a.routes.post, { kind: "stuck", title: "Build fails", body: "Build fails on CI" });
+      await send(a.routes.post, { kind: "fix", title: "Fix 1", body: "first fix", parent_id: stuck.body.id });
+      w.sync(a, b, c);
+      await send(a.routes.post, { kind: "fix", title: "Fix 2", body: "second fix", parent_id: stuck.body.id });
+      w.sync(a, b);
+      b.board.remove(stuck.body.id);
+      w.sync(b, a, b, a);
+      return { live: [], dead: [stuck.body.id], on: [a, b] };
+    }],
+    ["F: a post one PC fixed twice and deleted stays gone while a PC that saw the first fix is off", async (w) => {
+      const a = w.boot("pc-a");
+      const b = w.boot("pc-b");
+      const stuck = await send(b.routes.post, { kind: "stuck", title: "Build fails", body: "Build fails on CI" });
+      await send(b.routes.post, { kind: "fix", title: "Fix 1", body: "first fix", parent_id: stuck.body.id });
+      w.sync(b, a);
+      await send(b.routes.post, { kind: "fix", title: "Fix 2", body: "second fix", parent_id: stuck.body.id });
+      b.board.remove(stuck.body.id);
+      w.sync(b, b);
+      return { live: [], dead: [stuck.body.id], on: [b] };
+    }],
   ];
 
   it.each(cases.flatMap(([name, run, modes = ["Drive"]]) => modes.map((mode) => [`${name} (${mode})`, run, mode] as const)))("%s", async (_name, run, mode) => {
