@@ -5531,8 +5531,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const hasPriorUserTurn = activeMessages.some(
     (message) => message.role === "user" && message.kind === "text" && Boolean(message.text?.trim()) && !skipTranscript.has(message.id),
   );
-  const fresh =
-    !rewound &&
+  const engineChanged =
     engineIsFresh({
       instanceId,
       model,
@@ -5544,6 +5543,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       transcript,
       hasPriorUserTurn,
     });
+  // a rewind replays the branch itself, but a new engine still needs the saved paths
+  const fresh = !rewound && engineChanged;
   const lastTurnToolRounds = countLastTurnToolRounds(activeMessages, skipTranscript, task.providerSessionBoundId);
   const sessionToolRounds = countSessionToolRounds(
     activeMessages,
@@ -5674,7 +5675,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   // from the first fresh provider session on, every turn keeps the bot's saved paths
   const sessionTask = store.taskByThread(bot.id, threadId);
-  const restarted = commsDepth === 0 && (fresh || recycled || latestCompactionId !== null || sessionTask?.providerSessionBoundId || sessionTask?.hasFreshProviderSession);
+  const restarted = commsDepth === 0 && (engineChanged || recycled || latestCompactionId !== null || sessionTask?.providerSessionBoundId || sessionTask?.hasFreshProviderSession);
   const memoryText = restarted ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : "";
   const { turnText, resume } = buildTurnContext({
     driverKind: instance.driverKind,
@@ -6303,7 +6304,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // dispatched: the rewind is spent
       if (rewound) store.patchBot(bot.id, { rewound: false });
       // and this engine now owns the thread's most recent turn
-      store.markTaskDispatched(bot.id, threadId, instanceId, model, commsDepth === 0 && fresh);
+      store.markTaskDispatched(bot.id, threadId, instanceId, model, commsDepth === 0 && engineChanged);
       // a turn can settle before dispatch returns, and a poller started
       // after its own turn.completed would never be torn down — it would
       // keep polling the box forever, carrying dead per-turn state. busy

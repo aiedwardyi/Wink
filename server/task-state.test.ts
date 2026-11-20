@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -30,6 +30,7 @@ import {
   taskStateNotice,
   taskStateUpdateError,
   taskStateUpdateSchema,
+  writeTaskPlanSidecar,
   writeTaskResumePacket,
   type TaskResumePacket,
 } from "./task-state.ts";
@@ -693,6 +694,17 @@ describe("artifact overflow", () => {
   let dir: string;
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "task-overflow-")); });
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("names the plan sidecar by an absolute path from a relative data dir", () => {
+    const relativeDir = relative(process.cwd(), mkdtempSync(join(process.cwd(), "plan-sidecar-")));
+    try {
+      const path = writeTaskPlanSidecar("thread-1", ["plan.md"], { dir: relativeDir });
+      expect(isAbsolute(path)).toBe(true);
+      expect(path).toBe(resolve(relativeDir, "thread-1.plans.jsonl"));
+    } finally {
+      rmSync(relativeDir, { recursive: true, force: true });
+    }
+  });
 
   it("skips reading the sidecar when all artifacts fit", () => {
     const old = JSON.stringify({ ref: "older/plan.md", label: "Saved plan" });

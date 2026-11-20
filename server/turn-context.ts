@@ -524,7 +524,8 @@ const MEMORY_FOLDERS = 4;
 const MEMORY_NAMES = 2;
 export const MAX_MEMORY_PLAN_BYTES = 4096;
 const MEMORY_PLAN_PREFIX = "Read first, your plan: ";
-const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?![\p{L}\p{M}\p{N}\p{Pc}])/giu;
+// only an ASCII word char extends the extension: Korean and Japanese particles attach to the filename
+const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?!\w)/giu;
 // a quoted path may hold spaces, so it is read whole before DOC_PATH
 const QUOTED_DOC_PATH = /(["'`])([^"'`\n]+\.(?:md|txt|docx?|pdf))\1/gi;
 const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;

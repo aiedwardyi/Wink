@@ -282,7 +282,8 @@ export function writeTaskPlanSidecar(threadId: ThreadId, paths: readonly string[
   const path = planSidecarPath(taskStatePath(threadId, dir));
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileAtomic(path, paths.map((ref) => JSON.stringify(ref)).join("\n") + "\n", { mode: 0o600 });
-  return path;
+  // the bot opens this from the task's cwd, not the server's
+  return resolve(path);
 }
 
 function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {

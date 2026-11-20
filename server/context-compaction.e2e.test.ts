@@ -39,6 +39,7 @@ const MARKETING = {
   fatSession: "marketing-fat-session",
 };
 const ENGINE_SWITCH = { botId: "engine-switch-bot", threadId: "engine-switch-thread" };
+const ENGINE_SWITCH_BRANCH = { botId: "engine-switch-branch-bot", threadId: "engine-switch-branch-thread" };
 const CLAUDE_FAT_STOP = {
   botId: "compaction-claude-fat-stop-bot",
   threadId: "compaction-claude-fat-stop-thread",
@@ -296,6 +297,14 @@ describe("context compaction e2e", () => {
         name: "Engine switch",
         color: "pink",
         session: "older-claude-session",
+        previousSelection: { instanceId: "codex", model: "gpt-fake-default" },
+      }),
+      claudeResumeBot({
+        id: ENGINE_SWITCH_BRANCH.botId,
+        threadId: ENGINE_SWITCH_BRANCH.threadId,
+        name: "Engine switch branch",
+        color: "pink",
+        session: "older-claude-branch-session",
         previousSelection: { instanceId: "codex", model: "gpt-fake-default" },
       }),
       claudeResumeBot({
@@ -677,6 +686,10 @@ describe("context compaction e2e", () => {
         messages: slimMessages,
       }));
     }
+    writeFileSync(join(dataDir, `messages-${ENGINE_SWITCH_BRANCH.threadId}.json`), JSON.stringify({
+      activeLeafId: "alternate",
+      messages: [...slimMessages, { id: "alternate", at: 5, parentId: "s0", role: "bot", kind: "text", text: "other branch" }],
+    }));
     const launch = join(home, "launch");
     const shots = Array.from({ length: 11 }, (_, index) => join(launch, "real-shots", `workers-${index + 1}.png`));
     const marketingMessages = [
@@ -935,6 +948,27 @@ describe("context compaction e2e", () => {
     const fresh = String(dump.prompt.message.content);
     expect(fresh).toContain("The conversation so far");
     expect(fresh).not.toContain("Wink compacted this conversation");
+    await send("what should I do next?");
+    const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
+      .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
+      .filter((line) => line.pid === dump.pid).at(-1)!;
+    expect(next.text).toContain("what should I do next?");
+    expect(next.text).not.toContain("The conversation so far");
+    expect([fresh, next.text].map((prompt) => prompt.includes("real-shots 1 (cover.png)"))).toEqual([true, true]);
+  }, 30_000);
+
+  it("keeps saved files on an engine switch after selecting a branch, and the next turn", async () => {
+    const send = async (text: string) => {
+      expect((await api("POST", `/api/bots/${ENGINE_SWITCH_BRANCH.botId}/messages`, { text })).status).toBe(202);
+      await waitFor(async () => (await botById(ENGINE_SWITCH_BRANCH.botId))?.busy === false);
+    };
+    expect((await api("POST", `/api/bots/${ENGINE_SWITCH_BRANCH.botId}/active-branch`, { messageId: "sa" })).status).toBe(200);
+    rmSync(claudeDumpPath, { force: true });
+    await send("continue with Claude");
+    const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
+    expect(dump.argv).not.toContain("--resume");
+    const fresh = String(dump.prompt.message.content);
+    expect(fresh).toContain("The user rewound this conversation");
     await send("what should I do next?");
     const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
       .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))

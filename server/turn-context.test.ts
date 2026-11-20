@@ -1367,6 +1367,13 @@ describe("fresh-session memory block", () => {
     }, cwd)).toEqual([document, join(cwd, relative)]);
   });
 
+  it("pins a filename with a CJK particle glued on", () => {
+    expect(planFiles({
+      goal: "plan.md를 읽어 주세요.",
+      plan: [{ step: "review.txtを開いてください。", status: "active" }],
+    }, cwd)).toEqual([join(cwd, "plan.md"), join(cwd, "review.txt")]);
+  });
+
   it("expands home-relative plan files with or without a task folder", () => {
     const record = {
       goal: "Follow ~/plans/release.md",
