@@ -48,13 +48,21 @@ const factsSchema = z
     message_id: z.string().nullish(), question_id: z.string().nullish(),
   }));
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
+// a line and how many live rows were before it when it landed
+const landedSchema = z.object({ line: z.string(), at: z.number() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
   // notes a full MEMORY.md turned away before the overflow file; they are gone, never reported as moved
   dropped: z.record(z.string(), droppedSchema).optional(),
   overflow: z.record(z.string(), droppedSchema).optional(),
-  // a held batch's lines already in the overflow file, so its replay after a restart never adds them again
-  held: z.record(z.string(), z.object({ ids: z.array(z.string()), wrote: z.array(z.string()).optional(), seen: z.array(z.string()).optional() })).optional(),
+  // a held batch as accepted and where its overflow rows are, so a restart lands it as it was and never adds them again
+  held: z.record(z.string(), z.object({
+    ids: z.array(z.string()),
+    notes: z.array(z.object({ line: z.string(), replaces: z.string().optional(), kind: z.enum(["decision", "tweak"]).optional() })),
+    picked: z.boolean().optional(),
+    wrote: z.array(landedSchema).optional(),
+    seen: z.array(landedSchema).optional(),
+  })).optional().catch(undefined),
 });
 
 export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>;
@@ -63,6 +71,7 @@ export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
 export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; thread?: string };
 type DroppedCount = z.infer<typeof droppedSchema>;
+type Landed = z.infer<typeof landedSchema>;
 /** Notes sent to the overflow file, and apart from them notes an older version turned away and lost. */
 export type DroppedNotes = DroppedCount & { lost?: DroppedCount };
 
@@ -596,12 +605,14 @@ interface Batch {
   ids: string[];
   facts: Fact[];
   source: UserLine[];
+  // accepted before a restart, since asking the note-taker again can word them another way
+  notes?: Note[];
   // its picks are in the timeline, held only for MEMORY.md
   picked?: boolean;
   // its lines an earlier try put in the overflow file, written again only once gone from there
-  wrote?: string[];
+  wrote?: Landed[];
   // its lines an earlier try left out as already the newest row, so a row landing after them never makes a retry add them
-  seen?: string[];
+  seen?: Landed[];
 }
 
 /** Notes passing facts from new user lines into MEMORY.md once a 1:1 chat goes quiet. Never on the reply path. */
@@ -614,7 +625,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const lost = new Map<string, DroppedCount>();
   // generated but unsaved, so a busy turn or a moved revision never pays for the same batch twice
   const held = new Map<string, Batch>();
-  const replays = new Map<string, Pick<Batch, "ids" | "wrote" | "seen">>();
+  const replays = new Map<string, Pick<Batch, "ids" | "picked" | "wrote" | "seen"> & { notes: Note[] }>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const queue: Array<{ botId: string; threadId: string }> = [];
   const running = new Map<string, { botId: string; done: Promise<void>; controller: AbortController }>();
@@ -644,7 +655,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     for (const [botId, record] of Object.entries(state.dropped ?? {})) lost.set(botId, record);
     for (const [botId, record] of Object.entries(state.overflow ?? {})) overflowed.set(botId, record);
-    for (const [threadId, batch] of Object.entries(state.held ?? {})) replays.set(threadId, batch);
+    for (const [threadId, batch] of Object.entries(state.held ?? {})) {
+      replays.set(threadId, batch);
+      held.set(threadId, { ...batch, facts: [], source: [] });
+    }
   } catch {
     // first run or unreadable: start empty
   }
@@ -704,10 +718,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     save();
   };
 
-  const hold = (threadId: string, batch: Batch) => {
+  const hold = (threadId: string, batch: Batch, notes: Note[]) => {
     held.set(threadId, batch);
     if (!batch.wrote?.length && !batch.seen?.length) return;
-    replays.set(threadId, { ids: batch.ids, wrote: batch.wrote, seen: batch.seen });
+    replays.set(threadId, { ids: batch.ids, notes: notes.map(({ line, replaces, kind }) => ({ line, replaces, kind })), picked: batch.picked, wrote: batch.wrote, seen: batch.seen });
     save();
   };
 
@@ -721,7 +735,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       console.warn(`[memory-pass] ${PICKS_FILE} read failed (${error instanceof Error ? error.name : "error"})`);
       return arm(botId, threadId);
     }
-    const accepted = acceptFacts(batch.facts, batch.source, memory.text, timeline);
+    const accepted = batch.notes ?? acceptFacts(batch.facts, batch.source, memory.text, timeline);
     if (!accepted.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
@@ -793,10 +807,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
         const { rows, close } = liveRows(current);
-        const known = new Set(rows);
-        wrote = wrote.filter((line) => known.has(line));
-        seen = seen.filter((line) => known.has(line));
-        const due = overflow.filter(({ line }) => !wrote.includes(line) && !seen.includes(line));
+        // only its own row counts, at or past where it went, so an older copy's row in the same words never stands in for it
+        const stays = ({ line, at }: Landed) => rows.indexOf(line, at) >= 0;
+        wrote = wrote.filter(stays);
+        seen = seen.filter(stays);
+        const due = overflow.filter(({ line }) => ![...wrote, ...seen].some((row) => row.line === line));
         // a restart can replay a batch whose notes already landed in order
         let ends = due.length;
         while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line)) ends -= 1;
@@ -807,16 +822,16 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
           newest = line;
           return true;
         });
-        seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => line)];
+        seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => ({ line, at: rows.lastIndexOf(line) }))];
         if (fresh.length) {
           const added = fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("");
           appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);
-          overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.includes(line)).length, since: prior?.since ?? now() });
-          wrote = [...wrote, ...fresh.map(({ line }) => line)];
+          overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.some((row) => row.line === line)).length, since: prior?.since ?? now() });
+          wrote = [...wrote, ...fresh.map(({ line }, index) => ({ line, at: rows.length + index }))];
         }
       } catch (error) {
-        hold(threadId, { ...batch, picked, wrote, seen });
+        hold(threadId, { ...batch, picked, wrote, seen }, accepted);
         log({ botId, threadId, facts: accepted.length, ms, result: "error" });
         console.warn(`[memory-pass] ${OVERFLOW_FILE} write failed (${error instanceof Error ? error.name : "error"})`);
         return arm(botId, threadId);
@@ -830,18 +845,18 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (tail !== null && !conflict) appendLines(join(ensureWorkspace(botId), "MEMORY.md"), tail);
     } catch (error) {
       // the overflow notes are on disk; a retry finds them there, then finishes MEMORY.md and the receipt
-      hold(threadId, { ...batch, picked, wrote, seen });
+      hold(threadId, { ...batch, picked, wrote, seen }, accepted);
       log({ botId, threadId, facts: accepted.length, ms, result: "error" });
       console.warn(`[memory-pass] MEMORY.md write failed (${error instanceof Error ? error.name : "error"})`);
       return arm(botId, threadId);
     }
     if (conflict) {
-      hold(threadId, { ...batch, picked, wrote, seen });
+      hold(threadId, { ...batch, picked, wrote, seen }, accepted);
       log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
       return arm(botId, threadId);
     }
     // a repeat left out of the overflow file was not written, so it gets no receipt
-    const kept = accepted.filter((note) => (note.pick ? picked : !note.kind && (!overflow.includes(note) || wrote.includes(note.line))));
+    const kept = accepted.filter((note) => (note.kind ? picked : !overflow.includes(note) || wrote.some(({ line }) => line === note.line)));
     if (!kept.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
@@ -863,18 +878,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const run = async (botId: string, threadId: string, signal: AbortSignal) => {
-    const queued = pending.get(threadId) ?? [];
-    if (!queued.length || !deps.enabled(botId)) return;
+    const ids = [...(pending.get(threadId) ?? [])];
+    if (!ids.length || !deps.enabled(botId)) return;
     const kept = held.get(threadId);
     if (kept) {
       land(botId, threadId, kept, readMemoryFile(botId), memoryFileRaw(botId), 0);
       if (pending.has(threadId) && !held.has(threadId)) arm(botId, threadId);
       return;
     }
-    // after a restart a held batch runs again alone, so its lines never land twice and a later line still does
-    const replay = replays.get(threadId);
-    const again = replay?.ids.filter((id) => queued.includes(id)) ?? [];
-    const ids = again.length ? again : [...queued];
     const generate = deps.generate(botId);
     if (!generate) return warnOnce("no Claude CLI instance");
     const messages = deps.store.messagesFor(sourceThread(threadId));
@@ -931,8 +942,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
-    land(botId, threadId, { ids, facts: parseFacts(output), source: lines, wrote: again.length ? replay?.wrote : undefined, seen: again.length ? replay?.seen : undefined }, memory, raw, now() - started);
-    if (again.length && pending.has(threadId) && !held.has(threadId)) arm(botId, threadId);
+    land(botId, threadId, { ids, facts: parseFacts(output), source: lines }, memory, raw, now() - started);
   };
 
   const pump = () => {

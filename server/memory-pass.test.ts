@@ -782,10 +782,11 @@ describe("memory pass", () => {
       if (!said.includes(text)) said.push(text);
       return text;
     };
-    // the model says back what each message said, so a replay after a restart extracts the batch it held
+    // the model says back what each message said, and may word a held one another way when asked again
+    const reworded = new Map<string, string>();
     generate.mockImplementation(async (prompt) => facts(...[...prompt.matchAll(/message_id="([^"]+)"/g)].map(([, id]): [string, string] => {
       const text = store.rows("t1").find((message) => message.id === id)!.text!;
-      return [text, text];
+      return [reworded.get(id!) ?? text, text];
     })));
     const tell = async (...lines: string[]) => {
       for (const line of lines) say("t1", line);
@@ -819,28 +820,42 @@ describe("memory pass", () => {
       expect(overflow(), `run ${run}: ${a} again`).toBe(text);
       expect(chips("t1")).toHaveLength(saved);
       expect(pass.droppedNotes("bot-t1")).toEqual(count);
-      // held after its overflow step, then another writer's row and the same chat again, then a retry or a restart
+      // held after its overflow step, then the other PC's older copy of the file or another writer's row, and the same chat again, with a restart anywhere
       const c = pick(2) ? a : value();
       writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+      const prior = overflow()!;
+      const newestWhenSaid = rows().at(-1);
       lockMemoryOnce();
       await tell(c);
       vi.mocked(fs.openSync).mockRestore();
-      let other = value();
-      while (other === c) other = value();
-      if (pick(2)) fs.appendFileSync(overflowPath(), `- ${other} (noted 2026-10-15)\n`);
-      const later = [undefined, c, value()][pick(3)];
-      if (later !== undefined) say("t1", later);
-      const before = rows();
-      const restart = Boolean(pick(2));
-      if (restart) {
+      const asked = generate.mock.calls.length;
+      const restartAt = pick(5);
+      const restart = (at: number) => {
+        if (restartAt !== at) return;
         pass.dispose();
         pass = start();
-      }
+      };
+      restart(1);
+      if (pick(2)) reworded.set(store.rows("t1").findLast((message) => message.role === "user")!.id, [`${c}.`, `User ${c}`, `${c} too`][pick(3)]!);
+      let other = value();
+      while (other === c) other = value();
+      const swap = pick(3);
+      if (swap) writeFileSync(overflowPath(), `${prior}${swap === 2 ? `- ${other} (noted 2026-10-15)\n` : ""}`);
+      else if (pick(2)) fs.appendFileSync(overflowPath(), `- ${other} (noted 2026-10-15)\n`);
+      restart(2);
+      const later = [undefined, c, value()][pick(3)];
+      if (later !== undefined) say("t1", later);
+      restart(3);
+      // a row the older copy dropped is written again, unless it was the newest row already when said
+      const before = swap && newestWhenSaid !== c ? [...rows(), c] : rows();
       await settle("t1", 3 * MINUTE);
+      restart(4);
       await settle("t1", 3 * MINUTE);
       const want = later === undefined || later === before.at(-1) ? before : [...before, later];
-      expect(rows(), `run ${run}: ${c} held, then ${before.at(-1)} and ${later}, ${restart ? "restart" : "retry"}`).toEqual(want);
+      expect(rows(), `run ${run}: ${c} held, then ${["no swap", "older copy", `older copy and ${other}`][swap]} and ${later}, restart ${restartAt}`).toEqual(want);
       expect(newest()).toBe(`- ${want.at(-1)}`);
+      expect(generate).toHaveBeenCalledTimes(asked + (later === undefined ? 0 : 1));
+      expect(stored().held).toBeUndefined();
       // a hand-kept log keeps copies of a note in any order
       const key = Array.from({ length: 2 }, () => Array.from({ length: 6 }, () => glyph(0)).join("")).join(" ");
       const dates = Array.from({ length: 2 + pick(3) }, () => `2026-0${1 + pick(9)}-${10 + pick(19)}`);
@@ -1017,8 +1032,50 @@ describe("memory pass", () => {
     pass.dispose();
     pass = start();
     await settle("t1", 3 * MINUTE);
-    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate).toHaveBeenCalledTimes(1);
     expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([a, b].map((fact) => `- ${fact} (noted 2026-10-15)`));
+  });
+
+  it.each(["Works at Acme", "Works at Acme Corp", "Employed at Acme", "works at Acme", "Works at Acme.", "User works at Acme", "nothing"])("lands a held note after a restart as it was saved, where asking again would give %s", async (again) => {
+    const full = `# Memory\n${"- note\n".repeat(198)}`;
+    writeMemoryFile("bot-t1", full);
+    lockMemoryOnce();
+    generate.mockResolvedValueOnce(facts(["Works at Acme", "my job is at acme"]));
+    say("t1", "my job is at acme");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Works at Globex (noted 2026-10-15)\n");
+    generate.mockResolvedValue(again === "nothing" ? "[]" : facts([again, "my job is at acme"]));
+    pass.dispose();
+    pass = start();
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe("# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- Works at Acme (noted 2026-10-15)\n- Works at Globex (noted 2026-10-15)\n");
+    expect(memoryFileRaw("bot-t1")).toBe(`${full}- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)`);
+    expect(chips("t1").map((m) => m.tool?.spoken)).toEqual(["Works at Acme (MEMORY.md is full, saved in memory/auto-notes-overflow.md)"]);
+    expect(stored()).toEqual({ threads: {}, overflow: { "bot-t1": { dropped: 1, since: NOW + 3 * MINUTE } } });
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["retry", "restart"])("writes a held return again when an older copy of the file replaces it before the %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const older = "# Auto notes overflow\n\n- Works at Acme (noted 2026-10-01)\n- Works at Globex (noted 2026-10-14)\n";
+    writeFileSync(overflowPath(), older);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${older}- Works at Acme (noted 2026-10-15)\n`);
+    // the other PC's copy, without this PC's row, wins a sync
+    writeFileSync(overflowPath(), `${older}- Likes tea (noted 2026-10-15)\n`);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${older}- Likes tea (noted 2026-10-15)\n- Works at Acme (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 
   it.each(["rename-save", "open append handle"])("keeps another writer's overflow rows during %s", async (kind) => {
