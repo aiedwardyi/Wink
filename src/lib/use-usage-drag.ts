@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
+import { usageIdentity } from "../../shared/usage-identity";
 import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "./phone-swipe";
 import { LIFT_SCALE, soften, travel, useTouchDrag, type Travel } from "./use-touch-drag";
 
@@ -9,7 +10,8 @@ type Orders = Record<string, string[]>;
 const ROW = "[data-account-row]";
 const SECTION = "[data-usage-engine]";
 const PRESSABLE = "[data-usage-reorder]";
-const SKIP = "[data-account-name-editor], input, a, code";
+// a press on a row's own button is a click, never a pickup, for mouse and touch alike
+const SKIP = "button:not([data-edit-name], [data-engine-fold]), [data-account-name-editor], input, a, code";
 const DRAGGING = "data-usage-dragging";
 const EDGE = 48;
 const STEP = 10;
@@ -27,9 +29,18 @@ function load(): Orders {
   } catch { return {}; }
 }
 
-export function ordered<T>(items: T[], order: string[] = [], id: (item: T) => string): T[] {
+type Instance = { instanceId: string; snapshot: Parameters<typeof usageIdentity>[0] };
+
+// a sign-out discards an added slot and its re-add gets a new id, so a saved place also names who the account signs in as
+export function rankKeys(id: string, instances: Instance[]): string[] {
+  const identity = usageIdentity(instances.find((each) => each.instanceId === id)?.snapshot ?? {});
+  return identity ? [id, `identity:${identity}`] : [id];
+}
+
+export function ordered<T>(items: T[], order: string[] = [], keys: (item: T) => string[]): T[] {
   const rank = new Map(order.map((key, index) => [key, index]));
-  return [...items].sort((a, b) => (rank.get(id(a)) ?? order.length) - (rank.get(id(b)) ?? order.length));
+  const place = (item: T) => Math.min(order.length, ...keys(item).map((key) => rank.get(key) ?? order.length));
+  return [...items].sort((a, b) => place(a) - place(b));
 }
 
 type Drag = {
@@ -41,10 +52,26 @@ function scrollParent(node: HTMLElement | null) {
   return null;
 }
 
-export function useUsageDrag(engines: { base: string; accounts: { id: string }[] }[]) {
+export function useUsageDrag(engines: { base: string; accounts: { id: string }[] }[], instances: Instance[]) {
   const [orders, setOrders] = useState(load);
   const latest = useRef(orders);
   latest.current = orders;
+  const named = (ids: string[]) => [...new Set(ids.flatMap((id) => rankKeys(id, instances)))];
+  const save = (next: Orders) => {
+    setOrders(next);
+    try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
+    window.dispatchEvent(new CustomEvent(CHANGE, { detail: next }));
+  };
+  // an order saved by slot id alone learns who each signed-in slot is, so that slot's later re-add keeps its place
+  useEffect(() => {
+    const before = latest.current;
+    const learned = engines.flatMap(({ base }) => {
+      const order = before[base] ?? [];
+      const next = named(order);
+      return next.length > order.length ? [[base, next] as const] : [];
+    });
+    if (learned.length) save({ ...before, ...Object.fromEntries(learned) });
+  });
   useEffect(() => {
     const changed = (event: Event) => { if (event instanceof CustomEvent) setOrders(event.detail); };
     const stored = (event: StorageEvent) => { if (event.key === KEY || event.key === null) setOrders(load()); };
@@ -77,12 +104,9 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const before = latest.current;
     const visible = new Set(ids);
     let index = 0;
-    const order = accounts ? ordered(accounts, before[drag.key], (account) => account.id)
+    const order = accounts ? ordered(accounts, before[drag.key], (account) => rankKeys(account.id, instances))
       .map((account) => visible.has(account.id) ? ids[index++]! : account.id) : ids;
-    const next = { ...before, [drag.key]: order };
-    setOrders(next);
-    try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
-    window.dispatchEvent(new CustomEvent(CHANGE, { detail: next }));
+    save({ ...before, [drag.key]: accounts ? named(order) : order });
   };
   const focus = (drag: Drag) => {
     const selector = drag.node.matches(ROW) ? ROW : SECTION;
@@ -148,7 +172,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     active.current = null;
   };
   const touchRef = useTouchDrag(PRESSABLE, `${SECTION}, ${ROW}`, {
-    skip: `button:not([data-edit-name], [data-engine-fold]), ${SKIP}`,
+    skip: SKIP,
     selectPressed: true,
     scroller: () => scrollParent(list.current),
     lift: (pressed) => {
@@ -169,8 +193,6 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     let node: HTMLElement | null = null;
     let pointerY = startY;
     let frame = 0;
-    // a press inside an edge band would scroll its own row away on a jiggle; that band waits until the pointer leaves it
-    let still: { top: boolean; bottom: boolean } | null = null;
     const place = () => {
       if (!active.current || !node) return;
       over(null, pointerY);
@@ -180,12 +202,8 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
       const box = scrollParent(list.current);
       if (box && active.current) {
         const rect = box.getBoundingClientRect();
-        const top = pointerY < rect.top + EDGE;
-        const bottom = pointerY > rect.bottom - EDGE;
-        still ??= { top: startY < rect.top + EDGE, bottom: startY > rect.bottom - EDGE };
-        still = { top: still.top && top, bottom: still.bottom && bottom };
         const before = box.scrollTop;
-        box.scrollTop += top && !still.top ? -STEP : bottom && !still.bottom ? STEP : 0;
+        box.scrollTop += pointerY < rect.top + EDGE ? -STEP : pointerY > rect.bottom - EDGE ? STEP : 0;
         if (box.scrollTop !== before) place();
       }
       frame = requestAnimationFrame(edge);

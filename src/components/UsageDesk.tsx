@@ -20,7 +20,7 @@ import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { setUsageMode, useUsageMode } from "@/lib/usage-preferences";
-import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
+import { ordered, rankKeys, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { useUsageSwitch } from "@/lib/use-usage-switch";
 import { EngineSignIn } from "./EngineSetup";
 import { Fold } from "./Fold";
@@ -393,6 +393,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   reloadInstances: () => unknown; signIn: () => void; folded: boolean; onFold: () => void; accountOrder?: string[];
 }) {
   const { t } = clock;
+  const { state: store } = useStore();
   const checked = checkedMain(state, engine.base);
   const id = useId();
   // Expand all opens every engine at once, so only a press on this header brings its rows into view.
@@ -400,7 +401,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
   const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
     checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} settings {...slots} />;
-  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => each.id), checked, t, row,
+  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => rankKeys(each.id, store.instances)), checked, t, row,
     loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
   const head = (arrows?: ReactNode) => (
     <div data-engine-head="" {...(board.engines.filter((each) => each.accounts.length).length > 1 && reorderable(t("usage.desk.reorder", { name: label })))} className="usage-engine-head">
@@ -444,7 +445,7 @@ export function UsageDesk({ closing = false }: { closing?: boolean }) {
   const mode = useUsageMode();
   const pending = useRefreshPending();
   const spin = useSpinUntilTurnEnds(pending.size > 0);
-  const drag = useUsageDrag(state.board?.engines ?? []);
+  const drag = useUsageDrag(state.board?.engines ?? [], store.instances);
   const desk = useRef<HTMLDivElement>(null);
   const heads = useRef(new Map<HTMLElement, number>());
   const waited = useRef(false);
@@ -578,7 +579,7 @@ export function UsageDesk({ closing = false }: { closing?: boolean }) {
       {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
       <div data-usage-sections="" ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="usage-sections">
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
-      {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => each.base).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
+      {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => [each.base]).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
         terminal={terminal} clock={clock} label={engineLabel(board, each, store.instances)} folded={folded(each)} onFold={() => fold(each.base, !folded(each))} accountOrder={drag.orders[each.base]} reloadInstances={() => refreshInstances()}
         signIn={() => dispatch({ type: "toggleAppSettings", open: true, section: "connections" })} />)}
       </div>
