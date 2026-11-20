@@ -209,6 +209,23 @@ it("puts phone inline captions after the stage", async () => {
   expect(host.querySelector(".verify-watch-stage + .verify-watch-caption")).not.toBeNull();
 });
 
+it("holds the phone inline caption's room for the whole replay, desktop unchanged", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  const issue: VerifyIssue = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] };
+  const done: VerifyCardData = { ...card, status: "completed", live: undefined, replay: ["run-1"], issues: [issue] };
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [issue])));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: done, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  expect(host.querySelector(".verify-watch-caption:not([aria-hidden])")).toBeNull();
+  expect(host.querySelector(".verify-watch-stage + .verify-watch-captions > .verify-watch-caption[aria-hidden]")?.textContent).toContain("#apply");
+  await tick(2);
+  expect(host.querySelector(".verify-watch-captions > .verify-watch-caption:not([aria-hidden])")?.textContent).toContain("#apply");
+  await tick(60);
+  expect(host.querySelector(".verify-watch-captions, .verify-watch-caption")).toBeNull();
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: done, threadId: "t", live: false, hidden: false, onClose() {} })));
+  expect(host.querySelector(".verify-watch-captions")).toBeNull();
+});
+
 it.each([false, true])("keeps docked captions outside the target's stage (live=%s)", async live => {
   const tick = animationClock();
   vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [{ checker: "LINKS", tile: "desktop", rule: "self sign-up", where: "a#apply", measured: 'Sign-up link "#apply" points at itself; click the link', box: [540, 300, 200, 64] }])));
@@ -570,6 +587,10 @@ it("raises the pane before the maximize motion starts and preserves the chat's c
   expect(watchRule(".verify-watch-frame")).toContain("transition: min-height var(--motion-large) var(--ease-standard);");
   expect(watchRule(".verify-watch-frame[data-maximized]")).toContain("min-height: calc(100% - 24px);");
   expect(watchCss).not.toMatch(/\d\s?ms\b/);
+});
+
+it("wraps a held phone caption at the slot's width, as a lone one wraps at the frame's", () => {
+  expect(watchRule(".verify-watch-captions")).toContain("grid-template-columns: minmax(0, 1fr);");
 });
 
 it("lets the phone inline frame take its content height inside the replay fold", () => {

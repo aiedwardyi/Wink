@@ -1,13 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, Maximize2, Minimize2, Play, RefreshCw, X } from "lucide-react";
-import { VERIFY_ROUTES, type VerifyCardData, type VerifyTile } from "../../shared/live-verify";
+import { VERIFY_ROUTES, type VerifyCardData, type VerifyIssue, type VerifyTile } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { VERIFY_ROLE as ROLE, VERIFY_TAG as TAG, verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
-import { chooseVerifyTab, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate } from "@/lib/verify-watch";
+import { chooseVerifyTab, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate, verifyReel } from "@/lib/verify-watch";
 import { BANNER_MS, CURSOR_ARROW, VerifyWatchShow, tagSpot, type Part } from "@/lib/verify-watch-show";
 import "./VerifyWatch.css";
 
@@ -262,7 +262,10 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   }, [tile, head]);
   const reel = show.reelIssue();
   const pillTop = reel?.box && reel.box[1] + (reel.scrollY ?? 0) - (show.frame()?.scrollY ?? 0) + reel.box[3] / 2 > tileSize(show)[1] / 2;
-  const caption = reel && <div className="verify-watch-caption"><b>{reel.tile === "phone" ? c.phone : c.desktop} · {reel.where}</b><span>{verifyProblem(reel, locale)}</span></div>;
+  const captionOf = (issue: VerifyIssue) => <><b>{issue.tile === "phone" ? c.phone : c.desktop} · {issue.where}</b><span>{verifyProblem(issue, locale)}</span></>;
+  const caption = reel && <div className="verify-watch-caption">{captionOf(reel)}</div>;
+  // in the chat a caption arriving mid-replay would grow the card, so the slot holds the tallest one from the start
+  const held = inline && show.showing ? verifyReel(card.issues ?? []) : [];
   const issues = show.end?.issues ?? [];
   const seconds = Math.round(show.ms / 1000);
   const current = PARTS.find(part => !show.parts.has(part));
@@ -299,7 +302,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
         )}
         {banner && <div className="verify-watch-banner" role="status">{banner}</div>}
       </div>
-      {caption}
+      {held.length ? <div className="verify-watch-captions">{held.map((issue, i) => <div key={i} className="verify-watch-caption" aria-hidden="true">{captionOf(issue)}</div>)}{caption}</div> : caption}
       <div className="verify-watch-line">
         {live && <span className="verify-watch-live">{c.live}</span>}
         {PARTS.map(part => (
