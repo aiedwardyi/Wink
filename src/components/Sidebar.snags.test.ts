@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
+import { CHAT_SWITCH_PATH } from "@/lib/chat-switch-diag";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { noteJoinedRoom } from "@/lib/joined-rooms";
 import { SIDEBAR_ORDER_KEY } from "@/lib/sidebar-preferences";
@@ -274,6 +275,6 @@ it.each(["en", "ko"] as const)("replaces a rejected saved code in %s", async (lo
   const paste = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(paste, "clipboardData", { value: { getData: () => code } });
   await act(async () => dialog!.querySelector("input")!.dispatchEvent(paste));
-  expect(calls.at(-1)).toEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: { code } });
+  expect(calls.filter((call) => call.path !== CHAT_SWITCH_PATH).at(-1)).toEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: { code } });
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });

@@ -179,7 +179,7 @@ import {
   sendWebPushToDevices,
   type PushTarget,
 } from "./web-push.ts";
-import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { receiveChatSwitch, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
@@ -8765,6 +8765,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const test = { title: "Wink", body: "Test notification. Your phone is set up.", tag: "orbit:test", url: "/", icon };
       const [result] = await sendWebPushToDevices(DATA_DIR, test, webPushSubject(), phoneSignedIn, body.data.endpoint);
       return result?.ok ? json(res, 200, { ok: true }) : json(res, 502, { error: result?.error ?? "push failed" });
+    }
+    if (method === "POST" && path === "/api/diag/chat-switch") {
+      const received = await receiveChatSwitch(req);
+      return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
     }
     if (method === "POST" && path === "/api/diag/cold-open") {
       const received = await receiveColdOpen(req, DATA_DIR);
