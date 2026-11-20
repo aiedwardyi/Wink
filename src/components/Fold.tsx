@@ -19,8 +19,10 @@ export function Fold({ open, id, className, soft, keep, instant, fade, onOpened,
   }
   const full = open && !opening;
   const wasFull = useRef(full);
+  const latest = useRef(onOpened);
+  latest.current = onOpened;
   useEffect(() => {
-    if (full && !wasFull.current) onOpened?.();
+    if (full && !wasFull.current) latest.current?.();
     wasFull.current = full;
   }, [full]);
   if (!mounted || (instant && !open)) return id ? <div id={id} hidden /> : null;
