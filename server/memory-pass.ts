@@ -48,8 +48,8 @@ const factsSchema = z
     message_id: z.string().nullish(), question_id: z.string().nullish(),
   }));
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
-// a line and how many live rows were before it when it landed
-const landedSchema = z.object({ line: z.string(), at: z.number() });
+// a row by its words, its date and how many earlier rows share both, so rows coming or going around it never move it
+const landedSchema = z.object({ line: z.string(), date: z.string(), copy: z.number() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
   // notes a full MEMORY.md turned away before the overflow file; they are gone, never reported as moved
@@ -261,8 +261,9 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
-function liveRows(text: string): { rows: string[]; close: string } {
+function liveRows(text: string): { rows: string[]; dates: string[]; close: string } {
   const rows: string[] = [];
+  const dates: string[] = [];
   let block: { close: string; end: RegExp } | undefined;
   for (const row of text.split("\n")) {
     if (block) {
@@ -283,9 +284,12 @@ function liveRows(text: string): { rows: string[]; close: string } {
       continue;
     }
     const bullet = /^ {0,3}[-*+][ \t]+([^\r\n]+)/.exec(row)?.[1];
-    if (bullet) rows.push(NOTED.exec(row)?.[1] ?? bullet.trim());
+    if (!bullet) continue;
+    const noted = NOTED.exec(row);
+    rows.push(noted?.[1] ?? bullet.trim());
+    dates.push(noted?.[2] ?? "");
   }
-  return { rows, close: block ? `${block.close}\n` : "" };
+  return { rows, dates, close: block ? `${block.close}\n` : "" };
 }
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
@@ -806,12 +810,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       try {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-        const { rows, close } = liveRows(current);
-        // only its own row counts, at or past where it went, so an older copy's row in the same words never stands in for it
-        const stays = ({ line, at }: Landed) => rows.indexOf(line, at) >= 0;
+        const { rows, dates, close } = liveRows(current);
+        const copies = (line: string, date: string, end = rows.length) => rows.slice(0, end).filter((row, index) => row === line && dates[index] === date).length;
+        // only its own row counts, so an older copy's row in the same words never stands in for it
+        const stays = ({ line, date, copy }: Landed) => copies(line, date) > copy;
         wrote = wrote.filter(stays);
         seen = seen.filter(stays);
-        const due = overflow.filter(({ line }) => ![...wrote, ...seen].some((row) => row.line === line));
+        // from its first row gone on, so a later line of the batch still lands after an earlier one written again
+        const gone = overflow.findIndex(({ line }) => ![...wrote, ...seen].some((row) => row.line === line));
+        const due = gone < 0 ? [] : overflow.slice(gone);
         // a restart can replay a batch whose notes already landed in order
         let ends = due.length;
         while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line)) ends -= 1;
@@ -822,13 +829,16 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
           newest = line;
           return true;
         });
-        seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => ({ line, at: rows.lastIndexOf(line) }))];
+        seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => {
+          const at = rows.lastIndexOf(line);
+          return { line, date: dates[at] ?? "", copy: copies(line, dates[at] ?? "", at) };
+        })];
         if (fresh.length) {
           const added = fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("");
           appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);
           overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.some((row) => row.line === line)).length, since: prior?.since ?? now() });
-          wrote = [...wrote, ...fresh.map(({ line }, index) => ({ line, at: rows.length + index }))];
+          wrote = [...wrote.filter(({ line }) => !fresh.some((note) => note.line === line)), ...fresh.map(({ line }, index) => ({ line, date: stamp, copy: copies(line, stamp) + fresh.slice(0, index).filter((note) => note.line === line).length }))];
         }
       } catch (error) {
         hold(threadId, { ...batch, picked, wrote, seen }, accepted);
@@ -855,8 +865,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
       return arm(botId, threadId);
     }
-    // a repeat left out of the overflow file was not written, so it gets no receipt
-    const kept = accepted.filter((note) => (note.kind ? picked : !overflow.includes(note) || wrote.some(({ line }) => line === note.line)));
+    // a repeat left out of the overflow file was not written, so it gets no receipt; one an earlier try wrote does
+    const kept = accepted.filter((note) => (note.kind ? picked : !overflow.includes(note) || [...wrote, ...batch.wrote ?? []].some(({ line }) => line === note.line)));
     if (!kept.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);

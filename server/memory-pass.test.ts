@@ -1078,6 +1078,79 @@ describe("memory pass", () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
+  const above = "# Auto notes overflow\n\n- Works at Acme (noted 2026-10-01)\n- Likes tea (noted 2026-10-01)\n- Has a cat (noted 2026-10-02)\n";
+  const aboveEdits: Array<[string, (text: string) => string]> = [
+    ["deletes a row", (text) => text.replace("- Likes tea (noted 2026-10-01)\n", "")],
+    ["deletes the older row in the same words", (text) => text.replace("- Works at Acme (noted 2026-10-01)\n", "")],
+    ["adds a row", (text) => text.replace("- Likes tea", "- Plays chess (noted 2026-09-30)\n- Likes tea")],
+    ["swaps two rows", (text) => text.replace("- Likes tea (noted 2026-10-01)\n- Has a cat (noted 2026-10-02)\n", "- Has a cat (noted 2026-10-02)\n- Likes tea (noted 2026-10-01)\n")],
+    ["puts a row in a comment", (text) => text.replace("- Likes tea (noted 2026-10-01)\n", "<!-- - Likes tea (noted 2026-10-01) -->\n")],
+  ];
+  it.each(aboveEdits.flatMap(([kind, edit]) => [[kind, "retry", edit], [kind, "restart", edit]] as const))("never writes a held note again when a hand edit %s above it, then a %s", async (_kind, how, edit) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), above);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Works at Globex (noted 2026-10-15)\n");
+    const edited = edit(overflow()!);
+    writeFileSync(overflowPath(), edited);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  const chipEdits: Array<[string, (text: string) => string]> = [
+    ["a row above is deleted", (text) => text.replace("- Likes tea (noted 2026-10-01)\n", "")],
+    ["a shorter older copy replaces the file", () => "# Auto notes overflow\n\n- Works at Acme (noted 2026-10-01)\n"],
+  ];
+  it.each(chipEdits.flatMap(([kind, edit]) => [[kind, "retry", edit], [kind, "restart", edit]] as const))("shows the saved chip for a held note still the newest row after %s, then a %s", async (_kind, how, edit) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), above);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    const edited = edit(overflow()!);
+    writeFileSync(overflowPath(), edited);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    expect(chips("t1").map((m) => m.tool?.spoken)).toEqual(["Works at Acme (MEMORY.md is full, saved in memory/auto-notes-overflow.md)"]);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+    expect(stored().held).toBeUndefined();
+  });
+
+  it.each(["retry", "restart"])("keeps a held batch's later line last when only its earlier line is removed before the %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Uses pnpm", "i used to say i use pnpm"], ["Uses npm", "ok so now i use npm"]));
+    say("t1", "i used to say i use pnpm");
+    say("t1", "ok so now i use npm");
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(overflowPath(), overflow()!.replace("- Uses pnpm (noted 2026-10-15)\n", ""));
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual(["Uses npm", "Uses pnpm", "Uses npm"].map((fact) => `- ${fact} (noted 2026-10-15)`));
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(2);
+  });
+
   it.each(["rename-save", "open append handle"])("keeps another writer's overflow rows during %s", async (kind) => {
     writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
     const path = overflowPath();
