@@ -190,7 +190,7 @@ jobs:
       # test:terminal alone ran past the 10-minute cap on slow runners; each job takes half its files.
       - run: pnpm test:terminal
         env:
-          NODE_OPTIONS: --test-shard=${{ matrix.shard }}/2
+          NODE_OPTIONS: --test-shard=${{ matrix.shard }}/2 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/node-test-stalls.mjs --test-reporter-destination=stderr
 
   test:
     name: typecheck + test (Windows)
