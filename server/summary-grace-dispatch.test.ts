@@ -196,7 +196,7 @@ describe("summary grace dispatch", () => {
         ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },
         skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", opts: {}, tagged: [],
         text: "next request", activeMessages, skipTranscript, userMessage, replaysTranscript: false, replaysNatively: false,
-        reactions: {}, rewound: false, fresh: false, recycled: false, recycleReason: undefined, modelContextWindow: 200_000,
+        reactions: {}, rewound: false, fresh: false, engineChanged: false, recycled: false, recycleReason: undefined, modelContextWindow: 200_000,
         recycleDeferred: false,
         transcript: prepared.transcript, compactedThisTurn: Boolean(prepared.compaction), taskRecord: undefined, durableTaskRecordText: taskRecordText,
         recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, sessionCompactionId: null, seed,

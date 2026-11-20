@@ -145,7 +145,8 @@ type ApiBody =
   | { title: string }
   | { threadId: string }
   | { memberIds: string[] }
-  | { cwd: string | null };
+  | { cwd: string | null }
+  | { messageId: string };
 
 describe("context compaction e2e", () => {
   let child: ChildProcess;
