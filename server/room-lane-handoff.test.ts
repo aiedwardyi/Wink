@@ -89,7 +89,7 @@ describe("lane hand-off", () => {
   it("puts the plain-words line only in a lane turn's room prompt", () => {
     const expression = section("  const roomSystem =", ";\n");
     const prompt = (handoff: object | null) => runInNewContext(`${expression}; roomSystem`, {
-      handoff, LANE_HANDOFF_LINE, system: "SYS", cwd: "", workspace: undefined, cfg: {}, bot: { id: "pip" }, lane: Boolean(handoff), text: "", integrations: {}, selectedSkills: [],
+      handoff, LANE_HANDOFF_LINE, system: "SYS", cwd: "", workspace: undefined, cfg: {}, bot: { id: "pip" }, lane: Boolean(handoff), text: "", integrations: {}, selectedSkills: [], canMessage: false,
       projectFolderPrompt: () => "", detailedRepliesEnabled: () => false, DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", asked: undefined, aboutYouPrompt: () => "",
       memorySystemPrompt: () => "", memoryNotesEnabled: () => true, renderSkillInstructions: () => "", installedPlaybookInstructions: () => "", harnessPlaybookPrompt: () => "",
       accessRules: () => " ACCESS", instance: { adapter: {} }, access: {}, selection: {}, memberTurnSelection: () => ({}),

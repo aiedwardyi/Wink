@@ -191,7 +191,7 @@ describe("summary grace dispatch", () => {
         mailForTurn: () => event === "mail" || event === "held mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes,
         opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
-        computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
+        computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "", canMessage: false,
         commsDepth: 0, MAX_COMMS_DEPTH: 1,
         taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false, cfg: {},
         ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },

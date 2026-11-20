@@ -144,7 +144,7 @@ describe("every bot reads About You", () => {
   const asked = () => js(declared("asked")?.getText(index) ?? "");
   const roomSystem = (turn: Record<string, unknown>) =>
     evaluate(`${asked()}\n${js(declared("roomSystem")!.getText(index))}\nreturn roomSystem;`, {
-      system: "", projectFolderPrompt: () => "", cwd: ".", detailedRepliesEnabled: () => false, cfg: {},
+      system: "", projectFolderPrompt: () => "", cwd: ".", detailedRepliesEnabled: () => false, cfg: {}, canMessage: false, memoryParts: { guidance: "", content: "" },
       DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", aboutYouPrompt, memorySystemPrompt: () => "",
       memoryNotesEnabled: () => false, bot: { id: "bot", playbooks: [] }, lane: false, renderSkillInstructions: () => "", selectedSkills: [],
       installedPlaybookInstructions: () => "", text: "", harnessPlaybookPrompt: () => "", integrations: {}, accessRules: () => "",

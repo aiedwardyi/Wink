@@ -357,12 +357,19 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
   const near =
     memory.bytes >= MEMORY_MAX_BYTES * MEMORY_WARN_SHARE ||
     memory.lines >= MEMORY_MAX_LINES * MEMORY_WARN_SHARE;
-  // above the notes: a notice at the cut, after 24 KB of notes, gets missed
   const notice = memory.truncated
     ? `\n\n[${size}, over ${budget}, so its end was not loaded. Trim it this session: ${trim}]`
     : near
       ? `\n\n[${size}, near ${budget}; past it, the end stops loading. Trim it soon: ${trim}]`
       : "";
   const cut = memory.truncated ? "\n[MEMORY.md was cut off here.]" : "";
-  return `${guidance}${notice}${conflicts}\n\nYour memory (MEMORY.md):\n${memory.text}${cut}${picks}`;
+  const trailing = notice && !cut ? memory.text.match(/\s*$/)?.[0] ?? "" : "";
+  const text = trailing ? memory.text.slice(0, -trailing.length) : memory.text;
+  return `${guidance}${conflicts}\n\nYour memory (MEMORY.md):\n${text}${cut}${notice}${trailing}${picks}`;
+}
+
+export function memorySystemParts(botId: string, readOnly = false, notesEnabled = true): { guidance: string; content: string } {
+  const prompt = memorySystemPrompt(botId, readOnly, notesEnabled);
+  const at = prompt.indexOf("\n\n");
+  return at < 0 ? { guidance: prompt, content: "" } : { guidance: prompt.slice(0, at), content: prompt.slice(at) };
 }

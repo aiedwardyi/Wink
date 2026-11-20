@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { memoryNotesEnabled } from "./config.ts";
-import { ensureWorkspace, loadMemory, memorySystemPrompt, MEMORY_SEED, workspaceDir } from "./workspace.ts";
+import { ensureWorkspace, loadMemory, memorySystemParts, memorySystemPrompt, MEMORY_SEED, workspaceDir } from "./workspace.ts";
 
 const baseline = JSON.parse(readFileSync(new URL("../test/fixtures/memory-prompt-on.json", import.meta.url), "utf8")) as {
   cases: Array<{ kind: string; hashes: string[] }>;
@@ -32,7 +32,11 @@ describe("memory notes prompt", () => {
     for (const [index, lane] of [false, true].entries()) {
       const prompt = memorySystemPrompt(botId, lane, true);
       expect(prompt).toBe(memorySystemPrompt(botId, lane));
-      const normalized = prompt.replaceAll(dir.replaceAll("\\", "\\\\"), "<workspace>").replaceAll(dir, "<workspace>").replaceAll("<workspace>\\\\", "<workspace>/");
+      const notice = prompt.match(/\n\n\[MEMORY\.md is about [^\n]+\]/)?.[0] ?? "";
+      const withoutNotice = notice ? prompt.replace(notice, "") : prompt;
+      const boundary = withoutNotice.indexOf("\n\n");
+      const original = notice ? withoutNotice.slice(0, boundary) + notice + withoutNotice.slice(boundary) : prompt;
+      const normalized = original.replaceAll(dir.replaceAll("\\", "\\\\"), "<workspace>").replaceAll(dir, "<workspace>").replaceAll("<workspace>\\\\", "<workspace>/");
       expect(createHash("sha256").update(normalized).digest("hex")).toBe(hashes[index]);
     }
   });
@@ -69,11 +73,13 @@ describe("memory notes prompt", () => {
     [{ features: { memoryNotes: true } }, { memoryNotes: false }, false],
   ] as const)("uses the effective bot setting in solo and room dispatch: %j %j", (cfg, setting, enabled) => {
     seed("populated");
-    const solo = source.split("\n").find((line) => line.includes('tracePart("memory", privateWorkspace ?'))!.trim().replace(/\s*\+$/, "");
-    const room = source.split("\n").find((line) => line.includes('(workspace ? `\\n${memorySystemPrompt('))!.trim().replace(/\s*\+$/, "");
-    const context = { cfg, bot: { id: botId, ...setting }, privateWorkspace: true, workspace: true, lane: false, memoryNotesEnabled, memorySystemPrompt, tracePart: (_kind: string, text: string) => text };
-    expect(runInNewContext(solo, context)).toBe(memorySystemPrompt(botId, false, enabled));
-    expect(runInNewContext(room, context)).toBe(`\n${memorySystemPrompt(botId, false, enabled).trim()}`);
+    const solo = source.split("\n").find((line) => line.includes("const memoryParts = privateWorkspace"))!;
+    const room = source.split("\n").find((line) => line.includes("const memoryParts = workspace"))!;
+    const context = { cfg, bot: { id: botId, ...setting }, privateWorkspace: true, workspace: true, lane: false, memoryNotesEnabled, memorySystemParts };
+    for (const line of [solo, room]) {
+      const parts = runInNewContext(`${line}\nmemoryParts`, { ...context }) as { guidance: string; content: string };
+      expect(parts.guidance + parts.content).toBe(memorySystemPrompt(botId, false, enabled));
+    }
   });
 
   it("omits memory repair instructions while notes are OFF", () => {
