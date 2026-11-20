@@ -145,7 +145,7 @@ function readDeleted(dir: string): Map<string, Tombstone> {
   return deleted;
 }
 
-/** Past every deleted reply above, as prune walks them, so a reply never lands under a post that is gone. */
+/** Past every deleted reply above, as prune walks them, so a reply never shows under a post that is gone. */
 function liveParent(parent: string | null, deleted: ReadonlyMap<string, Tombstone>): string | null {
   const seen = new Set<string>();
   while (parent && deleted.get(parent)?.parent_id && !seen.has(parent)) {
@@ -198,12 +198,7 @@ export function createBoard(options: BoardOptions) {
     if (cache) return cache;
     cache = new Map(readPosts(options.dir).map((post) => [post.id, post]));
     // a tombstone beside its post is a delete a restart cut short, so it finishes before anything reads the board
-    for (const [id, tombstone] of gone()) {
-      if (!cache.has(id)) continue;
-      // a repair, not an edit: a fresh stamp would let this PC's older copy beat another PC's newer one
-      if (tombstone?.parent_id) lift(id, tombstone.parent_id);
-      forget(id);
-    }
+    for (const id of gone().keys()) forget(id);
     prune(cache);
     return cache;
   };
@@ -221,12 +216,19 @@ export function createBoard(options: BoardOptions) {
     return words;
   };
 
-  const keep = (id: string, tombstone: Tombstone) => {
-    if (gone().has(id) && rank(tombstone) <= rank(gone().get(id))) return;
-    const next = new Map(gone()).set(id, tombstone);
+  const keep = (tombstones: Iterable<[string, Tombstone]>) => {
+    const next = new Map(gone());
+    let changed = false;
+    for (const [id, tombstone] of tombstones) {
+      if (next.has(id) && rank(tombstone) <= rank(next.get(id))) continue;
+      next.set(id, tombstone);
+      changed = true;
+    }
+    if (!changed) return;
     mkdirSync(options.dir, { recursive: true });
     writeFileAtomic(join(options.dir, DELETED), deletedJson(next));
     deleted = next;
+    view = null;
   };
   const forget = (id: string): boolean => {
     if (!posts().has(id)) return false;
@@ -236,15 +238,10 @@ export function createBoard(options: BoardOptions) {
     posts().delete(id);
     return true;
   };
+  // the tombstone lands first, so a restart finds it beside its post and replies under it never name a missing post
   const drop = (id: string, tombstone: Tombstone): boolean => {
-    if (!tombstone?.parent_id) {
-      keep(id, tombstone);
-      return forget(id);
-    }
-    // a pulled reply delete leaves no tombstone beside its post, which a restart would take for an own delete cut short
-    const removed = forget(id);
-    keep(id, tombstone);
-    return removed;
+    keep([[id, tombstone]]);
+    return forget(id);
   };
 
   const prune = (candidates: Map<string, BoardPost>): number => {
@@ -284,9 +281,10 @@ export function createBoard(options: BoardOptions) {
     posts().set(post.id, post);
   };
 
-  const lift = (id: string, parent: string | null, stamp?: Pick<BoardPost, "updated_at" | "pc_id">) => {
-    const to = liveParent(parent, gone());
-    for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: to, ...stamp });
+  // a delete never rewrites the replies under it: an old copy written again would read as the newest edit
+  const shown = (post: BoardPost): BoardPost => {
+    const parent = liveParent(post.parent_id, gone());
+    return parent === post.parent_id ? post : { ...post, parent_id: parent };
   };
 
   // copied chat stays on disk but is never read back, nor the fix it wrote into its parent
@@ -295,7 +293,7 @@ export function createBoard(options: BoardOptions) {
     const all = [...posts().values()];
     const copied = new Set(all.filter(copiedChat).map((post) => `${post.parent_id}\n${post.fix || post.body}`));
     view = new Map(all.flatMap((post) => (copiedChat(post) ? [] : [[post.id, {
-      ...post,
+      ...shown(post),
       fix: copied.has(`${post.id}\n${post.fix}`) ? "" : post.fix,
       helped_bot_ids: post.helped_bot_ids.filter((id) => id !== BOARD_USER),
     }]])));
@@ -373,7 +371,7 @@ export function createBoard(options: BoardOptions) {
       options.changed?.();
       return next;
     },
-    /** A removed top-level post takes its whole thread; replies under a removed reply move up to its parent. */
+    /** A removed top-level post takes its whole thread; replies under a removed reply show under its parent. */
     remove(id: string): boolean {
       const held = posts().get(id);
       if (!held) return false;
@@ -381,9 +379,7 @@ export function createBoard(options: BoardOptions) {
         drop(id, CUT);
         prune(posts());
       } else {
-        keep(id, { parent_id: held.parent_id });
-        lift(id, held.parent_id, { updated_at: now(), pc_id: options.pcId() });
-        forget(id);
+        drop(id, { parent_id: held.parent_id });
       }
       options.changed?.();
       return true;
@@ -439,40 +435,17 @@ export function createBoard(options: BoardOptions) {
         const replyParent = post && ownReply(post) ? post.parent_id : null;
         return [id, tombstone ?? (replyParent ? { parent_id: replyParent } : null)];
       });
-      const above = new Map(kinds);
-      const moved = new Map<string, BoardPost[]>();
-      for (const [id, merged] of candidates) {
-        // each PC moves only the replies it holds, so a copy can still name a reply another PC deleted
-        const parent = liveParent(merged.parent_id, above);
-        const post = parent === merged.parent_id ? merged : { ...merged, parent_id: parent };
-        candidates.set(id, post);
-        const from = posts().get(id)?.parent_id;
-        if (!from || from === parent || tombstones.has(id)) continue;
-        const siblings = moved.get(from);
-        if (siblings) siblings.push(post);
-        else moved.set(from, [post]);
-      }
-      const depth = (id: string) => {
-        const seen = new Set<string>();
-        for (let at = posts().get(id)?.parent_id; at && !seen.has(at); at = posts().get(at)?.parent_id) seen.add(at);
-        return seen.size;
-      };
-      kinds.sort(([a], [b]) => depth(a) - depth(b));
-      // tombstones from the top down, so a restart lifts a reply past every deleted reply above it
-      for (const [id, kind] of kinds) keep(id, kind);
-      // posts from the bottom up, each after the replies moved off it, so none names a missing post
-      for (const [id, kind] of kinds.reverse()) {
-        for (const child of kind?.parent_id ? moved.get(id) ?? [] : []) {
-          write(child);
-          pulled++;
-        }
-        if (drop(id, kind)) pulled++;
+      // one write for every pulled tombstone, so a restart finishes the whole pull or none of it
+      keep(kinds);
+      for (const [id] of kinds) {
+        if (forget(id)) pulled++;
         candidates.delete(id);
       }
       pulled += prune(candidates);
       for (const post of candidates.values()) {
         const held = posts().get(post.id);
-        if (held && same(held, post)) continue;
+        // another PC publishes the parent it shows, so a copy that differs only there is no change
+        if (held && same(shown(held), shown(post))) continue;
         write(post);
         pulled++;
       }
@@ -494,7 +467,7 @@ export function createBoard(options: BoardOptions) {
       }
       const published = new Map(readPosts(ownDir).map((post) => [post.id, post]));
       for (const post of posts().values()) {
-        const out = mapPost(post, ids.out);
+        const out = mapPost(shown(post), ids.out);
         const held = published.get(post.id);
         if (held && same(held, out)) continue;
         mkdirSync(ownDir, { recursive: true });
