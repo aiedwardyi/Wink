@@ -153,17 +153,33 @@ const promptLine = ({ id, questionId, text, context, pictures, prior }: UserLine
 
 /** The bot's own words at the end of its replies: its promises, and reports that may finish an open one. */
 export interface BotLines { lines: string[]; commits: string[]; open: TaskAsk[] }
-export interface KeptPromises { promises: string[]; done: TaskAsk[] }
+/** repeats: the open promise, as read, the note-taker tied this one to */
+export interface KeptPromise { ask: string; repeats?: TaskAsk }
+export interface KeptPromises { promises: KeptPromise[]; done: TaskAsk[] }
 
 // "I'll do X when Y": a first-person commitment tied to a time or trigger; in-turn work ("let me check", "one moment") never counts
-const COMMIT = /\b(?:i['’]ll|i will(?! not)|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
+const COMMIT = /\b(?:i['’]ll|i will(?! not\b)|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
 const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|noon|midnight|when|once|after|before|next|by|(?:mon|tues|wednes|thurs|fri|satur|sun)day|this (?:morning|afternoon|evening|week|weekend)|in (?:an?|\d+) (?:minutes?|hours?|days?|weeks?))\b|\b\d{1,2}(?::\d{2})?\s?[ap]\.?m\b|\bat \d{1,2}(?::\d{2})?\b|나중에|내일|오늘|이따|다음에|되면|끝나면|켜시면|하시면|후에|\d{1,2}시/i;
 const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
 const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
-// later in the same reply: "scratch that" takes the last promise back, "I backed it up just now" says it is already done
+// later in the same reply: "scratch that" takes a promise back, "I backed it up just now" says one is already done
 const WITHDRAWN = /\b(?:scratch that|never ?mind|cancel that|(?:won['’]t|will not|can['’]t|cannot) (?:be able to|make it))\b|취소할게요|못 할 것 같/i;
 const DONE_NOW = /\bi(?:['’]ve| have)?\s.*\bjust now\b|방금/i;
+const JUST_NOW = /\bjust now\b|방금/i;
+const PLAIN = new Set(["actually", "sorry", "okay", "anyway", "instead", "really", "though", "still", "just", "that", "this", "these", "those", "with", "your", "from", "have", "been", "will", "going", "them", "they", "their", "then", "than", "what", "there", "into", "also", "about", "some", "그거", "그건", "이거"]);
+// word stems, so "backed it up" meets "back up the laptop"; times are not a subject
+const topic = (text: string) => new Set((text.replace(new RegExp(DEFERRED.source, "gi"), " ").toLowerCase().match(/[\p{L}\p{N}]{4,}|[가-힣]{2,}/gu) ?? [])
+  .filter((word) => !PLAIN.has(word)).map((word) => word.slice(0, /[가-힣]/.test(word) ? 2 : 4)));
+
+/** The promise a take-back is about: the one sharing the most of its subject, or with no subject of its own the promise right before it; -1 when no single one. */
+function takenBack(words: string, reply: readonly string[], before: number): number {
+  const subject = topic(words);
+  if (!subject.size) return before;
+  const shared = reply.map((promise) => [...topic(promise)].filter((word) => subject.has(word)).length);
+  const most = Math.max(0, ...shared);
+  return most && shared.indexOf(most) === shared.lastIndexOf(most) ? shared.indexOf(most) : -1;
+}
 
 /** The bot's text after the last tool of its reply to each of these user rows, as sentences in order: commitments, and reports of finished work. */
 export function botLines(messages: readonly Message[], ids: readonly string[], open: readonly TaskAsk[]): BotLines | null {
@@ -180,14 +196,19 @@ export function botLines(messages: readonly Message[], ids: readonly string[], o
       else if (row.tool && row.tool.name !== MEMORY_SAVE_TOOL) tail = [];
     }
     const reply: string[] = [];
+    let previous = -1;
     for (const part of tail.join("\n").split(SENTENCE)) {
       const sentence = part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+      const before = previous;
+      previous = -1;
       if (!sentence || sentence.length > SAID_CHARS || sentence.endsWith("?") || secretLike(sentence)) continue;
-      if (WITHDRAWN.test(sentence)) reply.pop();
-      if (COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence)) reply.push(sentence);
-      else if (DONE_NOW.test(sentence)) reply.pop();
+      const commit = COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence);
+      const back = WITHDRAWN.test(sentence) ? WITHDRAWN : !commit && DONE_NOW.test(sentence) ? JUST_NOW : undefined;
+      const about = back ? takenBack(sentence.replace(back, " "), reply, before) : -1;
+      if (about >= 0) reply.splice(about, 1);
+      if (commit) previous = reply.push(sentence) - 1;
       // a report rides along so the note-taker sees an open one finished
-      else if (!REPORT.test(sentence)) continue;
+      else if (!DONE_NOW.test(sentence) && !REPORT.test(sentence)) continue;
       lines.push(sentence);
     }
     commits.push(...reply);
@@ -209,15 +230,19 @@ const botPrompt = ({ lines, open }: BotLines) => [
   ...(open.length ? ["", "OPEN PROMISES:", "<promises>", ...open.map((ask) => `${ask.id}: ${ask.ask}`), "</promises>"] : []),
 ];
 
-/** Promises quoted from a commitment, and the open promises, as read, that a quoted line finished. */
+/** Promises quoted from a commitment, each with the open promise it repeats, and the open promises, as read, that a quoted line finished. */
 export function acceptPromises(facts: Fact[], said: BotLines): KeptPromises {
-  const promises: string[] = [];
+  const promises: KeptPromise[] = [];
   const done: TaskAsk[] = [];
   const quoted = (lines: string[], quote: string) => Boolean(quote.trim()) && lines.some((line) => squash(line).includes(squash(quote)));
   for (const { kind, fact, quote, replaces } of facts) {
     const line = fact.replace(/\s+/g, " ").trim();
-    const repeat = said.open.some((ask) => ask.id === replaces?.trim().toUpperCase());
-    if (kind === "promise" && !repeat && line && line.length <= ASK_LIMITS.ask && !secretLike(line) && quoted(said.commits, quote) && !promises.includes(line)) promises.push(line);
+    const repeats = said.open.find((ask) => ask.id === replaces?.trim().toUpperCase());
+    if (kind === "promise" && line && line.length <= ASK_LIMITS.ask && !secretLike(line) && quoted(said.commits, quote) && !promises.some(({ ask }) => ask === line)) {
+      const kept: KeptPromise = { ask: line };
+      if (repeats) kept.repeats = repeats;
+      promises.push(kept);
+    }
     const finished = kind === "done" ? said.open.find((ask) => ask.id === line.toUpperCase()) : undefined;
     if (finished && quoted(said.lines, quote) && !done.includes(finished)) done.push(finished);
   }

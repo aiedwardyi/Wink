@@ -251,3 +251,48 @@ describe("memory replay: gate 2073B cases", () => {
     run.dispose();
   });
 });
+
+describe("memory replay: gate 2073C cases", () => {
+  const invoice = "I'll email the signed invoice tomorrow.";
+  const notify = "I will notify you tomorrow when the invoice is ready.";
+  // the gate's note-taker: every "I'll" or "I will" line it is shown is a promise
+  const filesWill: NoteGenerator = async (prompt) => JSON.stringify(botLinesIn(prompt).filter((line) => /\bI(?:'ll| will)\b/i.test(line)).map((line) => ({ kind: "promise", fact: line, quote: line })));
+  it.each([
+    { name: "a promise to notify", rows: [notify], kept: [notify] },
+    { name: "a promise before an unrelated report done just now", rows: [invoice, "I checked the laptop backup just now."], kept: [invoice] },
+    { name: "a promise before an unrelated refusal", rows: [invoice, "I can't make it to the meeting today."], kept: [invoice] },
+    { name: "only the promise a scratch-that takes back", rows: [invoice, LAPTOP, "Actually, scratch that. I won't be able to do it."], kept: [invoice] },
+    { name: "only the promise a cancel names", rows: [`${invoice} ${LAPTOP} Cancel that invoice email. The backup is still on.`], kept: [LAPTOP] },
+    { name: "one ask for a promise restated in the same reply", rows: [LAPTOP, `To confirm, ${LAPTOP}`], kept: [LAPTOP] },
+    { name: "nothing for a refusal", rows: ["I will not email the signed invoice tomorrow."], kept: [] },
+  ])("files $name", async ({ name, rows, kept }) => {
+    const run = replay(name.replace(/\W+/g, "-"));
+    await run.talk([ask, ...rows.map((text) => ({ role: "bot", text }) as const)], filesWill);
+    expect(run.asks().map((item) => item.ask)).toEqual(kept);
+    run.dispose();
+  });
+
+  it("files a repeat tied to a promise retitled while the note-taker read it", async () => {
+    const run = replay("tied-while-retitled");
+    await run.talk([ask, { role: "bot", text: LAPTOP }], filesEvery);
+    const restated = "I'll verify the notebook backup later.";
+    let reading!: () => void;
+    let release!: () => void;
+    const read = new Promise<void>((resolve) => { reading = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const pass = run.talk([{ role: "user", text: "Please confirm the backup." }, { role: "bot", text: restated }], async () => {
+      reading();
+      await held;
+      return JSON.stringify([{ kind: "promise", fact: restated, quote: restated, replaces: "A1" }]);
+    });
+    await read;
+    const record = run.record();
+    const retitled = mergeTaskAsks(record, [{ id: "A1", ask: "Review the tax return", status: "open" }], Date.now() + 1);
+    if ("error" in retitled) throw new Error(retitled.error);
+    run.write({ ...record, asks: retitled.asks, lastAskId: retitled.lastAskId });
+    release();
+    await pass;
+    expect(run.asks().map((item) => item.ask)).toEqual(["Review the tax return", restated]);
+    run.dispose();
+  });
+});

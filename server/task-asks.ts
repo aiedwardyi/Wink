@@ -146,22 +146,29 @@ function samePromise(a: string, b: string): boolean {
   const least = Math.min(x.size, y.size);
   return least >= 3 && [...x].filter((word) => y.has(word)).length >= 0.8 * least && marks(a) === marks(b);
 }
+function restated(a: string, b: string): boolean {
+  const [x, y] = [gist(a), gist(b)];
+  const [less, more] = x.size <= y.size ? [x, y] : [y, x];
+  return less.size >= 3 && [...less].every((word) => more.has(word)) && marks(a) === marks(b);
+}
 
-export function fileBotPromises(book: AskBook | undefined, promises: readonly string[], done: readonly TaskAsk[], now: number): SavedAsks | null {
+export function fileBotPromises(book: AskBook | undefined, promises: readonly { ask: string; repeats?: TaskAsk }[], done: readonly TaskAsk[], now: number): SavedAsks | null {
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
   let lastAskId = lastAskIdOf(book);
   let changed = false;
+  // retitled or changed since the note-taker read it: a report or repeat was about another commitment
+  const asRead = (item: TaskAsk, read: TaskAsk) => read.id === item.id && read.ask === item.ask && read.changedAt === item.changedAt;
   for (const item of asks) {
-    // retitled or changed since the note-taker read it: the report was about another commitment
-    if (item.kind !== "promise" || !isOpenAsk(item) || !done.some((read) => read.id === item.id && read.ask === item.ask && read.changedAt === item.changedAt)) continue;
+    if (item.kind !== "promise" || !isOpenAsk(item) || !done.some((read) => asRead(item, read))) continue;
     Object.assign(item, { status: "done", changedAt: now });
     changed = true;
   }
   const read = asks.length;
-  for (const promise of promises) {
+  for (const { ask: promise, repeats } of promises) {
     const ask = clip(promise, ASK_LIMITS.ask);
-    // promises quoted from separate sentences now are separate; only an earlier one can come back reworded
-    if (!ask || asks.some((item, at) => isOpenAsk(item) && (words(item.ask) === words(ask) || (at < read && item.kind === "promise" && samePromise(item.ask, ask))))) continue;
+    if (repeats && asks.some((item) => item.kind === "promise" && isOpenAsk(item) && asRead(item, repeats))) continue;
+    // an earlier promise can come back reworded; one from this same batch only restated, adding words but never swapping one
+    if (!ask || asks.some((item, at) => isOpenAsk(item) && (words(item.ask) === words(ask) || (item.kind === "promise" && (at < read ? samePromise(item.ask, ask) : restated(item.ask, ask)))))) continue;
     lastAskId += 1;
     asks.push({ id: `A${lastAskId}`, ask, status: "open", kind: "promise", at: now, changedAt: now });
     changed = true;
