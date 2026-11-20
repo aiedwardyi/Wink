@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { request } from "./api-request";
+import type { ForumLesson } from "../../shared/forum-lesson";
 
 export type BoardKind = "stuck" | "fix" | "handoff" | "tip";
 /** The Forum's flair chips, in chip order. */
@@ -34,6 +35,7 @@ export interface BoardPost {
   updated_at: number;
   pc_id: string;
   author?: BoardAuthor;
+  lesson?: ForumLesson;
 }
 
 /** The user's Forum replies carry this author id. */

@@ -131,6 +131,7 @@ import { clearCodexPromo } from "../electron/codex-promo.mjs";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createBotCalls } from "./bot-call.ts";
 import { BOARD_DIR, createBoard, projectIdOf } from "./board.ts";
+import { createForumLessons } from "./forum-lessons.ts";
 import { createBoardCalls, FORUM_HOLDS_FILE } from "./board-calls.ts";
 import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
@@ -551,6 +552,7 @@ const board = createBoard({
     return { name: bot.name, model: label, color: bot.color ?? "", mascot_style: bot.mascotStyle ?? "" };
   },
 });
+const forumLessons = createForumLessons(board, () => profileSyncSettings.deviceId, process.env.OMB_FORUM_LESSONS !== "off");
 const threadSyncGate = createThreadSyncV2Gate(DATA_DIR);
 if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
@@ -3260,17 +3262,19 @@ const phonePingAllowed = createPingLimiter();
 const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:orbit@localhost");
 const phoneSignedIn = (phone: string) => phoneAccess.paired(phone);
 
-function boardProject(threadId: string): string {
+function boardProjectFolder(threadId: string): string | null | undefined {
   const bot = store.botByThread(threadId);
-  if (!bot) return "";
+  if (!bot) return;
   const pinned = store.taskByThread(bot.id, threadId)?.cwd;
-  return projectIdOf(pinned === undefined ? bot.cwd : pinned);
+  return pinned === undefined ? bot.cwd : pinned;
 }
 
+const boardProject = (threadId: string) => projectIdOf(boardProjectFolder(threadId));
+const forumRoom = sharedTurn(store, joinedRoomThreads);
 const boardCalls = createBoardCalls({
   board,
   projectOf: boardProject,
-  room: sharedTurn(store, joinedRoomThreads),
+  room: forumRoom,
   held: (hold) => {
     try {
       appendRotatingLog(join(DATA_DIR, FORUM_HOLDS_FILE), `${JSON.stringify({ at: Date.now(), ...hold })}\n`);
@@ -5846,6 +5850,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     }
     const releaseStarting = takeStartingHold(bot.id);
     let systemSeed: ReturnType<typeof systemSeeds.set> | undefined;
+    let forumOffer: ReturnType<typeof forumLessons.take>;
     try {
       const readOnly = opts?.readOnly === true;
       if (readOnly && instance.adapter.capabilities.readOnlyTurns !== true) throw new Error(`${bot.name} can't answer other people here: its engine can't work read-only`);
@@ -6150,7 +6155,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, model, docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6314,19 +6319,27 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           limitWaits.bind(threadId, joined.turnId);
           return joined;
         }
-        trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice], durableTaskRecordText, systemUpdate);
-        trace?.assembled(system, text);
+        const timedLesson = trace?.span("forum_lesson");
+        const requestText = opts?.transcriptText ?? userMessage.text ?? "";
+        if (!readOnly && !opts?.paneNoteWake && turnStartedByUser(opts) && forumLessons.matches(requestText)) {
+          const project = boardProjectFolder(threadId);
+          if (project === cwd) forumOffer = forumLessons.take({ botId: bot.id, model, project, text: requestText, room: forumRoom(threadId) });
+        }
+        const withLesson = (prompt: string) => forumOffer ? `${forumOffer.text}\n\n${prompt}` : prompt;
+        timedLesson?.(forumOffer ? "offered" : "none");
+        trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice, ...(forumOffer ? [forumOffer.text] : [])], durableTaskRecordText, systemUpdate);
+        trace?.assembled(system, withLesson(text));
         if (cwd) turnCwdByThread.set(threadId, cwd);
         else turnCwdByThread.delete(threadId);
         return live.adapter.sendTurn({
         ...(trace ? { trace } : {}),
         threadId,
-        text,
+        text: withLesson(text),
         model,
         effort,
         leanStartup,
         resumeCursor,
-        resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
+        resumeFallback: resumeCursor !== undefined ? { text: withLesson(withLate(resumeFallback)) } : undefined,
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,
@@ -6337,6 +6350,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         cwd,
       });
       });
+      if (forumOffer) {
+        const accepted = forumOffer;
+        forumOffer = undefined;
+        setImmediate(() => { try { accepted.accept(); } catch (error) { console.warn("[forum-lesson]", error); } });
+      }
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       if (reservation) commit(reservation);
       if (holdNotes) newestPaneNoteId = undefined;
@@ -6410,6 +6428,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       drainConnectorResumes();
       drainSecretResumes();
     } finally {
+      forumOffer?.release();
       releaseStarting();
       logSummaryWait();
       settleTrace?.();
@@ -8126,6 +8145,12 @@ const verifyDoc = createVerifyDoc({
 });
 const verifySite = createVerifySite({
   store,
+  lessons: forumLessons,
+  lessonBinding: (threadId, turnId) => {
+    const project = boardProjectFolder(threadId);
+    const model = turnRegistry.get(turnId)?.model;
+    return project && model && !forumRoom(threadId) ? { project, model } : undefined;
+  },
   resolveCommsCaller: (header) => commsCallers.resolve(header),
   botOutputRoots,
   autoVerdict,
@@ -9784,6 +9809,7 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
   reportThreads: store.bots.map((bot) => bot.threadId),
 }));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
+startupTiming.afterPaint("forumLessons", async () => { forumLessons.recover(); });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
 startupTiming.afterPaint("probes", async () => {

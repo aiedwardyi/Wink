@@ -77,6 +77,8 @@ export interface VerifyResult {
   durationMs: number;
   notChecked?: string[];
   details?: VerifyIssue[];
+  /** Checkers that completed on the stated viewport, before issue lists are capped. */
+  checks?: Record<string, "passed" | "missed">;
 }
 
 /** message.verify on a kind:"note" chat message: one current card per owner/thread, patched in place. */

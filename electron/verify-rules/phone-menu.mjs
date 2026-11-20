@@ -36,3 +36,9 @@ export function check(phone, desktop) {
   const replaced = lost.filter(([url]) => bar.has(url)).length >= 2;
   return { problems: lost.length >= 2 && !phone.menu && !replaced ? [{ rule: "phone menu gone", where: "header nav", measured: `${lost.slice(0, 5).map(([, href]) => href).join(", ")} disappear at 392 px with no menu control; narrow the page` }] : [], notChecked: [] };
 }
+
+export function linksReachable(phone, desktop) {
+  const key = a => a.url ?? a.href;
+  const available = new Set([...phone.links, ...(phone.bars ?? [])].map(key));
+  return desktop.links.every(link => available.has(key(link)));
+}
