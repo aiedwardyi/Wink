@@ -518,10 +518,11 @@ describe("sends while a chat catches up", () => {
   it("starts at once after a restart when Drive still lists an older copy of an applied peer head", async () => {
     const first = await boot(true);
     first.deliverSegment();
-    first.deliverHead();
+    const current = JSON.stringify({ ...JSON.parse(first.head), generation: 111 });
+    writeFileSync(join(first.folder, first.headPath), current);
     await first.sync.pull("thread");
     const stalePath = "threads-v2 (1)/bot/thread/peer/head.json";
-    const stale = gunzipSync(readFileSync(join(first.folder, "threads-v2/bot/thread/peer/seg-1-2.json.gz")));
+    const stale = JSON.stringify({ ...JSON.parse(gunzipSync(readFileSync(join(first.folder, "threads-v2/bot/thread/peer/seg-1-2.json.gz"))).toString()), generation: 5 });
     mkdirSync(dirname(join(first.folder, stalePath)), { recursive: true });
     writeFileSync(join(first.folder, stalePath), stale);
     const h = await boot(true);
@@ -531,9 +532,37 @@ describe("sends while a chat catches up", () => {
       id, name: "head.json", md5Checksum: createHash("md5").update(bytes).digest("hex"),
       createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
     }];
-    syncHold.feed(h.folder, new Map([[h.headPath, listed("head", h.head)], [stalePath, listed("stale", stale)]]), ids);
+    syncHold.feed(h.folder, new Map([[h.headPath, listed("head", current)], [stalePath, listed("stale", stale)]]), ids);
     expect((await h.send()).body.queued).not.toBe(true);
     expect(h.startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["changed bytes", "a conflicting sequence"])("holds a rejected head with %s and appends on the corrected peer row", async (kind) => {
+    const h = await boot(true);
+    h.deliverSegment();
+    h.deliverHead();
+    await h.sync.pull("thread");
+    const { syncHold } = await import("./sync-hold.ts");
+    const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
+    const list = (bytes: string) => syncHold.feed(h.folder, new Map([[h.headPath, [{
+      id: "head", name: "head.json", md5Checksum: createHash("md5").update(bytes).digest("hex"),
+      createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
+    }]]]), ids);
+    let bad = h.head.replace('"peer tip"', '"conflicting bytes"');
+    if (kind !== "changed bytes") bad = bad.replace('"generation":1', '"generation":2');
+    writeFileSync(join(h.folder, h.headPath), bad);
+    list(bad);
+    expectHeld(await h.send());
+    const doc: SyncHead = JSON.parse(h.head);
+    const corrected = JSON.stringify({ ...doc, generation: 3, lastSeq: 6, seen: { ...doc.seen, peer: 6 }, versions: [...doc.versions,
+      { seq: 5, seen: { ...doc.seen, peer: 4 }, kind: "row", rowId: "peer-six", origin: "peer", baseStamp: null, value: { id: "peer-six", parentId: "peer-tip", at: 4, role: "user", kind: "text", text: "peer correction" } },
+      { seq: 6, seen: { ...doc.seen, peer: 5 }, kind: "head", rowId: "", baseStamp: "4:peer", value: "peer-six" },
+    ] });
+    list(corrected);
+    writeFileSync(join(h.folder, h.headPath), corrected);
+    await h.sync.pull("thread");
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
   });
 
   it("drops a stale listed hash once the listing matches the applied head", async () => {

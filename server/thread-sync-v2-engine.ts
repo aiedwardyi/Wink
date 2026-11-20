@@ -669,23 +669,26 @@ export function createSyncEngine(input: SyncOptions) {
     }
   }
 
-  function ingest(scope: SyncScope, writer: string, head: SyncHead, bytes: Buffer, segment: boolean, result: SyncApplyResult): boolean {
+  function ingest(scope: SyncScope, writer: string, head: SyncHead, bytes: Buffer, segment: boolean, result: SyncApplyResult): "applied" | "older" | "rejected" {
     const prior = get(peerHeadSchema.optional(), "SELECT generation, cut, last_seq, hash FROM sync_v2_heads WHERE thread = ? AND writer = ?", scope.threadId, writer);
     if (!segment && prior) {
-      if (head.generation < prior.generation || head.sealedThrough < prior.cut || head.lastSeq < prior.last_seq) { result.rejected++; return false; }
+      if (head.generation < prior.generation || head.sealedThrough < prior.cut || head.lastSeq < prior.last_seq) {
+        result.rejected++;
+        return head.generation < prior.generation ? "older" : "rejected";
+      }
       if (head.generation === prior.generation && hash(bytes) !== prior.hash) {
         result.quarantined += quarantine(scope.threadId, writer, bytes, "Head generation changed bytes");
         result.rejected++;
-        return false;
+        return "rejected";
       }
-      if (head.generation === prior.generation) return true;
+      if (head.generation === prior.generation) return "applied";
     }
     for (const packet of head.versions) {
       const known = get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", scope.threadId, writer, packet.seq);
       if (known && known.hash !== hash(JSON.stringify(packet))) {
         result.quarantined += quarantine(scope.threadId, writer, bytes, `Conflicting bytes for sequence ${packet.seq}`);
         result.rejected++;
-        return false;
+        return "rejected";
       }
     }
     withMessageTransaction(() => {
@@ -699,7 +702,7 @@ export function createSyncEngine(input: SyncOptions) {
       if (!segment) sql("INSERT INTO sync_v2_heads VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(thread, writer) DO UPDATE SET generation = excluded.generation, cut = excluded.cut, last_seq = excluded.last_seq, hash = excluded.hash")
         .run(scope.threadId, writer, head.generation, head.sealedThrough, head.lastSeq, hash(bytes));
     });
-    return true;
+    return "applied";
   }
 
   function drain(scope: SyncScope, result: SyncApplyResult, limit = Infinity): void {
@@ -763,9 +766,9 @@ export function createSyncEngine(input: SyncOptions) {
             continue;
           }
           const ingested = ingest(scope, writer, head, bytes, segment, result);
-          if (segment && ingested) sql("INSERT OR IGNORE INTO sync_v2_files VALUES (?, ?, ?)").run(scope.threadId, writer, name);
-          // A rejected older copy still counts as read, or the send hold waits on a head it can never apply.
-          else if (!segment) notePulledHead(result, root, scope, head, bytes);
+          if (segment && ingested === "applied") sql("INSERT OR IGNORE INTO sync_v2_files VALUES (?, ?, ?)").run(scope.threadId, writer, name);
+          // An older copy still counts as read, or the send hold waits on a head it can never apply; a conflict must keep waiting.
+          else if (!segment && ingested !== "rejected") notePulledHead(result, root, scope, head, bytes);
         }
       }
     }
