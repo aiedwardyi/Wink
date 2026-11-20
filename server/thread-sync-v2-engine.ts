@@ -111,6 +111,8 @@ export function createSyncEngine(input: SyncOptions) {
   database.exec("CREATE TEMP TABLE IF NOT EXISTS sync_v2_ancestry (thread TEXT PRIMARY KEY, mark INTEGER NOT NULL)");
   const statements = new Map<string, StatementSync>();
   const checkedHeads = new Map<string, number>();
+  // Stored packets never change, so an older copy that matched once still matches.
+  const storedCopies = new Set<string>();
   type Ancestry = { mark: number; seen: SyncSeen; parents: Map<string, string[] | null>; depths: Map<string, number> };
   const ancestries = new Map<string, Ancestry>();
   const sql = (text: string): StatementSync => {
@@ -669,29 +671,24 @@ export function createSyncEngine(input: SyncOptions) {
     }
   }
 
-  function ingest(scope: SyncScope, writer: string, head: SyncHead, bytes: Buffer, segment: boolean, result: SyncApplyResult): "applied" | "older" | "rejected" {
+  function ingest(scope: SyncScope, writer: string, head: SyncHead, bytes: Buffer, segment: boolean, result: SyncApplyResult): boolean {
     const prior = get(peerHeadSchema.optional(), "SELECT generation, cut, last_seq, hash FROM sync_v2_heads WHERE thread = ? AND writer = ?", scope.threadId, writer);
-    const conflict = () => head.versions.find((packet) => {
-      const known = get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", scope.threadId, writer, packet.seq);
-      return known && known.hash !== hash(JSON.stringify(packet));
-    });
     if (!segment && prior) {
-      if (head.generation < prior.generation || head.sealedThrough < prior.cut || head.lastSeq < prior.last_seq) {
-        result.rejected++;
-        return head.generation < prior.generation && !conflict() ? "older" : "rejected";
-      }
+      if (head.generation < prior.generation || head.sealedThrough < prior.cut || head.lastSeq < prior.last_seq) { result.rejected++; return false; }
       if (head.generation === prior.generation && hash(bytes) !== prior.hash) {
         result.quarantined += quarantine(scope.threadId, writer, bytes, "Head generation changed bytes");
         result.rejected++;
-        return "rejected";
+        return false;
       }
-      if (head.generation === prior.generation) return "applied";
+      if (head.generation === prior.generation) return true;
     }
-    const conflicting = conflict();
-    if (conflicting) {
-      result.quarantined += quarantine(scope.threadId, writer, bytes, `Conflicting bytes for sequence ${conflicting.seq}`);
-      result.rejected++;
-      return "rejected";
+    for (const packet of head.versions) {
+      const known = get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?", scope.threadId, writer, packet.seq);
+      if (known && known.hash !== hash(JSON.stringify(packet))) {
+        result.quarantined += quarantine(scope.threadId, writer, bytes, `Conflicting bytes for sequence ${packet.seq}`);
+        result.rejected++;
+        return false;
+      }
     }
     withMessageTransaction(() => {
       for (const packet of head.versions) {
@@ -704,7 +701,28 @@ export function createSyncEngine(input: SyncOptions) {
       if (!segment) sql("INSERT INTO sync_v2_heads VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(thread, writer) DO UPDATE SET generation = excluded.generation, cut = excluded.cut, last_seq = excluded.last_seq, hash = excluded.hash")
         .run(scope.threadId, writer, head.generation, head.sealedThrough, head.lastSeq, hash(bytes));
     });
-    return "applied";
+    return true;
+  }
+
+  function olderCopyStored(scope: SyncScope, root: string, head: SyncHead, bytes: Buffer): boolean {
+    const prior = get(peerHeadSchema.optional(), "SELECT generation, cut, last_seq, hash FROM sync_v2_heads WHERE thread = ? AND writer = ?", scope.threadId, head.writerId);
+    if (!prior || head.generation >= prior.generation) return false;
+    const dir = join(root, scope.botSyncId, scope.threadId, head.writerId);
+    const key = `${dir}\n${hash(bytes)}`;
+    if (storedCopies.has(key)) return true;
+    const stored = (versions: SyncPacket[]) => versions.every((packet) => get(hashSchema, "SELECT hash FROM sync_v2_packets WHERE thread = ? AND writer = ? AND seq = ?",
+      scope.threadId, head.writerId, packet.seq)?.hash === hash(JSON.stringify(packet)));
+    try {
+      if (!stored(head.versions) || !readdirSync(dir).every((name) => {
+        const range = /^seg-[1-9]\d*-([1-9]\d*)\.json\.gz$/.exec(name);
+        return !range || Number(range[1]) > head.sealedThrough
+          || stored(validateHead(gunzipSync(readFileSync(join(dir, name)), { maxOutputLength: headBytes }), scope, head.writerId).versions);
+      })) return false;
+    } catch {
+      return false;
+    }
+    storedCopies.add(key);
+    return true;
   }
 
   function drain(scope: SyncScope, result: SyncApplyResult, limit = Infinity): void {
@@ -745,6 +763,7 @@ export function createSyncEngine(input: SyncOptions) {
     scopeDir(scope);
     const result = emptyResult();
     const before = totalChanges();
+    const rejected: { root: string; head: SyncHead; bytes: Buffer }[] = [];
     for (const root of syncRoots(options.folder, "threads-v2")) {
       const dir = join(root, scope.botSyncId, scope.threadId);
       if (!existsSync(dir)) continue;
@@ -767,13 +786,15 @@ export function createSyncEngine(input: SyncOptions) {
             result.rejected++;
             continue;
           }
-          const ingested = ingest(scope, writer, head, bytes, segment, result);
-          if (segment && ingested === "applied") sql("INSERT OR IGNORE INTO sync_v2_files VALUES (?, ?, ?)").run(scope.threadId, writer, name);
-          // An older copy still counts as read, or the send hold waits on a head it can never apply; a conflict must keep waiting.
-          else if (!segment && ingested !== "rejected") notePulledHead(result, root, scope, head, bytes);
+          if (ingest(scope, writer, head, bytes, segment, result)) {
+            if (segment) sql("INSERT OR IGNORE INTO sync_v2_files VALUES (?, ?, ?)").run(scope.threadId, writer, name);
+            else notePulledHead(result, root, scope, head, bytes);
+          } else if (!segment) rejected.push({ root, head, bytes });
         }
       }
     }
+    // An older copy is judged once every root is read, since a later root can store the packet it disagrees with.
+    for (const { root, head, bytes } of rejected) if (olderCopyStored(scope, root, head, bytes)) notePulledHead(result, root, scope, head, bytes);
     if (!options.staged) drain(scope, result);
     result.sqlRowsTouched = totalChanges() - before;
     return result;

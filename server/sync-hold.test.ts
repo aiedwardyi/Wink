@@ -602,6 +602,58 @@ describe("sends while a chat catches up", () => {
     expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
   });
 
+  const copies = (["lower", "equal", "higher"] as const).flatMap((generation) => (["same", "different"] as const)
+    .flatMap((bytes) => (["stored", "later", "sealed"] as const).map((packets) => ({ generation, bytes, packets }))));
+  it.each(copies)("holds a $generation generation copy with $bytes $packets packets only while a correction is due", async ({ generation, bytes, packets }) => {
+    const h = await boot(true);
+    h.deliverSegment();
+    const segmentPath = "threads-v2/bot/thread/peer/seg-1-2.json.gz";
+    const sealed: SyncHead = JSON.parse(gunzipSync(readFileSync(join(h.folder, segmentPath))).toString());
+    if (packets === "later") rmSync(join(h.folder, segmentPath));
+    const doc: SyncHead = { ...JSON.parse(h.head), generation: 111 };
+    writeFileSync(join(h.folder, h.headPath), JSON.stringify(doc));
+    await h.sync.pull("thread");
+    const { syncHold } = await import("./sync-hold.ts");
+    const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
+    const copyPath = "threads-v2 (1)/bot/thread/peer/head.json";
+    const list = (listed: string) => syncHold.feed(h.folder, new Map([[h.headPath, JSON.stringify(doc)], [copyPath, listed]].map(([path, data]) => [path, [{
+      id: path, name: "head.json", md5Checksum: createHash("md5").update(data).digest("hex"),
+      createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
+    }]])), ids);
+    const put = (path: string, data: string | Buffer) => {
+      mkdirSync(dirname(join(h.folder, path)), { recursive: true });
+      writeFileSync(join(h.folder, path), data);
+    };
+    // An equal or newer head cannot shrink its sealed prefix, so only an older copy carries the packets a later root supplies.
+    const unsealed = packets === "later" && generation === "lower" ? { sealedThrough: 0, firstSeq: 1, versions: [...sealed.versions, ...doc.versions] } : {};
+    const copy: SyncHead = structuredClone({ ...doc, generation: { lower: 110, equal: 111, higher: 112 }[generation], ...unsealed });
+    const own = structuredClone(sealed);
+    // SAFETY: the first version each copy carries is a text row.
+    const first = (packets === "sealed" ? own : copy).versions[0]!.value as Message;
+    if (bytes === "different") first.text = "different bytes";
+    if (packets === "later") put("threads-v2 (2)/bot/thread/peer/seg-1-2.json.gz", gzipSync(JSON.stringify(sealed)));
+    if (packets === "sealed") put("threads-v2 (1)/bot/thread/peer/seg-1-2.json.gz", gzipSync(JSON.stringify(own)));
+    put(copyPath, JSON.stringify(copy));
+    list(JSON.stringify(copy));
+    const receipt = await h.send();
+    // Equal and newer copies keep base, which never rereads a segment name it has recorded.
+    if (bytes === "same" || (generation !== "lower" && packets === "sealed")) {
+      expect(receipt.body.queued).not.toBe(true);
+      expect(h.store.messagesFor("thread").find((row) => row.sendId === "sync-hold-send-0001")?.parentId).toBe("peer-tip");
+      return;
+    }
+    expectHeld(receipt);
+    const corrected = JSON.stringify({ ...doc, generation: 113, lastSeq: 6, seen: { ...doc.seen, peer: 6 }, versions: [...doc.versions,
+      { seq: 5, seen: { ...doc.seen, peer: 4 }, kind: "row", rowId: "peer-six", origin: "peer", baseStamp: null, value: { id: "peer-six", parentId: "peer-tip", at: 4, role: "user", kind: "text", text: "peer correction" } },
+      { seq: 6, seen: { ...doc.seen, peer: 5 }, kind: "head", rowId: "", baseStamp: "4:peer", value: "peer-six" },
+    ] });
+    list(corrected);
+    put(copyPath, corrected);
+    await h.sync.pull("thread");
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
+  });
+
   it("drops a stale listed hash once the listing matches the applied head", async () => {
     const h = await boot(true);
     const { syncHold } = await import("./sync-hold.ts");
