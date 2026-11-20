@@ -1,0 +1,98 @@
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+import { afterEach, expect, it } from "vitest";
+import * as roots from "./comms-root.ts";
+
+const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+const PROXY = fileURLToPath(new URL("./drivers/agents-proxy.ts", import.meta.url));
+const BASE_PEER_TOOLS = ["check_delegation", "list_bots", "list_routines", "update_task_state", "wait_delegation"];
+const compact = (text: string) => text.replace(/\s+/g, " ").trim();
+const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const nodes = <T extends ts.Node>(guard: (node: ts.Node) => node is T): T[] => {
+  const found: T[] = [];
+  const visit = (node: ts.Node) => {
+    if (guard(node)) found.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+};
+
+afterEach(() => roots._resetCommsRoots());
+
+const startTurnOptions = (marker: string) => nodes(ts.isCallExpression)
+  .find((node) => node.expression.getText(source) === "startTurn" && compact(node.arguments[2]?.getText(source) ?? "").includes(marker))!
+  .arguments[2]!.getText(source);
+
+function joinedStart(guest: boolean) {
+  const arrow = nodes(ts.isPropertyAssignment).find((node) => node.name.getText(source) === "startTurn" && node.initializer.getText(source).includes("transcriptText: typed"))!.initializer.getText(source);
+  let captured: Record<string, unknown> = {};
+  new Function("startTurn", "joinedRoomThreads", `return ${js(arrow)}`)((_botId: string, _prompt: string, opts: Record<string, unknown>) => { captured = opts; }, new Set())("bot", "joined-thread", "prompt", "typed", () => {}, false, guest);
+  return captured;
+}
+
+function rootFor(threadId: string, opts: Record<string, unknown>, messageId: string) {
+  const root = nodes(ts.isVariableDeclaration).find((node) => node.name.getText(source) === "rootId" && node.initializer?.getText(source).includes("turnStartedByUser(opts)"))!;
+  const predicate = nodes(ts.isFunctionDeclaration).find((node) => node.name?.text === "turnStartedByUser")!;
+  return new Function("rootForStart", "threadId", "opts", "commsDepth", "userMessage", js(`${predicate.getText(source)}\nreturn ${root.initializer!.getText(source)};`))(roots.rootForStart, threadId, opts, Number(opts.commsDepth ?? 0), { id: messageId });
+}
+
+const hopOptions = {
+  ask: (callerRoot: string | null) => new Function("depth", "peer", "fromBotId", "isUnattended", "peerAttribution", "onDispatchError", `return ${js(`(${startTurnOptions("commsRoot: peer?.commsRoot ?? null")})`)}`)(0, { commsRoot: callerRoot }, "wink", () => false, () => ({}), () => {}),
+  delegation: (callerRoot: string | null) => new Function("commsDepth", "root", "reservation", "ask", "isUnattended", "sourceBotId", "transcriptText", "peerAttribution", "store", "channel", "reportStartFailure", `return ${js(`(${startTurnOptions("commsRoot: root ?? null")})`)}`)(1, callerRoot ?? undefined, undefined, undefined, () => false, "wink", "", () => ({}), { bot: () => undefined }, undefined, () => {}),
+};
+
+function agentsEnv(mountIndex: number, scope: { commsDepth?: number; hop?: number; rootId?: string | null; guestAsked?: boolean }): Record<string, string> {
+  const integration = nodes(ts.isFunctionDeclaration).find((node) => node.name?.text === "agentsIntegration")!;
+  const agentsIntegration = new Function("process", "agentsProxyPath", "AGENTS_NODE_FLAG", "PORT", "commsCallers", "teamReports", `${js(integration.getText(source))}; return agentsIntegration;`)(
+    { env: {} }, PROXY, {}, 9, { token: () => "fixture-token" }, { prompt: () => "" },
+  );
+  const mounts = nodes(ts.isIfStatement).filter((node) => node.thenStatement.getText(source).includes("integrations.agents = agentsIntegration("));
+  const integrations: { agents?: { env: Record<string, string> } } = {};
+  new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "readOnly", "importMemory", "searchable", "works", "handoff", "guestAsked", "rootId", "ownerRoot", "agentsIntegration", mounts[mountIndex]!.getText(source))(
+    integrations, { adapter: { capabilities: { agentsMcp: true } } }, { id: "evals" }, "evals-thread", scope.commsDepth ?? 0, scope.hop ?? 0, false, { tool: false }, false, true, null, scope.guestAsked ?? false, scope.rootId ?? null, roots.ownerRoot, agentsIntegration,
+  );
+  return integrations.agents!.env;
+}
+
+function listedTools(env: Record<string, string>): Promise<string[]> {
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OMB_")));
+  const proxy = spawn(process.execPath, [PROXY], { windowsHide: true, env: { ...inherited, ...env, OMB_HARNESS_URL: "http://127.0.0.1:9" }, stdio: ["pipe", "pipe", "inherit"] });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { proxy.kill(); reject(new Error("proxy probe timed out")); }, 10_000);
+    let buf = "";
+    proxy.stdout!.on("data", (chunk) => {
+      buf += chunk;
+      const line = buf.split("\n").find((row) => row.trim());
+      if (!line || !buf.includes("\n")) return;
+      clearTimeout(timer);
+      proxy.kill();
+      resolve(JSON.parse(line).result.tools.map((tool: { name: string }) => tool.name).sort());
+    });
+    proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n");
+  });
+}
+
+it.each(["ask", "delegation"] as const)("gives a %s a joined room's other person started only the base peer tools", async (kind) => {
+  const callerRoot = rootFor("joined-thread", joinedStart(true), "guest-line");
+  expect(callerRoot).not.toBeNull();
+  const opts = hopOptions[kind](callerRoot);
+  const env = agentsEnv(0, { commsDepth: Number(opts.commsDepth), rootId: rootFor("evals-thread", opts, "peer-line") });
+  expect(await listedTools(env)).toEqual(BASE_PEER_TOOLS);
+});
+
+it.each(["ask", "delegation"] as const)("keeps the opened tools on a %s the owner started, here or in a joined room", async (kind) => {
+  for (const start of [{ threadId: "wink-thread", opts: { threadId: "wink-thread" } }, { threadId: "joined-thread", opts: joinedStart(false) }]) {
+    const opts = hopOptions[kind](rootFor(start.threadId, start.opts, `${start.threadId}-line`));
+    const tools = await listedTools(agentsEnv(0, { commsDepth: Number(opts.commsDepth), rootId: rootFor("evals-thread", opts, "peer-line") }));
+    expect(tools).toEqual(expect.arrayContaining(["propose_routine", "propose_routine_action", "set_keep_going"]));
+    expect(tools).not.toContain("delegate_bot");
+  }
+});
+
+it("gives a room hop a guest's ask started only the base peer tools", async () => {
+  expect(await listedTools(agentsEnv(1, { hop: 1, guestAsked: true }))).toEqual(BASE_PEER_TOOLS);
+  expect(await listedTools(agentsEnv(1, { hop: 1, guestAsked: false }))).toEqual(expect.arrayContaining(["propose_routine", "set_keep_going"]));
+});

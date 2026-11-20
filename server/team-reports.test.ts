@@ -88,8 +88,9 @@ async function fixture() {
   }) as typeof fetch;
   let link = { ...status };
   let enrolled = true;
+  let ownerTurn = true;
   const service = new TeamReports({ dir: join(senderDir, "drafts"), store: sender, status: () => link, owner,
-    enrolled: () => enrolled, attachmentsDir: attachments, roots: () => [],
+    enrolled: () => enrolled, ownerTurn: () => ownerTurn, attachmentsDir: attachments, roots: () => [],
     current: () => ({ engine: "fixture", model: "current-model", version: "current-version" }),
     send: (report) => sendTeamReport({ dataDir: senderDir, base: () => "team.example", tokens: { idToken: () => senderToken, freshIdToken: async () => senderToken }, fetchImpl }, report) });
   const ownerStore = await profile(ownerDir);
@@ -101,7 +102,7 @@ async function fixture() {
   const args = { fromBotId: bot.id, fromThreadId: bot.threadId, selected_message_id: mistaken.id, earlier_message_ids: [correction.id] };
   return { root, senderDir, ownerDir, sender, bot, mistaken, request, correction, image, authorization, service, args, relay, ownerStore, chief, ownerOptions,
     calls: () => calls, fail: (value: typeof fail) => { fail = value; }, revoke: () => { revoked = true; },
-    link: (value: PhoneRelayStatus) => { link = value; }, enroll: (value: boolean) => { enrolled = value; } };
+    link: (value: PhoneRelayStatus) => { link = value; }, enroll: (value: boolean) => { enrolled = value; }, ownerTurn: (value: boolean) => { ownerTurn = value; } };
 }
 
 describe("team report intent", () => {
@@ -322,6 +323,16 @@ describe("private team reporting", () => {
     expect(held.report.originals.find((message) => message.id === answer.id)?.speaker).toBe("Peer");
     expect(JSON.stringify(held)).not.toContain(f.mistaken.id);
     expect(f.calls()).toBe(1);
+  });
+
+  it("never sends on a room guest's line or in a turn the owner did not start", async () => {
+    const f = await fixture();
+    f.ownerTurn(false);
+    expect(await f.service.handle({ ...f.args, action: "send" })).toEqual({ error: "A direct user report request is required." });
+    f.ownerTurn(true);
+    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "에디에게 보내", author: { kind: "person", id: "p-mina", name: "Mina" }, origin: "person" });
+    expect(await f.service.handle({ ...f.args, action: "send" })).toEqual({ error: "A direct user report request is required." });
+    expect(f.calls()).toBe(0);
   });
 
   it("asks for the incident when no answer exists and never asks for approval", async () => {

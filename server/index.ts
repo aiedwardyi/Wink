@@ -206,7 +206,7 @@ import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { botRoute, CommsCallers } from "./comms-caller.ts";
-import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
+import { adoptHumanRoot, callerSnapshot, commit, ownerRoot, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
@@ -714,7 +714,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false, ownerHop = false) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -730,6 +730,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number, searc
       ...(readOnly ? { OMB_READ_ONLY_TURN: "1" } : {}),
       ...(handOff ? { OMB_HAND_OFF: "1" } : {}),
       ...(importMemory ? { OMB_IMPORT_MEMORY: "1" } : {}),
+      ...(ownerHop ? { OMB_OWNER_HOP: "1" } : {}),
     },
   };
 }
@@ -1156,6 +1157,7 @@ const teamSnags = snagUserData ? new TeamSnags({
 const teamReports = new TeamReports({
   dir: join(DATA_DIR, "team-report-drafts"), store, status: () => phoneAccess.status(), owner: googleEnv.teamOwner,
   enrolled: () => hasReportEnrollment(DATA_DIR, phoneAccess.base()),
+  ownerTurn: (botId, threadId) => ownerRoot(callerSnapshot(botId, threadId)?.rootId),
   attachmentsDir: ATTACHMENTS_DIR,
   roots: (botId, threadId) => botOutputRoots(store.bot(botId)!, threadId, store.conversationForBot(botId, threadId)?.group?.id),
   current: (botId) => {
@@ -5034,6 +5036,8 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
+  /** Someone else typed this line in a room this PC joined: its peer hops keep the base peer tools. */
+  guest?: boolean;
 };
 
 /** True only for a turn a person actually typed - not a pane note wake, a
@@ -5351,7 +5355,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         });
   }
   let rootId = rootForStart(threadId, turnStartedByUser(opts)
-    ? { kind: "human", messageKey: userMessage.sendId ?? userMessage.id }
+    ? { kind: opts?.guest ? "guest" : "human", messageKey: userMessage.sendId ?? userMessage.id }
     : opts?.commsRoot !== undefined || commsDepth > 0
       ? { kind: "inherit", rootId: opts?.commsRoot }
       : { kind: "automatic" });
@@ -6090,7 +6094,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool, commsDepth > 0 && ownerRoot(rootId));
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6913,9 +6917,9 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => {
+  startTurn: (botId, threadId, prompt, typed, failed, readOnly, guest) => {
     joinedRoomThreads.add(threadId);
-    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
+    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), ...(guest ? { guest } : {}) });
   },
   readOnlyTurns: (botId, threadId) => {
     const bot = store.bot(botId);
@@ -7202,7 +7206,7 @@ async function runClaimedGroupMemberTurn(
     ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff));
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff), false, hop > 0 && !guestAsked);
   }
   const canMessage = works && Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(

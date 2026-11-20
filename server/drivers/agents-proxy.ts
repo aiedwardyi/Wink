@@ -41,6 +41,7 @@
 //   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
+//   OMB_OWNER_HOP    a peer turn in a chain the owner started: every tool but another hop
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
@@ -58,8 +59,11 @@ const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
 const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
 // Machine-wide mounts outside a bot turn have no identity and get no tools.
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
+// Routine inspection and delegation waits stay callable without proactive prompt guidance.
+const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
 // The harness refuses another hop from a peer turn, so these stay unlisted there.
 const HOP_TOOLS = new Set(["ask_bot", "delegate_bot", "create_bot", "create_channel"]);
+const peerTool = process.env.OMB_OWNER_HOP === "1" ? (name: string) => !HOP_TOOLS.has(name) : (name: string) => PEER_TOOLS.has(name);
 // A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
 export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
 const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
@@ -1204,7 +1208,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
-const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => (DEPTH === 0 || !HOP_TOOLS.has(tool.name)) && (!READ_ONLY || READ_ONLY_TOOLS.has(tool.name))) : [];
+const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => (DEPTH === 0 || peerTool(tool.name)) && (!READ_ONLY || READ_ONLY_TOOLS.has(tool.name))) : [];
 const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
 const listedTools = catalog?.tools ?? (process.env.OMB_WINK_TOOL_DEFER === "1" ? deferOptional(eligibleTools) : eligibleTools);
 
@@ -1249,7 +1253,7 @@ export async function handle(msg: Json) {
         args = call.arguments as Json;
       }
       if (!TOOLS_ENABLED || !TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
-      if (DEPTH > 0 && HOP_TOOLS.has(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
+      if (DEPTH > 0 && !peerTool(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
       if (READ_ONLY && !READ_ONLY_TOOLS.has(name)) return textResult(id, `${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`, true);
       const verify = name === VERIFY_SITE_TOOL.name ? new AbortController() : null;
       if (verify) verifyCalls.set(id, verify);

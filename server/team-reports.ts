@@ -26,6 +26,8 @@ export interface TeamReportsOptions {
   store: Pick<Store, "conversationForBot" | "bot" | "activePath">;
   status(): PhoneRelayStatus;
   enrolled(): boolean;
+  /** The sender's live turn is in a chain the owner started. */
+  ownerTurn(botId: string, threadId: string): boolean;
   owner: string | null;
   attachmentsDir: string;
   roots(botId: string, threadId: string): string[];
@@ -77,7 +79,7 @@ export class TeamReports {
     if (!this.canDraft()) return { error: "Authenticated team reporting unavailable. No report sent." };
     const path = o.store.activePath(body.fromThreadId);
     const request = path.findLast((message) => message.role === "user" && message.kind === "text");
-    if (!request || request.comm || request.from || request.queued || /(?:UNTRUSTED WEBHOOK|AUTHENTICATED WEBHOOK)/i.test(request.text ?? "")) return { error: "A direct user report request is required." };
+    if (!request || request.comm || request.from || request.queued || request.author?.kind === "person" || !o.ownerTurn(bot.id, body.fromThreadId) || /(?:UNTRUSTED WEBHOOK|AUTHENTICATED WEBHOOK)/i.test(request.text ?? "")) return { error: "A direct user report request is required." };
     if (reportIntent(request.text ?? "") !== "send") return { error: "No report call phrase. No report sent." };
     mkdirSync(o.dir, { recursive: true, mode: 0o700 });
     const contextFile = join(o.dir, `context-${createHash("sha256").update(JSON.stringify([bot.id, body.fromThreadId])).digest("hex")}.json`);

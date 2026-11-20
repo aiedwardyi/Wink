@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CommsCallers } from "./comms-caller.ts";
-import { _resetCommsRoots, adoptHumanRoot, callerSnapshot, commit, release, reserve, ROOT_TURNS, rootForStart, rootThreadOf } from "./comms-root.ts";
+import { _resetCommsRoots, adoptHumanRoot, callerSnapshot, commit, ownerRoot, release, reserve, ROOT_TURNS, rootForStart, rootThreadOf } from "./comms-root.ts";
 import { DATA_DIR } from "./config.ts";
 import { loadDelegationReceipts, resetDelegationReceipts } from "./delegation-ledger.ts";
 import { _loadPending, _resetPending, drainDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt } from "./delegations.ts";
@@ -376,4 +376,17 @@ it("stores opaque roots without account identity", () => {
   }
   expect(JSON.stringify(callerSnapshot(from.id, from.threadId))).not.toContain(email);
   expect(root).not.toContain(email);
+});
+
+it("keeps a root the owner's only when the owner typed its first line, through every later start", () => {
+  const owner = rootForStart("wink", { kind: "human", messageKey: "owner-line" });
+  const guest = rootForStart("joined", { kind: "guest", messageKey: "guest-line" });
+  expect(guest).not.toBeNull();
+  expect([ownerRoot(owner), ownerRoot(guest), ownerRoot(null)]).toEqual([true, false, false]);
+  expect(ownerRoot(rootForStart("evals", { kind: "inherit", rootId: owner }))).toBe(true);
+  expect(ownerRoot(rootForStart("evals", { kind: "inherit", rootId: guest }))).toBe(false);
+  expect(ownerRoot(rootForStart("wink", { kind: "automatic" }))).toBe(true);
+  expect(ownerRoot(rootForStart("joined", { kind: "automatic" }))).toBe(false);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 48 * 60 * 60 * 1000);
+  expect(ownerRoot(owner)).toBe(false);
 });

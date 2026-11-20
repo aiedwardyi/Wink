@@ -3,6 +3,8 @@ import { turnRegistry } from "./turn-registry.ts";
 
 export type RootStart =
   | { kind: "human"; messageKey: string }
+  // someone other than the owner typed it: a chain, but not one the owner started
+  | { kind: "guest"; messageKey: string }
   | { kind: "inherit"; rootId: string | null | undefined }
   | { kind: "automatic" };
 
@@ -27,6 +29,7 @@ const messages = new Map<string, string>();
 const threads = new Map<string, string | null>();
 const homes = new Map<string, string>();
 const budgets = new Map<string, { committed: number; pending: Set<string> }>();
+const owned = new Set<string>();
 
 function liveRoot(rootId: string | null | undefined): string | null {
   if (!rootId) return null;
@@ -35,6 +38,7 @@ function liveRoot(rootId: string | null | undefined): string | null {
   const now = Date.now();
   if (now - touched >= MAX_IDLE) {
     roots.delete(rootId);
+    owned.delete(rootId);
     return null;
   }
   roots.set(rootId, now);
@@ -43,19 +47,22 @@ function liveRoot(rootId: string | null | undefined): string | null {
 
 export function rootForStart(threadId: string, start: RootStart): string | null {
   let rootId: string | null;
-  if (start.kind === "human") {
+  if (start.kind === "human" || start.kind === "guest") {
     const now = Date.now();
     for (const [id, touched] of roots) {
       if (now - touched < MAX_IDLE) continue;
       roots.delete(id);
       homes.delete(id);
       budgets.delete(id);
+      owned.delete(id);
     }
     for (const [key, id] of messages) if (!roots.has(id)) messages.delete(key);
     for (const [thread, id] of threads) if (!id || !roots.has(id)) threads.delete(thread);
     rootId = messages.get(start.messageKey) ?? randomUUID();
     messages.set(start.messageKey, rootId);
     roots.set(rootId, now);
+    if (start.kind === "human") owned.add(rootId);
+    else owned.delete(rootId);
     if (!homes.has(rootId)) homes.set(rootId, threadId);
   } else {
     rootId = liveRoot(start.kind === "inherit" ? start.rootId : threads.get(threadId));
@@ -98,6 +105,11 @@ export function release(reservation: Reservation): void {
   budgets.get(reservation.rootId)?.pending.delete(reservation.id);
 }
 
+export function ownerRoot(rootId: string | null | undefined): boolean {
+  const live = liveRoot(rootId);
+  return Boolean(live && owned.has(live));
+}
+
 export function rootThreadOf(rootId: string): string | null {
   return homes.get(rootId) ?? null;
 }
@@ -108,4 +120,5 @@ export function _resetCommsRoots(): void {
   threads.clear();
   homes.clear();
   budgets.clear();
+  owned.clear();
 }

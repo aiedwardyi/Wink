@@ -318,6 +318,7 @@ describe("this PC's bot in a joined room", () => {
     turns.heard(ROOM, line(mina, "@Pete-Coder add totals", { at: Date.now() }));
     await settle();
     expect(deps.startTurn.mock.calls[0]![5]).toBe(false);
+    expect(deps.startTurn.mock.calls[0]![6]).toBe(true);
     await turns.settled(deps.startTurn.mock.calls[0]![1] as string, true);
     expect(setJoinedWorks(ROOM, "p2", false)).toBe(true);
     turns.heard(ROOM, line(mina, "@Pete-Coder push it", { at: Date.now() }));
@@ -339,6 +340,7 @@ describe("this PC's bot in a joined room", () => {
     turns.sent(ROOM, line(peter, "@Pete-Coder run the build"));
     await settle();
     expect(deps.startTurn.mock.calls[0]![5]).toBe(false);
+    expect(deps.startTurn.mock.calls[0]![6]).toBe(false);
   });
 
   it("keeps a busy rejection waiting on this PC without posting a failure", async () => {

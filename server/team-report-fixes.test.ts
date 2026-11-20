@@ -62,7 +62,7 @@ function fixture() {
   }) as typeof fetch;
   const store = { bot: (id: string) => ({ ...bot, id }), conversationForBot: (_id: string, thread: string) => thread === bot.threadId ? { bot } : undefined, activePath: () => path } as unknown as Store;
   const service = new TeamReports({ dir: join(dir, "drafts"), store, status: () => ({ ...PHONE_RELAY_OFF, state: "connected", reportOwner: owner }), enrolled: () => enrolled, owner,
-    attachmentsDir: dir, roots: () => [], current: () => current, send: (report) => sendTeamReport({ dataDir: dir, base: () => "team.example", tokens, fetchImpl }, report) });
+    ownerTurn: () => true, attachmentsDir: dir, roots: () => [], current: () => current, send: (report) => sendTeamReport({ dataDir: dir, base: () => "team.example", tokens, fetchImpl }, report) });
   const call = (args: Record<string, unknown>) => service.handle({ fromBotId: bot.id, fromThreadId: bot.threadId, ...args });
   const evidence = (request: Message, extra = {}) => collectReport({ owner, bot, threadId: bot.threadId, path, request, attachmentsDir: dir, roots: [], current, ...extra });
   const envelope = (report: TeamReport) => {
