@@ -326,8 +326,8 @@ it("refreshes through the existing refresh API, including Muse", async () => {
   h.instances.push({ ...h.instances[0], instanceId: "muse", driverKind: "museAgent" });
   await mount();
   await click("[data-usage-refresh]");
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/muse?fresh=1", { method: "POST" });
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/claude?fresh=1", { method: "POST" });
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/muse?fresh=1", expect.objectContaining({ method: "POST" }));
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/claude?fresh=1", expect.objectContaining({ method: "POST" }));
 });
 
 it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", async (locale) => {
@@ -339,7 +339,7 @@ it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", asy
   await mount();
   expect(q('[data-usage-engine="gemini"] [data-account-row="gemini"]')).not.toBeNull();
   await click("[data-usage-refresh]");
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini?fresh=1", { method: "POST" });
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini?fresh=1", expect.objectContaining({ method: "POST" }));
   expect(h.dispatch).toHaveBeenCalledWith({ type: "rateLimits", instanceId: "gemini", report, identity: instance.snapshot.account });
 });
 
@@ -351,7 +351,7 @@ it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh wh
   if (state === "unsupported") instance.canRefreshUsage = false;
   await mount();
   await click("[data-usage-refresh]");
-  expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini?fresh=1", { method: "POST" });
+  expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini?fresh=1", expect.objectContaining({ method: "POST" }));
 });
 
 it.each(["en", "ko"] as const)("toggles the chat card on click and preserves both Alt+U presses (%s)", async (locale) => {

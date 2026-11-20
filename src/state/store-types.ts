@@ -419,6 +419,7 @@ export interface EngineInstall {
 export interface RateLimitReport {
   windows: RateLimitWindow[];
   observedAt: string;
+  ageMs?: number;
 }
 
 /** One row of GET /api/instances - the model picker's data. */

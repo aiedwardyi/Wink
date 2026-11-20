@@ -428,11 +428,11 @@ export function engineLabel(board: UsageBoard, engine: UsageBoardEngine, instanc
 }
 
 /** Settings > Usage: every engine under a header that folds, its accounts in one box, each with a meter per reported window. */
-export function UsageDesk() {
+export function UsageDesk({ closing = false }: { closing?: boolean }) {
   const { t, locale } = useI18n();
   const { state: store, dispatch, refreshInstances } = useStore();
   const state = useUsageBoard();
-  useAutoRefresh(state.board, "desk");
+  useAutoRefresh(state.board, closing ? undefined : "desk");
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
   const mode = useUsageMode();

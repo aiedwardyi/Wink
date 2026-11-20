@@ -27,7 +27,7 @@ const { mockState, mockApi, settle, pendingPaths } = vi.hoisted(() => {
       if (typeof outcome === "object") return entry?.resolve(outcome);
       const observedAt = new Date().toISOString();
       const id = path.split("/").pop()!;
-      entry?.resolve({ report: { windows: [{ id: "five_hour", usedPercent: 10, resetsAt: Date.now() + 3_600_000 }], observedAt }, instanceId: id });
+      entry?.resolve({ report: { windows: [{ id: "five_hour", usedPercent: 10, resetsAt: Date.now() + 3_600_000 }], observedAt, ageMs: 0 }, instanceId: id });
     },
   };
 });
@@ -53,8 +53,8 @@ import { UsageQuickView } from "./UsageQuickView";
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 const freshReading = () => reading(new Date(Date.now() - 10_000).toISOString());
-const reading = (observedAt: string, usedPercent = 90) => ({
-  observedAt,
+const reading = (observedAt: string, usedPercent = 90, ageMs = Date.now() - Date.parse(observedAt)) => ({
+  observedAt, ageMs,
   windows: [{ id: "five_hour", usedPercent, resetsAt: Date.now() + 3_600_000 }],
 });
 const engine = (instanceId: string, driverKind: string, displayName: string, extra: Partial<InstanceInfo> = {}): InstanceInfo => ({
@@ -66,6 +66,7 @@ const engine = (instanceId: string, driverKind: string, displayName: string, ext
 });
 
 let tests = 0;
+const suiteStart = Date.now();
 
 describe("Usage auto refresh", () => {
   let host: HTMLDivElement;
@@ -76,7 +77,8 @@ describe("Usage auto refresh", () => {
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    vi.setSystemTime(Date.now() + ++tests * 3_600_000);
+    vi.setSystemTime(suiteStart + ++tests * 24 * 3_600_000);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now() - suiteStart);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     mockApi.mockClear();
     mockState.instances = [
@@ -94,6 +96,7 @@ describe("Usage auto refresh", () => {
     await act(async () => root.unmount());
     host.remove();
     mockState.appSettingsSection = "account";
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -102,7 +105,7 @@ describe("Usage auto refresh", () => {
     expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/grok"]);
   });
 
-  it.each(["Usage page", "quick view"])("reads a managed account again with the %s left open", async (surface) => {
+  it.each(["Usage page", "quick view"])("shows a managed account reset on the %s with the viewer clock 60 s ahead", async (surface) => {
     const id = "acct_managed_claude";
     const path = `/api/usage/refresh/${id}`;
     const board = structuredClone(usageBoardFixture);
@@ -110,7 +113,7 @@ describe("Usage auto refresh", () => {
     const account = view.accounts[0]!;
     account.id = id;
     mockState.instances = [engine(id, "claudeAgent", "Claude", {
-      accountState: "ready", rateLimits: reading(minutesAgo(0), 100),
+      accountState: "ready", rateLimits: reading(minutesAgo(1), 100, 0),
     })];
     const anchor = host.appendChild(document.createElement("button"));
     await open(surface === "Usage page" ? createElement(UsageSection) : createElement(UsageQuickView, {
@@ -122,9 +125,20 @@ describe("Usage auto refresh", () => {
     expect(refreshed()).toEqual([]);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(refreshed()).toEqual([path]);
-    await act(async () => { settle(path, { report: reading(minutesAgo(0), 12) }); });
+    await act(async () => { settle(path, { report: reading(minutesAgo(1), 12, 0) }); });
     expect(mockState.instances[0]?.rateLimits?.windows[0]?.usedPercent).toBe(12);
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(refreshed()).toEqual([path, path]);
+  });
+
+  it("uses the remaining age when the host returns a still-fresh cached reading", async () => {
+    const path = "/api/usage/refresh/claude";
+    mockState.instances = [engine("claude", "claudeAgent", "Claude")];
+    await open();
+    await act(async () => { settle(path, { status: "retained", report: reading(minutesAgo(1), 90, 29_990) }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(9); });
+    expect(refreshed()).toEqual([path]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(refreshed()).toEqual([path, path]);
   });
 
@@ -139,7 +153,7 @@ describe("Usage auto refresh", () => {
 
     await open();
     expect(refreshed()).toEqual([grok]);
-    await act(async () => { settle(grok, { status: "retained", report: previous, retryAt: Date.now() + 10 * 60_000 }); });
+    await act(async () => { settle(grok, { status: "retained", report: previous, retryInMs: 10 * 60_000 }); });
     await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
     expect(refreshed()).toEqual([codex, grok]);
     await act(async () => { settle(codex, { report: reading(minutesAgo(0), 12) }); });
@@ -182,10 +196,11 @@ describe("Usage auto refresh", () => {
     expect(mockState.instances[0].rateLimits).toBeUndefined();
   });
 
-  it("starts the refresh when Settings opens on another tab", async () => {
+  it("leaves background checks off when Settings opens on another tab", async () => {
     mockState.instances[1]!.rateLimits = reading(minutesAgo(2));
     await open(createElement(SettingsModal));
-    expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/grok"]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(6 * 60_000); });
+    expect(refreshed()).toEqual([]);
   });
 
   it("refreshes once when Settings opens straight on Usage, as Alt+U and the chat bar do", async () => {
@@ -194,19 +209,34 @@ describe("Usage auto refresh", () => {
     expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/grok"]);
   });
 
-  it("refreshes again when the Usage tab is picked after Settings was left open", async () => {
+  it("pauses Usage checks during the Settings close animation", async () => {
+    mockState.appSettingsSection = "usage";
+    mockState.instances = [engine("claude", "claudeAgent", "Claude", { rateLimits: freshReading() })];
+    await open(createElement(SettingsModal));
+    await act(async () => { await vi.advanceTimersByTimeAsync(19_900); });
+    await open(createElement(SettingsModal, { closing: true }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(refreshed()).toEqual([]);
+  });
+
+  it("refreshes when the Usage tab is picked after Settings was left open", async () => {
     await open(createElement(SettingsModal));
     await settleAll();
     mockState.instances = mockState.instances.map((instance) => ({ ...instance, rateLimits: reading(minutesAgo(6)) }));
     mockState.appSettingsSection = "usage";
     await open(createElement(SettingsModal));
-    expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/claude", "/api/usage/refresh/codex", "/api/usage/refresh/grok", "/api/usage/refresh/grok"]);
+    expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/codex", "/api/usage/refresh/grok"]);
+    await settleAll();
+    mockState.appSettingsSection = "account";
+    await open(createElement(SettingsModal));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(refreshed()).toHaveLength(3);
   });
 
   it("waits out a failed attempt and the server's retryAt before trying again", async () => {
     mockState.instances = mockState.instances.filter((instance) => instance.instanceId !== "codex");
     await open();
-    await act(async () => { settle("/api/usage/refresh/claude", "fail"); settle("/api/usage/refresh/grok", { error: "Could not refresh Grok limits", retryAt: Date.now() + 10 * 60_000 }); });
+    await act(async () => { settle("/api/usage/refresh/claude", "fail"); settle("/api/usage/refresh/grok", { error: "Could not refresh Grok limits", retryInMs: 10 * 60_000 }); });
     await act(async () => root.unmount());
     root = createRoot(host);
     await open();
@@ -288,10 +318,47 @@ describe("Usage auto refresh", () => {
       expect(button()!.querySelector("svg[class*='animate-spin']")).toBeNull();
     });
 
-    it("spins for the automatic refresh on open", async () => {
+    it("keeps Refresh enabled during an automatic check and joins it on tap", async () => {
+      const path = "/api/usage/refresh/claude";
+      mockState.instances = [engine("claude", "claudeAgent", "Claude", { rateLimits: reading(minutesAgo(0)) })];
+      await open(quick());
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(refreshed()).toEqual([path]);
+      expect(button()!.disabled).toBe(false);
+      expect(button()!.querySelector("svg[class*='animate-spin']")).toBeNull();
+      await act(async () => { button()!.click(); });
+      expect(button()!.disabled).toBe(true);
+      expect(button()!.querySelector("svg[class*='animate-spin']")).not.toBeNull();
+      expect(refreshed()).toEqual([path]);
+      await act(async () => { settle(path, "ok"); });
+      expect(button()!.disabled).toBe(false);
+    });
+
+    it("stays at one in-flight check and pauses while hidden", async () => {
+      const path = "/api/usage/refresh/claude";
       mockState.instances = [engine("claude", "claudeAgent", "Claude", { rateLimits: reading(minutesAgo(6)) })];
       await open(quick());
-      expect(button()!.querySelector("svg[class*='animate-spin']")).not.toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(181_000); });
+      expect(refreshed()).toEqual([path]);
+      const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      try {
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+          settle(path, "ok");
+          await vi.advanceTimersByTimeAsync(120_000);
+        });
+        expect(refreshed()).toEqual([path]);
+      } finally {
+        visibility.mockRestore();
+      }
+    });
+
+    it("starts no background checks while the panel is closing", async () => {
+      mockState.instances = [engine("claude", "claudeAgent", "Claude")];
+      const view = quick();
+      await open(createElement(UsageQuickView, { ...view.props, closing: true }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(refreshed()).toEqual([]);
     });
 
     it("shows the failure line and keeps the old reading", async () => {

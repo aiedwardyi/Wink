@@ -11,7 +11,7 @@ import { useI18n } from "@/lib/i18n";
 import { showUsagePerBotTable } from "@/lib/friends-chrome";
 import { botUsage, cachedInput, costCaption, formatTokens, formatUsd, hasFiniteCost, sumUsage, usageDetail } from "@/lib/usage";
 
-export function UsageSection() {
+export function UsageSection({ closing = false }: { closing?: boolean }) {
   const { t } = useI18n();
   const { state } = useStore();
   const rows = state.bots
@@ -34,7 +34,7 @@ export function UsageSection() {
 
   return (
     <>
-      <UsageDesk />
+      <UsageDesk closing={closing} />
       {showUsagePerBotTable() && (
       <Card title="Usage" subtitle="Tokens and cost per bot, added up from every settled turn. Only engines that report a price show one.">
         {rows.length === 0 ? (

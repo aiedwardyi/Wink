@@ -40,8 +40,14 @@ const codexUsageWindow = z.object({ usedPercent: percent }).passthrough();
 const codexUsage = z.object({ limitId: z.string().nullish(), primary: codexUsageWindow.nullable().optional(), secondary: codexUsageWindow.nullable().optional() }).passthrough();
 const rpcMessage = z.object({ id: z.number().optional(), method: z.string().optional(), result: z.json().optional(), error: z.object({ code: z.number() }).optional() });
 
-export function usageRefreshResponse(instanceId: string, result: Result) {
-  return { instanceId, report: result.report, error: result.error, retryAt: result.retryAt, status: result.status, resetsAt: result.resetsAt };
+export function usageReportWithAge(report: Report, now = Date.now()) {
+  return { ...report, ageMs: Math.max(0, now - Date.parse(report.observedAt)) };
+}
+
+export function usageRefreshResponse(instanceId: string, result: Result, now = Date.now()) {
+  const report = result.report && usageReportWithAge(result.report, now);
+  return { instanceId, report, error: result.error, retryAt: result.retryAt, retryInMs: Math.max(0, result.retryAt - now),
+    status: result.status, resetsAt: result.resetsAt };
 }
 
 export async function readUsageRpc(cli: string, env: NodeJS.ProcessEnv, account?: AccountContext): Promise<JsonValue> {
