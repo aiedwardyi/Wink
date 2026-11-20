@@ -682,6 +682,53 @@ describe("every delete case: nothing deleted that should live, nothing live that
       w.sync(a, b, a, b);
       return { live: [{ id: again.body.id, title: "Use pnpm 10" }], dead: [first.body.id] };
     }, both],
+    ["D: a retried reply with the same client id stays deleted", async (w) => {
+      const a = w.boot("pc-a");
+      const b = w.boot("pc-b");
+      const root = tip(a, "live parent");
+      const reply = { parent_id: root.id, body: "Original reply", client_id: "saved-reply-1111" };
+      const first = await send(a.routes.reply, reply);
+      w.sync(a, b);
+      expect((await send(a.routes.remove, { id: first.body.post.id })).status).toBe(200);
+      w.sync(a, b, a, b);
+      expect((await send(a.routes.reply, reply)).status).toBe(200);
+      w.sync(a, b, a, b);
+      return { live: [{ id: root.id }], dead: [first.body.post.id] };
+    }, both],
+    ...(["pc-a", "pc-b"] as const).map((first): (typeof cases)[number] => [`N: an answer under a reply the original release deleted goes with a thread delete after the update (${first} syncing first)`, (w) => {
+      const a = w.boot("pc-a");
+      const b = w.boot("pc-b");
+      const keep = tip(a, "keep");
+      const p = tip(a, "live");
+      const reply = tip(a, "user reply", p, BOARD_USER);
+      w.sync(a, b, a, b);
+      const answer = tip(b, "answer", reply);
+      // the original release deleted the reply alone: its file gone and a bare id
+      fs.rmSync(join(a.dir, `${reply.id}.json`));
+      oldTombstones(a.dir, reply.id);
+      const updated = [w.restart(a), w.restart(b)];
+      updated[0].board.remove(p.id);
+      const order = first === "pc-a" ? updated : updated.toReversed();
+      w.sync(...order, ...order);
+      return { live: [{ id: keep.id }], dead: [p.id, reply.id, answer.id] };
+    }]),
+    ["N: an answer that raced a reply delete goes with a later thread delete, also on a PC that never held the reply", async (w) => {
+      const a = w.boot("pc-a");
+      const b = w.boot("pc-b");
+      const keep = tip(a, "keep");
+      const p = tip(a, "live");
+      const saved = await send(a.routes.reply, { parent_id: p.id, body: "On it.", client_id: "saved-reply-2222" });
+      w.sync(a, b, a, b);
+      const answer = tip(b, "answer", saved.body.post);
+      expect((await send(a.routes.remove, { id: saved.body.post.id })).status).toBe(200);
+      w.sync(a, b, a, b);
+      const c = w.boot("pc-c");
+      w.sync(c);
+      expect(c.board.get(answer.id)).toBeDefined();
+      expect((await send(c.routes.remove, { id: p.id })).status).toBe(200);
+      w.sync(c, a, b, c, a, b);
+      return { live: [{ id: keep.id }], dead: [p.id, saved.body.post.id, answer.id] };
+    }],
     ["D: a retried reply with the same client id stays deleted with its thread", async (w) => {
       const a = w.boot("pc-a");
       const b = w.boot("pc-b");
@@ -690,7 +737,6 @@ describe("every delete case: nothing deleted that should live, nothing live that
       const reply = { parent_id: root.id, body: "Original reply", client_id: "saved-reply-1111" };
       const first = await send(a.routes.reply, reply);
       w.sync(a, b);
-      expect((await send(a.routes.remove, { id: first.body.post.id })).status).toBe(403);
       expect((await send(a.routes.remove, { id: root.id })).status).toBe(200);
       w.sync(a, b, a, b);
       expect((await send(a.routes.reply, reply)).status).toBe(404);

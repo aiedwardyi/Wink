@@ -148,16 +148,26 @@ describe("Forum replies and helped", () => {
     expect(board.list().filter((post) => post.parent_id === stuck.id)).toHaveLength(2);
   });
 
-  it("deletes no reply, the user's own included", async () => {
+  it("deletes the user's own reply for real and nothing else", async () => {
     const { board, routes } = setup();
     const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:3" });
     const botReply = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "Try again.", parent_id: stuck.id, source_ref: "tool:tc:3" });
     const saved = await call(routes.reply, { parent_id: stuck.id, body: "Switching is fine by me." });
-    for (const id of [botReply.id, saved.body.post.id]) {
-      expect((await call(routes.remove, { id })).status).toBe(403);
-      expect(board.get(id)).toBeDefined();
-    }
-    expect((await call(routes.remove, { id: "p000000000000000000000000" })).status).toBe(404);
+    expect((await call(routes.remove, { id: botReply.id })).status).toBe(403);
+    expect(await call(routes.remove, { id: saved.body.post.id })).toMatchObject({ status: 200 });
+    expect(board.list().map((post) => post.id)).toEqual(expect.arrayContaining([stuck.id, botReply.id]));
+    expect(board.get(saved.body.post.id)).toBeUndefined();
+    expect(existsSync(join(board.dir, `${saved.body.post.id}.json`))).toBe(false);
+    expect((await call(routes.remove, { id: saved.body.post.id })).status).toBe(404);
+  });
+
+  it("a deleted reply's own replies stay in its thread", async () => {
+    const { board, routes } = setup();
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:4" });
+    const saved = await call(routes.reply, { parent_id: stuck.id, body: "Try the work account." });
+    const under = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "That worked.", parent_id: saved.body.post.id, source_ref: "tool:tc:5" });
+    await call(routes.remove, { id: saved.body.post.id });
+    expect(board.get(under.id)).toMatchObject({ parent_id: stuck.id, body: "That worked." });
   });
 
   it("deletes a top-level post and every reply under it, for real", async () => {

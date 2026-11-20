@@ -38,6 +38,8 @@ export interface BoardPost {
 
 /** The user's Forum replies carry this author id. */
 export const BOARD_USER = "user";
+/** Mirrors ownReply in server/board.ts: only replies typed in the Forum's box can be deleted. */
+export const isOwnReply = (post: BoardPost) => post.author_bot_id === BOARD_USER && post.source_ref.startsWith("reply:");
 /** Mirrors removable in server/board.ts: a top-level post can be deleted, with its whole thread. */
 export const isRemovable = (post: BoardPost) => post.parent_id === null;
 
@@ -123,20 +125,27 @@ export function useBoardPosts(): BoardPostsView {
   const mine = useRef(new Map<string, { post: BoardPost; seq: number }>());
   // once a load carried a post the loads decide, so a late or retried answer never brings back a delete
   const listed = useRef(new Set<string>());
-  // a deleted post takes its whole thread, even from a load asked before the delete or with the live link down
-  const gone = useRef(new Set<string>());
+  // a deleted post stays gone, even from a load asked before the delete or with the live link down
+  const gone = useRef(new Map<string, string | null>());
+  // replies under a deleted reply move up to its parent, as the server moves them
+  const lift = useCallback((post: BoardPost) => {
+    let parent = post.parent_id;
+    while (parent && gone.current.has(parent)) parent = gone.current.get(parent)!;
+    return parent === post.parent_id ? post : { ...post, parent_id: parent };
+  }, []);
+  // a deleted top-level post takes its whole thread
   const prune = useCallback((list: BoardPost[]) => {
     const byId = new Map(list.map((post) => [post.id, post]));
     const cut = (post: BoardPost) => {
       const seen = new Set<string>();
-      for (let id: string | null = post.id; id && !seen.has(id); id = byId.get(id)?.parent_id ?? null) {
-        if (gone.current.has(id)) return true;
+      for (let id: string | null = post.id; id && !seen.has(id); id = gone.current.has(id) ? gone.current.get(id)! : byId.get(id)?.parent_id ?? null) {
+        if (gone.current.has(id) && (id === post.id || gone.current.get(id) === null)) return true;
         seen.add(id);
       }
       return false;
     };
-    return list.filter((post) => !cut(post));
-  }, []);
+    return list.filter((post) => !cut(post)).map(lift);
+  }, [lift]);
   const reload = useRef(() => {});
   useEffect(() => {
     let live = true;
@@ -171,7 +180,7 @@ export function useBoardPosts(): BoardPostsView {
     setPosts((now) => (forumKept.posts = prune([...(now ?? []).filter((held) => held.id !== post.id), post])));
   }, [prune]);
   const removed = useCallback((post: BoardPost) => {
-    gone.current.add(post.id);
+    gone.current.set(post.id, post.parent_id);
     mine.current.delete(post.id);
     setPosts((now) => (forumKept.posts = prune(now ?? [])));
   }, [prune]);

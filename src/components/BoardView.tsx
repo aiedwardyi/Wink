@@ -4,7 +4,7 @@ import { ArrowBigUp, CircleCheck, Flame, MessageCircle, Sparkles, TrendingUp, ty
 
 import { agoText } from "@/lib/ago";
 import {
-  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isRemovable, replyToBoard, sortBoardThreads, useBoardPosts,
+  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isOwnReply, isRemovable, replyToBoard, sortBoardThreads, useBoardPosts,
   type BoardKind, type BoardPost, type BoardReply, type BoardSort,
 } from "@/lib/board";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
@@ -167,7 +167,7 @@ const preview = (post: BoardPost) => (post.body && post.body !== post.title ? po
 
 type OnMenu = (menu: MessageMenuRequest) => void;
 
-/** The chat's message menu on a post: Copy on any, Delete added on a top-level post. */
+/** The chat's message menu on a post: Copy on any, Delete added on a top-level post and on the user's own replies. */
 const menuProps = (post: BoardPost, onMenu: OnMenu) => {
   const text = post.body || post.title;
   const user = post.author_bot_id === BOARD_USER;
@@ -596,7 +596,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
           target={shownMenu.target}
           closing={menuClosing}
           selectText={false}
-          onDelete={menuPost && isRemovable(menuPost) ? () => setDeleting(menuPost) : undefined}
+          onDelete={menuPost && (isRemovable(menuPost) || isOwnReply(menuPost)) ? () => setDeleting(menuPost) : undefined}
           onClose={() => setMenu(null)}
         />
       ) : shownMenu ? (
@@ -605,8 +605,8 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
       {confirm.value && (
         <ConfirmDialog
           closing={confirm.closing}
-          title={t("board.deleteTitle")}
-          body={t("board.deleteBody")}
+          title={t(confirm.value.parent_id === null ? "board.deletePostTitle" : "board.deleteTitle")}
+          body={t(confirm.value.parent_id === null ? "board.deletePostBody" : "board.deleteBody")}
           confirmLabel={t("chrome.delete")}
           onConfirm={() => {
             void remove(confirm.value!);
