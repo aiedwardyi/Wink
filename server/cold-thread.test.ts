@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatListPage, coldLoad, coldPaneReason, coldSendIds, coldWriteRows, sentRow, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
-import { applySyncedRows, insertMessage, messageDatabase, messageDbFile, readThread } from "./message-db.ts";
+import { applySyncedRows, insertMessage, messageDatabase, messageDbFile, readThread, withMessageTransaction } from "./message-db.ts";
 import { paneLines, paneReason } from "../shared/pane-note.ts";
 import { Store, type Message } from "./store.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
@@ -369,7 +369,8 @@ describe("loading a chat off the server thread", () => {
   it("takes a send made during the load by key, and loads it with the chat", async () => {
     const setup = fresh();
     const bot = setup.createBot({});
-    for (let n = 0; n < 2_500; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+    // One commit, not 2,500: on a busy runner the row-by-row seed held the thread past the test timeout.
+    withMessageTransaction(() => { for (let n = 0; n < 2_500; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` }); });
     const head = setup.activeLeaf(bot.threadId);
     const store = fresh();
     const load = coldLoad(store, bot.threadId);
