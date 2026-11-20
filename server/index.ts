@@ -198,7 +198,7 @@ import { BUSY_RESUME_DELAYS_MS, isRetryLine, retryLine } from "./drivers/retry.t
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
-import { lastMessageAt } from "./message-db.ts";
+import { lastMessageAt, storedWindow } from "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
@@ -2681,6 +2681,9 @@ function messagePage(threadId: string, limit: number | undefined, before?: strin
 /** A bounded page centred on a known message, used when a search result is
  * opened on a client that only hydrated the newest part of the transcript. */
 function messageWindow(threadId: string, messageId: string, limit: number) {
+  // a chat not in memory reads just the window; loading a long one took seconds
+  const stored = store.loaded(threadId) ? null : storedWindow(threadId, messageId, limit);
+  if (stored) return { messages: stored.messages.map(slimMessage), hasMore: stored.hasMore };
   const all = store.messagesFor(threadId);
   const index = all.findIndex((message) => message.id === messageId);
   if (index < 0) return null;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BotTrash } from "./bot-trash.ts";
 import { DATA_DIR } from "./config.ts";
+import { closeMessageDb } from "./message-db.ts";
 import { RoutineManager } from "./routines.ts";
 import { Store } from "./store.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
@@ -94,6 +95,37 @@ describe("search", () => {
     await route.search(res, new URL("http://localhost/search?q=kiwi"), [room.threadId]);
 
     expect(JSON.parse(body).hits.map((hit: { threadId: string }) => hit.threadId)).toEqual([bot.threadId]);
+  });
+});
+
+describe("find in a chat not in memory", () => {
+  it("answers without loading the chat, and still marks the version an edit replaced", async () => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+    const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
+    const writer = new Store(selection);
+    const bot = writer.createBot({ name: "Long" }, { seedMessages: false });
+    const first = writer.appendMessage(bot.threadId, { role: "user", kind: "text", text: "kiwi first", at: 1_000 });
+    writer.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "kiwi reply", at: 1_001 });
+    writer.branchMessage(bot.threadId, first.id, "kiwi edited");
+    for (let i = 0; i < 300; i++) writer.appendMessage(bot.threadId, { role: i % 2 ? "bot" : "user", kind: "text", text: `row ${i}` });
+    writer.appendMessage(bot.threadId, { role: "user", kind: "text", text: "kiwi newest" });
+    closeMessageDb();
+    const store = new Store(selection);
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    const find = async (q = "kiwi") => {
+      let body = "";
+      const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.search(res, new URL(`http://localhost/search?q=${q}&threadId=${bot.threadId}&view=chips`));
+      return Object.fromEntries(JSON.parse(body).hits.map((hit: { snippet: string; onActivePath: boolean }) => [hit.snippet, hit.onActivePath]));
+    };
+    const shown = { "kiwi newest": true, "kiwi edited": true, "kiwi reply": false, "kiwi first": false };
+
+    expect(await find("plum")).toEqual({});
+    expect(await find()).toEqual(shown);
+    // the old route read and parsed every row of the chat to answer this
+    expect(store.loaded(bot.threadId)).toBe(false);
+    store.messagesFor(bot.threadId);
+    expect(await find()).toEqual(shown);
   });
 });
 

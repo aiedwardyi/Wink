@@ -407,6 +407,64 @@ export function activePathBack(threadId: string): Iterable<Message> | null {
   })();
 }
 
+/** The last thread whose stored active path was walked, keyed on its head and version so a search per keystroke walks it once. */
+let storedPath: { threadId: string; key: string; ids: Set<string> } | undefined;
+
+/** Which of `ids` sit on the stored active path, read from the parent and id indexes alone: the rows themselves (pictures and all) are never read. */
+export function onStoredPath(threadId: string, ids: readonly string[]): Set<string> {
+  const head = storedHead(threadId);
+  if (!head) return new Set();
+  const key = `${head}:${threadVersion(threadId)}`;
+  if (storedPath?.threadId !== threadId || storedPath.key !== key) {
+    const database = db();
+    // SAFETY: These projections select SQLite's rowid with the message's parentId or id TEXT, both covered by an index.
+    const parents = database.prepare("SELECT rowid AS position, json_extract(json, '$.parentId') AS parent FROM messages WHERE thread_id = ?").all(threadId) as Array<{ position: number; parent: string | null }>;
+    const rows = database.prepare("SELECT rowid AS position, id FROM messages WHERE thread_id = ?").all(threadId) as Array<{ position: number; id: string }>;
+    // flat legacy rows omit parentId and follow the row stored before them, as activePathBack reads them; an explicit null ends the branch
+    // SAFETY: This projection selects SQLite's rowid.
+    const flat = new Set((database.prepare("SELECT rowid AS position FROM messages WHERE thread_id = ? AND json_extract(json, '$.parentId') IS NULL AND json_type(json, '$.parentId') IS NULL").all(threadId) as Array<{ position: number }>).map((row) => row.position));
+    const parentAt = new Map(parents.map((row) => [row.position, row.parent]));
+    const positionOf = new Map(rows.map((row) => [row.id, row.position]));
+    const stored = flat.size ? rows.sort((a, b) => a.position - b.position) : rows;
+    const indexAt = flat.size ? new Map(stored.map((row, index) => [row.position, index])) : undefined;
+    const path = new Set<string>();
+    for (let id: string | null | undefined = head; id && !path.has(id);) {
+      const position = positionOf.get(id);
+      if (position === undefined) break;
+      path.add(id);
+      id = flat.has(position) ? stored[indexAt!.get(position)! - 1]?.id : parentAt.get(position);
+    }
+    storedPath = { threadId, key, ids: path };
+  }
+  const path = storedPath.ids;
+  return new Set(ids.filter((id) => path.has(id)));
+}
+
+/** The rows messageWindow slices from messagesFor(threadId) around `id`, read by key without loading the thread; null when no stored row has that id. */
+export function storedWindow(threadId: string, id: string, limit: number): { messages: Message[]; hasMore: boolean } | null {
+  const database = db();
+  // SAFETY: This projection selects SQLite's rowid.
+  const target = database.prepare("SELECT rowid AS position FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { position: number } | undefined;
+  if (!target) return null;
+  if (limit < 1) return { messages: [], hasMore: true };
+  type Row = { id: string; json: string };
+  // SAFETY: These projections select the message id and its stored JSON.
+  const newer = database.prepare("SELECT id, json FROM messages WHERE thread_id = ? AND rowid >= ? ORDER BY rowid LIMIT ?").all(threadId, target.position, limit) as Row[];
+  // half the page before the row, more when the chat ends sooner; one extra row tells whether older ones remain
+  const wanted = Math.max(Math.floor((limit - 1) / 2), limit - newer.length);
+  const older = database.prepare("SELECT id, json FROM messages WHERE thread_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?").all(threadId, target.position, wanted + 1) as Row[];
+  const shown = older.slice(0, wanted).reverse();
+  // flat legacy rows chain to the row stored before them, as a loaded thread chains them
+  let prev = older[shown.length]?.id ?? null;
+  const messages = [...shown, ...newer.slice(0, limit - shown.length)].map((row) => {
+    const message = rowToMessage(row);
+    if (message.parentId === undefined) message.parentId = prev;
+    prev = message.id;
+    return message;
+  });
+  return { messages, hasMore: older.length > shown.length };
+}
+
 /** A thread's rows newest first, parsed only as far as the caller reads. */
 export function rowsBack(threadId: string): Iterable<Message> {
   // SAFETY: This projection selects the stored message JSON.
