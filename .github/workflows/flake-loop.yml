@@ -1,0 +1,77 @@
+# Scratch loop for CI-FLAKES-4; lives only on loop/* branches.
+name: Flake loop
+
+on:
+  push:
+    branches: ["loop/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: ${{ matrix.name }}
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "host start, shard 2/2, head #1", mode: shard, rounds: 4 }
+          - { name: "host start, shard 2/2, head #2", mode: shard, rounds: 4 }
+          - { name: "host start, shard 2/2, head #3", mode: shard, rounds: 4 }
+          - { name: "host start, shard 2/2, head #4", mode: shard, rounds: 4 }
+          - { name: "host start, shard 2/2, head #5", mode: shard, rounds: 4 }
+          - { name: "host start, shard 2/2, head #6", mode: shard, rounds: 4 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 2635760b4d4781a48c85cd66fb8c3c1d10c5bec9
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .loopkit
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Diagnose
+        shell: bash
+        env:
+          MODE: ${{ matrix.mode }}
+          ROUNDS: ${{ matrix.rounds }}
+        run: |
+          set -u +e +o pipefail
+          git rev-parse HEAD
+          ws=$(pwd -W)
+          cp .loopkit/loopkit/node-test-stalls.mjs scripts/node-test-stalls.mjs
+          node .loopkit/loopkit/whr-laps.mjs && node .loopkit/loopkit/host-laps.mjs "$ws/host-phases.log" || exit 1
+          for r in $(seq 1 "$ROUNDS"); do
+            rm -f whr-phases.log host-phases.log
+            s=$(date +%s)
+            if [ "$MODE" = alone ]; then
+              timeout 150 node --test --test-name-pattern="a host started from the copied runtime" electron/worker-host-runtime.node-test.mjs > "out-$r.txt" 2>&1
+            else
+              NODE_TEST_STALL_MS=90000 NODE_OPTIONS="--test-shard=2/2 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/node-test-stalls.mjs --test-reporter-destination=stderr" timeout 420 pnpm test:terminal > "out-$r.txt" 2>&1
+            fi
+            code=$?
+            echo "round $r: exit $code secs $(( $(date +%s) - s ))"
+            if [ "$code" != 0 ]; then
+              grep -aE "still running|^✖ |not ok|Error|AssertionError|expected|actual" "out-$r.txt" | sort -u | head -20
+              echo "--- test laps ---"; grep -a " lap " whr-phases.log | tail -12; grep -a " tick " whr-phases.log | tail -2 | cut -c1-600
+              echo "--- host laps ---"; cat host-phases.log
+              echo "--- hosts ---"
+              cdb="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
+              for pid in $(powershell -NoProfile -Command '(Get-Process -Name WinkWorker -ErrorAction SilentlyContinue).Id'); do
+                pid=$(echo "$pid" | tr -d '\r')
+                powershell -NoProfile -Command "\$p = Get-Process -Id $pid; \$c = (Get-CimInstance Win32_Process -Filter 'ProcessId=$pid').CommandLine; '{0} start {1} cpu {2} ms threads {3} | {4}' -f $pid, \$p.StartTime.ToString('HH:mm:ss.fff'), [int]\$p.TotalProcessorTime.TotalMilliseconds, \$p.Threads.Count, \$c"
+                if [ -x "$cdb" ]; then "$cdb" -p "$pid" -pv -c "~*kn 40; q" 2>&1 | grep -avE "^\*\*\*|Symbol search|^$|ModLoad" | head -150; else echo "no cdb"; fi
+              done
+            fi
+            taskkill //F //IM WinkWorker.exe > /dev/null 2>&1
+            taskkill //F //IM node.exe > /dev/null 2>&1
+          done
+          echo "RESULT diag done"
