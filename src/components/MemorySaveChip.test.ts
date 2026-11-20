@@ -78,7 +78,7 @@ describe("MemorySaveRun", () => {
     document.body.append(host);
     const root = createRoot(host);
     const messages = ats.map((at, i) => note(`n${i}`, at));
-    await act(async () => root.render(createElement(MemorySaveRun, { messages, children: createElement("i", null, "notes") })));
+    await act(async () => root.render(createElement(MemorySaveRun, { messages, children: createElement("div", { style: { display: "contents" } }, createElement("i", null, "notes")) })));
     return { host, root };
   }
 

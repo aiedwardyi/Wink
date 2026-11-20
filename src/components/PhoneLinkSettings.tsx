@@ -22,13 +22,14 @@ export function PhoneLinkSettings() {
   const onPaired = useCallback(() => setPaired((count) => count + 1), []);
   const closePairing = useCallback(() => setPairOpen(false), []);
   const otherWays = useRef<HTMLElement>(null);
+  const pairing = useRef<HTMLDivElement>(null);
+  const tailscale = useRef<HTMLDivElement>(null);
   // No relay on this PC: Connect from my devices opens the Tailscale QR here instead.
   const showOtherWays = useCallback(() => {
     setOthersOpen(true);
     setTailscaleOpen(true);
     otherWays.current?.scrollIntoView?.({ block: "start" });
   }, []);
-  const reveal = (id: string) => () => revealOnOpen(otherWays.current?.querySelector<HTMLElement>(`#${id} > div > *`) ?? null);
 
   if (!onThisPc()) {
     return <div data-phone-settings className="rounded-xl bg-card p-4"><ConnectDevices /></div>;
@@ -43,20 +44,20 @@ export function PhoneLinkSettings() {
           {t("settings.devices.otherWays")}
           <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-transform group-hover:text-ink motion-reduce:transition-none", !othersOpen && "-rotate-90")} />
         </button>
-        <Fold open={othersOpen} id="devices-other" onOpened={reveal("devices-other")}>
+        <Fold open={othersOpen} id="devices-other" onOpened={() => revealOnOpen(otherWays.current?.querySelector<HTMLElement>("[role='group']") ?? null)}>
           <DevicesGroup label={t("settings.devices.otherWays")}>
             <DeviceRow name={t("settings.devices.codeInstead")} sub={t("settings.devices.codeInsteadHelp")}
               control={<button type="button" disabled={!on} aria-expanded={pairOpen} aria-controls="phone-pairing" onClick={() => setPairOpen((open) => !open)} className={ROW_BUTTON}>{t("settings.devices.getCode")}</button>}>
-              <Fold open={pairOpen} id="phone-pairing" onOpened={reveal("phone-pairing")}>
-                <div className="pt-3"><PhonePairing onPaired={onPaired} onClose={closePairing} /></div>
+              <Fold open={pairOpen} id="phone-pairing" onOpened={() => revealOnOpen(pairing.current)}>
+                <div ref={pairing} className="pt-3"><PhonePairing onPaired={onPaired} onClose={closePairing} /></div>
               </Fold>
             </DeviceRow>
             <DeviceRow name={t("settings.devices.tailscale")} sub={t("settings.devices.tailscaleHelp")}
               control={<button type="button" aria-expanded={tailscaleOpen} aria-controls="devices-tailscale" onClick={() => setTailscaleOpen((open) => !open)} className={ROW_BUTTON}>{t("settings.devices.setUp")}</button>} />
           </DevicesGroup>
           {/* Below the box: the store QRs need the full width at 360 px. */}
-          <Fold open={tailscaleOpen} id="devices-tailscale" onOpened={reveal("devices-tailscale")}>
-            <div className="pt-3"><ConnectDevices /></div>
+          <Fold open={tailscaleOpen} id="devices-tailscale" onOpened={() => revealOnOpen(tailscale.current)}>
+            <div ref={tailscale} className="pt-3"><ConnectDevices /></div>
           </Fold>
         </Fold>
       </section>

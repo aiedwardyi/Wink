@@ -513,8 +513,8 @@ describe("Reveal", () => {
       await landFold(host.querySelector("#devices-tailscale")!);
       expect(scrolled.mock.contexts).toEqual([
         host.querySelector("#devices-other [role='group']"),
-        host.querySelector("#phone-pairing > div > div"),
-        host.querySelector("#devices-tailscale > div > div"),
+        host.querySelector("#phone-pairing .pt-3"),
+        host.querySelector("#devices-tailscale .pt-3"),
       ]);
       expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
       await act(async () => host.querySelector<HTMLElement>('[aria-controls="devices-other"]')!.click());
