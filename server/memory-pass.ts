@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -829,7 +829,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
           const below = dates.slice(index + 1).filter(Boolean);
           return Boolean(noted) && noted < date && (below.every((day) => day < date) || (copy !== 0 && below.some((day) => day > noted && day < date)));
         };
-        const stays = (landed: Landed) => rows.some((row, index) => row === landed.line && !older(index, landed.date, landed.copy));
+        // recall keeps a label's newest-dated rows, so a row it hides is there only when a copy as new as its write was outdated by a later row
+        const modified = current ? day(statSync(path).mtimeMs) : stamp;
+        const label = (row: string) => (/^([^:]{2,60}):\s/.exec(row)?.[1] ?? row).toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
+        const shown = ({ line, date }: Landed) => {
+          const own = rows.reduce((max, row, index) => (row === line && (dates[index] || modified) > max ? dates[index] || modified : max), "");
+          return own >= date || rows.every((row, index) => (dates[index] || modified) <= own || label(row) !== label(line));
+        };
+        const stays = (landed: Landed) => shown(landed) && rows.some((row, index) => row === landed.line && !older(index, landed.date, landed.copy));
         wrote = wrote.filter(stays);
         seen = seen.filter(stays);
         // from its first row gone on, so a later line of the batch still lands after an earlier one written again
@@ -847,11 +854,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         });
         seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => ({ line, date: dates[rows.lastIndexOf(line)] ?? "" }))];
         if (fresh.length) {
-          const added = fresh.map(({ line }) => `- ${line} (noted ${stamp})\n`).join("");
+          // written again on the day it was first noted, so it never outranks a row said after it
+          const first = (line: string) => batch.wrote?.find((row) => row.line === line)?.date ?? stamp;
+          const added = fresh.map(({ line }) => `- ${line} (noted ${first(line)})\n`).join("");
           appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);
           overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.some((row) => row.line === line)).length, since: prior?.since ?? now() });
-          const placed = fresh.map(({ line }) => ({ line, date: stamp, copy: rows.filter((row) => row === line).length }));
+          const placed = fresh.map(({ line }) => ({ line, date: first(line), copy: rows.filter((row) => row === line).length }));
           wrote = [...wrote.filter(({ line }) => !fresh.some((note) => note.line === line)), ...placed];
         }
       } catch (error) {

@@ -1297,7 +1297,59 @@ describe("memory pass", () => {
       pass = start();
     }
     await settle("t1", 3 * MINUTE);
-    expect(overflow()).toBe(edited);
+    expect(overflow()).toBe(`${edited}- Research station: Cobalt Acme (noted 2026-10-15)\n`);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    await lookup.refresh("bot-t1");
+    expect(lookup.take("bot-t1", "t1", "after", "indigo globex").join("")).toContain("Indigo Globex");
+  });
+
+  const restores: Array<[string, string, string]> = [
+    ["dates it above two later rows", "- Has a cat (noted 2026-10-02)\n", "- Research station: Cobalt Acme (noted 2026-10-01)\n- Plays chess (noted 2026-10-03)\n- Research station: Indigo Globex (noted 2026-10-15)\n"],
+    ["keeps only an older copy", "- Research station: Cobalt Acme (noted 2026-10-14)\n- Research station: Indigo Globex (noted 2026-10-15)\n", "- Research station: Cobalt Acme (noted 2026-10-14)\n- Research station: Indigo Globex (noted 2026-10-15)\n"],
+  ];
+  it.each(restores.flatMap(([kind, before, restored]) => [[kind, "retry", before, restored], [kind, "restart", before, restored]] as const))("keeps a held return in recall and in its chip when a restored older file %s, then a %s", async (_kind, how, before, restored) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const top = "# Auto notes overflow\n\n- Likes tea (noted 2026-10-01)\n";
+    writeFileSync(overflowPath(), top + before);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Research station: Cobalt Acme", "I returned to the cobalt acme research station"]));
+    say("t1", "I returned to the cobalt acme research station");
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(overflowPath(), top + restored);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    await lookup.refresh("bot-t1");
+    expect(chips("t1").map((chip) => chip.tool?.spoken).join()).toContain("Cobalt Acme");
+    expect(lookup.take("bot-t1", "t1", "after", "cobalt acme").join("")).toContain("Cobalt Acme");
+  });
+
+  it.each(["retry", "restart"])("keeps another chat's newer value of its label in recall when a hand edit moves a held row below it, then a next-day %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const top = "# Auto notes overflow\n\n- Likes tea (noted 2026-10-01)\n- Has a cat (noted 2026-10-02)\n";
+    writeFileSync(overflowPath(), `${top}- Plays chess (noted 2026-10-03)\n`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Research station: Cobalt Acme", "my research station is cobalt acme"]));
+    say("t1", "my research station is cobalt acme");
+    await settle("t1", 3 * MINUTE);
+    generate.mockResolvedValue(facts(["Research station: Indigo Globex", "my research station is indigo globex"]));
+    say("t2", "my research station is indigo globex");
+    pass.onSettled("bot-t1", "t2", true);
+    await pass.idle();
+    writeFileSync(overflowPath(), `${top}- Research station: Indigo Globex (noted 2026-10-15)\n- Research station: Cobalt Acme (noted 2026-10-02)\n- Plays chess (noted 2026-10-03)\n`);
+    vi.setSystemTime(NOW + 24 * 60 * MINUTE);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
     writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
     const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
     await lookup.refresh("bot-t1");
