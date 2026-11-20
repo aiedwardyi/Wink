@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   node-pty@1.1.0:
-    hash: 1b6a9413718a087dd2419d3a3f7b3dc320bf52252afb3bfc6382640c62184e96
+    hash: b73c63132eb58a24b0a1a7f6374af0b63834372f5359424827422a3c759e3428
     path: patches/node-pty@1.1.0.patch
 
 importers:
@@ -48,7 +48,7 @@ importers:
         version: 3.0.0
       node-pty:
         specifier: ^1.1.0
-        version: 1.1.0(patch_hash=1b6a9413718a087dd2419d3a3f7b3dc320bf52252afb3bfc6382640c62184e96)
+        version: 1.1.0(patch_hash=b73c63132eb58a24b0a1a7f6374af0b63834372f5359424827422a3c759e3428)
       pdfjs-dist:
         specifier: 4.10.38
         version: 4.10.38
@@ -5916,7 +5916,7 @@ snapshots:
 
   node-int64@0.4.0: {}
 
-  node-pty@1.1.0(patch_hash=1b6a9413718a087dd2419d3a3f7b3dc320bf52252afb3bfc6382640c62184e96):
+  node-pty@1.1.0(patch_hash=b73c63132eb58a24b0a1a7f6374af0b63834372f5359424827422a3c759e3428):
     dependencies:
       node-addon-api: 7.1.1
 

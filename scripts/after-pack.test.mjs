@@ -81,13 +81,25 @@ describe("Windows ConPTY resources", () => {
     const release = path.join(resources, "terminal", "node-pty", "build", "Release");
     const conpty = path.join(release, "conpty");
     fs.mkdirSync(conpty, { recursive: true });
-    for (const file of [path.join(release, "conpty.node"), path.join(conpty, "conpty.dll"), path.join(conpty, "OpenConsole.exe")]) {
+    for (const file of [path.join(conpty, "conpty.dll"), path.join(conpty, "OpenConsole.exe")]) {
       fs.writeFileSync(file, "fixture");
     }
+    fs.writeFileSync(path.join(release, "conpty.node"), "fixture lockedHandles");
 
     await afterPack({ electronPlatformName: "win32", appOutDir });
     fs.unlinkSync(path.join(conpty, "conpty.dll"));
     await expect(afterPack({ electronPlatformName: "win32", appOutDir })).rejects.toThrow("conpty.dll");
+  });
+
+  it("rejects a conpty.node built without the node-pty patch", async () => {
+    const { appOutDir, resources } = fixture();
+    const release = path.join(resources, "terminal", "node-pty", "build", "Release");
+    const conpty = path.join(release, "conpty");
+    fs.mkdirSync(conpty, { recursive: true });
+    for (const file of [path.join(release, "conpty.node"), path.join(conpty, "conpty.dll"), path.join(conpty, "OpenConsole.exe")]) {
+      fs.writeFileSync(file, "fixture");
+    }
+    await expect(afterPack({ electronPlatformName: "win32", appOutDir })).rejects.toThrow("without the node-pty patch");
   });
 
   it("rejects symlinked terminal ancestry", async () => {

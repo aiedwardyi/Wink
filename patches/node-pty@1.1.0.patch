@@ -1,4 +1,5 @@
 diff --git a/binding.gyp b/binding.gyp
+index 5f63978b07ab50aaf7523219a2170ec737a6b5db..1cb496118e973af3c6d5b1197870d5ae06da8582 100644
 --- a/binding.gyp
 +++ b/binding.gyp
 @@ -1,5 +1,7 @@
@@ -9,7 +10,51 @@ diff --git a/binding.gyp b/binding.gyp
      'dependencies': [
        "<!(node -p \"require('node-addon-api').targets\"):node_addon_api_except",
      ],
+diff --git a/deps/winpty/src/winpty.gyp b/deps/winpty/src/winpty.gyp
+index 1ac5758bedd8cf54f32280dea4e4aeb5afdee30d..2345706899eff2a003fec2cbcc30b79ee674bff4 100644
+--- a/deps/winpty/src/winpty.gyp
++++ b/deps/winpty/src/winpty.gyp
+@@ -10,7 +10,8 @@
+     #    make -j4 CXX=i686-w64-mingw32-g++ LDFLAGS="-static -static-libgcc -static-libstdc++"
+ 
+     'variables': {
+-        'WINPTY_COMMIT_HASH%': '<!(cmd /c "cd shared && GetCommitHash.bat")',
++        # Not the git hash of whatever repo holds node_modules, so the build is the same on every commit.
++        'WINPTY_COMMIT_HASH%': 'none',
+     },
+     'target_defaults' : {
+         'defines' : [
+@@ -22,7 +23,8 @@
+         'include_dirs': [
+             # Add the 'src/gen' directory to the include path and force gyp to
+             # run the script (re)generating the version header.
+-            '<!(cmd /c "cd shared && UpdateGenVersion.bat <(WINPTY_COMMIT_HASH)")',
++            # A path, since cmd skips the current folder when NoDefaultCurrentDirectoryInExePath is set.
++            '<!(cmd /c "cd shared && .\\UpdateGenVersion.bat <(WINPTY_COMMIT_HASH)")',
+         ]
+     },
+     'targets' : [
+diff --git a/scripts/prebuild.js b/scripts/prebuild.js
+index 17f1d980e62e017d77058627a7a15c4c29f9470c..248117f5e743ddc7e100364ccca8e1e3c4145869 100644
+--- a/scripts/prebuild.js
++++ b/scripts/prebuild.js
+@@ -24,6 +24,14 @@ if (process.env.npm_config_build_from_source === 'true') {
+   process.exit(1);
+ }
+ 
++// The prebuilt Windows binaries lack this package's native patch: build it, and leave none for the loader to fall back to.
++if (process.platform === 'win32') {
++  for (const name of fs.readdirSync(PREBUILDS_ROOT, { recursive: true })) {
++    if (String(name).startsWith('win32-') && String(name).endsWith('.node')) fs.rmSync(path.join(PREBUILDS_ROOT, String(name)));
++  }
++  process.exit(1);
++}
++
+ // Check whether the correct prebuilt files exist
+ console.log('\x1b[32m> Checking prebuilds...\x1b[0m');
+ if (!fs.existsSync(PREBUILD_DIR)) {
 diff --git a/src/win/conpty.cc b/src/win/conpty.cc
+index 7b286d3d644c26141df516929703aa6e129df4b2..c2422a81f79f934faf0e5dd6484631406bd6ba6e 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
 @@ -16,6 +16,7 @@
@@ -119,3 +164,12 @@ diff --git a/src/win/conpty.cc b/src/win/conpty.cc
  
    if (handle != nullptr) {
      HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+@@ -577,6 +583,8 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
+   exports.Set("resize", Napi::Function::New(env, PtyResize));
+   exports.Set("clear", Napi::Function::New(env, PtyClear));
+   exports.Set("kill", Napi::Function::New(env, PtyKill));
++  // Only this patch's build has it, so a check can tell a stock prebuild apart.
++  exports.Set("lockedHandles", Napi::Boolean::New(env, true));
+   return exports;
+ };
+ 

@@ -91,6 +91,10 @@ export async function validateNodePtyConpty(resources, platform, required) {
   await requireRegularFile(path.join(release, "conpty.node"));
   await requireRegularFile(path.join(conpty, "conpty.dll"));
   await requireRegularFile(path.join(conpty, "OpenConsole.exe"));
+  // A stock node-pty build crashes the process when terminals start or stop together; only the patched one exports this.
+  if (!(await readFile(path.join(release, "conpty.node"))).includes("lockedHandles")) {
+    throw new Error(`Package ships a conpty.node without the node-pty patch: ${release}`);
+  }
 }
 
 // electron-builder normalizes copied resource directories to 0775. That is
