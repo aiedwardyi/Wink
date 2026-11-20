@@ -302,6 +302,32 @@ describe("ChatView send order", () => {
     expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
   });
 
+  it.each([1500, 3000])("keeps two lines in the order sent when a ping %i ms late lands between them", async (late) => {
+    const earlier = history(2);
+    // the window counts on from the server's clock by elapsed time, which only timers move here
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
+    vi.setSystemTime(T0);
+    await mount("claude", true, earlier, [], { now: T0 });
+    const c = chat(earlier);
+    c.name("L1", "s1", "row-s1");
+    c.name("L2", "s2", "row-s2");
+    const mine = (sendId: string, text: string, at: number) =>
+      ({ id: `row-${sendId}`, sendId, text, role: "user" as const, steered: true, actedAt: bodies.get(sendId)?.actedAt, at: T0 + at, sendSeq: bodies.get(sendId)?.sendSeq });
+    await c.at(0, () => c.send("s1", "첫 줄"));
+    // the server wrote this ping `late` ms before the network handed it over, and the first line has not landed
+    await c.at(400, () => frame({ kind: "ping", now: T0 + 400 - late }));
+    await c.at(800, () => c.send("s2", "둘째 줄"));
+    await c.at(900, () => c.land(mine("s1", "첫 줄", 900)));
+    await c.at(910, () => answer("s1", { steered: true, threadId: "t1", message: c.landed.at(-1) }));
+    await c.at(950, () => c.land(mine("s2", "둘째 줄", 950)));
+    const final = await c.at(960, () => answer("s2", { steered: true, threadId: "t1", message: c.landed.at(-1) }));
+    expect(final).toEqual(["H", "L1", "L2"]);
+
+    await unmount?.();
+    await mount("claude", true, [...earlier, ...c.landed], [], { now: T0 + 1000 });
+    expect(c.order().filter((row) => row !== "thinking")).toEqual(final);
+  });
+
   it.each([
     ["steered", "codex", true],
     ["held", "acp", false],

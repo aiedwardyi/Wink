@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setRoomHolds } from "@/lib/drafts";
 import { I18nProvider } from "@/lib/i18n";
 import { StoreProvider, useStore, type Bot, type Group, type Message } from "@/state/store";
 
@@ -53,7 +54,7 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-type Frame = { kind: "hello"; resumed: boolean; cursor: string } | { kind: "message"; threadId: string; message: Message };
+type Frame = { kind: "hello"; resumed: boolean; cursor: string } | { kind: "message"; threadId: string; message: Message } | { kind: "group"; group: Partial<Group> };
 const frame = (value: Frame) => act(async () => FakeEventSource.last.onmessage?.({ data: JSON.stringify(value), lastEventId: "" }));
 const shown = (text: string) => host.querySelector('[role="log"]')?.textContent?.split(text).length ?? 0;
 
@@ -138,6 +139,44 @@ describe("GroupView sent lines", () => {
     await mount(false, [...room.messages, { id: "m0", at: 95_000, role: "bot", kind: "text", text: "답장 0", from: { botId: "b1", name: "Atlas", color: "blue" } }, earlier]);
     const order = () => [...host.querySelectorAll("[data-mid]")].map((el) => el.getAttribute("data-mid")).filter((id) => ["u1", "m0", "g0"].includes(id ?? ""));
     expect(order()).toEqual(["u1", "m0", "g0"]);
+  });
+
+  it.each([
+    ["a room", {}],
+    ["a hosted room", { hosted: { roomId: "r1" } }],
+  ])("draws a line held in %s below the reply it waited for, live and after reload", async (_, extra: Partial<Group>) => {
+    const reply: Message = { id: "m1", at: 103_000, role: "bot", kind: "text", text: "the reply it waited for", from: { botId: "b1", name: "Atlas", color: "blue" } };
+    await mount(true, [...room.messages, reply], extra);
+    const order = () => [...host.querySelectorAll("[data-mid]")].map((el) => el.getAttribute("data-mid")).filter((id) => ["u1", "m1", "s1", "g1"].includes(id ?? ""));
+    vi.setSystemTime(105_000);
+    // held with Ctrl+Enter at 100_000, sent as the room settled: Send now on the held line sends the same
+    await act(async () => store.dispatch({ type: "sendGroup", groupId: "g1", text: "held line", sendId: "s1", actedAt: 100_000, waited: true }));
+    expect(order()).toEqual(["u1", "m1", "s1"]);
+    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/groups/g1/messages")!;
+    const { actedAt, waited, sendSeq } = JSON.parse(String(init?.body)) as Message;
+    const stored: Message = { ...line("g1", "held line", "s1"), at: 105_200, actedAt, waited, sendSeq };
+    await frame({ kind: "message", threadId: "gt", message: stored });
+    expect(order()).toEqual(["u1", "m1", "g1"]);
+
+    await unmount?.();
+    await mount(true, [...room.messages, reply, stored], extra);
+    expect(order()).toEqual(["u1", "m1", "g1"]);
+  });
+
+  it("draws a line a closed room sends as it settles below the reply it waited for", async () => {
+    await mount(false, room.messages, { working: true });
+    const order = () => [...host.querySelectorAll("[data-mid]")].map((el) => el.getAttribute("data-mid")).filter((id) => ["u1", "m1", "s1", "g1"].includes(id ?? ""));
+    await act(async () => store.dispatch({ type: "select", id: "b1" }));
+    setRoomHolds(localStorage, "group:g1:gt", [{ text: "held line", requestText: "held line", sendId: "s1", threadId: "gt", revision: 0, attachments: [], at: 100_000 }]);
+    await frame({ kind: "message", threadId: "gt", message: { id: "m1", at: 103_000, role: "bot", kind: "text", text: "the reply it waited for", from: { botId: "b1", name: "Atlas", color: "blue" } } });
+    vi.setSystemTime(105_000);
+    await frame({ kind: "group", group: { id: "g1", threadId: "gt", working: false } });
+    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/groups/g1/messages")!;
+    const { actedAt, waited, sendSeq } = JSON.parse(String(init?.body)) as Message;
+    await act(async () => store.dispatch({ type: "select", id: "g1" }));
+    expect(order()).toEqual(["u1", "m1", "s1"]);
+    await frame({ kind: "message", threadId: "gt", message: { ...line("g1", "held line", "s1"), at: 105_200, actedAt, waited, sendSeq } });
+    expect(order()).toEqual(["u1", "m1", "g1"]);
   });
 
   it("keeps every line where it was sent while a member replies, live and after reload", async () => {

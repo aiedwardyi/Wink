@@ -16,6 +16,8 @@ export type AcceptedSend = {
   sendSeq?: number;
   /** Sent "after this turn": waits even on an engine that could steer it. */
   after?: boolean;
+  /** Held until the room settled: drawn where it lands, as its stored row is. */
+  waited?: boolean;
   replyToId?: string;
   /** The POST has not answered: an idle snapshot cannot say whether the server has this send yet. */
   posting?: true;
@@ -30,7 +32,7 @@ export function withAcceptedMessages(
 ): Message[] {
   if (!accepted.length && !pending.length) return messages;
   const seen = new Set(messages.flatMap((message) => [message.id, message.sendId, message.queueId]));
-  const waiting = [
+  const waiting: Omit<AcceptedSend, "kind">[] = [
     ...pending.filter((entry) => !entry.sendId || !seen.has(entry.sendId)).map((entry) => ({ sendId: entry.queueId, text: entry.text, at: entry.at, replyToId: entry.replyToId, sendSeq: entry.sendSeq })),
     ...accepted.filter((entry) => !pending.some((held) => held.sendId === entry.sendId)),
   ];
@@ -47,6 +49,7 @@ export function withAcceptedMessages(
       at: entry.at ?? 0,
       replyToId: entry.replyToId,
       sendSeq: entry.sendSeq,
+      waited: entry.waited,
       placeholder: true,
     });
   }

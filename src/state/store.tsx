@@ -868,6 +868,7 @@ export function reducer(state: AppState, action: Action): AppState {
           text: action.text,
           at: action.actedAt ?? sendClock(group.messages),
           sendSeq: action.sendSeq,
+          waited: action.waited,
           replyToId: action.replyToId,
           posting: true,
         }),
