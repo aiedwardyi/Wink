@@ -5257,7 +5257,6 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
 }
 
 async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOptions) {
-  const entryText = text;
   const trace = currentTurnTrace();
   const epoch = currentTurnEpoch(botId);
   // Sends queued before this claim belong to drain, not to this turn's folds.
@@ -5703,8 +5702,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
     ? importMemoryTurn(activeMessages)
     : { offer: false, tool: false };
+  const importOffer = importMemory.offer ? importOfferNote() : null;
+  const entryText = importOffer ? `${importOffer}\n\n${text}` : text;
   const currentPrompt = [
-    ...(importMemory.offer ? [importOfferNote()] : []),
+    ...(importOffer ? [importOffer] : []),
     composeUserTurnPrompt(text, turnOpts),
     ...folded,
   ].join("\n\n");

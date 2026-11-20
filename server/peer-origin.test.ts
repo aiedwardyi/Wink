@@ -12,6 +12,7 @@ import * as roots from "./comms-root.ts";
 import { ensureDirs } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext, withoutTurnNotes } from "./context-compaction.ts";
 import { recordDelegationReceipt, resetDelegationReceipts } from "./delegation-ledger.ts";
+import { importOfferNote } from "./memory-import-offer.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
 import { roomEchoesSinceLastUserTurn, writeRoomEcho } from "./one-mind.ts";
 import type { Message } from "./store.ts";
@@ -173,12 +174,14 @@ function privateDispatch(botId: string, threadId: string, opts: Record<string, u
   turnRegistry.prepare({ botId, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId });
   const start = source.text.indexOf("        const source = commsDepth === 1 ? privatePeerTask(");
   const end = source.text.indexOf("        return live.adapter.sendTurn(", start);
+  const expectedText = nodes(ts.isVariableDeclaration).find((node) => node.name.getText(source) === "entryText")!.initializer!.getText(source);
+  const entryText = new Function("text", "importOffer", `return ${expectedText};`)(userMessage.text, context.importOffer);
   const scope = {
     bot: { id: botId }, threadId, commsDepth, opts, rootId, userMessage, turnRegistry, randomUUID,
     privatePeerTask: roots.privatePeerTask, integrations: { agents: { env } },
     readOnly: false, hasProviderHistory: false, priorTaskPacket: null, rewound: false, recycled: false, systemRecycle: false,
     notOwnerChats: () => new Set(), store: { messagesFor: () => rows, groupByThread: () => undefined },
-    text: userMessage.text, entryText: userMessage.text, transcript: [], resumeCursor: undefined, systemUpdate: "",
+    text: userMessage.text, entryText, transcript: [], resumeCursor: undefined, systemUpdate: "",
     ...context,
   };
   expect(start).toBeGreaterThanOrEqual(0);
@@ -266,6 +269,12 @@ it.each(["ask", "delegation"] as const)("opens 20 tools for a fresh Wink to Eval
 it("guards a hop started by the owner in a joined room", async () => {
   privateDispatch("wink", "wink-thread", joinedStart(false), [ownerLine]);
   expect(await listedTools(peerDispatch("ask"))).toEqual(BASE_PEER_TOOLS);
+});
+
+it("allows the built-in memory offer on a first private send", async () => {
+  const importOffer = importOfferNote();
+  privateDispatch("wink", "wink-thread", chatStart(), [ownerLine], { importOffer, text: [importOffer, ownerLine.text].join("\n\n") });
+  expect(await listedTools(peerDispatch("delegation"))).toHaveLength(20);
 });
 
 it("gives only base tools after a delivered teammate report reaches a fresh engine in replay", async () => {
@@ -394,9 +403,9 @@ it("limits peer grants to the private send and inventories turn input boundaries
   ]);
   const notes = nodes(ts.isVariableDeclaration).filter((node) => node.initializer && ["turnNotes", "notes", "currentPrompt", "withLate"].includes(node.name.getText(source)))
     .map((node) => compact(node.initializer!.getText(source)))
-    .filter((initializer) => /^(?:\[\s*(?:\.\.\.accountNotes|\.\.\.\(importMemory)|\(base: string\) => \[base, \.\.\.late)/.test(initializer));
+    .filter((initializer) => /^(?:\[\s*(?:\.\.\.accountNotes|\.\.\.\(importOffer)|\(base: string\) => \[base, \.\.\.late)/.test(initializer));
   expect(notes).toEqual([
-    '[ ...(importMemory.offer ? [importOfferNote()] : []), composeUserTurnPrompt(text, turnOpts), ...folded, ].join("\\n\\n")',
+    '[ ...(importOffer ? [importOffer] : []), composeUserTurnPrompt(text, turnOpts), ...folded, ].join("\\n\\n")',
     "[...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes]",
     '(base: string) => [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\\n\\n")',
     "[...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes]",
@@ -448,8 +457,11 @@ it("rechecks the tool grant after a steer clears a fresh peer's authority", asyn
   privateDispatch("wink", "wink-thread", chatStart(), [ownerLine]);
   const env = peerDispatch("ask");
   expect(await listedTools(env)).toHaveLength(20);
-  const steer = vi.fn(async () => false);
-  await steerUntilTaken({ capabilities: { queueing: true, steerConsumed: true }, steer }, "evals-thread", "Late input.");
+  const steer = vi.fn(async () => {
+    expect(turnRegistry.privatePeerKey("evals", "evals-thread")).toBeUndefined();
+    return false;
+  });
+  await steerUntilTaken({ capabilities: { sessionModelSwitch: "unsupported", queueing: true, steerConsumed: true }, steer }, "evals-thread", "Late input.");
   expect(turnRegistry.privatePeerKey("evals", "evals-thread")).toBeUndefined();
   expect(await listedTools(env)).toEqual(BASE_PEER_TOOLS);
   expect((await proxyRequest(env, "tools/call", { name: "propose_routine" })).isError).toBe(true);
