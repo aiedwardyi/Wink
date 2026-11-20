@@ -25,6 +25,9 @@ jobs:
     name: NSIS installer
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      # pnpm's bundled node-gyp cannot find Visual Studio 2026, and node-pty builds from source on Windows.
+      npm_config_node_gyp: ${{ github.workspace }}\node_modules\node-gyp\bin\node-gyp.js
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
