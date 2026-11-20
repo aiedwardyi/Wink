@@ -742,6 +742,20 @@ describe("entering a PC's code", () => {
     expect(boxes()).toHaveLength(0);
   });
 
+  it("draws the boxes once when Back restores the page after a remembered PC opened", async () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(boxes()).toHaveLength(0);
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: false }));
+    expect(boxes()).toHaveLength(0);
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(document.getElementById("code")?.hidden).toBe(false);
+    expect(boxes()).toHaveLength(6);
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(boxes()).toHaveLength(6);
+  });
+
   it("shows the boxes when the remembered PC does not answer, and not before", async () => {
     vi.useFakeTimers();
     localStorage.setItem(LAST_PC, LABEL_B);

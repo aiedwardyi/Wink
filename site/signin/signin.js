@@ -499,6 +499,13 @@
     const last = remembered();
     const saved = LABEL_RE.test(last);
     if (!pick && saved && await reachable(last)) {
+      // Back restores this page from bfcache as it was left, with no controls: draw them then.
+      const restored = (event) => {
+        if (!event.persisted) return;
+        removeEventListener("pageshow", restored);
+        showCode();
+      };
+      addEventListener("pageshow", restored);
       go(last, "?g=1");
       return;
     }
