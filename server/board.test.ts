@@ -542,7 +542,10 @@ describe("a delete a restart cuts short", () => {
     { deleted: "a reply and the reply above it, lower one first", refs: ["reply:r1", "reply:r2"], order: [1, 0] },
     { deleted: "a reply and the reply above it, upper one first", refs: ["reply:r2", "reply:r1"], order: [0, 1] },
     { deleted: "three replies in a row, bottom up", refs: ["reply:r1", "reply:r3", "reply:r2"], order: [2, 1, 0] },
-  ])("a sync cut while it takes another PC's delete of $deleted boots every reply under the nearest post above it and ends as the sync that was not cut", ({ refs, order }) => {
+    { deleted: "a reply while this PC deletes the reply above it", refs: ["reply:r1", "reply:r2"], order: [1], own: [0] },
+    { deleted: "a reply while this PC deletes the reply under it", refs: ["reply:r1", "reply:r2"], order: [0], own: [1] },
+    { deleted: "the middle reply while this PC deletes the ones above and under it", refs: ["reply:r1", "reply:r2", "reply:r3"], order: [1], own: [2, 0] },
+  ])("a sync cut while it takes another PC's delete of $deleted boots every reply under the nearest post above it and ends as the sync that was not cut", ({ refs, order, own = [] }) => {
     const pair = () => {
       const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
       const a = home("pc-a");
@@ -555,6 +558,8 @@ describe("a delete a restart cuts short", () => {
       a.clock.at = 2_000;
       for (const n of order) a.board.remove(replies[n]);
       a.board.sync(folder, ids);
+      b.clock.at = 3_000;
+      for (const n of own) b.board.remove(replies[n]);
       return { folder, a, b, stuck, under };
     };
     const settled = (p: ReturnType<typeof pair>) => {
@@ -582,6 +587,39 @@ describe("a delete a restart cuts short", () => {
       expect(listed(restart(p.b.dir, "pc-b")), at).toEqual(listed(boot));
       expect(settled(p), at).toEqual(want);
     });
+    expect(cuts).toBeGreaterThan(2);
+  });
+
+  it("a sync cut while it takes another PC's delete of the replies above an answer keeps the answer's newest fix", () => {
+    const NEWEST = "Top it up from the billing page.";
+    const pair = () => {
+      const folder = temps.make(join(tmpdir(), "orbit-board-drive-"));
+      const a = home("pc-a");
+      const b = home("pc-b");
+      const stuck = a.board.post(STUCK);
+      const upper = a.board.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: STUCK.title, body: "Thanks.", source_ref: "reply:r1" });
+      const lower = a.board.post({ author_bot_id: BOARD_USER, parent_id: upper.id, kind: "tip", title: STUCK.title, body: "Still stuck.", source_ref: "reply:r2" });
+      const answer = a.board.post({ author_bot_id: "carbon", parent_id: lower.id, kind: "tip", title: STUCK.title, body: "Top it up.", source_ref: "tool:tc:1" });
+      const fix = (text: string, ref: string) => a.board.post({ author_bot_id: "carbon", parent_id: answer.id, kind: "fix", title: STUCK.title, body: text, fix: text, source_ref: ref });
+      fix("Top it up in settings.", "tool:tc:2");
+      for (const board of [a.board, b.board, a.board, b.board]) board.sync(folder, ids);
+      a.clock.at = 2_000;
+      fix(NEWEST, "tool:tc:3");
+      a.board.remove(lower.id);
+      a.board.remove(upper.id);
+      a.board.sync(folder, ids);
+      return { folder, a, b, stuck, answer };
+    };
+    const settled = (p: ReturnType<typeof pair>) => {
+      const b = restart(p.b.dir, "pc-b");
+      for (const board of [b, p.a.board, b, p.a.board]) board.sync(p.folder, ids);
+      return [p.a.board, b].map((board) => [board.get(p.answer.id)?.parent_id, board.get(p.answer.id)?.fix]);
+    };
+    const whole = pair();
+    whole.b.board.sync(whole.folder, ids);
+    const want = [[whole.stuck.id, NEWEST], [whole.stuck.id, NEWEST]];
+    expect(settled(whole)).toEqual(want);
+    const cuts = everyCut(pair, (p) => p.b.board.sync(p.folder, ids), (p, at) => expect(settled(p), at).toEqual(want));
     expect(cuts).toBeGreaterThan(2);
   });
 });

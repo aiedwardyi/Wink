@@ -421,6 +421,51 @@ describe("Forum", () => {
     for (const board of [a, b]) expect(board.list().map((held) => held.id)).toEqual([stuck.id]);
   });
 
+  it("two PCs each deleting one of two nested replies keep the answer under them in its thread, and the thread's Delete takes it", async () => {
+    const temps = createTempDirs();
+    afterAll(() => temps.remove());
+    const drive = temps.make(join(tmpdir(), "orbit-forum-drive-"));
+    const boot = (pc: string, dir = join(temps.make(join(tmpdir(), "orbit-forum-")), "board")) => createBoard({ dir, pcId: () => pc });
+    let [a, b] = [boot("home"), boot("work")];
+    const ids = { in: (id: string) => id, out: (id: string) => id };
+    const sync = () => {
+      for (const board of [a, b, a, b]) board.sync(drive, ids);
+    };
+    const stuck = a.post({ author_bot_id: "astra", kind: "stuck", title: "Stuck on the staging deploy", body: "Stuck on the staging deploy", source_ref: "call:ta:0:engine:deploy" });
+    const other = a.post({ author_bot_id: "astra", kind: "tip", title: "Pin node 22", body: "Pin node 22", source_ref: "tool:ta:pin" });
+    const upper = a.post({ author_bot_id: BOARD_USER, parent_id: stuck.id, kind: "tip", title: stuck.title, body: "On it.", source_ref: "reply:r1" });
+    const lower = a.post({ author_bot_id: BOARD_USER, parent_id: upper.id, kind: "tip", title: stuck.title, body: "Still stuck.", source_ref: "reply:r2" });
+    const answer = a.post({ author_bot_id: "carbon", parent_id: lower.id, kind: "tip", title: stuck.title, body: "Redeploy from main.", source_ref: "tool:tc:redeploy" });
+    sync();
+    a.remove(lower.id);
+    b.remove(upper.id);
+    sync();
+    [a, b] = [boot("home", a.dir), boot("work", b.dir)];
+    sync();
+    const routes = createBoardRoutes({ board: b, caller: () => undefined, known: () => false, projectOf: () => "", roomTurn: () => null });
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url !== "/api/board/delete") return json({ posts: b.list() });
+      let status = 0;
+      let answer = "";
+      const req = Object.assign(Readable.from([Buffer.from(String(init?.body))]), { headers: { "content-type": "application/json" } });
+      const res = { writeHead: (code: number) => { status = code; return res; }, end: (body: string) => { answer = body; } };
+      // SAFETY: the delete route reads only the request's headers and body, and calls only writeHead and end.
+      await routes.remove(req as never, res as never);
+      return new Response(answer, { status, headers: { "content-type": "application/json" } });
+    }));
+    await render(BoardView);
+    expect(rows().sort()).toEqual([stuck.id, other.id].sort());
+    await openRow(stuck.id);
+    expect(rows()).toEqual([stuck.id, answer.id]);
+    await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    expect(rows()).toEqual([other.id]);
+    sync();
+    for (const board of [a, b]) expect(board.list().map((held) => held.id)).toEqual([other.id]);
+  });
+
 it("a deleted reply's own replies stay in the thread, moved up to its parent", async () => {
     posts = [
       post("pbot", { created_at: 1 }),
