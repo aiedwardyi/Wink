@@ -23,7 +23,7 @@
   Built by <a href="https://github.com/aiedwardyi">Edward Yi</a>
 </p>
 
-<img src="./assets/readme/hero.png" alt="Wink with a team of five bots on five engines. Atlas picks up a plan from its notes and runs five workers, two of them done.">
+<img src="./assets/readme/hero.png" alt="Wink on desktop and phone: Atlas runs the card tests on the Home PC, Live Verify checkout 15 passed, and the same chat on the phone.">
 
 ## Tour
 
