@@ -96,7 +96,7 @@ export class TeamReports {
       try { previous.report = teamReportSchema.parse(previous.report); } catch { return { error: "Saved report invalid." }; }
       const ids = new Set(path.map((message) => message.id));
       const saved = previous.report;
-      if (saved.owner !== o.owner || !o.store.conversationForBot(saved.bot.id, body.fromThreadId) || saved.threadId !== body.fromThreadId || !ids.has(saved.requestMessageId) || !ids.has(saved.selectedMessageId) || !saved.originals.every((message) => ids.has(message.id))) return { error: "Saved report does not belong to this branch/sender/team." };
+      if (saved.owner !== o.owner || saved.bot.id !== bot.id || saved.threadId !== body.fromThreadId || !ids.has(saved.requestMessageId) || !ids.has(saved.selectedMessageId) || !saved.originals.every((message) => ids.has(message.id))) return { error: "Saved report does not belong to this branch/sender/team." };
     }
     if (!body.report_id && body.action !== "retry" && previous?.receipt && request.id !== previous.report.requestMessageId) previous = undefined;
     let report: TeamReport;
@@ -124,7 +124,7 @@ export class TeamReports {
     if (previous && (body.action === "retry" || (body.action === "send" && !body.earlier_message_ids && !body.exclude_image_message_ids))) {
       report = teamReportSchema.parse(previous.report);
       const ids = new Set(path.map((message) => message.id));
-      if (report.owner !== o.owner || !o.store.conversationForBot(report.bot.id, body.fromThreadId) || report.threadId !== body.fromThreadId || !ids.has(report.requestMessageId) || !report.originals.every((message) => ids.has(message.id))) return { error: "Saved report does not belong to this branch/sender/team." };
+      if (report.owner !== o.owner || report.bot.id !== bot.id || report.threadId !== body.fromThreadId || !ids.has(report.requestMessageId) || !report.originals.every((message) => ids.has(message.id))) return { error: "Saved report does not belong to this branch/sender/team." };
     }
     if (body.action !== "retry") {
       report.summary = reportText(body.summary ?? report.summary).slice(0, 2000);

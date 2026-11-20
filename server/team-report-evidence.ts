@@ -121,7 +121,7 @@ export function collectReport(options: EvidenceOptions): TeamReport {
   if (!images.length) missing.push("No available incident image bytes.");
   if (diagnostics.length > 8000) missing.push("Diagnostics truncated to 8000 characters.");
   originals.sort((a, b) => path.findIndex((message) => message.id === a.id) - path.findIndex((message) => message.id === b.id));
-  const id = createHash("sha256").update(JSON.stringify([options.threadId, request.id, selected.id])).digest("hex").slice(0, 32);
+  const id = createHash("sha256").update(JSON.stringify([options.bot.id, options.threadId, request.id, selected.id])).digest("hex").slice(0, 32);
   return teamReportSchema.parse({ id, owner: options.owner, at: request.at, bot: { id: options.bot.id, name: reportText(options.bot.name).slice(0, 200) },
     threadId: options.threadId, branchId: request.id, selectedMessageId: selected.id, requestMessageId: request.id,
     summary: "", diagnosis: "", originals, images, diagnostics: diagnostics.slice(0, 8000),

@@ -45,6 +45,14 @@ function start(messageKey = "first", threadId = from.threadId, depth = 0) {
   return rootId;
 }
 
+function spendsBudgetOf(handle: string | null | undefined, root: string | null) {
+  const held: Parameters<typeof release>[0][] = [];
+  for (let credit = reserve(root, "ask"); credit.ok; credit = reserve(root, "ask")) held.push(credit.reservation);
+  const shared = reserve(handle, "ask");
+  held.forEach(release);
+  return !ownerRoot(handle) && !shared.ok && shared.reason === "reserved";
+}
+
 function request(askBotAndWait = vi.fn(async (..._args: unknown[]) => ({ replied: true, text: "answer" }))) {
   const callers = new CommsCallers();
   const req = new EventEmitter() as IncomingMessage;
@@ -150,7 +158,7 @@ it.each(["routine", "card resume", "keep-going", "pane-note", "limit resume", "c
   expect(rootForStart(from.threadId, { kind: "automatic" })).toBeNull();
   const root = start();
   turnRegistry.settle("caller");
-  expect(rootForStart(from.threadId, { kind: "automatic" })).toBe(root);
+  expect(spendsBudgetOf(rootForStart(from.threadId, { kind: "automatic" }), root)).toBe(true);
   expect(rootForStart("detached", { kind: "automatic" })).toBeNull();
   expect(rootForStart("peer", { kind: "inherit", rootId: root })).toBe(root);
   expect(rootForStart("peer", { kind: "inherit", rootId: null })).toBeNull();
@@ -167,7 +175,7 @@ it.each(["inherit", "automatic", "snapshot"] as const)("expires idle roots on %s
   for (let index = 0; index < 2; index++) {
     touched += idle - 1;
     now.mockReturnValue(touched);
-    expect(live()).toBe(root);
+    expect(kind === "automatic" ? spendsBudgetOf(live(), root) : live() === root).toBe(true);
   }
   now.mockReturnValue(touched + idle);
   expect(live()).toBeNull();
@@ -180,12 +188,12 @@ it("drops idle roots on a human start and forgets all roots on restart", () => {
   const idle = rootForStart("idle", { kind: "human", messageKey: "old" });
   const active = rootForStart("active", { kind: "human", messageKey: "active" });
   now.mockReturnValue(1_000 + 47 * 60 * 60 * 1_000);
-  expect(rootForStart("active", { kind: "automatic" })).toBe(active);
+  expect(spendsBudgetOf(rootForStart("active", { kind: "automatic" }), active)).toBe(true);
   now.mockReturnValue(1_000 + 49 * 60 * 60 * 1_000);
   rootForStart("new", { kind: "human", messageKey: "new" });
   expect(rootForStart("idle", { kind: "automatic" })).toBeNull();
   expect(rootForStart("peer", { kind: "inherit", rootId: idle })).toBeNull();
-  expect(rootForStart("active", { kind: "automatic" })).toBe(active);
+  expect(spendsBudgetOf(rootForStart("active", { kind: "automatic" }), active)).toBe(true);
   expect(rootForStart("idle", { kind: "human", messageKey: "old" })).not.toBe(idle);
   _resetCommsRoots();
   expect(rootForStart("active", { kind: "automatic" })).toBeNull();
@@ -365,7 +373,7 @@ it("autonomous starts never refill the human root", () => {
   // routine, card resume, keep-going and pane note starts all take the automatic kind (comms-root-index.test.ts)
   for (const start of ["routine", "card resume", "keep-going", "pane note"]) {
     const rootId = rootForStart(from.threadId, { kind: "automatic" });
-    expect(rootId, start).toBe(root);
+    expect(ownerRoot(rootId), start).toBe(false);
     expect(reserve(rootId, "wake"), start).toEqual({ ok: false, reason: "exhausted" });
   }
   expect(rootForStart(from.threadId, { kind: "inherit", rootId: root })).toBe(root);
@@ -387,14 +395,14 @@ it("stores opaque roots without account identity", () => {
   expect(root).not.toContain(email);
 });
 
-it("keeps a root the owner's only when the owner typed its first line, through every later start", () => {
+it("keeps a root the owner's only when the owner typed its first line and the work carries it", () => {
   const owner = rootForStart("wink", { kind: "human", messageKey: "owner-line" });
   const guest = rootForStart("joined", { kind: "guest", messageKey: "guest-line" });
   expect(guest).not.toBeNull();
   expect([ownerRoot(owner), ownerRoot(guest), ownerRoot(null)]).toEqual([true, false, false]);
   expect(ownerRoot(rootForStart("evals", { kind: "inherit", rootId: owner }))).toBe(true);
   expect(ownerRoot(rootForStart("evals", { kind: "inherit", rootId: guest }))).toBe(false);
-  expect(ownerRoot(rootForStart("wink", { kind: "automatic" }))).toBe(true);
+  expect(ownerRoot(rootForStart("wink", { kind: "automatic" }))).toBe(false);
   expect(ownerRoot(rootForStart("joined", { kind: "automatic" }))).toBe(false);
   vi.spyOn(Date, "now").mockReturnValue(Date.now() + 48 * 60 * 60 * 1000);
   expect(ownerRoot(owner)).toBe(false);

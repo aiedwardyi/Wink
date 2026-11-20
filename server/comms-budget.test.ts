@@ -341,7 +341,8 @@ describe("wake admission", () => {
     replyRow("task-spent", rootId);
     store.appendMessage(from.threadId, { role: "bot", kind: "note", text: "Worker finished", origin: "local-device" });
     expect(admitPaneWake(store, from.id, from.threadId)).toEqual({ rootId: null, reservation: null });
-    expect(roots.rootForStart(from.threadId, { kind: "automatic" })).toBe(rootId);
+    const wake = roots.rootForStart(from.threadId, { kind: "automatic" });
+    expect([roots.ownerRoot(wake), roots.reserve(wake, "wake")]).toEqual([false, { ok: false, reason: "exhausted" }]);
     expect(left(rootId)).toBe(0);
   });
 

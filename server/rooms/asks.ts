@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { DATA_DIR } from "../config.ts";
 import { newId, type ProviderInstance } from "../contracts.ts";
 import { cancelQueuedAsk } from "../steer-queue.ts";
+import type { OwnerOrigin } from "../comms-root.ts";
 import type { GroupRecord, Store } from "../store.ts";
 import type { RoomAlert } from "./alerts.ts";
 import { appendRoomEntry, roomEntry, roomPeople, RoomError, type RoomGrant } from "./db.ts";
@@ -297,6 +298,12 @@ export function askFromOwner(ask: RoomAsk | null): boolean {
   const entry = roomEntry(ask.roomId, ask.entryId);
   const origin = entry?.author.kind === "bot" && entry.replyToId ? roomEntry(ask.roomId, entry.replyToId) : entry;
   return origin?.author.kind === "host";
+}
+
+/** A stored ask the owner wrote: its id is the room chain's owner origin. */
+export function askOrigin(ask: RoomAsk | null): OwnerOrigin | null {
+  // SAFETY: askFromOwner read the ask's stored entry and found the host wrote it.
+  return ask && askFromOwner(ask) ? (ask.id as OwnerOrigin) : null;
 }
 
 const askerWorks = (ask: RoomAsk) => askPermission(ask) !== "read-only";

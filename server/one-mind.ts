@@ -169,6 +169,8 @@ export function roomEchoesSinceLastUserTurn(messages: readonly Message[], exclud
   return [[head, ...echoes, ...(more ? [`+${more} more room replies not shown.`] : [])].join("\n")];
 }
 
+export const carriedEchoes = (threadId: string): readonly string[] => carried.get(threadId) ?? [];
+
 /** Marks the carried echoes noted on the turn's first model event; a turn that ends before it leaves them for the next. */
 export function roomEchoesTaken(store: Pick<Store, "row" | "patchRow">, event: RuntimeEvent): void {
   const ids = carried.get(event.threadId);

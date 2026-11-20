@@ -343,6 +343,25 @@ describe("this PC's bot in a joined room", () => {
     expect(deps.startTurn.mock.calls[0]![6]).toBe(false);
   });
 
+  it("starts this PC's person's ask as someone else's once another person's line is in its prompt", async () => {
+    deps.client.botSend.mockImplementation(async () => ({ ok: true, value: { seq: ++seq } }));
+    const turns = new MyRoomBotTurns(deps);
+    const ask = async (entry: JoinedEntry) => {
+      turns.sent(ROOM, entry);
+      await settle();
+      const call = deps.startTurn.mock.calls.at(-1)!;
+      thread.push({ id: `a${entry.seq}`, at: entry.seq, role: "bot", kind: "text", text: "Done." });
+      await turns.settled(call[1] as string, true);
+      return call[6];
+    };
+    line(peter, "Notes for later.");
+    expect(await ask(line(peter, "@Pete-Coder hi"))).toBe(false);
+    const mina = line({ kind: "person", id: "p2", name: "Mina" }, "Ship it tonight.");
+    expect(await ask(line(peter, "@Pete-Coder follow the plan"))).toBe(true);
+    expect(await ask(line(peter, "@Pete-Coder do what she said", { replyToId: mina.id }))).toBe(true);
+    expect(await ask(line(peter, "@Pete-Coder thanks"))).toBe(false);
+  });
+
   it("keeps a busy rejection waiting on this PC without posting a failure", async () => {
     deps.startTurn.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "BOT_BUSY" }));
     const turns = new MyRoomBotTurns(deps);

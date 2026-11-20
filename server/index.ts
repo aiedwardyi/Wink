@@ -61,7 +61,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
 import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askById, askFromOwner, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askById, askFromOwner, askOrigin, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -70,7 +70,7 @@ import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
-import { roomById } from "./rooms/db.ts";
+import { roomById, roomHostSeats } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { ownerRoomCode } from "./rooms/invites.ts";
 import { joinedRooms, leftByHand, myRoomBotThreads, roomTaskThreads, seatTaken } from "./rooms/joined.ts";
@@ -206,7 +206,7 @@ import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { botRoute, CommsCallers } from "./comms-caller.ts";
-import { adoptHumanRoot, callerSnapshot, commit, ownerRoot, release, rootForStart, type Reservation } from "./comms-root.ts";
+import { adoptHumanRoot, callerSnapshot, commit, othersInPrompt, ownerOrigin, ownerRoot, release, rootForStart, type OwnerOrigin, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
@@ -380,7 +380,7 @@ import { refuseVpsJoin, requestCredentials, roomDoorPath } from "./phone-auth.ts
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks } from "./quick-ask.ts";
-import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
+import { carriedEchoes, hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRelayBase, teamRoute } from "./team-stats.ts";
 import { effectiveModelDial } from "./model-dial-default.ts";
@@ -714,7 +714,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false, ownerHop = false) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false, origin: OwnerOrigin | null = null) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -730,7 +730,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number, searc
       ...(readOnly ? { OMB_READ_ONLY_TURN: "1" } : {}),
       ...(handOff ? { OMB_HAND_OFF: "1" } : {}),
       ...(importMemory ? { OMB_IMPORT_MEMORY: "1" } : {}),
-      ...(ownerHop ? { OMB_OWNER_HOP: "1" } : {}),
+      ...(origin ? { OMB_OWNER_HOP: "1" } : {}),
     },
   };
 }
@@ -5719,6 +5719,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
+  othersInPrompt(store, threadId, rootId, [...paneNoteIds ?? [], ...mailParts.map((part) => part.id), ...carriedEchoes(threadId)]);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
@@ -6094,7 +6095,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool, commsDepth > 0 && ownerRoot(rootId));
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool, commsDepth > 0 ? ownerOrigin(rootId) : null);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6279,6 +6280,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
+            if (othersInPrompt(store, threadId, rootId, [...refreshedNotes.ids ?? [], ...carriedEchoes(threadId)])) delete integrations.agents?.env.OMB_OWNER_HOP;
             seed.compactionId = compacted.expanded ? null : latestCompactionId;
             if (currentTurnEpoch(bot.id) !== epoch || (opts?.sendId && isSendCancelled(opts.sendId))) {
               throw Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true });
@@ -7120,8 +7122,9 @@ async function runClaimedGroupMemberTurn(
       { recovering, latestUserText: latestUser?.text ?? "", allAsks: isStatusTurn(latestUser?.text ?? "") },
     )
     : "";
+  const roomRows = await roomTurnMessages(group.hosted?.roomId, store.activePath(threadId));
   const prepared = await prepareModelContext({
-    messages: await roomTurnMessages(group.hosted?.roomId, store.activePath(threadId)),
+    messages: roomRows,
     referenceMessages: store.messagesFor(threadId),
     contextWindow: modelContextWindow,
     excludeIds,
@@ -7175,6 +7178,7 @@ async function runClaimedGroupMemberTurn(
     }
   }
   const roomMail = mailForTurn(store, threadId, [], modelContextWindow);
+  const foreign = othersInPrompt(store, threadId, rootId, roomMail.map((part) => part.id), roomRows, group.hosted ? roomHostSeats(group.hosted.roomId) : []);
   const roomContext = [
     prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
     prepared.transcript.map((message) => replayMessageText(message, instance.driverKind, bot.id, selection.model)).join("\n"),
@@ -7209,7 +7213,7 @@ async function runClaimedGroupMemberTurn(
     ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff), false, hop > 0 && (asked ? !guestAsked : ownerRoot(rootId)));
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff), false, hop > 0 && !foreign ? (asked ? (guestAsked ? null : askOrigin(lead)) : ownerOrigin(rootId)) : null);
   }
   const canMessage = works && Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(

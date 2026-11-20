@@ -326,6 +326,22 @@ describe("private team reporting", () => {
     expect(f.calls()).toBe(1);
   });
 
+  it("binds a saved group report to the bot that collected it", async () => {
+    const f = await fixture();
+    const peer = f.sender.createBot({ name: "Peer" }, { seedMessages: false });
+    const group = f.sender.createGroup("QA", [f.bot.id, peer.id], false, undefined, { completed: true });
+    f.sender.appendMessage(group.threadId, { role: "user", kind: "text", text: "작업을 계속해 주세요" });
+    const answer = f.sender.appendMessage(group.threadId, { role: "bot", kind: "text", text: "작업을 중단했습니다", from: { botId: peer.id, name: "Peer", color: "blue" } });
+    f.sender.appendMessage(group.threadId, { role: "user", kind: "text", text: "에디에게 보내" });
+    const as = (bot: { id: string }, raw: Record<string, unknown>) => f.handle({ fromBotId: bot.id, fromThreadId: group.threadId, ...raw });
+    const draft = await as(f.bot, { action: "collect", selected_message_id: answer.id });
+    expect(draft.state).toBe("draft");
+    for (const action of ["send", "retry"]) expect(await as(peer, { action, report_id: draft.id }), action).toEqual({ error: "Saved report does not belong to this branch/sender/team." });
+    const own = await as(peer, { action: "collect", selected_message_id: answer.id });
+    expect([own.state, own.id === draft.id, (own.report as { bot: { id: string } }).bot.id]).toEqual(["draft", false, peer.id]);
+    expect(f.calls()).toBe(0);
+  });
+
   it("never sends on a room guest's line or in a turn the owner did not start", async () => {
     const f = await fixture();
     f.ownerTurn(false);

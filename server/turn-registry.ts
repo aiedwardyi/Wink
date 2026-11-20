@@ -48,6 +48,12 @@ export class TurnRegistry {
     return turnId && turn ? { turnId, ...turn } : undefined;
   }
 
+  /** The root of the thread's turn, still starting or announced. */
+  rootOf(threadId: string): string | null | undefined {
+    const starting = this.starting.get(threadId);
+    return starting ? starting.rootId : this.current(threadId)?.rootId;
+  }
+
   adoptRoot(threadId: string, rootId: string): void {
     const starting = this.starting.get(threadId);
     if (starting) starting.rootId = rootId;

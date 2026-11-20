@@ -256,7 +256,7 @@ export class MyRoomBotTurns {
       this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length, pictureAbort: new AbortController() }));
       await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {
         if (this.running.get(threadId) === mine) void this.settled(threadId, false);
-      }, readOnly, entry.author.kind === "bot" || sender !== room.me.id);
+      }, readOnly, entry.author.kind === "bot" || [entry, ...window, ...(quote ? [quote] : [])].some((line) => senderId(line) !== room.me.id));
       // a Stop before dispatch cancels the turn without a turn.completed
       if (this.stopped.has(threadId) && this.running.get(threadId) === mine && !this.deps.busy(local.id)) void this.settled(threadId, false);
     } catch (error) {
