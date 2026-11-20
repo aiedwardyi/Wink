@@ -16,7 +16,7 @@ import { defaultComputerForNewBot } from "./local-routing.ts";
 import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
-import { THREAD_CACHE_CHARS, ThreadCache } from "./thread-cache.ts";
+import { THREAD_CACHE_CHARS, ThreadCache, type ThreadState } from "./thread-cache.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { removeWorkspace } from "./workspace.ts";
 import { readSessionSystem, SESSION_SYSTEM_DIR, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
@@ -156,6 +156,7 @@ export interface Message {
    * something — the UI offers setup instead of a retry that cannot work. */
   tool?: {
     name: string;
+    memoryBotId?: string;
     /** Claude Code tool name, when the engine said the kind. */
     verb?: string;
     ok?: boolean;
@@ -504,6 +505,9 @@ export type BotActivity = "working" | "waiting-on-you" | "idle" | "no-signal" | 
 /** The states in which the bot cannot take a new message. */
 export const ACTIVITY_BUSY: ReadonlySet<BotActivity> = new Set(["working", "waiting-on-you", "no-signal"]);
 
+/** Store.rowMark: a loaded thread's row count, or an unloaded one's newest stored rowid. */
+export type RowMark = { count: number } | { after: number };
+
 export type StoreChange =
   | { type: "message"; threadId: string; message: Message; imported?: true }
   | { type: "message.patch"; threadId: string; message: Message }
@@ -760,14 +764,6 @@ const onboardingCard = (): OptionCardData => ({
   options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"],
 });
 
-/** Messages form a tree (forks appear when a message is edited); the
- * visible conversation is the path from the root to activeLeafId. */
-interface ThreadState {
-  /** Written only through the thread cache, which weighs every row. */
-  readonly messages: readonly Message[];
-  activeLeafId: string | null;
-}
-
 export class Store {
   bots: BotRecord[] = [];
   /** "missing" is a lost file; "unreadable" is there but did not load, so it may still hold good bots. */
@@ -777,7 +773,7 @@ export class Store {
   readonly trash = new TrashList();
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
-  private threads: ThreadCache<ThreadState>;
+  private threads: ThreadCache;
   /** Threads a driver still owns after Stop marked its bot idle; the cache keeps them. */
   private heldThreads: () => Iterable<string> = () => [];
   private taskPackets = new Map<string, TaskResumePacket | null>();
@@ -1333,10 +1329,17 @@ export class Store {
     this.threads.offer(threadId, state, chars);
   }
 
-  private readState(threadId: string): { state: ThreadState; chars: number } {
+  /** Takes a chat read off the server thread, unless a write loaded it first. */
+  adopt(threadId: string, read: mdb.ThreadRows & { chars: number }): void {
+    if (this.threads.has(threadId)) return;
+    const { state, chars } = this.readState(threadId, read);
+    this.threads.set(threadId, state, chars);
+  }
+
+  private readState(threadId: string, read = mdb.readThread(threadId, messagesFile(threadId))): { state: ThreadState; chars: number } {
     // SQLite is the source of truth; a thread with no rows imports its
     // legacy messages-<threadId>.json once, inside readThread
-    const { messages, activeLeafId: storedLeaf, chars } = mdb.readThread(threadId, messagesFile(threadId));
+    const { messages, activeLeafId: storedLeaf, chars } = read;
     let activeLeafId = storedLeaf;
     // legacy rows carry no parentId — chain them in array order
     let prev: string | null = null;
@@ -1387,9 +1390,10 @@ export class Store {
     return this.threads.has(threadId);
   }
 
-  /** The visible conversation: root → activeLeafId. */
+  /** Stable projection of replace-on-write rows from the root to the active leaf. */
   activePath(threadId: string): Message[] {
     const t = this.thread(threadId);
+    if (t.path && t.path.leafId === t.activeLeafId) return t.path.rows;
     const byId = new Map(t.messages.map((m) => [m.id, m]));
     const path: Message[] = [];
     let cur = t.activeLeafId ? byId.get(t.activeLeafId) : undefined;
@@ -1397,12 +1401,50 @@ export class Store {
       path.push(cur);
       cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
-    return path.reverse();
+    path.reverse();
+    Object.freeze(path);
+    t.path = { leafId: t.activeLeafId, rows: path };
+    return path;
   }
 
   /** activePath newest first, read lazily from disk when the thread is not loaded. */
   activePathBack(threadId: string): Iterable<Message> {
     return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
+  }
+
+  /** messagesFor(threadId).findLast(predicate), read newest first from disk when the thread is not loaded. */
+  findLast(threadId: string, predicate: (message: Message) => boolean): Message | undefined {
+    if (this.threads.has(threadId)) return this.thread(threadId).messages.findLast(predicate);
+    for (const message of mdb.rowsBack(threadId)) if (predicate(message)) return message;
+    return undefined;
+  }
+
+  /** activePath(threadId).findLast(predicate), walked back from disk when the thread is not loaded. */
+  findLastOnPath(threadId: string, predicate: (message: Message) => boolean): Message | undefined {
+    if (this.threads.has(threadId)) return this.activePath(threadId).findLast(predicate);
+    for (const message of this.activePathBack(threadId)) if (predicate(message)) return message;
+    return undefined;
+  }
+
+  /** activePath(threadId).slice(-count), walked back from disk when the thread is not loaded. */
+  pathTail(threadId: string, count: number): Message[] {
+    if (this.threads.has(threadId)) return this.activePath(threadId).slice(-count);
+    const rows: Message[] = [];
+    for (const message of this.activePathBack(threadId)) if (rows.unshift(message) >= count) break;
+    return rows;
+  }
+
+  /** Where the rows a turn adds begin: the row count when the thread is loaded, else its newest stored rowid. */
+  rowMark(threadId: string): RowMark {
+    return this.threads.has(threadId) ? { count: this.thread(threadId).messages.length } : { after: mdb.lastCursor(threadId) };
+  }
+
+  /** The rows added since rowMark; a mark taken while the thread was unloaded reads them by rowid. */
+  rowsSince(threadId: string, mark: RowMark): readonly Message[] {
+    if ("count" in mark) return this.thread(threadId).messages.slice(mark.count);
+    const rows: Message[] = [];
+    for (let page = mdb.scanThreadRows(threadId, mark.after, 1024); page.messages.length; page = mdb.scanThreadRows(threadId, page.cursor, 1024)) rows.push(...page.messages);
+    return rows;
   }
 
   /** Note rows newest first, read lazily from disk when the thread is not loaded. */
@@ -1411,6 +1453,9 @@ export class Store {
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
+    // mail is matched by key against every row and a screen frame prunes older ones; both need the transcript
+    const head = this.threads.has(threadId) || message.comm?.mailKey || message.kind === "screen" ? undefined : mdb.storedHead(threadId);
+    if (head !== undefined) return this.appendRow(threadId, message, head);
     const t = this.thread(threadId);
     if (message.comm?.mailKey) {
       const existing = t.messages.find((row) => row.comm?.mailKey === message.comm!.mailKey);
@@ -1446,6 +1491,16 @@ export class Store {
     return full;
   }
 
+  /** appendMessage for a chat that is not loaded: writes the row and head by key and loads nothing, so a send never waits on a long chat's read. */
+  private appendRow(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }, head: string | null): Message {
+    const full: Message = { id: newId(), at: Date.now(), parentId: head, ...redactBotAuthored(message) };
+    this.beforeWrite(threadId);
+    this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    this.emit({ type: "message", threadId, message: full });
+    if (full.role === "user" && full.kind === "text") this.dismissOnboardingCard(threadId);
+    return full;
+  }
+
   appendCompaction(threadId: string, compaction: ContextCompactionV1): Message {
     const checked = readContextCompaction({
       value: {
@@ -1463,13 +1518,13 @@ export class Store {
 
   /** Hide the first-run quiz on this thread, if it is still open. */
   dismissOnboardingCard(threadId: string): Message | null {
-    const t = this.thread(threadId);
-    const card = t.messages.find(
+    const rows = this.threads.has(threadId) ? this.thread(threadId).messages : mdb.optionRows(threadId);
+    const card = rows.find(
       (message) =>
         message.kind === "options" && message.card && !message.card.requestId && !message.card.askUser && !message.card.dismissed,
     );
     if (!card?.card) return null;
-    return this.patchMessage(threadId, card.id, { card: { ...card.card, dismissed: true } });
+    return this.patchRow(threadId, card.id, { card: { ...card.card, dismissed: true } });
   }
 
   recordCardAnswer(threadId: string, messageId: string, text: string): Message | null {

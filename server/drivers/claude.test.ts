@@ -2204,6 +2204,22 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   });
 
   it.each([
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs",
+    "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+  ])("marks an expired login result as a sign-out: %s", async (result) => {
+    const fixture = join(scratch, "expired-login.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-expired-login", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
+      expect.objectContaining({ turnId, message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true }),
+    ]);
+  });
+
+  it.each([
     ["network", "Network error: connection reset after 401 files", undefined],
     ["usage", "Invalid API key: usage limit reached", undefined],
     ["rate", "HTTP 429 Too Many Requests", undefined],

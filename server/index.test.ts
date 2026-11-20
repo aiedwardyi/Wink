@@ -4446,6 +4446,9 @@ describe("bot memory API", () => {
       // a UI-sent name arrives percent-encoded and must resolve to the same file
       expect((await api("GET", `/api/bots/${bot.id}/memory/topics/my%20notes.md`)).body.text).toBe("spaced");
       expect((await api("GET", `/api/bots/${bot.id}/memory/topics/missing.md`)).status).toBe(404);
+      // a bot with no picks yet answers the Timeline tab without a failed request
+      const empty = await api("GET", `/api/bots/${bot.id}/memory/topics/decisions.md`);
+      expect([empty.status, empty.body]).toEqual([200, { name: "decisions.md", text: "", entries: [] }]);
       expect((await api("GET", "/api/bots/does-not-exist/memory/topics/deploys.md")).status).toBe(404);
     } finally {
       await api("DELETE", `/api/bots/${bot.id}`);

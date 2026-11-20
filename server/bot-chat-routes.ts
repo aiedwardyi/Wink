@@ -6,18 +6,22 @@ import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
+import { coldLoading, sentRow } from "./cold-thread.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { noteSendLocale } from "./memory-import-offer.ts";
 import { callLinesSinceLastUserTurn, parseCallTag } from "./live-call.ts";
+import { steerUntilTaken } from "./note-steer.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, quickAskRecovery, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
-import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
+import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, repliedUnder, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
+import { isOrder } from "./quick-route.ts";
+import { composeUserTurnPrompt, promptWithReply, replyExcerpt, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
@@ -33,6 +37,13 @@ import { TASK_RESUME_PROMPT } from "./turn-context.ts";
 
 // A stopped thread stays held through the driver's cancel grace (ACP and MSP: 5 s), and an edit inside it is refused.
 const STOP_RELEASE_MS = 6_000;
+// The bot acks a send mid-turn unless the helper's reply beside it does.
+const ACK_COVERED =
+  "[Wink note, automated, not from the person. A fast reply in your voice answers the message below beside your work, so write no line of your own for it; continue, and put anything new in your final reply.]";
+// Only the bot can tell whether its own reply under the send already answered it; built at each use, since that reply can land between steer and queue.
+// A steered note joins the user's own turn, where no_reply_needed neither ends nor hides anything and its "stop" could cost the work's reply.
+const ackMissed = (path: Message[], sent: Message, steered: boolean) =>
+  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(sent.text ?? "")}"; ${repliedUnder(path, sent) ? `if your reply after it already answers it, ${steered ? "write nothing for it" : "call no_reply_needed and write nothing"}; otherwise ` : ""}reply to it now in one short visible line, then continue.]`;
 
 type BotChatRouteDeps = {
   cancelUsageWait?: (botId: string, waitId?: string, preserveTurn?: boolean) => void;
@@ -137,17 +148,30 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     }
     return true;
   };
+  // A task frame carries the whole chat: one Map is loading lands first rather than be read here, and goes out only while the bot is still on it.
+  const taskFrame = async <Frame>(bot: BotRecord, botWithThread: (bot: BotRecord) => Frame, { answer = false, announce = true } = {}) => {
+    const { threadId } = bot;
+    const loading = coldLoading(threadId);
+    if (loading) await loading;
+    const shown = announce && store.bot(bot.id)?.threadId === threadId;
+    if (!answer && !shown) return undefined;
+    const frame = botWithThread({ ...bot, threadId });
+    if (shown) broadcast({ kind: "bot", bot: frame });
+    return frame;
+  };
   // Today's busy send: steer into the live turn, else queue for after it. A quick ask row stands in for the new line.
   const deliverBusy = async (
     bot: BotRecord,
     threadId: string,
     text: string,
-    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number },
+    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt, covered }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number; covered?: boolean },
   ) => {
     let steered = false;
     let dropped = false;
     let recorded = false;
     let callRow: Message | undefined;
+    // the reply beside a covered order promises it, so a late drop requeues it like a call
+    const requeues = Boolean(call) || Boolean(covered && isOrder(text));
     let peerInput: ReturnType<typeof beginPeerUserReply>;
     // a held switch: the adapter is still the old turn's engine, so this send queues for the chip's model
     if (!switchHeld(bot) && steersSend(adapter, bot.busy, after)) {
@@ -163,6 +187,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const prompt = [
         ...closedAskNotes(turnOpts.messages, text, ask?.id),
         ...(call ? callLinesSinceLastUserTurn(turnOpts.messages, new Set()) : []),
+        ...(covered ? [ACK_COVERED] : []),
         consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),
       ].join("\n\n");
       peerInput = beginPeerUserReply(bot.id, threadId, prompt);
@@ -176,8 +201,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           else dropped = true;
         }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
         .catch(() => false);
-      // an ask or call send the engine already dropped goes once down the idle or queue path
-      if ((ask || call) && dropped) steered = false;
+      // an ask, call or promised order the engine already dropped goes once down the idle or queue path
+      if ((ask || requeues) && dropped) steered = false;
       if (!steered) peerInput?.cancel();
     }
     // steer() is awaited adapter work. The turn can settle, the task can
@@ -224,7 +249,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           answersCard,
           actedAt,
         });
-      if (call) callRow = message;
+      if (requeues) callRow = message;
       peerInput?.accept(message);
       cancelUsageWait?.(bot.id, undefined, true);
       markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
@@ -270,10 +295,31 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`)).finally(settle);
   };
   const startAck = (quick: QuickRouting, botId: string, threadId: string, sent: Message) => {
+    const owed = () => {
+      const current = store.bot(botId);
+      const path = store.activePath(threadId);
+      if (!current || !store.taskByThread(botId, threadId) || askStopped(sent) || !path.some((row) => row.id === sent.id) || path.some((row) => row.quick?.askId === sent.id)) return undefined;
+      return current;
+    };
     void ackQuick({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent)
-      .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`));
+      .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`))
+      .then(async () => {
+        const current = owed();
+        if (!current) return;
+        const adapter = instanceForBot(current, threadId)?.adapter;
+        if (current.busy && (current.activeThreadId ?? current.threadId) === threadId && adapter?.steer) {
+          const note = ackMissed(store.activePath(threadId), sent, true);
+          if (await (steerUntilTaken(adapter, threadId, note) ?? adapter.steer(threadId, note)).catch(() => false)) return;
+          if (!owed()) return;
+        }
+        // a turn that ended or refused the note, or a switch to another task, leaves it for the bot's next turn in this task, drained into the send's own row
+        queueAsk(store, botId, threadId, sent, ackMissed(store.activePath(threadId), sent, false));
+        drainQueuedSends();
+      })
+      .catch((error) => console.warn(`[quick] owed ack failed: ${error instanceof Error ? error.message : String(error)}`));
   };
   return {
+    taskFrame,
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
       cancelUsageWait?.(m[1]!, m[2]);
@@ -309,6 +355,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         return json(res, 400, { error: "threadId must be a task id" });
       }
       noteTalked(bot.id);
+      noteSendLocale(body.locale);
       // A retry carries its original task. That lets us return the canonical
       // receipt after a task switch, while a genuinely new send still has to
       // target the task that is active now.
@@ -328,7 +375,11 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       }
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
       const call = parseCallTag(body.call);
-      const asked = typeof body.cardId === "string" ? store.activePath(threadId).find((message) => message.id === body.cardId) : undefined;
+      const cardId = typeof body.cardId === "string" ? body.cardId : undefined;
+      // the card must be on the active branch: a chat Map is loading lands first rather than be read here
+      const loading = cardId === undefined ? undefined : coldLoading(threadId);
+      if (loading) await loading;
+      const asked = cardId === undefined ? undefined : store.activePath(threadId).find((message) => message.id === cardId);
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, Date.now()) : undefined;
       // Send now on a held send: the user acted when they queued it
@@ -338,7 +389,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         sendFingerprint(text, replyTo?.id),
         async () => withQueuedSend(bot.id, threadId, queueId, sendId, async () => {
           if (sendId) {
-            const accepted = acceptedSendMatch(store.messagesFor(threadId), sendId, text, replyTo?.id);
+            const sent = await sentRow(store, threadId, sendId);
+            const accepted = acceptedSendMatch(sent ? [sent] : [], sendId, text, replyTo?.id);
             if (accepted.kind === "conflict") {
               throw Object.assign(new Error("sendId already belongs to another message"), { status: 409 });
             }
@@ -363,6 +415,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             }
           }
 
+          // a busy send is routed and steered off the active branch: a chat Map is loading lands first rather than be read here
+          const busyLoad = store.bot(bot.id)?.busy ? coldLoading(threadId) : undefined;
+          if (busyLoad) await busyLoad;
           if (sendId && isSendCancelled(sendId)) {
             return { ok: true as const, cancelled: true as const, threadId };
           }
@@ -389,7 +444,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             const after = body.deliver === "after";
             // a call order waited for a yes; it goes to the bot, never to Quick answers
             const gate: QuickGate | undefined = !call?.order && quick && !switchHeld(currentAtStart) ? {
-              bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
+              bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId),
+              // read only once a rule needs it: a claimed turn may still be waiting for Map's load of this chat
+              get messages() { return store.activePath(threadId); },
               deliverAfter: after, replyTo, queueId, answersCard, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
             } : undefined;
             if (quick && gate && routesQuick(gate)) {
@@ -398,9 +455,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               startQuick(quick, bot.id, threadId, message);
               return { ok: true as const, quick: true as const, threadId, message };
             }
-            // a call line is spoken back, so only a typed send gets the reply beside it
-            const ack = Boolean(quick && gate && !call && routesAck(gate));
-            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt });
+            // a call line is spoken back and a peer-watched turn owes the person its own tagged line, so only other typed sends get the reply beside them
+            const ack = Boolean(quick && gate && !call && !hasPeerWatch(threadId) && routesAck(gate));
+            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, covered: ack });
             if (quick && ack && "steered" in sent && sent.steered) startAck(quick, bot.id, threadId, sent.message);
             return sent;
           }
@@ -669,7 +726,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       // one chat per bot: native clients and MCP create_task get the chat it already has
       const task = store.activeTask(bot.id);
       if (!task) return json(res, 500, { error: "this bot has no chat" });
-      return json(res, 200, { bot: botWithThread(bot), task: wireTask(task) });
+      return json(res, 200, { bot: await taskFrame(bot, botWithThread, { answer: true, announce: false }), task: wireTask(task) });
     },
     switchTask: async (res: ServerResponse, m: RegExpMatchArray, url: URL, botWithThread: (bot: BotRecord) => Record<string, unknown>) => {
       const bot = store.bot(m[1]);
@@ -699,19 +756,16 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (bot.threadId !== m[2] && store.taskByThread(bot.id, m[2]!)) cancelUsageWait?.(bot.id);
       const switched = store.switchTask(bot.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such task" });
-      const fresh = botWithThread(switched);
-      broadcast({ kind: "bot", bot: fresh });
-      const responseBot = url.searchParams.get("messages") === "0"
-        ? { ...wireBot(switched), tasks: store.tasks(switched.id).map(wireTask) }
-        : fresh;
-      return json(res, 200, { bot: responseBot });
+      if (url.searchParams.get("messages") !== "0") return json(res, 200, { bot: await taskFrame(switched, botWithThread, { answer: true }) });
+      // the slim answer never waits on the chat
+      void taskFrame(switched, botWithThread).catch((error) => console.error("task switch frame failed", switched.id, error));
+      return json(res, 200, { bot: { ...wireBot(switched), tasks: store.tasks(switched.id).map(wireTask) } });
     },
     patchTask: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray, botWithThread: (bot: BotRecord) => Record<string, unknown>) => {
       const body = await readBody(req);
       const task = store.renameTask(m[1], m[2], String(body.title ?? ""));
       if (!task) return json(res, 404, { error: "no such task" });
-      const fresh = botWithThread(store.bot(m[1])!);
-      broadcast({ kind: "bot", bot: fresh });
+      await taskFrame(store.bot(m[1])!, botWithThread);
       return json(res, 200, { task: wireTask(task) });
     },
     secretCard: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {

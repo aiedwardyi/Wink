@@ -8,6 +8,8 @@ import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
 import { parseCallTag } from "./live-call.ts";
 import { applyPendingModel, switchHeld } from "./pending-model.ts";
 import { quickAskRecovery, routesAck, routesQuick } from "./quick-ask.ts";
+import { isOrder } from "./quick-route.ts";
+import { coldLoading, sentRow } from "./cold-thread.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -32,7 +34,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
     messages.push(saved);
     return saved;
   };
-  const store = { bot: () => bot, taskByThread: () => ({ threadId: bot.threadId, title: "", createdAt: 0, resumeCursors: {} }), messagesFor: () => messages, activePath: () => messages, appendMessage, patchMessage: vi.fn() };
+  const store = { bot: () => bot, taskByThread: () => ({ threadId: bot.threadId, title: "", createdAt: 0, resumeCursors: {} }), loaded: () => true, messagesFor: () => messages, activePath: () => messages, appendMessage, patchMessage: vi.fn() };
   const startTurn = vi.fn(async (_bot: string, text: string, opts: { sendId?: string; replyTo?: Message }) => {
     bot.busy = true;
     return startedTurn(appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId: opts.sendId, replyToId: opts.replyTo?.id }));
@@ -46,12 +48,12 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
     ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
-    noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery,
+    noteTalked: noop, noteSendLocale: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery, coldLoading, sentRow,
     ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: (_thread: string, id?: string) => messages.find((m) => m.id === id),
     botHasActiveTurn: () => false, registry: new Map([["fake", { adapter: { capabilities: { queueing }, steer, interruptTurn } }]]),
     instanceForBot: () => ({ adapter: { capabilities: { queueing }, steer, interruptTurn } }),
     beginPeerUserReply, cfg: {},
-    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [],
+    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [], ACK_COVERED: "[covered]",
     userTurnReactionKeys: () => [], hasPeerWatch, clearUnattended: noop,
     resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain, quick: undefined,
     ...extra,
@@ -196,11 +198,12 @@ describe("queued send through the message POST", () => {
 });
 
 describe("a line typed while the bot works", () => {
-  const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread")) => {
+  const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread"), extra: Record<string, unknown> = {}) => {
     const startQuick = vi.fn();
     const h = harness(steer, true, {
-      routesQuick, routesAck, startQuick, startAck: vi.fn(), quick: { accountReady: () => true },
+      routesQuick, routesAck, isOrder, startQuick, startAck: vi.fn(), quick: { accountReady: () => true },
       instanceForBot: () => ({ driverKind: "claudeAgent", fork: vi.fn(), adapter: { capabilities: { queueing: true }, steer, interruptTurn: vi.fn() } }),
+      ...extra,
     });
     Object.assign(h.store, { groupByThread: () => undefined });
     h.bot.activeThreadId = activeThreadId;
@@ -217,8 +220,20 @@ describe("a line typed while the bot works", () => {
   it("steers into a turn a pane note started in this chat", async () => {
     const h = working("thread");
     expect((await h.post({ text: "tldr pls ?" })).body).toMatchObject({ steered: true });
-    expect(h.steer).toHaveBeenCalledWith("thread", "tldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
+    expect(h.steer).toHaveBeenCalledWith("thread", "[covered]\n\ntldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
     expect(h.startQuick).not.toHaveBeenCalled();
+  });
+
+  it("routes a line on a chat Map is still loading only once the load lands", async () => {
+    let land!: () => void;
+    const coldLoading = vi.fn(() => new Promise<void>((resolve) => { land = resolve; }));
+    const h = working("thread", undefined, { coldLoading });
+    const read = vi.spyOn(h.store, "activePath");
+    const sent = h.post({ text: "tldr pls ?" });
+    await vi.waitFor(() => expect(coldLoading.mock.calls.length + read.mock.calls.length).toBeGreaterThan(0), { timeout: 500 });
+    expect(read).not.toHaveBeenCalled();
+    land();
+    expect((await sent).body).toMatchObject({ steered: true });
   });
 
   it("holds a card answer for the bot, the same as a typed answer, while the turn runs in a room", async () => {

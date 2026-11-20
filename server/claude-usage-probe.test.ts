@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
+import { readFile } from "node:fs/promises";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 
+import type { AccountContext } from "./account-policy.ts";
+import { writeFileAtomic } from "./atomic.ts";
 import { createClaudeUsageProbe, readClaudeUsage } from "./claude-usage-probe.ts";
 import { createUsageRefresh, readUsageRpc } from "./usage-refresh.ts";
 import { DATA_DIR } from "./config.ts";
@@ -9,29 +12,46 @@ import { join } from "node:path";
 import * as procs from "./procs.ts";
 
 vi.mock("./procs.ts", async (original) => ({ ...await original<typeof procs>(), spawnCli: vi.fn(), killCliTree: vi.fn() }));
+// oxlint-disable-next-line anti-slop/no-module-mocking -- sees any direct write of the CLI's token file.
+vi.mock("./atomic.ts", async (original) => ({ ...await original<typeof import("./atomic.ts")>(), writeFileAtomic: vi.fn() }));
+// oxlint-disable-next-line anti-slop/no-module-mocking -- sees any direct read of the CLI's token file.
+vi.mock("node:fs/promises", async (original) => {
+  const fs = await original<typeof import("node:fs/promises")>();
+  const stored = JSON.stringify({ claudeAiOauth: { accessToken: "fake-expired", refreshToken: "fake-refresh" } });
+  return { ...fs, readFile: vi.fn((...args: Parameters<typeof fs.readFile>) => String(args[0]).endsWith(".credentials.json") ? Promise.resolve(stored) : fs.readFile(...args)) };
+});
 const account = { id: "acct_fixture", of: "claude", home: join(DATA_DIR, "fixture"), generation: 2 };
+const legacyHome = join(DATA_DIR, "legacy-claude");
 const payload = { subscription_type: "max", rate_limits_available: true, rate_limits: {
   five_hour: { utilization: 35, resets_at: "2026-11-04T00:00:00Z" }, seven_day: { utilization: 82, resets_at: null },
 } };
 const windows = [{ id: "five_hour", usedPercent: 35, resetsAt: Date.parse("2026-11-04T00:00:00Z"), windowMinutes: 300 },
   { id: "seven_day", usedPercent: 82, resetsAt: null, windowMinutes: 10080 }];
 
-function childFixture(reply = true) {
+function childFixture(reply = true, target: AccountContext | null = account, env: NodeJS.ProcessEnv = { PATH: "fixture" }) {
   const frames: Array<{ type: string; request_id: string; request: Record<string, unknown> }> = [];
   const stdout = new PassThrough();
+  let exits = true;
   const child = Object.assign(new EventEmitter(), { stdout, stderr: new PassThrough(), stdin: new Writable({
     write(chunk, _encoding, done) { frames.push(JSON.parse(String(chunk))); done(); },
+    // Like the CLI, exits once stdin ends, unless held as one still saving a renewed token.
+    final(done) { done(); if (exits) child.emit("exit", 0, null); },
   }) });
   vi.mocked(procs.spawnCli).mockReturnValue(child as unknown as ReturnType<typeof procs.spawnCli>);
   const respond = (request_id: string, data: unknown, subtype = "success") => stdout.write(`${JSON.stringify({ type: "control_response", response: { subtype, request_id, response: data } })}\n`);
-  const pending = readClaudeUsage("fixture-cli", { PATH: "fixture" }, account);
+  const pending = readClaudeUsage("fixture-cli", env, target ?? undefined);
   if (reply) respond("initialize", {});
-  return { child, frames, respond, pending };
+  return { child, frames, respond, pending, hold: () => { exits = false; } };
 }
 
-afterEach(() => { vi.clearAllMocks(); vi.useRealTimers(); });
+// A read holds its folder until its CLI exits: end every CLI a test started, so one failing early can't block the next.
+afterEach(() => {
+  vi.mocked(procs.spawnCli).mock.results.forEach(({ value }) => value?.emit("exit", 0, null));
+  vi.clearAllMocks();
+  vi.useRealTimers();
+});
 
-it("initializes then reads usage in the account home without sending a prompt", async () => {
+it("initializes then reads usage in the account home without sending a prompt, and ends by closing stdin", async () => {
   const f = childFixture();
   f.respond("usage", payload);
   expect(await f.pending).toEqual(windows);
@@ -41,13 +61,21 @@ it("initializes then reads usage in the account home without sending a prompt", 
   ]);
   expect(procs.spawnCli).toHaveBeenCalledWith("fixture-cli", expect.arrayContaining(["--input-format", "stream-json", "--no-session-persistence"]),
     { cwd: account.home, env: { PATH: "fixture" }, stdio: ["pipe", "pipe", "pipe"], account, accountDriver: "claudeAgent" });
-  expect(procs.killCliTree).toHaveBeenCalledWith(f.child);
+  expect(f.child.stdin.writableEnded).toBe(true);
+  expect(procs.killCliTree).not.toHaveBeenCalled();
 });
 
 it("keeps a weekly-only get_usage response when five_hour is null", async () => {
   const f = childFixture();
   f.respond("usage", { ...payload, rate_limits: { five_hour: null, seven_day: { utilization: 98, resets_at: null } } });
   expect(await f.pending).toEqual([{ id: "seven_day", usedPercent: 98, resetsAt: null, windowMinutes: 10080 }]);
+});
+
+it("keeps the CLI's model-specific weekly windows and skips entries that are not windows", async () => {
+  const f = childFixture(true, null);
+  f.respond("usage", { ...payload, rate_limits: { ...payload.rate_limits, seven_day_opus: { utilization: 61, resets_at: null }, seven_day_sonnet: null,
+    seven_day_oauth_apps: { utilization: "x" }, extra_usage: { is_enabled: false } } });
+  expect(await f.pending).toEqual([...windows, { id: "seven_day_opus", usedPercent: 61, resetsAt: null, windowMinutes: 10080 }]);
 });
 
 it.each([
@@ -60,7 +88,7 @@ it.each([
   const f = childFixture();
   f.respond("usage", value);
   await expect(f.pending).rejects.toThrow("unavailable");
-  expect(procs.killCliTree).toHaveBeenCalledOnce();
+  expect(procs.killCliTree).not.toHaveBeenCalled();
 });
 
 it.each(["old CLI", "bad id", "invalid JSON", "exit", "spawn error", "EPIPE", "permission request"])("stops on %s without a prompt", async (error) => {
@@ -73,11 +101,13 @@ it.each(["old CLI", "bad id", "invalid JSON", "exit", "spawn error", "EPIPE", "p
   else f.child.emit(error === "exit" ? "exit" : "error", new Error(error));
   await expect(f.pending).rejects.toThrow("unavailable");
   expect(f.frames).toHaveLength(1);
-  expect(procs.killCliTree).toHaveBeenCalledOnce();
+  expect(procs.killCliTree).not.toHaveBeenCalled();
 });
 
 it("starts the Claude and Codex usage CLIs without saved keys or Wink's token", async () => {
-  void childFixture(false).pending.catch(() => undefined);
+  const first = childFixture(false);
+  first.child.emit("exit");
+  await first.pending.catch(() => undefined);
   vi.mocked(procs.spawnCli).mockClear();
   const env = { PATH: "fixture", GEMINI_API_KEY: "saved", OMB_COMMS_TOKEN: "boot", OPENAI_API_KEY: "saved" };
   const claude = readClaudeUsage("fixture-cli", env, account).catch(() => undefined);
@@ -88,15 +118,21 @@ it("starts the Claude and Codex usage CLIs without saved keys or Wink's token", 
   await Promise.all([claude, codex]);
 });
 
-it("kills the child when initialize or get_usage times out", async () => {
+it("abandons a read that outlives its deadline without killing it, and starts no second CLI on that folder until it exits", async () => {
   vi.useFakeTimers();
   for (const initialized of [false, true]) {
     const f = childFixture(initialized);
+    f.hold();
     const failed = expect(f.pending).rejects.toThrow("unavailable");
     await vi.advanceTimersByTimeAsync(15_000);
     await failed;
-    expect(procs.killCliTree).toHaveBeenCalledWith(f.child);
+    expect(f.child.stdin.writableEnded).toBe(true);
+    await expect(readClaudeUsage("fixture-cli", { PATH: "fixture" }, account)).rejects.toThrow("unavailable");
+    expect(procs.spawnCli).toHaveBeenCalledOnce();
+    f.child.emit("exit", 0, null);
+    vi.mocked(procs.spawnCli).mockClear();
   }
+  expect(procs.killCliTree).not.toHaveBeenCalled();
 });
 
 it("runs accounts in sequence and throttles failures and generation changes for five minutes plus jitter", async () => {
@@ -127,18 +163,38 @@ it("runs accounts in sequence and throttles failures and generation changes for 
 });
 
 it("uses the CLI reading on Refresh without accessing a token file or HTTP", async () => {
-  const read = vi.fn();
-  const write = vi.fn();
-  const request = vi.fn();
-  const claude = vi.fn<typeof readClaudeUsage>(async () => windows);
-  const refresh = createUsageRefresh({ read, write, request, claude });
-  const result = await refresh("claudeAgent", { instanceId: account.id, account, environment: { CLAUDE_CODE_OAUTH_TOKEN: "fake", ANTHROPIC_API_KEY: "fake" } });
-  expect(result.report?.windows).toEqual(windows);
-  expect(claude.mock.calls[0]).toEqual(["claude", expect.objectContaining({ CLAUDE_CONFIG_DIR: account.home }), account]);
-  expect(claude.mock.calls[0]?.[1]).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
-  expect(read).not.toHaveBeenCalled();
-  expect(write).not.toHaveBeenCalled();
-  expect(request).not.toHaveBeenCalled();
+  const http = vi.spyOn(globalThis, "fetch");
+  try {
+    const claude = vi.fn<typeof readClaudeUsage>(async () => windows);
+    const refresh = createUsageRefresh({ claude });
+    const result = await refresh("claudeAgent", { instanceId: account.id, account, environment: { CLAUDE_CODE_OAUTH_TOKEN: "fake", ANTHROPIC_API_KEY: "fake" } });
+    expect(result.report?.windows).toEqual(windows);
+    expect(claude.mock.calls[0]).toEqual(["claude", expect.objectContaining({ CLAUDE_CONFIG_DIR: account.home }), account]);
+    expect(claude.mock.calls[0]?.[1]).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(readFile).not.toHaveBeenCalled();
+    expect(writeFileAtomic).not.toHaveBeenCalled();
+    expect(http).not.toHaveBeenCalled();
+  } finally {
+    http.mockRestore();
+  }
+});
+
+it("reads the reset value for a managed account when an open view's report reaches 30 seconds", async () => {
+  let now = 0;
+  let usedPercent = 100;
+  const claude = vi.fn<typeof readClaudeUsage>(async () => [{ ...windows[1]!, usedPercent }]);
+  const refresh = createUsageRefresh({ claude, now: () => now, random: () => 0.5 });
+  const options = { instanceId: account.id, account, maxAgeMs: 30_000 };
+  const first = await refresh("claudeAgent", options);
+  expect(first.report?.windows[0]?.usedPercent).toBe(100);
+  usedPercent = 12;
+  now = 29_999;
+  expect((await refresh("claudeAgent", options)).report).toEqual(first.report);
+  now = 30_000;
+  const next = await refresh("claudeAgent", options, first.report);
+  expect(next.report?.windows[0]?.usedPercent).toBe(12);
+  expect(Date.parse(next.report!.observedAt)).toBe(now);
+  expect(claude).toHaveBeenCalledTimes(2);
 });
 
 it("retains the current reading and caption when the CLI read fails", async () => {
@@ -147,16 +203,64 @@ it("retains the current reading and caption when the CLI read fails", async () =
   expect(await refresh("claudeAgent", { instanceId: account.id, account }, previous)).toMatchObject({ report: previous, status: "no_observation" });
 });
 
-it("keeps the single-account usage path on its existing API read", async () => {
-  const claude = vi.fn<typeof readClaudeUsage>();
-  const request = vi.fn(async () => Response.json(payload.rate_limits));
-  const read = vi.fn();
-  const refresh = createUsageRefresh({ claude, request, read });
-  const result = await refresh("claudeAgent", { instanceId: "claude", environment: { CLAUDE_CODE_OAUTH_TOKEN: "fake" } });
-  expect(result.report?.windows).toEqual(windows);
-  expect(claude).not.toHaveBeenCalled();
-  expect(read).not.toHaveBeenCalled();
-  expect(request).toHaveBeenCalledOnce();
+it("reads single-account usage through the CLI without the token file, a token refresh or HTTP", async () => {
+  const http = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => String(url).includes("/oauth/token")
+    ? Response.json({ access_token: "fake-minted", refresh_token: "fake-next", expires_in: 3600 })
+    : new Headers(init?.headers).get("authorization") === "Bearer fake-minted" ? Response.json(payload.rate_limits) : new Response(null, { status: 401 }));
+  try {
+    const claude = vi.fn<typeof readClaudeUsage>(async () => windows);
+    const refresh = createUsageRefresh({ claude, platform: "linux" });
+    const result = await refresh("claudeAgent", { instanceId: "claude", environment: { CLAUDE_CONFIG_DIR: legacyHome } });
+    expect({
+      http: http.mock.calls.map(([url, init]) => `${init?.method ?? "GET"} ${String(url)}`),
+      reads: vi.mocked(readFile).mock.calls.map(([path]) => String(path)),
+      writes: vi.mocked(writeFileAtomic).mock.calls.map(([path, content]) => `${path} ${content}`),
+    }).toEqual({ http: [], reads: [], writes: [] });
+    expect(result.report?.windows).toEqual(windows);
+    expect(claude.mock.calls).toEqual([["claude", expect.objectContaining({ CLAUDE_CONFIG_DIR: legacyHome }), undefined]]);
+  } finally {
+    http.mockRestore();
+  }
+});
+
+it("keeps the last single-account reading as no observation when the CLI can't report, without a token or sign-in", async () => {
+  const http = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 401 }));
+  try {
+    const previous = { windows, observedAt: new Date().toISOString() };
+    const refresh = createUsageRefresh({ claude: async () => { throw new Error("old CLI"); }, platform: "linux" });
+    const result = await refresh("claudeAgent", { instanceId: "claude", environment: { CLAUDE_CONFIG_DIR: legacyHome } }, previous);
+    expect(http).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ report: previous, status: "no_observation" });
+    expect(result.error).toBeUndefined();
+  } finally {
+    http.mockRestore();
+  }
+});
+
+it("probes one single-account login once for every instance on it", async () => {
+  const claude = vi.fn<typeof readClaudeUsage>(async () => windows);
+  const refresh = createUsageRefresh({ claude, platform: "linux" });
+  const options = (instanceId: string, home = legacyHome) => ({ instanceId, environment: { CLAUDE_CONFIG_DIR: home } });
+  const [first, second] = await Promise.all([refresh("claudeAgent", options("claude")), refresh("claudeAgent", options("claude-opus"))]);
+  expect(second.report).toEqual(first.report);
+  await refresh("claudeAgent", options("claude-haiku"));
+  expect(claude).toHaveBeenCalledOnce();
+  await refresh("claudeAgent", options("other", join(DATA_DIR, "other-claude")));
+  expect(claude).toHaveBeenCalledTimes(2);
+  refresh.invalidate("claude");
+  await refresh("claudeAgent", options("claude"));
+  expect(claude).toHaveBeenCalledTimes(3);
+});
+
+it("reads single-account usage with the launch env from a lean folder without killing its child", async () => {
+  const f = childFixture(true, null, { PATH: "fixture", CLAUDE_CONFIG_DIR: legacyHome, CLAUDE_CODE_OAUTH_TOKEN: "fake", CLAUDECODE: "1" });
+  f.respond("usage", payload);
+  expect(await f.pending).toEqual(windows);
+  expect(procs.spawnCli).toHaveBeenCalledWith("fixture-cli", expect.arrayContaining(["--no-session-persistence"]),
+    { cwd: join(DATA_DIR, "helper"), env: { PATH: "fixture", CLAUDE_CONFIG_DIR: legacyHome }, stdio: ["pipe", "pipe", "pipe"] });
+  expect(f.child.stdin.writableEnded).toBe(true);
+  expect(procs.killCliTree).not.toHaveBeenCalled();
 });
 
 it("reads an account again on a tap while automatic checks keep the five minute wait", async () => {
@@ -170,6 +274,26 @@ it("reads an account again on a tap while automatic checks keep the five minute 
   expect(await used(true)).toBe(12);
   expect(await used()).toBe(12);
   expect(claude).toHaveBeenCalledTimes(2);
+});
+
+it("joins an in-flight CLI read and waits out a failed probe even on a tap", async () => {
+  let now = 0;
+  let fail!: (error: Error) => void;
+  const read = vi.fn(() => new Promise<typeof windows>((_, reject) => { fail = reject; }));
+  const probe = createClaudeUsageProbe({ read, now: () => now, random: () => 0.5 });
+  const first = probe("fake", {}, account);
+  await Promise.resolve();
+  const tap = () => probe("fake", {}, account, account.id, { fresh: true });
+  expect(tap()).toBe(first);
+  fail(new Error("Claude usage unavailable"));
+  expect(await first).toBeUndefined();
+  now = 314_999;
+  expect(await tap()).toBeUndefined();
+  expect(read).toHaveBeenCalledTimes(1);
+  now = 315_000;
+  read.mockResolvedValue(windows);
+  expect((await tap())?.windows).toEqual(windows);
+  expect(read).toHaveBeenCalledTimes(2);
 });
 
 it("drops a late reading after account invalidation", async () => {

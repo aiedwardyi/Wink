@@ -156,8 +156,8 @@ it("gives all four header controls the same hover classes", async () => {
 });
 
 it.each([
-  ["en", false, "Close"],
-  ["ko-KR", false, "닫기"],
+  ["en", false, "Close (Ctrl+`)"],
+  ["ko-KR", false, "닫기 (Ctrl+`)"],
   ["en", true, "Chat"],
   ["ko-KR", true, "대화"],
 ])("labels the leave button in %s with phone=%s", async (locale, phone, label) => {
@@ -165,6 +165,8 @@ it.each([
   vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.assign(new EventTarget(), { matches: phone && query.includes("max-width"), media: query, onchange: null, addListener() {}, removeListener() {} }));
   await mount();
   const leave = host.querySelector<HTMLButtonElement>("header button")!;
-  expect(leave.textContent!.replace(leave.querySelector("kbd")!.textContent!, "").trim()).toBe(label);
-  expect(Boolean(leave.querySelector("svg"))).toBe(phone);
+  expect(leave.getAttribute("aria-label")).toBe(label);
+  expect(leave.title).toBe(label);
+  expect(leave.textContent).toBe("");
+  expect(leave.querySelector("svg")).not.toBeNull();
 });

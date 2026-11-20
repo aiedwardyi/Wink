@@ -718,7 +718,7 @@ describe("context compaction e2e", () => {
         blockers: [],
         nextAction: "",
         asks: [
-          { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348", at: 1, changedAt: 1 },
+          { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user", at: 1, changedAt: 1 },
           { id: "A2", ask: "Drop the old skin", status: "declined", at: 1, changedAt: 1 },
           { id: "A3", ask: "Fix the login redirect", status: "building", at: Date.now(), changedAt: Date.now() },
         ],
@@ -1399,7 +1399,7 @@ describe("context compaction e2e", () => {
     await waitFor(async () => (await botById(PLAN_CLEARED.botId))?.busy === false);
   }, 30_000);
 
-  it.each([ASKS_CODEX, ASKS_CLAUDE])("keeps $name asks across compaction, flags the stale one and closes into history", async (bot) => {
+  it.each([ASKS_CODEX, ASKS_CLAUDE])("keeps $name asks across compaction, flags the one needing a verdict and closes into history", async (bot) => {
     // Null until the engine has run this turn. A warm Claude process logs each later prompt but dumps once.
     const sent = (text: string) => {
       try {
@@ -1439,16 +1439,16 @@ describe("context compaction e2e", () => {
     rmSync(claudeDumpPath, { force: true });
     const compacted = await turn(`${bot.name}: continue the release`);
     expect(compacted.prompt).toContain("history 120");
-    expect(compacted.prompt).toContain("[Wink asks list - 2 open, 1 stale: no change in 6+ hours");
-    expect(compacted.prompt).toContain("- A1 waiting-for-user stale ");
-    expect(compacted.prompt).toContain(": Review the model picker PR (PR #1348)");
+    expect(compacted.prompt).toContain("[Wink asks list - 2 open, 1 needs a verdict: no ref and no change in 3+ days");
+    expect(compacted.prompt).toContain("- A1 waiting-for-user needs verdict ");
+    expect(compacted.prompt).toContain(": Review the model picker PR\n");
     expect(compacted.prompt).toContain("- A3 building ");
     expect(compacted.prompt).not.toContain("Drop the old skin");
     expect(compacted.system).toContain("Add each ask the user makes to update_task_state asks in the same turn");
     expect(compacted.tools).toContain("agents-proxy");
 
     const resumed = await turn(`${bot.name}: thanks`);
-    expect(resumed.prompt).toContain("- A1 waiting-for-user stale ");
+    expect(resumed.prompt).toContain("- A1 waiting-for-user needs verdict ");
 
     const closed = await botTaskState(bot.botId, bot.botThreadId, { asks: [{ id: "A1", status: "done" }] }, resumed.token);
     expect(closed.status).toBe(200);

@@ -6,12 +6,14 @@ const KEY = "omb-map-split";
 const ROWS = "omb-map-rows";
 const REST = 120;
 const STEP = 24;
-type Box = { from: number; min: number; max: number; below?: HTMLElement; tall?: number };
+type Box = { tree: number; min: number; full: number; free: number; flow?: HTMLElement; tall: number; shrink: number; grow: number };
+type Placed = { tree: number; rows: number };
 
 // rows: the line above the Git rows, which give or take what the tree gains or loses.
+// The other line moves only the Git rows and the code; when the rows can neither grow nor shrink, the move goes to the tree.
 export function MapSplit({ target, rows = false }: { target: RefObject<HTMLElement | null>; rows?: boolean }) {
   const { locale } = useI18n();
-  const drag = useRef<Box & { y: number; to: number; frame: number } | null>(null);
+  const drag = useRef<Box & { y: number; at: Placed; split: string; touched: { tree: boolean; rows: boolean }; frame: number } | null>(null);
   useEffect(() => {
     const saved = Number(localStorage.getItem(KEY));
     if (saved > 0) target.current?.style.setProperty("--map-split", `${saved}%`);
@@ -23,31 +25,47 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
   const bounds = (handle: HTMLElement): Box | null => {
     const top = target.current;
     if (!top) return null;
-    const from = top.getBoundingClientRect().height;
-    const min = Number.parseFloat(getComputedStyle(top).minHeight) || 0;
-    const full = top.scrollHeight + top.offsetHeight - top.clientHeight;
-    if (!rows) {
-      const room = handle.parentElement?.querySelector<HTMLElement>(":scope > .map-code")?.clientHeight ?? 0;
-      return { from, min, max: Math.max(min, Math.min(full, from + room - REST)) };
-    }
-    const below = handle.nextElementSibling;
-    const list = below?.querySelector<HTMLElement>(".map-flow-list");
-    if (!(below instanceof HTMLElement) || !list) return null;
-    // The rows keep one row, and take back only what they hide: never empty space.
-    const row = list.firstElementChild?.getBoundingClientRect().height ?? 0;
-    return { from, below, tall: below.getBoundingClientRect().height, min: Math.max(min, from - list.scrollHeight + list.clientHeight), max: Math.max(min, Math.min(full, from + list.clientHeight - row)) };
+    const near = rows ? handle.nextElementSibling : handle.previousElementSibling;
+    const flow = near instanceof HTMLElement && near.matches(".map-flow-rows") ? near : undefined;
+    const list = flow?.querySelector<HTMLElement>(".map-flow-list");
+    if (flow ? !list : rows) return null;
+    const row = list?.firstElementChild?.getBoundingClientRect().height ?? 0;
+    const room = handle.parentElement?.querySelector<HTMLElement>(":scope > .map-code")?.clientHeight ?? 0;
+    // No code view below: the rows box fills the pane, and the room under its list is give too.
+    const pad = flow && getComputedStyle(flow);
+    const empty = flow && list && pad && !flow.nextElementSibling ? Math.max(0, flow.clientHeight - (Number.parseFloat(pad.paddingTop) || 0) - (Number.parseFloat(pad.paddingBottom) || 0) - list.offsetHeight) : 0;
+    return {
+      tree: top.getBoundingClientRect().height, min: Number.parseFloat(getComputedStyle(top).minHeight) || 0, full: top.scrollHeight + top.offsetHeight - top.clientHeight,
+      // The rows keep one row, take back only what they hide, and never take the code view under REST.
+      free: Math.max(0, room - REST), flow, tall: flow?.getBoundingClientRect().height ?? 0, shrink: list ? Math.max(0, list.clientHeight - row) + empty : 0, grow: list ? list.scrollHeight - list.clientHeight : 0,
+    };
   };
-  const keep = (height: number, box: Box) => {
+  const place = (box: Box, by: number): Placed => {
+    const down = by > 0, size = Math.abs(by), sign = down ? 1 : -1;
+    const give = down === rows ? box.shrink : box.grow;
+    const tree = Math.max(0, down ? box.full - box.tree : box.tree - box.min);
+    const code = down ? box.free : Infinity;
+    if (rows) {
+      const moved = Math.min(size, tree, give > 0 ? give : code);
+      return { tree: box.tree + sign * moved, rows: give > 0 ? box.tall - sign * moved : box.tall };
+    }
+    if (box.shrink || box.grow) return { tree: box.tree, rows: box.tall + sign * Math.min(size, give, code) };
+    return { tree: box.tree + sign * Math.min(size, tree, code), rows: box.tall };
+  };
+  const keep = (box: Box, at: Placed) => {
     const top = target.current;
     const pane = top?.parentElement;
     if (!top || !pane?.clientHeight) return;
-    const share = (height / pane.clientHeight * 100).toFixed(1);
-    top.style.setProperty("--map-split", `${share}%`);
-    localStorage.setItem(KEY, share);
-    if (!box.below || box.tall === undefined) return;
-    const rest = ((box.tall + box.from - height) / pane.clientHeight * 100).toFixed(1);
-    pane.style.setProperty("--map-rows", `${rest}%`);
-    localStorage.setItem(ROWS, rest);
+    const share = (height: number) => (height / pane.clientHeight * 100).toFixed(1);
+    if (at.tree !== box.tree) {
+      top.style.setProperty("--map-split", `${share(at.tree)}%`);
+      localStorage.setItem(KEY, share(at.tree));
+    }
+    // Rows with no code view below fill the free room: their filled height is not a size to remember.
+    if (box.flow?.nextElementSibling && at.rows !== box.tall) {
+      pane.style.setProperty("--map-rows", `${share(at.rows)}%`);
+      localStorage.setItem(ROWS, share(at.rows));
+    }
   };
   // The rows and the code move as layers while dragging: without it every frame repaints them.
   const lift = (handle: HTMLElement, on: boolean) => {
@@ -60,8 +78,10 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
     cancelAnimationFrame(now.frame);
     handle.removeAttribute("data-drag");
     lift(handle, false);
-    now.below?.style.removeProperty("--map-rows");
-    if (now.to !== now.from) keep(now.to, now);
+    // A drag that comes back to its start keeps the tree's share, not the last frame's pixels.
+    target.current?.style.setProperty("--map-split", now.split);
+    now.flow?.style.removeProperty("--map-rows");
+    keep(now, now.at);
   };
 
   return <div role="separator" aria-orientation="horizontal" aria-label={copy[locale][rows ? "rows" : "code"]} tabIndex={0} data-rows={rows || undefined}
@@ -73,16 +93,18 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
       event.currentTarget.setPointerCapture?.(event.pointerId);
       event.currentTarget.setAttribute("data-drag", "");
       lift(event.currentTarget, true);
-      drag.current = { ...box, y: event.clientY, to: box.from, frame: 0 };
+      drag.current = { ...box, y: event.clientY, at: { tree: box.tree, rows: box.tall }, split: target.current?.style.getPropertyValue("--map-split") ?? "", touched: { tree: false, rows: false }, frame: 0 };
     }}
     onPointerMove={event => {
       const now = drag.current;
       if (!now) return;
-      now.to = Math.max(now.min, Math.min(now.max, now.from + event.clientY - now.y));
+      now.at = place(now, event.clientY - now.y);
       now.frame ||= requestAnimationFrame(() => {
         now.frame = 0;
-        target.current?.style.setProperty("--map-split", `${now.to}px`);
-        if (now.tall !== undefined) now.below?.style.setProperty("--map-rows", `${now.tall + now.from - now.to}px`);
+        now.touched.tree ||= now.at.tree !== now.tree;
+        now.touched.rows ||= now.at.rows !== now.tall;
+        if (now.touched.tree) target.current?.style.setProperty("--map-split", `${now.at.tree}px`);
+        if (now.touched.rows) now.flow?.style.setProperty("--map-rows", `${now.at.rows}px`);
       });
     }}
     onPointerUp={event => end(event.currentTarget)}
@@ -93,7 +115,7 @@ export function MapSplit({ target, rows = false }: { target: RefObject<HTMLEleme
       const box = by && bounds(event.currentTarget);
       if (!box) return;
       event.preventDefault();
-      keep(Math.max(box.min, Math.min(box.max, box.from + by)), box);
+      keep(box, place(box, by));
     }}
   />;
 }

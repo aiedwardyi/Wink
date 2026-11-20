@@ -24,6 +24,7 @@ export const ownReply = (post: BoardPost) => post.author_bot_id === BOARD_USER &
 const copiedChat = (post: BoardPost) => post.author_bot_id === BOARD_USER && !ownReply(post);
 
 const LIMITS = { id: 160, title: 200, body: 4000, fix: 4000, ref: 300 } as const;
+export const BOARD_REF_MAX = LIMITS.ref;
 
 const idSchema = z.string().regex(/^p[0-9a-f]{24}$/);
 /** The author as it looked when it posted, so another PC can show a bot it does not have. */
@@ -75,6 +76,8 @@ export function boardWords(text: string): string[] {
   const words = text.toLowerCase().normalize("NFKC").split(/[^\p{L}\p{N}_]+/u).filter((word) => word.length >= 3 && !STOP.has(word) && !/^\d+$/.test(word));
   return [...new Set(words)];
 }
+
+const postWords = (post: BoardPost) => new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
 
 export function projectIdOf(folder: string | undefined | null): string {
   return folder ? basename(folder.replace(/[\\/]+$/, "")).toLowerCase() : "";
@@ -131,10 +134,15 @@ export interface BoardSearch {
   projectId?: string;
   errorSig?: string;
   solvedOnly?: boolean;
-  /** Share of the query's words a post must hold; a matching error_sig always passes. */
+  /** Share of the query's words a post must hold; a matching error_sig passes unless sigRanksOnly. */
   minShare?: number;
+  sigRanksOnly?: boolean;
+  /** Fewest of the query's words a post must hold. */
+  minHits?: number;
   limit?: number;
   withoutRoom?: boolean;
+  /** Only posts written on this room thread's turns. */
+  roomThread?: string;
 }
 
 export interface BoardOptions {
@@ -153,8 +161,19 @@ export function createBoard(options: BoardOptions) {
   let deleted: Set<string> | null = null;
   const gone = () => (deleted ??= new Set(readDeleted(options.dir)));
 
+  // keyed by post id and checked against the text it was built from, so an edit never reads stale words
+  const wordSets = new Map<string, { title: string; body: string; fix: string; words: Set<string> }>();
+  const wordsOf = (post: BoardPost) => {
+    const held = wordSets.get(post.id);
+    if (held && held.title === post.title && held.body === post.body && held.fix === post.fix) return held.words;
+    const words = postWords(post);
+    wordSets.set(post.id, { title: post.title, body: post.body, fix: post.fix, words });
+    return words;
+  };
+
   const drop = (id: string) => {
     view = null;
+    wordSets.delete(id);
     posts().delete(id);
     rmSync(join(options.dir, `${id}.json`), { force: true });
     if (gone().has(id)) return;
@@ -271,19 +290,7 @@ export function createBoard(options: BoardOptions) {
       if (changed) options.changed?.();
     },
     search(input: BoardSearch): BoardPost[] {
-      const words = boardWords(input.query);
-      const minShare = input.minShare ?? 0;
-      const scored = board.list().flatMap((post) => {
-        if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
-        const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);
-        const held = new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
-        const hits = words.filter((word) => held.has(word)).length;
-        const share = words.length ? hits / words.length : 0;
-        if (!sig && (!hits || share < minShare)) return [];
-        return [{ post, score: (sig ? 1 : 0) + share, local: Boolean(input.projectId && post.project_id === input.projectId) }];
-      });
-      scored.sort((a, b) => Number(b.local) - Number(a.local) || b.score - a.score || b.post.updated_at - a.post.updated_at);
-      return scored.slice(0, input.limit ?? 5).map((entry) => entry.post);
+      return searchBoard(board.list(), input, wordsOf);
     },
     /**
      * Drive sync. Each PC writes only its own folder, so two PCs posting at once never
@@ -345,6 +352,23 @@ export function createBoard(options: BoardOptions) {
 }
 
 export type Board = ReturnType<typeof createBoard>;
+
+export function searchBoard(posts: readonly BoardPost[], input: BoardSearch, wordsOf = postWords): BoardPost[] {
+  const words = boardWords(input.query);
+  const minShare = input.minShare ?? 0;
+  const scored = posts.flatMap((post) => {
+    if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
+    if (input.roomThread !== undefined && !post.source_ref.startsWith(`${ROOM_REF}${input.roomThread}:`)) return [];
+    const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);
+    const held = wordsOf(post);
+    const hits = words.filter((word) => held.has(word)).length;
+    const share = words.length ? hits / words.length : 0;
+    if ((!sig || input.sigRanksOnly) && (hits < (input.minHits ?? 1) || share < minShare)) return [];
+    return [{ post, score: (sig ? 1 : 0) + share, local: Boolean(input.projectId && post.project_id === input.projectId) }];
+  });
+  scored.sort((a, b) => Number(b.local) - Number(a.local) || b.score - a.score || b.post.updated_at - a.post.updated_at);
+  return scored.slice(0, input.limit ?? 5).map((entry) => entry.post);
+}
 
 /** What a bot sees of a post: a few hundred characters, never the whole thread. */
 export function boardLine(post: BoardPost, max = 300): string {

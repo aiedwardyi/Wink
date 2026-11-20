@@ -53,7 +53,7 @@ const bot = (id: string, name: string) => ({
 }) as unknown as Bot;
 const atlas = bot("atlas", "Atlas");
 const juno = bot("juno", "Juno");
-const CONFIG: { gemini: { configured: boolean }; liveCall: { voice: string; language: string } } = { gemini: { configured: true }, liveCall: { voice: "Aoede", language: "auto" } };
+const CONFIG: { gemini: { configured: boolean }; liveCall: { voice: string; language: string }; features: { voiceCalls: boolean } } = { gemini: { configured: true }, features: { voiceCalls: true }, liveCall: { voice: "Aoede", language: "auto" } };
 
 const posts: string[] = [];
 const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {

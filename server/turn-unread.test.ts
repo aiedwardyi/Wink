@@ -31,6 +31,9 @@ function rig(target: "bot" | "group") {
     patchBot: (_id: string, patch: Partial<typeof state>) => Object.assign(state, patch),
     patchGroup: (_id: string, patch: Partial<typeof state>) => Object.assign(state, patch),
     patchMessage: (_threadId: string, id: string, patch: Partial<Message>) => Object.assign(messages.find((m) => m.id === id)!, patch),
+    patchRow: (_threadId: string, id: string, patch: Partial<Message>) => Object.assign(messages.find((m) => m.id === id)!, patch),
+    rowMark: () => ({ count: messages.length }),
+    rowsSince: (_threadId: string, mark: { count: number }) => messages.slice(mark.count),
   };
   const fold = find(parsed, (node) => ts.isSwitchStatement(node)
     && node.expression.getText(parsed) === "event.type"
@@ -64,7 +67,7 @@ function rig(target: "bot" | "group") {
     reportServerFailure: () => {}, terminalBridgeAccess: null, INCOMPLETE_LOG_MESSAGE: "internal log failure",
     ...turnReply, store, bot: { id: "bot-1" }, group: { id: "group-1" },
     routineReportGroup: undefined, turnSummary: turnReply.turnSummaries(), limitWaits: { bind: () => {} },
-    turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(),
+    turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(), turnOwnerId: "bot-1", memorySleep: { onTurn() {} },
     threadId: "thread-1", stopScreenPoller: () => {}, activeVpsThreads: new Map(), groupSpeakers: new Map(),
     roomLanes: { thread: () => undefined }, lane: false,
     pushMessage: (message: Omit<Message, "id" | "at">) => messages.push({ id: `message-${messages.length}`, at: 1, ...message }),

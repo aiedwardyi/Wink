@@ -52,8 +52,7 @@ it.each([Response.json({ app: "other" }), Response.json(null), new Response("not
   await vi.waitFor(() => expect(presence(items, local)[0].offline).toBe(true));
 });
 
-it("settles a timed out launch probe in 1500 ms without waiting for Drive", async () => {
-  vi.useFakeTimers();
+function hangingProbe() {
   const request = vi.fn((_url, init) => new Promise<Response>((_done, reject) => {
     init.signal.addEventListener("abort", () => reject(new Error("offline")));
   }));
@@ -62,9 +61,40 @@ it("settles a timed out launch probe in 1500 ms without waiting for Drive", asyn
     setTimeout(() => controller.abort(), ms);
     return controller.signal;
   });
+  return { request, timeout };
+}
+
+it("answers on the first read once the local tailnet name has landed", async () => {
+  const request = vi.fn().mockResolvedValue(Response.json({ app: "openmausbot" }));
+  const now = vi.fn(() => 0);
+  const presence = createDevicePresence(request, now);
+  const items = [pc("home", { current: true }), pc("work", { checking: true })];
+  presence.probe(items, local);
+  await vi.waitFor(() => expect(now).toHaveBeenCalled());
+  expect(presence(items, local)[1]).toMatchObject({ checking: false, offline: false });
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a PC with a fresh record out of Offline when its probe times out", async () => {
+  vi.useFakeTimers();
+  const { request, timeout } = hangingProbe();
   try {
     const presence = createDevicePresence(request);
     const items = [pc("work")];
+    presence(items, local);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(presence(items, local)[0]).toMatchObject({ checking: true, offline: false });
+  } finally {
+    timeout.mockRestore();
+  }
+});
+
+it("settles a timed out probe for a stale PC in 1500 ms", async () => {
+  vi.useFakeTimers();
+  const { request, timeout } = hangingProbe();
+  try {
+    const presence = createDevicePresence(request);
+    const items = [pc("work", { offline: true })];
     expect(presence(items, local)[0].checking).toBe(true);
     await vi.advanceTimersByTimeAsync(1_499);
     expect(presence(items, local)[0].checking).toBe(true);

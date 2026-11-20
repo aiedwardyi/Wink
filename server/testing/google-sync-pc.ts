@@ -158,7 +158,7 @@ function syncProfile(folder: string): void {
   if (!old) publishRooms(roomHost, folder);
   finishRevive(host, marks.revive, (botId) => v2?.rebuild(botId));
   for (const bot of store.bots) if (settings.botMap[bot.id]) syncBotMemory(folder, settings.botMap[bot.id]!, workspaceDir(bot.id), ledger);
-  writeDeviceRecord(folder, { deviceId: settings.deviceId, name: "Test PC", host: "test.example.ts.net", chatSync: 2 }, Date.now());
+  writeDeviceRecord(folder, { deviceId: settings.deviceId, name: "Test PC", host: `${settings.deviceId}.example.ts.net`, chatSync: 2 }, Date.now());
   save();
 }
 

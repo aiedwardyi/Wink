@@ -37,6 +37,7 @@ const refused = (status: number, error: string) => Object.assign(new Error(error
 const DAY = 24 * 60 * 60 * 1000;
 
 const lineOf = (entry: JoinedEntry) => `${entry.author.name}: ${entry.text}`;
+const senderId = (entry: JoinedEntry) => entry.seat ?? entry.author.id;
 
 const shown = (message: Message) =>
   message.role === "bot" && message.kind === "text" && !message.summarized && !message.queued && !message.quick && !message.comm && Boolean(message.text?.trim());
@@ -82,7 +83,7 @@ export class MyRoomBotTurns {
   /** Runs after the door stored this PC's line; never on its send path. */
   sent(roomId: string, entry: JoinedEntry): void {
     const room = joinedRoom(roomId);
-    if (entry.author.kind === "person" && entry.author.id === room?.me.id) this.memberLine(roomId, entry);
+    if (entry.author.kind !== "bot" && senderId(entry) === room?.me.id) this.memberLine(roomId, entry);
   }
 
   /** The host's or a teammate's line wakes this PC's bot it @'s or replies to, like its owner's. */
@@ -102,7 +103,7 @@ export class MyRoomBotTurns {
     const room = joinedRoom(roomId);
     const state = room?.state;
     if (Date.now() - entry.at > DAY) return;
-    if (entry.author.kind !== "bot") return entry.author.id === room?.me.id ? undefined : this.memberLine(roomId, entry);
+    if (entry.author.kind !== "bot") return senderId(entry) === room?.me.id ? undefined : this.memberLine(roomId, entry);
     if (room?.status !== "joined" || !state?.teamBots || this.halted(roomId, entry.seq)) return;
     const hit = handoffTarget(entry, [...state.bots, ...state.teamBots], [state.host, ...state.people.map((person) => person.name)]);
     const own = hit && state.teamBots.some((bot) => bot.id === hit.id && bot.owner === room.me.id);
@@ -221,14 +222,15 @@ export class MyRoomBotTurns {
       }
       const window = since(roomId, row.after, entry.seq);
       const { state } = room;
-      const ownerOf = (owner?: string) => (owner ? state.people.find((person) => person.id === owner)?.name : state.host);
+      const ownerOf = (owner?: string) => (!owner || state.hostSeats?.includes(owner) ? state.host : state.people.find((person) => person.id === owner)?.name);
       const others = [
         ...state.bots.map((other) => [other.name, state.host] as const),
         ...(state.teamBots ?? []).filter((other) => other.id !== bot.id).map((other) => [other.name, ownerOf(other.owner)] as const),
       ].flatMap(([name, owner]) => (owner ? [`${JSON.stringify(name)} (${JSON.stringify(owner)})`] : []));
       const me = JSON.stringify(room.me.name);
       const works = joinedWorks(roomId);
-      const readOnly = entry.author.kind === "bot" || (entry.author.id !== room.me.id && !works.has(entry.author.id));
+      const sender = senderId(entry);
+      const readOnly = entry.author.kind === "bot" || (sender !== room.me.id && !works.has(sender));
       if (readOnly && !this.deps.readOnlyTurns(local.id, threadId)) {
         const posted = await this.deps.client.botSend(roomId, bot.id, `${roomName} can't take requests from you yet. ${room.me.name} has to turn on "Can make bots work" for you.`, entry.id);
         setMyRoomBotTurn(roomId, bot.id, threadId, posted.ok ? posted.value.seq : entry.seq);

@@ -1271,12 +1271,12 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     const folder = temp();
     const a = pc(folder, "a");
     const b = pc(folder, "b");
-    const row = await a.call<Message>("append", { text: "first" });
+    const row = await a.call<Message>("append", { role: "bot", text: "first", patch: { engine: "grokAgent" } });
     await a.call("flush");
     await b.call("cursor");
     await b.call("pull");
     const first = await b.snapshot();
-    expect(first.rows).toMatchObject([{ id: row.id, text: "first" }]);
+    expect(first.rows).toMatchObject([{ id: row.id, text: "first", engine: "grokAgent" }]);
     expect(first.events).toContainEqual(expect.objectContaining({ type: "message", imported: true, importing: true }));
     expect(first.tasks.find((task) => task.threadId === "thread")?.resumeCursors).toEqual({});
     expect(first.outbox).toBe(0);
@@ -1285,7 +1285,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await a.call("flush");
     await b.call("pull");
     const second = await b.snapshot();
-    expect(second.rows[0].text).toBe("edited");
+    expect(second.rows[0]).toMatchObject({ text: "edited", engine: "grokAgent" });
     expect(second.events).toContainEqual(expect.objectContaining({ type: "message.patch", importing: true }));
     expect(second.tasks.find((task) => task.threadId === "thread")?.title).toBe("Renamed");
     expect(second.outbox).toBe(0);

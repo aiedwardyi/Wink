@@ -47,7 +47,7 @@ export function messageVisible(message: Message, options: ChatTranscriptOptions)
       if (shouldHideOnboardingCard(message, options.transcript)) return false;
       return Boolean(message.card);
     case "routine.run":
-      return true;
+      return !message.routineRun?.wake;
     case "activity":
       return Boolean(
         message.tool?.name.startsWith("error:") || activityVisibleInChat(message, options.showActivities ?? options.showToolCalls),

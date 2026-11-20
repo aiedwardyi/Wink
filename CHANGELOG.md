@@ -2,6 +2,111 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.289] - 2026-11-20
+
+### Added
+- Your bots tidy their memory while idle and keep every line they take out, so you can copy it back.
+- A short code beside the Devices QR opens this PC from app.getwink.dev on another device.
+- The sign-in page takes that code in six boxes and opens your PC on the last one.
+- Team rooms show on every PC you use.
+
+### Fixed
+- Esc on the Forum goes back to your chat, and switching filters no longer shifts the list.
+- The short code in Settings > Devices stays readable on a phone.
+- A reinstalled PC shows once in Devices, and offline PCs can be removed.
+- Swiping between chats on a phone is smooth again on scene themes.
+- Turning on Devices opens the dashboard only once this PC is on it.
+- A profile with no name shows a gray person icon instead of "?".
+- An order the sidekick promised to pass on reaches your bot, and an answered message gets no second reply.
+- A check that ran on another PC shows its result, not a Watch that can't play here.
+- Bots keep to the plan, building asks and the asks list, with no extra list files.
+- The Timeline runs oldest to newest and opens at your newest pick.
+- Unattended turns can't delete files after a folder change Wink can't follow.
+- The Memory page shows your bot's memory at once while the latest loads.
+- Archived bots stay archived on your other PCs.
+- Opening a PC from the browser shows one calm Opening screen.
+- Activity keeps the right engine for replies synced from your other PCs.
+- Forum avatars stay plain, with no working ring.
+- After Google sign-in, a PC joins sync by itself when your other PCs already sync.
+
+## [1.0.288] - 2026-11-19
+
+### Fixed
+- An expired Claude login now offers Sign In again, instead of "couldn't finish that".
+- Sign In and Retry sit side by side on the sign-in card.
+- Each sign-in row keeps its engine name, with one button on the right.
+- The Google sign-in finish page matches the sign-in page.
+- Turning on Devices asks first, then signs in.
+- The Forum slides in and out from the left.
+- What's New clips play smoother.
+- The Timeline demo can be moved and zoomed like a real Timeline.
+- Your first Timeline pick shows with no error.
+- The + menu stays inside the window when the sidebar is on the right.
+- The side pane button stays gray when open.
+- Your first reply comes faster.
+- A message you send while your bot works gets one reply, not two.
+- When you give an order while your bot works, the sidekick leaves it to your bot.
+
+## [1.0.287] - 2026-11-19
+
+### Added
+- Decisions you make in a chat land on the Timeline as picks, with a short demo until your first one.
+- Your bots check the Forum for a fix before they ask you, and share the fixes that worked.
+- A new bot offers to bring in your memory from another AI, in 3 steps.
+
+### Changed
+- The engine connect screen reads like a sign-in page.
+- The terminal top bar lines up with the chat header.
+- Voice calls are for team PCs only.
+
+### Fixed
+- Claude stays signed in after an update.
+- Sign In opens your browser for Claude on Windows, and Gemini signs in and out from Connections.
+- The Media tab shows every picture again.
+- Map shows its Git rows faster, all at once.
+- The PC menu shows your other PCs right away.
+- Map code lines that did not change show at full color.
+- The pane buttons stay in one spot.
+- The terminal dock slides smoothly.
+- A bot's own wake reminders stay out of your chat.
+- Reply shows in the menu of a fast reply.
+- Bots see every open question and keep the list tidy.
+- Live doc Watch reads the document once, then rests.
+- The Import Memory prompt box shows the start, with no scrollbar.
+- The sign-in page reaches older PCs, and you pick your account once.
+
+## [1.0.286] - 2026-11-19
+
+### Added
+- Gemini 4 Neon is in the model picker, with its Model Index scores.
+
+### Fixed
+- The Import Memory prompt shows in full, with no inner scroll.
+
+## [1.0.285] - 2026-11-19
+
+### Changed
+- The Forum reads like threads: open a post to see its replies, deleting asks first, and Retry reloads it if it fails.
+- Your next message goes out right after a reply, with no pause.
+- Typing stays smooth while other bots are replying.
+- The chat box uses your theme's colors by default.
+
+## [1.0.284] - 2026-11-19
+
+### Changed
+- The Media tab opens fast, even in chats with many pictures.
+- Leaving a chat while it loads never jumps you back to it.
+
+### Fixed
+- The X on a folded question really closes it.
+- Bot pictures in team rooms reach every member.
+- The Import Memory prompt box shows less and scrolls the rest.
+- What's New clips play smoothly.
+- Engine logos in Connections show their brand colors.
+- Model Index shows each lab's logo on chart dots, chips and ranked rows.
+- The side pane tab highlight stays centered.
+- Map divider lines move only their neighbours.
+
 ## [1.0.283] - 2026-11-18
 
 ### Changed

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, isCsrfRejection, museCheckModel, readAntigravityQuota, readAntigravityUsageCommand, readGrokBillingRpc, readMuseUsage, usageRefreshResponse } from "./usage-refresh.ts";
+import type { RateLimitWindow } from "./contracts.ts";
 import { antigravityRateLimitWindows } from "./drivers/rate-limits.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import type { JsonValue } from "./schema.ts";
@@ -16,7 +17,6 @@ const reset = "2026-10-01T12:00:00Z";
 const FAKE_MSP_CLI = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-msp-cli.ts");
 const FAKE_ACP_CLI = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-acp-cli.ts");
 const fixtures = {
-  claudeAgent: { five_hour: { utilization: 42, resets_at: reset }, seven_day: { utilization: 19, resets_at: reset } },
   codex: { rateLimits: { primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: Date.parse(reset) / 1000 }, secondary: { usedPercent: 19, windowDurationMins: 10080, resetsAt: Date.parse(reset) / 1000 } } },
   grokAgent: { config: { creditUsagePercent: 42, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: reset } } },
   antigravityAgent: {
@@ -32,13 +32,15 @@ const fixtures = {
     },
   },
 };
+const claudeWindows: RateLimitWindow[] = [
+  { id: "five_hour", usedPercent: 42, resetsAt: Date.parse(reset), windowMinutes: 300 },
+  { id: "seven_day", usedPercent: 19, resetsAt: Date.parse(reset), windowMinutes: 10_080 },
+];
 const real = {
-  claude: z.object({ reply: z.json() }).parse(JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/oauth-usage.json", import.meta.url), "utf8"))).reply,
   codex: z.object({ reply: z.json() }).parse(JSON.parse(readFileSync(new URL("../test/fixtures/recorded/codex/rate-limits.json", import.meta.url), "utf8"))).reply,
   grok: z.object({ reply: z.json(), settled: z.json() }).parse(JSON.parse(readFileSync(new URL("../test/fixtures/recorded/grok/billing-renewal.json", import.meta.url), "utf8"))),
   grokUsed: z.object({ reply: z.json() }).parse(JSON.parse(readFileSync(new URL("../test/fixtures/recorded/grok/billing-used.json", import.meta.url), "utf8"))).reply,
 };
-const credentials = JSON.stringify({ claudeAiOauth: { accessToken: "access-secret" }, "auth.x.ai::test": { key: "access-secret", user_id: "user" }, tokens: { access_token: "access-secret", refresh_token: "refresh-secret" } });
 const unreadableCodexBuckets: Record<string, JsonValue>[] = [{}, { primary: { usedPercent: "unknown" } }];
 
 it("shares the usage-read availability policy with wait admission", () => {
@@ -51,14 +53,6 @@ it("shares the usage-read availability policy with wait admission", () => {
 });
 
 describe("usage refresh route result", () => {
-  it("preserves model-specific Claude windows beside the session and weekly limits", async () => {
-    const refresh = createUsageRefresh({ platform: "linux", read: async () => credentials,
-      request: async () => Response.json({ ...fixtures.claudeAgent, seven_day_opus: { utilization: 100, resets_at: reset }, extra_usage: { is_enabled: false } }) });
-    const result = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(result.error).toBeUndefined();
-    expect(result.report?.windows).toContainEqual({ id: "seven_day_opus", usedPercent: 100, resetsAt: Date.parse(reset), windowMinutes: 10080 });
-  });
-
   it("preserves every Codex bucket in a read instead of using only the compatibility bucket", async () => {
     const refresh = createUsageRefresh({ rpc: async () => ({ ...fixtures.codex,
       rateLimitsByLimitId: { spark: { primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Date.parse(reset) / 1000 } } } }) });
@@ -95,25 +89,24 @@ describe("usage refresh route result", () => {
     expect(rpc).toHaveBeenCalledTimes(2);
   });
 
-  it("shares a Claude credential read that outlives its cooldown", async () => {
+  it("shares a Claude usage read that outlives its cooldown", async () => {
     let now = 1_000;
-    let answer: (response: Response) => void = () => {};
-    const request = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; }));
-    const refresh = createUsageRefresh({ platform: "linux", now: () => now, read: async () => credentials, request });
+    let answer: (windows: RateLimitWindow[]) => void = () => {};
+    const claude = vi.fn(() => new Promise<RateLimitWindow[]>((resolve) => { answer = resolve; }));
+    const refresh = createUsageRefresh({ platform: "linux", now: () => now, claude });
     const first = refresh("claudeAgent", { instanceId: "claude" });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(claude).toHaveBeenCalledTimes(1));
     now += 31_000;
     const second = refresh("claudeAgent", { instanceId: "claude" });
     await Promise.resolve();
-    expect(request).toHaveBeenCalledTimes(1);
-    answer(Response.json(fixtures.claudeAgent));
+    expect(claude).toHaveBeenCalledTimes(1);
+    answer(claudeWindows);
     expect((await second).report).toEqual((await first).report);
   });
 
   describe("a user-tapped refresh", () => {
     const used = (result: { report?: { windows: { usedPercent: number }[] } }) => result.report?.windows.map((window) => window.usedPercent);
     const codexAt = (percent: number) => ({ rateLimits: { primary: { usedPercent: percent, windowDurationMins: 300, resetsAt: Date.parse(reset) / 1000 } } });
-    const claudeAt = (percent: number) => Response.json({ five_hour: { utilization: percent, resets_at: reset }, seven_day: { utilization: percent, resets_at: reset } });
 
     it("asks the provider again inside the cooldown while automatic checks still share one read", async () => {
       const answers = [38, 12];
@@ -136,24 +129,6 @@ describe("usage refresh route result", () => {
       expect(rpc).toHaveBeenCalledTimes(1);
       finish(codexAt(12));
       expect(await tap).toBe(await auto);
-    });
-
-    it("reads a Claude credential again inside the cooldown", async () => {
-      const answers = [38, 12];
-      const request = vi.fn(async () => claudeAt(answers.shift() ?? 0));
-      const refresh = createUsageRefresh({ platform: "linux", now: () => 1_000, read: async () => credentials, request });
-      expect(used(await refresh("claudeAgent", { instanceId: "claude" }))).toEqual([38, 38]);
-      expect(used(await refresh("claudeAgent", { instanceId: "claude", fresh: true }))).toEqual([12, 12]);
-      expect(request).toHaveBeenCalledTimes(2);
-    });
-
-    it("still waits out a Claude 429", async () => {
-      const request = vi.fn(async () => new Response("", { status: 429, headers: { "retry-after": "120" } }));
-      const refresh = createUsageRefresh({ platform: "linux", now: () => 1_000, read: async () => credentials, request });
-      await refresh("claudeAgent", { instanceId: "claude" });
-      const tap = await refresh("claudeAgent", { instanceId: "claude", fresh: true });
-      expect(tap.status).toBe("retained");
-      expect(request).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -183,31 +158,10 @@ describe("usage refresh route result", () => {
     }
   });
 
-  it("reads Claude windows past a seven_day key that is not a window and logs the key once", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const refresh = createUsageRefresh({ platform: "linux", throttleMs: 0, read: async () => credentials, request: async () => Response.json(real.claude) });
-      for (const result of [await refresh("claudeAgent", { instanceId: "claude" }), await refresh("claudeAgent", { instanceId: "claude" })]) {
-        expect(result.error).toBeUndefined();
-        expect(result.report?.windows).toEqual([
-          { id: "five_hour", usedPercent: 30, resetsAt: Date.parse("2026-10-29T15:09:59.696703+00:00"), windowMinutes: 300 },
-          { id: "seven_day", usedPercent: 81, resetsAt: Date.parse("2026-11-02T07:59:59.696721+00:00"), windowMinutes: 10_080 },
-        ]);
-      }
-      expect(warn.mock.calls.filter(([line]) => String(line).includes("seven_day_breakdown"))).toHaveLength(1);
-    } finally {
-      warn.mockRestore();
-    }
-  });
   it.each(["claudeAgent", "codex"] as const)("normalizes %s without leaking credentials", async (driver) => {
     const refresh = createUsageRefresh({
       platform: "linux",
-      read: async () => credentials,
-      request: async (_url, init) => {
-        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-secret");
-        expect(init?.redirect).toBe("error");
-        return Response.json({ ...fixtures[driver], access_token: "access-secret", refresh_token: "refresh-secret", authorization: "Bearer access-secret" });
-      },
+      claude: async () => claudeWindows,
       rpc: async () => fixtures.codex,
     });
     const result = await refresh(driver, { instanceId: driver });
@@ -219,18 +173,8 @@ describe("usage refresh route result", () => {
   });
 
   it("normalizes grokAgent from ACP billing without reading auth.json", async () => {
-    let reads = 0;
-    let http = 0;
     const refresh = createUsageRefresh({
       platform: "linux",
-      read: async () => {
-        reads++;
-        return credentials;
-      },
-      request: async () => {
-        http++;
-        return Response.json({ access_token: "access-secret" });
-      },
       billing: async () => fixtures.grokAgent,
     });
     const result = await refresh("grokAgent", { instanceId: "grok" });
@@ -238,8 +182,6 @@ describe("usage refresh route result", () => {
     expect(result.report?.windows).toEqual([
       { id: "seven_day", usedPercent: 42, resetsAt: Date.parse(reset), windowMinutes: 10_080 },
     ]);
-    expect(reads).toBe(0);
-    expect(http).toBe(0);
     expect(JSON.stringify(result)).not.toContain("access-secret");
   });
 
@@ -307,109 +249,51 @@ describe("usage refresh route result", () => {
     }
   });
 
-  it("keeps two credential stores isolated within the throttle window", async () => {
-    let calls = 0;
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      now: () => 1_000,
-      read: async (path) => JSON.stringify({ claudeAiOauth: { accessToken: path.includes("account-a") ? "token-a" : "token-b" } }),
-      request: async (_url, init) => {
-        calls++;
-        const utilization = new Headers(init?.headers).get("authorization") === "Bearer token-a" ? 12 : 67;
-        return Response.json({ five_hour: { utilization, resets_at: reset }, seven_day: null });
-      },
-    });
-    const account = (instanceId: string) => ({ instanceId, environment: { CLAUDE_CONFIG_DIR: instanceId, CLAUDE_CODE_OAUTH_TOKEN: "" } });
+  it("keeps two Claude logins isolated within the throttle window", async () => {
+    const claude = vi.fn(async (_cli: string, env: NodeJS.ProcessEnv) =>
+      [{ id: "five_hour", usedPercent: env.CLAUDE_CONFIG_DIR === "account-a" ? 12 : 67, resetsAt: Date.parse(reset), windowMinutes: 300 }]);
+    const refresh = createUsageRefresh({ platform: "linux", now: () => 1_000, claude });
+    const account = (instanceId: string) => ({ instanceId, environment: { CLAUDE_CONFIG_DIR: instanceId } });
     const first = await refresh("claudeAgent", account("account-a"));
     const second = await refresh("claudeAgent", account("account-b"));
     expect(first.report?.windows[0].usedPercent).toBe(12);
     expect(second.report?.windows[0].usedPercent).toBe(67);
     expect(await refresh("claudeAgent", account("account-a"))).toEqual(first);
     expect(await refresh("claudeAgent", account("account-b"))).toEqual(second);
-    expect(calls).toBe(2);
+    expect(claude).toHaveBeenCalledTimes(2);
   });
 
-  it("coalesces concurrent reads and throttles failed attempts for 30 seconds", async () => {
+  it("coalesces concurrent Claude reads and keeps the last values quietly when the CLI can't report", async () => {
     let now = 1_000;
-    let calls = 0;
-    let status = 200;
-    const refresh = createUsageRefresh({ platform: "linux", now: () => now, read: async () => credentials, request: async () => {
-      calls++;
-      return Response.json(fixtures.claudeAgent, { status });
-    } });
+    const claude = vi.fn(async () => claudeWindows);
+    const refresh = createUsageRefresh({ platform: "linux", now: () => now, random: () => 0, claude });
     const [first, second] = await Promise.all([refresh("claudeAgent", { instanceId: "claude" }), refresh("claudeAgent", { instanceId: "claude" })]);
-    expect(calls).toBe(1);
-    expect(second).toEqual(first);
-    now += 29_999;
+    expect(claude).toHaveBeenCalledTimes(1);
+    expect(second.report).toEqual(first.report);
+    now += 299_999;
     await refresh("claudeAgent", { instanceId: "claude" });
-    expect(calls).toBe(1);
+    expect(claude).toHaveBeenCalledTimes(1);
     now++;
-    status = 401;
+    claude.mockRejectedValueOnce(new Error("old CLI"));
     const failed = await refresh("claudeAgent", { instanceId: "claude" }, first.report);
-    expect(calls).toBe(2);
-    expect(failed.report).toEqual(first.report);
-    expect(failed.error).toBe("Sign in again in Claude");
+    expect(claude).toHaveBeenCalledTimes(2);
+    expect(failed).toMatchObject({ report: first.report, status: "no_observation" });
+    expect(failed.error).toBeUndefined();
     await refresh("claudeAgent", { instanceId: "claude" });
-    expect(calls).toBe(2);
+    expect(claude).toHaveBeenCalledTimes(2);
   });
 
-  it("reads Claude's weekly window alone when the body has no five_hour key or a null one", async () => {
-    for (const body of [{ seven_day: { utilization: 19, resets_at: reset } }, { five_hour: null, seven_day: { utilization: 19, resets_at: reset } }]) {
-      const refresh = createUsageRefresh({ platform: "linux", read: async () => credentials, request: async () => Response.json(body) });
-      const result = await refresh("claudeAgent", { instanceId: "claude" });
-      expect(result.error).toBeUndefined();
-      expect(result.report?.windows).toEqual([{ id: "seven_day", usedPercent: 19, resetsAt: Date.parse(reset), windowMinutes: 10080 }]);
-    }
-  });
-
-  it("keeps Claude's last values quietly on a 429 and backs off from 5 to 30 minutes", async () => {
-    let now = 1_000;
-    let calls = 0;
-    let retryAfter = "0";
-    const refresh = createUsageRefresh({ platform: "linux", now: () => now, read: async () => credentials, request: async () => {
-      calls++;
-      return Response.json({ error: "Rate limited. Please try again later." }, { status: 429, headers: { "retry-after": retryAfter } });
-    } });
-    const previous = { windows: [{ id: "seven_day", usedPercent: 19, resetsAt: null }], observedAt: new Date(0).toISOString() };
-    const minute = 60_000;
-    for (const [index, wait] of [5, 10, 20, 30, 30].entries()) {
-      const result = await refresh("claudeAgent", { instanceId: "claude" }, previous);
-      expect(result.error).toBeUndefined();
-      expect(result.report).toEqual(previous);
-      expect(result.retryAt).toBe(now + wait * minute);
-      now += wait * minute - 1;
-      await refresh("claudeAgent", { instanceId: "claude" }, previous);
-      expect(calls).toBe(index + 1);
-      now++;
-    }
-    retryAfter = "90";
-    expect((await refresh("claudeAgent", { instanceId: "claude" }, previous)).retryAt).toBe(now + 90_000);
-  });
-
-  it("reads one Claude credential once for every instance on it", async () => {
-    let calls = 0;
-    const refresh = createUsageRefresh({ platform: "linux", now: () => 1_000, read: async () => credentials, request: async () => {
-      calls++;
-      return Response.json(fixtures.claudeAgent);
-    } });
+  it("reads one Claude login once for every instance on it", async () => {
+    const claude = vi.fn(async () => claudeWindows);
+    const refresh = createUsageRefresh({ platform: "linux", now: () => 1_000, claude });
     const results = await Promise.all(["claude", "claude-opus", "claude-sonnet"].map((instanceId) => refresh("claudeAgent", { instanceId })));
     expect(await refresh("claudeAgent", { instanceId: "claude-haiku" })).toEqual(results[0]);
-    expect(calls).toBe(1);
+    expect(claude).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes antigravityAgent from the local quota server without touching credentials", async () => {
-    let reads = 0;
-    let http = 0;
     const refresh = createUsageRefresh({
       platform: "linux",
-      read: async () => {
-        reads++;
-        return credentials;
-      },
-      request: async () => {
-        http++;
-        return Response.json({ access_token: "access-secret" });
-      },
       antigravity: async () => fixtures.antigravityAgent,
     });
     const result = await refresh("antigravityAgent", { instanceId: "antigravity" });
@@ -417,8 +301,6 @@ describe("usage refresh route result", () => {
     expect(result.report?.windows.map((window) => window.id)).toEqual(["five_hour", "seven_day"]);
     expect(result.report?.windows.map((window) => window.usedPercent)).toEqual([42, 19]);
     expect(result.report?.windows.map((window) => window.windowMinutes)).toEqual([300, 10_080]);
-    expect(reads).toBe(0);
-    expect(http).toBe(0);
     expect(JSON.stringify(result)).not.toContain("access-secret");
   });
 
@@ -443,18 +325,8 @@ describe("usage refresh route result", () => {
   });
 
   it("normalizes museAgent from the injected quota source without touching credentials", async () => {
-    let reads = 0;
-    let http = 0;
     const refresh = createUsageRefresh({
       platform: "linux",
-      read: async () => {
-        reads++;
-        return credentials;
-      },
-      request: async () => {
-        http++;
-        return Response.json({ access_token: "access-secret" });
-      },
       muse: async () => fixtures.museAgent,
     });
     const result = await refresh("museAgent", { instanceId: "muse" });
@@ -465,8 +337,6 @@ describe("usage refresh route result", () => {
     expect(result.report?.windows.map((window) => window.windowMinutes)).toEqual([300, 10_080]);
     expect(result.report?.windows.map((window) => window.resetsAt)).toEqual([1_790_000_000_000, 1_790_172_800_000]);
     expect(result.report?.observedAt).toBe(new Date(1_790_000_000_000).toISOString());
-    expect(reads).toBe(0);
-    expect(http).toBe(0);
     expect(JSON.stringify(result)).not.toContain("access-secret");
   });
 
@@ -749,19 +619,7 @@ describe("usage refresh route result", () => {
   });
 
   it("leaves Gemini API off the refresh path without inventing numbers", async () => {
-    let reads = 0;
-    let http = 0;
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => {
-        reads++;
-        return credentials;
-      },
-      request: async () => {
-        http++;
-        return Response.json({});
-      },
-    });
+    const refresh = createUsageRefresh({ platform: "linux" });
     const report = { windows: [{ id: "five_hour", usedPercent: 12, resetsAt: null }], observedAt: reset };
     const kept = await refresh("geminiAgent", { instanceId: "gemini" }, report);
     expect(kept.report).toEqual(report);
@@ -771,8 +629,6 @@ describe("usage refresh route result", () => {
     expect(fresh.report).toBeUndefined();
     expect(fresh.error).toBe("Usage refresh is not supported");
     expect(fresh.retryAt).toBe(0);
-    expect(reads).toBe(0);
-    expect(http).toBe(0);
     expect(JSON.stringify(kept)).not.toContain("access-secret");
   });
 
@@ -789,307 +645,11 @@ describe("usage refresh route result", () => {
     expect(result.error).toBe(kind === "signin" ? "Sign in again in Grok" : "Could not refresh Grok limits");
   });
 
-  it("refreshes an expired Claude access token instead of demanding sign-in", async () => {
-    const now = 1_000_000;
-    const stored = { claudeAiOauth: { accessToken: "stale-access", refreshToken: "stored-refresh", expiresAt: now - 1, scopes: ["user:inference"] }, sibling: { keep: true } };
-    let writes: Array<{ path: string; content: string }> = [];
-    const seen: string[] = [];
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      now: () => now,
-      read: async () => JSON.stringify(stored),
-      write: async (path, content) => {
-        writes.push({ path, content });
-      },
-      request: async (url, init) => {
-        const target = String(url);
-        seen.push(target);
-        if (target.includes("/oauth/token")) {
-          const body = JSON.parse(String(init?.body));
-          expect(body).toMatchObject({ grant_type: "refresh_token", refresh_token: "stored-refresh", client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e" });
-          return Response.json({ access_token: "fresh-access", refresh_token: "rotated-refresh", expires_in: 28_800 });
-        }
-        const token = new Headers(init?.headers).get("authorization");
-        if (token === "Bearer stale-access") return Response.json({ error: "expired" }, { status: 401 });
-        expect(token).toBe("Bearer fresh-access");
-        return Response.json(fixtures.claudeAgent);
-      },
-    });
-    const result = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(result.error).toBeUndefined();
-    expect(result.report?.windows.map((window) => window.usedPercent)).toEqual([42, 19]);
-    expect(seen[0]).toContain("/api/oauth/usage");
-    // the minted tokens persist in the CLI's shape, sibling keys untouched
-    expect(writes).toHaveLength(1);
-    expect(writes[0].path).toMatch(/\.credentials\.json$/);
-    const persisted = JSON.parse(writes[0].content);
-    expect(persisted.claudeAiOauth).toMatchObject({ accessToken: "fresh-access", refreshToken: "rotated-refresh", expiresAt: now + 28_800_000, scopes: ["user:inference"] });
-    expect(persisted.sibling).toEqual({ keep: true });
-    for (const secret of ["stale-access", "stored-refresh", "fresh-access", "rotated-refresh"]) expect(JSON.stringify(result)).not.toContain(secret);
-  });
-
-  it("treats a dead Claude refresh grant as signed out", async () => {
-    let usageCalls = 0;
-    let writes = 0;
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "dead-refresh" } }),
-      write: async () => {
-        writes++;
-      },
-      request: async (url) => {
-        if (String(url).includes("/oauth/token")) return Response.json({ error: "invalid_grant" }, { status: 400 });
-        usageCalls++;
-        return Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const result = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(result.error).toBe("Sign in again in Claude");
-    expect(usageCalls).toBe(1);
-    expect(writes).toBe(0);
-  });
-
-  it("treats a Claude token-endpoint outage as transient", async () => {
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "stored-refresh" } }),
-      request: async (url) => {
-        if (String(url).includes("/oauth/token")) throw new Error("network down");
-        return Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const report = { windows: [{ id: "five_hour", usedPercent: 12, resetsAt: null }], observedAt: reset };
-    const result = await refresh("claudeAgent", { instanceId: "claude" }, report);
-    expect(result.report).toEqual(report);
-    expect(result.error).toBe("Could not refresh Claude limits");
-  });
-
-  it("fails the token over to the fallback host when the primary path is gone", async () => {
-    const seen: string[] = [];
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "stored-refresh" } }),
-      request: async (url, init) => {
-        const target = String(url);
-        seen.push(target);
-        if (target.includes("/oauth/token")) {
-          if (target.startsWith("https://console.anthropic.com")) return Response.json({}, { status: 404 });
-          return Response.json({ access_token: "fresh-access", expires_in: 28_800 });
-        }
-        return new Headers(init?.headers).get("authorization") === "Bearer fresh-access"
-          ? Response.json(fixtures.claudeAgent)
-          : Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const result = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(result.error).toBeUndefined();
-    expect(seen.filter((target) => target.includes("/oauth/token"))).toEqual([
-      "https://console.anthropic.com/v1/oauth/token",
-      "https://platform.claude.com/v1/oauth/token",
-    ]);
-  });
-
-  it("still serves the refresh when persisting the minted token fails", async () => {
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "stored-refresh" } }),
-      write: async () => {
-        throw new Error("read-only fs");
-      },
-      request: async (url, init) => {
-        if (String(url).includes("/oauth/token")) return Response.json({ access_token: "fresh-access" });
-        return new Headers(init?.headers).get("authorization") === "Bearer fresh-access"
-          ? Response.json(fixtures.claudeAgent)
-          : Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const result = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(result.error).toBeUndefined();
-    expect(result.report?.windows.map((window) => window.usedPercent)).toEqual([42, 19]);
-  });
-
-  it("never replays a grant after an ambiguous transport failure", async () => {
-    const seen: string[] = [];
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "stored-refresh" } }),
-      request: async (url) => {
-        const target = String(url);
-        if (target.includes("/oauth/token")) {
-          seen.push(target);
-          if (target.startsWith("https://console.anthropic.com")) throw new Error("connection reset");
-          return Response.json({ access_token: "fresh-access" });
-        }
-        return Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const report = { windows: [{ id: "five_hour", usedPercent: 12, resetsAt: null }], observedAt: reset };
-    const result = await refresh("claudeAgent", { instanceId: "claude" }, report);
-    // The first endpoint may already have rotated the grant: retrying it on
-    // the fallback could come back invalid_grant and read as signed out.
-    expect(seen).toEqual(["https://console.anthropic.com/v1/oauth/token"]);
-    expect(result.report).toEqual(report);
-    expect(result.error).toBe("Could not refresh Claude limits");
-  });
-
-  it("treats a failed credential reread as transient, not signed out", async () => {
-    let reads = 0;
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => {
-        reads++;
-        if (reads > 1) throw new Error("file busy");
-        return JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "stored-refresh" } });
-      },
-      request: async () => Response.json({ error: "expired" }, { status: 401 }),
-    });
-    const report = { windows: [{ id: "five_hour", usedPercent: 12, resetsAt: null }], observedAt: reset };
-    const result = await refresh("claudeAgent", { instanceId: "claude" }, report);
-    expect(result.report).toEqual(report);
-    expect(result.error).toBe("Could not refresh Claude limits");
-  });
-
-  it("sends a 403 straight to sign-in without burning a mint round-trip", async () => {
-    let tokenCalls = 0;
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => JSON.stringify({ claudeAiOauth: { accessToken: "scoped-access", refreshToken: "stored-refresh" } }),
-      request: async (url) => {
-        // 403 is insufficient scope: a minted token carries the same scopes.
-        if (String(url).includes("/oauth/token")) tokenCalls++;
-        return Response.json({ error: "insufficient_scope" }, { status: 403 });
-      },
-    });
-    const result = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(result.error).toBe("Sign in again in Claude");
-    expect(tokenCalls).toBe(0);
-  });
-
-  it("treats a non-grant OAuth 400 as transient, not signed out", async () => {
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "stored-refresh" } }),
-      request: async (url) => {
-        if (String(url).includes("/oauth/token")) return Response.json({ error: "invalid_request" }, { status: 400 });
-        return Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const report = { windows: [{ id: "five_hour", usedPercent: 12, resetsAt: null }], observedAt: reset };
-    const result = await refresh("claudeAgent", { instanceId: "claude" }, report);
-    expect(result.report).toEqual(report);
-    expect(result.error).toBe("Could not refresh Claude limits");
-  });
-
-  it("treats an unreadable OAuth error body as transient, not signed out", async () => {
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      read: async () => JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "stored-refresh" } }),
-      request: async (url) => {
-        if (String(url).includes("/oauth/token")) return new Response("not json", { status: 400 });
-        return Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const result = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(result.report).toBeUndefined();
-    expect(result.error).toBe("Could not refresh Claude limits");
-  });
-
-  it("mints once when two instances share one credential file", async () => {
-    let files = JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "shared-refresh" } });
-    let tokenCalls = 0;
-    let writes = 0;
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      now: () => 1_000_000,
-      read: async () => files,
-      write: async (_path, content) => {
-        writes++;
-        files = content;
-      },
-      request: async (url, init) => {
-        const target = String(url);
-        if (target.includes("/oauth/token")) {
-          tokenCalls++;
-          return Response.json({ access_token: "fresh-access", refresh_token: "rotated-refresh", expires_in: 28_800 });
-        }
-        return new Headers(init?.headers).get("authorization") === "Bearer fresh-access"
-          ? Response.json(fixtures.claudeAgent)
-          : Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const options = (instanceId: string) => ({ instanceId, environment: { CLAUDE_CONFIG_DIR: "/shared/claude" } });
-    const [first, second] = await Promise.all([refresh("claudeAgent", options("a")), refresh("claudeAgent", options("b"))]);
-    expect(first.error).toBeUndefined();
-    expect(second.error).toBeUndefined();
-    // One mint serves both: the loser re-reads the rotated file inside the
-    // lock instead of redeeming the consumed grant a second time.
-    expect(tokenCalls).toBe(1);
-    expect(writes).toBe(1);
-  });
-
-  it("bridges a failed persist from memory instead of redeeming the dead grant", async () => {
-    let now = 1_000_000;
-    const file = JSON.stringify({ claudeAiOauth: { accessToken: "stale-access", refreshToken: "original-refresh" } });
-    let failWrites = true;
-    const written: string[] = [];
-    let tokenCalls = 0;
-    const grants: unknown[] = [];
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      now: () => now,
-      read: async () => file,
-      write: async (_path, content) => {
-        if (failWrites) throw new Error("read-only fs");
-        written.push(content);
-      },
-      request: async (url, init) => {
-        const target = String(url);
-        if (target.includes("/oauth/token")) {
-          tokenCalls++;
-          grants.push(JSON.parse(String(init?.body)).refresh_token);
-          return Response.json({ access_token: "memory-access", refresh_token: "memory-refresh", expires_in: 28_800 });
-        }
-        return new Headers(init?.headers).get("authorization") === "Bearer memory-access"
-          ? Response.json(fixtures.claudeAgent)
-          : Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const first = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(first.error).toBeUndefined();
-    expect(tokenCalls).toBe(1);
-    // Next cycle the file still holds the consumed grant, but no second
-    // mint happens: the remembered rotation serves usage, then heals the file.
-    now += 31_000;
-    failWrites = false;
-    const second = await refresh("claudeAgent", { instanceId: "claude" });
-    expect(second.error).toBeUndefined();
-    expect(second.report?.windows.map((window) => window.usedPercent)).toEqual([42, 19]);
-    expect(tokenCalls).toBe(1);
-    expect(grants).toEqual(["original-refresh"]);
-    expect(written).toHaveLength(1);
-    expect(JSON.parse(written[0]).claudeAiOauth).toMatchObject({ accessToken: "memory-access", refreshToken: "memory-refresh" });
-  });
-
-  it("keeps the env-token path fail-closed with no refresh attempt", async () => {
-    let tokenCalls = 0;
-    const refresh = createUsageRefresh({
-      platform: "linux",
-      request: async (url) => {
-        if (String(url).includes("/oauth/token")) tokenCalls++;
-        return Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const result = await refresh("claudeAgent", { instanceId: "claude", environment: { CLAUDE_CODE_OAUTH_TOKEN: "env-token" } });
-    expect(result.error).toBe("Sign in again in Claude");
-    expect(tokenCalls).toBe(0);
-  });
-
   it("rejects malformed usage and skips unsupported engines and macOS Keychain access", async () => {
     let calls = 0;
     const refresh = createUsageRefresh({
       platform: "darwin",
-      read: async () => credentials,
-      request: async () => { calls++; return Response.json({}); },
+      claude: async () => { calls++; return []; },
       billing: async () => ({}),
       antigravity: async () => ({}),
     });

@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import type { Window as HappyWindow } from "happy-dom";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +90,26 @@ const claudeBot = {
   modelSelection: { instanceId: "claude", model: "claude-3-5-sonnet", mode: "automatic" },
   messages: [],
 } as Bot;
+
+beforeEach(({ onTestFinished }) => {
+  const fetchSettings = (window as typeof window & Pick<HappyWindow, "happyDOM">).happyDOM.settings.fetch;
+  const previous = fetchSettings.interceptor;
+  const unexpected: string[] = [];
+  fetchSettings.interceptor = {
+    beforeAsyncRequest: async ({ request, window }) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === `/api/bots/${claudeBot.id}/memory`) {
+        return window.Response.json({ text: "", truncated: false, topics: [] });
+      }
+      unexpected.push(`${request.method} ${path}`);
+      throw new Error("Mock this request in the SettingsPanel test.");
+    },
+  };
+  onTestFinished(() => {
+    fetchSettings.interceptor = previous;
+    expect(unexpected, "Mock these requests in the SettingsPanel test.").toEqual([]);
+  });
+});
 
 const memoryRow = (host: HTMLElement) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.includes("Memory File"))!;

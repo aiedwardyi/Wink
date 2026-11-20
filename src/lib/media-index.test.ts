@@ -1,12 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { rmSync } from "node:fs";
+import type { ServerResponse } from "node:http";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
 
+import { DATA_DIR } from "../../server/config.ts";
+import { Store } from "../../server/store.ts";
+import { createThreadRoutes } from "../../server/thread-routes.ts";
+
 import { mediaKey, messageRefs } from "./chat-media";
-import { decodeMedia, mediaMonths, withLive, type MediaWire } from "./media-index";
+import { decodeMedia, loadMedia, mediaMonths, withLive, type MediaWire } from "./media-index";
 import { mediaList } from "./media-viewer";
 import { linkedFileSrc } from "./show-pane";
 import type { MediaFile } from "./show-media";
+
+const mock = vi.hoisted(() => ({ request: vi.fn() }));
+vi.mock("@/lib/api-request", () => ({ request: mock.request }));
 
 const AT = 1_790_000_000;
 const file = (key: string, at = 0): MediaFile => ({ key, name: key, at, src: key, image: true });
@@ -47,6 +56,26 @@ describe("media index", () => {
       return pictures.length;
     });
     expect(found).toEqual([1, 1, 4, 0]);
+  });
+
+  it("lists a long chat's oldest picture in the first answer", async () => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[old.png](C:\\w\\old.png)" });
+    for (let n = 0; n < 1_000; n++) store.appendMessage(threadId, { role: "user", kind: "text", text: `note ${n}` });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[new.png](C:\\w\\new.png)" });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    mock.request.mockImplementation(async (path: string) => {
+      let body = "";
+      const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.media(res, ["", threadId] as RegExpMatchArray, new URL(path, "http://localhost"));
+      return JSON.parse(body);
+    });
+
+    const { files } = await loadMedia(threadId);
+
+    expect(files.map((each) => each.name)).toEqual(["new.png", "old.png"]);
   });
 
   it("keeps the same list while the open chat gains nothing new", () => {

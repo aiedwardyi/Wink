@@ -8,6 +8,7 @@ import type { InstanceInfo } from "@/state/store";
 import { Onboarding } from "./Onboarding";
 import { NoEngines } from "./NoEngines";
 import { EngineConnect } from "./EngineConnect";
+import { PRIMARY_BUTTON } from "@/lib/button-style";
 
 let instances: InstanceInfo[];
 let host: HTMLDivElement;
@@ -40,10 +41,16 @@ async function click(label: string, scope: ParentNode = host) {
   await act(async () => button!.click());
 }
 
+async function press(row: Element) {
+  await act(async () => row.querySelector("button")!.click());
+}
+
 async function connect() {
   await render();
   await click("Connect an Engine");
 }
+
+const nameRow = (row: Element) => row.querySelector("svg")!.closest("div")!;
 
 async function advance(ms: number) {
   await act(async () => vi.advanceTimersByTimeAsync(ms));
@@ -84,13 +91,13 @@ describe("first engine connection", () => {
     instances = [main, base, ...instances.slice(1)];
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const row = host.querySelector('[data-engine-connect="claude"]')!;
-    const label = locale === "en" ? "Sign in to Claude" : "Claude에 로그인";
+    const label = locale === "en" ? "ClaudeSign In" : "Claude로그인";
     expect(row.querySelector("button")?.textContent).toBe(label);
     expect(row.hasAttribute("data-onboarding-ready")).toBe(false);
     expect(host.querySelectorAll("[data-engine-connect]")).toHaveLength(5);
     await click(locale === "en" ? "Show Commands" : "명령어 보기");
     const setup = host.querySelector("[data-engine-connect-commands]")!.firstElementChild!;
-    expect(setup.textContent).toContain(label);
+    expect(setup.textContent).toContain(locale === "en" ? "Sign in to Claude" : "Claude에 로그인");
     expect(setup.querySelector("code")?.textContent).toBe("claude login");
     expect(setup.textContent).not.toContain(locale === "en" ? "Install Claude" : "Claude 설치");
     await click(label, row);
@@ -110,7 +117,7 @@ describe("first engine connection", () => {
     instances = [base, main, ...instances.slice(1)];
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const row = () => host.querySelector('[data-engine-connect="claude"]')!;
-    const label = locale === "en" ? "Sign in to Claude" : "Claude에 로그인";
+    const label = locale === "en" ? "ClaudeSign In" : "Claude로그인";
     expect(host.querySelectorAll("[data-engine-connect]")).toHaveLength(5);
     await click(label, row());
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`/api/instances/${id}/sign-in`, expect.objectContaining({ method: "POST" }));
@@ -131,7 +138,7 @@ describe("first engine connection", () => {
       pickerSnapshot: { state: authenticated ? "unavailable" as const : "available" as const, authenticated: !authenticated } };
     await render(createElement(EngineConnect, { instances: [base], onRefresh: refreshInstances }));
     const row = host.querySelector('[data-engine-connect="claude"]')!;
-    expect(row.querySelector("button")?.textContent).toBe(authenticated ? "Sign in to Claude" : "Claude is ready");
+    expect(row.querySelector("button")?.textContent).toBe(authenticated ? "ClaudeSign In" : "Claude is ready");
     expect(row.hasAttribute("data-onboarding-ready")).toBe(!authenticated);
     await click("Show Commands");
     if (authenticated) expect(host.querySelector("code")?.textContent).toBe("claude login");
@@ -142,9 +149,9 @@ describe("first engine connection", () => {
     const base = { ...instances[0]!, pickerSnapshot: { state: "available" as const, authenticated: true } };
     await render(createElement(EngineConnect, { instances: [base], onRefresh: refreshInstances }));
     const row = host.querySelector('[data-engine-connect="claude"]')!;
-    expect(row.querySelector("button")?.textContent).toBe("Install Claude");
+    expect(row.querySelector("button")?.textContent).toBe("ClaudeInstall");
     expect(row.hasAttribute("data-onboarding-ready")).toBe(false);
-    await click("Install Claude", row);
+    await click("ClaudeInstall", row);
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
   });
 
@@ -181,7 +188,7 @@ describe("first engine connection", () => {
     await connect();
     await advance(15000);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await click("Install Claude");
+    await click("ClaudeInstall");
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
     expect(host.textContent).toContain("Open Again");
     expect(host.textContent).toContain("Finish in the window that opened.");
@@ -190,12 +197,12 @@ describe("first engine connection", () => {
     instances = instances.map((row) => row.instanceId === "claude" ? { ...row, snapshot: { state: "available", authenticated: false } } : row);
     await advance(1);
     expect(fetchMock).toHaveBeenLastCalledWith("/api/instances?refresh=1");
-    expect(host.textContent).toContain("Sign in to Claude");
+    expect(host.textContent).toContain("ClaudeSign In");
     expect(host.textContent).not.toContain("Open Again");
     const count = fetchMock.mock.calls.length;
     await advance(15000);
     expect(fetchMock).toHaveBeenCalledTimes(count);
-    await click("Sign in to Claude");
+    await click("ClaudeSign In");
     expect(fetchMock).toHaveBeenLastCalledWith("/api/instances/claude/sign-in", expect.objectContaining({ method: "POST", body: '{"device":false}' }));
     expect(window.ogb!.openEngineSignIn).not.toHaveBeenCalled();
     instances = instances.map((row) => row.instanceId === "claude" ? { ...row, snapshot: { state: "available", authenticated: true } } : row);
@@ -207,19 +214,19 @@ describe("first engine connection", () => {
   it.each(["running", "opened"] as const)("leaves the button free to open the window again after a %s launch", async (result) => {
     Object.assign(window.ogb!, { openEngineInstall: vi.fn(async () => result) });
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     const button = () => host.querySelector<HTMLButtonElement>('[data-engine-connect="claude"] button')!;
-    expect(button().textContent).toBe("Open Again");
+    expect(button().textContent).toBe("ClaudeOpen Again");
     expect(button().disabled).toBe(false);
     expect(host.textContent).not.toContain("Installing Claude…");
-    await click("Open Again");
+    await click("ClaudeOpen Again");
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledTimes(2);
     expect(button().disabled).toBe(false);
   });
 
   it("times out at ten minutes, retries with a fresh deadline and still checks on focus", async () => {
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     await advance(599999);
     expect(host.textContent).toContain("Finish in the window that opened.");
     await advance(1);
@@ -229,7 +236,7 @@ describe("first engine connection", () => {
     expect(fetchMock).toHaveBeenCalledTimes(count);
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(fetchMock).toHaveBeenCalledTimes(count + 1);
-    await click("Try Again");
+    await click("ClaudeTry Again");
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledTimes(2);
     await advance(5000);
     expect(fetchMock).toHaveBeenCalledTimes(count + 2);
@@ -238,7 +245,7 @@ describe("first engine connection", () => {
 
   it("keeps polling after a failed recheck, without losing the commands escape", async () => {
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     fetchMock.mockRejectedValueOnce(new Error("offline"));
     await advance(5000);
     expect(host.textContent).toContain("Finish in the window that opened.");
@@ -252,7 +259,7 @@ describe("first engine connection", () => {
     await connect();
     const row = host.querySelector(`[data-engine-connect="${id}"]`)!;
     expect(row).not.toBeNull();
-    await click("Install", row);
+    await press(row);
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledExactlyOnceWith(id);
     expect(row.textContent).toContain("Finish in the window that opened.");
     instances = instances.map((instance) => instance.instanceId === id ? { ...instance, snapshot: { state: "available", authenticated: false } } : instance);
@@ -262,9 +269,9 @@ describe("first engine connection", () => {
 
   it("keeps independent deadlines and stops probing when the last install completes", async () => {
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     await advance(10000);
-    await click("Install", host.querySelector('[data-engine-connect="codex"]')!);
+    await press(host.querySelector('[data-engine-connect="codex"]')!);
     instances = instances.map((row) => row.instanceId === "claude" ? { ...row, snapshot: { state: "available", authenticated: true } } : row);
     await advance(5000);
     expect(host.textContent).toContain("Claude is ready");
@@ -278,9 +285,9 @@ describe("first engine connection", () => {
 
   it("keeps the five-second cadence when another engine starts between probes", async () => {
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     await advance(2500);
-    await click("Install", host.querySelector('[data-engine-connect="codex"]')!);
+    await press(host.querySelector('[data-engine-connect="codex"]')!);
     await advance(2500);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     await advance(5000);
@@ -289,7 +296,7 @@ describe("first engine connection", () => {
 
   it("stops polling and focus rechecks when the screen unmounts", async () => {
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     await act(async () => root!.unmount());
     root = undefined;
     const count = fetchMock.mock.calls.length;
@@ -302,7 +309,7 @@ describe("first engine connection", () => {
     window.ogb!.openEngineInstall = vi.fn(async () => { throw new Error("No handler registered"); });
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     expect(host.textContent).toContain("Didn't finish?");
     await click("Show Commands");
     expect(host.querySelector("code")?.textContent).toBe("install-claude");
@@ -327,16 +334,16 @@ describe("first engine connection", () => {
     await click("Continue");
     expect(host.textContent).toContain("Wink found the engines on this computer.");
     expect(host.querySelector("[data-engine-connect-panel]")).not.toBeNull();
-    expect(host.textContent).toContain("Sign in to Claude");
+    expect(host.textContent).toContain("ClaudeSign In");
     expect(host.querySelector("code")).toBeNull();
     const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
-    expect(next.disabled).toBe(true);
+    expect(next.disabled).toBe(false);
     expect(next.className).not.toMatch(/flex-1|w-full/);
+    expect(next.parentElement!.textContent).toBe("BackContinue");
     expect(host.textContent).not.toContain("Optional setup");
     instances[0]!.snapshot = { state: "available", authenticated: true };
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(host.textContent).toContain("Claude is ready");
-    expect(next.disabled).toBe(false);
     await click("Continue");
     expect(host.textContent).toContain("You're all set");
     expect(host.textContent).toContain("Open Wink");
@@ -357,11 +364,11 @@ describe("first engine connection", () => {
 
   it("shares the Claude-first desktop NoEngines screen and focus recheck", async () => {
     await render(createElement(NoEngines));
-    expect(host.textContent).toContain("Install Claude");
+    expect(host.textContent).toContain("ClaudeInstall");
     expect(host.querySelector("code")).toBeNull();
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(refreshInstances).toHaveBeenCalledExactlyOnceWith("passive");
-    await click("Install Claude");
+    await click("ClaudeInstall");
     await advance(5000);
     expect(refreshInstances).toHaveBeenCalledTimes(2);
     expect(refreshInstances).toHaveBeenLastCalledWith("passive");
@@ -370,7 +377,7 @@ describe("first engine connection", () => {
 
   it("keeps an onboarding poll response that takes longer than five seconds, including a focus check", async () => {
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     fetchMock.mockImplementation(async () => {
       await new Promise((resolve) => setTimeout(resolve, 12000));
       return Response.json({ instances: instances.map((row) => row.instanceId === "claude"
@@ -388,7 +395,7 @@ describe("first engine connection", () => {
   it("shows paste guidance and commands for a blank terminal, polling until the ten-minute deadline", async () => {
     Object.assign(window.ogb!, { platform: "linux", openEngineInstall: vi.fn(async () => "opened") });
     await connect();
-    await click("Install Claude");
+    await click("ClaudeInstall");
     const row = host.querySelector('[data-engine-connect="claude"]')!;
     expect(row.textContent).toContain("Paste the command in Terminal and press Enter.");
     expect(row.textContent).toContain("Open Again");
@@ -406,7 +413,8 @@ describe("first engine connection", () => {
     const configured = { ...instance, instanceId: `${instance.instanceId} work/profile`,
       snapshot: { state: "available" as const, authenticated: false } };
     await render(createElement(EngineConnect, { instances: [configured], onRefresh: refreshInstances }));
-    await click(`Sign in to ${configured.displayName}`);
+    expect(host.querySelector("[data-sign-in]")?.textContent).toContain(kind === "codex" ? "Sign in to Codex" : "ClaudeSign In");
+    await press(host.querySelector("[data-engine-connect]")!);
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`/api/instances/${encodeURIComponent(configured.instanceId)}/sign-in`,
       expect.objectContaining({ method: "POST", body: '{"device":false}' }));
     expect(window.ogb!.openEngineSignIn).not.toHaveBeenCalled();
@@ -418,9 +426,9 @@ describe("first engine connection", () => {
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const row = host.querySelector(`[data-engine-connect="${id}"]`)!;
     const button = row.querySelector<HTMLButtonElement>("button")!;
-    expect(button.textContent).toBe(`${instance.displayName} is ready`);
+    expect(button.textContent?.startsWith(`${instance.displayName} is ready`)).toBe(true);
     expect(button.disabled).toBe(true);
-    expect(button.className).not.toContain("w-full");
+    expect(button.className).not.toContain(PRIMARY_BUTTON);
     expect(row.className).not.toContain("bg-card");
     expect(row.querySelector("p")).toBeNull();
     expect(host.textContent).not.toContain("A window opens and installs Claude.");
@@ -431,9 +439,79 @@ describe("first engine connection", () => {
     instances[0]!.snapshot = { state: "available", authenticated: false };
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const row = host.querySelector('[data-engine-connect="claude"]')!;
-    expect(row.className).toContain("bg-card");
+    expect(row.querySelector("button")!.textContent).toBe(locale === "en" ? "ClaudeSign In" : "Claude로그인");
     expect(row.textContent).toContain(locale === "en" ? "Claude can answer once you're signed in." : "로그인하면 Claude이(가) 답할 수 있어요.");
     expect(row.textContent).not.toContain(locale === "en" ? "A window opens and installs Claude." : "창이 열리고 Claude를 설치합니다.");
+  });
+
+  it.each(["en", "ko"] as const)("shows Claude as its name with one action and no download arrow in %s", async (locale) => {
+    persistPreference(locale);
+    instances[0]!.snapshot = { state: "available", authenticated: false };
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const button = host.querySelector('[data-engine-connect="claude"] button')!;
+    expect(button.textContent).toBe(locale === "en" ? "ClaudeSign In" : "Claude로그인");
+    expect(button.querySelector(".lucide-download")).toBeNull();
+    instances[0]!.snapshot = { state: "unavailable" };
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    expect(host.querySelector('[data-engine-connect="claude"] button')!.textContent).toBe(locale === "en" ? "ClaudeInstall" : "Claude설치");
+  });
+
+  it.each(["en", "ko"] as const)("keeps each engine's name on one row with Cancel while signing in and once connected in %s", async (locale) => {
+    persistPreference(locale);
+    for (const instance of instances.slice(0, 2)) instance.snapshot = { state: "available", authenticated: false };
+    let signedIn = false;
+    fetchMock.mockImplementation(async (url: string) => Response.json(url === "/api/instances"
+      ? { instances: instances.map((row) => row.instanceId === "claude" && signedIn ? { ...row, snapshot: { state: "available", authenticated: true } } : { ...row, loginState: "pending", loginCapture: { url: "https://auth.example/sign-in" } }) }
+      : { url: "https://auth.example/sign-in" }));
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const claude = host.querySelector('[data-engine-connect="claude"]')!;
+    const codex = host.querySelector('[data-engine-connect="codex"]')!;
+    await press(claude);
+    await press(codex);
+    const cancel = locale === "en" ? "Cancel" : "취소";
+    const openAgain = locale === "en" ? "Open Again" : "다시 열기";
+    for (const [row, name] of [[claude, "Claude"], [codex, "Codex"]] as const) {
+      expect(row.querySelector("[data-sign-in]")).toBeNull();
+      expect(row.textContent).toBe(`${name}${openAgain}${cancel}`);
+      expect(nameRow(row).textContent).toBe(`${name}${openAgain}${cancel}`);
+      expect(nameRow(row).querySelector("a")?.textContent).toBe(openAgain);
+    }
+    signedIn = true;
+    await advance(2000);
+    expect(nameRow(claude).textContent).toBe(`Claude${locale === "en" ? "Connected" : "연결됨"}`);
+    expect(nameRow(codex).textContent).toBe(`Codex${openAgain}${cancel}`);
+  });
+
+  it("keeps the browser code form under the signing-in row, not inside it", async () => {
+    instances[0]!.snapshot = { state: "available", authenticated: false };
+    fetchMock.mockImplementation(async (url: string) => Response.json(url === "/api/instances" ? { instances } : { url: "https://auth.example/sign-in", inputGeneration: 1 }));
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const claude = host.querySelector('[data-engine-connect="claude"]')!;
+    await press(claude);
+    expect(nameRow(claude).textContent).toBe("ClaudeOpen AgainCancel");
+    expect(claude.querySelector("form")!.parentElement).toBe(nameRow(claude).parentElement);
+  });
+
+  it.each(["en", "ko"] as const)("names the computer-only rows on a phone in %s", async (locale) => {
+    persistPreference(locale);
+    Object.assign(window, { ogb: undefined });
+    vi.mocked(window.matchMedia).mockReturnValue({ matches: true } as MediaQueryList);
+    for (const id of ["claude", "antigravity"]) instances.find((row) => row.instanceId === id)!.snapshot = { state: "available", authenticated: false };
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const computer = locale === "en" ? "Sign in on computer" : "컴퓨터에서 로그인";
+    for (const [id, name] of [["claude", "Claude"], ["antigravity", "Gemini (Antigravity)"]]) {
+      expect(nameRow(host.querySelector(`[data-engine-connect="${id}"]`)!).textContent).toBe(`${name}${computer}`);
+    }
+  });
+
+  it("keeps Show Commands as its own small link, out of the Back and Continue row", async () => {
+    instances[0]!.snapshot = { state: "available", authenticated: false };
+    await render();
+    await click("Continue");
+    const commands = [...host.querySelectorAll("button")].find((button) => button.textContent === "Show Commands")!;
+    const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    expect(commands.closest("div")!.contains(next)).toBe(false);
+    expect(next.closest("[data-engine-connect-panel] > div:last-child")!.textContent).toContain("Back");
   });
 
   it("resets the connect session on Back after an engine becomes available", async () => {
@@ -454,6 +532,21 @@ describe("first engine connection", () => {
     expect(row.textContent).not.toContain("Gemini (Antigravity)");
   });
 
+  it("lays NoEngines out like a sign-in page: Wink logo, Claude first, every engine as the same outlined row", async () => {
+    await render(createElement(NoEngines));
+    const main = host.querySelector("main")!;
+    expect(main.querySelector('svg[aria-label="Wink"]')).not.toBeNull();
+    const buttons = [...main.querySelectorAll<HTMLButtonElement>("[data-engine-connect] button")];
+    expect(buttons.some((button) => button.className.includes(PRIMARY_BUTTON))).toBe(false);
+    for (const [index, name] of ["ClaudeInstall", "Install Codex", "Install Gemini (Antigravity)", "Install Grok", "Install Meta Muse"].entries()) {
+      const button = buttons[index]!;
+      expect(button.textContent).toContain(name);
+      expect(button.className).toContain("w-full");
+      expect(button.className).toContain("border");
+      expect(button.querySelector("svg")).not.toBeNull();
+    }
+  });
+
   it.each(["en", "ko"] as const)("shows only the phone copy in %s, with no commands or polling", async (locale) => {
     persistPreference(locale);
     Object.assign(window, { ogb: undefined });
@@ -464,6 +557,7 @@ describe("first engine connection", () => {
       : "봇은 엔진으로 작동합니다. PC의 Wink에서 엔진을 설치하세요. 대부분 Claude로 시작합니다.");
     expect(host.querySelector("code")).toBeNull();
     expect(host.querySelector("button")).toBeNull();
+    expect(host.querySelector('svg[aria-label="Wink"]')).not.toBeNull();
     await advance(600000);
     expect(refreshInstances).not.toHaveBeenCalled();
   });

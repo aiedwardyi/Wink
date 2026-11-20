@@ -2038,6 +2038,7 @@ const pushGoogleSession = createGoogleSessionPush({
 const googleAccount = createGoogleAccountController({
   client: GOOGLE_CLIENT,
   openExternal: (url) => shell.openExternal(url),
+  getLocale: uiLocale,
   saveSession: async (session, idToken) => {
     if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error("The operating-system credential store is unavailable");
     await updateSecureCredentialDocument((credentials) => ({ ...credentials, googleAccount: session }));
@@ -2050,9 +2051,18 @@ const googleAccount = createGoogleAccountController({
     });
     await pushGoogleSession(null);
   },
+  // The server saves it before it answers the turn-on, so it is current by finish.
+  relayBase: () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), "config.json"), "utf8")).phoneRelay?.base ?? null;
+    } catch {
+      return null;
+    }
+  },
   log: slog,
 });
-ipcMain.handle("google-account:sign-in", () => googleAccount.signIn());
+ipcMain.handle("google-account:sign-in", (_event, options) => googleAccount.signIn({ hold: options?.hold }));
+ipcMain.handle("google-account:finish", (_event, base) => googleAccount.finish(base));
 ipcMain.handle("google-account:cancel", () => googleAccount.cancel());
 ipcMain.handle("google-account:sign-out", () => googleAccount.signOut());
 

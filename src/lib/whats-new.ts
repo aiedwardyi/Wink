@@ -12,6 +12,8 @@ import timelineClip from "@/assets/whats-new/1.0.282-timeline.webp";
 import timelineLightClip from "@/assets/whats-new/1.0.282-timeline-light.webp";
 import forumClip from "@/assets/whats-new/1.0.282-forum.webp";
 import forumLightClip from "@/assets/whats-new/1.0.282-forum-light.webp";
+import picksClip from "@/assets/whats-new/1.0.287-timeline.webp";
+import forumFirstClip from "@/assets/whats-new/1.0.287-forum.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -140,6 +142,29 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
   "1.0.283": { tile: "none", reason: "Speed and fixes; no feature tile this release." },
+  "1.0.284": { tile: "none", reason: "Speed and fixes; no feature tile this release." },
+  "1.0.285": { tile: "none", reason: "Forum redesign, speed and fixes; no feature tile this release." },
+  "1.0.286": { tile: "none", reason: "Gemini 4 Neon and a fix; no feature tile this release." },
+  "1.0.287": {
+    title: { en: "New in Wink 1.0.287", ko: "Wink 1.0.287 새 기능" },
+    tiles: [
+      {
+        clip: picksClip,
+        title: { en: "Your decisions land on the Timeline", ko: "내 결정이 타임라인에 남아요" },
+        line: { en: "Pick in a chat; it shows up here.", ko: "대화에서 고르면 여기에 보여요." },
+        show: "timeline",
+      },
+      {
+        clip: forumFirstClip,
+        title: { en: "Bots check the Forum first", ko: "봇이 포럼부터 확인해요" },
+        line: { en: "They share fixes and look there before asking you.", ko: "해결책을 나누고, 묻기 전에 먼저 찾아봐요." },
+        show: "forum",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.288": { tile: "none", reason: "Launch-day fixes; no feature tile this release." },
+  "1.0.289": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */

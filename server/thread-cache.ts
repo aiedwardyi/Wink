@@ -9,11 +9,17 @@ const KEEP_NEWEST = 2;
 /** A row's share of the budget, in the units readThread counts. */
 export const rowChars = (message: Message): number => JSON.stringify(message).length;
 
-type Entry<T> = { state: T; chars: number };
+export interface ThreadState {
+  readonly messages: readonly Message[];
+  activeLeafId: string | null;
+  path?: { leafId: string | null; rows: Message[] };
+}
+
+type Entry = { state: ThreadState; chars: number };
 
 /** Rows change only through push/put/reset here, so every write is weighed. */
-export class ThreadCache<T extends { readonly messages: readonly Message[] }> {
-  private entries = new Map<string, Entry<T>>();
+export class ThreadCache {
+  private entries = new Map<string, Entry>();
   private chars: number;
   /** Threads a running turn writes to; never evicted. */
   private busy: () => ReadonlySet<string>;
@@ -24,7 +30,7 @@ export class ThreadCache<T extends { readonly messages: readonly Message[] }> {
   }
 
   /** A use: the thread becomes the newest. */
-  get(threadId: string): T | undefined {
+  get(threadId: string): ThreadState | undefined {
     const entry = this.entries.get(threadId);
     if (!entry) return undefined;
     this.entries.delete(threadId);
@@ -33,7 +39,7 @@ export class ThreadCache<T extends { readonly messages: readonly Message[] }> {
   }
 
   /** A look that is not a use. */
-  peek(threadId: string): T | undefined {
+  peek(threadId: string): ThreadState | undefined {
     return this.entries.get(threadId)?.state;
   }
 
@@ -46,14 +52,14 @@ export class ThreadCache<T extends { readonly messages: readonly Message[] }> {
   }
 
   /** A loaded thread, as the newest; `chars` is its stored size. */
-  set(threadId: string, state: T, chars: number): void {
+  set(threadId: string, state: ThreadState, chars: number): void {
     this.entries.delete(threadId);
     this.entries.set(threadId, { state, chars });
     this.trim();
   }
 
   /** A warmed thread, kept only in spare room and as the least recent, so warming never pushes out a chat in use. */
-  offer(threadId: string, state: T, chars: number): boolean {
+  offer(threadId: string, state: ThreadState, chars: number): boolean {
     if (this.entries.has(threadId) || this.total() + chars > this.chars) return false;
     this.entries = new Map([[threadId, { state, chars }], ...this.entries]);
     return true;
@@ -92,7 +98,8 @@ export class ThreadCache<T extends { readonly messages: readonly Message[] }> {
     this.trim();
   }
 
-  private rows(entry: Entry<T>): Message[] {
+  private rows(entry: Entry): Message[] {
+    entry.state.path = undefined;
     // SAFETY: cached arrays are plain arrays; readonly only keeps writers outside the cache from skipping the weighing.
     return entry.state.messages as Message[];
   }

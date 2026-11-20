@@ -14,6 +14,7 @@ const SITES = {
   // Headless Claude: Code Mode only runs in the interactive terminal.
   "server/drivers/claude.ts": { launches: 2 },
   "server/drivers/claude-fork.ts": { launches: 1 },
+  "server/drivers/antigravity-auth-cli.ts": { launches: 1 },
   // Control requests only, never a model turn.
   "server/claude-usage-probe.ts": { launches: 1 },
   "companion/src/listener.ts": { launches: 1 },
@@ -30,7 +31,7 @@ const SITES = {
   "electron/worker-host-client.mjs": { launches: 1 },
   "electron/worker-host-entry.mjs": { launches: 1 },
   "electron/worker-host-runtime.mjs": { launches: 2 },
-  "server/device-sync.ts": { launches: 1 },
+  "server/device-sync.ts": { launches: 3 },
   "server/drivers/acp/core.ts": { launches: 2 },
   "server/drivers/acp/muse.ts": { launches: 1 },
   "server/drivers/antigravity.ts": { launches: 3 },

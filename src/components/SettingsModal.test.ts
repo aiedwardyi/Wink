@@ -250,12 +250,12 @@ describe("SettingsModal friends chrome", () => {
     }
   });
 
-  it("picks the chat box ring from Off, Rainbow and Theme colors on Themes, off by default", () => {
+  it("picks the chat box ring from Off, Rainbow and Theme colors on Themes, theme by default", () => {
     expect(markup("general")).not.toContain('aria-label="Chat Box"');
     const checked = () => [...markup("themes").matchAll(/<button type="button" role="radio" aria-checked="true"[^>]*>([^<]+)</g)].map((m) => m[1]);
     const group = markup("themes").match(/<div role="radiogroup" aria-label="Chat Box"[^>]*>(.*?)<\/div>/)?.[1] ?? "";
     expect([...group.matchAll(/role="radio"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Off", "Rainbow", "Theme Colors"]);
-    expect(checked()).toContain("Off");
+    expect(checked()).toContain("Theme Colors");
     saveRainbowBox("rainbow");
     expect(checked()).toContain("Rainbow");
     saveRainbowBox("theme");

@@ -79,18 +79,16 @@ describe("account launch boundary", () => {
   });
 
   it.each(["keep-going", "limit waits", "spawn-usage", "HTTP"])("returns before every token path for %s", async () => {
-    const read = vi.fn(async () => { throw new Error("credential read"); });
-    const write = vi.fn(async () => {});
-    const request = vi.fn<typeof fetch>(async () => { throw new Error("token HTTP"); });
+    const request = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("token HTTP"));
     const claude = vi.fn(async () => { throw new Error("old CLI"); });
-    const refresh = createUsageRefresh({ read, write, request, claude });
+    const refresh = createUsageRefresh({ claude });
     const options = { instanceId: account.id, account, environment: { CLAUDE_CODE_OAUTH_TOKEN: "fake-env-token", CLAUDE_CONFIG_DIR: account.home } };
-    const result = await refresh("claudeAgent", options);
-    expect(read).not.toHaveBeenCalled();
-    expect(write).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
-    expect(claude).toHaveBeenCalledOnce();
-    expect(result.status).toBe("no_observation");
+    try {
+      const result = await refresh("claudeAgent", options);
+      expect(request).not.toHaveBeenCalled();
+      expect(claude).toHaveBeenCalledOnce();
+      expect(result.status).toBe("no_observation");
+    } finally { request.mockRestore(); }
   });
 
   it("advertises the CLI usage read for Claude accounts on every platform", () => {

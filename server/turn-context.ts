@@ -530,9 +530,9 @@ export interface TaskRecordBlockOptions {
   latestUserText?: string;
   /** A request no completion settled; it takes the recovery shape too. */
   unsettledRequest?: string;
-  /** Clock stale asks are judged by. */
+  /** Clock parked asks and verdicts are judged by. */
   now?: number;
-  /** A status-style turn lists every open ask, not the oldest few. */
+  /** A status turn: the asks list says to build any summary from it. */
   allAsks?: boolean;
 }
 

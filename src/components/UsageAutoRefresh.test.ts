@@ -52,6 +52,7 @@ import { SettingsModal } from "./SettingsModal";
 import { UsageQuickView } from "./UsageQuickView";
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+const freshReading = () => reading(new Date(Date.now() - 10_000).toISOString());
 const reading = (observedAt: string, usedPercent = 90) => ({
   observedAt,
   windows: [{ id: "five_hour", usedPercent, resetsAt: Date.now() + 3_600_000 }],
@@ -80,7 +81,7 @@ describe("Usage auto refresh", () => {
     mockApi.mockClear();
     mockState.instances = [
       engine("claude", "claudeAgent", "Claude", { rateLimits: reading(minutesAgo(6)) }),
-      engine("codex", "codex", "Codex", { rateLimits: reading(minutesAgo(2)) }),
+      engine("codex", "codex", "Codex", { rateLimits: freshReading() }),
       engine("grok", "grokAgent", "Grok"),
       engine("muse", "museAgent", "Meta Muse", { rateLimits: reading(minutesAgo(24 * 60)) }),
     ];
@@ -96,12 +97,38 @@ describe("Usage auto refresh", () => {
     vi.useRealTimers();
   });
 
-  it("refreshes only readings older than 5 minutes and never Muse", async () => {
+  it("refreshes stale readings on open and skips a fresh reading", async () => {
     await open();
     expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/grok"]);
   });
 
-  it("starts nothing twice while a refresh runs and nothing again within 5 minutes", async () => {
+  it.each(["Usage page", "quick view"])("reads a managed account again with the %s left open", async (surface) => {
+    const id = "acct_managed_claude";
+    const path = `/api/usage/refresh/${id}`;
+    const board = structuredClone(usageBoardFixture);
+    const view = board.engines[0]!;
+    const account = view.accounts[0]!;
+    account.id = id;
+    mockState.instances = [engine(id, "claudeAgent", "Claude", {
+      accountState: "ready", rateLimits: reading(minutesAgo(0), 100),
+    })];
+    const anchor = host.appendChild(document.createElement("button"));
+    await open(surface === "Usage page" ? createElement(UsageSection) : createElement(UsageQuickView, {
+      engine: view, account, board, state: { board, status: "ready", pending: {}, failed: new Set<string>() },
+      anchor: { current: anchor }, onClose: () => {},
+    }));
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(29_999); });
+    expect(refreshed()).toEqual([]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(refreshed()).toEqual([path]);
+    await act(async () => { settle(path, { report: reading(minutesAgo(0), 12) }); });
+    expect(mockState.instances[0]?.rateLimits?.windows[0]?.usedPercent).toBe(12);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(refreshed()).toEqual([path, path]);
+  });
+
+  it("starts nothing twice while a refresh runs or while its report is fresh", async () => {
     await open();
     await open(createElement("div", null, createElement(UsageSection), createElement(UsageSection)));
     expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/grok"]);
@@ -136,6 +163,7 @@ describe("Usage auto refresh", () => {
   });
 
   it("starts the refresh when Settings opens on another tab", async () => {
+    mockState.instances[1]!.rateLimits = reading(minutesAgo(2));
     await open(createElement(SettingsModal));
     expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/grok"]);
   });
@@ -156,6 +184,7 @@ describe("Usage auto refresh", () => {
   });
 
   it("waits out a failed attempt and the server's retryAt before trying again", async () => {
+    mockState.instances = mockState.instances.filter((instance) => instance.instanceId !== "codex");
     await open();
     await act(async () => { settle("/api/usage/refresh/claude", "fail"); settle("/api/usage/refresh/grok", { error: "Could not refresh Grok limits", retryAt: Date.now() + 10 * 60_000 }); });
     await act(async () => root.unmount());
@@ -207,8 +236,8 @@ describe("Usage auto refresh", () => {
     const button = () => document.body.querySelector<HTMLButtonElement>("[data-usage-refresh]");
     const fresh = () => {
       mockState.instances = [
-        engine("claude", "claudeAgent", "Claude", { rateLimits: reading(minutesAgo(1)) }),
-        engine("codex", "codex", "Codex", { rateLimits: reading(minutesAgo(1)) }),
+        engine("claude", "claudeAgent", "Claude", { rateLimits: freshReading() }),
+        engine("codex", "codex", "Codex", { rateLimits: freshReading() }),
       ];
     };
     beforeEach(() => { anchor = document.body.appendChild(document.createElement("button")); fresh(); });

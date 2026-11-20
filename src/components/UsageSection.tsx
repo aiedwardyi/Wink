@@ -10,14 +10,6 @@ import { UsageDesk } from "./UsageDesk";
 import { useI18n } from "@/lib/i18n";
 import { showUsagePerBotTable } from "@/lib/friends-chrome";
 import { botUsage, cachedInput, costCaption, formatTokens, formatUsd, hasFiniteCost, sumUsage, usageDetail } from "@/lib/usage";
-import { useAutoRefresh } from "@/lib/usage-auto-refresh";
-
-// The stale-provider recheck stays; a report it brings back bumps the board revision, and the live frame reads it.
-// Each engine draws its own box, so the desk sits on the page without a card around it.
-function PlanUsage() {
-  useAutoRefresh();
-  return <UsageDesk />;
-}
 
 export function UsageSection() {
   const { t } = useI18n();
@@ -42,7 +34,7 @@ export function UsageSection() {
 
   return (
     <>
-      <PlanUsage />
+      <UsageDesk />
       {showUsagePerBotTable() && (
       <Card title="Usage" subtitle="Tokens and cost per bot, added up from every settled turn. Only engines that report a price show one.">
         {rows.length === 0 ? (

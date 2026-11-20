@@ -76,12 +76,12 @@ const REPORT_TEXT = workerReportText(process.platform);
 // Kept here, not imported from antigravity.ts: this proxy runs as its own light process.
 export const WORKER_GEMINI_FAMILIES = [
   { name: "Gemini 4 Carbon", id: "gemini-4-carbon" },
-  { name: "Gemini 4 Argon", id: "gemini-4-argon" },
+  { name: "Gemini 4 Neon", id: "gemini-4-neon" },
   { name: "Gemini 4 Hydrogen", id: "gemini-4-hydrogen" },
+  { name: "Gemini 4 Argon", id: "gemini-4-argon" },
   { name: "Gemini 3.8 Flash", id: "gemini-3.8-flash" },
 ];
 export const WORKER_GEMINI_EFFORTS = ["high", "medium", "low"];
-
 // Picker rows only; "Claude " and "Meta " prefixes are dropped to keep the list short.
 export function workerModelsText(): string {
   const line = (engine: string, catalog: ModelCatalog, effort = "") =>
@@ -92,7 +92,7 @@ export function workerModelsText(): string {
     line("Codex", STATIC_CODEX_MODELS),
     line("Muse", MSP_MUSE_MODELS, ` (effort ${MSP_MUSE_EFFORT_LEVELS.join("/")})`),
     line("Grok", STATIC_GROK_MODELS, ` (effort ${grokSupport.effortLevels?.join("/")})`),
-    `Gemini: ${WORKER_GEMINI_FAMILIES.map((family) => `${family.name} = ${family.id}-<effort>`).join(", ")} (effort ${WORKER_GEMINI_EFFORTS.join("/")}, part of the id).`,
+    `Gemini: ${WORKER_GEMINI_FAMILIES.map((family) => `${family.name} = ${family.id}-<effort>`).join(", ")} (effort ${WORKER_GEMINI_EFFORTS.join("/")}, part of the id; Neon also has xhigh).`,
   ].join(" ");
 }
 

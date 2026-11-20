@@ -17,13 +17,14 @@ import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store, type BotRecord, type Message } from "../store.ts";
-import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
-import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
+import { asksWork, closeAsksDb, configureRoomAsks, readOnlyAskTurn, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
+import { appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
 import { listRoomFiles } from "./files.ts";
 import { roomFilesRoot } from "./files-folder.ts";
 import { GuestClient } from "./guest-client.ts";
+import * as invites from "./invites.ts";
 import { barRoomPerson, closeInvitesDb, createInvite, revokeGuestKeys, roomCode } from "./invites.ts";
 import { joinedRoute } from "./joined-routes.ts";
 import { addJoinedEntries, closeJoinedDb, joinedCursor, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
@@ -54,6 +55,9 @@ let client: GuestClient | null = null;
 let changes: unknown[] = [];
 let ownName = "Mina";
 let refusePicture: (() => Promise<number>) | undefined;
+let hostAlert = vi.fn();
+let guestAlert = vi.fn();
+const device = "pc-mina-0123456789abcdef";
 
 /** The relay hop: splices TCP to the PC, which ends TLS, as the real relay does. */
 const hop = {
@@ -152,6 +156,8 @@ beforeEach(() => {
   doorHeaders = [];
   changes = [];
   ownName = "Mina";
+  hostAlert = vi.fn();
+  guestAlert = vi.fn();
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   engine = { sendTurn: vi.fn(), generateText: vi.fn(), generateReview: vi.fn(), answerWords: vi.fn() };
   roomAskHooks.words = vi.fn();
@@ -162,6 +168,7 @@ beforeEach(() => {
     dispatch: vi.fn(),
     stopTurn: vi.fn(async () => {}),
     endSession: vi.fn(async () => {}),
+    alert: hostAlert,
   });
   configureRoomDoor({ store, hostName: () => "Edward" });
 });
@@ -178,10 +185,11 @@ afterEach(() => {
 const teammate = (timing?: { silenceMs?: number; retryMs?: number; maxRetryMs?: number }) =>
   (client = new GuestClient({
     bases: () => [null, BASE],
-    joiner: () => ({ name: ownName, device: "pc-mina-0123456789abcdef" }),
+    joiner: () => ({ name: ownName, device }),
     https: { ca: caPem, lookup: loopbackLookup, port: hop.port },
     onChange: (roomId) => changes.push({ kind: "joined", hosted: true, roomId }),
-    timing: { retryMs: 50, maxRetryMs: 200, ...timing },
+    alert: guestAlert,
+    timing: { retryMs: 50, maxRetryMs: 200, alertMs: 10, ...timing },
   }));
 
 function teamRoom(name = "Team"): HostedGroup {
@@ -207,6 +215,21 @@ const texts = (roomId: string) => joinedEntries(roomId, 500).map((entry) => entr
 const seqs = (roomId: string) => joinedEntries(roomId, 500).map((entry) => entry.seq);
 const live = (c: GuestClient, roomId: string) => until(() => c.rooms().find((room) => room.roomId === roomId)?.link === "live");
 
+function snapshotFor(roomId: string, key: string): Promise<{ state: { people: Array<{ name: string }> }; entries: Array<{ author: unknown }> }> {
+  return new Promise((resolve, reject) => {
+    const req = httpsRequest({ host: "127.0.0.1", port: hop.port, servername: HOST, ca: caPem, path: `/room/v1/rooms/${roomId}/snapshot`,
+      headers: { host: HOST, authorization: `Bearer ${key}` } }, async (res) => {
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of res) chunks.push(chunk);
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch (error) { reject(error); }
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 async function joinedTeam(name = "Mina") {
   const group = teamRoom();
   hostSays(group, "welcome");
@@ -219,6 +242,167 @@ async function joinedTeam(name = "Mina") {
 }
 
 describe("teammate and the real door", () => {
+  function ownerCode(roomId: string) {
+    const { id, secret } = invites.ownerRoomCode(roomId, device);
+    return `wkr1:${HOST}:${id}.${secret}`;
+  }
+
+  it("shows just one Edward to ordinary guests and upgrades an existing synced seat and its history", async () => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    const publicCode = roomCode(roomId);
+    const guest = invites.joinRoom(publicCode.id, publicCode.secret, ["Edward"], { name: "Mina", device: "pc-other-0123456789abcdef" });
+    if (!guest.ok) throw new Error(guest.error);
+    const privateCode = invites.ownerRoomCode(roomId, device);
+    expect(invites.joinRoom(privateCode.id, privateCode.secret, ["Edward"], { name: "Mina", device: "pc-other-0123456789abcdef" })).toMatchObject({ ok: false, error: "wrong-secret" });
+    ownName = "Edward";
+    const c = teammate();
+    expect((await c.seat(`wkr1:${HOST}:${publicCode.id}.${publicCode.secret}`, roomId)).ok).toBe(true);
+    await live(c, roomId);
+    const previousKey = joinedKey(roomId);
+    const sent = await c.send(roomId, "old line from Work");
+    expect(sent.ok).toBe(true);
+    expect(await c.seat(ownerCode(roomId), roomId)).toMatchObject({ ok: true });
+    await live(c, roomId);
+    expect(joinedKey(roomId)).toEqual(previousKey);
+    expect(c.rooms()[0]?.state?.people.map(({ name }) => name)).toEqual(["Mina"]);
+    expect(c.rooms()[0]?.me.name).toBe("Edward");
+    const snapshot = await snapshotFor(roomId, guest.key);
+    expect(snapshot.state.people.map(({ name }) => name)).toEqual(["Mina"]);
+    expect(snapshot.entries[0].author).toEqual({ kind: "host", id: "host", name: "Edward" });
+    expect(joinedEntries(roomId, 10)[0]?.author).toEqual(snapshot.entries[0].author);
+    expect(store.messagesFor(group.threadId)[0]?.author).toEqual(snapshot.entries[0].author);
+    expect(store.group(group.id)?.unread).toBe(false);
+    expect(invites.joinRoom(publicCode.id, publicCode.secret, ["Edward"], { name: "Mina", device })).toMatchObject({ ok: false, error: "removed" });
+  });
+
+  it("counts neither PC's own room lines as unread", async () => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    hostSays(group, "earlier from Home");
+    ownName = "Edward";
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    expect(c.rooms()[0]?.unread).toBe(0);
+    const work = await c.send(roomId, "from Work");
+    expect(work).toMatchObject({ ok: true, value: { author: { kind: "host", id: "host", name: "Edward" } } });
+    expect(store.group(group.id)?.unread).toBeFalsy();
+    hostSays(group, "live from Home");
+    await until(() => texts(roomId).includes("live from Home"));
+    expect(c.rooms()[0]?.unread).toBe(0);
+    expect(guestAlert).not.toHaveBeenCalled();
+  });
+
+  it.each(["offline upgrade", "startup upgrade", "reconnect control"])("keeps all 455 lines after %s, paging and restart", async (mode) => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    const { id, secret } = roomCode(roomId);
+    ownName = "Edward";
+    let c = teammate(mode === "offline upgrade" ? { retryMs: 60_000, maxRetryMs: 60_000 } : undefined);
+    expect((await c.seat(`wkr1:${HOST}:${id}.${secret}`, roomId)).ok).toBe(true);
+    await live(c, roomId);
+    for (let i = 1; i <= 5; i++) hostSays(group, `line ${i}`);
+    await until(() => joinedCursor(roomId) === 5);
+
+    if (mode === "offline upgrade") {
+      hop.up = false;
+      hop.drop();
+      await until(() => c.room(roomId)?.link === "offline");
+    } else {
+      c.stop();
+    }
+    for (let i = 6; i <= 455; i++) hostSays(group, `line ${i}`);
+    hop.up = true;
+    if (mode !== "offline upgrade") {
+      closeJoinedDb();
+      c = teammate();
+      c.start();
+    }
+    if (mode !== "reconnect control") expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    await until(() => joinedCursor(roomId) === 455, 10_000);
+    expect(Boolean(joinedRoom(roomId)?.me.host)).toBe(mode !== "reconnect control");
+    const caughtUp = seqs(roomId).length;
+    expect(await c.older(roomId, 256)).toEqual({ ok: true, value: true });
+    const paged = seqs(roomId).length;
+
+    c.stop();
+    closeJoinedDb();
+    c = teammate();
+    c.start();
+    await live(c, roomId);
+    expect({ caughtUp, paged, restarted: seqs(roomId).length }).toEqual({ caughtUp: 455, paged: 455, restarted: 455 });
+    expect(seqs(roomId)).toEqual(Array.from({ length: 455 }, (_, i) => i + 1));
+  });
+
+  it.each(["fresh", "upgraded"])("lets the %s owner seat ask the host's bot to work", async (mode) => {
+    const bot = store.patchBot(store.createBot().id, { name: "Wink" })!;
+    const group = store.createGroup("Crew", [bot.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    const { roomId } = group.hosted;
+    ownName = "Edward";
+    const c = teammate();
+    if (mode === "upgraded") {
+      const { id, secret } = roomCode(roomId);
+      expect((await c.seat(`wkr1:${HOST}:${id}.${secret}`, roomId)).ok).toBe(true);
+      await live(c, roomId);
+    }
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    expect((await c.send(roomId, "@Wink fix the build")).ok).toBe(true);
+    const asks = roomAsks(roomId, ["queued"]);
+    expect(asks).toEqual([expect.objectContaining({ botId: bot.id, grant: "work" })]);
+    expect(startAsk(asks[0]!.id)).toBe(true);
+    expect({ works: asksWork(asks), readOnly: readOnlyAskTurn(roomId, group.threadId, bot.id) }).toEqual({ works: true, readOnly: false });
+  });
+
+  it("retries a capped owner-seat send with the same committed text and entry", async () => {
+    const { roomId } = teamRoom().hosted;
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    const capped = `${"a".repeat(PERSON_TEXT_MAX - 1)} `;
+    const text = `${capped}b`;
+    const sendId = "seat-retry-capped-text";
+    const first = await c.send(roomId, text, undefined, sendId);
+    expect(await c.send(roomId, text, undefined, sendId)).toEqual(first);
+    expect(first).toMatchObject({ ok: true, value: { text: capped } });
+    expect(recentRoomEntries(roomId, 10)).toHaveLength(1);
+  });
+
+  it("delivers @Edward only on the host PC", async () => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    ownName = "Edward";
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    const { invite, secret } = createInvite(roomId, "Mina", ["Edward"]);
+    const guest = invites.joinRoom(invite.id, secret, ["Edward"]);
+    if (!guest.ok) throw new Error(guest.error);
+    hostedSend(group, { kind: "person", id: guest.person.id }, "@Edward please check this");
+    await until(() => hostAlert.mock.calls.length > 0);
+    expect(hostAlert.mock.calls).toEqual([[expect.objectContaining({ text: "@Edward please check this", name: "Mina" })]]);
+    expect(guestAlert).not.toHaveBeenCalled();
+    expect(c.rooms()[0]?.unread).toBe(1);
+    hostedSend(group, { kind: "person", id: guest.person.id }, "ordinary message from Mina");
+    await until(() => guestAlert.mock.calls.length > 0);
+    expect(guestAlert.mock.calls).toEqual([[expect.objectContaining({ text: "ordinary message from Mina", name: "Mina" })]]);
+  });
+
+  it("delivers a host bot's @Edward only on the host PC", async () => {
+    const bot = store.patchBot(store.createBot().id, { name: "Wink" })!;
+    const group = store.createGroup("Crew", [bot.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    const { roomId } = group.hosted;
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    store.appendMessage(group.threadId, { role: "bot", kind: "text", from: { botId: bot.id, name: bot.name, color: bot.color }, text: "@Edward please review" });
+    publishTurnAnswer(store, group, group.threadId, bot, 0);
+    await until(() => hostAlert.mock.calls.length > 0);
+    expect(hostAlert.mock.calls).toEqual([[expect.objectContaining({ text: "@Edward please review", name: "Wink" })]]);
+    expect(guestAlert).not.toHaveBeenCalled();
+  });
   it("saves an old left copy's code once and reuses it after restart", async () => {
     const group = teamRoom();
     const shared = roomCode(group.hosted.roomId);

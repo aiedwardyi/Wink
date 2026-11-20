@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -14,7 +14,6 @@ const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const FAKE_MSP_CLI = join(SERVER_DIR, "testing", "fake-msp-cli.ts");
-const STUB = pathToFileURL(join(SERVER_DIR, "testing", "stub-oauth-usage.mjs")).href;
 
 const windowSchema = z.object({ id: z.string(), usedPercent: z.number() }).passthrough();
 const reportSchema = z.object({
@@ -74,6 +73,10 @@ beforeAll(async () => {
   port = await freePortBlock([0, 1], 24_100, 2_000);
   home = mkdtempSync(join(tmpdir(), "omb-usage-refresh-route-"));
   mkdirSync(join(home, ".orbit"), { recursive: true });
+  const reset = new Date(Date.now() + 3_600_000).toISOString();
+  writeFileSync(join(home, "claude-usage.json"), JSON.stringify({ rate_limits_available: true, rate_limits: {
+    five_hour: { utilization: 42, resets_at: reset }, seven_day: { utilization: 19, resets_at: reset },
+  } }));
   writeFileSync(
     join(home, ".orbit", "config.json"),
     JSON.stringify({
@@ -81,7 +84,7 @@ beforeAll(async () => {
         claudeHappy: {
           driver: "claudeAgent",
           displayName: "Fixture Claude Happy",
-          environment: { FAKE_CLAUDE_MODE: "happy", CLAUDE_CODE_OAUTH_TOKEN: "fixture-oauth" },
+          environment: { FAKE_CLAUDE_MODE: "happy", CLAUDE_CODE_OAUTH_TOKEN: "fixture-oauth", FAKE_CLAUDE_GET_USAGE: join(home, "claude-usage.json") },
           config: { cli: FAKE_CLAUDE_CLI },
         },
         museFresh: {
@@ -122,7 +125,7 @@ beforeAll(async () => {
   if (process.env.PATH) env.PATH = process.env.PATH;
   if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
 
-  child = spawn(process.execPath, ["--import", STUB, join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env,
     windowsHide: true,
@@ -203,8 +206,13 @@ describe("usage refresh throttle vs runtime reports", () => {
 
   it("reads the provider again for a tapped refresh inside the cooldown", async () => {
     const auto = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy")).body);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const reset = new Date(Date.now() + 3_600_000).toISOString();
+    writeFileSync(join(home, "claude-usage.json"), JSON.stringify({ rate_limits_available: true, rate_limits: {
+      five_hour: { utilization: 28, resets_at: reset }, seven_day: { utilization: 7, resets_at: reset },
+    } }));
+    const cached = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy")).body);
+    expect(cached.report).toEqual(auto.report);
     const tap = refreshSchema.parse((await api("POST", "/api/usage/refresh/claudeHappy?fresh=1")).body);
-    expect(Date.parse(tap.report!.observedAt)).toBeGreaterThan(Date.parse(auto.report!.observedAt));
+    expect(tap.report?.windows.map((window) => window.usedPercent)).toEqual([28, 7]);
   });
 });
