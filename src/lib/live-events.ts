@@ -61,8 +61,6 @@ export interface LiveEventsHandlers {
   onSnapshotRequired: (cursor?: string) => Promise<boolean>;
   onOpen?: () => void;
   onError?: () => void;
-  /** The open link closed, reported at once rather than held for a wake like onError. */
-  onClosed?: () => void;
   /** The server's clock off each hello and ping; undefined from a server that sends none. */
   onServerTime?: (now?: number) => void;
   screens?: boolean;
@@ -196,11 +194,12 @@ function browserPlatform(overrides: Partial<LiveEventsPlatform>): LiveEventsPlat
 export function openLiveEvents(
   handlers: LiveEventsHandlers,
   platformOverrides: Partial<LiveEventsPlatform> = {},
-): () => void {
+) {
   const platform = browserPlatform(platformOverrides);
   if (!platform) {
     handlers.onError?.();
-    return () => {};
+    const stop = () => {};
+    return Object.assign(stop, { reconnect: stop });
   }
 
   const staleMs = handlers.staleMs ?? LIVE_EVENTS_STALE_MS;
@@ -254,10 +253,8 @@ export function openLiveEvents(
 
   const closeSource = () => {
     const current = source;
-    const wasOpen = linkOpen;
     source = null;
     linkOpen = false;
-    if (wasOpen) handlers.onClosed?.();
     if (!current) return;
     if (pendingSnapshot?.source === current) {
       snapshotGeneration += 1;
@@ -458,7 +455,7 @@ export function openLiveEvents(
   platform.windowTarget?.addEventListener("pageshow", onPageShow);
   platform.documentTarget?.addEventListener("visibilitychange", onVisibilityChange);
 
-  return () => {
+  const stop = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(staleTimer);
@@ -470,4 +467,5 @@ export function openLiveEvents(
     platform.windowTarget?.removeEventListener("pageshow", onPageShow);
     platform.documentTarget?.removeEventListener("visibilitychange", onVisibilityChange);
   };
+  return Object.assign(stop, { reconnect: () => reconnectNow(false) });
 }

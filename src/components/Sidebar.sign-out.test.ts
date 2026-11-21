@@ -9,12 +9,13 @@ import { StoreProvider } from "@/state/store";
 import { Sidebar } from "./Sidebar";
 
 const RELAY = "aaaaaaaaaaaaaaaa.app.getwink.dev";
+const liveEvents = () => new Response("", { headers: { "content-type": "text/event-stream" } });
 let host: HTMLDivElement;
 let root: Root;
 let signOut: () => Promise<Response>;
 let events: () => Promise<Response>;
 let offline = false;
-let streams: Array<{ onopen: (() => void) | null; onerror: (() => void) | null; onmessage: ((event: { data: string }) => void) | null }> = [];
+let streams: Array<{ onopen: (() => void) | null; onerror: (() => void) | null; onmessage: ((event: { data: string }) => void) | null; close: () => void }> = [];
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -27,10 +28,10 @@ beforeEach(() => {
     constructor() {
       streams.push(this);
     }
-    close() {}
+    close = vi.fn();
   });
   signOut = async () => new Response('{"ok":true}', { status: 200 });
-  events = async () => new Response("", { status: 200 });
+  events = async () => liveEvents();
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     if (offline) throw new TypeError("Failed to fetch");
     if (String(path).includes("/api/phone/sign-out")) return signOut();
@@ -129,13 +130,14 @@ describe("signing a browser out from the avatar", () => {
     };
     events = gone;
     const replace = await renderSidebar(RELAY);
+    await act(async () => streams.at(-1)?.onopen?.());
     await click(avatar());
     await click(menuItems().at(-1));
     await settle();
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
     expect(replace).not.toHaveBeenCalled();
 
-    events = async () => new Response("", { status: 200 });
+    events = async () => liveEvents();
     await act(async () => streams.at(-1)?.onopen?.());
     await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
     expect(replace).not.toHaveBeenCalled();
@@ -154,6 +156,7 @@ describe("signing a browser out from the avatar", () => {
     };
     events = gone;
     const replace = await renderSidebar(RELAY);
+    await act(async () => streams.at(-1)?.onopen?.());
     await click(avatar());
     await click(menuItems().at(-1));
     await settle();
@@ -226,10 +229,11 @@ describe("signing a browser out from the avatar", () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
-  it("says it failed when the live stream never dropped and only pings arrive", async () => {
+  it("waits for a new live stream when the old one keeps sending pings", async () => {
     const replace = await renderSidebar(RELAY);
-    await act(async () => streams.at(-1)?.onopen?.());
-    const ping = () => act(async () => streams.at(-1)?.onmessage?.({ data: JSON.stringify({ kind: "ping", now: Date.now() }) }));
+    const oldStream = streams.at(-1)!;
+    await act(async () => oldStream.onopen?.());
+    const ping = () => act(async () => oldStream.onmessage?.({ data: JSON.stringify({ kind: "ping", now: Date.now() }) }));
     await ping();
     signOut = async () => {
       throw new TypeError("Failed to fetch");
@@ -238,6 +242,10 @@ describe("signing a browser out from the avatar", () => {
     await click(avatar());
     await click(menuItems().at(-1));
     await ping();
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
+    expect(streams.at(-1)).not.toBe(oldStream);
+    expect(oldStream.close).toHaveBeenCalledOnce();
+    await act(async () => streams.at(-1)?.onopen?.());
     await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
     expect(replace).not.toHaveBeenCalled();
   });

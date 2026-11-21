@@ -593,6 +593,8 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useSidebarRooms();
+  const { reconnectLive } = useStore();
+  const signingOut = useRef(false);
   const profile = shownProfile(state);
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
@@ -978,19 +980,30 @@ export function Sidebar({
   };
 
   const signOut = async (site: string) => {
+    if (signingOut.current) return;
+    signingOut.current = true;
+    setTeamFeedback(null);
     signedOutLanding(`${site}/?signedout=1`);
+    const confirmation = new AbortController();
     try {
       await api("/api/phone/sign-out", { method: "POST" });
       return leaveSignedOut();
     } catch {
-      // A failed reply may follow a revoke that landed, so only the PC's own answer decides.
-      // A PC that is gone can't give one, so nothing is claimed until it does: its refusal on the live stream lands on sign-in.
-      // A stream already open may be one the PC is about to cut, so only one that opens from here answers before the check does.
-      const state = await Promise.race([sessionState(), sessionStreamLive(false).then(() => "live" as const)]);
+      const live = sessionStreamLive(confirmation.signal);
+      const probe = new AbortController();
+      const state = await Promise.race([sessionState(probe), live]);
+      probe.abort();
       if (state === "gone") return leaveSignedOut();
-      if (state === "unknown") await sessionStreamLive();
+      if (state === "unknown") {
+        // The old stream can outlive a revoke or a gateway outage on new requests.
+        reconnectLive();
+        await live;
+      }
       signedOutLanding();
       setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
+    } finally {
+      confirmation.abort();
+      signingOut.current = false;
     }
   };
 

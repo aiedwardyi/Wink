@@ -28,11 +28,10 @@ async function reachable(url: string): Promise<boolean> {
 export type SessionState = "gone" | "live" | "unknown";
 
 /** EventSource hides the status, so ask the stream with fetch whether the PC refused this session. Only the PC's own yes or no counts: a dropped socket or a gateway's error says nothing about it. */
-export async function sessionState(): Promise<SessionState> {
-  const abort = new AbortController();
+export async function sessionState(abort = new AbortController()): Promise<SessionState> {
   try {
     const res = await fetch(LIVE_EVENTS_PATH, { signal: abort.signal, cache: "no-store" });
-    if (res.ok) return "live";
+    if (res.ok && res.headers.get("content-type")?.split(";")[0] === "text/event-stream") return "live";
     if (res.status !== 401) return "unknown";
     const body = await res.json().catch(() => null);
     return body?.code === SIGNED_OUT ? "gone" : "unknown";
@@ -43,25 +42,23 @@ export async function sessionState(): Promise<SessionState> {
   }
 }
 
-let streamOpen = false;
 const waiting = new Set<() => void>();
 
-/** Resolves when the live stream opens, or at once if `already` and it is open: the PC's word that it still has this session, since it cuts a signed-out session's streams before it answers. */
-export function sessionStreamLive(already = true): Promise<void> {
-  if (already && streamOpen) return Promise.resolve();
+/** Watch for a new authenticated stream while the failed reply is being checked. */
+export function sessionStreamLive(signal: AbortSignal): Promise<"live"> {
   return new Promise((resolve) => {
-    waiting.add(resolve);
+    const stop = () => waiting.delete(opened);
+    const opened = () => {
+      signal.removeEventListener("abort", stop);
+      resolve("live");
+    };
+    waiting.add(opened);
+    signal.addEventListener("abort", stop, { once: true });
   });
 }
 
 /** The live stream opened. */
 export function sessionLive(): void {
-  streamOpen = true;
   for (const resolve of waiting) resolve();
   waiting.clear();
-}
-
-/** The live stream closed. */
-export function sessionStreamClosed(): void {
-  streamOpen = false;
 }

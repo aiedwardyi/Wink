@@ -48,7 +48,7 @@ import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-a
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { relaySignInSite } from "@/lib/devices-setup";
-import { leaveSignedOut, sessionLive, sessionState, sessionStreamClosed } from "@/lib/signed-out";
+import { leaveSignedOut, sessionLive, sessionState } from "@/lib/signed-out";
 import { trackReplyText, trackStream } from "@/lib/usage-stats";
 import { trackAction } from "@/lib/usage-stats-actions";
 import { holdReload } from "@/lib/reload-hold";
@@ -1200,6 +1200,7 @@ const DispatchContext = createContext<React.Dispatch<Action> | null>(null);
 const StoreContext = createContext<{
   state: AppState;
   dispatch: React.Dispatch<Action>;
+  reconnectLive: () => void;
   /** Commit any debounced profile edits before an operation reads the bot. */
   flushBotPatches: (botId: string) => Promise<void>;
   /** `passive` re-probes without starting WSL; true allows WSL; default reads the last check. */
@@ -1213,6 +1214,12 @@ const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, rawDispatch] = useReducer(reducer, initialState, withCachedSnapshot);
   const stateRef = useRef(state);
+  const reconnectLiveRef = useRef<(() => void) | null>(null);
+  const reconnectLive = useCallback(() => {
+    trackStream(false);
+    rawDispatch({ type: "connected", value: false });
+    reconnectLiveRef.current?.();
+  }, []);
   const sendStamps = useRef<SendStamps>({ sequences: new Map(), times: new Map() });
   if (stateRef.current !== state) sendStamps.current.times.clear();
   const viewedReplies = useRef(createViewedReplies());
@@ -2642,7 +2649,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!prefetchStarted && !hydrated && !hydrationPromise) snapshots.prefetch();
         prefetchStarted = true;
       },
-      onClosed: sessionStreamClosed,
       onError: () => {
         trackStream(false);
         rawDispatch({ type: "connected", value: false });
@@ -2677,6 +2683,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (frame.replayed) flushDeltas();
       },
     });
+    reconnectLiveRef.current = stopLive.reconnect;
     if (canPrefetchChat(window.location)) {
       prefetchStarted = true;
       snapshots.prefetch();
@@ -2703,6 +2710,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       for (const refresh of peripheralRefresh.values()) {
         if (refresh.timer) clearTimeout(refresh.timer);
       }
+      reconnectLiveRef.current = null;
       stopLive();
     };
   }, []);
@@ -2820,8 +2828,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [botPatchQueue],
   );
   const value = useMemo(
-    () => ({ state, dispatch, flushBotPatches, refreshInstances, instancesVersion, turnOrigin }),
-    [state, dispatch, flushBotPatches, refreshInstances, turnOrigin],
+    () => ({ state, dispatch, reconnectLive, flushBotPatches, refreshInstances, instancesVersion, turnOrigin }),
+    [state, dispatch, reconnectLive, flushBotPatches, refreshInstances, turnOrigin],
   );
   return (
     <StoreContext.Provider value={value}>
