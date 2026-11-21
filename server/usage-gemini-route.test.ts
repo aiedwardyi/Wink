@@ -89,7 +89,7 @@ afterAll(async () => {
 });
 
 describe("Gemini usage follows the login, not a restart", () => {
-  it("plan, then API key, then plan again: bars appear, clear, and come back; Connections never moves", async () => {
+  it("plan, then ADC, then API key, then plan again: bars appear, clear, and come back; Connections never moves", async () => {
     before = await settled();
     expect(await geminiWindows()).toEqual([]);
 
@@ -105,6 +105,18 @@ describe("Gemini usage follows the login, not a restart", () => {
     expect(transient.error).toBe("Could not refresh Antigravity limits");
     expect(transient.report?.windows).toHaveLength(2);
     expect(await geminiWindows()).toHaveLength(2);
+    expect(await connections()).toEqual(before);
+
+    // Cloud ADC (exit 1, "authentication required"): agy cannot authenticate, so no stale plan bar either.
+    setMode("adc");
+    const adc = await refresh();
+    expect(adc.report).toBeUndefined();
+    expect(adc.error).toBeUndefined();
+    expect(await geminiWindows()).toEqual([]);
+    expect(await connections()).toEqual(before);
+
+    setMode("plan");
+    expect((await refresh()).report?.windows).toHaveLength(2);
     expect(await connections()).toEqual(before);
 
     // agy's definitive "not available with a Gemini API key" (exit 2): no row content, no sentence, no stale bar.

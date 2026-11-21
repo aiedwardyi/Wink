@@ -154,10 +154,12 @@ const agyQuotaPaths = [
 /** What the run helper hands back when agy says this login has no plan quota at all. */
 export const AGY_NOT_A_PLAN: unique symbol = Symbol("agy-not-a-plan");
 
-/** agy's own answer for a login with no account quota: a Gemini API key (changelog: `-p /usage` exits with
- * code 2). Spawn failures, timeouts and other errors are transient and are not this. */
-export function agyNotAPlan(error: Error | null): boolean {
-  return Boolean(error) && (error as { code?: unknown }).code === 2;
+/** agy's own answers for a login with no plan quota: a Gemini API key (changelog: `-p /usage` exits with code 2) and a
+ * login agy cannot authenticate (Cloud ADC, expired or signed out: exit 1 with "authentication required" on stderr,
+ * captured from agy 1.5.12). Spawn failures, timeouts and every other exit are transient and are not this. */
+export function agyNotAPlan(error: Error | null, stderr = ""): boolean {
+  const code = error ? (error as { code?: unknown }).code : undefined;
+  return code === 2 || (code === 1 && /authentication required/i.test(stderr));
 }
 
 /** Quota from `agy -p /usage --output-format stream-json`: the CLI prints a
@@ -176,7 +178,7 @@ export function readAntigravityUsageCommand(
         command,
         args,
         { timeout: 20_000, windowsHide: true, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, env, cwd: homedir() },
-        (error, stdout) => resolve(!error ? stdout : agyNotAPlan(error) ? AGY_NOT_A_PLAN : null),
+        (error, stdout, stderr) => resolve(!error ? stdout : agyNotAPlan(error, String(stderr ?? "")) ? AGY_NOT_A_PLAN : null),
       );
     }),
 ): Promise<JsonValue> {

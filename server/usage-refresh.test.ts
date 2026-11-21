@@ -868,9 +868,16 @@ describe("antigravity /usage: not a plan versus transient failure", () => {
     expect(rpcCalls).toBe(0);
   });
 
-  it("reads only exit code 2 as agy's not-a-plan answer", () => {
-    expect(agyNotAPlan(Object.assign(new Error("exit 2"), { code: 2 }))).toBe(true);
-    for (const code of [1, 3, 127, "ETIMEDOUT", "ENOENT", undefined]) expect(agyNotAPlan(Object.assign(new Error("failed"), { code }))).toBe(false);
-    expect(agyNotAPlan(null)).toBe(false);
+  it("reads exit 2, and exit 1 with \"authentication required\", as agy's not-a-plan answers", () => {
+    const failed = (code: unknown) => Object.assign(new Error("failed"), { code });
+    expect(agyNotAPlan(failed(2))).toBe(true);
+    const captured = "Error: authentication required. Run 'agy.exe' to log in.\nerror: authentication failed or timed out\n";
+    expect(agyNotAPlan(failed(1), captured)).toBe(true);
+    // Everything else stays transient: other exits, a plain exit 1, a timeout or a spawn failure.
+    expect(agyNotAPlan(failed(1))).toBe(false);
+    expect(agyNotAPlan(failed(1), "usage failed\n")).toBe(false);
+    expect(agyNotAPlan(failed(3), captured)).toBe(false);
+    for (const code of [127, "ETIMEDOUT", "ENOENT", undefined]) expect(agyNotAPlan(failed(code), captured)).toBe(false);
+    expect(agyNotAPlan(null, captured)).toBe(false);
   });
 });

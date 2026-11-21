@@ -36,7 +36,8 @@ if (argv.includes("--version")) {
 
 // `-p /usage`: FAKE_AGY_USAGE_MODE_FILE names a file holding the mode, read on every call so a test can switch
 // accounts without a restart. plan = FAKE_AGY_USAGE_FIXTURE's stream-json lines; apikey = agy's own refusal
-// (exit 2); transient = a plain failure (exit 1); signedout = empty groups, exit 0.
+// (exit 2); adc = what agy 1.5.12 printed for Cloud ADC with unusable credentials (exit 1, "authentication required");
+// transient = any other plain failure (exit 1); signedout = empty groups, exit 0.
 if (argv[argv.indexOf("-p") + 1] === "/usage") {
   const mode = process.env.FAKE_AGY_USAGE_MODE_FILE && existsSync(process.env.FAKE_AGY_USAGE_MODE_FILE)
     ? readFileSync(process.env.FAKE_AGY_USAGE_MODE_FILE, "utf8").trim() : "plan";
@@ -51,6 +52,11 @@ if (argv[argv.indexOf("-p") + 1] === "/usage") {
   if (mode === "apikey") {
     process.stderr.write("/usage is not available with a Gemini API key\n");
     process.exit(2);
+  }
+  if (mode === "adc") {
+    process.stdout.write(`${JSON.stringify({ event: "result", result: { conversation_id: "", status: "ERROR", response: "", error: "authentication failed or timed out", finished_reason: "error" } })}\n`);
+    process.stderr.write("Error: authentication required. Run 'agy.exe' to log in.\nerror: authentication failed or timed out\n");
+    process.exit(1);
   }
   process.stderr.write("usage failed\n");
   process.exit(1);
