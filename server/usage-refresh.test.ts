@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
-import { canRefreshUsage, createMuseCheck, createUsageRefresh, isCsrfRejection, museCheckModel, readAntigravityQuota, readAntigravityUsageCommand, readGrokBillingRpc, readMuseUsage, usageRefreshResponse } from "./usage-refresh.ts";
+import { canRefreshUsage, createMuseCheck, createUsageRefresh, isCsrfRejection, museCheckModel, AGY_NOT_A_PLAN, agyNotAPlan, readAntigravityQuota, readAntigravityUsageCommand, readGrokBillingRpc, readMuseUsage, usageRefreshResponse } from "./usage-refresh.ts";
 import type { RateLimitWindow } from "./contracts.ts";
 import { antigravityRateLimitWindows } from "./drivers/rate-limits.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
@@ -812,5 +812,62 @@ describe("antigravity /usage as agy 1.5 prints it", () => {
     const result = await refresh("antigravityAgent", { instanceId: "agy" });
     expect(result.report).toBeUndefined();
     expect(result.error).toBe("Could not refresh Antigravity limits");
+  });
+});
+
+describe("antigravity /usage: not a plan versus transient failure", () => {
+  const live = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "testing", "fixtures", "agy-usage-live.jsonl"), "utf8");
+  const previous = { windows: [{ id: "five_hour", usedPercent: 30, resetsAt: null }, { id: "seven_day", usedPercent: 9, resetsAt: null }], observedAt: reset };
+  const refreshWith = (run: () => Promise<string | null | typeof AGY_NOT_A_PLAN>) => createUsageRefresh({
+    platform: "linux",
+    antigravity: (cli, env) => readAntigravityQuota(cli, env, {
+      usage: (c, e) => readAntigravityUsageCommand(c, e, run),
+      rpc: async () => { throw new Error("refresh"); },
+    }),
+  });
+
+  it("clears the last report when agy answers that the login has no plan quota", async () => {
+    const result = await refreshWith(async () => AGY_NOT_A_PLAN)("antigravityAgent", { instanceId: "agy" }, previous);
+    expect(result.cleared).toBe(true);
+    expect(result.report).toBeUndefined();
+    expect(result.error).toBeUndefined();
+  });
+
+  it("keeps the last report on a timeout, a spawn failure or any other transient error", async () => {
+    for (const run of [async () => null, async () => "", async () => "not json\n"]) {
+      const result = await refreshWith(run)("antigravityAgent", { instanceId: "agy" }, previous);
+      expect(result.cleared).toBeUndefined();
+      expect(result.report).toEqual(previous);
+      expect(result.error).toBe("Could not refresh Antigravity limits");
+    }
+  });
+
+  it("goes from plan to API key and back through the same refresh, no restart", async () => {
+    let mode: "plan" | "apikey" = "plan";
+    const refresh = refreshWith(async () => (mode === "plan" ? live : AGY_NOT_A_PLAN));
+    const first = await refresh("antigravityAgent", { instanceId: "agy", fresh: true }, undefined);
+    expect(first.report?.windows).toHaveLength(2);
+    mode = "apikey";
+    const second = await refresh("antigravityAgent", { instanceId: "agy", fresh: true }, first.report);
+    expect(second.cleared).toBe(true);
+    expect(second.report).toBeUndefined();
+    mode = "plan";
+    const third = await refresh("antigravityAgent", { instanceId: "agy", fresh: true }, undefined);
+    expect(third.report?.windows).toHaveLength(2);
+  });
+
+  it("asks the language-server leg nothing once agy has said it is not a plan", async () => {
+    let rpcCalls = 0;
+    await expect(readAntigravityQuota("agy", {}, {
+      usage: (c, e) => readAntigravityUsageCommand(c, e, async () => AGY_NOT_A_PLAN),
+      rpc: async () => { rpcCalls++; return {}; },
+    })).rejects.toThrow("noplan");
+    expect(rpcCalls).toBe(0);
+  });
+
+  it("reads only exit code 2 as agy's not-a-plan answer", () => {
+    expect(agyNotAPlan(Object.assign(new Error("exit 2"), { code: 2 }))).toBe(true);
+    for (const code of [1, 3, 127, "ETIMEDOUT", "ENOENT", undefined]) expect(agyNotAPlan(Object.assign(new Error("failed"), { code }))).toBe(false);
+    expect(agyNotAPlan(null)).toBe(false);
   });
 });

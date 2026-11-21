@@ -31,7 +31,8 @@ export type UsageRefreshStatus =
   | "transport_error"
   | "auth_error"
   | "limit_reached";
-type Result = { report?: Report; error?: string; retryAt: number; status?: UsageRefreshStatus; resetsAt?: number | null };
+/** `cleared`: the provider answered that this login has no plan quota, so the caller drops the stored report. */
+type Result = { report?: Report; error?: string; retryAt: number; status?: UsageRefreshStatus; resetsAt?: number | null; cleared?: true };
 type Options = { instanceId: string; cli?: string; environment?: NodeJS.ProcessEnv; museModel?: string; account?: AccountContext; fresh?: boolean; maxAgeMs?: number };
 const usableReport = (report: Report | undefined): report is Report =>
   Boolean(report && report.windows.length > 0 && Number.isFinite(Date.parse(report.observedAt)));
@@ -150,6 +151,15 @@ const agyQuotaPaths = [
   "/exa.language_server_pb.LanguageServerService/GetUserStatus",
 ] as const;
 
+/** What the run helper hands back when agy says this login has no plan quota at all. */
+export const AGY_NOT_A_PLAN: unique symbol = Symbol("agy-not-a-plan");
+
+/** agy's own answer for a login with no account quota: a Gemini API key (changelog: `-p /usage` exits with
+ * code 2). Spawn failures, timeouts and other errors are transient and are not this. */
+export function agyNotAPlan(error: Error | null): boolean {
+  return Boolean(error) && (error as { code?: unknown }).code === 2;
+}
+
 /** Quota from `agy -p /usage --output-format stream-json`: the CLI prints a
  * structured `command_result` (plus a final `result`, same `command.data`)
  * without spending a token or needing the IDE open, so bars can appear
@@ -160,13 +170,13 @@ const agyQuotaPaths = [
 export function readAntigravityUsageCommand(
   cli: string,
   env: NodeJS.ProcessEnv,
-  run: (command: string, args: string[]) => Promise<string | null> = (command, args) =>
+  run: (command: string, args: string[]) => Promise<string | null | typeof AGY_NOT_A_PLAN> = (command, args) =>
     new Promise((resolve) => {
       execCli(
         command,
         args,
         { timeout: 20_000, windowsHide: true, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, env, cwd: homedir() },
-        (error, stdout) => resolve(error ? null : stdout),
+        (error, stdout) => resolve(!error ? stdout : agyNotAPlan(error) ? AGY_NOT_A_PLAN : null),
       );
     }),
 ): Promise<JsonValue> {
@@ -191,6 +201,7 @@ export function readAntigravityUsageCommand(
   };
   return (async (): Promise<JsonValue> => {
     const out = await run(cli, ["-p", "/usage", "--output-format", "stream-json"]);
+    if (out === AGY_NOT_A_PLAN) throw new Error("noplan");
     if (!out) throw new Error("refresh");
     for (const line of out.split("\n")) {
       if (!line.trim()) continue;
@@ -394,7 +405,9 @@ export function readAntigravityQuota(
   return (async (): Promise<JsonValue> => {
     try {
       return await usage(cli, env);
-    } catch {
+    } catch (error) {
+      // agy said there is no plan quota to scrape: the language-server leg would only repeat it.
+      if (error instanceof Error && error.message === "noplan") throw error;
       return rpc(cli, env);
     }
   })();
@@ -693,6 +706,7 @@ export function createUsageRefresh(deps: {
         }
         return { report, ...(driver === "museAgent" ? { status: "fresh" as const } : {}), retryAt };
       } catch (error) {
+        if (driver === "antigravityAgent" && error instanceof Error && error.message === "noplan") return { cleared: true as const, retryAt };
         if (error instanceof MuseUsageFailure && error.kind === "limit") {
           return { report: previous, status: "limit_reached", resetsAt: error.resetsAt, retryAt };
         }

@@ -3343,7 +3343,7 @@ const refreshUsage = createUsageRefresh({
 });
 const checkMuseUsage = createMuseCheck();
 const refreshSwappedUsage = createUsageSwapRefresh({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
-  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); },
+  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); else usageBoard.touch(); },
 });
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
@@ -9299,6 +9299,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             museModel: museCheckModel(store.bots.filter((bot) => bot.modelSelection.instanceId === instanceId).map((bot) => bot.modelSelection.model)),
           }, previous)
         : await refreshUsage(instance.driverKind, { ...usageOptions, fresh: url.searchParams.get("fresh") === "1", maxAgeMs: 30_000 }, previous);
+      if (result.cleared && rateLimitsByInstance.delete(instanceId)) {
+        scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR);
+        usageBoard.touch();
+      }
       if (result.report) {
         const current = rateLimitsByInstance.get(instanceId);
         if (!current || Date.parse(result.report.observedAt) >= Date.parse(current.observedAt)) {
