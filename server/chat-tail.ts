@@ -18,7 +18,8 @@ const isPreview = (message: Message) =>
 export function offscreenLimit(
   messages: readonly Message[],
   limit: number,
-  chat: { unread?: boolean; readAt?: number },
+  /** `panes` is false when the host says the chat has no worker pane open, so no sidebar worker line reads its launch and note rows. */
+  chat: { unread?: boolean; readAt?: number; panes?: boolean },
   activeLeafId?: string | null,
   /** Ask cards older than `messages`, when `messages` is only a thread's tail. */
   earlier: readonly Message[] = [],
@@ -37,7 +38,7 @@ export function offscreenLimit(
     const message = messages[i]!;
     const keep = (!prompt && isPrompt(message)) || (!prompt && !ask && isAsk(message)) || message === waiting || (!preview && isPreview(message))
       || (!read && (chat.readAt === undefined ? !user : message.at > chat.readAt))
-      || isOpenRequest(message) || message.kind === "launch" || message.kind === "note";
+      || isOpenRequest(message) || (chat.panes !== false && (message.kind === "launch" || message.kind === "note"));
     if (keep) rows = Math.max(rows, messages.length - i);
     prompt ||= isPrompt(message);
     ask ||= isAsk(message);

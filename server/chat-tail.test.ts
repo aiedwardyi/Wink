@@ -44,6 +44,14 @@ describe("offscreen chat tail", () => {
     expect(offscreenLimit(messages, 200, read)).toBe(180);
   });
 
+  it("skips worker rows when the chat has no pane open", () => {
+    const messages = thread(300, 290);
+    messages[120] = { ...reply(120), kind: "launch" };
+    messages[150] = { ...reply(150), kind: "note" };
+    expect(offscreenLimit(messages, 200, { panes: false })).toBe(30);
+    expect(offscreenLimit(messages, 200, { panes: true })).toBe(180);
+  });
+
   it("keeps every unread reply", () => {
     expect(offscreenLimit(thread(300, 290), 200, { unread: true, readAt: 239 })).toBe(60);
     expect(offscreenLimit(thread(300, 290), 200, { unread: true, readAt: 10 })).toBe(200);

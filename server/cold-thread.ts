@@ -63,7 +63,7 @@ export async function chatListPage(
   store: Pick<Store, "loaded">,
   threadId: string,
   limit: number,
-  offscreen?: { unread?: boolean; readAt?: number },
+  offscreen?: { unread?: boolean; readAt?: number; panes?: boolean },
 ): Promise<{ messages: Message[]; hasMore: boolean } | null> {
   if (store.loaded(threadId)) return null;
   let tail: Tail;

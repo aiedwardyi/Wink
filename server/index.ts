@@ -8794,12 +8794,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
       const offscreen = (chat: { id: string }) => typeof open === "string" && chat.id !== open;
-      const page = async (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
-        const tail = limit === undefined ? null : await chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
-        if (tail) return { messages: tail.messages.map(slimMessage), hasMore: tail.hasMore };
-        return messagePage(chat.threadId, limit === undefined || !offscreen(chat) ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId)));
-      };
       if (typeof open === "string") warmFirst(open);
+      // bots with a worker pane open; null when the host can't say, and every chat keeps its worker rows
+      const panes = typeof open === "string" && limit ? await terminalPaneCountsResponse(terminalBridgeAccess) : null;
+      const paned = panes?.status === 200 && "counts" in panes.body ? new Set(Object.keys(panes.body.counts)) : null;
+      const page = async (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
+        const shown = offscreen(chat) ? { unread: chat.unread, readAt: chat.readAt, panes: paned ? paned.has(chat.id) : undefined } : undefined;
+        const tail = limit === undefined ? null : await chatListPage(store, chat.threadId, limit, shown);
+        if (tail) return { messages: tail.messages.map(slimMessage), hasMore: tail.hasMore };
+        return messagePage(chat.threadId, limit === undefined || !shown ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, shown, store.activeLeaf(chat.threadId)));
+      };
       // taken before the cold pages are read off this thread: an event meanwhile replays, and the client folds repeats by id
       const cursor = `${STREAM_ID}:${lastSeq}`;
       const [bots, groups] = await Promise.all([
