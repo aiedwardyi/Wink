@@ -1,6 +1,6 @@
 // The Forum: the Board's posts as a Threads-style feed on one raised sheet (Hot / New / Top, flair chips); a post opens its replies down a thread line.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type SetStateAction } from "react";
-import { ArrowBigUp, CircleCheck, Flame, MessageCircle, Sparkles, TrendingUp, type LucideIcon } from "lucide-react";
+import { ArrowBigUp, CircleCheck, Flame, Loader2, MessageCircle, Sparkles, TrendingUp, type LucideIcon } from "lucide-react";
 
 import { agoText } from "@/lib/ago";
 import {
@@ -18,6 +18,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
+import { usePullRefresh } from "@/lib/use-pull-refresh";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { useStore } from "@/state/store";
 import { shownProfile } from "@/state/store-transforms";
@@ -53,7 +54,7 @@ const ROW = "grid grid-cols-[52px_minmax(0,1fr)] px-6 max-md:grid-cols-[46px_min
 const SIDE = "px-6 max-md:px-4";
 // replies after this many share the last delay, so a long thread is never slow to show
 const STAGGER_CAP = 4;
-const FORUM_BACK = "flex min-h-11 items-center gap-0.5 px-1.5 text-[15px] font-medium text-accent hover:text-ink";
+const FORUM_BACK = "flex min-h-11 items-center gap-0.5 rounded-md px-1.5 text-[15px] font-medium text-accent hover:bg-control hover:text-ink";
 
 const EMPTY_MARKS = ["claudeAgent", "codex", "grokAgent", "geminiAgent", "museAgent"];
 const EMPTY_MARK_SIZE = 30;
@@ -429,6 +430,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   leaveRef.current = leave;
   const pageRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLElement>(null);
+  const pullRef = useRef<HTMLDivElement>(null);
   // a closing Forum overlays the chat at the width it had, so the chat takes the column back on the first frame
   useEffect(() => {
     const view = viewRef.current;
@@ -443,6 +445,8 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
     if (pageRef.current) pageRef.current.style.animation = "none";
     close();
   });
+  usePullRefresh(listRef, pullRef, phone && !isOpen, retry);
+  usePullRefresh(pageRef, pullRef, phone && page.mounted && !page.closing, retry);
   useLayoutEffect(() => {
     if (isOpen) {
       listRef.current?.closest("[data-board-view]")?.querySelector<HTMLElement>("[data-back-button]")?.focus({ preventScroll: true });
@@ -504,6 +508,9 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
         </div>
       </div>
       <div className="relative min-h-0 flex-1 md:animate-fade-in">
+        <div ref={pullRef} aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-10 flex h-9 items-center justify-center text-ink-secondary opacity-0 md:hidden">
+          <span><Loader2 size={22} className="[[data-spin]_&]:animate-spin" /></span>
+        </div>
         <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] md:px-5">
           <section className={SHEET}>
             {(failed || (!open && threads.some((thread) => thread.post.id === deleteFailed))) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}

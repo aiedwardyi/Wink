@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,7 @@ import type { ModelSelection } from "./contracts.ts";
 import { buildMediaIndex, createMediaIndex } from "./media-index.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // a test can hold every disk size read until it lets go
 const disk = vi.hoisted(() => ({ hold: undefined as Promise<void> | undefined }));
@@ -24,7 +25,7 @@ const upload = 'see\n<attached-image path="C:\\att\\abc-1.png" />\n<attached-fil
 describe("media index", () => {
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 

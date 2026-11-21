@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,7 @@ import { replyTurns } from "./pick-sources.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -111,7 +112,7 @@ describe("memory pass", () => {
     on = true;
     botSwitch = new Map();
     writeMemoryFile("bot-t1", "");
-    rmSync(join(workspaceDir("bot-t1"), "memory"), { recursive: true, force: true });
+    removeTestData(join(workspaceDir("bot-t1"), "memory"));
     pass = start();
   });
 

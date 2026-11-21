@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi, type Mock } from "vitest";
+import { DATA_DIR } from "../config.ts";
+import { spawnTestNode as spawn } from "../testing/harness-auth.ts";
 import { STATIC_GROK_MODELS } from "./acp/grok.ts";
 import { STATIC_CLAUDE_MODELS } from "./claude.ts";
 import { STATIC_CODEX_MODELS } from "./codex-catalog.ts";
@@ -159,7 +159,7 @@ describe("terminal proxy", () => {
   });
 
   it("adds Codex pane env, notify and orbit-msg reports on Windows only", () => {
-    const orbitMsg = join(homedir(), ".orbit", "bin", "orbit-msg.ps1").replace(/\\/g, "/");
+    const orbitMsg = join(DATA_DIR, "bin", "orbit-msg.ps1").replace(/\\/g, "/");
     const win = workerReportText("win32");
     expect(win.env).toBe(["ORBIT_PANE", "ORBIT_BOT", "ORBIT_TEACHER", "ORBIT_URL", "ORBIT_MSG_AUTH"].map((name) => `-c "shell_environment_policy.set.${name}='$env:${name}'" `).join(""));
     expect(win.env).not.toContain("inherit");
@@ -174,7 +174,7 @@ describe("terminal proxy", () => {
   });
 
   it("points Claude workers at the hook settings on Windows once installed", () => {
-    const settings = join(homedir(), ".orbit", "bin", "claude-worker.json").replace(/\\/g, "/");
+    const settings = join(DATA_DIR, "bin", "claude-worker.json").replace(/\\/g, "/");
     expect(workerReportText("win32", true).claude).toBe(`--settings '${settings}' `);
     expect(workerReportText("win32", false).claude).toBe("");
     expect(workerReportText("linux", true).claude).toBe("");

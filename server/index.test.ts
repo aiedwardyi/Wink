@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { openSse } from "./testing/sse.ts";
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES } from "./attachments.ts";
 import { defaultComputerForNewBot } from "./local-routing.ts";
@@ -21,6 +21,7 @@ import { readDecisions } from "./decision-log.ts";
 import { spawnHarness as spawn, harnessFetch as fetch, harnessToken } from "./testing/harness-auth.ts";
 import { agentsHeaders } from "./testing/agents-caller.ts";
 import { roomResponders } from "./store.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -101,7 +102,7 @@ const statusWithHeaders = (headers: Record<string, string>): Promise<number> =>
   });
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
+  home = createFixtureHome("omb-api-test-");
   staticDir = join(home, "static");
   fakeClaudeDump = join(home, "fake-claude-dump.json");
   // a fleet of exactly one unknown driver: no CLI probes, no network
@@ -311,7 +312,7 @@ afterAll(async () => {
   // retry loop; these helpers are that fix plus the cause — the retry AND
   // an exit that is actually waited for before the delete begins.
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("harness HTTP API", () => {
@@ -1344,6 +1345,21 @@ describe("harness HTTP API", () => {
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${bot.id}`);
       await api("DELETE", `/api/bots/${foreign.id}`);
+    }
+  });
+
+  it("stores the send order a room line was sent with", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Order room", memberIds: [bot.id] })).body.group;
+    try {
+      await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" });
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "in order", sendId: "send-order-0123456789", actedAt: 1, sendSeq: 3 })).status).toBe(202);
+      const current = (await api("GET", "/api/bots?messages=20")).body.groups.find((candidate: { id: string }) => candidate.id === room.id);
+      expect(current.messages.at(-1)).toMatchObject({ text: "in order", sendSeq: 3 });
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${bot.id}`);
     }
   });
 
@@ -4696,7 +4712,8 @@ describe("resumable event stream", () => {
     const hello = await first.until((frame) => frame.kind === "hello");
     let cursor = hello.cursor;
     try {
-      expect(await first.until((frame) => frame.kind === "ping")).toEqual({ kind: "ping" });
+      expect(hello.now).toEqual(expect.any(Number));
+      expect(await first.until((frame) => frame.kind === "ping")).toEqual({ kind: "ping", now: expect.any(Number) });
       await nudge(botId);
       const next = await first.until((frame) => frame.kind === "bot" && frame.bot?.id === botId);
       const since = Number(hello.cursor.split(":")[1]);
@@ -5490,7 +5507,7 @@ describe("a start that fails before dispatch returns", () => {
         cwd: gone,
         modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
       })).status).toBe(200);
-      rmSync(gone, { recursive: true });
+      removeTestData(gone);
       for (const [index, text] of ["first try", "second try"].entries()) {
         expect((await api("POST", `/api/bots/${bot.id}/messages`, { text })).status).toBe(202);
         await expect.poll(() => failures(bot.threadId), { timeout: 10_000 }).toBe(index + 1);
@@ -5529,7 +5546,7 @@ describe("a start that fails before dispatch returns", () => {
       // the first turn's CLI keeps the desk, so the member moves to a folder nothing holds
       const gone = folder("MovedDesk");
       expect((await api("PATCH", `/api/bots/${bot.id}`, { cwd: gone })).status).toBe(200);
-      rmSync(gone, { recursive: true });
+      removeTestData(gone);
       expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "two" })).status).toBe(202);
       await expect.poll(() => failures(room.threadId), { timeout: 10_000 }).toBe(1);
 

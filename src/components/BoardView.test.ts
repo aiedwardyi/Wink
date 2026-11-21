@@ -599,6 +599,52 @@ describe("Forum", () => {
     expect(host.querySelector("article")).toBeNull();
   });
 
+  describe("pull to refresh", () => {
+    const loads = () => vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/board").length;
+    const pullDown = async (target: Element) => {
+      const touch = (type: string, y: number) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperties(event, { touches: { value: type === "touchend" ? [] : [{ clientX: 200, clientY: y }] }, timeStamp: { value: y } });
+        target.dispatchEvent(event);
+      };
+      await act(async () => {
+        touch("touchstart", 100);
+        touch("touchmove", 160);
+        touch("touchmove", 320);
+        touch("touchend", 320);
+      });
+      await settle();
+    };
+    const phone = () => vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: query.includes("reduce") || query === PHONE_QUERY }));
+
+    it("reloads the posts from the list on a phone", async () => {
+      phone();
+      posts = [post("pa", { created_at: 1 })];
+      await render(BoardView);
+      const before = loads();
+      await pullDown(host.querySelector("[data-board-view] .overflow-y-auto")!);
+      expect(loads()).toBe(before + 1);
+    });
+
+    it("reloads inside an open post", async () => {
+      phone();
+      posts = [post("pa", { created_at: 1 })];
+      await render(BoardView);
+      await openRow("pa");
+      const before = loads();
+      await pullDown(host.querySelector("[data-side-panel]")!);
+      expect(loads()).toBe(before + 1);
+    });
+
+    it("does nothing on desktop", async () => {
+      posts = [post("pa", { created_at: 1 })];
+      await render(BoardView);
+      const before = loads();
+      await pullDown(host.querySelector("[data-board-view] .overflow-y-auto")!);
+      expect(loads()).toBe(before);
+    });
+  });
+
   it("a chat visit comes back to the same sort, filter and open post, with no Loading frame", async () => {
     posts = [post("pa", { kind: "tip", created_at: 1 }), post("pb", { kind: "tip", created_at: 2 }), post("pc", { created_at: 3 })];
     await render(BoardView);
@@ -902,14 +948,16 @@ describe("Forum", () => {
     expect(delays).toEqual(["", ...[1, 2, 3, 4, 4].map((n) => `calc(var(--motion-fast) * ${n})`)]);
   });
 
-  it("goes back with a plain accent ‹ Forum, no box behind it", async () => {
+  it("goes back with an accent ‹ Forum that takes the Settings back button's hover background", async () => {
     posts = [post("pesc", {})];
     await render(BoardView);
     await act(async () => host.querySelector<HTMLButtonElement>('[data-board-post="pesc"] button')!.click());
     const back = host.querySelector<HTMLButtonElement>("[data-back-button]")!;
     expect(back.textContent).toBe("Forum");
     expect(back.className).toContain("text-accent");
-    expect(back.className).not.toMatch(/(^|\s)(hover:)?bg-|rounded/);
+    expect(back.className).toContain("rounded-md");
+    expect(back.className).toContain("hover:bg-control");
+    expect(back.className).not.toMatch(/(^|\s)bg-/);
     expect(back.className).toContain("hover:text-ink");
     expect(back.className).not.toContain("accent-border");
   });

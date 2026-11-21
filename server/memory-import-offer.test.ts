@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -9,6 +9,7 @@ import { DATA_DIR } from "./config.ts";
 import { importMemoryRoute, importMemoryTurn, importOfferNote, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
 import type { Message } from "./store.ts";
 import { en, ko } from "../src/lib/i18n-catalog.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const dir = join(DATA_DIR, "about-you");
 const typed = (text: string) => ({ role: "user", kind: "text", text }) as Message;
@@ -30,10 +31,10 @@ async function call(body: object, chat: Message[], ownerChat = true) {
 }
 
 beforeEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  removeTestData(dir);
   noteSendLocale("en");
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => removeTestData(dir));
 
 describe("new bot import offer", () => {
   it("offers on a new chat's first typed message while Import Memory is empty", () => {
@@ -92,9 +93,31 @@ describe("new bot import offer", () => {
 describe("import_memory saves through the Settings path", () => {
   it("saves the user's pasted message and reports what Settings reports", async () => {
     const result = await call({}, [typed("hi"), reply("offer"), typed(paste)]);
-    expect(result).toEqual({ status: 200, text: "Import Memory says: Added 2 new.\nTell the user this result." });
+    expect(result).toEqual({ status: 200, text: expect.stringMatching(/^Import Memory says: Added 2 new\.\nTell the user this result\.\n/) });
     expect(aboutYouSources()).toEqual([{ source: "ChatGPT", facts: ["The user is Dana Park; call her Dana.", "Speaks Korean and English."] }]);
     expect((await call({}, [typed(paste)])).text).toContain(en["aboutYou.nothingNew"]);
+  });
+
+  it("after a save that added facts, tells the bot to say what it now knows, from the paste only", async () => {
+    const text = (await call({}, [typed("hi"), reply("offer"), typed(paste)])).text;
+    expect(text).toContain("Added 2 new.");
+    expect(text).toContain("tell them what you now know");
+    expect(text).toContain("up to 5 short bullets");
+    expect(text).toContain("Use only what the paste says");
+    expect(text).not.toContain("Dana");
+    expect(text).not.toMatch(/wrong or missing/i);
+    noteSendLocale("ko");
+    const ko = (await call({}, [typed(paste.replace("Dana", "Dan"))])).text;
+    expect(ko).toContain("글머리표");
+    expect(ko).toContain("한국어로");
+  });
+
+  it("gives no recap when nothing was added, and leaves errors unchanged", async () => {
+    await call({}, [typed(paste)]);
+    const again = (await call({}, [typed(paste)])).text;
+    expect(again).toBe(`Import Memory says: ${en["aboutYou.nothingNew"]}\nTell the user this result.`);
+    expect((await call({}, [typed("   ")])).text).toBe(`Import Memory says: ${en["aboutYou.noFacts"]}\nTell the user this result.`);
+    expect((await call({}, [typed("x".repeat(ABOUT_YOU_MAX_PASTE + 1))])).text).toBe(`Import Memory says: ${en["aboutYou.tooLarge"]}\nTell the user this result.`);
   });
 
   it("imports the paste the bot saw, not a later steered line or a side quick question", async () => {

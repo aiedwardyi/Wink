@@ -16,9 +16,9 @@ import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } fr
 import { _resetSteerQueue, foldQueuedSends, queueMark } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { asksNudge } from "./task-asks.ts";
-import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
 import { currentTurnTrace, tracePart } from "./turn-timing.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 function section(from: string, to: string): string {
@@ -45,7 +45,7 @@ const runDispatch = new Function(`${javascript}\nreturn run;`)();
 
 beforeEach(async () => {
   closeMessageDb();
-  await removeTempDir(DATA_DIR);
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   _resetPending();
   vi.spyOn(console, "info").mockImplementation(() => {});

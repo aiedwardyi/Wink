@@ -7,12 +7,12 @@
 //
 // POSIX-gated like the other CLI e2es (the fakes are shebang scripts).
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -47,7 +47,7 @@ posixOnly("mid-turn steering e2e", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CLAUDE, 0o755);
     chmodSync(FAKE_MSP, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-steer-"));
+    home = createFixtureHome("omb-steer-");
     mkdirSync(join(home, ".orbit", "about-you"), { recursive: true });
     // the user already said no to importing memory, so the first turn carries no import offer
     writeFileSync(join(home, ".orbit", "about-you", "declined"), "");
@@ -96,7 +96,7 @@ posixOnly("mid-turn steering e2e", () => {
       child.on("close", () => resolve());
       setTimeout(() => (child.kill("SIGKILL"), resolve()), 5_000).unref?.();
     });
-    rmSync(home, { recursive: true, force: true });
+    removeTestData(home);
   });
 
   it(

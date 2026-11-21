@@ -25,6 +25,7 @@ import { RoutineManager } from "./routines.ts";
 import { Store, type BotRecord } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { ensureWorkspace, workspaceDir } from "./workspace.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const BOTS_FILE = join(DATA_DIR, "bots.json");
@@ -107,7 +108,7 @@ function editTrashFile(edit: (file: { bots: Array<Record<string, unknown>> }) =>
 }
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   project = mkdtempSync(join(tmpdir(), "omb-trash-project-"));
   mkdirSync(join(project, "src"));
   writeFileSync(join(project, "src", "main.ts"), "export const answer = 42;");

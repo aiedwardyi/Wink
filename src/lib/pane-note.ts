@@ -27,11 +27,11 @@ export function noteText(note: PaneNote, t: Translate): string {
   if (note.alert?.kind === "restarted") return t("chat.noteRestarted", { panes: note.alert.panes.join(", ") });
   if (note.alert?.kind === "kept") return t("chat.noteKept", { panes: note.alert.panes.join(", ") });
   if (note.alert?.kind === "limit") return t("chat.noteLimit", { engine: note.alert.engine, reset: note.alert.reset });
-  return note.body;
+  return note.reportPath ? `${note.body}\nFull report: ${note.reportPath}` : note.body;
 }
 
 export function notePreview(note: PaneNote, t: Translate): string {
-  const text = noteText(note, t).replace(/\s+/g, " ").trim();
+  const text = noteText({ ...note, reportPath: undefined }, t).replace(/\s+/g, " ").trim();
   if (!note.status) return text;
   const status = t(NOTE_STATUS_KEY[note.status]);
   return text ? t("chat.noteStatusLine", { status, text }) : status;

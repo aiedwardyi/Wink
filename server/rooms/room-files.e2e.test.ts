@@ -29,6 +29,7 @@ import { joinedRoute } from "./joined-routes.ts";
 import { closeJoinedDb, joinedEntries, joinedKey, joinedRoom, resetJoined } from "./joined.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const disk = vi.hoisted(() => ({ shortWrites: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -166,7 +167,7 @@ function hostUp() {
 
 beforeEach(() => {
   close();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   hop.up = true;
   store = new Store(() => ({ instanceId: "fake", model: "m" }));

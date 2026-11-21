@@ -25,6 +25,7 @@ import {
   WORKSPACE_CREDENTIAL_ENV,
   type AppConfig,
 } from "./config.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 describe("configuration boundaries", () => {
   it("documents both default-on product switches", () => {
@@ -339,7 +340,7 @@ describe("legacy OpenCode key sweep", () => {
       expect(sweepLegacyOpencodeKey(dir)).toBe("swept");
       expect(parseStoredConfig(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")))).toEqual({ gemini: { apiKey: "kept" } });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 
@@ -351,7 +352,7 @@ describe("legacy OpenCode key sweep", () => {
       expect(sweepLegacyOpencodeKey(dir)).toBe("absent");
       expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(raw);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 
@@ -365,7 +366,7 @@ describe("legacy OpenCode key sweep", () => {
     try {
       expect(sweepLegacyOpencodeKey(dir)).toBe("failed");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 
@@ -382,7 +383,7 @@ describe("legacy OpenCode key sweep", () => {
       expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(raw);
     } finally {
       chmodSync(dir, 0o755);
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 
@@ -398,7 +399,7 @@ describe("legacy OpenCode key sweep", () => {
       ).toBe("failed");
       expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(raw);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 });

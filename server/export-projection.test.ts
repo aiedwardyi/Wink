@@ -3,17 +3,17 @@
 // hydration, pagination, and both export formats project a safe view while
 // leaving the stored row intact.
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const BOT_ID = "hist-bot";
@@ -40,7 +40,7 @@ const api = async (method: string, path: string): Promise<{ status: number; body
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
-  home = mkdtempSync(join(tmpdir(), "omb-export-proj-"));
+  home = createFixtureHome("omb-export-proj-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
     join(home, ".orbit", "config.json"),
@@ -163,7 +163,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("historical transcript export projection", () => {
