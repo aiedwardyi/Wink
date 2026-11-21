@@ -14,10 +14,11 @@
 // FAKE_AGY_DENIED_MODEL, when set, is a --model whose turns fail with Vertex's permission denial.
 // FAKE_AGY_USAGE, when set, is the JSON usage on the response step and the result.
 // FAKE_AGY_STREAM=1 streams result.response as two text_delta steps first.
+// FAKE_AGY_WRITE_HOME=1 writes what real agy writes under HOME/.gemini on a turn.
 // Deterministic, no network.
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const argv = process.argv.slice(2);
@@ -109,6 +110,21 @@ if (process.env.FAKE_AGY_MCP_DUMP) {
     config = readFileSync(join(home, ".gemini", "config", "mcp_config.json"), "utf8");
   } catch {}
   writeFileSync(process.env.FAKE_AGY_MCP_DUMP, config);
+}
+
+if (process.env.FAKE_AGY_WRITE_HOME === "1" && prompt) {
+  const gemini = join(process.env.HOME || process.env.USERPROFILE || "", ".gemini");
+  const cli = join(gemini, "antigravity-cli");
+  const id = `helper-${process.pid}`;
+  for (const dir of ["conversations", "log", `brain/${id}`, "cache", "presence"]) mkdirSync(join(cli, dir), { recursive: true });
+  writeFileSync(join(cli, "conversations", `${id}.db`), "conversation");
+  writeFileSync(join(cli, "brain", id, "note.md"), "brain");
+  writeFileSync(join(cli, "presence", `${id}.lock`), "lock");
+  appendFileSync(join(cli, "log", `cli-${id}.log`), "helper log\n");
+  writeFileSync(join(cli, "cache", "last_conversations.json"), JSON.stringify({ [process.cwd()]: id }));
+  writeFileSync(join(cli, "settings.json"), JSON.stringify({ trustedFolders: [process.cwd()] }));
+  writeFileSync(join(gemini, "state.json"), JSON.stringify({ last: id }));
+  appendFileSync(join(gemini, "trustedFolders.json"), `${process.cwd()}\n`);
 }
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");

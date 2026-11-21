@@ -22,8 +22,7 @@
 // ensureAntigravityComputerMcp below. Computer use is full-auto instances
 // only; the host desktop stays off (no approval channel in print mode, ever).
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
-import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -51,6 +50,7 @@ import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
 import { antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 
@@ -285,34 +285,6 @@ function mountAntigravityMcp(
     sharedMcpMounts.delete(path);
     mount.restore();
   };
-}
-
-/** agy home for note helpers: ~/.gemini linked through (dirs) or copied (files), but its own config/ with no MCP servers, so a helper never sees a computer turn's box token and never takes the MCP lock. Sign-in is in the OS keyring, so it carries over. */
-export function antigravityHelperHome(env: Record<string, string | undefined>, dataDir = DATA_DIR): string {
-  const source = join(env.HOME || env.USERPROFILE || homedir(), ".gemini");
-  const home = join(dataDir, "agy-helper", createHash("sha256").update(source).digest("hex").slice(0, 16));
-  const gemini = join(home, ".gemini");
-  mkdirSync(join(gemini, "config"), { recursive: true, mode: 0o700 });
-  writeFileSync(join(gemini, "config", "mcp_config.json"), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`, { mode: 0o600 });
-  for (const name of existsSync(source) ? readdirSync(source) : []) {
-    if (name === "config") continue;
-    const from = join(source, name);
-    const to = join(gemini, name);
-    const stat = statSync(from, { throwIfNoEntry: false });
-    const existing = lstatSync(to, { throwIfNoEntry: false });
-    if (stat?.isDirectory()) {
-      if (existing) continue;
-      try {
-        symlinkSync(from, to, "junction");
-      } catch (error) {
-        // SAFETY: Filesystem failures expose Node's errno code; EEXIST is a concurrent helper's link.
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-    } else if (stat?.isFile() && (!existing || existing.mtimeMs < stat.mtimeMs)) {
-      copyFileSync(from, to);
-    }
-  }
-  return home;
 }
 
 function antigravityMcpConfigPath(env: Record<string, string | undefined>): string {
