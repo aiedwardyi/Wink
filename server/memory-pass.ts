@@ -163,15 +163,16 @@ const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|noon|midnight|when
 const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
 const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
-// later in the same reply "cancel that production report" takes a promise back; "I checked the laptop backup just now" only rides along for the note-taker
-const WITHDRAWN = /\b(?:scratch that|never ?mind|cancel that)\b|취소할게요/i;
+// a take-back opens its sentence ("Actually, cancel that production report"); one quoted or offered to the user takes nothing back, and "I checked the laptop backup just now" only rides along for the note-taker
+const WITHDRAWN = /^(?:(?:actually|oh|oops|sorry|wait|no)[,!.]?\s+)*(?:scratch that|never ?mind|cancel that)\b|취소할게요/i;
 const DONE_NOW = /\bi(?:['’]ve| have)?\s.*\bjust now\b|방금/i;
 const DENIED = /\b(?:not|never|no|cannot)\b|n['’]t\b|(?:^|\s)(?:안|못)\s/i;
 const TIMES = new RegExp(DEFERRED.source, "gi");
 const PLAIN = new Set(["a", "an", "the", "i", "me", "my", "myself", "you", "your", "yourself", "we", "us", "our", "it", "its", "this", "that", "these", "those", "there", "here", "them", "they", "their", "to", "of", "for", "on", "in", "at", "with", "from", "into", "about", "up", "out", "off", "as", "and", "or", "but", "so", "if", "then", "than", "until", "also", "just", "now", "still", "really", "actually", "sorry", "okay", "ok", "anyway", "instead", "though", "again", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "will", "would", "can", "could", "going", "s", "t", "ll", "ve", "re", "d", "m", "그거", "그건", "이거"]);
 // whole words, never stems; a lone capital like the B of "PC B" is a name, not an article
-const named = (text: string) => new Set((text.replace(TIMES, " ").match(/[\p{L}\p{N}]+/gu) ?? [])
+const terms = (text: string) => new Set((text.match(/[\p{L}\p{N}]+/gu) ?? [])
   .map((word) => (/^\p{Lu}$/u.test(word) && word !== "I" ? word : word.toLowerCase())).filter((word) => !PLAIN.has(word)));
+const named = (text: string) => terms(text.replace(TIMES, " "));
 /** What a promise is about: its words after "I'll" and the verb, before a Korean ending, or after the verb of a plain title. */
 function object(promise: string): Set<string> {
   const marker = COMMIT.exec(promise);
@@ -179,18 +180,46 @@ function object(promise: string): Set<string> {
   return named((marker ? promise.slice(marker.index + marker[0].length) : promise).replace(/^\s*\S+/, ""));
 }
 
-/** A completion or cancel is about a promise only when it names every word of that promise's object, as whole words; no such tie keeps the promise. */
-export function namesPromise(line: string, promise: string): boolean {
+/** What a promise does: the word after "I'll" or opening a plain title; a Korean ending leaves it in the object. */
+function verb(promise: string): string | undefined {
+  const marker = COMMIT.exec(promise);
+  if (marker && !/^i/i.test(marker[0])) return undefined;
+  return /^\s*(\p{L}+)/u.exec(marker ? promise.slice(marker.index + marker[0].length) : promise)?.[1]?.toLowerCase();
+}
+// "called" and "calling" are "call"; whole forms, so "production" is never "product"
+const forms = (does: string) => {
+  const stem = does.replace(/e$/, "");
+  const ied = does.replace(/([^aeiou])y$/, "$1i");
+  return new Set([does, `${does}s`, `${ied}es`, `${stem}ed`, `${ied}ed`, `${stem}ing`, `${does}${does.slice(-1)}ed`, `${does}${does.slice(-1)}ing`]);
+};
+const own = (promise: string) => {
+  const does = verb(promise);
+  return new Set([...terms(promise.replace(COMMIT, " ")), ...(does ? forms(does) : [])]);
+};
+
+/** A line is about a promise only when it names that promise's whole object and its action, as whole words, and more of it than of each other promise; anything less keeps the promise. */
+export function namesPromise(line: string, promise: string, others: readonly string[] = []): boolean {
   const said = line.replace(WITHDRAWN, " ");
+  const words = terms(said);
+  const shared = (text: string) => [...own(text)].filter((word) => words.has(word));
   const about = object(promise);
-  const words = named(said);
-  return !DENIED.test(said) && about.size > 0 && [...about].every((word) => words.has(word));
+  const does = verb(promise);
+  const hits = shared(promise);
+  // "cancel that production report" leaves the emailing unsaid but names nothing else; "cancel that plan to publish" never names a draft
+  const action = (does !== undefined && [...forms(does)].some((form) => words.has(form))) || hits.length === words.size;
+  return !DENIED.test(said) && about.size > 0 && [...about].every((word) => words.has(word)) && action
+    && others.map(shared).every((theirs) => theirs.length < hits.length && theirs.every((word) => hits.includes(word)));
 }
 
-// "To confirm, I'll check ..." restates a promise of the same reply word for word
-const clause = (sentence: string) => {
+const parts = (sentence: string) => {
   const marker = COMMIT.exec(sentence);
-  return words(marker && /^i/i.test(marker[0]) ? sentence.slice(marker.index) : sentence).join(" ");
+  const at = marker && /^i/i.test(marker[0]) ? marker.index : 0;
+  return { lead: words(sentence.slice(0, at)).join(" "), clause: words(sentence.slice(at)).join(" ") };
+};
+// "To confirm, I'll check ..." restates a promise of the same reply word for word; "For Bob, I'll send ..." never restates "For Alice, I'll send ..."
+const restates = (promise: string, sentence: string) => {
+  const [a, b] = [parts(promise), parts(sentence)];
+  return a.clause === b.clause && (!a.lead || !b.lead || a.lead === b.lead);
 };
 
 /** The bot's text after the last tool of its reply to each of these user rows, as sentences in order: commitments, and reports of finished work. */
@@ -208,13 +237,21 @@ export function botLines(messages: readonly Message[], ids: readonly string[], o
       else if (row.tool && row.tool.name !== MEMORY_SAVE_TOOL) tail = [];
     }
     let reply: string[] = [];
+    let last: string | undefined;
     for (const part of tail.join("\n").split(SENTENCE)) {
       const sentence = part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
-      if (!sentence || sentence.length > SAID_CHARS || sentence.endsWith("?") || secretLike(sentence)) continue;
+      if (!sentence) continue;
+      const before = last;
+      last = undefined;
+      if (sentence.length > SAID_CHARS || sentence.endsWith("?") || secretLike(sentence)) continue;
       const commit = COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence);
-      if (WITHDRAWN.test(sentence)) reply = reply.filter((promise) => !namesPromise(sentence, promise));
+      // a take-back that names nothing is about the promise right before it, never an older one
+      if (WITHDRAWN.test(sentence)) reply = named(sentence.replace(WITHDRAWN, " ")).size
+        ? reply.filter((promise) => !namesPromise(sentence, promise, reply.filter((other) => other !== promise)))
+        : reply.filter((promise) => promise !== before);
       if (commit) {
-        if (!reply.some((promise) => clause(promise) === clause(sentence))) reply.push(sentence);
+        last = reply.find((promise) => restates(promise, sentence));
+        if (!last) reply.push(last = sentence);
       }
       // a report rides along so the note-taker sees an open one finished
       else if (!DONE_NOW.test(sentence) && !REPORT.test(sentence)) continue;
@@ -253,8 +290,8 @@ export function acceptPromises(facts: Fact[], said: BotLines): KeptPromises {
       promises.push(kept);
     }
     const finished = kind === "done" ? said.open.find((ask) => ask.id === line.toUpperCase()) : undefined;
-    // the note-taker's id counts only when its quote names that promise
-    if (finished && quoted(said.lines, quote) && namesPromise(quote, finished.ask) && !done.includes(finished)) done.push(finished);
+    // the note-taker's id counts only when its quote names that promise, and no other open one as well
+    if (finished && quoted(said.lines, quote) && namesPromise(quote, finished.ask, said.open.filter((ask) => ask !== finished).map(({ ask }) => ask)) && !done.includes(finished)) done.push(finished);
   }
   return { promises, done };
 }

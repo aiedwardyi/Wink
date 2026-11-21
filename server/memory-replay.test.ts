@@ -172,6 +172,7 @@ describe("memory replay: gate 2073 cases", () => {
   it.each([
     { name: "checked", helper: skipsDone, rows: [{ role: "bot", text: `${LAPTOP} I checked the laptop backup just now.` }] },
     { name: "backed up", helper: skipsDone, rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "I backed it up just now." }] },
+    { name: "withdrawn", helper: filesEvery, rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "Actually, scratch that. I won't be able to do it." }] },
   ] satisfies { name: string; helper: NoteGenerator; rows: MissRow[] }[])("files nothing for a promise $name later in the same reply ($helper.name)", async ({ name, helper, rows }) => {
     const run = replay(`same-reply-${name.replace(/\W+/g, "-")}-${helper.name}`);
     await run.talk([ask, ...rows], helper);
@@ -182,7 +183,6 @@ describe("memory replay: gate 2073 cases", () => {
   it.each([
     { name: "checked", why: "only the note-taker judges a done line", rows: [{ role: "bot", text: `${LAPTOP} I checked the laptop backup just now.` }] },
     { name: "backed up", why: "only the note-taker judges a done line", rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "I backed it up just now." }] },
-    { name: "withdrawn", why: "a scratch-that names no promise", rows: [{ role: "bot", text: LAPTOP }, { role: "bot", text: "Actually, scratch that. I won't be able to do it." }] },
   ] satisfies { name: string; why: string; rows: MissRow[] }[])("keeps a promise $name later in the same reply (filesEvery): $why", async ({ name, rows }) => {
     const run = replay(`same-reply-${name.replace(/\W+/g, "-")}-filesEvery`);
     await run.talk([ask, ...rows], filesEvery);
@@ -269,7 +269,7 @@ describe("memory replay: gate 2073C cases", () => {
     { name: "a promise to notify", rows: [notify], kept: [notify] },
     { name: "a promise before an unrelated report done just now", rows: [invoice, "I checked the laptop backup just now."], kept: [invoice] },
     { name: "a promise before an unrelated refusal", rows: [invoice, "I can't make it to the meeting today."], kept: [invoice] },
-    { name: "both, as a scratch-that names neither", rows: [invoice, LAPTOP, "Actually, scratch that. I won't be able to do it."], kept: [invoice, LAPTOP] },
+    { name: "only the promise a scratch-that takes back", rows: [invoice, LAPTOP, "Actually, scratch that. I won't be able to do it."], kept: [invoice] },
     { name: "both, as the cancel never says signed", rows: [`${invoice} ${LAPTOP} Cancel that invoice email. The backup is still on.`], kept: [invoice, LAPTOP] },
     { name: "one ask for a promise restated in the same reply", rows: [LAPTOP, `To confirm, ${LAPTOP}`], kept: [LAPTOP] },
     { name: "nothing for a refusal", rows: ["I will not email the signed invoice tomorrow."], kept: [] },
@@ -377,6 +377,75 @@ describe("memory replay: gate 2073D cases", () => {
     await run.talk([{ role: "user", text: "Please call the electrician tomorrow and send the agenda tonight." }, { role: "bot", text: `${electrician} I'll send the agenda tonight.` }], filesWill);
     await run.talk([{ role: "user", text: "Who did you call today?" }, { role: "bot", text: report }], async (prompt) => JSON.stringify([{ kind: "done", fact: "A1", quote: botLinesIn(prompt)[0] }]));
     expect(run.asks().map((item) => [item.ask, item.status])).toEqual([[electrician, status], ["I'll send the agenda tonight.", "open"]]);
+    run.dispose();
+  });
+});
+
+describe("memory replay: gate 2073E cases", () => {
+  const draft = "I'll draft the announcement tomorrow.";
+  const publish = "I'll publish the announcement tonight.";
+  const unpublish = "Cancel that plan to publish the announcement.";
+  const taxi = "I'll reserve the taxi tomorrow.";
+  const hotel = "I'll book the hotel room tomorrow.";
+  const renew = "I'll renew the subscription tomorrow.";
+  const toAlice = "I'll send the agenda to Alice tomorrow.";
+  const toManager = "I'll send the agenda to Alice's manager tomorrow.";
+  const monday = "I'll book the pickup on Monday.";
+  const friday = "I'll book the pickup on Friday.";
+  const agenda = "I'll send the agenda tomorrow.";
+  const print = "I'll print the agenda tonight.";
+
+  it("removes a promise only when a line names its whole object and its action, and no other promise as well", () => {
+    const ties: [string, string, string[]][] = [
+      [unpublish, publish, [draft]],
+      ["Cancel that Friday pickup.", friday, [monday]],
+      ["I printed the agenda just now.", print, [agenda]],
+    ];
+    const loose: [string, string, string[]][] = [
+      [unpublish, draft, [publish]],
+      [unpublish, draft, []],
+      ["Cancel that taxi, but keep the hotel room.", hotel, [taxi]],
+      ["If you want to cancel that subscription later, let me know.", renew, []],
+      ['The button says "Cancel that subscription".', renew, []],
+      ["Cancel that agenda delivery to Alice's manager.", toAlice, [toManager]],
+      ["Cancel that Friday pickup.", monday, [friday]],
+      ["Cancel that Friday pickup.", monday, []],
+      ["Cancel that pickup.", monday, [friday]],
+      ["I printed the agenda just now.", agenda, [print]],
+      ["I printed the agenda just now.", agenda, []],
+    ];
+    expect(ties.filter(([line, promise, others]) => !namesPromise(line, promise, others))).toEqual([]);
+    expect(loose.filter(([line, promise, others]) => namesPromise(line, promise, others))).toEqual([]);
+  });
+
+  it.each([
+    { name: "a draft beside a cancelled publishing", rows: [draft, publish, unpublish], kept: [draft] },
+    { name: "a draft beside a cancelled publishing promised first", rows: [publish, draft, unpublish], kept: [draft] },
+    { name: "a draft when the cancel names only publishing", rows: [draft, unpublish], kept: [draft] },
+    { name: "both, as a cancel naming the taxi and the hotel singles out neither", rows: [taxi, hotel, "Cancel that taxi, but keep the hotel room."], kept: [taxi, hotel] },
+    { name: "a renewal beside a cancel offered for later", rows: [renew, "If you want to cancel that subscription later, let me know."], kept: [renew] },
+    { name: "a renewal beside a quoted cancel button", rows: [renew, 'The button says "Cancel that subscription".'], kept: [renew] },
+    { name: "both agendas, as a delivery never names the sending", rows: [toAlice, toManager, "Cancel that agenda delivery to Alice's manager."], kept: [toAlice, toManager] },
+    { name: "the Monday pickup beside a cancelled Friday one", rows: [monday, friday, "Cancel that Friday pickup."], kept: [monday] },
+    { name: "both pickups, as the cancel names neither day", rows: [monday, friday, "Cancel that pickup."], kept: [monday, friday] },
+    { name: "a copy for Alice and one for Bob", rows: ["For Alice, I'll send the agenda tomorrow.", "For Bob, I'll send the agenda tomorrow."], kept: ["For Alice, I'll send the agenda tomorrow.", "For Bob, I'll send the agenda tomorrow."] },
+    { name: "a restart on the laptop and one on the desktop", rows: ["On the laptop, I'll restart the server tomorrow.", "On the desktop, I'll restart the server tomorrow."], kept: ["On the laptop, I'll restart the server tomorrow.", "On the desktop, I'll restart the server tomorrow."] },
+  ])("keeps $name", async ({ name, rows, kept }) => {
+    const run = replay(name.replace(/\W+/g, "-"));
+    await run.talk([ask, { role: "bot", text: rows.join(" ") }], filesWill);
+    expect(run.asks().map((item) => item.ask)).toEqual(kept);
+    run.dispose();
+  });
+
+  it.each([
+    { name: "another action on the same agenda", promises: [agenda, print], id: "A1", statuses: ["open", "open"] },
+    { name: "the action it names", promises: [agenda, print], id: "A2", statuses: ["open", "done"] },
+    { name: "the only open promise when the report names another action", promises: [agenda], id: "A1", statuses: ["open"] },
+  ])("lets a done id close $name only when its quote names that action", async ({ name, promises, id, statuses }) => {
+    const run = replay(`done-${name.replace(/\W+/g, "-")}`);
+    await run.talk([{ role: "user", text: "Please handle these tasks." }, { role: "bot", text: promises.join(" ") }], filesWill);
+    await run.talk([{ role: "user", text: "What did you finish?" }, { role: "bot", text: "I printed the agenda just now." }], async (prompt) => JSON.stringify([{ kind: "done", fact: id, quote: botLinesIn(prompt)[0] }]));
+    expect(run.asks().map((item) => item.status)).toEqual(statuses);
     run.dispose();
   });
 });
