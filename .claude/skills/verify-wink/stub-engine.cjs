@@ -1,7 +1,8 @@
 // Stand-in for the five engine CLIs, at the same stdio boundary the drivers spawn.
 // Usage (as a configured `cli`): "<node>" "<this file>" <claude|grok|codex|antigravity|muse> ...driver args
 // Replies read: STUB <ENGINE> <model> | re: <last line of the prompt> | <n> image
-const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { dirname, join } = require("node:path");
 const { createInterface } = require("node:readline");
 const { randomUUID } = require("node:crypto");
 
@@ -61,6 +62,19 @@ if (args.includes("--version")) {
   process.exit(0);
 }
 note("spawn", { args });
+
+// `agy -p /usage`, only while the scratch root holds agy-usage.jsonl (a captured plan answer): a plan login prints it,
+// "apikey" in agy-usage-mode is agy's own refusal (exit 2). Without the file the stub answers as before.
+const usageFile = process.env.USERPROFILE ? join(dirname(process.env.USERPROFILE), "agy-usage.jsonl") : "";
+if (engine === "antigravity" && args[args.indexOf("-p") + 1] === "/usage" && existsSync(usageFile)) {
+  const modeFile = join(dirname(usageFile), "agy-usage-mode");
+  if (existsSync(modeFile) && readFileSync(modeFile, "utf8").trim() === "apikey") {
+    process.stderr.write("/usage is not available with a Gemini API key\n");
+    process.exit(2);
+  }
+  process.stdout.write(readFileSync(usageFile, "utf8"));
+  process.exit(0);
+}
 
 if (engine === "claude") {
   if (args[0] === "auth") {
