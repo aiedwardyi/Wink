@@ -542,10 +542,16 @@ function localPath(ref: string, cwd: string | undefined): string | null {
   if (!path || /^\w{2,}:\/\//.test(path)) return null;
   if (/^~[\\/]/.test(path)) return join(homedir(), path.slice(2));
   if (isAbsolute(path)) return resolve(path);
+  if (cwd && !/[\\/:~]/.test(path)) {
+    if (based[0] !== cwd) based = [cwd, resolve(cwd)];
+    return based[1].endsWith(sep) ? based[1] + path : based[1] + sep + path;
+  }
   return cwd ? resolve(cwd, path) : null;
 }
+let based: [string | undefined, string] = [undefined, ""];
 
-function runFiles(run: string, cwd: string | undefined, listed: (dir: string) => Set<string>): string[] {
+// rule 0 reads a run as c9206fd80 did, 1 as 9c19449a1, 2 as 2f3162357; each kept a name another dropped, so planFiles pins what any of them reads
+function runFiles(run: string, cwd: string | undefined, listed: (dir: string) => Set<string>, rule: number): [number, string][] {
   const ends = [...run.matchAll(NAME_END)].map((match) => match.index + match[0].length).reverse();
   const refs: [number, string][] = [];
   let rest = run;
@@ -561,7 +567,7 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
     let best: [number, number] | undefined;
     for (let start = from; start <= hit.index && tails.length > 0 && (!best || tails[0]! - start > best[1] - best[0]); start++) {
       // a name starts after a character no ASCII name holds, so release-plan.md never pins plan.md
-      if (start && start !== starts.at(-1) && /[\w.~:\\/-]/.test(run[start - 1]!) || /[\uDC00-\uDFFF]/.test(run[start]!)) continue;
+      if (start && (!rule || start !== starts.at(-1)) && /[\w.~:\\/-]/.test(run[start - 1]!) || /[\uDC00-\uDFFF]/.test(run[start]!)) continue;
       const head = localPath(run.slice(start, after), cwd);
       if (!head || !listed(dirname(head)).has(fileKey(basename(head)))) continue;
       for (const end of tails) {
@@ -579,9 +585,9 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
       // 请先读plan.md is prose then a name, 新draft.md and 計画.md改訂.md one name each, and no rule tells them apart, so the token and each start since the name before this one are pinned up to this end; only a file on disk ending at a name end or starting a later name (a Latin start, a folder) shows plan.md和review.txt is two names, so only then does no reading run past that end
       const token = [...run.slice(0, after).matchAll(DOC_PATH)].at(-1)!;
       const next = Math.max(best?.[0] ?? 0, ...named.filter((at) => at < hit.index));
-      const cut = ends.find((end) => end <= next && (real.includes(end) || best && best[0] >= end)) ?? 0;
+      const cut = rule ? ends.find((end) => end <= next && (rule < 2 || real.includes(end) || best && best[0] >= end)) ?? 0 : 0;
       const lead = Math.max(token.index, cut);
-      const near = Math.max(lead, starts.at(-2) ?? 0);
+      const near = rule ? Math.max(lead, starts.at(-2) ?? 0) : lead;
       for (const start of new Set([lead, ...[...starts, ...latin].filter((start) => start >= near)])) {
         if (start < hit.index) spans.push([start, after]);
       }
@@ -598,7 +604,7 @@ function runFiles(run: string, cwd: string | undefined, listed: (dir: string) =>
     rest = rest.slice(0, blank) + " ".repeat(from - blank) + rest.slice(from);
   }
   for (const match of rest.matchAll(DOC_PATH)) refs.push([match.index, match[0]]);
-  return refs.sort(([a], [b]) => a - b).map(([, ref]) => ref);
+  return refs;
 }
 
 function fileKey(name: string): string {
@@ -643,7 +649,37 @@ export function planFiles(record: Pick<TaskRecordContext, "goal" | "plan" | "art
   const cited = [record.goal, ...record.plan.map((item) => item.step)].join("\n").replace(/\w{2,}:\/\/\S+/g, "");
   for (const match of cited.matchAll(QUOTED_DOC_PATH)) refs.push(match[2]!);
   const listed = listedFiles(cwd);
-  for (const run of cited.replace(QUOTED_DOC_PATH, " ").match(NAME_RUN) ?? []) refs.push(...runFiles(run, cwd, listed));
+  const keys = new Map<string, boolean>();
+  const keyed = (name: string) => {
+    let has = keys.get(name);
+    if (has === undefined) {
+      const path = localPath(name, cwd);
+      keys.set(name, has = !!path && listed(dirname(path)).has(fileKey(basename(path))));
+    }
+    return has;
+  };
+  // listed holds every name up to each of its extensions, so a reading whose name up to its first extension is unlisted is not on disk
+  const onDisk = (name: string) => {
+    const [ext] = name.matchAll(DOC_EXT);
+    return keyed(ext ? name.slice(0, ext.index + ext[0].length) : name) && keyed(name) && existsSync(localPath(name, cwd)!);
+  };
+  for (const run of cited.replace(QUOTED_DOC_PATH, " ").match(NAME_RUN) ?? []) {
+    const seen = new Set<number>();
+    const readings = [0, 1, 2].flatMap((rule) => runFiles(run, cwd, listed, rule)).sort(([a], [b]) => a - b)
+      .filter(([at, name]) => !seen.has(at * (run.length + 1) + name.length) && !!seen.add(at * (run.length + 1) + name.length));
+    const disk = readings.map(([, name]) => onDisk(name));
+    const firstEnd = new Map<number, number>();
+    const lastStart = new Map<number, number>();
+    for (const [index, [at, name]] of readings.entries()) {
+      if (!disk[index]) continue;
+      firstEnd.set(at, Math.min(firstEnd.get(at) ?? Infinity, at + name.length));
+      lastStart.set(at + name.length, Math.max(lastStart.get(at + name.length) ?? -1, at));
+    }
+    // only files on disk prove plan.md和review.txt is two names, so a reading missing from disk is dropped only when it runs exactly from one to the other
+    for (const [index, [at, name]] of readings.entries()) {
+      if (disk[index] || !((firstEnd.get(at) ?? Infinity) <= (lastStart.get(at + name.length) ?? -1))) refs.push(name);
+    }
+  }
   return [...new Set(refs.map((ref) => localPath(ref, cwd)).filter((path): path is string => path !== null))];
 }
 
