@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -1310,6 +1311,35 @@ describe("memory pass wiring", () => {
   it("lifts a signed-out helper only on a fresh account probe", () => {
     expect(index).toContain("registry.onProbed((instanceId) => signedOutHelpers.delete(instanceId));");
     expect(index).toContain("signedOut: signedOutHelpers");
+  });
+
+  it("stops a Gemini bot's note helpers as soon as a foreground send claims it", async () => {
+    const source = index.replace(/\r\n/g, "\n");
+    const start = source.indexOf("function tryClaimTurnStart(");
+    const claims = new Map<string, string | undefined>();
+    const kinds: Record<string, string> = { "bot-g1": "antigravityAgent", "bot-c1": "codex" };
+    const generate = vi.fn((_prompt: string, signal: AbortSignal) => new Promise<string>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }));
+    const store = fakeStore();
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), generate: () => generate, enabled: () => true, busy: (botId) => claims.has(botId) });
+    const memorySleep = { onTurn: vi.fn() };
+    const claim = new Function("scope", `with (scope) { ${ts.transpile(source.slice(start, source.indexOf("\n}\n", start) + 2), { target: ts.ScriptTarget.ES2022 })} return tryClaimTurnStart; }`)({
+      turnStartClaims: claims, memoryPass: pass, memorySleep,
+      store: { bot: (id: string) => ({ modelSelection: { instanceId: id } }) },
+      registry: { get: (id: string) => ({ driverKind: kinds[id] }) },
+    }) as (botId: string, threadId?: string) => boolean;
+    for (const thread of ["g1", "c1"]) {
+      writeMemoryFile(`bot-${thread}`, "");
+      store.appendMessage(thread, { role: "user", kind: "text", text: "I use pnpm for my projects." });
+      pass.onSettled(`bot-${thread}`, thread, true);
+    }
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
+    expect(claim("bot-g1", "g1")).toBe(true);
+    expect(claim("bot-c1", "c1")).toBe(true);
+    expect(generate.mock.calls.map(([, signal]) => signal.aborted)).toEqual([true, false]);
+    expect(memorySleep.onTurn).toHaveBeenCalledExactlyOnceWith("bot-g1");
+    pass.dispose();
   });
 
   it("runs the pass after a room turn, for the member that spoke", () => {
