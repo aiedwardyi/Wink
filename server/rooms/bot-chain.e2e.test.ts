@@ -1,11 +1,11 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 import { spawnHarness as spawn, harnessFetch as fetch, runTestNode } from "../testing/harness-auth.ts";
-import { removeTestData, testHome } from "../testing/test-home.ts";
+import { createFixtureHome, removeTestData } from "../testing/test-home.ts";
 
 const ROOMS_DIR = dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = join(ROOMS_DIR, "..");
@@ -38,14 +38,14 @@ const roomEntries = async (roomId: string) => {
   const db = JSON.stringify(pathToFileURL(join(ROOMS_DIR, "db.ts")).href);
   const read = await runTestNode(["--input-type=module", "-e", `import { recentRoomEntries } from ${db}; console.log(JSON.stringify(recentRoomEntries(process.env.ROOM_ID, 50)));`], {
     cwd: ROOT,
-    env: { ...process.env, OMB_DATA_DIR: join(home, ".orbit"), ROOM_ID: roomId },
+    env: { ...process.env, HOME: home, USERPROFILE: home, OMB_DATA_DIR: join(home, ".orbit"), ROOM_ID: roomId },
   });
   expect(read.status, read.stderr).toBe(0);
   return JSON.parse(read.stdout) as Array<{ author: { kind: string; name: string }; text: string; replyToId?: string; askId?: string }>;
 };
 
 beforeAll(async () => {
-  home = mkdtempSync(join(testHome(), "omb-bot-chain-"));
+  home = createFixtureHome("omb-bot-chain-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   const fixture = join(home, "handoff.json");
   writeFileSync(fixture, JSON.stringify([

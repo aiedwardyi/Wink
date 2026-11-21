@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Accounts } from "../relay/src/accounts.ts";
 import { reportHttp } from "../relay/src/reports-http.ts";
 import { ReportStore, type HeldReport } from "../relay/src/reports.ts";
@@ -17,11 +17,7 @@ import { sendTeamReport } from "./team-report-transport.ts";
 import { loadOrCreateIdentity, writeTicket } from "./phone-relay/store.ts";
 import { TeamReports } from "./team-reports.ts";
 import type { Store } from "./store.ts";
-import { createTempDirs } from "./testing/cleanup.ts";
-import { testHome } from "./testing/test-home.ts";
-
-const temps = createTempDirs();
-afterAll(() => temps.remove());
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const ownerEmail = "edward@example.test";
 const owner = reportOwnerHash(ownerEmail);
@@ -48,7 +44,7 @@ function token(sub: string, email: string): string {
 }
 
 async function fixture() {
-  const root = temps.make(join(testHome(), "team-report-fixture-"));
+  const root = createFixtureHome("team-report-fixture-");
   const senderDir = join(root, "sender");
   const ownerDir = join(root, "owner");
   const sender = await profile(senderDir);

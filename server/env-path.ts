@@ -16,6 +16,7 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, extname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
+import { DATA_DIR } from "./config.ts";
 
 /** nvm keeps every node version's bin dir separately; newest first so a
  * CLI installed under the latest node wins. */
@@ -96,7 +97,7 @@ export function preferCli(name: string, file: string | null): void {
 }
 
 function pathCacheFile(): string {
-  return join(process.env.OMB_DATA_DIR ?? join(homedir(), ".orbit"), "path-cache.json");
+  return join(DATA_DIR, "path-cache.json");
 }
 
 function pathCacheKey(): string {

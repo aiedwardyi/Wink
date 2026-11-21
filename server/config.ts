@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 
-import { registerTestDataDir, requireTestHome } from "../companion/src/test-profile.ts";
+import { registerTestDataDir, requireTestHome, shouldGuardTestData } from "../companion/src/test-profile.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import { LIVE_VOICES, type LiveVoice } from "../shared/live-call.ts";
 import {
@@ -302,7 +302,7 @@ export function showToolCallsEnabled(cfg: AppConfig): boolean {
   return cfg.features?.showToolCalls === true;
 }
 
-if (process.env.VITEST !== undefined) {
+if (shouldGuardTestData()) {
   const home = requireTestHome("server/config.ts");
   const dataDir = process.env.OMB_DATA_DIR ?? join(home, ".orbit");
   if (!registerTestDataDir(dataDir, "server/config.ts")) {

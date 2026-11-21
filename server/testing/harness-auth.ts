@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
 
-import { harnessTestHome } from "../../companion/src/test-profile.ts";
+import { harnessTestHome, requireTestHome } from "../../companion/src/test-profile.ts";
+import { scrubProfileEnv } from "./profile-env.ts";
 
 const profilePreload = new URL("./harness-profile.ts", import.meta.url).href;
 
@@ -22,13 +23,17 @@ export function spawnTestNode(command: string, args: string[], options: SpawnOpt
 export function spawnTestNode(command: string, args: string[], options: SpawnOptions): ChildProcess {
   let env = options.env ?? process.env;
   let profile;
-  if (env?.VITEST !== undefined) {
+  if (process.env.VITEST !== undefined) {
     profile = harnessTestHome(env.HOME);
     if (!profile || env.USERPROFILE !== profile.home) {
       throw new Error("Use createFixtureHome from server/testing/test-home.ts for a Vitest child HOME and USERPROFILE");
     }
     const temp = tmpdir();
     env = { ...env, TEMP: temp, TMP: temp, TMPDIR: temp };
+    scrubProfileEnv(env, profile.home, profile);
+    if (env.OMB_COMPANION_DIR && env.OMB_COMPANION_DIR === process.env.OMB_COMPANION_DIR && profile.home !== requireTestHome()) {
+      delete env.OMB_COMPANION_DIR;
+    }
     args = ["--import", profilePreload, ...args];
   }
   // stdio and windowsHide sit after the spread deliberately: the ipc channel

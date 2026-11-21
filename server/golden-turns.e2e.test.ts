@@ -1,14 +1,14 @@
 // Golden baseline: what 1:1 and ordinary room turns send to the engine. Team
 // rooms must leave every line of it unchanged. GOLDEN_UPDATE=1 rewrites it.
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { spawnHarness as spawn, harnessFetch as fetch, runTestNode } from "./testing/harness-auth.ts";
-import { removeTestData, testHome } from "./testing/test-home.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -114,14 +114,14 @@ windowsOnly.each(WORLDS)("golden turns with %s", (world) => {
     ].join("\n");
     const result = await runTestNode(["--input-type=module", "-e", seed], {
       cwd: ROOT,
-      env: { ...process.env, OMB_DATA_DIR: join(home, ".orbit"), ROOM_ID: created.body.group.hosted.roomId },
+      env: { ...process.env, HOME: home, USERPROFILE: home, OMB_DATA_DIR: join(home, ".orbit"), ROOM_ID: created.body.group.hosted.roomId },
     });
     expect(result.status, result.stderr).toBe(0);
   };
   const mark = (name: string) => writeFileSync(log, `${JSON.stringify({ kind: "fixture", name })}\n`, { flag: "a" });
 
   beforeAll(async () => {
-    home = mkdtempSync(join(testHome(), "omb-golden-"));
+    home = createFixtureHome("omb-golden-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     log = join(home, "golden.ndjson");
     gate = join(home, "task.gate");

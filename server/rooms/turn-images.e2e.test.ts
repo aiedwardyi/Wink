@@ -17,7 +17,7 @@ const port = 28800 + Math.floor(Math.random() * 10_000);
 const doorPort = port + 1;
 const base = `http://127.0.0.1:${port}`;
 const door = `http://127.0.0.1:${doorPort}`;
-const hostHome = join(testHome(), "host");
+const hostHome = testHome();
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=", "base64");
 const cases: Array<{ driver: string; name: string; roomId: string; code: string; dump: string }> = [];
 let child: ChildProcess;

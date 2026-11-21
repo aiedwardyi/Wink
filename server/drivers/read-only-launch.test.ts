@@ -162,8 +162,7 @@ const ENGINES: Record<string, Engine> = {
 
 // The owner's own command hooks, from every settings file and an enabled plugin, each writing a marker.
 const HOOK_SOURCES = ["user", "project", "local", "installed-plugin", "plugin-dir"];
-const hookFixture = () => {
-  const marks = join(scratch, "marks");
+const hookFixture = (marks: string) => {
   const config = join(scratch, "config");
   const project = join(scratch, "project");
   const base = join(scratch, "base");
@@ -190,12 +189,13 @@ const hookFixture = () => {
   writeFileSync(join(base, "settings.json"), JSON.stringify({ enabledPlugins: { "kit@mkt": true } }));
   writeFileSync(join(base, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "kit@mkt": [{ scope: "user", installPath: kit, version: "1.0.0" }] } }));
   const fired = () => readdirSync(marks).map((name) => name.replace(/-(SessionStart|UserPromptSubmit)$/, "")).filter((tag, i, all) => all.indexOf(tag) === i).sort();
-  return { marks, config, project, base, fired };
+  return { config, project, base, fired };
 };
 
 describe("Claude read-only turns run none of the owner's hooks", () => {
   const launch = async (account: boolean) => {
-    const fixture = hookFixture();
+    const marks = join(scratch, "marks");
+    const fixture = hookFixture(marks);
     setEnv("FAKE_CLAUDE_HOOKS", "1");
     if (account) {
       const exec = procs.execCli;
@@ -214,8 +214,8 @@ describe("Claude read-only turns run none of the owner's hooks", () => {
     const turn = async (threadId: string, extra: Partial<SendTurnInput>) => {
       await run(instance, threadId, { cwd: fixture.project, integrations: { agents }, ...extra });
       const fired = fixture.fired();
-      await removeTempDir(fixture.marks);
-      mkdirSync(fixture.marks);
+      await removeTempDir(marks);
+      mkdirSync(marks);
       return fired;
     };
     return turn;

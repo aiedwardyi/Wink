@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
 import { removeTestData, startTestRun } from "../../companion/src/test-profile.ts";
+import { scrubProfileEnv } from "./profile-env.ts";
 
 const home = startTestRun();
 process.env.HOME = home;
@@ -16,11 +17,8 @@ if (homedir() !== home) throw new Error(`test home isolation failed: homedir() i
 // OMB_DATA_DIR is an intentional production override, but tests must never
 // let it escape the throwaway home they are about to delete.
 delete process.env.OMB_DATA_DIR;
-// Do not let a developer's Hermes global config path leak into per-test homes.
-delete process.env.HERMES_HOME;
-// A worker pane inherits its account's real login dirs; a test that writes
-// credentials would otherwise sign that account out.
-for (const name of ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME", "CODEX_SQLITE_HOME", "GROK_HOME"]) delete process.env[name];
+scrubProfileEnv(process.env, home);
+delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 // The companion keeps its paired devices in its own directory, and resolves
 // it from homedir() the same way — so the redirect above already covers it.
 // Named explicitly all the same: the device tests delete this directory

@@ -20,9 +20,9 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { registerTestDataDir, requireTestHome } from "./test-profile.ts";
+import { registerTestDataDir, requireTestHome, shouldGuardTestData } from "./test-profile.ts";
 
-if (process.env.VITEST !== undefined) {
+if (shouldGuardTestData()) {
   const home = requireTestHome("companion/src/state.ts");
   const dataDir = join(home, ".openmausbot-companion");
   if ((process.env.OMB_COMPANION_DIR ?? dataDir) !== dataDir ||
