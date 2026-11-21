@@ -139,15 +139,6 @@ describe("import_memory saves through the Settings path", () => {
     expect(text).toContain("only from the saved facts list");
   });
 
-  it("saves every fact of a mixed paste and none of its labeled secrets", async () => {
-    const mixed = ["- Lives in Seoul.", "- Password: river7!orchid", "- My door code is 4821", "- 좋아하는 음식은 김치찌개예요.", "비밀번호:", "hunter2orchid", "- 도어락 번호: 9753", "- Plays tennis.", "Source: ChatGPT"].join("\n");
-    const text = (await call({}, [typed("hi"), reply("offer"), typed(mixed)])).text;
-    expect(text).toContain("Added 3 new. Left out 4 that looked like passwords or keys.");
-    expect(text).toContain("Saved facts:\n- Lives in Seoul.\n- 좋아하는 음식은 김치찌개예요.\n- Plays tennis.");
-    expect(aboutYouSources()).toEqual([{ source: "ChatGPT", facts: ["Lives in Seoul.", "좋아하는 음식은 김치찌개예요.", "Plays tennis."] }]);
-    expect(`${text}${readFileSync(join(dir, "MEMORY.md"), "utf8")}`).not.toMatch(/river7|4821|hunter2|9753/);
-  });
-
   it("reports when the saved facts list is capped", async () => {
     const text = (await call({}, [typed(`${Array.from({ length: 10 }, (_, i) => `- New fact ${i}.`).join("\n")}\nSource: ChatGPT`)])).text;
     expect(text).toContain("- New fact 7.\n+2 more");

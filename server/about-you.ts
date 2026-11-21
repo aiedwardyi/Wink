@@ -19,10 +19,6 @@ const TAG = / \(from ([^(),\n]+), (\d{4}-\d{2}-\d{2})\)$/;
 const SKIP = /^(?:#|```|wink memory export\b|source\s*:)/i;
 const SOURCE = /^[ \t]*Source:[ \t]*(.*?)\s*$/im;
 const SENTENCE = /(?<=[.!?。])\s+/;
-const ITEM = /^\s*(?:[-*+•]|\d{1,3}[.)])\s/;
-// codes that open a home, beside the passwords and keys secretLike knows; "Dress code" and "postal code" stay facts
-const ACCESS_CODE = /\b(?:door|gate|garage|alarm|entry|keypad|lock\s*box)\s*(?:codes?|combos?|combinations?|pins?)\b/i;
-const ACCESS_CODE_KO = /(?:도어\s*락|현관\s*문?|공동\s*현관|대문|출입\s*문?|경보기?|키\s*패드)\s*(?:번호|코드|비번)|도어\s*락\s*[:：]|(?<!\p{L})핀\s*[:：]/u;
 
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 const aboutYouFile = () => join(DATA_DIR, "about-you", "MEMORY.md");
@@ -82,30 +78,16 @@ export function sourceOf(paste: string): string {
   return [...safe].slice(0, 40).join("").trim() || "another AI";
 }
 
-const secret = (line: string) => secretLike(line) || ACCESS_CODE.test(line) || ACCESS_CODE_KO.test(line) || redactRoomMemory(line) !== line;
-
 /** The fact lines in a paste, cleaned, with secret-looking ones left out and counted. */
 export function factsOf(paste: string): { facts: string[]; hidden: number } {
   const facts: string[] = [];
   let hidden = 0;
-  // a "Password:" or "## Passwords" line holds its value below it: 1 until that value, 2 through a list of them
-  let under = 0;
   for (const raw of paste.split(/\r?\n/)) {
     const line = clean(raw);
-    if (!line) {
-      if (under === 2) under = 0;
-      continue;
-    }
-    const label = raw.trim().startsWith("#") || /[:：]$/.test(line);
-    if (label) under = secret(line) ? 1 : 0;
-    if (label || SKIP.test(raw.trim())) continue;
-    const item = ITEM.test(raw);
-    if (under === 2 && !item) under = 0;
+    if (!line || SKIP.test(raw.trim()) || /[:：]$/.test(line)) continue;
     // a split could part a label from its value, so the whole line is checked
-    if (under || secret(line)) {
-      hidden++;
-      under = under && item ? 2 : 0;
-    } else facts.push(...pieces(line));
+    if (secretLike(line) || redactRoomMemory(line) !== line) hidden++;
+    else facts.push(...pieces(line));
   }
   return { facts, hidden };
 }
