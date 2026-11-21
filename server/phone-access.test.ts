@@ -34,7 +34,7 @@ import { isRelayRequest, markRelaySocket } from "./phone-relay/via.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
 import { createTerminalLive } from "./terminal-live.ts";
 import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
-import { addPushSubscription, loadPushSubscriptions } from "./web-push.ts";
+import { WEB_PUSH_SUBS_FILE, addPushSubscription, loadPushSubscriptions } from "./web-push.ts";
 
 const COMMS = "c".repeat(48);
 const BOT_BEARER = "Bearer bot-caller";
@@ -1002,6 +1002,31 @@ describe("phone management", () => {
     expect(new PhoneDevices(w.r.dataDir).list()).toEqual([]);
     expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: session } })).status).toBe(401);
     stream.socket.destroy();
+  });
+
+  it("keeps a browser signed in when its push cleanup can't be saved, and drops the subscription on retry", async () => {
+    const w = await world();
+    const session = await pairPhone(w, "Lost phone");
+    const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
+    addPushSubscription(w.r.dataDir, { endpoint: "https://fcm.googleapis.com/fcm/send/a", keys: { p256dh: "BA", auth: "AA" } }, phones[0]!.id);
+    const write = atomic.writeFileAtomic;
+    let busy = true;
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, data, options) => {
+      if (busy && path === join(w.r.dataDir, WEB_PUSH_SUBS_FILE)) {
+        busy = false;
+        throw Object.assign(new Error("push subscriptions are busy"), { code: "EBUSY" });
+      }
+      write(path, data, options);
+    });
+    const signOut = () => viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: session, origin: w.origin } });
+
+    expect((await signOut()).status).toBe(500);
+    expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: session } })).status).toBe(200);
+    expect(new PhoneDevices(w.r.dataDir).list().map((phone) => phone.name)).toEqual(["Lost phone"]);
+
+    expect((await signOut()).status).toBe(200);
+    expect(new PhoneDevices(w.r.dataDir).list()).toEqual([]);
+    expect(loadPushSubscriptions(w.r.dataDir)).toEqual([]);
   });
 
   it("takes sign-out only as this PC's own POST from a relay browser", async () => {

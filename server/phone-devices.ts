@@ -256,12 +256,16 @@ export class PhoneDevices {
     }
   }
 
-  /** A browser signing itself out: gone from the file first, so a failed write leaves it signed in and a retry finds it. Its id, or null. */
-  signOut(token: string | null): string | null {
+  /**
+   * A browser signing itself out: `forget` saves its other records, then it leaves the file, so a failed write
+   * at either step leaves it signed in and a retry finds it. Its id, or null.
+   */
+  signOut(token: string | null, forget: (id: string) => void): string | null {
     if (!token?.startsWith(TOKEN_PREFIX)) return null;
     const hash = sha256(token);
     const record = this.phones.find((phone) => sameText(phone.tokenHash, hash));
     if (!record) return null;
+    forget(record.id);
     this.persist(this.phones.filter((phone) => phone !== record));
     this.lastSeenWrites.delete(record.id);
     return record.id;

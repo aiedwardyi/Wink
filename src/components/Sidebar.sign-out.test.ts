@@ -106,6 +106,20 @@ describe("signing a browser out from the avatar", () => {
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 
+  it("lands on the sign-in page when the reply is lost and the PC can't be asked, rather than claim nothing happened", async () => {
+    signOut = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    events = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    const replace = await renderSidebar(RELAY);
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
+  });
+
   it.each([
     ["the desktop app", "127.0.0.1:3000", () => { Reflect.set(window, "ogb", { platform: "win32" }); }],
     ["another PC's desktop window", RELAY, () => { vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 Wink/1.0 Electron/43.4.0"); }],

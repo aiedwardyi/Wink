@@ -497,7 +497,7 @@ export class PhoneAccess {
   private signOut(req: IncomingMessage, res: ServerResponse): void {
     let id: string | null;
     try {
-      id = this.phones.signOut(phoneCookieToken(req.headers.cookie));
+      id = this.phones.signOut(phoneCookieToken(req.headers.cookie), (phone) => removePhonePushSubscriptions(this.options.dataDir, phone));
     } catch {
       return send(res, 500, { error: "save-failed" });
     }

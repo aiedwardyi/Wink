@@ -67,7 +67,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
 import { relaySignInSite } from "@/lib/devices-setup";
 import { ConnectionError } from "@/lib/error-text";
-import { leaveSignedOut, sessionGone, signedOutLanding } from "@/lib/signed-out";
+import { leaveSignedOut, sessionState, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -983,8 +983,8 @@ export function Sidebar({
     try {
       await api("/api/phone/sign-out", { method: "POST" });
     } catch (error) {
-      // A reply lost after the revoke landed still signed this browser out.
-      if (!(error instanceof ConnectionError && await sessionGone())) {
+      // A lost reply may follow a revoke that landed; only a PC that still knows this session means it failed.
+      if (!(error instanceof ConnectionError) || await sessionState() === "live") {
         signedOutLanding();
         return setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
       }

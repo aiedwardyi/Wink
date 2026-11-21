@@ -48,7 +48,7 @@ import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-a
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { relaySignInSite } from "@/lib/devices-setup";
-import { leaveSignedOut, sessionGone } from "@/lib/signed-out";
+import { leaveSignedOut, sessionState } from "@/lib/signed-out";
 import { trackReplyText, trackStream } from "@/lib/usage-stats";
 import { trackAction } from "@/lib/usage-stats-actions";
 import { holdReload } from "@/lib/reload-hold";
@@ -2571,7 +2571,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       onError: () => {
         trackStream(false);
         rawDispatch({ type: "connected", value: false });
-        if (relaySignInSite()) void sessionGone().then((gone) => gone && leaveSignedOut());
+        if (relaySignInSite()) void sessionState().then((state) => state === "gone" && leaveSignedOut());
       },
       onSnapshotRequired: (cursor) => {
         clearTimeout(hydrationFallback);

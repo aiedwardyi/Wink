@@ -14,16 +14,18 @@ export function leaveSignedOut(): void {
   location.replace(landing);
 }
 
+export type SessionState = "gone" | "live" | "unreachable";
+
 /** EventSource hides the status, so ask the stream with fetch whether the relay refused this session. */
-export async function sessionGone(): Promise<boolean> {
+export async function sessionState(): Promise<SessionState> {
   const abort = new AbortController();
   try {
     const res = await fetch(LIVE_EVENTS_PATH, { signal: abort.signal, cache: "no-store" });
-    if (res.status !== 401) return false;
+    if (res.status !== 401) return "live";
     const body = await res.json().catch(() => null);
-    return body?.code === SIGNED_OUT;
+    return body?.code === SIGNED_OUT ? "gone" : "live";
   } catch {
-    return false;
+    return "unreachable";
   } finally {
     abort.abort();
   }
