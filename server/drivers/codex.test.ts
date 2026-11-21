@@ -1030,15 +1030,15 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(calls[4].params.input).toEqual([{ type: "text", text: "go" }]);
   });
 
-  it("keeps the history in the first prompt if the app-server has no injection method", async () => {
+  it.each(["-32601", "-32603"])("delivers the first reply inline when history injection returns %s", async (code) => {
     await create();
     const dump = join(scratch, "restore-inline.json");
     process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_NO_INJECT = "-32601";
+    process.env.FAKE_CODEX_NO_INJECT = code;
     const nativeReplayPrefix = "User: earlier request\n\n";
     const text = nativeReplayPrefix + "go";
     await instance.adapter.sendTurn({ threadId: "t-restore-inline", text, nativeReplayPrefix });
-    await recorder.until((e) => e.type === "turn.completed");
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
     expect(sentCalls(dump).find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text }]);
   });
 

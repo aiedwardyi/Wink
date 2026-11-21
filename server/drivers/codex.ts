@@ -1022,7 +1022,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             trace?.delivered("native-history", () => ({ history: replay.trimEnd() }));
             prompt = prompt.slice(replay.length);
           } catch (error) {
-            if ((error as { code?: number }).code !== -32601) throw error;
+            // A transport failure leaves the injection outcome unknown.
+            if (typeof (error as { code?: number }).code !== "number") throw error;
           }
         }
         if (cursor && !resumeFailed && turn.systemUpdate) {

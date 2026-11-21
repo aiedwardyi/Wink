@@ -824,8 +824,9 @@ describe("context compaction e2e", () => {
     expect(turn?.history).toContain("Goal: Ship the release");
     expect(turn?.history).toContain("reports/green.json");
     expect(turn?.history).toContain("dist/orbit.exe");
-    expect(turn?.history).toContain("history 0");
-    expect(turn?.history).toContain("history 120");
+    expect(turn?.history?.split("\n").filter((line) => /^(User|Assistant): history \d+$/.test(line))).toEqual(
+      Array.from({ length: 121 }, (_, index) => `${index % 2 === 0 ? "User" : "Assistant"}: history ${index}`),
+    );
     expect(turn?.history).not.toContain(`User: ${text}`);
 
     const bot = (await api("GET", "/api/bots")).body.bots.find(

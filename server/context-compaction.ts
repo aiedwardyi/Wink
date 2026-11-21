@@ -1241,6 +1241,26 @@ function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, s
   return [...head, ...transcript.slice(start)];
 }
 
+export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number): Extract<PreparedModelContext, { status: "ready" }> | undefined {
+  if (plan.estimatedTokensBefore > budgetTokens) return undefined;
+  const summary = plan.previous ? plan.transcript[0] : undefined;
+  // Already covered rows can supply values that the saved summary missed.
+  const values = summary ? typedValuesBlock(plan.typedLines, VALUES_CAP_TOKENS * 3) : "";
+  const transcript = summary && values && !summary.text.endsWith(values)
+    ? [{ ...summary, text: `${summary.text}\n\n${values}` }, ...plan.transcript.slice(1)]
+    : plan.transcript;
+  const estimatedTokens = transcript === plan.transcript ? plan.estimatedTokensBefore : estimateContextTokens(transcript);
+  if (estimatedTokens > budgetTokens) return undefined;
+  return {
+    status: "ready",
+    transcript,
+    budgetTokens,
+    estimatedTokens,
+    compacted: Boolean(plan.previous),
+    ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+  };
+}
+
 function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
@@ -1273,24 +1293,9 @@ export async function prepareModelContext(input: {
   summaryGrace?: SummaryGrace;
   /** the caller's own plan for these same inputs, so a send plans once */
   plan?: CompactionPlan;
-  nativeReplay?: boolean;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {
   const plan = input.plan ?? planCompaction(input);
-  if (input.nativeReplay && plan.needed) {
-    // The seed stays in the provider's input on every follow-up.
-    const transcript = plan.estimatedTokensBefore <= plan.budgetTokens
-      ? plan.transcript
-      : newestWithin(plan.transcript, plan.budgetTokens, Boolean(plan.previous));
-    return {
-      status: "ready",
-      transcript,
-      budgetTokens: nativeReplayBudget(input.contextWindow),
-      estimatedTokens: transcript === plan.transcript ? plan.estimatedTokensBefore : estimateContextTokens(transcript),
-      compacted: Boolean(plan.previous),
-      ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
-    };
-  }
   const grace = input.summaryGrace ? planSummaryGrace({ ...input, plan, grace: input.summaryGrace }) : null;
   if (grace?.safe && (plan.needed || plan.status === "fits")) {
     return {

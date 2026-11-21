@@ -1207,9 +1207,9 @@ describe("summary build wiring", () => {
     expect(index.split("90_000, () => summarizesOnEstimate(planBeforeSummary), {")).toHaveLength(3);
     const settle = index.indexOf("const summaryWaitMs = codexHistory ? 0 : await summaryBuild.settle(");
     expect(settle).toBeGreaterThan(index.indexOf("async function startClaimedTurn("));
-    expect(settle).toBeLessThan(index.indexOf("  const prepared = await prepareContext("));
+    expect(settle).toBeLessThan(index.indexOf("  const prepared = nativeReplay ?? await prepareContext("));
     expect(index).toContain("const usePlannedContext = summarySkipped || codexHistory;");
-    expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, usePlannedContext ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined, codexHistory);");
+    expect(index).toContain("const prepared = nativeReplay ?? await prepareContext(activeMessages, summaryWaitMs, usePlannedContext ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);");
     expect(index).toContain("requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle");
     expect(index).toContain("const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;");
     expect(index).toMatch(/summaryBuild\.dispose\(\);\s*summaryRepair\.dispose\(\);/);
