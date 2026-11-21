@@ -8,11 +8,15 @@ function isChildPath(path: string): boolean {
 
 function canonicalTestHome(home: string): string | undefined {
   const temp = tmpdir();
-  const path = relative(temp, home);
-  if (home !== resolve(home) || !isChildPath(path)) return;
+  if (home !== resolve(home)) return;
   try {
+    const canonicalTemp = realpathSync.native(temp);
+    const tempPath = relative(temp, home);
+    // Windows can report the temp root with an 8.3 name.
+    const path = isChildPath(tempPath) ? tempPath : relative(canonicalTemp, home);
+    if (!isChildPath(path)) return;
     const canonical = realpathSync.native(home);
-    if (!relative(join(realpathSync.native(temp), path), canonical) && lstatSync(canonical).isDirectory()) return canonical;
+    if (!relative(join(canonicalTemp, path), canonical) && lstatSync(canonical).isDirectory()) return canonical;
   } catch {
     return undefined;
   }

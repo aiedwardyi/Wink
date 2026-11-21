@@ -86,12 +86,15 @@ it("rejects a junction above an otherwise marked companion home", () => {
   try {
     const outside = join(scratch, "outside");
     const home = join(outside, "home");
-    const env = { ...scratchEnv(home, temp), WINK_VITEST_HOME: home };
+    const tempAlias = join(scratch, "os-temp");
+    const env = { ...scratchEnv(home, tempAlias), WINK_VITEST_HOME: home };
     markTestHome(home, env.WINK_VITEST_HOME_TOKEN);
     const deviceFile = join(env.OMB_COMPANION_DIR, "sentinel");
     mkdirSync(dirname(deviceFile));
     writeFileSync(deviceFile, "sentinel");
     const module = "companion/src/state.ts";
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    symlinkSync(outside, tempAlias, linkType);
     const valid = importProfile(module, env);
     expect(valid.status, valid.stderr).toBe(0);
     expect(valid.stdout.trim()).toBe(env.OMB_COMPANION_DIR);
@@ -99,7 +102,7 @@ it("rejects a junction above an otherwise marked companion home", () => {
     const childTemp = join(scratch, "temp");
     const link = join(childTemp, "redirect");
     mkdirSync(childTemp);
-    symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+    symlinkSync(outside, link, linkType);
     const linkedHome = join(link, "home");
     const linked = importProfile(module, { ...scratchEnv(linkedHome, childTemp), WINK_VITEST_HOME: linkedHome });
     expect(linked.status, linked.stdout + linked.stderr).toBe(1);
