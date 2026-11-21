@@ -1205,8 +1205,11 @@ describe("summary build wiring", () => {
     expect(index).toContain("const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));");
     expect(index).toContain("grace: graceInputs, onWait: onSummaryWait");
     expect(index.split("90_000, () => summarizesOnEstimate(planBeforeSummary), {")).toHaveLength(3);
-    expect(index.indexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeLessThan(index.indexOf("  const prepared = await prepareContext("));
-    expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);");
+    const settle = index.indexOf("const summaryWaitMs = codexHistory ? 0 : await summaryBuild.settle(");
+    expect(settle).toBeGreaterThan(index.indexOf("async function startClaimedTurn("));
+    expect(settle).toBeLessThan(index.indexOf("  const prepared = await prepareContext("));
+    expect(index).toContain("const usePlannedContext = summarySkipped || codexHistory;");
+    expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, usePlannedContext ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined, codexHistory);");
     expect(index).toContain("requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle");
     expect(index).toContain("const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;");
     expect(index).toMatch(/summaryBuild\.dispose\(\);\s*summaryRepair\.dispose\(\);/);
@@ -1215,7 +1218,7 @@ describe("summary build wiring", () => {
   it("the 1:1 send's inline call runs on the deadline left after the wait; the room path is unchanged", () => {
     const sends = index.split("summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),");
     expect(sends).toHaveLength(2);
-    expect(sends[0]!.lastIndexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeGreaterThan(sends[0]!.lastIndexOf("async function startClaimedTurn("));
+    expect(sends[0]!.lastIndexOf("const summaryWaitMs = codexHistory ? 0 : await summaryBuild.settle(")).toBeGreaterThan(sends[0]!.lastIndexOf("async function startClaimedTurn("));
     expect(index).toContain("summarize: instance.generateText ? (prompt) => instance.generateText!(prompt) : undefined,");
   });
 

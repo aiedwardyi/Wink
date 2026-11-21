@@ -202,7 +202,7 @@ describe("summary grace dispatch", () => {
         transcript: prepared.transcript, compactedThisTurn: Boolean(prepared.compaction), taskRecord: undefined, durableTaskRecordText: taskRecordText,
         recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, sessionCompactionId: null, seed,
         seedInputs: { instanceId: "claude", cursor: "session", seed: summaryGrace.native.seed, latestCompactionId: null },
-        summarySkipped: true, summaryGrace, graceInputs, planBeforeSummary, summaryBuild: build, prepareContext,
+        summarySkipped: true, codexHistory: false, summaryGrace, graceInputs, planBeforeSummary, summaryBuild: build, prepareContext,
         inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) },
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,

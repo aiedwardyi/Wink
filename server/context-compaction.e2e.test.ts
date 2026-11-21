@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import { readTaskResumePacket } from "./task-state.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
-import { PRE_COMPACT_TOOL_ROUND_LIMIT } from "./turn-context.ts";
+import { PRE_COMPACT_TOOL_ROUND_LIMIT, REPLY_MARKER } from "./turn-context.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -18,6 +18,30 @@ const FAKE_CODEX_CLI = join(SERVER_DIR, "testing", "fake-codex-app-server.ts");
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
+
+type CodexCall = {
+  method: string;
+  params: {
+    threadId?: string;
+    developerInstructions?: string;
+    input?: Array<{ text: string }>;
+    items?: Array<{ type: string; role: string; content: Array<{ text: string }> }>;
+  };
+};
+
+function codexTurn(calls: CodexCall[], text: string) {
+  const index = calls.findLastIndex((call) => call.method === "turn/start" && call.params.input?.[0]?.text.includes(text));
+  if (index < 0) return null;
+  const { params } = calls[index]!;
+  const previous = calls.slice(0, index).findLast((call) => (call.method === "turn/start" || call.method === "thread/inject_items") &&
+    call.params.threadId === params.threadId);
+  const item = previous?.method === "thread/inject_items" ? previous.params.items?.[0] : undefined;
+  return {
+    prompt: params.input![0]!.text,
+    history: item?.type === "message" && item.role === "user" ? item.content[0]?.text : undefined,
+  };
+}
+
 const BOT_ID = "compaction-bot";
 const THREAD_ID = "compaction-thread";
 const CLAUDE_BOT_ID = "compaction-claude-bot";
@@ -782,7 +806,8 @@ describe("context compaction e2e", () => {
   });
 
   it("dispatches a long thread through a driver without generateText", async () => {
-    const sent = await api("POST", `/api/bots/${BOT_ID}/messages`, { text: "Continue with final QA" });
+    const text = "Continue with final QA";
+    const sent = await api("POST", `/api/bots/${BOT_ID}/messages`, { text });
     expect(sent.status).toBe(202);
 
     await expect.poll(() => existsSync(dumpPath), { timeout: 10_000 }).toBe(true);
@@ -794,18 +819,19 @@ describe("context compaction e2e", () => {
     }, { timeout: 10_000 }).toBe(false);
 
     const dump = JSON.parse(readFileSync(dumpPath, "utf8"));
-    const turn = dump.calls.find((call: { method: string }) => call.method === "turn/start");
-    const prompt = turn.params.input[0].text;
-    expect(prompt).toContain("Goal: Ship the release");
-    expect(prompt).toContain("reports/green.json");
-    expect(prompt).toContain("dist/orbit.exe");
-    expect(prompt).toContain("history 0");
-    expect(prompt).toContain("history 120");
+    const turn = codexTurn(dump.calls, text);
+    expect(turn?.prompt).toBe(`${REPLY_MARKER}\n\n${text}`);
+    expect(turn?.history).toContain("Goal: Ship the release");
+    expect(turn?.history).toContain("reports/green.json");
+    expect(turn?.history).toContain("dist/orbit.exe");
+    expect(turn?.history).toContain("history 0");
+    expect(turn?.history).toContain("history 120");
+    expect(turn?.history).not.toContain(`User: ${text}`);
 
     const bot = (await api("GET", "/api/bots")).body.bots.find(
       (candidate: { id: string }) => candidate.id === BOT_ID,
     );
-    expect(bot.messages.filter((message: { kind: string }) => message.kind === "compaction")).toHaveLength(1);
+    expect(bot.messages.filter((message: { kind: string }) => message.kind === "compaction")).toHaveLength(0);
     expect(bot.messages.some((message: { text?: string }) => message.text === "history 0")).toBe(true);
     expect(JSON.stringify(bot.messages)).not.toContain("cannot summarize it");
   }, 30_000);
@@ -1411,17 +1437,18 @@ describe("context compaction e2e", () => {
           if (!logged || !dump.mcpConfig) return null;
           return {
             prompt: logged.text,
+            history: undefined,
             system: logged.systemPrompt,
             tools: JSON.stringify(dump.mcpConfig.mcpServers.agents),
             token: String(dump.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN),
           };
         }
         const dump = JSON.parse(readFileSync(dumpPath, "utf8"));
-        const calls: Array<{ method: string; params: any }> = dump.calls;
-        const prompt = calls.filter((call) => call.method === "turn/start" && JSON.stringify(call.params.input).includes(text)).at(-1)?.params.input[0].text;
-        if (!prompt) return null;
+        const calls: CodexCall[] = dump.calls;
+        const turn = codexTurn(calls, text);
+        if (!turn) return null;
         return {
-          prompt: String(prompt),
+          ...turn,
           system: String(calls.find((call) => call.method === "thread/start" && String(call.params.developerInstructions).includes(`You are ${bot.name},`))?.params.developerInstructions),
           tools: String(dump.argv.find((arg: string) => arg.startsWith("mcp_servers.agents.args="))),
           token: String(dump.env.WINK_MCP_AGENTS_OMB_COMMS_TOKEN),
@@ -1437,13 +1464,21 @@ describe("context compaction e2e", () => {
     };
 
     rmSync(claudeDumpPath, { force: true });
-    const compacted = await turn(`${bot.name}: continue the release`);
-    expect(compacted.prompt).toContain("history 120");
-    expect(compacted.prompt).toContain("[Wink asks list - 2 open, 1 needs a verdict: no ref and no change in 3+ days");
-    expect(compacted.prompt).toContain("- A1 waiting-for-user needs verdict ");
-    expect(compacted.prompt).toContain(": Review the model picker PR\n");
-    expect(compacted.prompt).toContain("- A3 building ");
-    expect(compacted.prompt).not.toContain("Drop the old skin");
+    const text = `${bot.name}: continue the release`;
+    const compacted = await turn(text);
+    const codex = bot.selection.instanceId === "codex";
+    const replay = codex ? compacted.history : compacted.prompt;
+    if (codex) {
+      expect(compacted.prompt).toBe(`${REPLY_MARKER}\n\n${text}`);
+      expect(replay).toContain(`Next action: ${text}`);
+      expect(replay).not.toContain(`User: ${text}`);
+    }
+    expect(replay).toContain("history 120");
+    expect(replay).toContain("[Wink asks list - 2 open, 1 needs a verdict: no ref and no change in 3+ days");
+    expect(replay).toContain("- A1 waiting-for-user needs verdict ");
+    expect(replay).toContain(": Review the model picker PR\n");
+    expect(replay).toContain("- A3 building ");
+    expect(replay).not.toContain("Drop the old skin");
     expect(compacted.system).toContain("Add each ask the user makes to update_task_state asks in the same turn");
     expect(compacted.tools).toContain("agents-proxy");
 
