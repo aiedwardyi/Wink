@@ -320,7 +320,7 @@ describe("memory replay: gate 2073D cases", () => {
   it("removes a promise only when a line names every word of its object as whole words", () => {
     const ties: [string, string][] = [
       ["Cancel that production report.", production],
-      ["Sorry, I won't be able to check the laptop backup.", LAPTOP],
+      ["Never mind the laptop backup.", LAPTOP],
       ["I called the electrician just now.", electrician],
     ];
     const loose: [string, string][] = [
@@ -334,6 +334,7 @@ describe("memory replay: gate 2073D cases", () => {
       ["I sent the agenda to Alice just now.", toManager],
       ["I did not email the signed invoice just now.", invoice],
       ["I cannot reach the electrician just now.", electrician],
+      ["Sorry, I won't be able to check the laptop backup.", LAPTOP],
     ];
     expect(ties.filter(([line, promise]) => !namesPromise(line, promise))).toEqual([]);
     expect(loose.filter(([line, promise]) => namesPromise(line, promise))).toEqual([]);
@@ -350,6 +351,7 @@ describe("memory replay: gate 2073D cases", () => {
     { name: "an agenda drafted just now", rows: ["I'll send the agenda tonight. I drafted the agenda just now."], kept: ["I'll send the agenda tonight."] },
     { name: "an invoice signed just now", rows: [`${invoice} I signed the invoice just now.`], kept: [invoice] },
     { name: "an electrician emailed just now", rows: [`${electrician} I emailed the electrician just now.`], kept: [electrician] },
+    { name: "a refusal to finish the same report", rows: ["I'll email the report tomorrow. I won't be able to finish the report today."], kept: ["I'll email the report tomorrow."] },
   ])("keeps every promise: $name", async ({ name, rows, kept }) => {
     const run = replay(name.replace(/\W+/g, "-"));
     await run.talk([ask, ...rows.map((text) => ({ role: "bot", text }) as const)], filesWill);

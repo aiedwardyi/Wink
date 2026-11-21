@@ -164,7 +164,7 @@ const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|
 const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
 // later in the same reply "cancel that production report" takes a promise back; "I checked the laptop backup just now" only rides along for the note-taker
-const WITHDRAWN = /\b(?:scratch that|never ?mind|cancel that|(?:won['’]t|will not|can['’]t|cannot) (?:be able to|make it))\b|취소할게요|못 할 것 같/i;
+const WITHDRAWN = /\b(?:scratch that|never ?mind|cancel that)\b|취소할게요/i;
 const DONE_NOW = /\bi(?:['’]ve| have)?\s.*\bjust now\b|방금/i;
 const DENIED = /\b(?:not|never|no|cannot)\b|n['’]t\b|(?:^|\s)(?:안|못)\s/i;
 const TIMES = new RegExp(DEFERRED.source, "gi");
@@ -179,7 +179,7 @@ function object(promise: string): Set<string> {
   return named((marker ? promise.slice(marker.index + marker[0].length) : promise).replace(/^\s*\S+/, ""));
 }
 
-/** A completion, refusal or cancel is about a promise only when it names every word of that promise's object, as whole words; no such tie keeps the promise. */
+/** A completion or cancel is about a promise only when it names every word of that promise's object, as whole words; no such tie keeps the promise. */
 export function namesPromise(line: string, promise: string): boolean {
   const said = line.replace(WITHDRAWN, " ");
   const about = object(promise);
