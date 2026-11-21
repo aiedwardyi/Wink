@@ -393,8 +393,10 @@ export class ProviderRegistry {
   }
 
   async cancelSignIn(instanceId: InstanceId) {
-    const config = this.loginConfig(instanceId);
-    if (!config) return false;
+    // Only checks the target: resolving the launch env would restore a missing account home mid-removal.
+    const live = this.get(instanceId);
+    const driver = live && this.driversByKind.get(live.driverKind);
+    if (!live || !driver || !(live.loginConfig?.()?.cli ?? this.cliByInstance.get(instanceId) ?? cliDefaultOf(driver))) return false;
     if (this.signingOut.has(instanceId)) return true;
     await this.logins.cancel(instanceId);
     return true;

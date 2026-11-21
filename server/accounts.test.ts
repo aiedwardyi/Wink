@@ -1,5 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR, instanceConfigs } from "./config.ts";
@@ -19,6 +21,32 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("PC-local accounts", () => {
+  it("creates saved account homes only through AccountService.resolveHome", () => {
+    const root = fileURLToPath(new URL(".", import.meta.url));
+    const offenders: string[] = [];
+    for (const file of readdirSync(root, { recursive: true, encoding: "utf8" })) {
+      if (!file.endsWith(".ts") || file.endsWith(".test.ts") || /^testing[\\/]/.test(file)) continue;
+      const source = ts.createSourceFile(file, readFileSync(join(root, file), "utf8"), ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node, owner: string): void => {
+        if ((ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) && node.name) owner = node.name.getText(source);
+        if (ts.isCallExpression(node)) {
+          const name = node.expression.getText(source).replace(/^(?:fs\.|this\.)/, "");
+          const args = node.arguments.map((arg) => arg.getText(source)).join(", ");
+          const at = `${file.replace(/\\/g, "/")}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1} ${node.getText(source)}`;
+          if (file === "accounts.ts") {
+            if (name === "plainDirectory" && owner !== "openHome") offenders.push(at);
+            if (name === "openHome" && owner !== "resolveHome" && owner !== "add") offenders.push(at);
+            if (name === "mkdirSync" && owner !== "plainDirectory" && args !== "this.dataDir, { recursive: true, mode: 0o700 }") offenders.push(at);
+          // OpenAI credit keeps its own folder beside the data, not a saved account home.
+          } else if (/^(?:mkdirSync|mkdir|promises\.mkdir)$/.test(name) && /\bhome\b/i.test(args) && !(file.startsWith("worker-launch") && args.startsWith('join(account.home, "state")'))) offenders.push(at);
+        }
+        ts.forEachChild(node, (child) => visit(child, owner));
+      };
+      visit(source, "");
+    }
+    expect(offenders, "Create or restore a saved account home only through AccountService.resolveHome (resolveAccountHome outside accounts.ts): it rechecks the account is live and refuses links, files and removals").toEqual([]);
+  });
+
   it("accepts account directories below a linked ancestor", async () => {
     const { dir } = fixture();
     const target = join(dir, "target");
@@ -117,6 +145,19 @@ describe("PC-local accounts", () => {
     expect(restored.list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
     await expect(restored.add("codex")).rejects.toThrow(/accounts.json/);
     expect(readFileSync(join(dir, "accounts.json"), "utf8")).toBe(before);
+  });
+
+  it("recreates a saved account's missing home on restart without deleting anything", async () => {
+    const { dir, service } = fixture();
+    const claude = await service.add("claude");
+    const codex = await service.add("codex");
+    writeFileSync(join(claude.home, "keep.json"), "keep");
+    rmSync(codex.home, { recursive: true });
+    const restored = new core!.AccountService(dir, () => bases);
+    expect(restored.error).toBeUndefined();
+    expect(restored.snapshot.map((row) => row.id)).toEqual([claude.id, codex.id]);
+    expect(existsSync(join(codex.home, "state"))).toBe(true);
+    expect(readFileSync(join(claude.home, "keep.json"), "utf8")).toBe("keep");
   });
 
   it("refuses an account-root alias", async () => {

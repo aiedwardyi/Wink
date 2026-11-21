@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -92,6 +92,17 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
 }
 
 describe("account lifecycle", () => {
+  it.each(["signed in", "signed out"])("removes a %s saved account whose home is gone and leaves no folder behind", async (kind) => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    if (kind === "signed out") await f.accounts.stop(account.id);
+    rmSync(account.home, { recursive: true });
+    await expect(f.controller.remove(account.id)).resolves.toEqual({});
+    expect(f.accounts.get(account.id)).toBeUndefined();
+    expect(existsSync(account.home)).toBe(false);
+    expect(f.start.mock.calls.some(([, , args]) => args.includes("logout"))).toBe(false);
+  });
+
   it("clears a base account's promo mark after sign-in completes", async () => {
     const f = await fixture();
     const home = join(f.dir, "base-codex");

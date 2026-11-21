@@ -38,19 +38,31 @@ export class AccountError extends Error {
   constructor(message: string, status = 409, code?: string, bot?: string) { super(message); this.status = status; this.code = code; this.bot = bot; }
 }
 
+const canonical = (value: string) => process.platform === "win32" ? resolve(value).toLowerCase() : resolve(value);
+const services = new Map<string, AccountService>();
+
 function plainDirectory(path: string, create: boolean) {
-  if (create) mkdirSync(path, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(path);
-  const canonical = (value: string) => process.platform === "win32" ? resolve(value).toLowerCase() : resolve(value);
+  let stat;
+  try { stat = lstatSync(path); } catch (error) {
+    if (!create || !(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+    stat = lstatSync(path);
+  }
   if (!stat.isDirectory() || stat.isSymbolicLink() || canonical(realpathSync(path)) !== canonical(join(realpathSync(dirname(path)), basename(path)))) {
     throw new AccountError("Account home must not use a link or alias");
   }
+}
+
+// The one way to a saved account home: undefined when no account store owns it (base, credit), false when the account is gone or being removed and its home is missing.
+export function resolveAccountHome(account: AccountContext, codex: boolean): boolean | undefined {
+  return services.get(canonical(dirname(account.home)))?.resolveHome(account, codex);
 }
 
 export class AccountService {
   readonly error?: string;
   private state: State = { version: 1, accounts: [], retired: [] };
   private records: readonly AccountRecord[] = Object.freeze([]);
+  private readonly removing = new Set<string>();
   private queue: Promise<unknown> = Promise.resolve();
   private readonly file: string;
   private readonly root: string;
@@ -62,6 +74,7 @@ export class AccountService {
     this.bases = bases;
     this.file = join(dataDir, "accounts.json");
     this.root = join(dataDir, "accounts");
+    services.set(canonical(this.root), this);
     try {
       const stat = lstatSync(this.file);
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a regular file");
@@ -73,16 +86,11 @@ export class AccountService {
     try {
       this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
       this.validate(this.state);
-      if (this.state.accounts.length) {
-        plainDirectory(this.root, false);
-        for (const row of this.state.accounts) {
-          plainDirectory(this.home(row.id), false);
-          if (this.base(row.of).driver === "codex") plainDirectory(join(this.home(row.id), "state"), false);
-        }
-      }
       this.publish();
+      for (const row of this.records) this.resolveHome(row, this.base(row.of).driver === "codex");
     } catch {
       this.state = { version: 1, accounts: [], retired: [] };
+      this.records = Object.freeze([]);
       this.error = "Cannot load accounts.json; accounts are off because account state is corrupt or unsafe, or its base engine is unavailable";
     }
   }
@@ -166,10 +174,7 @@ export class AccountService {
       let id: string;
       do { id = `acct_${randomUUID()}`; } while (Object.hasOwn(fleet, id) || this.state.retired.includes(id) || this.get(id));
       mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
-      plainDirectory(this.root, true);
-      const home = this.home(id);
-      plainDirectory(home, true);
-      if (base.driver === "codex") plainDirectory(join(home, "state"), true);
+      this.openHome(this.home(id), base.driver === "codex", true);
       const row: SavedAccount = { id, of, generation: 1, state: "pending" };
       this.commit({ ...this.state, accounts: [...this.state.accounts, row] });
       return this.get(id)!;
@@ -200,6 +205,28 @@ export class AccountService {
       const defaults = Object.fromEntries(Object.entries(this.state.defaults ?? {}).filter(([, accountId]) => accountId !== id));
       this.commit({ ...this.state, defaults, accounts: this.state.accounts.filter((row) => row.id !== id), retired: [...this.state.retired, id] });
     });
+  }
+
+  // Rechecks membership at launch time: a probe captured before removal must not bring a retired home back.
+  resolveHome(account: AccountContext, codex: boolean): boolean {
+    const row = this.get(account.id);
+    if (!row || canonical(row.home) !== canonical(account.home)) return false;
+    return this.openHome(row.home, codex, !this.removing.has(row.id) && !this.drains[row.id]);
+  }
+
+  // Launches during a removal only read the home, so one that is missing stays missing once the account retires.
+  async whileRemoving<T>(id: string, run: () => Promise<T>): Promise<T> {
+    this.removing.add(id);
+    try { return await run(); } finally { this.removing.delete(id); }
+  }
+
+  private openHome(home: string, codex: boolean, create: boolean): boolean {
+    if (!create && !lstatSync(home, { throwIfNoEntry: false })) return false;
+    plainDirectory(this.root, create);
+    plainDirectory(home, create);
+    const state = join(home, "state");
+    if (codex && (create || lstatSync(state, { throwIfNoEntry: false }))) plainDirectory(state, create);
+    return true;
   }
 
   validateBases(bases = this.bases()) { if (!this.error) this.validate(this.state, bases); }
