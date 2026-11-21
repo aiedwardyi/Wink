@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 
-import { isTestProfilePath, requireTestHome } from "../companion/src/test-profile.ts";
+import { registerTestDataDir, requireTestHome } from "../companion/src/test-profile.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import { LIVE_VOICES, type LiveVoice } from "../shared/live-call.ts";
 import {
@@ -305,7 +305,7 @@ export function showToolCallsEnabled(cfg: AppConfig): boolean {
 if (process.env.VITEST !== undefined) {
   const home = requireTestHome("server/config.ts");
   const dataDir = process.env.OMB_DATA_DIR ?? join(home, ".orbit");
-  if (!isTestProfilePath(dataDir, home)) {
+  if (!registerTestDataDir(dataDir, "server/config.ts")) {
     throw new Error("OMB_DATA_DIR must point inside the verified Vitest home (use setup.ts or createFixtureHome)");
   }
 }

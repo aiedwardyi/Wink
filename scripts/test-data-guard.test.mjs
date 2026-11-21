@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
@@ -82,7 +82,7 @@ it.each([
     const env = scratchEnv(home, temp);
     const sentinel = join(sibling, "sentinel");
     writeFileSync(sentinel, "sentinel");
-    const link = join(home, "redirect");
+    const link = join(home, key === "OMB_DATA_DIR" ? ".orbit" : ".openmausbot-companion");
     symlinkSync(sibling, link, linkType);
     const overrides = [sibling, join(link, "data"), ".", ...(process.platform === "win32" ? [sibling.toUpperCase()] : [])];
     for (const dir of overrides) {
@@ -139,6 +139,7 @@ it("rejects a junction above an otherwise marked companion home", () => {
       import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
       import { basename, dirname, join } from "node:path";
       import { startTestRun } from "./companion/src/test-profile.ts";
+      import { runTestNode } from "./server/testing/harness-auth.ts";
       const alias = ${JSON.stringify(tempAlias)};
       const home = startTestRun(alias);
       assert.equal(dirname(home), alias);
@@ -148,8 +149,12 @@ it("rejects a junction above an otherwise marked companion home", () => {
       const deviceFile = join(process.env.OMB_COMPANION_DIR, "sentinel");
       mkdirSync(dirname(deviceFile));
       writeFileSync(deviceFile, "sentinel");
-      assert.equal((await import("./companion/src/state.ts")).DATA_DIR, process.env.OMB_COMPANION_DIR);
-      assert.equal((await import("./server/config.ts")).DATA_DIR, process.env.OMB_DATA_DIR);
+      const config = await import("./server/config.ts");
+      assert.equal(config.DATA_DIR, process.env.OMB_DATA_DIR);
+      const valid = await runTestNode(["--input-type=module", "-e", 'console.log((await import("./companion/src/state.ts")).DATA_DIR)'],
+        { env: config.scrubbedEnv(process.env) });
+      assert.equal(valid.status, 0, valid.stderr);
+      assert.equal(valid.stdout.trim(), process.env.OMB_COMPANION_DIR);
       const link = join(${JSON.stringify(scratch)}, "redirect");
       symlinkSync(${JSON.stringify(outside)}, link, ${JSON.stringify(linkType)});
       process.env.HOME = process.env.USERPROFILE = join(link, basename(home));
@@ -229,21 +234,31 @@ it("rechecks the run nonce and refuses a junction swapped in after config import
       assert.throws(() => removeTestData(DATA_DIR), /removeTestData requires the live run/);
       assert(lstatSync(DATA_DIR).isDirectory());
       writeFileSync(marker, original);
-      renameSync(branch, join(home, "parked"));
+      const parked = join(home, "parked");
+      renameSync(branch, parked);
       symlinkSync(fakeProfile, branch, ${JSON.stringify(linkType)});
       assert.throws(() => removeTestData(DATA_DIR), /removeTestData refused a real profile path/);
       for (const target of [osHome, fakeProfile, join(fakeProfile, "data")]) {
         assert.throws(() => removeTestData(target), /removeTestData refused a real profile path/);
       }
-      for (const name of [".codex", ".openmausbot-companion"]) {
+      for (const name of [".codex", ".openmausbot-companion", ".claude", ".claude-account", ...(
+        process.platform === "win32" ? [".CLAUDE-WORK"] : []
+      )]) {
         const protectedDir = join(home, name);
         mkdirSync(protectedDir);
+        const token = join(protectedDir, "sentinel");
+        writeFileSync(token, "protected");
         const alias = join(osHome, name);
         symlinkSync(protectedDir, alias, ${JSON.stringify(linkType)});
+        assert.throws(() => removeTestData(alias), /removeTestData refused a real profile path/);
         assert.throws(() => removeTestData(protectedDir), /removeTestData refused a real profile path/);
         assert.throws(() => removeTestData(home), /removeTestData refused a real profile path/);
+        assert.equal(readFileSync(token, "utf8"), "protected");
         unlinkSync(alias);
       }
+      assert.throws(() => removeTestData(home), /removeTestData found a changed directory/);
+      unlinkSync(branch);
+      renameSync(parked, branch);
       removeTestData(home);
       assert.equal(readFileSync(sentinel, "utf8"), "original");
     `, scratchEnv(scratch, scratch));
@@ -251,6 +266,37 @@ it("rechecks the run nonce and refuses a junction swapped in after config import
   } finally {
     removeTestData(scratch);
   }
+});
+
+it("refuses ordinary replacements of imported data directories during direct and parent cleanup", async () => {
+  const home = createFixtureHome("replaced-data-");
+  const env = scratchEnv(home, testHome());
+  const result = await runTestNode(["--input-type=module", "-e", `
+    await import("./server/config.ts");
+    await import("./companion/src/state.ts");
+  `], { cwd: root, env });
+  expect(result.status, result.stderr).toBe(0);
+  for (const dir of [env.OMB_DATA_DIR, env.OMB_COMPANION_DIR]) {
+    writeFileSync(join(dir, "owned"), "owned");
+    removeTestData(dir);
+    expect(existsSync(join(dir, "owned"))).toBe(false);
+    const parked = dir + "-parked";
+    const replacement = dir + "-replacement";
+    mkdirSync(join(replacement, "nested"), { recursive: true });
+    writeFileSync(join(replacement, "nested", "sentinel"), "replacement");
+    renameSync(dir, parked);
+    renameSync(replacement, dir);
+    try {
+      expect(() => removeTestData(dir)).toThrow("changed directory");
+      expect(() => removeTestData(join(dir, "nested"))).toThrow("changed directory");
+      expect(() => removeTestData(home)).toThrow("changed directory");
+      expect(readFileSync(join(dir, "nested", "sentinel"), "utf8")).toBe("replacement");
+    } finally {
+      if (existsSync(dir)) renameSync(dir, replacement);
+      renameSync(parked, dir);
+    }
+  }
+  removeTestData(home);
 });
 
 it("the repo check rejects raw recursive deletion through aliases and keeps file removal", () => {

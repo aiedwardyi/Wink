@@ -34,7 +34,7 @@ export function spawnTestNode(command: string, args: string[], options: SpawnOpt
   // stdio and windowsHide sit after the spread deliberately: the ipc channel
   // is load-bearing for the token handshake below, and no harness wants a console.
   const stdio = Array.isArray(options.stdio) ? options.stdio : [];
-  const child = spawn(command, args, { ...options, env,
+  const child = spawn(command, args, { ...options, env, ...(profile ? { serialization: "advanced" } : {}),
     stdio: [stdio[0] ?? "ignore", stdio[1] ?? "pipe", stdio[2] ?? "pipe", "ipc"], windowsHide: true });
   const childProfile = profile;
   if (childProfile) child.once("message", (message) => {
