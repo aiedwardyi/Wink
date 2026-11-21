@@ -65,11 +65,13 @@ const calls: FetchCall[] = [];
 const probes: string[] = [];
 const buttons: Array<{ theme: string; text: string; shape: string }> = [];
 let renders = 0;
+let autoSelectOff = 0;
 
 function installGoogle(gisError?: string): void {
   inits.length = 0;
   prompts.length = 0;
   renders = 0;
+  autoSelectOff = 0;
   buttons.length = 0;
   vi.stubGlobal("google", {
     accounts: {
@@ -89,6 +91,9 @@ function installGoogle(gisError?: string): void {
           prompts.push(listener);
         },
         cancel(): void {},
+        disableAutoSelect(): void {
+          autoSelectOff += 1;
+        },
       },
     },
   });
@@ -406,6 +411,19 @@ describe("phone sign-in page", () => {
     await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
     expect(location.href).not.toContain("/pair");
     expect(document.getElementById("pick")?.hidden).toBe(true);
+  });
+
+  it("after Sign Out, turns off Google's quiet sign-in and waits for the button instead of reopening the last PC", async () => {
+    localStorage.setItem(LAST_PC, LABEL_A);
+    open("/?signedout=1", [{ label: LABEL_A, name: "Ada" }]);
+    await vi.waitFor(() => expect(renders).toBe(1));
+    expect(autoSelectOff).toBe(1);
+    expect(probes).toHaveLength(0);
+    expect(prompts).toHaveLength(0);
+    expect(inits[0]?.auto_select).toBe(false);
+    expect(location.href).not.toContain("/pair");
+    inits[0]?.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Ada")));
   });
 
   it("titles the PC list Choose a PC with no sign-in wording", async () => {

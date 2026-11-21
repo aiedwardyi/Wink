@@ -11,6 +11,7 @@ import {
   FolderMinus,
   FolderPlus,
   Loader2,
+  LogOut,
   Pencil,
   PanelLeftClose,
   PanelLeftOpen,
@@ -23,6 +24,7 @@ import {
   Search,
   Settings,
   Trash2,
+  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -62,6 +64,9 @@ import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./Sideba
 import { confirmRoomDelete, TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
+import { relaySignInSite } from "@/lib/devices-setup";
+import { leaveSignedOut, sessionState, sessionStreamLive, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -611,6 +616,10 @@ export function Sidebar({
   const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   useEffect(() => { if (plusOpen) trackScreen("new-menu"); }, [plusOpen]);
+  const [signInSite] = useState(relaySignInSite);
+  const [profileMenu, setProfileMenu] = useState<{ left: number; bottom: number } | null>(null);
+  const profileMenuPresence = usePresence(profileMenu);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
   const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   useEffect(() => { if (teamLibraryOpen) trackScreen("teams-library"); }, [teamLibraryOpen]);
@@ -669,7 +678,7 @@ export function Sidebar({
   const density: SidebarDensity = sidebarCollapsed ? "icons" : "comfortable";
   const backOverlay = deleteTarget ? "delete" : sectionPicker ? "section" : roomSectionPicker ? "room-section"
     : menu ? "menu" : roomMenu ? "room-menu" : wizard ? "wizard" : archivedBotsOpen ? "archived"
-    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
+    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : profileMenu ? "profile-menu" : null;
   useEffect(() => {
     onOverlayChange?.(backOverlay);
   }, [backOverlay, onOverlayChange]);
@@ -685,6 +694,7 @@ export function Sidebar({
       else if (trashOpen) setTrashOpen(false);
       else if (teamLibraryOpen) { setTeamLibraryOpen(false); setTeamInstallUrl(null); }
       else if (plusOpen) setPlusOpen(false);
+      else if (profileMenu) setProfileMenu(null);
     };
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
@@ -964,6 +974,23 @@ export function Sidebar({
       refreshTrash();
     } catch (cause) {
       setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
+
+  const signOut = async (site: string) => {
+    signedOutLanding(`${site}/?signedout=1`);
+    try {
+      await api("/api/phone/sign-out", { method: "POST" });
+      return leaveSignedOut();
+    } catch {
+      // A failed reply may follow a revoke that landed, so only the PC's own answer decides.
+      // A PC that is gone can't give one, so nothing is claimed until it does: its refusal on the live stream lands on sign-in.
+      // A stream already open may be one the PC is about to cut, so only one that opens from here answers before the check does.
+      const state = await Promise.race([sessionState(), sessionStreamLive(false).then(() => "live" as const)]);
+      if (state === "gone") return leaveSignedOut();
+      if (state === "unknown") await sessionStreamLive();
+      signedOutLanding();
+      setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
     }
   };
 
@@ -1878,7 +1905,13 @@ export function Sidebar({
         <CallWidgetSlot narrow={density === "icons"} className="mb-2 max-md:hidden" />
         <div className={cn("flex min-w-0 items-center", density === "icons" && "justify-center")} data-sidebar-profile-row>
           <button
-            onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "account" })}
+            onClick={(event) => {
+              if (!signInSite) return dispatch({ type: "toggleAppSettings", open: true, section: "account" });
+              const rect = event.currentTarget.getBoundingClientRect();
+              setProfileMenu(profileMenu ? null : { left: rect.left, bottom: window.innerHeight - rect.top + 4 });
+            }}
+            aria-haspopup={signInSite ? "menu" : undefined}
+            aria-expanded={signInSite ? Boolean(profileMenu) : undefined}
             className={cn("flex min-w-0 items-center rounded-xl py-2 text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-3")}
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
@@ -1914,6 +1947,50 @@ export function Sidebar({
         </div>
       </div>
 
+      {profileMenuPresence.value && signInSite && createPortal(
+        <>
+          {!profileMenuPresence.closing && <div className="fixed inset-0 z-50" onMouseDown={() => setProfileMenu(null)} />}
+          <div
+            ref={profileMenuRef}
+            role="menu"
+            aria-label={t("settings.section.account")}
+            data-profile-menu
+            data-closing={profileMenuPresence.closing || undefined}
+            inert={profileMenuPresence.closing}
+            style={profileMenuPresence.value}
+            onKeyDown={(event) => menuKeyDown(profileMenuRef, event)}
+            className={cn(MENU_CLASS, "z-50 w-52 overflow-hidden")}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              autoFocus
+              onClick={() => {
+                setProfileMenu(null);
+                dispatch({ type: "toggleAppSettings", open: true, section: "account" });
+              }}
+              className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
+            >
+              <UserRound size={16} className="text-ink-secondary" />
+              {t("settings.section.account")}
+            </button>
+            <div className="mx-2 my-1 border-t border-hairline/40" />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setProfileMenu(null);
+                void signOut(signInSite);
+              }}
+              className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
+            >
+              <LogOut size={16} className="text-ink-secondary" />
+              {t("chrome.signOut")}
+            </button>
+          </div>
+        </>,
+        document.body,
+      )}
       {menuPresence.value && (
         <BotContextMenu
           menu={menuPresence.value}

@@ -511,11 +511,11 @@
     });
   }
 
-  async function coldStart(pick) {
+  async function coldStart(pick, signedOut) {
     const last = remembered();
     const saved = LABEL_RE.test(last);
-    const uncover = !pick && saved ? coverCode() : () => {};
-    if (!pick && saved && await reachable(last)) {
+    const uncover = !pick && !signedOut && saved ? coverCode() : () => {};
+    if (!pick && !signedOut && saved && await reachable(last)) {
       // Back restores this page from bfcache as it was left, still covered.
       const restored = (event) => {
         if (!event.persisted) return;
@@ -536,7 +536,7 @@
       say(OFFLINE, "error");
       return;
     }
-    choose(listed, pick || saved);
+    choose(listed, pick || (saved && !signedOut));
     if (listed.length === 0) refreshWhenBack(token, pick || saved);
   }
 
@@ -594,7 +594,10 @@
     const m = params.get("m");
     if (pc === null && m === null) {
       showCode();
-      void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
+      const signedOut = params.get("signedout") === "1";
+      // Google would otherwise sign the browser straight back in on the PC's return leg.
+      if (signedOut) gis.disableAutoSelect();
+      void coldStart(params.get("pick") === "1", signedOut).catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
     // A cold start is already the chooser, so the link would only reload it.
