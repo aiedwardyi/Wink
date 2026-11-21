@@ -1266,7 +1266,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               if (failure) reject(failure);
               else if (!result) reject(textUsageError(stderr) ?? new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
               else if (result.status !== "SUCCESS" || !response) {
-                reject(textUsageError(typeof result.error === "string" ? result.error : undefined) ?? textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})`));
+                const error = typeof result.error === "string" ? result.error : undefined;
+                reject(textUsageError(error) ?? textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})${error && isAgyAccountError(error) ? `: ${error}` : ""}`));
               }
               else resolve(response);
             });

@@ -32,6 +32,7 @@ import {
   STATIC_ANTIGRAVITY_MODELS,
   WIN32_CREATEPROCESS_CMDLINE_MAX,
 } from "./antigravity.ts";
+import { noteGenerator } from "../memory-pass.ts";
 import { describeSpawnFailure } from "../procs.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
@@ -1745,6 +1746,21 @@ describe("Antigravity computer MCP config", () => {
     const helper = await createIn(home, "limited", { FAKE_AGY_RESULT_ERROR: "RESOURCE_EXHAUSTED (code 429): Quota exceeded for quota metric Generate requests." });
     try {
       await expect(helper.generateText!("notes")).rejects.toThrow("Account text rate limit");
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("holds a note helper after a sign-in rejection in the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-signedout-"));
+    const helper = await createIn(home, "signed-out", { FAKE_AGY_RESULT_ERROR: "UNAUTHENTICATED (code 401): Sign in again." });
+    const usage = { limits: new Map(), save: () => {}, signedOut: new Set<string>() };
+    try {
+      await expect(noteGenerator([], undefined, helper, usage)!("notes", new AbortController().signal)).rejects.toThrow("UNAUTHENTICATED (code 401)");
+      expect(noteGenerator([], undefined, helper, usage)).toBeNull();
     } finally {
       await helper.dispose();
       rmSync(home, { recursive: true, force: true });

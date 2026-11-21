@@ -5,12 +5,15 @@ import { z } from "zod";
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
+import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
+import { chatSyncBotId } from "./thread-sync.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import {
   ensureWorkspace,
@@ -68,7 +71,7 @@ export interface MemoryPassDeps {
   enabled(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
   dataDir: string;
-  /** This PC; pending ids restored from another PC stay that PC's work. */
+  /** This PC; pending ids restored from another PC stay that PC's work while this copy syncs chats with it. */
   host?: string;
   now?(): number;
 }
@@ -87,7 +90,7 @@ export interface MemoryPass {
 }
 
 type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string };
-export type NoteLimits = { limits: RateLimitsMap; save(): void };
+export type NoteLimits = { limits: RateLimitsMap; save(): void; signedOut?: Set<string> };
 
 export function noteGenerator(
   instances: readonly NoteInstance[],
@@ -102,6 +105,7 @@ export function noteGenerator(
   const report = id && usage ? usage.limits.get(id) : undefined;
   const now = Date.now();
   if (exhaustedWindow(report?.windows, now) || (report?.noteLimit && (report.noteLimit.resetsAt === null || report.noteLimit.resetsAt > now))) return null;
+  if (id && usage?.signedOut?.has(id)) return null;
   const generate: NoteGenerator = async (prompt, signal, onUsage) => {
     try {
       return await helper.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true, ...(onUsage ? { onUsage } : {}) });
@@ -111,7 +115,7 @@ export function noteGenerator(
         const previous = usage.limits.get(id);
         usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: limit });
         usage.save();
-      }
+      } else if (id && !signal.aborted && error instanceof Error && (isSignOut(error.message) || UNAVAILABLE.test(error.message))) usage?.signedOut?.add(id);
       throw error;
     }
   };
@@ -629,8 +633,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   try {
     const state = stateSchema.parse(JSON.parse(readFileSync(statePath, "utf8")));
     const restored = Boolean(state.host && deps.host && state.host !== deps.host);
+    const sync = restored ? loadProfileSyncSettings(deps.dataDir) : undefined;
     for (const [threadId, ids] of Object.entries(state.threads)) {
-      if (ids.length && !restored) pending.set(threadId, ids);
+      const bot = sync && sourceBot(threadId);
+      if (ids.length && !(sync && bot && chatSyncBotId(sync, bot.id))) pending.set(threadId, ids);
     }
     for (const [botId, record] of Object.entries(state.dropped ?? {})) dropped.set(botId, record);
     claim = Boolean(deps.host && state.host !== deps.host);
@@ -772,6 +778,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const run = async (botId: string, threadId: string, signal: AbortSignal) => {
     const ids = [...(pending.get(threadId) ?? [])];
     if (!ids.length || signal.aborted || !deps.enabled(botId)) return;
+    if (busy(botId, threadId)) return arm(botId, threadId);
     const kept = held.get(threadId);
     if (kept) {
       land(botId, threadId, kept, readMemoryFile(botId), memoryFileRaw(botId), 0);

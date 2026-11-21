@@ -25,6 +25,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import { CodexDriver } from "./drivers/codex.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { replyTurns } from "./pick-sources.ts";
+import { loadProfileSyncSettings, saveProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
@@ -242,7 +243,41 @@ describe("memory pass", () => {
     expect(stored()).toEqual({ threads: { t1: ids } });
   });
 
-  it("runs a restored batch only on the PC that saved it", async () => {
+  it("makes five settlements cost one attempt on a signed-out account until a fresh probe", async () => {
+    const signedOut = new Set<string>();
+    const own = { instanceId: "acct-live", enabled: true, driverKind: "antigravityAgent", generateText: vi.fn(async () => {
+      throw new Error("UNAUTHENTICATED (code 401): Sign in again.");
+    }) };
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, own, { limits: new Map(), save: () => {}, signedOut }) });
+    passes.push(pass);
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    for (let i = 0; i < 5; i++) await settle("t1");
+    expect(own.generateText).toHaveBeenCalledTimes(1);
+    signedOut.clear();
+    await settle("t1");
+    pass.dispose();
+    expect(own.generateText).toHaveBeenCalledTimes(2);
+    expect(store.rows("t1").map(({ id }) => id)).toEqual(ids);
+    expect(stored()).toEqual({ threads: { t1: ids } });
+  });
+
+  it("keeps a moved, renamed or restored batch and saves it on the new home", async () => {
+    const id = say("t1", "I use pnpm").id;
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ host: "old-home", threads: { t1: [id] } }));
+    generate.mockResolvedValueOnce(facts(["Uses pnpm", "I use pnpm"]));
+    pass = createMemoryPass({ store, dataDir, host: "new-home", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    expect(stored()).toEqual({ host: "new-home", threads: { t1: [id] } });
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memoryFileRaw("bot-t1")).toContain("Uses pnpm");
+    expect(stored()).toEqual({ host: "new-home", threads: {} });
+  });
+
+  it("runs a synced copy's restored batch only on the PC that saved it", async () => {
     for (let i = 0; i < 8; i++) say("t1", "I use pnpm");
     pass.dispose();
     const startOn = (host: string, path: string) => {
@@ -254,6 +289,7 @@ describe("memory pass", () => {
     say("t1", "I prefer tabs");
     const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
     writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    saveProfileSyncSettings(mirrorDir, { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: { "bot-t1": "synced-bot" } });
     const mirror = startOn("pc-b", mirrorDir);
     mirror.onSettled("bot-t1", "t1");
     await mirror.idle();
@@ -263,6 +299,17 @@ describe("memory pass", () => {
     expect(generate.mock.calls[0]![0]).toContain("I use pnpm");
     expect(generate.mock.calls[0]![0]).toContain("I prefer tabs");
     expect(stored()).toEqual({ host: "pc-a", threads: {} });
+  });
+
+  it("never starts a helper for a turn claimed after the pass was scheduled", async () => {
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    busy.add("bot-t1");
+    await pass.idle();
+    expect(generate).not.toHaveBeenCalled();
+    busy.delete("bot-t1");
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 
   it("starts a pass only after the settling call returns", async () => {
@@ -1202,6 +1249,27 @@ describe("notes on the bot's own engine", () => {
     expect(limits.get("codex")?.noteLimit).toEqual({ resetsAt: null });
   });
 
+  it.each([
+    ["an RPC error", undefined],
+    ["an error event", { method: "error", params: { error: { message: "unexpected status 401 Unauthorized" }, willRetry: false } }],
+    ["a failed turn", { method: "turn/completed", params: { turn: { status: "failed", error: { message: "unexpected status 401 Unauthorized" } } } }],
+  ])("holds a Codex helper signed out by %s until a fresh account probe", async (_path, frame) => {
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-signed-out-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    const environment: Record<string, string> = frame ? { FAKE_CODEX_TOOL_FIXTURE: join(home, "frames.json") } : { FAKE_CODEX_MODE: "unauthorized" };
+    if (frame) writeFileSync(join(home, "frames.json"), JSON.stringify([frame]));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true,
+      environment: { CODEX_HOME: home, ...environment }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const usage = { limits: new Map() as RateLimitsMap, save: vi.fn(), signedOut: new Set<string>() };
+    await expect(noteGenerator([], undefined, own, usage)?.("notes", new AbortController().signal)).rejects.toThrow("401");
+    expect(noteGenerator([], undefined, own, usage)).toBeNull();
+    usage.signedOut.clear();
+    expect(noteGenerator([], undefined, own, usage)).not.toBeNull();
+    expect(usage.save).not.toHaveBeenCalled();
+  });
+
   it("fills notes and the timeline for a Codex bot on a PC with no Claude", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
@@ -1237,6 +1305,11 @@ describe("memory pass wiring", () => {
     expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?generate: noteHelper,/);
     expect(index).toMatch(/memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);\s*if \(!store\.groupByThread\(event\.threadId\)\)/);
     expect(index).toContain("memoryPass.dispose();");
+  });
+
+  it("lifts a signed-out helper only on a fresh account probe", () => {
+    expect(index).toContain("registry.onProbed((instanceId) => signedOutHelpers.delete(instanceId));");
+    expect(index).toContain("signedOut: signedOutHelpers");
   });
 
   it("runs the pass after a room turn, for the member that spoke", () => {

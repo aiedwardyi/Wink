@@ -3071,9 +3071,11 @@ const summaryBuild = createSummaryBuild({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   userName: () => cfg.profile?.name?.trim() || "User",
 });
+const signedOutHelpers = new Set<string>();
+registry.onProbed((instanceId) => signedOutHelpers.delete(instanceId));
 const noteHelper = (botId: string) => {
   const bot = store.bot(botId);
-  return bot ? botAccounts.notes(bot, { limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR) }) : null;
+  return bot ? botAccounts.notes(bot, { limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR), signedOut: signedOutHelpers }) : null;
 };
 const memoryJobEnabled = (botId: string) => {
   const bot = store.bot(botId);
