@@ -194,10 +194,12 @@ describe("engine default account routing", () => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     vi.spyOn(f.registry, "startSignIn").mockImplementationOnce(async () => { await held; throw new Error("held"); });
+    const queued = [vi.spyOn(f.controller, "cancel"), vi.spyOn(f.controller, "remove")];
     const busy = f.controller.signIn(f.added[1].id).catch(() => {});
+    await vi.waitFor(() => expect(f.registry.startSignIn).toHaveBeenCalled());
     const cancel = f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, tab);
     const remove = f.request("DELETE", `/api/accounts/${id}`, {}, tab);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.waitFor(() => { for (const spy of queued) expect(spy).toHaveBeenCalled(); });
     const first = f.registry.logins.generation(id);
     await f.registry.logins.cancel(id);
     await start();
