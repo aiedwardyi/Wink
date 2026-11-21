@@ -22,9 +22,10 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
   attempt("home", () => { home = present(account.home); });
   if (!home) return;
   const sourceStat = (path: string) => statSync(path, { throwIfNoEntry: false });
-  const link = (source: string, destination: string) => {
+  const link = (source: string, destination: string, parent = false) => {
     if (!sourceStat(source)?.isDirectory() || present(destination)) return;
-    mkdirSync(dirname(destination), { recursive: true });
+    // Only a folder inside the home: a home that goes missing mid-setup stays missing.
+    if (parent && !present(dirname(destination))) mkdirSync(dirname(destination));
     symlinkSync(resolve(source), destination, "junction");
   };
   if (driver === "claudeAgent") {
@@ -53,7 +54,7 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
     let complete = true;
     for (const name of readdirSync(source)) {
       if (name === "synced" || name.startsWith(".")) continue;
-      if (!attempt(name, () => link(join(source, name), join(destination, name)))) complete = false;
+      if (!attempt(name, () => link(join(source, name), join(destination, name), true))) complete = false;
     }
     const current = present(destination);
     if (complete && current?.isDirectory() && scanStart - Math.max(sourceInfo.mtimeMs, current.mtimeMs) > SETTLE_MS) skillScans.set(key, { sourceMtimeMs: sourceInfo.mtimeMs, destinationMtimeMs: current.mtimeMs });

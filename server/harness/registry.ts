@@ -677,7 +677,7 @@ export class ProviderRegistry {
     try {
       const account = this.accounts.get(inst.instanceId);
       // Launching would fail (Codex) or create the home (Claude, Grok); Sign In creates it.
-      if (account && missingAccountHome(account, inst.driverKind === "codex")) {
+      if (account && missingAccountHome(account)) {
         return { snapshot: { ...MISSING_HOME, authChecked: true }, cliCandidates: candidatesFor(driver), models: this.cacheDir ? structuredClone(inst.models) : undefined };
       }
       const discovery = this.modelRefreshInFlight.get(inst.instanceId);

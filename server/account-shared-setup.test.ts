@@ -78,6 +78,20 @@ describe("Claude user setup", () => {
     expect(fs.existsSync(f.home)).toBe(false);
   });
 
+  it.each(["claudeAgent", "codex", "grokAgent"])("does not bring back a %s home that goes missing while setup runs", (driver) => {
+    const f = fixture();
+    f.write(join(f.base, "rules", "fixture.md"));
+    f.write(join(f.base, "skills", "fixture", "SKILL.md"));
+    const base = resolve(f.base).toLowerCase();
+    let archived = false;
+    vi.spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, ...rest: any[]) => {
+      if (!archived && resolve(String(path)).toLowerCase().startsWith(base)) { archived = true; actual.rmSync(f.home, { recursive: true }); }
+      return Reflect.apply(actual.statSync, actual, [path, ...rest]);
+    }) as typeof fs.statSync);
+    f.share(driver);
+    expect(fs.existsSync(f.home)).toBe(false);
+  });
+
   it("writes the default pointer using the mocked home", () => {
     const f = fixture("profile/.claude");
     vi.spyOn(os, "homedir").mockReturnValue(join(f.root, "profile"));

@@ -132,6 +132,30 @@ describe("account lifecycle", () => {
     expect(existsSync(account.home)).toBe(false);
   });
 
+  it("keeps a signed-in Codex account ready when only its state folder is missing", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    rmSync(join(account.home, "state"), { recursive: true });
+    const snapshot = vi.spyOn(f.registry.get(account.id)!, "snapshot");
+    await f.registry.describe({ refresh: true });
+    expect(snapshot).toHaveBeenCalled();
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+    const accounts = new core!.AccountService(f.dir, () => f.bases);
+    expect(accounts.error).toBeUndefined();
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: f.bases }, accounts.snapshot), { deferAccountAuth: true });
+    const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    });
+    controllers.push(controller);
+    await controller.restore();
+    expect(accounts.get(account.id)?.state).toBe("ready");
+    expect(registry.accountAvailable(account.id)).toBe(true);
+    expect(existsSync(join(account.home, "state"))).toBe(false);
+  });
+
   it("never brings back the missing home of a removed account", async () => {
     const f = await fixture();
     const account = await f.add("codex");

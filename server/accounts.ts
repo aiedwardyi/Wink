@@ -50,9 +50,9 @@ function plainDirectory(path: string, create: boolean) {
 export const MISSING_HOME: ProviderSnapshot = Object.freeze({ state: "available", authenticated: false, accountAuthenticated: false });
 
 // A saved home that went missing reads as signed out until Sign In creates it again (AccountService.openHome).
-export function missingAccountHome(account: AccountContext, codex: boolean): boolean {
-  const present = (path: string) => Boolean(lstatSync(path, { throwIfNoEntry: false }));
-  try { return ACCOUNT_ID.test(account.id) && (!present(account.home) || (codex && !present(join(account.home, "state")))); } catch { return false; }
+// Only the home itself counts: when it exists, the provider's own auth check answers.
+export function missingAccountHome(account: AccountContext): boolean {
+  try { return ACCOUNT_ID.test(account.id) && !lstatSync(account.home, { throwIfNoEntry: false }); } catch { return false; }
 }
 
 export class AccountService {

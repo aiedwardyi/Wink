@@ -78,7 +78,7 @@ export class AccountLifecycle {
     const { id, generation } = account;
     this.registry.checkAccount(id);
     const live = this.registry.get(id);
-    const snapshot = live && missingAccountHome(account, live.driverKind === "codex") ? MISSING_HOME : await live?.snapshot({ refresh: true }).catch(() => undefined);
+    const snapshot = live && missingAccountHome(account) ? MISSING_HOME : await live?.snapshot({ refresh: true }).catch(() => undefined);
     if (!this.registry.accountChecking(id) || this.accounts.get(id)?.generation !== generation) return;
     try {
       await this.observe(id, snapshot ?? { state: "unavailable" }, generation);

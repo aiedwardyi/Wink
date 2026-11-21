@@ -61,7 +61,7 @@ describe("PC-local accounts", () => {
     const restored = new core!.AccountService(dir, () => bases);
     expect(restored.error).toBeUndefined();
     expect(restored.snapshot.map((row) => row.id)).toEqual(saved.map((row) => row.id));
-    expect(saved.map((row) => core!.missingAccountHome(row, row.of === "codex"))).toEqual([false, true, true]);
+    expect(saved.map((row) => core!.missingAccountHome(row))).toEqual([false, true, true]);
     expect([existsSync(saved[1].home), existsSync(saved[2].home)]).toEqual([false, false]);
     rmSync(dirname(saved[0].home), { recursive: true });
     expect(new core!.AccountService(dir, () => bases).snapshot).toHaveLength(3);
