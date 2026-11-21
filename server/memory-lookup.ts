@@ -235,8 +235,11 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
   db.exec("COMMIT");
   const search = db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? ORDER BY bm25(notes), rowid LIMIT ${HIT_LIMIT}`);
 
+  // recall answers one row per label, so a word its rows repeat, in a copy or an edit of one note, counts once
+  const said = new Map<string, Set<string>>();
+  for (const piece of pieces) for (const token of piece.tokens) said.set(piece.topic, (said.get(piece.topic) ?? new Set<string>()).add(token));
   const documents = new Map<string, number>();
-  for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
+  for (const tokens of said.values()) for (const word of tokens) documents.set(word, (documents.get(word) ?? 0) + 1);
   const vocabulary = [...documents.keys()].filter((word) => word.length >= 3);
   const total = rows.length;
   const maxIdf = Math.log(1 + (total + 0.5) / 0.5);

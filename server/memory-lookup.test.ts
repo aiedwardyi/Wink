@@ -298,6 +298,23 @@ describe("corpus", () => {
     }
   });
 
+  it("finds a note kept in two rows, copied to another file or edited in place, so an older note naming its day never leaves the label with nothing", async () => {
+    const supplies = (count: number) => Array.from({ length: count }, (_, n) => `- Supply ${n} crate${n} tent${n}`);
+    const notes = (rows: string[]) => `# Notes\n${rows.join("\n")}\n`;
+    const onyx = "- Dentist: Onyx Mill on 2026-11-25 (noted 2026-10-11)";
+    const amber = "- Dentist: provisional Amber Quay on 2026-11-25 (noted 2026-10-16)";
+    const copied = "- Dentist: provisional Amber Quay on 2026-11-25";
+    const slate = "- Ferry ticket: moved to Slate Hollow on 2026-11-20 (noted 2026-10-12)";
+    const layouts: Array<readonly [string, Record<string, readonly [string, number]>, string]> = [
+      ...[0, 24, 45].map((count) => [`overflow copy, filler ${count}`, { "side0.md": [notes([...supplies(count), onyx, amber]), 16], "auto-notes-overflow.md": [notes([amber]), 16] }, "amber quay"] as const),
+      ["hand copy", { "side0.md": [notes([...supplies(24), onyx, amber]), 16], "people.md": [notes([copied]), 16] }, "amber quay"],
+      ["copies in both files", { "side0.md": [notes([...supplies(24), "- Dentist: provisional Cedar Dock", amber, copied, onyx]), 10], "auto-notes-overflow.md": [notes([copied, copied, "- Dentist: Coral Bend from 2026-10-12 (noted 2026-10-11)"]), 15] }, "amber quay"],
+      ["edited copy", { "side0.md": [notes([...supplies(24), "- Dentist: Opal Gate on 2026-11-08 (noted 2026-10-20)", "- Dentist: Opal Gate on 2026-11-08 (noted 2026-10-11) updated", "- Dentist: confirmed Maple Yard on 2027-01-15 (noted 2026-10-18)"]), 19] }, "opal gate"],
+      ["three tickets", { "side0.md": [notes([...supplies(24), "- Ferry ticket: provisional Pearl Cove on 2026-11-20 (noted 2026-10-10)", "- Ferry ticket: Opal Gate on 2026-11-20 (noted 2026-10-10)", slate]), 16], "auto-notes-overflow.md": [notes([slate]), 15] }, "slate hollow"],
+    ];
+    for (const [name, files, query] of layouts) expect(await fresh(files, query), name).toContain(query.replace(/\b\w/g, (first) => first.toUpperCase()));
+  });
+
   it("treats an impossible stamp as no stamp, so it never hides a newer value", async () => {
     const files = { "connections.md": ["# Stations\n- Station assignment: Silver Pier from 2026-10-01 (noted 2026-13-02)\n- Station assignment: Amber Quay (noted 2026-10-15)\n", 16] as const };
     expect(await fresh(files, "amber quay")).toContain("Amber Quay");
@@ -404,6 +421,7 @@ describe("corpus", () => {
     const places = ["Silver Pier", "Amber Quay", "Cobalt Acme", "Indigo Globex", "Cedar Dock", "Harbor Road", "Maple Yard", "Opal Gate"];
     const day = (month: number, date: number) => `2026-${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
     const stamp = () => [" (noted 2026-13-02)", " (noted 2026-02-31)", " (noted 2026-10-32)", "", "", ` (noted ${day(10, 10 + pick(10))})`, ` (noted ${day(10, 10 + pick(10))})`][pick(7)]!;
+    const layout = (files: NoteFile[]) => files.map((one) => `${one.source} day ${new Date(one.mtime).getDate()} tier ${one.tier}: ${one.text.split("\n").filter((row) => row.startsWith("- ") && !row.startsWith("- Supply")).join(" | ")}`).join(" || ");
     for (let plan = 0; plan < 2_000; plan++) {
       const own = [labels[pick(4)]!, labels[pick(4)]!];
       const free = [...places].sort(() => pick(3) - 1);
@@ -416,7 +434,22 @@ describe("corpus", () => {
       const split = pick(3) ? 1 : 2;
       const files = Array.from({ length: split }, (_, at) => file(`side${at}.md`, [...(at ? [] : supplies([0, 8, 24, 128][pick(4)]!)), ...rows.filter((_, n) => n % split === at)], 12 + pick(8), pick(2) ? 1 : 0));
       const queries = [...new Set(rows.map((row) => /: ([A-Z]\w+ [A-Z]\w+)/.exec(row)![1]!.toLowerCase())), ...new Set(own.map((name) => name.toLowerCase()))];
-      await check(`plan ${plan}: ${files.map((one) => `${one.source} day ${new Date(one.mtime).getDate()} tier ${one.tier}: ${one.text.split("\n").filter((row) => row.startsWith("- ") && !row.startsWith("- Supply")).join(" | ")}`).join(" || ")}`, files, queries);
+      await check(`plan ${plan}: ${layout(files)}`, files, queries);
+    }
+    // a label's newest note in two or more rows, saved again in another file, copied there by hand or edited in place, beside older notes naming its later day, under 60 rows
+    for (let plan = 0; plan < 600; plan++) {
+      const [own, other] = [labels[pick(4)]!, labels[pick(4)]!];
+      const free = [...places].sort(() => pick(3) - 1);
+      const later = ` on ${day(11, 20 + pick(6))}`;
+      const older = Array.from({ length: 1 + pick(2) }, () => `- ${own}: ${free.pop()}${later} (noted ${day(10, 10 + pick(5))})`);
+      const newest = `- ${own}: ${free.pop()}${pick(4) ? later : ""} (noted ${day(10, 15 + pick(5))})`;
+      const noise = [`- ${own}: ${free.pop()}`, `- ${own}: ${free.pop()} from ${day(10, 1 + pick(9))} (noted ${day(10, 10 + pick(5))})`, `- ${other}: ${free.pop()}${stamp()}`].filter(() => !pick(3));
+      const rows = [...older, newest, ...(pick(3) ? [] : [`${newest} updated`]), ...noise].sort(() => pick(3) - 1);
+      const count = [0, 8, 24, 45, 48, 52][pick(6)]!;
+      const copies = Array.from({ length: 1 + pick(2) }, (_, at) => file(["auto-notes-overflow.md", "people.md"][at]!, [pick(2) ? newest : value(newest)], 12 + pick(8), pick(2) ? 1 : 0));
+      const files = [file("side0.md", [...supplies(count), ...rows], 12 + pick(8)), ...copies];
+      const queries = [...rows.map((row) => /: ([A-Z]\w+ [A-Z]\w+)/.exec(row)![1]!.toLowerCase()), ...new Set([own, other].map((name) => name.toLowerCase()))];
+      await check(`saved twice plan ${plan}, filler ${count}: ${layout(files)}`, files, queries);
     }
     expect(asked).toBeGreaterThan(10_000);
     expect(missing.slice(0, 8), `${missing.length} values 83f790c87 returns are missing`).toEqual([]);
