@@ -14,7 +14,7 @@ let root: Root;
 let signOut: () => Promise<Response>;
 let events: () => Promise<Response>;
 let offline = false;
-let streams: Array<{ onopen: (() => void) | null; onerror: (() => void) | null }> = [];
+let streams: Array<{ onopen: (() => void) | null; onerror: (() => void) | null; onmessage: ((event: { data: string }) => void) | null }> = [];
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -23,7 +23,7 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", class {
     onopen: (() => void) | null = null;
     onerror: (() => void) | null = null;
-    onmessage = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
     constructor() {
       streams.push(this);
     }
@@ -206,6 +206,87 @@ describe("signing a browser out from the avatar", () => {
     await act(async () => streams.at(-1)?.onerror?.());
     await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
     expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["drops the connection", async () => { throw new TypeError("Failed to fetch"); }],
+    ["is answered for by the gateway with 503", async () => new Response("PC unavailable", { status: 503 })],
+  ])("says it failed when the live stream opened while the PC %s on the check", async (_case, gone) => {
+    signOut = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    events = async () => {
+      await act(async () => streams.at(-1)?.onopen?.());
+      return gone();
+    };
+    const replace = await renderSidebar(RELAY);
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("says it failed when the live stream never dropped and only pings arrive", async () => {
+    const replace = await renderSidebar(RELAY);
+    await act(async () => streams.at(-1)?.onopen?.());
+    const ping = () => act(async () => streams.at(-1)?.onmessage?.({ data: JSON.stringify({ kind: "ping", now: Date.now() }) }));
+    await ping();
+    signOut = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    events = async () => new Response("Bad gateway", { status: 502 });
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await ping();
+    await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("says it failed as soon as the stream reopens, while the gateway still holds the check", async () => {
+    const replace = await renderSidebar(RELAY);
+    await act(async () => streams.at(-1)?.onopen?.());
+    const opened = streams.length;
+    signOut = async () => {
+      await act(async () => streams.at(-1)?.onerror?.());
+      throw new TypeError("Failed to fetch");
+    };
+    const held: Array<(response: Response) => void> = [];
+    events = () => new Promise((resolve) => held.push(resolve));
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await settle();
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
+
+    await vi.waitFor(() => expect(streams.length).toBeGreaterThan(opened));
+    await act(async () => streams.at(-1)?.onopen?.());
+    await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
+    expect(replace).not.toHaveBeenCalled();
+    await act(async () => held.forEach((resolve) => resolve(new Response("PC unavailable", { status: 503 }))));
+  });
+
+  it("claims nothing when the PC cut the open stream as it saved the sign-out, then lands on the sign-in page", async () => {
+    const replace = await renderSidebar(RELAY);
+    await act(async () => streams.at(-1)?.onopen?.());
+    const opened = streams.length;
+    signOut = async () => {
+      await act(async () => streams.at(-1)?.onerror?.());
+      throw new TypeError("Failed to fetch");
+    };
+    events = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await settle();
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
+    expect(replace).not.toHaveBeenCalled();
+
+    // the reconnect is refused
+    events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
+    await vi.waitFor(() => expect(streams.length).toBeGreaterThan(opened));
+    await act(async () => streams.at(-1)?.onerror?.());
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 
   it("lands on the sign-in page when the PC dropped the session but answered with an error", async () => {

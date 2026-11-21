@@ -43,18 +43,25 @@ export async function sessionState(): Promise<SessionState> {
   }
 }
 
-let waiting: (() => void) | null = null;
+let streamOpen = false;
+const waiting = new Set<() => void>();
 
-/** Resolves when the live stream next opens, the PC's word that it still has this session. */
-export function sessionLiveAgain(): Promise<void> {
+/** Resolves when the live stream opens, or at once if `already` and it is open: the PC's word that it still has this session, since it cuts a signed-out session's streams before it answers. */
+export function sessionStreamLive(already = true): Promise<void> {
+  if (already && streamOpen) return Promise.resolve();
   return new Promise((resolve) => {
-    waiting = resolve;
+    waiting.add(resolve);
   });
 }
 
 /** The live stream opened. */
 export function sessionLive(): void {
-  const resolve = waiting;
-  waiting = null;
-  resolve?.();
+  streamOpen = true;
+  for (const resolve of waiting) resolve();
+  waiting.clear();
+}
+
+/** The live stream closed. */
+export function sessionStreamClosed(): void {
+  streamOpen = false;
 }

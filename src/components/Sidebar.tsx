@@ -66,7 +66,7 @@ import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
 import { relaySignInSite } from "@/lib/devices-setup";
-import { leaveSignedOut, sessionLiveAgain, sessionState, signedOutLanding } from "@/lib/signed-out";
+import { leaveSignedOut, sessionState, sessionStreamLive, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -985,9 +985,10 @@ export function Sidebar({
     } catch {
       // A failed reply may follow a revoke that landed, so only the PC's own answer decides.
       // A PC that is gone can't give one, so nothing is claimed until it does: its refusal on the live stream lands on sign-in.
-      const state = await sessionState();
+      // A stream already open may be one the PC is about to cut, so only one that opens from here answers before the check does.
+      const state = await Promise.race([sessionState(), sessionStreamLive(false).then(() => "live" as const)]);
       if (state === "gone") return leaveSignedOut();
-      if (state === "unknown") await sessionLiveAgain();
+      if (state === "unknown") await sessionStreamLive();
       signedOutLanding();
       setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
     }

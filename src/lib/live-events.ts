@@ -61,6 +61,8 @@ export interface LiveEventsHandlers {
   onSnapshotRequired: (cursor?: string) => Promise<boolean>;
   onOpen?: () => void;
   onError?: () => void;
+  /** The open link closed, reported at once rather than held for a wake like onError. */
+  onClosed?: () => void;
   /** The server's clock off each hello and ping; undefined from a server that sends none. */
   onServerTime?: (now?: number) => void;
   screens?: boolean;
@@ -252,8 +254,10 @@ export function openLiveEvents(
 
   const closeSource = () => {
     const current = source;
+    const wasOpen = linkOpen;
     source = null;
     linkOpen = false;
+    if (wasOpen) handlers.onClosed?.();
     if (!current) return;
     if (pendingSnapshot?.source === current) {
       snapshotGeneration += 1;
