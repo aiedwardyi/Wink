@@ -741,6 +741,14 @@ describe("entering a PC's code", () => {
     expect(document.getElementById("code")?.hidden).toBe(true);
   });
 
+  it.each(["/signin?code=ABCDEF", "/signin#code=ABCDEF"])("starts with the boxes open on a link that carries a code: %s", (url) => {
+    open(url, []);
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(boxes()).toHaveLength(6);
+    expect(shown()).toBe("|||||");
+  });
+
   it("keeps the boxes out of sight behind a link a keyboard can reach", () => {
     open("/signin", []);
     expect(link().tagName).toBe("BUTTON");
@@ -902,6 +910,34 @@ describe("entering a PC's code", () => {
     expect(boxesHidden()).toBe(false);
     expect(link().hidden).toBe(true);
     expect(focused()).toBe(0);
+  });
+
+  it.each<[string, Answer, string]>([
+    ["answers 503", { status: 503, body: { error: "unavailable" } }, OFFLINE],
+    ["cannot be reached", "fail", OFFLINE],
+    ["comes back empty", { status: 200, body: [] }, EMPTY],
+  ])("keeps the cursor and the typed letters when the PC list %s after the boxes were opened", async (_why, late, said) => {
+    open("/signin", []);
+    answer(live);
+    const routed = globalThis.fetch;
+    let settle!: () => void;
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+      url === `https://relay.${BASE}/v1/pcs`
+        ? new Promise<Response>((resolve, reject) => {
+            settle = () => (late === "fail" ? reject(new TypeError("offline")) : resolve(new Response(JSON.stringify(late.body), { status: late.status })));
+          })
+        : routed(url, init),
+    );
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    enter("AB");
+    expect(focused()).toBe(2);
+    await vi.waitFor(() => expect(settle).toBeTypeOf("function"));
+    settle();
+    await vi.waitFor(() => expect(status().textContent).toBe(said));
+    expect(shown()).toBe("A|B||||");
+    expect(focused()).toBe(2);
+    enter("CDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
   });
 
   it("shows the boxes when Back restores the page after a remembered PC opened", async () => {

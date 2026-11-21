@@ -288,11 +288,12 @@
     const nav = globalThis.navigation;
     if (!nav) return () => showBoxes(false);
     const code = $("code");
-    const uncover = () => {
+    // A stopped open brings the cursor with the boxes; a probe that fails or Back does not.
+    const uncover = (stopped) => {
       code.classList.remove("trying");
       code.removeAttribute("inert");
       nav.removeEventListener("navigateerror", uncover);
-      showBoxes(false);
+      showBoxes(Boolean(stopped));
     };
     code.classList.add("trying");
     code.setAttribute("inert", "");
@@ -390,7 +391,9 @@
     render();
     $("boxes").replaceChildren(...boxes);
     // The boxes stay out of sight, and out of the tab order, until the person asks for them or the way to a PC falls through.
+    // Only when they open: a late failure must not pull the cursor out of boxes already in use.
     showBoxes = (focus) => {
+      if (!$("boxes").hidden) return;
       $("usecode").hidden = true;
       $("boxes").hidden = false;
       if (focus) focusAt(0);
@@ -608,6 +611,8 @@
     const m = params.get("m");
     if (pc === null && m === null) {
       showCode();
+      // A link that carries a code was opened to type one.
+      if (params.has("code") || new URLSearchParams(location.hash.slice(1)).has("code")) showBoxes(false);
       void coldStart(params.get("pick") === "1").catch(() => {
         say(GOOGLE_DOWN, "error");
         showBoxes(true);
