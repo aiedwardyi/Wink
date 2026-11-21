@@ -275,7 +275,7 @@ describe("Phone setup steps", () => {
     await act(async () => button("Copy Link").click());
     expect(writeText).toHaveBeenCalledWith(url);
     await act(async () => button("Open Laptop").click());
-    expect(open).toHaveBeenCalledExactlyOnceWith("laptop.tail1234.ts.net", "Laptop");
+    expect(open).toHaveBeenCalledExactlyOnceWith("laptop.tail1234.ts.net", "Laptop", undefined);
   });
 
   it.each(["missing", "not-running", "serve-disabled", "checking", "error", "ready"])("renders %s with one next PC step", async (state) => {

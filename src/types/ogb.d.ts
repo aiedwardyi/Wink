@@ -204,7 +204,7 @@ declare global {
       }) => void): () => void;
       /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
       deviceWindow?: {
-        open(host: string, name: string): Promise<boolean>;
+        open(host: string, name: string, relayHost?: string): Promise<boolean>;
       };
       /** Native folder picker; resolves null when the user cancels. */
       pickFolder?(current?: string): Promise<string | null>;
