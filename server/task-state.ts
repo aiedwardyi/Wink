@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import { z } from "zod";
 
@@ -208,13 +208,82 @@ function serializeBounded(packet: TaskResumePacket): string {
 // a sha256 hex digest and its newline
 const MARK_BYTES = 65;
 const stagedPath = (path: string): string => `${path}.staged`;
+const overflowPath = (path: string): string => path.replace(/\.json$/, ".artifacts.jsonl");
+const planSidecarPath = (path: string): string => path.replace(/\.json$/, ".plans.jsonl");
+// the reader's cap too: a full sidecar moves to the next archive, so every file reads and no ref is lost
+const OVERFLOW_MAX_BYTES = TASK_STATE_READ_MAX_BYTES;
+const archivePath = (path: string, index: number): string => path.replace(/\.json$/, `.artifacts.${index}.jsonl`);
+
+function overflowArchives(path: string): string[] {
+  const found: string[] = [];
+  while (existsSync(archivePath(path, found.length + 1))) found.push(archivePath(path, found.length + 1));
+  return found;
+}
 
 function sealed(packet: TaskResumePacket, dir: string): { path: string; serialized: string; saved: TaskResumePacket } {
   const normalized = normalize(packet);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = taskStatePath(normalized.threadId, dir);
   const serialized = serializeBounded(normalized);
-  return { path, serialized, saved: taskResumePacketSchema.parse(JSON.parse(serialized)) };
+  const saved = taskResumePacketSchema.parse(JSON.parse(serialized));
+  overflowArtifacts(path, packet.artifacts, saved.artifacts);
+  return { path, serialized, saved };
+}
+
+/** Artifacts the cap or byte budget cut from the record go here instead of being lost. */
+function overflowArtifacts(path: string, given: TaskResumePacket["artifacts"], kept: TaskResumePacket["artifacts"]): void {
+  const keptRefs = new Set(kept.map((item) => item.ref));
+  const omitted = given.flatMap((item) => {
+    const ref = clean(item.ref, LIMITS.ref);
+    return ref && !keptRefs.has(ref) ? [{ ref, label: item.label }] : [];
+  });
+  if (!omitted.length) return;
+  const seen = new Set(overflowOf(path).map((item) => item.ref));
+  const lines: string[] = [];
+  for (const { ref, label } of omitted) {
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    lines.push(JSON.stringify({ ref, label: clean(label, LIMITS.label) || ref }));
+  }
+  if (!lines.length) return;
+  const added = `${lines.join("\n")}\n`;
+  if (sizeOf(overflowPath(path)) + Buffer.byteLength(added) > OVERFLOW_MAX_BYTES) renameSync(overflowPath(path), archivePath(path, overflowArchives(path).length + 1));
+  appendFileSync(overflowPath(path), added, { mode: 0o600 });
+}
+
+function sizeOf(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+const overflowItemSchema = z.object({ ref: z.string().min(1), label: z.string() });
+
+function overflowOf(path: string): TaskResumePacket["artifacts"] {
+  return [...overflowArchives(path), overflowPath(path)].flatMap((file) => (fileText(file, OVERFLOW_MAX_BYTES) ?? "").split("\n")).flatMap((line) => {
+    try {
+      const item = overflowItemSchema.safeParse(JSON.parse(line));
+      return item.success ? [item.data] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** Artifacts the record no longer holds, oldest first. */
+export function readTaskArtifactOverflow(threadId: ThreadId, options: TaskStateOptions = {}): TaskResumePacket["artifacts"] {
+  return overflowOf(taskStatePath(threadId, options.dir ?? TASK_STATE_DIR));
+}
+
+export function writeTaskPlanSidecar(threadId: ThreadId, paths: readonly string[], options: TaskStateOptions = {}): string {
+  const dir = options.dir ?? TASK_STATE_DIR;
+  const path = planSidecarPath(taskStatePath(threadId, dir));
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileAtomic(path, paths.map((ref) => JSON.stringify(ref)).join("\n") + "\n", { mode: 0o600 });
+  // the bot opens this from the task's cwd, not the server's
+  return resolve(path);
 }
 
 function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {
@@ -306,6 +375,7 @@ export function deleteTaskResumePacket(
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
   const staged = existsSync(stagedPath(path));
   rmSync(stagedPath(path), { force: true });
+  for (const file of [...overflowArchives(path), overflowPath(path), planSidecarPath(path)]) rmSync(file, { force: true });
   if (!existsSync(path)) return staged;
   const status = lstatSync(path);
   if (!status.isFile() || status.isSymbolicLink()) return staged;
@@ -353,7 +423,7 @@ export function taskStateUpdateSchema(clipped: string[]) {
     ref: z.string().trim().min(1),
     label: z.string().trim().min(1),
   }).strict()).transform((items) =>
-    keep("artifacts", items, LIMITS.artifacts, "last").map((item, index) => {
+    items.map((item, index) => {
       if (item.ref.length > LIMITS.ref) return item;
       return { ref: item.ref, label: clip(`artifacts.${index}.label`, item.label, LIMITS.label) };
     }),
@@ -495,19 +565,20 @@ function clipText(text: string, max: number): string {
   return `${cut.trimEnd()}…`;
 }
 
+const NETWORK_PATH = /^[\\/]{2}/;
+
 function groundedTaskArtifact(cwd: string, ref: string): string | null {
+  // a share can block the event loop, so refuse before any fs call
+  if (NETWORK_PATH.test(ref)) return null;
   try {
-    const root = realpathSync(cwd);
-    const candidate = realpathSync(resolve(root, ref));
-    const fromRoot = relative(root, candidate);
-    if (fromRoot.startsWith("..") || isAbsolute(fromRoot) || !statSync(candidate).isFile()) return null;
-    return candidate;
+    const candidate = realpathSync(resolve(cwd, ref));
+    return !NETWORK_PATH.test(candidate) && statSync(candidate).isFile() ? candidate : null;
   } catch {
     return null;
   }
 }
 
-/** Keeps the artifacts that are files inside the task folder, resolved to their real path. */
+/** Keeps the artifacts that are local files, resolved to their real path; relative refs start at the task folder. */
 export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string) {
   const kept: TaskArtifact[] = [];
   const dropped: string[] = [];
@@ -521,9 +592,9 @@ export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string) {
 }
 
 /** One line for the bot when an update saved with something clipped or dropped. Empty on a clean save. */
-export function taskStateNotice(clipped: string[], dropped: string[], cwd: string): string {
+export function taskStateNotice(clipped: string[], dropped: string[]): string {
   const parts: string[] = [];
   if (clipped.length) parts.push(`Clipped to fit: ${clipped.join(", ")}.`);
-  if (dropped.length) parts.push(`Dropped artifacts that are not files inside ${cwd}: ${dropped.join(", ")}.`);
+  if (dropped.length) parts.push(`Dropped artifacts that are not files: ${dropped.join(", ")}.`);
   return parts.join(" ");
 }

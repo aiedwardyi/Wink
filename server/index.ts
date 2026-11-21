@@ -279,12 +279,14 @@ import {
 import "../shared/task-resume.ts";
 import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
 import "./task-state.ts";
-import type { TaskResumePacket } from "./task-state.ts";
+import { readTaskArtifactOverflow, writeTaskPlanSidecar, type TaskResumePacket } from "./task-state.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import {
   buildResumeFallback,
   buildTurnContext,
+  builtListPath,
+  chatMemory,
   countLastTurnToolRounds,
   countSessionToolRounds,
   engineIsFresh,
@@ -329,6 +331,7 @@ import { LimitWaits } from "./limit-wait.ts";
 import {
   ensureWorkspace,
   workspaceDir,
+  memoryFileRaw,
   memoryHealth,
   memorySystemPrompt,
   supportsWorkspaceFiles,
@@ -1341,6 +1344,7 @@ const wireTask = ({
   lastInstanceId: _lastInstanceId,
   lastModel: _lastModel,
   providerSessionBoundId: _providerSessionBoundId,
+  hasFreshProviderSession: _hasFreshProviderSession,
   resumeSeed: _resumeSeed,
   paneNotesDeliveredId: _paneNotesDeliveredId,
   reactionsDelivered: _reactionsDelivered,
@@ -2953,6 +2957,19 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
     pendingTaskPackets.delete(threadId);
   }
   return store.taskPacket(threadId);
+}
+
+/** Saved paths, never file contents: what a chat that had a fresh provider session gets each turn. */
+function freshSessionMemory(botId: string, threadId: string, record: TaskResumePacket | null, messages: readonly Message[]): string {
+  return chatMemory({
+    record,
+    overflow: readTaskArtifactOverflow(threadId),
+    messages,
+    cwd: store.taskByThread(botId, threadId)?.cwd ?? undefined,
+    savePlanSidecar: (paths) => writeTaskPlanSidecar(threadId, paths),
+    builtList: builtListPath(memoryFileRaw(botId)),
+    work: unlandedWork.work(threadId),
+  });
 }
 
 function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }): TaskResumePacket | null {
@@ -5587,8 +5604,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const hasPriorUserTurn = activeMessages.some(
     (message) => message.role === "user" && message.kind === "text" && Boolean(message.text?.trim()) && !skipTranscript.has(message.id),
   );
-  const fresh =
-    !rewound &&
+  const engineChanged =
     engineIsFresh({
       instanceId,
       model,
@@ -5600,6 +5616,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       transcript,
       hasPriorUserTurn,
     });
+  // a rewind replays the branch itself, but a new engine still needs the saved paths
+  const fresh = !rewound && engineChanged;
   const lastTurnToolRounds = countLastTurnToolRounds(activeMessages, skipTranscript, task.providerSessionBoundId);
   const sessionToolRounds = countSessionToolRounds(
     activeMessages,
@@ -5728,6 +5746,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
+  // from the first fresh provider session on, every turn keeps the bot's saved paths
+  const sessionTask = store.taskByThread(bot.id, threadId);
+  const restarted = commsDepth === 0 && (engineChanged || recycled || latestCompactionId !== null || sessionTask?.providerSessionBoundId || sessionTask?.hasFreshProviderSession);
+  const memoryText = restarted ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : "";
   const { turnText, resume } = buildTurnContext({
     driverKind: instance.driverKind,
     model,
@@ -5744,6 +5766,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
     asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
+    memoryText,
   });
   stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
@@ -5752,7 +5775,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     text: turnPrompt,
     transcript: turnTranscript,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: [durableTaskRecordText, memoryText].filter(Boolean).join("\n") || undefined,
   });
   const systemRecycleText = (compaction = false) => buildTurnContext({
     driverKind: instance.driverKind,
@@ -5768,6 +5791,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     taskRecordText: durableTaskRecordText || undefined,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
+    memoryText: memoryText || (commsDepth === 0 ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : ""),
   }).turnText;
 
   const persona = [
@@ -6356,7 +6380,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // dispatched: the rewind is spent
       if (rewound) store.patchBot(bot.id, { rewound: false });
       // and this engine now owns the thread's most recent turn
-      store.markTaskDispatched(bot.id, threadId, instanceId, model);
+      store.markTaskDispatched(bot.id, threadId, instanceId, model, commsDepth === 0 && engineChanged);
       // a turn can settle before dispatch returns, and a poller started
       // after its own turn.completed would never be torn down — it would
       // keep polling the box forever, carrying dead per-turn state. busy

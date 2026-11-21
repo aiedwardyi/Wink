@@ -329,7 +329,7 @@ const TOOLS = [
         },
         artifacts: {
           type: "array",
-          description: "New files created inside this task's working folder, at most 20.",
+          description: "New files this task created, at most 20.",
           items: {
             type: "object",
             additionalProperties: false,

@@ -60,6 +60,7 @@ import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 import { CODEX_PROMO_MESSAGE, isCodexPromo, markCodexPromo, requireCodexPromoAccount } from "../../electron/codex-promo.mjs";
 import { warmPool, type Lease } from "./warm-pool.ts";
 import { FREE_ACCESS, routedAccess, type AccessTurn } from "./turn-access.ts";
+import { shellMade } from "../shell-made.ts";
 
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
@@ -493,6 +494,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let contextWindow: number | undefined;
       let usageWindows: ReturnType<typeof codexRateLimitWindows> = [];
       let usageLimitReported = false;
+      const commandStarts = new Map<string, number>();
       let promoReported = false;
       const promoFailure = (failure: unknown) => {
         if (!isCodexPromo(failure)) return false;
@@ -747,6 +749,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
                 ...base(threadId, turnId), type: "item.started", itemType: "tool", itemId: item.id, title,
               };
               if (verb) started.verb = verb;
+              if (item.type === "commandExecution") commandStarts.set(item.id, Date.now());
               if (item.type === "fileChange" && Array.isArray(item.changes)) started.writes = item.changes.map((change: { path: string }) => change.path).slice(0, 32);
               emit(started);
             }
@@ -780,6 +783,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               const detail = parsed.success ? codexToolDetail(parsed.data, !ok) : undefined;
               if (detail) event.detail = detail;
               if (ok && parsed.success && parsed.data.type === "fileChange") event.writes = parsed.data.changes?.filter(change => change.kind.type !== "delete").map(change => change.path).slice(0, 32);
+              const startedAt = commandStarts.get(item.id);
+              commandStarts.delete(item.id);
+              if (parsed.success && parsed.data.command && startedAt !== undefined) event.made = shellMade(parsed.data.command, cwd, startedAt);
               emit(event);
             } else if (item.type === "reasoning") {
               emit({ ...base(threadId, turnId), type: "item.updated", itemType: "reasoning", tokens: null });

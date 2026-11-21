@@ -174,7 +174,11 @@ export interface Message {
     usageWait?: UsageWaitView;
     /** an auto-approval chip; the model replay skips it */
     approval?: boolean;
+    /** shell rows: files the command named that it created or changed, found on disk; not writes, so verify and the Map keep their rules */
+    made?: string[];
   };
+  /** Files a task-state call recorded; the record stays on this PC, the row syncs. */
+  recorded?: Array<{ ref: string; label: string }>;
   /** user messages sent INTO a running turn (capabilities.queueing): the
    * model saw it mid-turn, so the transcript marks it — a reader should
    * know the reply above it may already account for this line */
@@ -363,6 +367,7 @@ export interface TaskRecord {
    * after this id belong to the current native session; older chips do
    * not. Absent on tasks that have never soft-recycled. */
   providerSessionBoundId?: string;
+  hasFreshProviderSession?: true;
   /** The session a turn certified. Counts only while `resumeCursors` still
    * holds that instance's cursor; absent means no session may be resumed
    * before a replay. */
@@ -2027,11 +2032,14 @@ export class Store {
   /** Record which instance just took a turn on this task. Called at
    * dispatch, not at cursor time — transcript-replay engines never
    * produce a cursor, and they still count as having run last. */
-  markTaskDispatched(botId: string, threadId: string, instanceId: string, model: string) {
+  markTaskDispatched(botId: string, threadId: string, instanceId: string, model: string, fresh = false) {
     const task = this.taskByThread(botId, threadId);
-    if (!task || (task.lastInstanceId === instanceId && task.lastModel === model)) return;
+    if (!task) return;
+    const firstFresh = fresh && !task.hasFreshProviderSession;
+    if (!firstFresh && task.lastInstanceId === instanceId && task.lastModel === model) return;
     task.lastInstanceId = instanceId;
     task.lastModel = model;
+    if (firstFresh) task.hasFreshProviderSession = true;
     this.saveBotsSoon();
   }
 

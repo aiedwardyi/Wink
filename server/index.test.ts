@@ -2825,14 +2825,20 @@ describe("harness HTTP API", () => {
         body: JSON.stringify({
           fromBotId: bot.id,
           fromThreadId: bot.threadId,
-          artifacts: [{ ref: outsidePath, label: "Outside" }],
+          artifacts: [{ ref: outsidePath, label: "Outside" }, { ref: join(home, "gone.txt"), label: "Gone" }],
         }),
       });
       expect(outside.status).toBe(200);
       const { notice: outsideNotice } = (await outside.json()) as { notice: string };
-      expect(outsideNotice).toMatch(/^Dropped artifacts that are not files inside /);
-      expect(outsideNotice).toContain(outsidePath);
-      expect(storedTaskPacket(bot.threadId).artifacts).toEqual([{ ref: groundedArtifactPath, label: "Weekly brief" }]);
+      expect(outsideNotice).toBe(`Dropped artifacts that are not files: ${join(home, "gone.txt")}.`);
+      expect(storedTaskPacket(bot.threadId).artifacts).toEqual([
+        { ref: groundedArtifactPath, label: "Weekly brief" },
+        { ref: realpathSync(outsidePath), label: "Outside" },
+      ]);
+      // no update_task_state row was open for these calls; a synced row still carries the files
+      const rows = z.array(z.object({ recorded: z.array(z.object({ ref: z.string() })).optional() }).passthrough())
+        .parse((await api("GET", `/api/threads/${bot.threadId}/messages?limit=200`)).body.messages);
+      expect(rows.flatMap((row) => row.recorded ?? []).map((item) => item.ref)).toEqual([groundedArtifactPath, realpathSync(outsidePath)]);
       const foreign = await fetch(`${BASE}/api/internal/task-state`, {
         method: "POST",
         headers: { authorization: `Bearer ${commsToken}`, "content-type": "application/json" },
