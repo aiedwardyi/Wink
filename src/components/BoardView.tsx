@@ -4,7 +4,7 @@ import { ArrowBigUp, CircleCheck, Flame, MessageCircle, Sparkles, TrendingUp, ty
 
 import { agoText } from "@/lib/ago";
 import {
-  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isOwnReply, replyToBoard, sortBoardThreads, useBoardPosts,
+  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isOwnReply, isRemovable, replyToBoard, sortBoardThreads, useBoardPosts,
   type BoardKind, type BoardPost, type BoardReply, type BoardSort,
 } from "@/lib/board";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
@@ -167,7 +167,7 @@ const preview = (post: BoardPost) => (post.body && post.body !== post.title ? po
 
 type OnMenu = (menu: MessageMenuRequest) => void;
 
-/** The chat's message menu on a post: Copy on any, Delete added on the user's own replies. */
+/** The chat's message menu on a post: Copy on any, Delete added on a top-level post and on the user's own replies. */
 const menuProps = (post: BoardPost, onMenu: OnMenu) => {
   const text = post.body || post.title;
   const user = post.author_bot_id === BOARD_USER;
@@ -458,14 +458,33 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   }, [isOpen]);
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
-  const [deleteFailed, setDeleteFailed] = useState(false);
+  const [deleteFailed, setDeleteFailed] = useState<string | null>(null);
+  const failedIn = (thread: { post: BoardPost; replies: BoardPost[] }) => [thread.post, ...thread.replies].some((post) => post.id === deleteFailed);
+  // the alert takes its height from the top of the list column, so the list scrolls by that height in the same commit and no row moves
+  const alertShown = failed || (!open && threads.some((thread) => thread.post.id === deleteFailed));
+  const alertRef = useRef<HTMLDivElement>(null);
+  const held = useRef({ shown: false, top: 0, height: 0 });
+  if (held.current.shown !== alertShown) held.current.top = listRef.current?.scrollTop ?? 0;
+  useLayoutEffect(() => {
+    const hold = held.current;
+    hold.shown = alertShown;
+    const box = alertRef.current;
+    // whole pixels: a scroll offset lands on whole pixels, so a half-pixel alert would leave every row half a pixel off
+    if (alertShown && box) {
+      box.style.minHeight = "";
+      hold.height = Math.ceil(box.getBoundingClientRect().height);
+      box.style.minHeight = `${hold.height}px`;
+    }
+    if (listRef.current && hold.top > 0) listRef.current.scrollTop = hold.top + (alertShown ? hold.height : -hold.height);
+  }, [alertShown]);
   const [deleting, setDeleting] = useState<BoardPost | null>(null);
   const confirm = usePresence(deleting);
   const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
   const remove = (post: BoardPost) => deleteFromBoard(post.id).then(() => {
     removed(post);
-    setDeleteFailed(false);
-  }, () => setDeleteFailed(true));
+    setOpenId((current) => (current === post.id ? null : current));
+    setDeleteFailed(null);
+  }, () => setDeleteFailed(post.id));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
     if (hidden || closing || (!isOpen && phone)) return;
@@ -501,10 +520,14 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
           )}
         </div>
       </div>
-      <div className="relative min-h-0 flex-1 md:animate-fade-in">
-        <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] md:px-5">
+      <div className="relative flex min-h-0 flex-1 flex-col md:animate-fade-in">
+        {alertShown && (
+          <div ref={alertRef} className="shrink-0 overflow-y-hidden [scrollbar-gutter:stable] md:px-5">
+            <div role="alert" className={cn(SIDE, "mx-auto flex w-full max-w-[640px] items-center justify-between gap-3 bg-app py-3 text-[13px] text-danger md:rounded-t-[28px] md:bg-card")}><span>{t("errors.request")}</span>{failed && retryButton}</div>
+          </div>
+        )}
+        <div ref={listRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] md:px-5">
           <section className={SHEET}>
-            {failed && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{retryButton}</div>}
             {!posts && !failed && (
               <div data-board-loading role="status" className="py-24 text-center text-[14px] text-ink-secondary">{t("board.loading")}</div>
             )}
@@ -580,7 +603,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
             className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app md:px-5"
           >
             <section className={SHEET}>
-              {(failed || deleteFailed) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 pt-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
+              {(failed || failedIn(page.value)) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 pt-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
               <Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} onMenu={setMenu} onSaved={saved} />
             </section>
           </div>
@@ -595,7 +618,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
           target={shownMenu.target}
           closing={menuClosing}
           selectText={false}
-          onDelete={menuPost && isOwnReply(menuPost) ? () => setDeleting(menuPost) : undefined}
+          onDelete={menuPost && (isRemovable(menuPost) || isOwnReply(menuPost)) ? () => setDeleting(menuPost) : undefined}
           onClose={() => setMenu(null)}
         />
       ) : shownMenu ? (
@@ -604,8 +627,8 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
       {confirm.value && (
         <ConfirmDialog
           closing={confirm.closing}
-          title={t("board.deleteTitle")}
-          body={t("board.deleteBody")}
+          title={t(confirm.value.parent_id === null ? "board.deletePostTitle" : "board.deleteTitle")}
+          body={t(confirm.value.parent_id === null ? "board.deletePostBody" : "board.deleteBody")}
           confirmLabel={t("chrome.delete")}
           onConfirm={() => {
             void remove(confirm.value!);

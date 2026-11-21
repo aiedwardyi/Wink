@@ -49,20 +49,15 @@ export function createBoardCalls(deps: BoardCallDeps) {
     limit: Number.POSITIVE_INFINITY,
     withoutRoom: true,
   }).filter(solvedFix);
-  /** The episode's post ref: the full-note ref an older call already posted under, else a digest of the whole blocker. */
-  const episodeRef = (threadId: string, blocker: Blocker, episode: number) => {
+  /** The episode's post refs: the full-note ref older calls posted under, then the digest of the whole blocker a new post takes. */
+  const episodeRefs = (threadId: string, blocker: Blocker, episode: number) => {
     const legacy = `${callRef(threadId)}${episode}:${blocker.kind}:${blocker.note}`;
+    const digest = `${callRef(threadId)}${episode}:${blocker.kind}:${createHash("sha256").update(keyOf(blocker)).digest("hex").slice(0, 24)}`;
     // a longer legacy ref was cut before hashing, so another note may share its post
-    if (legacy.length <= BOARD_REF_MAX && deps.board.get(boardPostId(legacy))) return legacy;
-    return `${callRef(threadId)}${episode}:${blocker.kind}:${createHash("sha256").update(keyOf(blocker)).digest("hex").slice(0, 24)}`;
+    return legacy.length <= BOARD_REF_MAX ? [legacy, digest] : [digest];
   };
-  const episodePost = (threadId: string, blocker: Blocker, episode: number) => deps.board.get(boardPostId(episodeRef(threadId, blocker, episode)));
-  /** The call's current episode: the first whose post is not solved yet. */
-  const episodeOf = (threadId: string, blocker: Blocker) => {
-    let episode = 0;
-    while (episodePost(threadId, blocker, episode)?.status === "solved") episode++;
-    return episode;
-  };
+  /** The call's current ref: the live post of the first episode neither deleted nor solved, else a new post. */
+  const currentRef = (threadId: string, blocker: Blocker) => deps.board.next((episode) => episodeRefs(threadId, blocker, episode), (post) => post.status === "solved");
 
   return {
     /**
@@ -139,7 +134,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
         body: blocker.note,
         error_sig: errorSig(blocker.note),
         project_id: deps.projectOf(threadId),
-        source_ref: episodeRef(threadId, blocker, episodeOf(threadId, blocker)),
+        source_ref: currentRef(threadId, blocker),
       });
     },
     /** The bot cleared the one blocker it called on, with a note: that note is the fix. The user's chat is never the fix. */
@@ -147,7 +142,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
       if (deps.room(threadId) || !note.trim()) return [];
       const left = new Set(after.map(keyOf));
       const open = before.filter((blocker) => closable(blocker) && !left.has(keyOf(blocker))).flatMap((blocker) => {
-        const post = episodePost(threadId, blocker, episodeOf(threadId, blocker));
+        const post = deps.board.get(boardPostId(currentRef(threadId, blocker)));
         return post?.kind === "stuck" && post.status === "open" ? [post] : [];
       });
       // one note cannot say which of several calls it fixed
