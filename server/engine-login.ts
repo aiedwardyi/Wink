@@ -19,6 +19,12 @@ export class LoginBusyError extends Error {
   constructor() { super("Another sign-in for this engine is still running"); }
 }
 
+/** A sign-in belongs to the session that started it: this PC or a paired phone, plus the browser's own id. */
+export function signInOwner(headers: { [name: string]: string | string[] | undefined }, phoneId?: string): string {
+  const client = String(headers["x-wink-client"] ?? "");
+  return `${phoneId ? `phone:${phoneId}` : "pc"}:${/^[0-9a-f]{32}$/.test(client) ? client : ""}`;
+}
+
 export function logSignInRefusal(status: number, code?: string): void {
   console.warn(`sign-in refused code=${code ?? `http-${status}`} status=${status} stderr=-`);
 }
@@ -56,6 +62,7 @@ interface LoginJob {
   changed: Set<() => void>;
   acknowledged: boolean;
   pasteBack: boolean;
+  owner?: string;
   lastStderr?: string;
 }
 
@@ -88,6 +95,12 @@ export class EngineLogin {
     return { ...this.jobs.get(engine)?.capture };
   }
 
+  /** Whether `owner` may answer or cancel this engine's sign-in: always, unless another session's is pending. */
+  owns(engine: string, owner?: string): boolean {
+    const job = this.jobs.get(engine);
+    return job?.state !== "pending" || job.owner === owner;
+  }
+
   submit(engine: string, generation: number, code: string): boolean {
     const job = this.jobs.get(engine);
     if (job?.state !== "pending" || job.capture.inputGeneration !== generation || !job.child?.stdin?.writable
@@ -102,7 +115,7 @@ export class EngineLogin {
     return job?.state === "pending" || (job?.state === "complete" && !job.acknowledged);
   }
 
-  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean } = {}): Promise<LoginCapture> {
+  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean; owner?: string } = {}): Promise<LoginCapture> {
     if (this.disposed) return {};
     let job = this.jobs.get(engine);
     const scope = options.scope ?? engine;
@@ -121,6 +134,7 @@ export class EngineLogin {
     if (job?.state !== "pending") {
       job = this.create(engine, scope);
       job.pasteBack = options.paste === true;
+      job.owner = options.owner;
       try {
         // A cold Windows sign-in can beat the status check that selects the usable Claude binary.
         if (process.platform === "win32" && scope === "claudeAgent" && cli === "claude" && args[0] === "auth" && args[1] === "login" && findCliCandidates(cli).length > 1) {

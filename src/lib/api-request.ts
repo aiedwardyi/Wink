@@ -1,9 +1,23 @@
 import { ConnectionError } from "./error-text";
 import { t } from "./i18n";
 
+const CLIENT_KEY = "wink.client";
+let client: string | undefined;
+
+/** This browser's own id: the server lets only the browser that started a sign-in answer or cancel it. */
+export function clientId(): string {
+  if (client) return client;
+  try { client = localStorage.getItem(CLIENT_KEY) ?? undefined; } catch { /* storage blocked: this page keeps its own id */ }
+  if (!client || !/^[0-9a-f]{32}$/.test(client)) {
+    client = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    try { localStorage.setItem(CLIENT_KEY, client); } catch { /* storage blocked */ }
+  }
+  return client;
+}
+
 export async function fetchResponse(path: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(path, { headers: { "content-type": "application/json" }, ...init });
+    return await fetch(path, { headers: { "content-type": "application/json", "x-wink-client": clientId() }, ...init });
   } catch (cause) {
     if (cause instanceof TypeError) throw new ConnectionError();
     throw cause;

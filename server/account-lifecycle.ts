@@ -112,13 +112,13 @@ export class AccountLifecycle {
     });
   }
 
-  add(of: string, device = false) {
+  add(of: string, device = false, owner?: string) {
     return this.exclusive(async () => {
       const account = await this.accounts.add(of);
       this.registry.blockAccount(account.id, true);
       try {
         await this.hooks.reload();
-        const capture = await this.begin(account, device);
+        const capture = await this.begin(account, device, owner);
         return { id: account.id, generation: account.generation, ...capture };
       } catch (error) {
         await this.discard(account.id);
@@ -127,7 +127,7 @@ export class AccountLifecycle {
     });
   }
 
-  signIn(id: string, device = false) {
+  signIn(id: string, device = false, owner?: string) {
     return this.exclusive(async () => {
       const destinations = Object.values(this.accounts.drains).filter((row) => row.destinationId === id);
       if (destinations.some((row) => row.phase !== "signed-out") || (destinations.length > 0 && this.registry.accountAvailable(id))) throw new AccountError("This account is the destination of a pending removal");
@@ -151,7 +151,7 @@ export class AccountLifecycle {
         }
         let capture;
         try {
-          capture = await this.registry.startSignIn(id, device);
+          capture = await this.registry.startSignIn(id, device, owner);
           if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
         } catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
         if (this.registry.accountBlocked(id)) {
@@ -172,7 +172,7 @@ export class AccountLifecycle {
       this.registry.blockAccount(id, true);
       try {
         if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id, account.state === "stopped" && destinations.length === 0)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
-        return await this.begin(account, device);
+        return await this.begin(account, device, owner);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);
         else this.registry.blockAccount(id, blocked || account.state !== "ready");
@@ -355,13 +355,13 @@ export class AccountLifecycle {
     this.retries.set(account.id, retry);
   }
 
-  private async begin(account: AccountRecord, device: boolean) {
+  private async begin(account: AccountRecord, device: boolean, owner?: string) {
     const token = {};
     this.results.delete(account.id);
     this.jobs.set(account.id, token);
     let capture;
     try {
-      capture = await this.registry.startSignIn(account.id, device);
+      capture = await this.registry.startSignIn(account.id, device, owner);
       if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
     } catch (error) {
       this.jobs.delete(account.id);

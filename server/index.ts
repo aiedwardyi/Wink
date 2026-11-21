@@ -137,8 +137,8 @@ import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
-import { createAccountRoutes } from "./account-routes.ts";
-import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
+import { createAccountRoutes, SIGNED_IN_ELSEWHERE } from "./account-routes.ts";
+import { LoginBusyError, logSignInRefusal, signInOwner } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -9277,7 +9277,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
     if (method === "POST" && path === "/api/accounts") await enableWorkerAccounts(terminalBridgeAccess);
-    if (await accountRoutes(req, res, method, path)) return;
+    if (await accountRoutes(req, res, method, path, signInOwner(req.headers, phone?.id))) return;
     m = path.match(/^\/api\/usage\/(refresh|check)\/([^/]+)$/);
     if (m && method === "POST") {
       const instanceId = m[2];
@@ -9337,9 +9337,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
           const body = await readBody(req);
           if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
-          const capture = await registry.startSignIn(id, body?.device === true);
+          const capture = await registry.startSignIn(id, body?.device === true, signInOwner(req.headers, phone?.id));
           return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         }
+        if (method === "DELETE" && !registry.logins.owns(id, signInOwner(req.headers, phone?.id))) return refuse(403, SIGNED_IN_ELSEWHERE, "sign-in-elsewhere");
         if (method === "DELETE") return await registry.cancelSignIn(id)
           ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         if (method === "GET") {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
-import { EngineLogin } from "./engine-login.ts";
+import { EngineLogin, signInOwner } from "./engine-login.ts";
 import * as envPath from "./env-path.ts";
 import * as procs from "./procs.ts";
 
@@ -198,6 +198,32 @@ describe("EngineLogin", () => {
     expect(manager.submit("phone", retry.inputGeneration!, "wrong-code")).toBe(true);
     await manager.wait("phone");
     expect(manager.state("phone")).toBe("failed");
+  });
+
+  it("names a sign-in's session by its phone and the browser's own id", () => {
+    const id = "0123456789abcdef0123456789abcdef";
+    expect(signInOwner({ "x-wink-client": id }, "phone-1")).toBe(`phone:phone-1:${id}`);
+    expect(signInOwner({ "x-wink-client": id })).toBe(`pc:${id}`);
+    expect(signInOwner({ "x-wink-client": id }, "phone-2")).not.toBe(signInOwner({ "x-wink-client": id }, "phone-1"));
+    for (const client of [undefined, "short", id.toUpperCase(), [id, id]]) expect(signInOwner({ "x-wink-client": client })).toBe("pc:");
+  });
+
+  it.each([
+    ["claudeAgent", "claudePhone", true], ["codex", "codex", false], ["grokAgent", "grok", false], ["museAgent", "muse", false],
+  ] as const)("lets only the session that started a %s sign-in answer or cancel it", async (scope, output, paste) => {
+    const { manager, dir } = fixture();
+    const script = join(dir, "owned.cjs");
+    writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT[output])}); setInterval(() => {}, 1000);`);
+    const phone = signInOwner({ "x-wink-client": "a".repeat(32) }, "phone-1");
+    const others = [signInOwner({ "x-wink-client": "a".repeat(32) }, "phone-2"), signInOwner({ "x-wink-client": "b".repeat(32) }), signInOwner({}), undefined];
+    expect(manager.owns(scope, phone)).toBe(true);
+    const capture = await manager.start(scope, `"${process.execPath}" "${script}"`, [], {}, [], { scope, paste, owner: phone });
+    expect(manager.state(scope)).toBe("pending");
+    expect(JSON.stringify(capture)).not.toContain("phone-1");
+    expect(manager.owns(scope, phone)).toBe(true);
+    for (const other of others) expect(manager.owns(scope, other)).toBe(false);
+    await manager.cancel(scope);
+    for (const other of others) expect(manager.owns(scope, other)).toBe(true);
   });
 
   it("releases a finished login scope when neither kill nor close completes", async () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -83,12 +83,12 @@ async function fixture(empty = false, of = "claude") {
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: vi.fn(() => false) };
   const controller = createAccountRuntime(deps);
   controllers.push(controller);
-  const request = async (method: string, path: string, value: unknown = {}) => {
+  const request = async (method: string, path: string, value: unknown = {}, owner?: string) => {
     const req = Object.assign(Readable.from([JSON.stringify(value)]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
     let status = 0;
     let output = "";
     const res = { writeHead: (code: number) => { status = code; }, end: (body: string) => { output = body; } } as unknown as ServerResponse;
-    const handled = await createAccountRoutes(controller, registry)(req, res, method, path);
+    const handled = await createAccountRoutes(controller, registry)(req, res, method, path, owner);
     return { handled, status, body: output ? JSON.parse(output) : undefined };
   };
   const useDefault = (id: string) => request("POST", `/api/accounts/${id}/default`);
@@ -142,6 +142,36 @@ describe("engine default account routing", () => {
     expect(submit).toHaveBeenCalledExactlyOnceWith("claude", 7, "code");
     submit.mockReturnValue(false);
     expect((await f.request("POST", path, { generation: 7, code: "stale" })).status).toBe(409);
+  });
+
+  it("takes a code or Cancel only from the session that started the sign-in", async () => {
+    const f = await fixture();
+    const id = f.added[0].id;
+    const script = join(f.root, "paste-login.cjs");
+    const received = join(f.root, "received.txt");
+    writeFileSync(script, `process.stdout.write("Paste code here if prompted > ");
+      process.stdin.once("data", (code) => require("node:fs").writeFileSync(${JSON.stringify(received)}, code)); setInterval(() => {}, 1000);`);
+    const phone = `phone:phone-1:${"a".repeat(32)}`;
+    const capture = await f.registry.logins.start(id, `"${process.execPath}" "${script}"`, [], {}, [], { scope: "claudeAgent", paste: true, owner: phone });
+    expect(capture.inputGeneration).toBe(f.registry.logins.generation(id));
+    const cancel = vi.spyOn(f.registry, "cancelSignIn").mockImplementation(async (login) => { await f.registry.logins.cancel(login); return true; });
+    const code = { generation: capture.inputGeneration, code: "other-session#state" };
+    for (const other of [`phone:phone-2:${"a".repeat(32)}`, `pc:${"b".repeat(32)}`, "pc:"]) {
+      expect((await f.request("POST", `/api/accounts/${id}/sign-in/code`, code, other)).status).toBe(403);
+      expect((await f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, other)).status).toBe(403);
+      expect((await f.request("DELETE", `/api/instances/${id}/sign-in`, {}, other)).status).toBe(403);
+    }
+    expect(f.registry.logins.state(id)).toBe("pending");
+    expect(cancel).not.toHaveBeenCalled();
+    expect(f.registry.logins.capture(id).inputGeneration).toBe(capture.inputGeneration);
+    expect(existsSync(received)).toBe(false);
+    expect((await f.request("POST", `/api/accounts/${id}/sign-in/code`, { ...code, code: "own-session#state" }, phone)).status).toBe(200);
+    await vi.waitFor(() => expect(readFileSync(received, "utf8")).toBe("own-session#state\n"));
+    expect((await f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, `pc:${"b".repeat(32)}`)).status).toBe(403);
+    expect(f.registry.logins.state(id)).toBe("pending");
+    expect((await f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, phone)).status).toBe(200);
+    expect(cancel).toHaveBeenCalledExactlyOnceWith(id);
+    expect(f.registry.logins.state(id)).toBe("cancelled");
   });
 
   it("uses the default for every existing and new bot without publishing account ids", async () => {
@@ -811,7 +841,7 @@ describe("account removal drain", () => {
     await controller.signIn(destination);
     await controller.settled(destination);
     await controller.resumeDrains();
-    expect(login).toHaveBeenCalledExactlyOnceWith(destination, false);
+    expect(login).toHaveBeenCalledExactlyOnceWith(destination, false, undefined);
     expect(accounts.get(source)).toBeUndefined();
     expect(accounts.drains[source]).toBeUndefined();
     expect(controller.bots?.resolve(f.bot).instanceId).toBe(destination);

@@ -189,7 +189,12 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
           void reload();
           return;
         }
-        if (["complete", "failed", "cancelled"].includes(result.state)) { setAdding(null); return; }
+        if (["complete", "failed", "cancelled"].includes(result.state)) {
+          // A failed addition is retired with its row, so the failure line stays here.
+          if (result.state === "failed") setError({ message: t("engines.didntFinish"), signInIds: [] });
+          setAdding(null);
+          return;
+        }
       } catch { if (cancelled) return; }
       timer = setTimeout(() => void poll(), 1000);
     };
@@ -227,8 +232,9 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const existing = state.instances.find((account) => account.instanceId === existingId);
   const existingName = board?.engines.flatMap((engine) => engine.accounts).find((account) => account.id === existingId)?.name
     ?? existing?.snapshot.account ?? existing?.displayName;
+  // deviceEnv marks a phone-only login (Claude, Gemini): a computer browser keeps the browser login.
   const add = addable && (computerOnly ? <span data-computer-only="">{t("connections.addOnComputer")}</span>
-    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
+    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) && (!login?.deviceEnv || isPhone()) })}
       className={STRONG_BUTTON}>{t("accounts.add")}</button>);
   return (
     <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0">
