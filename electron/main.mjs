@@ -1257,6 +1257,14 @@ async function openDeviceWindow(rawHost, rawName, relayHost) {
   const tailnet = await localTailnet();
   if (!tailnet) return false;
   const url = deviceWindowUrl(rawHost, tailnet);
+  // No cookie for this PC means this app never pasted its link, so Home would answer 401. A ready relay on
+  // this Google account opens in the browser before any window; anything else opens the window as before.
+  const unpaired = !deviceWindows.has(url.origin) && Boolean(relayDeviceUrl(relayHost, base))
+    && !(await session.fromPartition(DEVICE_WINDOW_PARTITION).cookies.get({ url: url.origin })).length;
+  if (unpaired) {
+    const ready = await readyRelayDeviceUrl(relayHost, base);
+    if (ready && await shell.openExternal(ready).then(() => true, () => false)) return true;
+  }
   openOrFocus(deviceWindows, url.origin, () => {
     const title = deviceWindowTitle(rawName, url.hostname);
     const name = typeof rawName === "string" && rawName.trim() ? rawName.trim().slice(0, 64) : url.hostname;
@@ -1284,9 +1292,8 @@ async function openDeviceWindow(rawHost, rawName, relayHost) {
       invalid: nativeText("packaged.deviceLinkInvalid"),
     });
     deviceLinkPages.set(win, linkPage);
-    // The paste page is for a PC with no signed-in path. One on this Google account with a ready relay
-    // opens through Google sign-in instead; anything else falls back to the paste page as before.
-    if (relayDeviceUrl(relayHost, base)) {
+    // A login cookie Home no longer takes also answers 401: that window hands off the same way.
+    if (!unpaired && relayDeviceUrl(relayHost, base)) {
       let pairing = false;
       devicePairing.set(win, async () => {
         if (pairing) return;

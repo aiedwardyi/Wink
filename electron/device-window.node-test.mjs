@@ -432,7 +432,7 @@ const LABEL = "abcdefghijklmnop";
 const RELAY_PC = `${LABEL}.wink.test`;
 
 // Runs main's real openDeviceWindow with no window, browser or tailscale call.
-function openDevice({ teamRelay = "wink.test", tailnet = "", request, externalError } = {}) {
+function openDevice({ teamRelay = "wink.test", tailnet = "", request, externalError, cookies = [] } = {}) {
   const source = openDeviceWindowSource(readFileSync(new URL("./main.mjs", import.meta.url), "utf8"));
   const external = [], windows = [], pages = [];
   let listener, closed = false;
@@ -456,6 +456,7 @@ function openDevice({ teamRelay = "wink.test", tailnet = "", request, externalEr
       external.push(url);
     } },
     localTailnet: async () => tailnet,
+    session: { fromPartition: (name) => ({ cookies: { get: async ({ url }) => (name === DEVICE_WINDOW_PARTITION && url === "https://home.tail1234.ts.net" ? cookies : []) } }) },
     readyRelayDeviceUrl: (host, base) => readyRelayDeviceUrl(host, base, request),
     relayDeviceUrl,
     deviceWindowUrl,
@@ -498,9 +499,33 @@ test("openDeviceWindow opens a team relay host in the default browser with no ta
   assert.deepEqual(device.windows, []);
 });
 
-test("checks the Google relay only when a same-origin 401 would show the paste page", async () => {
+test("opens a never-pasted PC in the browser before any app window", async () => {
   const requests = [];
   const device = openDevice({ tailnet: "tail1234.ts.net", request: async (url, init) => {
+    requests.push([url.href, init.method, init.redirect]);
+    return new Response(null, { status: 204 });
+  } });
+  assert.equal(await device.open("home.tail1234.ts.net", "Home", RELAY_PC), true);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/pair?g=1`]);
+  assert.deepEqual(device.windows, []);
+  assert.deepEqual(device.pages, []);
+  assert.deepEqual(requests, [[`https://${RELAY_PC}/api/phone/google/start`, "HEAD", "error"]]);
+});
+
+test("a paired PC opens its window with no relay check", async () => {
+  let requested = false;
+  const device = openDevice({ tailnet: "tail1234.ts.net", cookies: [{ name: "remote" }], request: async () => { requested = true; } });
+  assert.equal(await device.open("home.tail1234.ts.net", "Home", RELAY_PC), true);
+  await device.complete(200);
+  assert.equal(requested, false);
+  assert.deepEqual(device.external, []);
+  assert.deepEqual(device.windows, ["https://home.tail1234.ts.net"]);
+  assert.deepEqual(device.pages, ["https://home.tail1234.ts.net/"]);
+});
+
+test("checks the Google relay when a login cookie Home no longer takes gets a same-origin 401", async () => {
+  const requests = [];
+  const device = openDevice({ tailnet: "tail1234.ts.net", cookies: [{ name: "remote" }], request: async (url, init) => {
     requests.push([url.href, init.method, init.redirect]);
     return new Response(null, { status: 204 });
   } });
@@ -519,7 +544,9 @@ test("checks the Google relay only when a same-origin 401 would show the paste p
 
 test("shows the original paste page when the relay cannot take a Google sign-in", async () => {
   for (const status of [404, 409, 503, null]) {
+    let probes = 0;
     const device = openDevice({ tailnet: "tail1234.ts.net", request: async () => {
+      probes++;
       if (status === null) throw new TypeError("relay unreachable");
       return new Response(null, { status });
     } });
@@ -529,6 +556,7 @@ test("shows the original paste page when the relay cannot take a Google sign-in"
     assert.deepEqual(device.windows, ["https://home.tail1234.ts.net"]);
     assert.match(device.pages.at(-1), /^data:text\/html/);
     assert.equal(device.closed(), false);
+    assert.equal(probes, 1);
   }
 });
 
