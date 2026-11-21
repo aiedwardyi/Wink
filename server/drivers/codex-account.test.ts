@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
+import { testHome } from "../testing/test-home.ts";
 
 const { calls, children, wait, retire, kill, probe } = vi.hoisted(() => ({
   calls: [] as { method: string }[], children: [] as EventEmitter[],
@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 it("keeps base catalog, snapshots and turns free of account RPCs and extra spawns", async () => {
-  const home = join(homedir(), ".codex");
+  const home = join(testHome(), ".codex");
   mkdirSync(home, { recursive: true });
   const token = `header.${Buffer.from(JSON.stringify({ email: "base@example.com" })).toString("base64url")}.signature`;
   writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: { id_token: token } }));
@@ -80,7 +80,7 @@ it("keeps base catalog, snapshots and turns free of account RPCs and extra spawn
 });
 
 it.each([false, true])("coordinates usage-refresh retirement only for accounts (%s)", async (managed) => {
-  const account = managed ? { id: "acct_test", of: "codex", home: join(homedir(), "managed"), generation: 1 } : undefined;
+  const account = managed ? { id: "acct_test", of: "codex", home: join(testHome(), "managed"), generation: 1 } : undefined;
   await readUsageRpc("stub-codex", {}, account);
   expect(wait).toHaveBeenCalledTimes(managed ? 1 : 0);
   expect(retire).toHaveBeenCalledTimes(managed ? 1 : 0);
@@ -89,7 +89,7 @@ it.each([false, true])("coordinates usage-refresh retirement only for accounts (
 });
 
 it("keeps account admission in the managed catalog and snapshot", async () => {
-  const account = { id: "acct_test", of: "codex", home: join(homedir(), "managed"), generation: 1 };
+  const account = { id: "acct_test", of: "codex", home: join(testHome(), "managed"), generation: 1 };
   const instance = await CodexDriver.create({ instanceId: account.id, displayName: "Codex", enabled: true, config: { cli: "stub-codex", fullAuto: false }, environment: {}, account });
   try {
     expect(calls.some((call) => call.method === "account/read")).toBe(true);
@@ -107,7 +107,7 @@ it("does not spawn an account reader for a refreshed base snapshot", async () =>
 });
 
 it.each(["rpc", "close", "timeout"])("preserves unknown authentication after a managed %s failure", async (failure) => {
-  const account = { id: "acct_test", of: "codex", home: join(homedir(), "managed"), generation: 1 };
+  const account = { id: "acct_test", of: "codex", home: join(testHome(), "managed"), generation: 1 };
   const instance = await CodexDriver.create({ instanceId: account.id, displayName: "Codex", enabled: true, config: { cli: "stub-codex", fullAuto: false }, environment: {}, account });
   try {
     probe.failure = failure;
@@ -116,7 +116,7 @@ it.each(["rpc", "close", "timeout"])("preserves unknown authentication after a m
 });
 
 it.each([null, { type: "apikey" }])("still rejects a known non-ChatGPT account (%j)", async (value) => {
-  const account = { id: "acct_test", of: "codex", home: join(homedir(), "managed"), generation: 1 };
+  const account = { id: "acct_test", of: "codex", home: join(testHome(), "managed"), generation: 1 };
   const instance = await CodexDriver.create({ instanceId: account.id, displayName: "Codex", enabled: true, config: { cli: "stub-codex", fullAuto: false }, environment: {}, account });
   try {
     probe.account = value;
@@ -130,7 +130,7 @@ it.each([
   [{ auth_mode: "apikey", tokens: { id_token: "x.e30.x" } }, undefined],
   [{ tokens: { id_token: "malformed" } }, undefined],
 ])("preserves the base auth-file label (%j)", (auth, label) => {
-  const home = join(homedir(), ".codex");
+  const home = join(testHome(), ".codex");
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, "auth.json"), JSON.stringify(auth));
   expect(codexAccount({ CODEX_HOME: home })).toBe(label);

@@ -8,23 +8,13 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { waitForAppToken } from "../electron/local-api-auth.mjs";
+import { relayServerEnv } from "./smoke-env.mjs";
 
 const resources = resolve(process.argv[2]);
 const home = mkdtempSync(join(tmpdir(), "wink-relay-smoke-"));
 const port = 21988;
 const child = spawn(process.execPath, [join(resources, "server", "packaged-boot.js")], {
-  env: {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    OMB_PORT: String(port),
-    OMB_STATIC_DIR: join(resources, "ui"),
-    OMB_RESOURCES_PATH: resources,
-    OMB_SKILLS_DIR: join(resources, "skills"),
-    OMB_USER_DATA: home,
-    OMB_PACKAGED: "1",
-    ORBIT_REMOTE_AUTO: "0",
-  },
+  env: relayServerEnv(process.env, { home, port, resources }),
   stdio: ["ignore", "pipe", "pipe", "ipc"],
   windowsHide: true,
 });

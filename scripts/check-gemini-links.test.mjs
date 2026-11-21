@@ -27,6 +27,12 @@ describe("Gemini link gate", () => {
     expect(geminiLinkHits(file, 'import { symlinkSync } from "node:fs";\nsymlinkSync(skills, to, "junction");')).toEqual([]);
   });
 
+  it("lets a listed file keep only its counted links", () => {
+    const source = `${gemini}import { linkSync } from "node:fs";\nlinkSync(temp, record);\nlinkSync(source, to);`;
+    expect(checkGeminiLinks([file], () => source, { [file]: 1 })).toHaveLength(1);
+    expect(checkGeminiLinks([file], () => source, { [file]: 2 })).toEqual([]);
+  });
+
   it("names the fix", () => {
     const [hit] = checkGeminiLinks([file], () => `${gemini}import { symlinkSync } from "node:fs";\nsymlinkSync(source, to);`);
     expect(hit).toMatch(/^server\/drivers\/fixture\.ts:3: .*antigravity-home\.ts/);

@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { createSecureContext } from "node:tls";
@@ -10,6 +10,7 @@ import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, type GuestClientDeps } from "./guest-client.ts";
 import { closeJoinedDb, joinedCode } from "./joined.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const BASE = "wink.test";
 const LABEL = "abcdefghijklmnop";
@@ -48,7 +49,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
 });
 

@@ -125,6 +125,9 @@ h1 {
 .code {
   margin-top: 24px;
 }
+.code.trying {
+  opacity: 0;
+}
 .boxes {
   display: flex;
   justify-content: space-between;

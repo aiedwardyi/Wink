@@ -31,7 +31,7 @@ export function parsePage(html, benchmarkId = "legal_bench") {
   if (start < 0 || end < 0) throw new Unverifiable("Vals overall table not found");
   const accuracy = new Map();
   const cost = new Map();
-  for (const m of props.slice(start, end).matchAll(/"([a-z0-9_-]+\/[a-z0-9_.-]+)":\[0,\{"accuracy":\[0,([0-9.]+)\](?:,"latency":\[0,[^\]]*\],"cost_per_test":\[0,([0-9.]+(?:e-?\d+)?)\])?/g)) {
+  for (const m of props.slice(start, end).matchAll(/"([a-z0-9_-]+\/[a-z0-9_.-]+)":\[0,\{"accuracy":\[0,([0-9.]+)\](?:,"latency":\[0,[^\]]*\](?:,"[a-z0-9_]+":\[0,[^\]]*\])*,"cost_per_test":\[0,([0-9.]+(?:e-?\d+)?)\])?/g)) {
     if (accuracy.has(m[1]) && accuracy.get(m[1]) !== Number(m[2])) throw new Unverifiable(`Vals lists ${m[1]} with two accuracies`);
     accuracy.set(m[1], Number(m[2]));
     if (m[3]) cost.set(m[1], Number(m[3]));

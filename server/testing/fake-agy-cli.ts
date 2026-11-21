@@ -103,8 +103,8 @@ if (Number.isFinite(delayMs) && delayMs > 0) {
 while (process.env.FAKE_AGY_HOLD_FILE && !existsSync(process.env.FAKE_AGY_HOLD_FILE)) {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
+const home = process.env.HOME || process.env.USERPROFILE || "";
 if (process.env.FAKE_AGY_MCP_DUMP) {
-  const home = process.env.HOME || process.env.USERPROFILE || "";
   let config = "null";
   try {
     config = readFileSync(join(home, ".gemini", "config", "mcp_config.json"), "utf8");
@@ -113,7 +113,7 @@ if (process.env.FAKE_AGY_MCP_DUMP) {
 }
 
 if (process.env.FAKE_AGY_WRITE_HOME === "1" && prompt) {
-  const gemini = join(process.env.HOME || process.env.USERPROFILE || "", ".gemini");
+  const gemini = join(home, ".gemini");
   const cli = join(gemini, "antigravity-cli");
   const id = `helper-${process.pid}`;
   for (const dir of ["conversations", "log", `brain/${id}`, "cache", "presence"]) mkdirSync(join(cli, dir), { recursive: true });

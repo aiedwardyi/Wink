@@ -31,6 +31,7 @@ import {
   type ThreadSyncHost,
   type ThreadSyncLedger,
 } from "./thread-sync.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const BOT_SYNC_ID = "sync-bot-1";
 const roots: string[] = [];
@@ -159,7 +160,7 @@ describe("thread sync", () => {
 
   it("round trips a thread into a real store and clears per-device session fields", () => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const folder = temp("thread-sync-folder-");
     const a = pc("device-a", folder);
@@ -635,7 +636,7 @@ describe("thread sync", () => {
 
   it("marks the ledger dirty before a message write reaches SQLite", () => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const store = new Store((): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const { threadId } = store.createBot();
@@ -814,7 +815,7 @@ describe("thread sync", () => {
 describe("thread sync follow", () => {
   function setup() {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const store = new Store((): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const { id, threadId } = store.createBot();
@@ -888,7 +889,7 @@ describe("thread sync follow", () => {
 describe("one chat per bot", () => {
   function setup() {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const store = new Store((): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const { id, threadId: older } = store.createBot({}, { seedMessages: false });
@@ -934,7 +935,7 @@ describe("one chat per bot", () => {
 describe("thread sync delete", () => {
   function setup() {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const folder = temp("thread-sync-folder-");
     const a = pc("device-a", folder);

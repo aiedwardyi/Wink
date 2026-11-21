@@ -138,7 +138,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
-import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
+import { LoginBusyError, logSignInRefusal, signInOwner, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -231,6 +231,7 @@ import {
   type Hands,
 } from "./steer-queue.ts";
 import { startedTurn } from "./send-receipt.ts";
+import { serverClockSample } from "./send-clock.ts";
 import "./send-deliver.ts";
 import {
   SendSequencer,
@@ -5047,6 +5048,9 @@ type StartTurnOptions = {
   call?: CallTag;
   answersCard?: string;
   actedAt?: number;
+  sendSeq?: number;
+  sentAfterId?: string | null;
+  waited?: boolean;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -5368,6 +5372,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           call: opts?.call,
           answersCard: opts?.answersCard,
           actedAt: opts?.actedAt,
+          sendSeq: opts?.sendSeq,
+          sentAfterId: opts?.sentAfterId,
+          waited: opts?.waited,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -7550,12 +7557,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number, waited?: boolean, sendSeq?: number, sentAfterId?: string | null) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
   const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
-  const shared = hosted && (answersCard || actedAt !== undefined) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt }) ?? hosted : hosted;
+  const shared = hosted && (answersCard || actedAt !== undefined || waited) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt, waited }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group, store.messagesFor(group.threadId).length)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7572,6 +7579,9 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     ...(askerId ? { askedBy: askerId } : {}),
     answersCard,
     actedAt,
+    waited,
+    sendSeq,
+    sentAfterId,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -8261,6 +8271,7 @@ const threadRoutes = createThreadRoutes({
   DEFAULT_PAGE,
   pageSize,
   clientMessage,
+  slimMessage,
   messagePage,
   messageWindow,
   answerRequest,
@@ -8604,6 +8615,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           // A client that offered no cursor gets false too, which is exactly
           // what a cold start should do.
           resumed,
+          // a window stamps its sends by this clock, so a cap here never moves a line
+          now: serverClockSample(),
         })}\n\n`,
       );
       if (resumed) {
@@ -8621,7 +8634,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // liveness watchdog. Heartbeats carry no id and never advance replay.
       const keepalive = setInterval(() => {
         try {
-          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping" })}\n\n`);
+          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping", now: serverClockSample() })}\n\n`);
         } catch {}
       }, SSE_HEARTBEAT_MS);
       req.on("close", () => {
@@ -8715,7 +8728,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
         setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
-        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : []) } : {}),
+        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [], teamRelayBase(googleEnv.teamRelay)) } : {}),
         phones: phoneVisits.list(),
       });
     }
@@ -8736,7 +8749,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "POST" && path === BOARD_ROUTES.remove) return await boardRoutes.remove(req, res);
     if (method === "GET" && path === "/api/devices") {
       const listed = syncedDevices();
-      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay), Date.now(), !relay && isLoopbackHost(req.headers.host));
       return json(res, 200, { devices });
     }
     if (method === "DELETE" && path.startsWith("/api/devices/")) {
@@ -9287,7 +9300,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
     if (method === "POST" && path === "/api/accounts") await enableWorkerAccounts(terminalBridgeAccess);
-    if (await accountRoutes(req, res, method, path)) return;
+    if (await accountRoutes(req, res, method, path, signInOwner(req.headers, phone?.id))) return;
     m = path.match(/^\/api\/usage\/(refresh|check)\/([^/]+)$/);
     if (m && method === "POST") {
       const instanceId = m[2];
@@ -9347,9 +9360,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
           const body = await readBody(req);
           if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
-          const capture = await registry.startSignIn(id, body?.device === true);
+          const capture = await registry.startSignIn(id, body?.device === true, signInOwner(req.headers, phone?.id));
           return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         }
+        if (method === "DELETE" && !registry.logins.owns(id, signInOwner(req.headers, phone?.id))) return refuse(403, SIGNED_IN_ELSEWHERE, "sign-in-elsewhere");
         if (method === "DELETE") return await registry.cancelSignIn(id)
           ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         if (method === "GET") {
@@ -9368,6 +9382,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
+      // Owner check and sign-out's cancel run in this one turn, so no newer sign-in can slip between them.
+      if (!registry.logins.owns(engineSignOut[1], signInOwner(req.headers, phone?.id))) return json(res, 403, { error: SIGNED_IN_ELSEWHERE, code: "sign-in-elsewhere" });
       const signedOut = await registry.signOut(engineSignOut[1]);
       return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
         : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });

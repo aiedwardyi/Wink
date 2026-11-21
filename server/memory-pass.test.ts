@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,7 @@ import type { Message, StoreChange } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -119,7 +120,7 @@ describe("memory pass", () => {
     on = true;
     botSwitch = new Map();
     writeMemoryFile("bot-t1", "");
-    rmSync(join(workspaceDir("bot-t1"), "memory"), { recursive: true, force: true });
+    removeTestData(join(workspaceDir("bot-t1"), "memory"));
     pass = start();
   });
 
@@ -1362,7 +1363,7 @@ describe("notes on the bot's own engine", () => {
     const own = summaryInstance(codex, "gpt-fake");
     const store = fakeStore();
     writeMemoryFile("bot-c1", "");
-    rmSync(join(workspaceDir("bot-c1"), "memory"), { recursive: true, force: true });
+    removeTestData(join(workspaceDir("bot-c1"), "memory"));
     const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), generate: () => noteGenerator([codex!], undefined, own), enabled: () => true, busy: () => false });
     store.appendMessage("c1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
     store.appendMessage("c1", { role: "user", kind: "text", text: "the second one" });

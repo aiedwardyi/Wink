@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { REVEALED_EVENT, STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
 import { applyLocale } from "@/lib/i18n";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
@@ -273,11 +274,11 @@ it("uses the card title's click-cursor mark in the chat header, keeping its labe
 });
 
 const media = (phone: boolean) => vi.stubGlobal("matchMedia", (query: string) => ({ matches: phone && query.includes("max-width"), addEventListener() {}, removeEventListener() {} }));
-async function mounted(data: VerifyCardData, phone = false) {
+async function mounted(data: VerifyCardData, phone = false, parent: HTMLElement = document.body) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   media(phone);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const host = document.body.appendChild(document.createElement("div")), root = createRoot(host);
+  const host = parent.appendChild(document.createElement("div")), root = createRoot(host);
   const show = (next: VerifyCardData) => act(async () => root.render(createElement(VerifyCard, { card: next, threadId: "thread" })));
   const pass = () => act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
   await show(data);
@@ -355,6 +356,113 @@ it("folds the details open and shut", async () => {
     await view.pass();
     expect(view.host.querySelector(".verify-card-details")).toBeNull();
   } finally { await view.close(); }
+});
+
+it.each([
+  ["page", card({ replay: ["a"] }), "./VerifyWatch"],
+  ["document", card({ replay: ["a"], doc: { pages: 1, lines: 2, chunks: [1, 1], by: {}, findings: [], findingTotal: 0 } }), "./VerifyDocWatch"],
+] as const)("brings the %s replay Play opens on a phone into the chat's view, top first and only once it runs past the edge", async (_, data, frame) => {
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(null, { status: 404 }))));
+  await import(frame);
+  const VIEW = { top: 60, bottom: 752 };
+  let replay = { top: 0, height: 0 };
+  const isReplay = (el: Element) => el.firstElementChild?.matches(".verify-watch-frame[data-inline]");
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const box = this.matches("[data-orbit-transcript]") ? VIEW : isReplay(this) ? { top: replay.top, bottom: replay.top + replay.height } : { top: 0, bottom: 0 };
+    return { ...box, height: box.bottom - box.top, left: 0, right: 390, width: 390, x: 0, y: box.top, toJSON() {} } as DOMRect;
+  });
+  const observers = new Set<{ resize: () => void; target?: Element }>();
+  vi.stubGlobal("ResizeObserver", class {
+    entry: { resize: () => void; target?: Element };
+    constructor(resize: () => void) { this.entry = { resize }; }
+    observe(target: Element) { this.entry.target = target; observers.add(this.entry); }
+    disconnect() { observers.delete(this.entry); }
+  });
+  const resized = () => act(async () => { for (const entry of [...observers]) if (entry.target && isReplay(entry.target)) entry.resize(); });
+  const open = async (top: number, height: number, before = () => {}) => {
+    const chat = document.body.appendChild(document.createElement("div"));
+    chat.setAttribute("data-orbit-transcript", "");
+    const stops = vi.fn();
+    chat.addEventListener(STOP_FOLLOW_EVENT, stops);
+    const revealed = vi.fn();
+    chat.addEventListener(REVEALED_EVENT, revealed);
+    chat.scrollTo = vi.fn() as typeof chat.scrollTo;
+    Object.defineProperty(chat, "scrollHeight", { configurable: true, value: 5000 });
+    Object.defineProperty(chat, "clientHeight", { configurable: true, value: 692 });
+    const view = await mounted(data, true, chat);
+    replay = { top, height };
+    before.call(chat);
+    await act(async () => view.host.querySelector<HTMLButtonElement>("[data-verify-watch]")!.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await resized();
+    return { chat, stops, revealed, scrolled: chat.scrollTo as ReturnType<typeof vi.fn>, close: async () => { await view.close(); chat.remove(); } };
+  };
+  const below = await open(700, 677);
+  try {
+    expect(below.stops).toHaveBeenCalledTimes(1);
+    expect(below.scrolled.mock.calls).toEqual([[{ top: 640, behavior: "smooth" }]]);
+    replay = { top: 300, height: 900 };
+    await resized();
+    expect(below.scrolled.mock.calls[1]).toEqual([{ top: 240, behavior: "smooth" }]);
+    await act(async () => {
+      below.chat.dispatchEvent(new Event("scroll"));
+      below.chat.querySelector(".verify-watch-frame")!.dispatchEvent(new Event("scrollend"));
+    });
+    expect(below.revealed).not.toHaveBeenCalled();
+    replay = { top: 280, height: 900 };
+    await resized();
+    expect(below.scrolled.mock.calls[2]).toEqual([{ top: 220, behavior: "smooth" }]);
+    await act(async () => { below.chat.dispatchEvent(new Event("scrollend")); });
+    replay = { top: 75, height: 1000 };
+    await resized();
+    expect(below.scrolled.mock.calls[3]).toEqual([{ top: 15, behavior: "instant" }]);
+    for (const top of [-200, 760]) {
+      replay = { top, height: 1000 };
+      await resized();
+    }
+    expect(below.scrolled).toHaveBeenCalledTimes(4);
+    await act(async () => {
+      const frame = below.chat.querySelector(".verify-watch-frame")!;
+      frame.dispatchEvent(new Event("touchmove", { bubbles: true }));
+      frame.dispatchEvent(new Event("scroll"));
+    });
+    expect(below.revealed).not.toHaveBeenCalled();
+    await act(async () => { below.chat.dispatchEvent(new Event("scroll")); });
+    expect(below.revealed).toHaveBeenCalledTimes(1);
+  } finally { await below.close(); }
+  const tall = await open(300, 1000);
+  try { expect(tall.scrolled.mock.calls).toEqual([[{ top: 240, behavior: "smooth" }]]); } finally { await tall.close(); }
+  const shown = await open(120, 600);
+  try {
+    expect(shown.stops).toHaveBeenCalledTimes(1);
+    expect(shown.scrolled).not.toHaveBeenCalled();
+    await act(async () => { shown.chat.dispatchEvent(new Event("scroll")); shown.chat.dispatchEvent(new Event("scrollend")); });
+    replay = { top: 120, height: 677 };
+    await resized();
+    expect(shown.scrolled.mock.calls).toEqual([[{ top: 60, behavior: "smooth" }]]);
+  } finally { await shown.close(); }
+  const railed = await open(120, 600);
+  try {
+    await act(async () => { railed.chat.dispatchEvent(new Event("scroll")); });
+    expect(railed.revealed).not.toHaveBeenCalled();
+    await act(async () => { document.dispatchEvent(new Event("pointerdown")); railed.chat.dispatchEvent(new Event("scroll")); });
+    expect(railed.revealed).toHaveBeenCalledTimes(1);
+    replay = { top: 120, height: 677 };
+    await resized();
+    expect(railed.scrolled).not.toHaveBeenCalled();
+  } finally { await railed.close(); }
+  const moved = await open(120, 600);
+  try {
+    await act(async () => { moved.chat.dispatchEvent(new Event("touchmove", { bubbles: true })); });
+    expect(moved.revealed).not.toHaveBeenCalled();
+    const unlisten = vi.spyOn(document, "removeEventListener");
+    await act(async () => { moved.chat.dispatchEvent(new Event("scroll")); });
+    expect(moved.revealed).toHaveBeenCalledTimes(1);
+    expect(unlisten).toHaveBeenCalledWith("pointerdown", expect.any(Function), { capture: true });
+    replay = { top: 120, height: 677 };
+    await resized();
+    expect(moved.scrolled).not.toHaveBeenCalled();
+  } finally { await moved.close(); }
 });
 
 it("keeps the phone replay mounted while it folds shut", async () => {

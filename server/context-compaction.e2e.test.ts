@@ -1,16 +1,16 @@
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { readTaskResumePacket } from "./task-state.ts";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { PRE_COMPACT_TOOL_ROUND_LIMIT } from "./turn-context.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -206,7 +206,7 @@ describe("context compaction e2e", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CODEX_CLI, 0o755);
     chmodSync(FAKE_CLAUDE_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "orbit-compaction-e2e-"));
+    home = createFixtureHome("orbit-compaction-e2e-");
     dumpPath = join(home, "codex-dump.json");
     claudeDumpPath = join(home, "claude-dump.json");
     claudePromptLogPath = join(home, "claude-prompts.ndjson");
@@ -778,7 +778,7 @@ describe("context compaction e2e", () => {
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    removeTestData(home);
   });
 
   it("dispatches a long thread through a driver without generateText", async () => {

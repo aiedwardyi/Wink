@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { testHome } from "../server/testing/test-home.ts";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { installOrbitMsg } from "./terminal-mailbox.mjs";
 import { loadTerminalBridgeToken, publishTerminalDiscovery } from "./terminal-discovery.mjs";
@@ -12,7 +13,7 @@ import { createPaneRuns } from "./pane-runs.mjs";
 import { createWorkerSession } from "./worker-session.mjs";
 
 it("loads one complete identity under concurrent starts", async () => {
-  const profile = await fs.mkdtemp(path.join(os.homedir(), "bridge-identity-"));
+  const profile = await fs.mkdtemp(path.join(testHome(), "bridge-identity-"));
   const tokens = await Promise.all(Array.from({ length: 8 }, () => loadTerminalBridgeToken(profile)));
   expect(new Set(tokens).size).toBe(1);
   expect(await fs.readFile(path.join(profile, "terminal-bridge-token"), "utf8")).toBe(tokens[0]);
@@ -20,7 +21,7 @@ it("loads one complete identity under concurrent starts", async () => {
 });
 
 it.skipIf(process.platform !== "win32")("persists bridge identity and the old-env session hook discovers the restarted port", async () => {
-  const root = await fs.mkdtemp(path.join(os.homedir(), "bridge-discovery-"));
+  const root = await fs.mkdtemp(path.join(testHome(), "bridge-discovery-"));
   const profile = path.join(root, "프로필");
   const bin = await installOrbitMsg(path.join(root, ".orbit", "bin"), "win32", profile);
   const file = path.join(profile, "pane-runs.json");

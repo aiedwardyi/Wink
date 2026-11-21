@@ -5,6 +5,8 @@ import { location, parseSource, readSource, runCheck, testFile, trackedFiles, wa
 const sources = /^(?:server|electron|shared|companion\/src)\/.*\.[cm]?[jt]sx?$/;
 const fsModule = /^(?:node:)?fs(?:\/promises)?$/;
 const linkCalls = new Set(["symlink", "symlinkSync", "link", "linkSync"]);
+// Links that never touch the Gemini home: test-profile publishes its own registration record with a hard link.
+const allowedLinks = { "companion/src/test-profile.ts": 1 };
 
 const rootName = (node) => {
   while (ts.isPropertyAccessExpression(node)) node = node.expression;
@@ -36,8 +38,8 @@ export function geminiLinkHits(file, text) {
   return hits;
 }
 
-export function checkGeminiLinks(files = trackedFiles(sources).filter((file) => !testFile.test(file)), read = readSource) {
-  return files.flatMap((file) => geminiLinkHits(file, read(file))).map((hit) =>
+export function checkGeminiLinks(files = trackedFiles(sources).filter((file) => !testFile.test(file)), read = readSource, allowed = allowedLinks) {
+  return files.flatMap((file) => geminiLinkHits(file, read(file)).slice(allowed[file] ?? 0)).map((hit) =>
     `${hit.file}:${hit.line}: link created in code that handles the Gemini home; never link Wink's folder to ~/.gemini, give agy a home of its own files (server/drivers/antigravity-home.ts)`);
 }
 

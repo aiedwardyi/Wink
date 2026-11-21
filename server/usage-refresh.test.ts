@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -511,7 +512,7 @@ describe("usage refresh route result", () => {
       const spawn = JSON.parse(readFileSync(dump, "utf8"));
       expect(spawn.argv).toEqual(["serve", "--no-session-log", "--disable-shell", "--disable-write"]);
       expect(spawn.cwd).toContain("omb-muse-check-");
-      expect(spawn.cwd).not.toBe(homedir());
+      expect(spawn.cwd).not.toBe(testHome());
       expect(JSON.parse(readFileSync(`${dump}.config.json`, "utf8"))).toEqual([
         { method: "session/start", modelId: "muse-spark-1.3", approvalMode: "denyUnmatched", workspaceRoot: spawn.cwd },
       ]);
