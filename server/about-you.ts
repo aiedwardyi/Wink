@@ -23,6 +23,8 @@ const ITEM = /^\s*(?:[-*+•]|\d{1,3}[.)])\s/;
 // codes that open a home, beside the passwords and keys secretLike knows; "Dress code" and "postal code" stay facts
 const ACCESS_CODE = /\b(?:door|gate|garage|alarm|entry|keypad|lock\s*box)\s*(?:codes?|combos?|combinations?|pins?)\b/i;
 const ACCESS_CODE_KO = /(?:도어\s*락|현관\s*문?|공동\s*현관|대문|출입\s*문?|경보기?|키\s*패드)\s*(?:번호|코드|비번)|도어\s*락\s*[:：]|(?<!\p{L})핀\s*[:：]/u;
+// "WiFi: x" names no password, yet its value is one
+const WIFI = /^(?:wi[- ]?fi|와이파이)\s*(?:[:：]|$)/iu;
 
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 const aboutYouFile = () => join(DATA_DIR, "about-you", "MEMORY.md");
@@ -82,25 +84,25 @@ export function sourceOf(paste: string): string {
   return [...safe].slice(0, 40).join("").trim() || "another AI";
 }
 
-const secret = (line: string) => secretLike(line) || ACCESS_CODE.test(line) || ACCESS_CODE_KO.test(line) || redactRoomMemory(line) !== line;
+const secret = (line: string) => secretLike(line) || ACCESS_CODE.test(line) || ACCESS_CODE_KO.test(line) || WIFI.test(line) || redactRoomMemory(line) !== line;
 
 /** The fact lines in a paste, cleaned, with secret-looking ones left out and counted. */
 export function factsOf(paste: string): { facts: string[]; hidden: number } {
   const facts: string[] = [];
   let hidden = 0;
-  // a "Password:" or "## Passwords" line holds its value below it: 1 until that value, 2 through a list of them
+  // a "Password:" or "## Passwords" line holds its value below it: 1 until that value, 2 through a list of them, 3 past a blank line, where only a list still counts
   let under = 0;
   for (const raw of paste.split(/\r?\n/)) {
     const line = clean(raw);
     if (!line) {
-      if (under === 2) under = 0;
+      under = under === 1 ? 3 : 0;
       continue;
     }
     const label = raw.trim().startsWith("#") || /[:：]$/.test(line);
     if (label) under = secret(line) ? 1 : 0;
     if (label || SKIP.test(raw.trim())) continue;
     const item = ITEM.test(raw);
-    if (under === 2 && !item) under = 0;
+    if (under > 1 && !item) under = 0;
     // a split could part a label from its value, so the whole line is checked
     if (under || secret(line)) {
       hidden++;

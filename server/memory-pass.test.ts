@@ -857,6 +857,8 @@ describe("memory pass filters", () => {
       "Code a8Fj29dkLq03mZp7XyT5vB2n",
     ]) expect(secretLike(fact)).toBe(true);
     expect(secretLike("Uses Muse Spark 1.3")).toBe(false);
+    for (const fact of ["My PIN-up art hobby is screen printing.", "Wears pin-striped suits"]) expect(secretLike(fact)).toBe(false);
+    for (const fact of ["PIN: 4821", "My bank PIN is 4471", "PIN-code 4821"]) expect(secretLike(fact)).toBe(true);
     const text = "my wifi password is Tr0ub4dor";
     expect(acceptFacts([{ fact: "Has wifi at home", quote: "my wifi password is Tr0ub4dor" }], text, "")).toEqual([]);
   });
