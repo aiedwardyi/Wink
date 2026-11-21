@@ -7,7 +7,6 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 
-import { registerTestDataDir, requireTestHome, shouldGuardTestData } from "../companion/src/test-profile.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import { LIVE_VOICES, type LiveVoice } from "../shared/live-call.ts";
 import {
@@ -20,6 +19,7 @@ import {
 } from "../shared/credential-request.ts";
 import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
+import { resolveDataDir } from "./data-dir.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { hostMatchesRemote } from "./remote-access.ts";
 import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
@@ -302,16 +302,8 @@ export function showToolCallsEnabled(cfg: AppConfig): boolean {
   return cfg.features?.showToolCalls === true;
 }
 
-if (shouldGuardTestData()) {
-  const home = requireTestHome("server/config.ts");
-  const dataDir = process.env.OMB_DATA_DIR ?? join(home, ".orbit");
-  if (!registerTestDataDir(dataDir, "server/config.ts")) {
-    throw new Error("OMB_DATA_DIR must point inside the verified Vitest home (use setup.ts or createFixtureHome)");
-  }
-}
-
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
-export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".orbit");
+export const DATA_DIR = resolveDataDir("server/config.ts");
 export const DOWNLOADS_DIR = process.env.OMB_DOWNLOADS_DIR ?? join(homedir(), "Downloads");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
