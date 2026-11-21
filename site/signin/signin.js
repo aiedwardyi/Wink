@@ -25,6 +25,7 @@
   let config = null;
   let listed = [];
   let account = "";
+  let showBoxes = () => {};
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
@@ -168,6 +169,8 @@
     remember(label);
     holdAccount(label);
     holdName(label, name);
+    // A stopped open leaves this page up, and the code is the other way in.
+    globalThis.navigation?.addEventListener("navigateerror", () => showBoxes(true), { once: true });
     location.assign(`https://${label}.${config.base}/pair${suffix}${name ? `&n=${encodeURIComponent(name)}` : ""}`);
   }
 
@@ -202,6 +205,7 @@
     }
     showList(listed);
     say(`${pc.name} is offline.`, "error");
+    showBoxes(true);
   }
 
   function showList(pcs) {
@@ -278,27 +282,20 @@
 
   const shortCodeChars = (value) => [...value.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(CODE_KEEP, "");
 
-  // Shown at once but see-through and inert while a remembered PC may open, so the boxes do not flash. Stopping that open fires navigateerror here; with no Navigation API nothing could bring them back, so they are not covered.
-  function coverCode(show) {
+  // Shown at once but see-through and inert while a remembered PC may open, so the boxes do not flash. Stopping that open fires navigateerror here; with no Navigation API nothing could bring them back, so they are not covered and stay behind the link.
+  function coverCode() {
     const nav = globalThis.navigation;
-    if (!nav) {
-      show(false);
-      return () => {};
-    }
+    if (!nav) return () => showBoxes(false);
     const code = $("code");
     const uncover = () => {
       code.classList.remove("trying");
       code.removeAttribute("inert");
-      nav.removeEventListener("navigateerror", stopped);
-      show(false);
-    };
-    const stopped = () => {
-      uncover();
-      show(true);
+      nav.removeEventListener("navigateerror", uncover);
+      showBoxes(false);
     };
     code.classList.add("trying");
     code.setAttribute("inert", "");
-    nav.addEventListener("navigateerror", stopped);
+    nav.addEventListener("navigateerror", uncover);
     return uncover;
   }
 
@@ -391,13 +388,13 @@
     }
     render();
     $("boxes").replaceChildren(...boxes);
-    // The boxes stay out of sight, and out of the tab order, until the person asks for them or a remembered PC's open falls through.
-    const show = (focus) => {
+    // The boxes stay out of sight, and out of the tab order, until the person asks for them or a PC's open falls through.
+    showBoxes = (focus) => {
       $("usecode").hidden = true;
       $("boxes").hidden = false;
       if (focus) focusAt(0);
     };
-    $("usecode").addEventListener("click", () => show(true));
+    $("usecode").addEventListener("click", () => showBoxes(true));
     // Back from the PC's page can restore this one as it was left: locked on a code that already went.
     addEventListener("pageshow", (event) => {
       if (!event.persisted) return;
@@ -406,7 +403,6 @@
       typed = false;
       say("");
     });
-    return show;
   }
 
   // Back from turning on Devices on the PC, the empty list loads again with the same token.
@@ -527,10 +523,10 @@
     });
   }
 
-  async function coldStart(pick, show) {
+  async function coldStart(pick) {
     const last = remembered();
     const saved = LABEL_RE.test(last);
-    const uncover = !pick && saved ? coverCode(show) : () => {};
+    const uncover = !pick && saved ? coverCode() : () => {};
     if (!pick && saved && await reachable(last)) {
       // Back restores this page from bfcache as it was left, still covered.
       const restored = (event) => {
@@ -609,7 +605,8 @@
     const pc = params.get("pc");
     const m = params.get("m");
     if (pc === null && m === null) {
-      void coldStart(params.get("pick") === "1", showCode()).catch(() => say(GOOGLE_DOWN, "error"));
+      showCode();
+      void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
     // A cold start is already the chooser, so the link would only reload it.

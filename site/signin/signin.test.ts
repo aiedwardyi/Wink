@@ -837,11 +837,48 @@ describe("entering a PC's code", () => {
     expect(link().hidden).toBe(true);
   });
 
-  it("shows the boxes from the start where the page cannot hear a stopped open", () => {
+  it("keeps the boxes behind the link while a remembered PC opens where the page cannot hear a stopped open", async () => {
     localStorage.setItem(LAST_PC, LABEL_B);
     open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    expect(boxesHidden()).toBe(true);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(boxesHidden()).toBe(true);
+    expect(link().hidden).toBe(false);
+  });
+
+  it("opens the boxes when the remembered PC is offline where the page cannot hear a stopped open", async () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "down");
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
     expect(boxesHidden()).toBe(false);
     expect(link().hidden).toBe(true);
+  });
+
+  async function chooseAda(probe = "up"): Promise<void> {
+    open("/signin", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }], undefined, probe);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    expect(boxesHidden()).toBe(true);
+    document.querySelector<HTMLButtonElement>("#list button")!.click();
+  }
+
+  it("opens the boxes with the cursor in the first one when a chosen PC is offline", async () => {
+    await chooseAda("down");
+    await vi.waitFor(() => expect(status().textContent).toBe("Ada is offline."));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
+  it("opens the boxes with the cursor in the first one when a chosen PC's open is stopped", async () => {
+    const navigation = stubNavigation();
+    await chooseAda();
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Ada")));
+    expect(boxesHidden()).toBe(true);
+    navigation.dispatchEvent(new Event("navigateerror"));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
   });
 
   it("shows the boxes when Back restores the page after a remembered PC opened", async () => {
