@@ -10,8 +10,7 @@
 // queued send, not a newline-joined burst) and what it was not (the
 // webhook untrusted-data paragraph an attended turn must never get).
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -41,6 +40,7 @@ import { foldPeerQueuedSends } from "./peer-user-reply.ts";
 import type { BotRecord, Message } from "./store.ts";
 import { startQueuedTurn } from "./chat-error.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
@@ -772,7 +772,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
     chmodSync(FAKE_MSP_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-steer-test-"));
+    home = createFixtureHome("omb-steer-test-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     mkdirSync(join(home, "gates"), { recursive: true });
     drainGate = join(home, "gates", "drain.gate");
@@ -872,7 +872,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       child.on("close", () => resolve());
       setTimeout(() => (child.kill("SIGKILL"), resolve()), 5_000).unref?.();
     });
-    rmSync(home, { recursive: true, force: true });
+    removeTestData(home);
   });
 
   it.each(["grokResultFirst", "grokOriginalFirst"])("records a %s steer once, in order, without queue fallback", async (instanceId) => {

@@ -6,11 +6,63 @@ import { expect, it } from "vitest";
 
 import { runTestNode, spawnHarness } from "../server/testing/harness-auth.ts";
 import { createFixtureHome, removeTestData, testHome } from "../server/testing/test-home.ts";
-import { checkTestProfilePaths } from "./check-test-profile-paths.mjs";
+import { checkLauncherEnv, checkTestProfilePaths } from "./check-test-profile-paths.mjs";
+import { linuxDesktopEnv, relayServerEnv } from "./smoke-env.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const setupHint = "load server/testing/setup.ts (vite.config.ts setupFiles) before importing";
 const linkType = process.platform === "win32" ? "junction" : "dir";
+
+it("scrubs inherited profile overrides in Vitest setup", () => {
+  for (const name of ["OMB_USER_DATA", "OMB_DOWNLOADS_DIR", "MUSE_AUTH_PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "ORBIT_WORKTREE_ROOT"]) {
+    expect(process.env[name], name).toBeUndefined();
+  }
+  expect(process.env.APPDATA).toBe(join(testHome(), "AppData", "Roaming"));
+  expect(process.env.LOCALAPPDATA).toBe(join(testHome(), "AppData", "Local"));
+});
+
+it("keeps the inherited user-data sentinel untouched when the server boots", async () => {
+  const home = createFixtureHome("server-home-");
+  const sentinel = createFixtureHome("host-user-data-");
+  const snag = join(sentinel, "team-snags", "sentinel");
+  mkdirSync(dirname(snag));
+  writeFileSync(snag, "original");
+  const result = await runTestNode(["--input-type=module", "-e", `
+    await import("./server/index.ts");
+    process.exit(0);
+  `], { cwd: root, env: {
+    ...process.env, HOME: home, USERPROFILE: home, OMB_USER_DATA: sentinel,
+    OMB_PORT: "0", OMB_WEBHOOK_PORT: "0", ORBIT_REMOTE_AUTO: "0", ORBIT_RELAY: "0", ORBIT_NO_WSL: "1",
+  } });
+  expect(result.status, result.stderr).toBe(0);
+  expect(existsSync(join(sentinel, "mailbox-secret")), "mailbox secret written outside the server fixture").toBe(false);
+  expect(readFileSync(snag, "utf8")).toBe("original");
+});
+
+it("guards a child even if Vitest was omitted from its requested environment", async () => {
+  const home = createFixtureHome("minimal-child-");
+  const env = { HOME: home, USERPROFILE: home, SystemRoot: process.env.SystemRoot, OMB_DATA_DIR: testHome() };
+  const result = await runTestNode(["--input-type=module", "-e", `
+    import { requireTestHome } from "./companion/src/test-profile.ts";
+    console.log(JSON.stringify([requireTestHome(), process.env.VITEST]));
+    await import("./server/config.ts");
+  `], { cwd: root, env });
+  expect(result.status, result.stderr).toBe(1);
+  expect(JSON.parse(result.stdout)).toEqual([home, null]);
+  expect(result.stderr).toContain("OMB_DATA_DIR must point inside the verified Vitest home");
+});
+
+it("guards the path cache without a config import or Vitest setup", () => {
+  const home = createFixtureHome("path-cache-host-");
+  const env = scratchEnv(home, home);
+  const result = runProbe(`
+    const { refreshPathCache } = await import("./server/env-path.ts");
+    await refreshPathCache([]);
+  `, env);
+  expect(existsSync(join(env.OMB_DATA_DIR, "path-cache.json")), "unguarded path cache write").toBe(false);
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain(setupHint);
+});
 
 function scratchEnv(home, temp) {
   const appData = join(home, "AppData");
@@ -241,11 +293,12 @@ it("rechecks the run nonce and refuses a junction swapped in after config import
       for (const target of [osHome, fakeProfile, join(fakeProfile, "data")]) {
         assert.throws(() => removeTestData(target), /removeTestData refused a real profile path/);
       }
-      for (const name of [".codex", ".openmausbot-companion", ".claude", ".claude-account", ...(
+      mkdirSync(join(osHome, ".config"));
+      for (const name of [".codex", ".openmausbot-companion", ".claude", ".claude-account", ".grok", ".gemini", ".config/muse", ".hermes", ...(
         process.platform === "win32" ? [".CLAUDE-WORK"] : []
       )]) {
         const protectedDir = join(home, name);
-        mkdirSync(protectedDir);
+        mkdirSync(protectedDir, { recursive: true });
         const token = join(protectedDir, "sentinel");
         writeFileSync(token, "protected");
         const alias = join(osHome, name);
@@ -266,6 +319,29 @@ it("rechecks the run nonce and refuses a junction swapped in after config import
   } finally {
     removeTestData(scratch);
   }
+});
+
+it("allows owned cleanup with a dangling Claude link in the OS home", () => {
+  const scratch = createFixtureHome("dangling-claude-");
+  const result = runProbe(`
+    import assert from "node:assert/strict";
+    import { existsSync, lstatSync, mkdirSync, symlinkSync } from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    import os from "node:os";
+    import { join } from "node:path";
+    import { removeTestData, startTestRun } from "./companion/src/test-profile.ts";
+    const osHome = join(${JSON.stringify(scratch)}, "os-user");
+    mkdirSync(osHome);
+    os.userInfo = () => ({ homedir: osHome });
+    syncBuiltinESMExports();
+    const alias = join(osHome, ".claude-dangling");
+    symlinkSync(join(osHome, "missing"), alias, ${JSON.stringify(linkType)});
+    const home = startTestRun();
+    removeTestData(home);
+    assert(!existsSync(home));
+    assert(lstatSync(alias).isSymbolicLink());
+  `, scratchEnv(scratch, scratch));
+  expect(result.status, result.stdout + result.stderr).toBe(0);
 });
 
 it("refuses ordinary replacements of imported data directories during direct and parent cleanup", async () => {
@@ -299,6 +375,41 @@ it("refuses ordinary replacements of imported data directories during direct and
   removeTestData(home);
 });
 
+const parentProfile = () => {
+  const names = ["OMB_DATA_DIR", "OMB_USER_DATA", "OMB_DOWNLOADS_DIR", "OMB_COMPANION_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"];
+  return Object.fromEntries(names.map((name) => [name, join(root, "parent-sentinel", name)]));
+};
+
+it.each([
+  ["relay smoke", (parent, home) => relayServerEnv(parent, { home, port: 1, resources: join(home, "res") })],
+  ["Linux package smoke", (parent, home) => linuxDesktopEnv(parent,
+    { home, xdgConfig: join(home, "config"), xdgRuntime: join(home, "run"), wayland: false, sentinel: join(home, "cua"), brokerPort: 1, cua: true })],
+])("the %s launch env never carries the parent's profile", (_name, build) => {
+  const home = join(root, "disposable-home");
+  const parent = { ...parentProfile(), PATH: "kept" };
+  const env = build(parent, home);
+  expect(env.PATH).toBe("kept");
+  for (const name of Object.keys(parentProfile())) {
+    const value = Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
+    expect(value === undefined || value.startsWith(home), `${name}=${value}`).toBe(true);
+  }
+  expect(env.HOME).toBe(home);
+  expect(env.USERPROFILE).toBe(home);
+});
+
+it("the repo check rejects a launcher that forwards process.env to the app and names the scrub helper", () => {
+  const hits = checkLauncherEnv(["scripts/smoke-example.mjs", "scripts/smoke-scrubbed.mjs", "scripts/smoke-driver.mjs"], (file) => ({
+    "scripts/smoke-example.mjs": 'spawn(exe, [], { env: { ...process.env, HOME: home, OMB_PORT: "1" } });',
+    "scripts/smoke-scrubbed.mjs": 'spawn(exe, [], { env: { ...smokeLauncherEnv(process.env, home), OMB_PORT: "1" } });',
+    "scripts/smoke-driver.mjs": 'spawn(exe, [], { env: { ...process.env, OMB_SMOKE_MODE: "1" } });',
+  })[file]);
+  expect(hits).toHaveLength(1);
+  expect(hits[0]).toContain("smoke-example.mjs");
+  expect(hits[0]).toContain("smokeLauncherEnv");
+  expect(checkLauncherEnv()).toEqual([]);
+});
+
 it("the repo check rejects raw recursive deletion through aliases and keeps file removal", () => {
   const file = "example.test.ts";
   const hits = checkTestProfilePaths([file], () => `
@@ -315,6 +426,25 @@ it("the repo check rejects raw recursive deletion through aliases and keeps file
   `);
   expect(hits).toHaveLength(5);
   expect(hits.filter((hit) => hit.includes("use removeTestData"))).toHaveLength(4);
+});
+
+it("the repo check rejects raw cleanup of derived profile paths and temp fixtures", () => {
+  const hits = checkTestProfilePaths(["example.test.ts"], () => `
+    import { WORKSPACES_DIR as workspaces, EVENTS_DIR } from "./config.ts";
+    import { workspaceDir } from "./workspace.ts";
+    import { createTempDirs as makeTemps } from "./testing/cleanup.ts";
+    const temps = makeTemps();
+    const unrelated = makeTemps();
+    temps.make(join(testHome(), "fixture-"));
+    unrelated.make(join(tmpdir(), "fixture-"));
+    rmSync(workspaces, { recursive: true });
+    rmSync(EVENTS_DIR, { recursive: true });
+    rmSync(join(workspaceDir(botId), "memory"), { recursive: true });
+    temps.remove();
+    unrelated.remove();
+  `);
+  expect(hits).toHaveLength(4);
+  expect(hits.every((hit) => hit.includes("use removeTestData"))).toBe(true);
 });
 
 it.skipIf(process.platform !== "win32")("revokes a run even when Windows cannot remove its empty home", () => {

@@ -97,12 +97,28 @@ export function harnessTestHome(home: string | undefined): TestHome | undefined 
   }
 }
 
+export function isTestHomePath(profile: TestHome, path: string): boolean {
+  if (path !== resolve(path)) return false;
+  const expected = expectedProfilePath(path, profile.home, profile.canonical);
+  try {
+    return !!expected && !relative(expected, resolvePath(path));
+  } catch {
+    return false;
+  }
+}
+
 export function attachHarnessTestHome(profile: TestHome): void {
-  if (state[key] || !process.connected || profile.home !== homedir() || !verifiedHome(profile)) return;
+  if (state[key] || !process.connected || profile.home !== homedir() || !verifiedHome(profile)) {
+    throw new Error("Cannot attach the verified Vitest child home");
+  }
   state[key] = { child: profile };
   const active = shareWithWorkers(profile);
   process.once("disconnect", () => Atomics.store(active, 0, 0));
   process.channel?.unref();
+}
+
+export function shouldGuardTestData(): boolean {
+  return process.env.VITEST !== undefined || state[key] !== undefined || getEnvironmentData(workerKey) !== undefined;
 }
 
 function shareWithWorkers(profile: TestHome): Int32Array {
@@ -205,12 +221,20 @@ export function removeTestData(dir: string): void {
   const target = resolvePath(dir);
   const osHome = userInfo().homedir;
   const claudeSiblings = directoryStat(osHome) ? readdirSync(osHome).filter((name) => directoryKey(name).startsWith(".claude")) : [];
-  for (const name of new Set([".orbit", ".codex", ".openmausbot-companion", ".claude", ...claudeSiblings])) {
+  for (const name of new Set([".orbit", ".codex", ".openmausbot-companion", ".claude", ".grok", ".gemini", ".config/muse", ".hermes", ...claudeSiblings])) {
     const profile = join(osHome, name);
-    for (const protectedPath of [profile, resolvePath(profile)]) {
-      if (overlaps(target, protectedPath)) {
-        throw new Error(`removeTestData refused a real profile path: ${dir}. Use the current test home from server/testing/setup.ts`);
-      }
+    if (overlaps(target, profile)) {
+      throw new Error(`removeTestData refused a real profile path: ${dir}. Use the current test home from server/testing/setup.ts`);
+    }
+    let canonical: string;
+    try {
+      canonical = resolvePath(profile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (overlaps(target, canonical)) {
+      throw new Error(`removeTestData refused a real profile path: ${dir}. Use the current test home from server/testing/setup.ts`);
     }
   }
   const removingRoot = dir === run.home || dir === run.canonical;

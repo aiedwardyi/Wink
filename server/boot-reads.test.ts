@@ -19,7 +19,7 @@ import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
 const root = join(import.meta.dirname, "..");
 const port = 28800 + Math.floor(Math.random() * 10_000);
 const base = `http://127.0.0.1:${port}`;
-const home = join(testHome(), "host");
+const home = testHome();
 const userData = join(home, "user-data");
 const spyLog = join(home, "main-sql.jsonl");
 const syncFolder = join(home, "sync");
