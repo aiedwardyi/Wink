@@ -277,7 +277,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type AskBook, type SavedAsks } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import * as tts from "./tts/index.ts";
@@ -3060,9 +3060,16 @@ const summaryBuild = createSummaryBuild({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   userName: () => cfg.profile?.name?.trim() || "User",
 });
+function saveHarnessAsks(threadId: string, change: (book: AskBook | undefined) => SavedAsks | null): void {
+  const current = taskPacketForWrite(threadId);
+  const saved = current && change(current);
+  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
+}
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
+  asks: taskPacketForWrite,
+  saveAsks: saveHarnessAsks,
   generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
   enabled: (botId) => {
     const bot = store.bot(botId);
@@ -4652,11 +4659,7 @@ bus.subscribe((event: RuntimeEvent) => {
 
 // ask_user cards wait for the asking turn's reply.
 const askHold = watchAskHold(store, bus);
-watchSkippedQuestions(store, (threadId, change) => {
-  const current = taskPacketForWrite(threadId);
-  const saved = current && change(current);
-  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
-});
+watchSkippedQuestions(store, saveHarnessAsks);
 
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main

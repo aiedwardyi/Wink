@@ -8,7 +8,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { ASK_LIMITS, ASK_UPDATE_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema } from "./task-asks.ts";
+import { ASK_LIMITS, ASK_UPDATE_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema, type TaskAsk } from "./task-asks.ts";
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
 export const TASK_STATE_MAX_BYTES = 16_384;
@@ -209,12 +209,47 @@ function serializeBounded(packet: TaskResumePacket): string {
 const MARK_BYTES = 65;
 const stagedPath = (path: string): string => `${path}.staged`;
 
+// an older build reads a packet with an ask kind it does not know as no packet at all, so promise kinds live beside it, by id and creation time
+const marksPath = (path: string): string => path.replace(/\.json$/, ".promises.json");
+const marksSchema = z.record(z.string(), z.number());
+type PromiseMarks = z.output<typeof marksSchema>;
+
+function readMarks(path: string): PromiseMarks {
+  try {
+    const parsed = marksSchema.safeParse(JSON.parse(fileText(marksPath(path)) ?? "{}"));
+    return parsed.success ? parsed.data : {};
+  } catch {
+    return {};
+  }
+}
+
+function marked(packet: TaskResumePacket, marks: PromiseMarks): TaskResumePacket {
+  const promise = (ask: TaskAsk) => !ask.kind && marks[ask.id] === ask.at;
+  return packet.asks?.some(promise) ? { ...packet, asks: packet.asks.map((ask) => promise(ask) ? { ...ask, kind: "promise" as const } : ask) } : packet;
+}
+
+/** Before the packet: a mark whose ask never landed matches no ask's creation time. */
+function writeMarks(path: string, saved: TaskResumePacket): void {
+  const marks = Object.fromEntries((saved.asks ?? []).filter((ask) => ask.kind === "promise").map((ask) => [ask.id, ask.at]));
+  const text = Object.keys(marks).length ? JSON.stringify(marks) : "";
+  if ((fileText(marksPath(path)) ?? "") === text) return;
+  if (text) writeFileAtomic(marksPath(path), text, { mode: 0o600 });
+  else rmSync(marksPath(path), { force: true });
+}
+
 function sealed(packet: TaskResumePacket, dir: string): { path: string; serialized: string; saved: TaskResumePacket } {
   const normalized = normalize(packet);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = taskStatePath(normalized.threadId, dir);
-  const serialized = serializeBounded(normalized);
-  return { path, serialized, saved: taskResumePacketSchema.parse(JSON.parse(serialized)) };
+  const marks = Object.fromEntries((normalized.asks ?? []).filter((ask) => ask.kind === "promise").map((ask) => [ask.id, ask.at]));
+  const asks = normalized.asks?.map((ask) => {
+    if (ask.kind !== "promise") return ask;
+    const plain = { ...ask };
+    delete plain.kind;
+    return plain;
+  });
+  const serialized = serializeBounded(asks ? { ...normalized, asks } : normalized);
+  return { path, serialized, saved: marked(taskResumePacketSchema.parse(JSON.parse(serialized)), marks) };
 }
 
 function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {
@@ -264,6 +299,7 @@ export function writeTaskResumePacket(
   options: TaskStateOptions = {},
 ): TaskResumePacket {
   const { path, serialized, saved } = sealed(packet, options.dir ?? TASK_STATE_DIR);
+  writeMarks(path, saved);
   writeFileAtomic(path, serialized, { mode: 0o600 });
   dropStaged(path);
   return saved;
@@ -276,6 +312,7 @@ export function stageTaskResumePacket(
   options: TaskStateOptions = {},
 ): TaskResumePacket {
   const { path, serialized, saved } = sealed(packet, options.dir ?? TASK_STATE_DIR);
+  writeMarks(path, saved);
   writeFileSync(stagedPath(path), savedMark(path) + serialized, { mode: 0o600 });
   return saved;
 }
@@ -296,7 +333,8 @@ export function readTaskResumePacket(
   options: TaskStateOptions = {},
 ): TaskResumePacket | null {
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
-  return stagedRecord(path, threadId)?.packet ?? recordOf(fileText(path), threadId);
+  const packet = stagedRecord(path, threadId)?.packet ?? recordOf(fileText(path), threadId);
+  return packet && marked(packet, readMarks(path));
 }
 
 export function deleteTaskResumePacket(
@@ -306,6 +344,7 @@ export function deleteTaskResumePacket(
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
   const staged = existsSync(stagedPath(path));
   rmSync(stagedPath(path), { force: true });
+  rmSync(marksPath(path), { force: true });
   if (!existsSync(path)) return staged;
   const status = lstatSync(path);
   if (!status.isFile() || status.isSymbolicLink()) return staged;

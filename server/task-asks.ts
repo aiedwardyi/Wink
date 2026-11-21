@@ -16,8 +16,8 @@ export const taskAskSchema = z.object({
   ask: z.string().min(1).max(ASK_LIMITS.ask),
   status: z.enum(ASK_STATUSES),
   ref: z.string().min(1).max(ASK_LIMITS.ref).optional(),
-  /** the bot's own ask_user card left unanswered; Wink adds these, not the bot */
-  kind: z.literal("question").optional(),
+  /** question: the bot's own ask_user card left unanswered; promise: its own "I'll do X" from a reply. Wink adds these, not the bot */
+  kind: z.enum(["question", "promise"]).optional(),
   choices: z.string().min(1).max(ASK_LIMITS.ref).optional(),
   due: z.number().int().nonnegative().optional(),
   /** the wake Wink set for due, so moving or closing the ask cancels it */
@@ -136,6 +136,47 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
+/** Files the bot's own promises as open asks and closes the promises it finished, each only while it is still as the note-taker read it; null when nothing changes. An open ask with the same words is a repeat. */
+// the note-taker rewords a repeat, so a promise sharing most of its words with an open one is that one
+const gist = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{4,}|[가-힣]{2,}/gu) ?? []);
+// "PC A" and "PC B", or 4 pm and 5 pm: a number or one-letter name only one of them has keeps them apart
+const marks = (text: string) => [...new Set(text.replace(/\b(\d{1,2}):00\b/g, "$1").match(/\p{N}+|(?<![\p{L}\p{N}'’])\p{Lu}(?![\p{L}\p{N}'’])/gu)?.filter((mark) => mark !== "I"))].sort().join(" ");
+// a reworded lead ("Once your laptop is on" or "When the laptop is on") keeps the promise; a word swapped after "I'll", payroll for billing, makes another
+const clause = (text: string) => gist(text.replace(/^.*?\bi(?:['’]ll| will)\b/i, ""));
+function samePromise(a: string, b: string): boolean {
+  const [x, y] = [gist(a), gist(b)];
+  const [p, q] = [clause(a), clause(b)];
+  const least = Math.min(x.size, y.size);
+  return least >= 3 && [...x].filter((word) => y.has(word)).length >= 0.8 * least && marks(a) === marks(b)
+    && ([...p].every((word) => q.has(word)) || [...q].every((word) => p.has(word)));
+}
+
+export function fileBotPromises(book: AskBook | undefined, promises: readonly { ask: string; repeats?: TaskAsk }[], done: readonly TaskAsk[], now: number): SavedAsks | null {
+  const asks = (book?.asks ?? []).map((item) => ({ ...item }));
+  let lastAskId = lastAskIdOf(book);
+  let changed = false;
+  // retitled or changed since the note-taker read it: a report or repeat was about another commitment
+  const asRead = (item: TaskAsk, read: TaskAsk) => read.id === item.id && read.ask === item.ask && read.changedAt === item.changedAt;
+  for (const item of asks) {
+    if (item.kind !== "promise" || !isOpenAsk(item) || !done.some((read) => asRead(item, read))) continue;
+    Object.assign(item, { status: "done", changedAt: now });
+    changed = true;
+  }
+  const read = asks.length;
+  for (const { ask: promise, repeats } of promises) {
+    const ask = clip(promise, ASK_LIMITS.ask);
+    if (repeats && asks.some((item) => item.kind === "promise" && isOpenAsk(item) && asRead(item, repeats))) continue;
+    // an earlier promise can come back reworded; one from this same batch is another promise, even with more words
+    if (!ask || asks.some((item, at) => isOpenAsk(item) && (words(item.ask) === words(ask) || (item.kind === "promise" && at < read && samePromise(item.ask, ask))))) continue;
+    lastAskId += 1;
+    asks.push({ id: `A${lastAskId}`, ask, status: "open", kind: "promise", at: now, changedAt: now });
+    changed = true;
+  }
+  if (!changed) return null;
+  trimClosed(asks);
+  return { asks, lastAskId };
+}
+
 /** A card answered after its question was filed: one filed for this card goes, an older one closes done. Null when none matches. */
 export function answerQuestionAsk(existing: readonly TaskAsk[] | undefined, question: string, cardAt: number, now: number): TaskAsk[] | null {
   const ask = words(clip(question, ASK_LIMITS.ask));
@@ -159,7 +200,7 @@ function listed(asks: readonly TaskAsk[] | undefined, now: number) {
   const due = open.filter((ask) => needsVerdict(ask, now)).sort(byAge);
   const rest = open.filter((ask) => !needsVerdict(ask, now)).sort(byAge);
   const ordered = [...due, ...rest.filter((ask) => !isQuestion(ask)), ...rest.filter(isQuestion)];
-  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${ask.kind ? ` ${ask.kind}` : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
   const bytes = (ask: TaskAsk) => Buffer.byteLength(line(ask), "utf8") + 1;
   if (ordered.reduce((sum, ask) => sum + bytes(ask), 0) <= MAX_STATUS_ASKS_BYTES) return { ordered, due, shown: ordered, line };
   const picked = new Set<TaskAsk>();

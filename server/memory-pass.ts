@@ -9,6 +9,7 @@ import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } fro
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
+import { ASK_LIMITS, fileBotPromises, isOpenAsk, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import {
   ensureWorkspace,
@@ -34,6 +35,8 @@ const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
 const SUMMARY_MAX = 120;
+const SAID_CHARS = 240;
+const NOTES_PER_PASS = 20;
 const STATE_FILE = "memory-pass.json";
 
 const listSchema = z.union([z.array(z.string()), z.string()]).nullish();
@@ -42,8 +45,7 @@ const factsSchema = z
     kind: z.string().nullish(), fact: z.string(), quote: z.string(), replaces: z.string().nullish(),
     key: z.string().nullish(), over: listSchema, picture: z.string().nullish(), over_pictures: listSchema,
     message_id: z.string().nullish(), question_id: z.string().nullish(),
-  }))
-  .max(20);
+  }));
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
 const stateSchema = z.object({
   threads: z.record(z.string(), z.array(z.string())),
@@ -64,6 +66,10 @@ export interface MemoryPassDeps {
   /** The bot's Auto notes switch, read live. */
   enabled(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
+  /** A 1:1 chat's asks, where the bot's own promises are filed. */
+  asks?(threadId: string): AskBook | null | undefined;
+  /** Saves what `change` returns to the chat's asks; null saves nothing. */
+  saveAsks?(threadId: string, change: (book: AskBook | undefined) => SavedAsks | null): void;
   dataDir: string;
   now?(): number;
 }
@@ -145,7 +151,161 @@ const promptLine = ({ id, questionId, text, context, pictures, prior }: UserLine
     text,
   ].join("\n");
 
-export function notePrompt(notes: string, lines: UserLine[], picks = ""): string {
+/** The bot's own words at the end of its replies: its promises, and reports that may finish an open one. */
+export interface BotLines { lines: string[]; commits: string[]; open: TaskAsk[] }
+/** repeats: the open promise, as read, the note-taker tied this one to */
+export interface KeptPromise { ask: string; repeats?: TaskAsk }
+export interface KeptPromises { promises: KeptPromise[]; done: TaskAsk[] }
+
+// "I'll do X when Y": a first-person commitment tied to a time or trigger; in-turn work ("let me check", "one moment") never counts
+const COMMIT = /\b(?:i['’]ll|i will(?! not\b)|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
+const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|noon|midnight|when|once|after|before|next|by|(?:mon|tues|wednes|thurs|fri|satur|sun)day|this (?:morning|afternoon|evening|week|weekend)|in (?:an?|\d+) (?:minutes?|hours?|days?|weeks?))\b|\b\d{1,2}(?::\d{2})?\s?[ap]\.?m\b|\bat \d{1,2}(?::\d{2})?\b|나중에|내일|오늘|이따|다음에|되면|끝나면|켜시면|하시면|후에|\d{1,2}시/i;
+const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
+const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
+const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
+// a take-back opens its sentence ("Actually, cancel that production report"); one quoted or offered to the user takes nothing back, and "I checked the laptop backup just now" only rides along for the note-taker
+const WITHDRAWN = /^(?:(?:actually|oh|oops|sorry|wait|no)[,!.]?\s+)*(?:scratch that|never ?mind|cancel that)\b|취소할게요/i;
+const DONE_NOW = /\bi(?:['’]ve| have)?\s.*\bjust now\b|방금/i;
+const DENIED = /\b(?:not|never|no|cannot)\b|n['’]t\b|(?:^|\s)(?:안|못)\s/i;
+// "cancel that if we have to" takes nothing back yet
+const HEDGED = /\b(?:if|unless|maybe|perhaps|in case)\b/i;
+const TIMES = new RegExp(DEFERRED.source, "gi");
+const PLAIN = new Set(["a", "an", "the", "i", "me", "my", "myself", "you", "your", "yourself", "we", "us", "our", "it", "its", "this", "that", "these", "those", "there", "here", "them", "they", "their", "to", "of", "for", "on", "in", "at", "with", "from", "into", "about", "up", "out", "off", "as", "and", "or", "but", "so", "if", "then", "than", "until", "also", "just", "now", "still", "really", "actually", "sorry", "okay", "ok", "anyway", "instead", "though", "again", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "will", "would", "can", "could", "going", "s", "t", "ll", "ve", "re", "d", "m", "그거", "그건", "이거"]);
+// whole words, never stems; a lone capital like the B of "PC B" is a name, not an article
+const terms = (text: string) => new Set((text.match(/[\p{L}\p{N}]+/gu) ?? [])
+  .map((word) => (/^\p{Lu}$/u.test(word) && word !== "I" ? word : word.toLowerCase())).filter((word) => !PLAIN.has(word)));
+const named = (text: string) => terms(text.replace(TIMES, " "));
+// plain words that still point somewhere, at a person or a condition: "Never mind me" and "Cancel that if we have to" are not bare
+const POINTED = new Set(["i", "me", "my", "myself", "you", "your", "yourself", "we", "us", "our", "them", "they", "their", "if", "until"]);
+const bare = (text: string) => (text.match(/[\p{L}\p{N}]+/gu) ?? []).every((word) => PLAIN.has(word.toLowerCase()) && !POINTED.has(word.toLowerCase()));
+/** What a promise is about: its words after "I'll" and the verb, before a Korean ending, or after the verb of a plain title. */
+function object(promise: string): Set<string> {
+  const marker = COMMIT.exec(promise);
+  if (marker && !/^i/i.test(marker[0])) return named(promise.slice(0, marker.index));
+  return named((marker ? promise.slice(marker.index + marker[0].length) : promise).replace(/^\s*\S+/, ""));
+}
+
+/** What a promise does: the word after "I'll" or opening a plain title; a Korean ending leaves it in the object. */
+function verb(promise: string): string | undefined {
+  const marker = COMMIT.exec(promise);
+  if (marker && !/^i/i.test(marker[0])) return undefined;
+  return /^\s*(\p{L}+)/u.exec(marker ? promise.slice(marker.index + marker[0].length) : promise)?.[1]?.toLowerCase();
+}
+// "called" and "calling" are "call"; whole forms, so "production" is never "product"
+const forms = (does: string) => {
+  const stem = does.replace(/e$/, "");
+  const ied = does.replace(/([^aeiou])y$/, "$1i");
+  return new Set([does, `${does}s`, `${ied}es`, `${stem}ed`, `${ied}ed`, `${stem}ing`, `${does}${does.slice(-1)}ed`, `${does}${does.slice(-1)}ing`]);
+};
+const own = (promise: string) => {
+  const does = verb(promise);
+  return new Set([...terms(promise.replace(COMMIT, " ")), ...(does ? forms(does) : [])]);
+};
+
+/** A line is about a promise only when it names that promise's whole object in its order, or nothing but its time, and its action, as whole words, and more of it than of each other promise; anything less keeps the promise. */
+export function namesPromise(line: string, promise: string, others: readonly string[] = []): boolean {
+  const said = line.replace(WITHDRAWN, " ");
+  const words = terms(said);
+  const shared = (text: string) => [...own(text)].filter((word) => words.has(word));
+  const about = object(promise);
+  const does = verb(promise);
+  const hits = shared(promise);
+  // "cancel that production report" leaves the emailing unsaid but names nothing else; "cancel that plan to publish" never names a draft
+  const action = (does !== undefined && [...forms(does)].some((form) => words.has(form))) || hits.length === words.size;
+  // "email Bob about Alice" never names "email Alice about Bob"; "cancel that for Friday" names only a time
+  const whole = about.size > 0 && [...words].filter((word) => about.has(word)).join(" ") === [...about].join(" ");
+  return !DENIED.test(said) && !HEDGED.test(said) && hits.length > 0 && (whole || !named(said).size) && action
+    && others.map(shared).every((theirs) => theirs.length < hits.length && theirs.every((word) => hits.includes(word)));
+}
+
+const parts = (sentence: string) => {
+  const marker = COMMIT.exec(sentence);
+  const at = marker && /^i/i.test(marker[0]) ? marker.index : 0;
+  return { lead: words(sentence.slice(0, at)).join(" "), clause: words(sentence.slice(at)).join(" ") };
+};
+// "To confirm, I'll check ..." restates a promise of the same reply word for word; "For Bob, I'll send ..." never restates "For Alice, I'll send ..."
+const restates = (promise: string, sentence: string) => {
+  const [a, b] = [parts(promise), parts(sentence)];
+  return a.clause === b.clause && (!a.lead || !b.lead || a.lead === b.lead);
+};
+
+/** The bot's text after the last tool of its reply to each of these user rows, as sentences in order: commitments, and reports of finished work. */
+export function botLines(messages: readonly Message[], ids: readonly string[], open: readonly TaskAsk[]): BotLines | null {
+  const wanted = new Set(ids);
+  const lines: string[] = [];
+  const commits: string[] = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (!wanted.has(messages[i]!.id)) continue;
+    let tail: string[] = [];
+    for (let j = i + 1; j < messages.length && messages[j]!.role !== "user"; j += 1) {
+      const row = messages[j]!;
+      if (row.role !== "bot") continue;
+      if (row.kind === "text" && row.text?.trim()) tail.push(row.text.replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1").replace(CONTEXT_TAGS, " "));
+      else if (row.tool && row.tool.name !== MEMORY_SAVE_TOOL) tail = [];
+    }
+    let reply: string[] = [];
+    let last: string | undefined;
+    for (const part of tail.join("\n").split(SENTENCE)) {
+      const sentence = part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+      if (!sentence) continue;
+      const before = last;
+      last = undefined;
+      if (sentence.length > SAID_CHARS || sentence.endsWith("?") || secretLike(sentence)) continue;
+      const commit = COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence);
+      // a take-back that names nothing is about the promise right before it, never an older one
+      if (WITHDRAWN.test(sentence)) reply = bare(sentence.replace(WITHDRAWN, " "))
+        ? reply.filter((promise) => promise !== before)
+        : reply.filter((promise) => !namesPromise(sentence, promise, reply.filter((other) => other !== promise)));
+      if (commit) {
+        last = reply.find((promise) => restates(promise, sentence));
+        if (!last) reply.push(last = sentence);
+      }
+      // a report rides along so the note-taker sees an open one finished
+      else if (!DONE_NOW.test(sentence) && !REPORT.test(sentence)) continue;
+      lines.push(sentence);
+    }
+    commits.push(...reply);
+  }
+  return commits.length || (open.length && lines.length) ? { lines, commits, open: [...open] } : null;
+}
+
+const botPrompt = ({ lines, open }: BotLines) => [
+  "",
+  "BOT LINES are the bot's own words at the end of its replies:",
+  "- kind \"promise\": an unfinished task the bot said it will do later, on a time or trigger. fact: that task in the bot's first-person words and language, like \"I'll check laptop sync once you're on it\", 80 characters max; quote: its exact words from BOT LINES.",
+  "- Not a promise: an offer waiting on the user's yes, a rule for how it will behave, or work done in the same lines.",
+  ...(open.length ? ["- A promise OPEN PROMISES already has, even reworded: add replaces: its id.", "- kind \"done\": an OPEN PROMISES item BOT LINES say is finished; fact: its id; quote: the words that say so."] : []),
+  "",
+  "BOT LINES:",
+  "<bot_lines>",
+  ...lines.map((line) => `- ${line}`),
+  "</bot_lines>",
+  ...(open.length ? ["", "OPEN PROMISES:", "<promises>", ...open.map((ask) => `${ask.id}: ${ask.ask}`), "</promises>"] : []),
+];
+
+/** Promises quoted from a commitment, each with the open promise it repeats, and the open promises, as read, that a quoted line finished. */
+export function acceptPromises(facts: Fact[], said: BotLines): KeptPromises {
+  const promises: KeptPromise[] = [];
+  const done: TaskAsk[] = [];
+  const quoted = (lines: string[], quote: string) => Boolean(quote.trim()) && lines.some((line) => squash(line).includes(squash(quote)));
+  // a quote cut from "I never checked the laptop backup just now" finishes nothing
+  const negated = (quote: string) => said.lines.some((line) => squash(line).includes(squash(quote)) && DENIED.test(squash(line).slice(0, squash(line).indexOf(squash(quote))).split(/[,;:]/).pop() ?? ""));
+  for (const { kind, fact, quote, replaces } of facts) {
+    const line = fact.replace(/\s+/g, " ").trim();
+    const repeats = said.open.find((ask) => ask.id === replaces?.trim().toUpperCase());
+    if (kind === "promise" && line && line.length <= ASK_LIMITS.ask && !secretLike(line) && quoted(said.commits, quote) && !promises.some(({ ask }) => ask === line)) {
+      const kept: KeptPromise = { ask: line };
+      if (repeats) kept.repeats = repeats;
+      promises.push(kept);
+    }
+    const finished = kind === "done" ? said.open.find((ask) => ask.id === line.toUpperCase()) : undefined;
+    // the note-taker's id counts only when its quote names that promise, and no other open one as well
+    if (finished && quoted(said.lines, quote) && !negated(quote) && namesPromise(quote, finished.ask, said.open.filter((ask) => ask !== finished).map(({ ask }) => ask)) && !done.includes(finished)) done.push(finished);
+  }
+  return { promises, done };
+}
+
+export function notePrompt(notes: string, lines: UserLine[], picks = "", said?: BotLines | null): string {
   return [
     "You pick durable facts and decisions out of the user's own chat messages, for their notes file.",
     "",
@@ -165,7 +325,7 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "- Copy the decision's message_id from <source>. Use <prior> and its question_id only for a continued question.",
     "- replaces: only when the fact makes a CURRENT NOTES line untrue or outdated, that whole line copied exactly. Otherwise leave it out.",
     "",
-    "Reply with a JSON array of facts, decisions and tweaks, or [] when nothing qualifies.",
+    `Reply with a JSON array of facts, decisions and tweaks${said ? ", promises and dones" : ""}, or [] when nothing qualifies.`,
     "",
     "CURRENT NOTES:",
     "<notes>",
@@ -181,6 +341,7 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "<user_lines>",
     lines.map(promptLine).join("\n\n"),
     "</user_lines>",
+    ...(said ? botPrompt(said) : []),
   ].join("\n");
 }
 
@@ -190,7 +351,10 @@ export function parseFacts(output: string): Fact[] {
   if (start < 0 || end < start) return [];
   try {
     const parsed = factsSchema.safeParse(JSON.parse(output.slice(start, end + 1)));
-    return parsed.success ? parsed.data : [];
+    if (!parsed.success) return [];
+    // a runaway list of notes still lands none; promises are bounded by the bot lines they must quote
+    const promise = ({ kind }: Fact) => kind === "promise" || kind === "done";
+    return parsed.data.filter((fact) => !promise(fact)).length > NOTES_PER_PASS ? parsed.data.filter(promise) : parsed.data;
   } catch {
     return [];
   }
@@ -553,6 +717,8 @@ interface PassLog {
   decisions?: number;
   replaced?: number;
   tweaks?: number;
+  promises?: number;
+  closed?: number;
   ms: number;
   result: "saved" | "none" | "busy" | "too-large" | "conflict" | "error";
 }
@@ -769,7 +935,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (files.length) line.files = files;
       return line;
     });
-    if (!lines.length) return done(threadId, ids);
+    const book = roomSource(threadId) || !deps.saveAsks ? undefined : deps.asks?.(threadId);
+    const said = roomSource(threadId) || !deps.saveAsks ? null : botLines(messages, ids, (book?.asks ?? []).filter((ask) => ask.kind === "promise" && isOpenAsk(ask)));
+    if (!lines.length && !said) return done(threadId, ids);
     const memory = readMemoryFile(botId);
     const raw = memoryFileRaw(botId);
     const started = now();
@@ -779,7 +947,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     let outcome = "helper-failed";
     let output: string;
     try {
-      output = await generate(notePrompt(memory.text, lines, pickKeysList(readMemoryTopic(botId, PICKS_FILE))), signal, trace ? (usage, id) => {
+      output = await generate(notePrompt(memory.text, lines, pickKeysList(readMemoryTopic(botId, PICKS_FILE)), said), signal, trace ? (usage, id) => {
         request++;
         trace.request(id ?? `helper:${request}`, usage);
       } : undefined);
@@ -798,7 +966,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
-    land(botId, threadId, { ids, facts: parseFacts(output), source: lines }, memory, raw, now() - started);
+    const facts = parseFacts(output);
+    const promised = acceptPromises(facts, said ?? { lines: [], commits: [], open: [] });
+    if (promised.promises.length || promised.done.length) {
+      deps.saveAsks?.(threadId, (current) => fileBotPromises(current, promised.promises, promised.done, now()));
+      log({ botId, threadId, promises: promised.promises.length, closed: promised.done.length, ms: now() - started, result: "saved" });
+    }
+    land(botId, threadId, { ids, facts: facts.filter(({ kind }) => kind !== "promise" && kind !== "done"), source: lines }, memory, raw, now() - started);
   };
 
   const pump = () => {
