@@ -881,6 +881,29 @@ describe("entering a PC's code", () => {
     expect(focused()).toBe(0);
   });
 
+  it("opens the boxes with the cursor in the first one when the PC list answers 503", async () => {
+    open("/signin", []);
+    answer({ [`https://relay.${BASE}/v1/pcs`]: { status: 503, body: { error: "unavailable" } } });
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(status().textContent).toBe(OFFLINE));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
+  it.each([
+    ["the PC list cannot be reached", "fail" as const, undefined, OFFLINE],
+    ["no PC is signed in", [] as Pc[], undefined, EMPTY],
+    ["Google sign-in breaks", [] as Pc[], GIS_BOOM, GOOGLE_DOWN],
+  ])("opens the boxes with the cursor in the first one when %s", async (_why, body, gisError, said) => {
+    open("/signin", body, gisError);
+    inits[0]?.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(status().textContent).toBe(said));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
   it("shows the boxes when Back restores the page after a remembered PC opened", async () => {
     stubNavigation();
     localStorage.setItem(LAST_PC, LABEL_B);

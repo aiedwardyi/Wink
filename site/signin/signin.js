@@ -230,6 +230,7 @@
   function choose(pcs, pick = false) {
     if (pcs.length === 0) {
       say(EMPTY);
+      showBoxes(true);
       return;
     }
     if (pick) {
@@ -388,7 +389,7 @@
     }
     render();
     $("boxes").replaceChildren(...boxes);
-    // The boxes stay out of sight, and out of the tab order, until the person asks for them or a PC's open falls through.
+    // The boxes stay out of sight, and out of the tab order, until the person asks for them or the way to a PC falls through.
     showBoxes = (focus) => {
       $("usecode").hidden = true;
       $("boxes").hidden = false;
@@ -546,6 +547,7 @@
     const listed = await loadPcs(token);
     if (!listed) {
       say(OFFLINE, "error");
+      showBoxes(true);
       return;
     }
     choose(listed, pick || saved);
@@ -606,7 +608,10 @@
     const m = params.get("m");
     if (pc === null && m === null) {
       showCode();
-      void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
+      void coldStart(params.get("pick") === "1").catch(() => {
+        say(GOOGLE_DOWN, "error");
+        showBoxes(true);
+      });
       return;
     }
     // A cold start is already the chooser, so the link would only reload it.
