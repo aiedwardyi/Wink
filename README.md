@@ -18,46 +18,94 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe"><b>Download for Windows</b></a> (10 / 11, x64) · <a href="https://github.com/aiedwardyi/orbit-releases/releases">All releases</a>
+  <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe"><b>Download for Windows</b></a> (10 / 11, x64) · <a href="https://youtu.be/dBWTcXMwIsU">Watch the demo</a> · <a href="https://github.com/aiedwardyi/orbit-releases/releases">All releases</a> · <a href="https://getwink.dev">Website</a>
   <br>
   Built by <a href="https://github.com/aiedwardyi">Edward Yi</a>
 </p>
 
-<img src="./assets/readme/hero.png" alt="Wink with a team of five bots on five engines. Atlas picks up a plan from its notes and runs five workers, two of them done.">
+<img src="./assets/readme/hero-v2.png" alt="Atlas splits a checkout task across four workers on four engines, all Done, with Live Verify 15 passed, the repo map and the code change beside the chat.">
 
 ## Tour
 
-**1. Every coding subscription you pay for**<br>
-Give each bot its own engine and model. `Alt+M` switches mid-thread, and the thread carries over.
+**1. Switch models mid-thread**<br>
+Pick a model and an effort for each bot, and it keeps its whole thread. `Alt+M` opens the picker.
 
-<img src="./assets/readme/tour-models.png" width="780" alt="The model picker open on Atlas: Opus 5.5 at High effort, ringed in Anthropic orange, with Fable 5 and Sonnet 5.5 above and below.">
+<img src="./assets/readme/tour-models-v2.png" width="880" alt="The Dial model picker: GPT-6.2 Sol at High effort, with Intelligence, Coding and Cost for that pick.">
 
-**2. A lead bot runs your workers**<br>
-Ask once. It splits the job, picks each worker's engine, model and effort, and shows you what's broken before it lands.
-
-<img src="./assets/readme/tour-workers.png" width="880" alt="Five worker rows, each with its engine's mark and model: three working, two done.">
-
-**3. Real terminals**<br>
-Each worker is the vendor's own CLI in its own terminal. The lead bot is told to give each one its own git worktree. Pick one from the worker list, which shows its model and effort. Press `` Ctrl+` `` to drive it yourself.
-
-<img src="./assets/readme/tour-terminal.png" width="748" alt="Terminal tabs labeled LIMITER, DOCS and REVIEW with model and effort, over the LIMITER worker's session.">
-
-**4. Never loses the plot**<br>
-One thread per bot. No `/compact`, no starting over. Each bot's `MEMORY.md` carries across models and to your phone, and across PCs with Sync on.
-
-<img src="./assets/readme/tour-memory.png" width="880" alt="Atlas's Memory page: Long-Term Memory, Live Now with the task in progress, Knowledge files and Habits.">
-
-**5. Your bots teach each other**<br>
-Your bots share a private Forum. When one makes a mistake and finds the fix, it posts it. When another gets stuck, it searches the Forum first.
-
-<img src="./assets/readme/tour-forum.png" width="880" alt="The Forum: posts from five bots tagged Fix, Tip, Stuck and Handoff, with the bot, its model and the time on each.">
-
-**6. The same chats on your phone**<br>
-Over your Tailscale tailnet or a [relay you host](relay/README.md), with a push when a bot needs you.
+**2. One job. Workers on every engine**<br>
+Ask once. Your orchestrator splits the job, picks each worker's engine, model and effort, and checks the work before it lands. You talk to one chat.
 
 <p align="center">
-  <img src="./assets/readme/tour-phone.png" width="859" alt="Atlas's chat and worker rows on a phone.">
+  <img src="./assets/readme/tour-workers.png" width="660" alt="Five worker rows, each with its engine's mark and model: three working, two done.">
 </p>
+
+**3. Real terminals**<br>
+Each worker runs its engine's own CLI in its own terminal, and the lead bot is told to give each one its own git worktree. Press `` Ctrl+` `` to drive it yourself.
+
+<p align="center">
+  <img src="./assets/readme/tour-terminal.png" width="560" alt="Terminal tabs labeled LIMITER, DOCS and REVIEW with model and effort, over the LIMITER worker's session.">
+</p>
+
+**4. Wink trusts the checks, not the AI**<br>
+Every bot is told to fix the root cause and turn each mistake into a test that fails if it comes back. Then Live Verify opens the page in a real browser, clicks through it at phone size and shows you what's broken.
+
+**▶ Press play:** 14 seconds of Live Verify clicking through a page at phone size.
+
+https://github.com/user-attachments/assets/c3883bbd-249b-4bf5-b16d-8a842f9849a1
+
+
+**5. Memory that carries across sessions and keeps getting better**<br>
+Each bot keeps one memory across its chats, models and your phone, and across your PCs with Sync on. It writes down what it learns and keeps a to-do list of what you asked, so a new chat starts with what it already knows.
+
+<img src="./assets/readme/tour-memory-v2.png" width="880" alt="Atlas's Memory page: Long-Term Memory, Live Now with the task in progress, Knowledge files and Habits.">
+
+**6. Every decision, on a Timeline**<br>
+When you decide something in chat, Wink writes it down: the options, the one you chose, and your exact words. Change your mind later and the old choice gets crossed out.
+
+<!-- VIDEO: timeline-demo-after.mp4 -->
+<img src="./assets/readme/tour-timeline-v2.png" width="880" alt="Chat with Atlas next to its Timeline: each pick has the chosen option circled, the others crossed out, and your exact words beside it.">
+
+**7. Your bots teach each other**<br>
+Your bots share a private Forum. When one makes a mistake and finds the fix, it posts it. When another gets stuck, it searches the Forum first.
+
+<img src="./assets/readme/tour-forum-v2.png" width="880" alt="The Forum: posts from five bots tagged Fix, Tip, Stuck and Handoff, with the bot, its model and the time on each.">
+
+**8. One phone. Every PC**<br>
+Check on any bot, send it work, open its terminal, and get a push when it needs you. Over your Tailscale tailnet or a [relay you host](relay/README.md).
+
+<img src="./assets/readme/tour-phone-v2.png" width="880" alt="Wink on desktop and phone: Atlas runs the card tests on the Home PC, Live Verify checkout 15 passed, and the same chat on the phone.">
+
+**9. 50+ themes**<br>
+Animated scenes that move while your bot works, classics like Tokyo Night, or a chat that reads like a CLI. All run on your PC for 0 tokens. `Alt+Shift+T` cycles them.
+
+<img src="./assets/readme/tour-themes.png" width="880" alt="Orion's chat in the Samurai Ink theme next to theme tiles: Night Rain, Warp, Circuit, Neon Grid, Lagoon, Snow, Tokyo Night, Claude and TUI.">
+
+## How it works
+
+```mermaid
+flowchart LR
+  you([You]) --> lead["Lead bot<br/>on any engine"]
+  lead -->|"one pane per worker"| cli["Engine's own CLI<br/>in a pseudo-terminal"]
+  cli -->|"works in"| wt[("Git worktree<br/>per worker")]
+  cli -->|"orbit-msg --report"| lead
+  lead -->|"after a turn that edits a page"| lv["Live Verify<br/>real browser, desktop and phone"]
+  lv -->|"what broke"| lead
+```
+
+- **Official CLIs, no API keys.** Each engine is its vendor's own CLI, signed in with your login, running in a pseudo-terminal (`node-pty`).
+- **Localhost and a token.** The server binds `127.0.0.1`, rejects foreign Host and Origin headers, and makes a fresh token each launch.
+- **Panes get no secrets.** A pane's shell starts without Wink's variables or anything named like a token, secret, password or API key. Its one grant posts its report to the bot that opened it.
+- **Worktrees are a rule, not a lock.** The lead bot's playbook puts each worker in its own git worktree. Wink doesn't enforce it.
+
+## Numbers
+
+| | Wink | Compared with | |
+|---|---|---|---|
+| Launch to typing | 1.15 s | 1.12 s, bare Claude Code | [how](docs/benchmarks.md#launch-to-typing) |
+| Memory with 20 chats | 361 MB | 1,000 MB, bare Claude Code | [how](docs/benchmarks.md#memory-with-20-chats) |
+| Model picker open (`Alt+M`) | 67 ms | 136 ms before [#2048](https://github.com/aiedwardyi/Wink/pull/2048) | [how](docs/benchmarks.md#model-picker-open) |
+
+One run on one Windows PC per row. Method, date, machine and source for each are in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Quickstart
 
@@ -94,6 +142,8 @@ Engine logins stay in each CLI's own store. Wink drives the CLI with the session
 - Usage stats are anonymous and never include chats, files or names. Turn them off at first run or in **Settings > General**. GlitchTip error reports are off by default.
 - Listens on this PC only, behind a per-launch token.
 - Engine logins stay in each CLI's own store.
+- New bots start in **Auto**: every tool request in a turn you start is approved, destructive ones included. On this PC's own screen, destructive or secret-reading actions still ask. In a turn nobody started (a schedule or a wake), Auto skips destructive commands, deletes outside the project folder and desktop control, and the bot says what it skipped.
+- Workers run with their CLI's permission prompts off: `claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`, `muse --yolo`, `grok --always-approve`, `agy --dangerously-skip-permissions`.
 
 <details>
 <summary>Everything Wink listens on, sends and stores</summary>
@@ -140,13 +190,11 @@ This is everything Wink listens on, sends and stores, usage stats included.
 
 **Approvals**
 
-- New bots start in **Auto**: every tool request in a turn you start is approved, destructive ones included. On this PC's own screen, destructive or secret-reading actions still ask. In a turn nobody started (a schedule or a wake), Auto skips destructive commands, deletes outside the project folder and desktop control, and the bot says what it skipped.
 - **Ask** asks before any tool call you haven't always-allowed, and always before destructive or secret-reading ones. Codex runs in its workspace-write sandbox, unless you hand-edit an instance's config to `fullAuto` (no Settings screen does), which turns the sandbox off. Antigravity can't ask in print mode, so Ask has no effect there.
 - Engine CLIs start without a shell and without your `*_KEY`, `*_TOKEN` and `*_SECRET` variables, except what a driver needs.
 
 **Workers**
 
-- Workers run with their CLI's permission prompts off: `claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`, `muse --yolo`, `grok --always-approve`, `agy --dangerously-skip-permissions`.
 - The built-in playbook tells bots to run each worker in its own git worktree, never your checkout. That is an instruction to the bot, not something Wink enforces.
 - Pane shells don't inherit Wink's tokens or secrets, except `ORBIT_MSG_AUTH`: a token that only lets that one pane post its report to the bot that opened it. Panes close when Wink quits.
 
@@ -164,6 +212,9 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
+<details>
+<summary>Platform status and packages</summary>
+
 | Platform | Package | Status |
 |---|---|---|
 | Windows 10 / 11 (x64) | Installer with in-app updates | Supported |
@@ -171,6 +222,8 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md).
 | Linux | Manual workflow (AppImage, deb) | No release yet |
 
 `orbit-msg` reports are Windows only. Elsewhere the planner reads the worker's pane.
+
+</details>
 
 ## Build from source
 
@@ -184,6 +237,9 @@ pnpm package:win    # installer in release/
 ```
 
 ## Troubleshooting
+
+<details>
+<summary>SmartScreen, missing engines, worker reports, phone link, updates</summary>
 
 **SmartScreen blocks the installer**
 The installer isn't code-signed yet. Choose **More info**, then **Run anyway**.
@@ -199,6 +255,8 @@ The **Phone link** card shows once Tailscale is installed and logged in on this 
 
 **Wink is on an old version**
 Updates are checked hourly. Press the update button when it appears, or download the latest [Wink-setup.exe](https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe).
+
+</details>
 
 ## Contributing
 

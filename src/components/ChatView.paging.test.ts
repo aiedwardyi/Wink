@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, formatTime, openNotificationTarget, useStore, type Bot, type Group, type Message } from "@/state/store";
 import type { TurnStreamState } from "@/lib/turn-stage";
 import { applyLocale } from "@/lib/i18n";
+import { REVEALED_EVENT, STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
 import { applySkin } from "@/lib/skins";
 import { landOnSearchHit } from "@/lib/focus-message";
 
@@ -474,6 +475,25 @@ describe("paged transcripts", () => {
     await reachTop();
     await vi.waitFor(() => expect(host.textContent).toContain("row 380;"));
     expect(calls.some((call) => call.includes("before=m400"))).toBe(true);
+  });
+
+  it.each(["chat", "room"] as const)("holds older %s rows while a box opening in a row scrolls into view, then loads them", async (view) => {
+    const reachTop = topObservers();
+    const thread = rows(0, 500);
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const calls = pagedServer(threadId, thread, view === "chat" ? { bots: [bot(thread.slice(-100), true)], groups: [] } : { bots: [], groups: [room(thread.slice(-100), true)] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.textContent).toContain("row 499;"));
+    nearTop(host);
+    const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
+    await reachTop();
+    await act(async () => { await Promise.resolve(); });
+    expect(calls.some((call) => call.includes("before="))).toBe(false);
+    expect(host.textContent).not.toContain("row 380;");
+    await act(async () => { scroller.dispatchEvent(new Event(REVEALED_EVENT)); });
+    await reachTop();
+    await vi.waitFor(() => expect(host.textContent).toContain("row 380;"));
   });
 
   it.each(["chat", "room"] as const)("keeps mounted %s rows under the cap while reading back to the first row", async (view) => {

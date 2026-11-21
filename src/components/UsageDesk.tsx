@@ -7,6 +7,7 @@ import { afterFold } from "@/lib/fold-press";
 import { localeTag, useI18n, type MessageKey, type Translate } from "@/lib/i18n";
 import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
 import { refreshUsage, useAutoRefresh, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
@@ -394,6 +395,8 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   const { t } = clock;
   const checked = checkedMain(state, engine.base);
   const id = useId();
+  // Expand all opens every engine at once, so only a press on this header brings its rows into view.
+  const pressed = useRef(false);
   const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
   const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
     checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} settings {...slots} />;
@@ -401,7 +404,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
     loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
   const head = (arrows?: ReactNode) => (
     <div data-engine-head="" {...(board.engines.filter((each) => each.accounts.length).length > 1 && reorderable(t("usage.desk.reorder", { name: label })))} className="usage-engine-head">
-      <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, onFold)}
+      <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, () => { pressed.current = folded; onFold(); })}
         className={cn("group relative flex h-5 min-w-0 shrink items-center gap-2 text-[14px] font-semibold text-ink",
           terminal ? "rounded-none" : "rounded-md", "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2")}>
         <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px] font-normal")}><ProviderBrandMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
@@ -411,7 +414,10 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
       {folded ? main && <FoldSummary engine={engine} account={main} clock={clock} /> : arrows && <span className="ml-auto flex shrink-0">{arrows}</span>}
     </div>
   );
-  const group = (content: ReactNode) => <Fold open={!folded} id={id} soft><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
+  const group = (content: ReactNode) => <Fold open={!folded} id={id} soft onOpened={() => {
+    if (pressed.current) revealOnOpen(document.getElementById(id)?.querySelector<HTMLElement>("[data-account-row]") ?? null);
+    pressed.current = false;
+  }}><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
   return (
     <section data-usage-engine={engine.engine} data-usage-base={engine.base} aria-label={label} className="min-w-0">
       {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />

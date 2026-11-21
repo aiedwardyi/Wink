@@ -15,6 +15,7 @@ import {
   botNotifyIconPath,
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
+import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
@@ -230,6 +231,7 @@ import {
   type Hands,
 } from "./steer-queue.ts";
 import { startedTurn } from "./send-receipt.ts";
+import { serverClockSample } from "./send-clock.ts";
 import "./send-deliver.ts";
 import {
   SendSequencer,
@@ -5029,6 +5031,9 @@ type StartTurnOptions = {
   call?: CallTag;
   answersCard?: string;
   actedAt?: number;
+  sendSeq?: number;
+  sentAfterId?: string | null;
+  waited?: boolean;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -5064,7 +5069,7 @@ const PLAIN_WORDS_INSTRUCTIONS =
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
-  " After something took 2+ tries, board_post kind fix: the error and the line that fixed it.";
+  ` After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
 const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
 
@@ -5345,6 +5350,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           call: opts?.call,
           answersCard: opts?.answersCard,
           actedAt: opts?.actedAt,
+          sendSeq: opts?.sendSeq,
+          sentAfterId: opts?.sentAfterId,
+          waited: opts?.waited,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -7527,12 +7535,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number, waited?: boolean, sendSeq?: number, sentAfterId?: string | null) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
   const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
-  const shared = hosted && (answersCard || actedAt !== undefined) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt }) ?? hosted : hosted;
+  const shared = hosted && (answersCard || actedAt !== undefined || waited) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt, waited }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group, store.messagesFor(group.threadId).length)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7549,6 +7557,9 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     ...(askerId ? { askedBy: askerId } : {}),
     answersCard,
     actedAt,
+    waited,
+    sendSeq,
+    sentAfterId,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -8581,6 +8592,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           // A client that offered no cursor gets false too, which is exactly
           // what a cold start should do.
           resumed,
+          // a window stamps its sends by this clock, so a cap here never moves a line
+          now: serverClockSample(),
         })}\n\n`,
       );
       if (resumed) {
@@ -8598,7 +8611,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // liveness watchdog. Heartbeats carry no id and never advance replay.
       const keepalive = setInterval(() => {
         try {
-          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping" })}\n\n`);
+          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping", now: serverClockSample() })}\n\n`);
         } catch {}
       }, SSE_HEARTBEAT_MS);
       req.on("close", () => {

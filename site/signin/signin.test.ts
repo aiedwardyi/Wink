@@ -751,6 +751,73 @@ describe("entering a PC's code", () => {
     expect(document.getElementById("code")?.hidden).toBe(true);
   });
 
+  const covered = () => document.getElementById("code")?.classList.contains("trying");
+  const inert = () => document.getElementById("code")?.hasAttribute("inert");
+
+  function stubNavigation(): EventTarget {
+    const navigation = new EventTarget();
+    vi.stubGlobal("navigation", navigation);
+    return navigation;
+  }
+
+  it("keeps the boxes see-through and inert while a remembered PC opens", async () => {
+    stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    expect(covered()).toBe(true);
+    expect(inert()).toBe(true);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(covered()).toBe(true);
+    expect(inert()).toBe(true);
+  });
+
+  it("shows usable boxes when the open is stopped and the page stays", async () => {
+    const navigation = stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    navigation.dispatchEvent(new Event("navigateerror"));
+    expect(covered()).toBe(false);
+    expect(inert()).toBe(false);
+    expect(boxes()).toHaveLength(6);
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
+  });
+
+  it("does not cover the boxes where the page cannot hear a stopped open", () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    expect(covered()).toBe(false);
+    expect(inert()).toBe(false);
+  });
+
+  it("shows the boxes when Back restores the page after a remembered PC opened", async () => {
+    stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: false }));
+    expect(covered()).toBe(true);
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(covered()).toBe(false);
+    expect(inert()).toBe(false);
+    expect(boxes()).toHaveLength(6);
+  });
+
+  it("shows the boxes when the remembered PC does not answer, and not before", async () => {
+    stubNavigation();
+    vi.useFakeTimers();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "timeout");
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(covered()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(covered()).toBe(false);
+    expect(inert()).toBe(false);
+    expect(boxes()).toHaveLength(6);
+  });
+
   it("is six boxes that ask the phone for a one-time code, and no Open button", () => {
     open("/signin", []);
     expect(boxes()).toHaveLength(6);

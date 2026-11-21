@@ -2,6 +2,31 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.292] - 2026-11-21
+
+### Fixed
+- Chat lines stay where you sent them, live and after a reload, with no "Sends next" you did not ask for.
+- A worker report that gets cut off ends with a link to the full file.
+
+## [1.0.291] - 2026-11-20
+
+### Fixed
+- The model picker (Alt+M) opens about twice as fast.
+- A Live Verify replay of a long doc ends without the view jumping back up.
+- A sign-in call no longer turns into a Forum stuck post.
+- Bots post a Forum stuck post only for problems another bot could solve.
+
+## [1.0.290] - 2026-11-20
+
+### Fixed
+- Sections you open in Settings, Usage, Devices and elsewhere scroll their first row into view.
+- The Bot Details header sits flush under the tabs, with no text peeking above it as you scroll.
+- A room bot's search of your 1:1 chats no longer leaves a chip in the room.
+- Refresh on the Usage page asks your provider again instead of showing the last read.
+- Settings > More themes scrolls its first row into view when it opens.
+- The Timeline's Oldest and Newest take you there with a glide.
+- The Map opens in a blink on long chats.
+
 ## [1.0.289] - 2026-11-20
 
 ### Added

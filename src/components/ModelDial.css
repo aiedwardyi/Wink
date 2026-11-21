@@ -46,7 +46,6 @@
   user-select: none;
   touch-action: none;
 }
-.dial-stage[data-boot], .dial-stage[data-boot] * { transition: none !important; animation: none !important; }
 .dial-layer { position: absolute; inset: 0; }
 .dial-mark, .dial-mark * { display: block; fill: currentColor; overflow: visible; }
 

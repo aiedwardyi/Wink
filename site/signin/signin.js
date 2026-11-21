@@ -278,6 +278,22 @@
 
   const shortCodeChars = (value) => [...value.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(CODE_KEEP, "");
 
+  // Shown at once but see-through and inert while a remembered PC may open, so the boxes do not flash. Stopping that open fires navigateerror here; with no Navigation API nothing could bring them back, so they are not covered.
+  function coverCode() {
+    const nav = globalThis.navigation;
+    if (!nav) return () => {};
+    const code = $("code");
+    const uncover = () => {
+      code.classList.remove("trying");
+      code.removeAttribute("inert");
+      nav.removeEventListener("navigateerror", uncover);
+    };
+    code.classList.add("trying");
+    code.setAttribute("inert", "");
+    nav.addEventListener("navigateerror", uncover);
+    return uncover;
+  }
+
   function showCode() {
     $("code").hidden = false;
     const boxes = [];
@@ -498,10 +514,19 @@
   async function coldStart(pick, signedOut) {
     const last = remembered();
     const saved = LABEL_RE.test(last);
+    const uncover = !pick && !signedOut && saved ? coverCode() : () => {};
     if (!pick && !signedOut && saved && await reachable(last)) {
+      // Back restores this page from bfcache as it was left, still covered.
+      const restored = (event) => {
+        if (!event.persisted) return;
+        removeEventListener("pageshow", restored);
+        uncover();
+      };
+      addEventListener("pageshow", restored);
       go(last, "?g=1");
       return;
     }
+    uncover();
     // From a PC the account is usually known to Google, so try its quiet sign-in before drawing the button.
     if (pick) $("title").textContent = "Choose a PC";
     const token = await requestToken(randomNonce(), pick);
