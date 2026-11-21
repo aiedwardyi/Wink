@@ -2,14 +2,13 @@
 // DATA_DIR (~/.openmausbot) never touches the real one. os.homedir()
 // reads HOME (POSIX) / USERPROFILE (Windows) at call time, and this file
 // runs before any test module imports server/config.ts.
-import { mkdtempSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
-import { removeTempDir } from "./cleanup.ts";
+import { removeTestData, startTestRun } from "../../companion/src/test-profile.ts";
 
-const home = mkdtempSync(join(tmpdir(), "omb-test-home-"));
+const home = startTestRun();
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 // Worker threads on Windows keep the real profile in homedir(); refuse to run against it.
@@ -35,9 +34,7 @@ process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
 const { closeMessageDb } = await import("../message-db.ts");
 afterEach(closeMessageDb);
 
-// Windows holds a directory that is a live process's cwd, and a just-killed
-// CLI lets go a beat after the kill call returns — see removeTempDir.
-afterAll(async () => {
+afterAll(() => {
   closeMessageDb();
-  await removeTempDir(home);
+  removeTestData(home);
 });

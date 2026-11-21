@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 
+import { registerTestDataDir, requireTestHome } from "../companion/src/test-profile.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import { LIVE_VOICES, type LiveVoice } from "../shared/live-call.ts";
 import {
@@ -299,6 +300,14 @@ export function detailedRepliesEnabled(cfg: AppConfig): boolean {
 
 export function showToolCallsEnabled(cfg: AppConfig): boolean {
   return cfg.features?.showToolCalls === true;
+}
+
+if (process.env.VITEST !== undefined) {
+  const home = requireTestHome("server/config.ts");
+  const dataDir = process.env.OMB_DATA_DIR ?? join(home, ".orbit");
+  if (!registerTestDataDir(dataDir, "server/config.ts")) {
+    throw new Error("OMB_DATA_DIR must point inside the verified Vitest home (use setup.ts or createFixtureHome)");
+  }
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.

@@ -12,6 +12,7 @@ import { Store, type GroupRecord } from "../store.ts";
 import { createVerifyAuto } from "../verify-auto.ts";
 import { closeRoomsDb, createRoom } from "./db.ts";
 import { isHostedThread } from "./guards.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 let store: Store;
 let hosted: GroupRecord;
@@ -30,7 +31,7 @@ let spies: ReturnType<typeof spyDeps>;
 
 beforeEach(async () => {
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   const bot = store.createBot();
   hosted = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: createRoom("Team").id });

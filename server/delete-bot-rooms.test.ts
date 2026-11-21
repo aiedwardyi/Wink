@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { removeTestData, testHome } from "./testing/test-home.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
 
 // deleteBotFully and removeSyncedBots are private to index.ts, which these
@@ -17,10 +18,9 @@ const fn = (name: string) => {
 let home: string;
 
 async function freshStore() {
-  home = mkdtempSync(join(tmpdir(), "omb-delete-bot-rooms-"));
+  home = mkdtempSync(join(testHome(), "omb-delete-bot-rooms-"));
   vi.resetModules();
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("USERPROFILE", home);
+  vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, roomResponders } = await import("./store.ts");
   return { store: new Store(() => ({ instanceId: "claude", model: "m" })), roomResponders };
 }
@@ -29,7 +29,7 @@ afterEach(async () => {
   const { closeMessageDb } = await import("./message-db.ts");
   closeMessageDb();
   vi.unstubAllEnvs();
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 describe("deleting a bot that leads a room", () => {
@@ -105,7 +105,7 @@ describe("deleteBotFully", () => {
   });
 
   it("removes the event logs of every task, not just the open one", async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-delete-bot-logs-"));
+    home = mkdtempSync(join(testHome(), "omb-delete-bot-logs-"));
     const dirs = ["events", "native"].map((name) => join(home, name));
     for (const dir of dirs) {
       mkdirSync(dir);

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
 import { resolveCliSpawn } from "../env-path.ts";
-import { killCliTree } from "../procs.ts";
+import { killCliTree } from "../kill-cli-tree.ts";
 
 const AUTH_URL = /https:\/\/accounts\.google\.com\/[^\s"'\\]+/;
 

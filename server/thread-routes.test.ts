@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +7,7 @@ import { DATA_DIR } from "./config.ts";
 import { RoutineManager } from "./routines.ts";
 import { Store } from "./store.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 function pager() {
   vi.useFakeTimers();
@@ -57,7 +57,7 @@ describe("older message batches", () => {
 
 describe("search", () => {
   it("returns live hits past a trashed bot's", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const routines = new RoutineManager({
       file: join(DATA_DIR, "routines.json"),
@@ -81,7 +81,7 @@ describe("search", () => {
   });
 
   it("leaves out the threads it is told to hide", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const bot = store.createBot({ name: "Live" }, { seedMessages: false });
     const room = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: "r1" });
@@ -99,7 +99,7 @@ describe("search", () => {
 
 describe("media", () => {
   it("lists a chat's files in one answer, then the version alone, and 404s an unknown chat", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const bot = store.createBot({ name: "Live" }, { seedMessages: false });
     const sent = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "[a.png](C:\\w\\a.png)", at: 1_000 });

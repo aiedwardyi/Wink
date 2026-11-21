@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -11,13 +11,14 @@ import { closeRoomsDb, createRoom } from "./db.ts";
 import { deleteRoomFile, saveRoomFile } from "./files.ts";
 import { moveRoomFiles, roomFilesRoot } from "./files-folder.ts";
 import { roomTurnMessages } from "./turn-images.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array(24).fill(1)]);
 let roomId: string;
 
 beforeEach(() => {
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   roomId = createRoom("Images").id;
 });

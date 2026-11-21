@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { VerifyCardData } from "../shared/live-verify.ts";
@@ -6,6 +5,7 @@ import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const key = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
@@ -24,7 +24,7 @@ const card = (patch: Partial<VerifyCardData> = {}): VerifyCardData => ({
 
 describe("verify card messages", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("survive a save and reload unchanged", () => {

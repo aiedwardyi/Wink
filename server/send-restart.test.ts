@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 let dir: string;
 let closeDb = () => {};
@@ -22,7 +23,7 @@ function savedQueue() {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "orbit-send-restart-"));
+  dir = mkdtempSync(join(testHome(), "orbit-send-restart-"));
   vi.stubEnv("OMB_DATA_DIR", dir);
 });
 
@@ -30,7 +31,7 @@ afterEach(() => {
   closeDb();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  rmSync(dir, { recursive: true, force: true });
+  removeTestData(dir);
 });
 
 describe("waiting sends across restart", () => {

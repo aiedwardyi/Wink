@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,6 +12,7 @@ import { decodeMedia, loadMedia, mediaMonths, withLive, type MediaWire } from ".
 import { mediaList } from "./media-viewer";
 import { linkedFileSrc } from "./show-pane";
 import type { MediaFile } from "./show-media";
+import { removeTestData } from "../../server/testing/test-home.ts";
 
 const mock = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("@/lib/api-request", () => ({ request: mock.request }));
@@ -59,7 +59,7 @@ describe("media index", () => {
   });
 
   it("lists a long chat's oldest picture in the first answer", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const { threadId } = store.createBot({}, { seedMessages: false });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[old.png](C:\\w\\old.png)" });

@@ -1,7 +1,6 @@
 import { createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +18,7 @@ import { loadOrCreateIdentity, writeTicket } from "./phone-relay/store.ts";
 import { TeamReports } from "./team-reports.ts";
 import type { Store } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { testHome } from "./testing/test-home.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -48,7 +48,7 @@ function token(sub: string, email: string): string {
 }
 
 async function fixture() {
-  const root = temps.make(join(tmpdir(), "team-report-fixture-"));
+  const root = temps.make(join(testHome(), "team-report-fixture-"));
   const senderDir = join(root, "sender");
   const ownerDir = join(root, "owner");
   const sender = await profile(senderDir);

@@ -1,11 +1,11 @@
 import type { ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import { DATA_DIR } from "./config.ts";
 import { mailboxGrant, mailboxSecretFor } from "./mailbox.ts";
@@ -19,7 +19,7 @@ import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
 const root = join(import.meta.dirname, "..");
 const port = 28800 + Math.floor(Math.random() * 10_000);
 const base = `http://127.0.0.1:${port}`;
-const home = join(homedir(), "host");
+const home = join(testHome(), "host");
 const userData = join(home, "user-data");
 const spyLog = join(home, "main-sql.jsonl");
 const syncFolder = join(home, "sync");

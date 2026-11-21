@@ -1,13 +1,14 @@
 // Golden baseline: what 1:1 and ordinary room turns send to the engine. Team
 // rooms must leave every line of it unchanged. GOLDEN_UPDATE=1 rewrites it.
-import { spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { spawnHarness as spawn, harnessFetch as fetch, runTestNode } from "./testing/harness-auth.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -111,18 +112,16 @@ windowsOnly.each(WORLDS)("golden turns with %s", (world) => {
       'const ask = appendRoomEntry(room, { author: { kind: "person", id: mina.id, name: mina.name }, text: "@Roomie hello" });',
       'appendRoomEntry(room, { author: { kind: "bot", id: "roomie", name: "Roomie" }, text: "Hi Mina.", replyToId: ask.id, askId: "a1", grant: "words", clean: false });',
     ].join("\n");
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", seed], {
+    const result = await runTestNode(["--input-type=module", "-e", seed], {
       cwd: ROOT,
       env: { ...process.env, OMB_DATA_DIR: join(home, ".orbit"), ROOM_ID: created.body.group.hosted.roomId },
-      encoding: "utf8",
-      windowsHide: true,
     });
     expect(result.status, result.stderr).toBe(0);
   };
   const mark = (name: string) => writeFileSync(log, `${JSON.stringify({ kind: "fixture", name })}\n`, { flag: "a" });
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-golden-"));
+    home = mkdtempSync(join(testHome(), "omb-golden-"));
     mkdirSync(join(home, ".orbit"), { recursive: true });
     log = join(home, "golden.ndjson");
     gate = join(home, "task.gate");
@@ -171,7 +170,7 @@ windowsOnly.each(WORLDS)("golden turns with %s", (world) => {
       child.on("close", () => resolve());
       setTimeout(resolve, 5_000).unref?.();
     });
-    rmSync(home, { recursive: true, force: true });
+    removeTestData(home);
   });
 
   it("matches the recorded engine inputs", async () => {
