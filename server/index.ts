@@ -35,6 +35,7 @@ import "./bot-cwd.ts";
 import { resolveBotTerminalFolder } from "./terminal-cwd.ts";
 import {
   applyResolvedProjectFolder,
+  checkProjectFolders,
   opensHostFiles,
   projectFolderPrompt,
   projectNotesPrompt,
@@ -5407,9 +5408,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
   );
-  const earlierMessages = messagesBeforeSummary.filter((message) => !skipTranscript.has(message.id));
-  const latestUser = lastUserInstruction(earlierMessages);
-  const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, earlierMessages);
+  const latestUser = lastUserInstruction(messagesBeforeSummary, skipTranscript);
+  const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, messagesBeforeSummary, skipTranscript);
   // Recovery Current request must be this send's text. skipTranscript excludes
   // userMessage.id, so transcript lookup alone would show a prior user turn.
   // A Resume card carries no request of its own, so it falls back to the turn
@@ -5497,7 +5497,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           turnsAtWrite: task.usage?.turns ?? taskRecord.turnsAtWrite,
         })) ?? taskRecord;
       }
-      recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages.filter((message) => !skipTranscript.has(message.id)))?.text) || "";
+      recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages, skipTranscript)?.text) || "";
       durableTaskRecordText = taskRecord
         ? taskRecordBlock(taskRecord, Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
             { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn })
@@ -5903,8 +5903,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // landed meanwhile spends it like any other history line.
       const clearedAt = bot.projectFolderClearedAt ?? -Infinity;
       const currentFolderText = namedByUser && userMessage.at > clearedAt ? text : undefined;
-      const resolvedProject = worksInWorkspace && opts?.runOn !== "cloud"
-        ? applyResolvedProjectFolder({
+      const folderInput = worksInWorkspace && opts?.runOn !== "cloud"
+        ? {
             pin: bot.cwd,
             remembered: bot.lastProjectCwd,
             continuation: !namedByUser,
@@ -5912,6 +5912,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
               since: bot.projectFolderClearedAt,
             }),
             recentPaths: projectPathsFromRecords({ bots: store.bots, groups: store.groups }),
+          }
+        : undefined;
+      const resolvedProject = folderInput
+        ? applyResolvedProjectFolder({
+            ...folderInput,
+            // the folders a long chat names are checked off the server thread first; a pin reads none of them
+            checked: folderInput.pin?.trim() ? undefined : await checkProjectFolders(folderInput),
             remember: (cwd) => store.rememberProjectCwd(bot.id, cwd),
             forget: () => store.forgetProjectCwd(bot.id),
           })

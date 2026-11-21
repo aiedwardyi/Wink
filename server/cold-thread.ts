@@ -218,6 +218,20 @@ export async function sentRow(store: Pick<Store, "adopt" | "loaded" | "messagesF
   return store.messagesFor(threadId).find((message) => message.sendId === sendId);
 }
 
+/** sendClock's newest stamp of an unloaded chat, read on the reader; undefined when the store holds the chat and answers itself. */
+export async function coldNewestStamp(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<number | undefined> {
+  if (store.loaded(threadId)) return undefined;
+  try {
+    await committed();
+    const newest = await (reader ??= startReader())({ threadId, newest: true });
+    return store.loaded(threadId) ? undefined : newest;
+  } catch (error) {
+    console.error("cold send clock read failed; the send waits for the chat to load", threadId, error);
+    await coldLoad(store, threadId);
+    return undefined;
+  }
+}
+
 /** Loads an unloaded chat into the store, a worker reading its pages and this thread parsing one per turn: else the first send after Map's cold read reads it all at once. */
 export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
   let load = loads.get(threadId);

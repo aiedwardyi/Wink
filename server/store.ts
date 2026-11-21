@@ -770,6 +770,27 @@ const onboardingCard = (): OptionCardData => ({
   options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"],
 });
 
+/** Root-to-leaf rows by parent links. A row's id is unique in its chat (the table's key), and a parent is stored
+ * before its children, so the walk reads back through the rows once and builds an id map only for one that is not. */
+function walkPath(messages: readonly Message[], leafId: string | null): Message[] {
+  const path: Message[] = [];
+  let byId: Map<string, Message> | undefined;
+  let at = messages.length;
+  for (let id = leafId; id; ) {
+    let row: Message | undefined;
+    if (!byId) {
+      let index = at - 1;
+      while (index >= 0 && messages[index]!.id !== id) index--;
+      if (index >= 0) row = messages[(at = index)];
+    }
+    row ??= (byId ??= new Map(messages.map((m) => [m.id, m]))).get(id);
+    if (!row) break;
+    path.push(row);
+    id = row.parentId ?? null;
+  }
+  return path.reverse();
+}
+
 export class Store {
   bots: BotRecord[] = [];
   /** "missing" is a lost file; "unreadable" is there but did not load, so it may still hold good bots. */
@@ -1400,14 +1421,11 @@ export class Store {
   activePath(threadId: string): Message[] {
     const t = this.thread(threadId);
     if (t.path && t.path.leafId === t.activeLeafId) return t.path.rows;
-    const byId = new Map(t.messages.map((m) => [m.id, m]));
-    const path: Message[] = [];
-    let cur = t.activeLeafId ? byId.get(t.activeLeafId) : undefined;
-    while (cur) {
-      path.push(cur);
-      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-    }
-    path.reverse();
+    const leaf = t.messages.at(-1);
+    // a row appended under the last path's leaf extends it: a 237k-row chat's walk held the server ~110 ms per send
+    const path = t.path && leaf && leaf.id === t.activeLeafId && leaf.parentId && leaf.parentId === t.path.leafId
+      ? [...t.path.rows, leaf]
+      : walkPath(t.messages, t.activeLeafId);
     Object.freeze(path);
     t.path = { leafId: t.activeLeafId, rows: path };
     return path;

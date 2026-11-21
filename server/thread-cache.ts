@@ -68,7 +68,8 @@ export class ThreadCache {
   push(threadId: string, message: Message): void {
     const entry = this.entries.get(threadId);
     if (!entry) return;
-    this.rows(entry).push(message);
+    // the rows before it are unchanged, so activePath can extend its last path
+    (entry.state.messages as Message[]).push(message);
     entry.chars += rowChars(message);
     this.trim();
   }

@@ -267,6 +267,53 @@ it("shows a send made while Map loads the chat once, stamped as a loaded chat wo
   for (const spy of clock) spy.mockRestore();
 });
 
+it("caps a send stamped ahead by the clock it arrived at, while Map's load of the chat moves past it", async () => {
+  const { store, bot, release } = await loadingChat();
+  // later than every stored row, so only the clock caps the stamp
+  const now = Date.now() + 1_000;
+  const reads = wholeReads(store);
+  const send = sendRoute(store, async (_botId, text, { sendId, actedAt }) =>
+    ({ message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId, actedAt }) }));
+  const wall = vi.spyOn(Date, "now").mockReturnValue(now);
+  const elapsed = vi.spyOn(performance, "now").mockReturnValue(0);
+  const sendId = randomUUID();
+  const sent = send(bot.id, { text: "stamped ahead of this clock", sendId, actedAt: now + 60_000 });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  wall.mockReturnValue(now + 500);
+  await release();
+  const { status, data } = await sent;
+  wall.mockRestore();
+  elapsed.mockRestore();
+  expect(status).toBe(202);
+  expect(reads).toEqual([]);
+  expect(store.row(bot.threadId, data.message.id)?.actedAt).toBe(now);
+});
+
+it("lands an unkeyed send while Map's load of the chat is held, stamped past its newest row, without reading it on the server thread", async () => {
+  const now = Date.now() + 1_000;
+  const { store, bot, release } = await loadingChat((setup, made) => {
+    setup.appendMessage(made.threadId, { role: "bot", kind: "text", text: "stamped ahead", at: now + 30_000 });
+  });
+  const reads = wholeReads(store);
+  const loadedAtTurn: boolean[] = [];
+  const send = sendRoute(store, async (_botId, text, { actedAt }) => {
+    loadedAtTurn.push(store.loaded(bot.threadId));
+    return { message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, actedAt }) };
+  });
+  const clock = [vi.spyOn(Date, "now").mockReturnValue(now), vi.spyOn(performance, "now").mockReturnValue(0)];
+  const sent = send(bot.id, { text: "an unkeyed line", actedAt: now + 60_000 });
+  // the line is stored before Map's page lands, as a direct write was: a second viewer and the Timeline rail see it with the load
+  await vi.waitFor(() => expect(loadedAtTurn).toEqual([false]), { timeout: 5_000 });
+  await release();
+  const { status, data } = await sent;
+  for (const spy of clock) spy.mockRestore();
+  expect(status).toBe(202);
+  expect(reads).toEqual([]);
+  const lines = store.messagesFor(bot.threadId).filter((message) => message.text === "an unkeyed line");
+  expect(lines.map((message) => message.id)).toEqual([data.message.id]);
+  expect(lines[0]!.actedAt).toBe(now + 30_001);
+});
+
 it("answers a retry of a send stored before Map opened by its key once Map's load lands", async () => {
   const sendId = randomUUID();
   let stored: Message | undefined;
