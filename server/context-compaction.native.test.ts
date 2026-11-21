@@ -258,4 +258,56 @@ describe("native compaction plan", () => {
     expect(prepared.transcript[0]?.text).toContain(contact);
     expect(planCompaction({ ...input, resumeNativeReplay: { compactionId: "saved", budgetTokens: plan.estimatedTokensBefore } }).needed).toBe(true);
   });
+
+  it.each([31_770, 31_990, 32_000])("keeps all recovered values beside a %i-character summary", async (length) => {
+    const contacts = ["covered-owner@example.test", "covered-reviewer@example.test"];
+    const summary = "Reviewed the release notes. ".repeat(1_200).slice(0, length - 20) + "Final decision: ship";
+    const messages = [
+      message("covered", `Send the handoff to ${contacts[0]}.\nShare the review with ${contacts[1]}.`),
+      message("saved", "", {
+        role: "bot", kind: "compaction", compaction: {
+          v: 1, summary, coveredThroughId: "covered", firstKeptId: null,
+          contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
+        },
+      }),
+      ...longThread(),
+    ];
+    const input = { messages, contextWindow: 128_000 };
+    const plan = planCompaction(input);
+    if (!plan.needed) throw new Error("expected a plan");
+    const budgetTokens = nativeReplayBudget(input.contextWindow);
+    const prepared = prepareNativeReplay(plan, budgetTokens);
+    expect(prepared?.transcript[0]?.text).toContain(summary);
+    const resumed = planCompaction({ ...input, resumeNativeReplay: { compactionId: "saved", budgetTokens } });
+    expect(resumed).toMatchObject({ status: "fits", nativeReplay: true, replaySummary: prepared?.replaySummary });
+    const saved = [messages[0]!, { ...messages[1]!, ...prepared?.replaySummary }, ...messages.slice(-4)];
+    const switched = await prepareModelContext({ ...input, messages: saved, taskRecordText: "" });
+    if (switched.status !== "ready") throw new Error("expected a switched context");
+    expect(switched.transcript[0]?.text).toBe(prepared?.transcript[0]?.text);
+    for (const contact of contacts) {
+      expect.soft(prepared?.transcript[0]?.text).toContain(contact);
+      expect.soft(switched.transcript[0]?.text).toContain(contact);
+    }
+  });
+
+  it("keeps covered values when a long visible tail also contains typed values", () => {
+    const contact = "covered-owner@example.test";
+    const messages = [
+      message("covered", `Send the release handoff to ${contact}.`),
+      message("saved", "", {
+        role: "bot", kind: "compaction", compaction: {
+          v: 1, summary: "The launch is approved for review.", coveredThroughId: "covered", firstKeptId: null,
+          contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
+        },
+      }),
+      message("addresses", Array.from({ length: 500 }, (_, index) => `Add reviewer-${index}@example.test to the list.`).join("\n\n")),
+      ...longThread(),
+    ];
+    const plan = planCompaction({ messages, contextWindow: 24_000 });
+    if (!plan.needed) throw new Error("expected a plan");
+    const prepared = prepareNativeReplay(plan, nativeReplayBudget(128_000));
+    expect(prepared?.transcript[0]?.text).toContain(contact);
+    expect(prepared?.transcript[0]?.text).not.toContain("reviewer-499@example.test");
+    expect(prepared?.transcript[1]?.text).toContain("reviewer-499@example.test");
+  });
 });

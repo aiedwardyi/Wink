@@ -5585,7 +5585,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (prepared.compaction) {
         latestCompactionId = store.appendCompaction(threadId, prepared.compaction).id;
       } else if (prepared.replaySummary && prepared.compactionId &&
-        !store.patchMessage(threadId, prepared.compactionId, { compaction: prepared.replaySummary })) {
+        !store.patchMessage(threadId, prepared.compactionId, prepared.replaySummary)) {
         throw new Error("the reused context summary is missing");
       }
     } catch (error) {

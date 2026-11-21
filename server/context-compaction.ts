@@ -87,7 +87,10 @@ export interface ApplicableCompaction {
   pathIndex: number;
   coveredIndex: number;
   value: ContextCompactionV1;
+  recoveredValues?: string;
 }
+
+type ReplaySummaryPatch = { compaction: ContextCompactionV1 } | { recoveredValues: string };
 
 export type PreparedModelContext =
   | {
@@ -99,7 +102,7 @@ export type PreparedModelContext =
       compaction?: ContextCompactionV1;
       /** message id of the reused summary; absent when `compaction` is new */
       compactionId?: string;
-      replaySummary?: ContextCompactionV1;
+      replaySummary?: ReplaySummaryPatch;
       /** the window grew past the summary's, so the original history replaced it */
       expanded?: boolean;
     }
@@ -693,7 +696,7 @@ function compactionAt(
 ): ApplicableCompaction | { unsupported: true; messageId: string; version: number } | null {
   const message = messages[pathIndex]!;
   if (message.kind !== "compaction") return null;
-  const parsed = readContextCompaction({ value: message.compaction });
+  const parsed = readContextCompaction({ value: message.compaction, recoveredValues: message.recoveredValues });
   if (parsed.status === "unsupported") {
     return { unsupported: true, messageId: message.id, version: parsed.version };
   }
@@ -707,7 +710,9 @@ function compactionAt(
   ) {
     return null;
   }
-  return { messageId: message.id, pathIndex, coveredIndex, value: parsed.value };
+  const found: ApplicableCompaction = { messageId: message.id, pathIndex, coveredIndex, value: parsed.value };
+  if (parsed.recoveredValues) found.recoveredValues = parsed.recoveredValues;
+  return found;
 }
 
 export function applicableCompaction(
@@ -1054,7 +1059,7 @@ export type CompactionPlan =
       budgetTokens: number;
       estimatedTokens: number;
       nativeReplay?: true;
-      replaySummary?: ContextCompactionV1;
+      replaySummary?: ReplaySummaryPatch;
     }
   | { needed: false; status: "unsupported"; messageId: string; version: number }
   | { needed: false; status: "failed"; error: string };
@@ -1091,7 +1096,7 @@ export function planCompaction(input: {
     return { needed: false, status: "unsupported", messageId: found.messageId, version: found.version };
   }
   const previous = found;
-  const storedSummary = previous ? redactSecretsInText(previous.value.summary) : "";
+  const storedSummary = previous ? redactSecretsInText(previous.value.summary + (previous.recoveredValues ?? "")) : "";
   const tailUnits = replayUnits(
     input.messages,
     input.excludeIds ?? new Set(),
@@ -1123,10 +1128,9 @@ export function planCompaction(input: {
   const replay = input.resumeNativeReplay;
   if (replay && replay.compactionId === (previous?.messageId ?? null) && currentTokens <= replay.budgetTokens) {
     const coveredValues = previous ? typedValueLines(input.messages.slice(0, previous.coveredIndex + 1), input.excludeIds) : [];
-    const projection = replayWithTypedValues(currentTranscript, currentTokens, coveredValues);
+    const projection = replayWithTypedValues(currentTranscript, currentTokens, previous, coveredValues);
     if (projection.estimatedTokens <= replay.budgetTokens) {
-      const replaySummary = previous ? sharedReplaySummary(previous, coveredValues) : undefined;
-      return { ...fits, ...projection, budgetTokens: replay.budgetTokens, nativeReplay: true, ...(replaySummary ? { replaySummary } : {}) };
+      return { ...fits, ...projection, budgetTokens: replay.budgetTokens, nativeReplay: true };
     }
   }
   const summaryBudget = Math.max(
@@ -1248,45 +1252,45 @@ function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, s
   return [...head, ...transcript.slice(start)];
 }
 
-function replayWithTypedValues(transcript: ModelContextMessage[], estimatedTokens: number, lines: readonly TypedLine[]) {
+function replayWithTypedValues(
+  transcript: ModelContextMessage[], estimatedTokens: number, previous: ApplicableCompaction | null, lines: readonly TypedLine[],
+): { transcript: ModelContextMessage[]; estimatedTokens: number; replaySummary?: ReplaySummaryPatch } {
+  if (!previous || !lines.length) return { transcript, estimatedTokens };
   const summary = transcript[0];
-  const values = lines.length ? typedValuesBlock(lines, VALUES_CAP_TOKENS * 3) : "";
+  const values = typedValuesBlock(lines, VALUES_CAP_TOKENS * 3);
   if (!summary || !values || summary.text.endsWith(values)) return { transcript, estimatedTokens };
-  const enriched = { ...summary, text: `${summary.text}\n\n${values}` };
+  const storedLines = new Set(summary.text.split("\n"));
+  const missing = values.split("\n").slice(1).filter((line) => !storedLines.has(line));
+  if (!missing.some((line) => line.startsWith("- "))) return { transcript, estimatedTokens };
+  const header = storedLines.has(TYPED_VALUES_HEADER) ? "\n" : `\n\n${TYPED_VALUES_HEADER}\n`;
+  const addition = header + missing.join("\n");
+  const enriched = { ...summary, text: summary.text + addition };
+  const storedSummary = redactSecretsInText(previous.value.summary);
+  // Keep overflow on the row so older readers can still validate the original summary.
+  const replaySummary = !previous.recoveredValues && storedSummary.length + addition.length <= SUMMARY_MAX_CHARS
+    ? { compaction: { ...previous.value, summary: storedSummary + addition } }
+    : { recoveredValues: (previous.recoveredValues ?? "") + addition };
   return {
     transcript: [enriched, ...transcript.slice(1)],
     estimatedTokens: estimatedTokens + messageTokens(enriched) - messageTokens(summary),
+    replaySummary,
   };
-}
-
-function sharedReplaySummary(previous: ApplicableCompaction, lines: readonly TypedLine[]): ContextCompactionV1 | undefined {
-  if (!lines.length) return undefined;
-  const summary = redactSecretsInText(previous.value.summary);
-  const covered = lines.filter(({ index }) => index <= previous.coveredIndex);
-  const block = typedValuesBlock(covered, Math.min(VALUES_CAP_TOKENS * 3, SUMMARY_MAX_CHARS - summary.length - 2));
-  if (!block) return undefined;
-  const storedLines = new Set(summary.split("\n"));
-  const missing = block.split("\n").filter((line) => line.startsWith("- ") && !storedLines.has(line));
-  if (!missing.length) return undefined;
-  // Keep one values section so later compactions still strip and rebuild it.
-  const header = storedLines.has(TYPED_VALUES_HEADER) ? "\n" : `\n\n${TYPED_VALUES_HEADER}\n`;
-  return { ...previous.value, summary: summary + header + missing.join("\n") };
 }
 
 export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number): Extract<PreparedModelContext, { status: "ready" }> | undefined {
   if (plan.estimatedTokensBefore > budgetTokens) return undefined;
-  const { transcript, estimatedTokens } = replayWithTypedValues(plan.transcript, plan.estimatedTokensBefore, plan.previous ? plan.typedLines : []);
-  if (estimatedTokens > budgetTokens) return undefined;
-  const replaySummary = plan.previous ? sharedReplaySummary(plan.previous, plan.typedLines) : undefined;
-  return {
+  const previous = plan.previous;
+  const covered = previous ? plan.typedLines.filter(({ index }) => index <= previous.coveredIndex) : [];
+  const projection = replayWithTypedValues(plan.transcript, plan.estimatedTokensBefore, previous, covered);
+  if (projection.estimatedTokens > budgetTokens) return undefined;
+  const prepared: Extract<PreparedModelContext, { status: "ready" }> = {
     status: "ready",
-    transcript,
+    ...projection,
     budgetTokens,
-    estimatedTokens,
-    compacted: Boolean(plan.previous),
-    ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
-    ...(replaySummary ? { replaySummary } : {}),
+    compacted: Boolean(previous),
   };
+  if (previous) prepared.compactionId = previous.messageId;
+  return prepared;
 }
 
 function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {

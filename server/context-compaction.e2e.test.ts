@@ -51,7 +51,11 @@ const CODEX_RESTORED = [
 const COVERED_CONTACT = "covered-owner@example.test";
 const LATER_CONTACT = "launch-owner@example.test";
 const RECENT_MILESTONE = "violet telescope";
-const CODEX_SWITCH = { id: "restored-switch", groupId: "restored-switch-room", roomThreadId: "restored-switch-room-thread" };
+const CODEX_SWITCH = [
+  { id: "restored-switch", summary: "The launch is approved for review." },
+  { id: "restored-switch-full", summary: "The launch is approved for review. ".repeat(1_000).slice(0, 31_990) },
+];
+const switchRoom = (id: string) => `${id}-room`;
 const CLAUDE_BOT_ID = "compaction-claude-bot";
 const CLAUDE_THREAD_ID = "compaction-claude-thread";
 const CLAUDE_RESUME = {
@@ -240,6 +244,13 @@ describe("context compaction e2e", () => {
     const env: NodeJS.ProcessEnv = {
       HOME: home,
       USERPROFILE: home,
+      APPDATA: join(home, "Roaming"),
+      LOCALAPPDATA: join(home, "Local"),
+      OMB_DATA_DIR: join(home, ".orbit"),
+      OMB_USER_DATA: join(home, "user-data"),
+      CODEX_HOME: join(home, ".codex"),
+      CLAUDE_CONFIG_DIR: join(home, ".claude"),
+      NODE_OPTIONS: process.env.NODE_OPTIONS,
       OMB_PORT: String(PORT),
     };
     if (process.env.PATH) env.PATH = process.env.PATH;
@@ -297,11 +308,11 @@ describe("context compaction e2e", () => {
       },
     }));
     writeFileSync(join(dataDir, "bots.json"), JSON.stringify([
-      {
-        id: CODEX_SWITCH.id, threadId: CODEX_SWITCH.id, name: "Restored handoff", title: "Release", color: "blue", createdAt: 1,
+      ...CODEX_SWITCH.map(({ id }) => ({
+        id, threadId: id, name: "Restored handoff", title: "Release", color: "blue", createdAt: 1,
         modelSelection: { instanceId: "codex", model: "gpt-fake-default" },
-        resumeCursors: {}, tasks: [{ threadId: CODEX_SWITCH.id, title: "Release", createdAt: 1, resumeCursors: {} }],
-      },
+        resumeCursors: {}, tasks: [{ threadId: id, title: "Release", createdAt: 1, resumeCursors: {} }],
+      })),
       ...CODEX_RESTORED.map(({ id, cursor }) => ({
         id, threadId: id, name: "Restored", title: "Release", color: "blue", createdAt: 1,
         modelSelection: { instanceId: "codex", model: "gpt-fake-default" },
@@ -619,11 +630,11 @@ describe("context compaction e2e", () => {
       })),
     ]));
     writeFileSync(join(dataDir, "groups.json"), JSON.stringify([
-      {
-        id: CODEX_SWITCH.groupId, threadId: CODEX_SWITCH.roomThreadId, name: "Handoff room", memberIds: [CODEX_SWITCH.id],
-        defaultResponder: { kind: "member", botId: CODEX_SWITCH.id }, bulletin: "", unread: false, createdAt: 1,
-        tasks: [{ threadId: CODEX_SWITCH.roomThreadId, title: "Release", createdAt: 1 }],
-      },
+      ...CODEX_SWITCH.map(({ id }) => ({
+        id: switchRoom(id), threadId: `${switchRoom(id)}-thread`, name: "Handoff room", memberIds: [id],
+        defaultResponder: { kind: "member", botId: id }, bulletin: "", unread: false, createdAt: 1,
+        tasks: [{ threadId: `${switchRoom(id)}-thread`, title: "Release", createdAt: 1 }],
+      })),
       {
         id: ROOM_FIRST.groupId,
         threadId: ROOM_FIRST.roomThreadId,
@@ -678,12 +689,12 @@ describe("context compaction e2e", () => {
       kind: "text",
       text: `history ${index}`,
     }));
-    writeFileSync(join(dataDir, `messages-${CODEX_SWITCH.id}.json`), JSON.stringify({
+    for (const { id, summary } of CODEX_SWITCH) writeFileSync(join(dataDir, `messages-${id}.json`), JSON.stringify({
       activeLeafId: "milestone",
       messages: [
         { id: "covered", at: 1, parentId: null, role: "user", kind: "text", text: `Send the handoff to ${COVERED_CONTACT}.` },
         { id: "saved", at: 2, parentId: "covered", role: "bot", kind: "compaction", compaction: {
-          v: 1, summary: "The launch is approved for review.", coveredThroughId: "covered", firstKeptId: null,
+          v: 1, summary, coveredThroughId: "covered", firstKeptId: null,
           contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
         } },
         { id: "archive1", at: 3, parentId: "saved", role: "user", kind: "text", text: "First archived log. " + "an example line. ".repeat(7_000) },
@@ -872,11 +883,11 @@ describe("context compaction e2e", () => {
     await removeTempDir(home);
   });
 
-  it("keeps covered values on the provider wire after restart and engine switch", async () => {
-    const route = `/api/bots/${CODEX_SWITCH.id}`;
-    const first = "What did we work on in this chat?";
+  it.each(CODEX_SWITCH)("keeps covered values on the provider wire after restart and engine switch for $id", async ({ id }) => {
+    const route = `/api/bots/${id}`;
+    const first = `What did we work on in ${id}?`;
     expect((await api("POST", `${route}/messages`, { text: first })).status).toBe(202);
-    await waitFor(async () => existsSync(dumpPath) && (await botById(CODEX_SWITCH.id))?.busy === false);
+    await waitFor(async () => existsSync(dumpPath) && (await botById(id))?.busy === false);
     const { calls }: { calls: CodexCall[] } = JSON.parse(readFileSync(dumpPath, "utf8"));
     expect(codexTurn(calls, first)?.history).toContain(COVERED_CONTACT);
 
@@ -888,21 +899,22 @@ describe("context compaction e2e", () => {
       modelSelection: { mode: "pinned", instanceId: "claude", model: "claude-sonnet-5-5", effort: "low" },
     })).status).toBe(200);
 
+    const promptRow = z.object({ systemPrompt: z.string(), text: z.string() });
     const providerInput = (text: string) => {
       if (!existsSync(claudePromptLogPath)) return "";
-      const sent = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
-        .map((line) => JSON.parse(line) as { systemPrompt: string; text: string })
+      const sent = readFileSync(claudePromptLogPath, "utf8").split("\n").slice(0, -1)
+        .map((line) => promptRow.parse(JSON.parse(line)))
         .findLast((line) => line.text.includes(text));
       return sent ? `${sent.text}\n${sent.systemPrompt}` : "";
     };
-    const roomText = "Who is handling the release in this room?";
-    expect((await api("POST", `/api/groups/${CODEX_SWITCH.groupId}/messages`, { text: roomText })).status).toBe(202);
-    await waitFor(async () => Boolean(providerInput(roomText)) && (await botById(CODEX_SWITCH.id))?.busy === false);
+    const roomText = `Who is handling the release in the ${id} room?`;
+    expect((await api("POST", `/api/groups/${switchRoom(id)}/messages`, { text: roomText })).status).toBe(202);
+    await waitFor(async () => Boolean(providerInput(roomText)) && (await botById(id))?.busy === false);
     expect.soft(providerInput(roomText).includes(COVERED_CONTACT), "covered contact in room handoff").toBe(true);
 
-    const text = "Who receives the release handoff after the switch?";
+    const text = `Who receives the release handoff after the ${id} switch?`;
     expect((await api("POST", `${route}/messages`, { text })).status).toBe(202);
-    await waitFor(async () => Boolean(providerInput(text)) && (await botById(CODEX_SWITCH.id))?.busy === false);
+    await waitFor(async () => Boolean(providerInput(text)) && (await botById(id))?.busy === false);
     const prompt = providerInput(text);
     expect(prompt).toContain(LATER_CONTACT);
     expect(prompt).toContain(RECENT_MILESTONE);
