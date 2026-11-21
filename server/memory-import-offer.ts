@@ -87,8 +87,8 @@ function pastedAnswer(messages: readonly Message[]): string {
 
 // Only a save that added something earns the recap; the bullets come from the user's own paste, already in the chat, so no extra model call.
 const RECAP = {
-  en: "Then tell them what you now know: 3-5 short bullets of the most specific things from their paste. Use only what the paste says, add nothing, skip anything Import Memory left out.",
-  ko: "그다음 지금 알게 된 내용을 말해 주세요: 붙여 넣은 내용에서 가장 구체적인 것 3~5개를 짧은 글머리표로. 붙여 넣은 내용에 있는 것만 쓰고, 덧붙이지 말고, Import Memory가 뺀 것은 빼세요. 한국어로, 자연스러운 존댓말로 쓰세요.",
+  en: "Then tell them what you now know: up to 5 short bullets of the most specific things from their paste, fewer if it has fewer. Use only what the paste says, add nothing, skip anything Import Memory left out.",
+  ko: "그다음 지금 알게 된 내용을 말해 주세요: 붙여 넣은 내용에서 가장 구체적인 것 최대 5개를 짧은 글머리표로 (내용이 적으면 더 적게). 붙여 넣은 내용에 있는 것만 쓰고, 덧붙이지 말고, Import Memory가 뺀 것은 빼세요. 한국어로, 자연스러운 존댓말로 쓰세요.",
 };
 
 export async function importMemoryRoute(req: IncomingMessage, res: ServerResponse, deps: ImportMemoryDeps): Promise<void> {

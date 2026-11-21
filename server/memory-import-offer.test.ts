@@ -101,7 +101,7 @@ describe("import_memory saves through the Settings path", () => {
     const text = (await call({}, [typed("hi"), reply("offer"), typed(paste)])).text;
     expect(text).toContain("Added 2 new.");
     expect(text).toContain("tell them what you now know");
-    expect(text).toContain("3-5 short bullets");
+    expect(text).toContain("up to 5 short bullets");
     expect(text).toContain("Use only what the paste says");
     expect(text).not.toContain("Dana");
     expect(text).not.toMatch(/wrong or missing/i);
