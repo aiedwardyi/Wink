@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
 import { markTestHome } from "../companion/src/test-profile.ts";
+import { scrubbedEnv } from "../server/config.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const setupHint = "load server/testing/setup.ts (vite.config.ts setupFiles) before importing";
@@ -36,7 +37,7 @@ it("protects both profiles when Vitest skips setupFiles", () => {
     delete env.OMB_DATA_DIR;
     delete env.OMB_COMPANION_DIR;
     delete env.WINK_VITEST_HOME;
-    delete env.WINK_VITEST_HOME_TOKEN;
+    delete env.WINK_VITEST_HOME_NONCE;
     const options = { cwd: root, env, encoding: "utf8", windowsHide: true };
     const preflight = spawnSync(process.execPath, ["-p", "require('node:os').homedir()"], options);
     expect(preflight.status, preflight.stderr).toBe(0);
@@ -88,14 +89,14 @@ it("rejects a junction above an otherwise marked companion home", () => {
     const home = join(outside, "home");
     const tempAlias = join(scratch, "os-temp");
     const env = { ...scratchEnv(home, tempAlias), WINK_VITEST_HOME: home };
-    markTestHome(home, env.WINK_VITEST_HOME_TOKEN);
+    markTestHome(home, env.WINK_VITEST_HOME_NONCE);
     const deviceFile = join(env.OMB_COMPANION_DIR, "sentinel");
     mkdirSync(dirname(deviceFile));
     writeFileSync(deviceFile, "sentinel");
     const module = "companion/src/state.ts";
     const linkType = process.platform === "win32" ? "junction" : "dir";
     symlinkSync(outside, tempAlias, linkType);
-    const valid = importProfile(module, env);
+    const valid = importProfile(module, scrubbedEnv(env));
     expect(valid.status, valid.stderr).toBe(0);
     expect(valid.stdout.trim()).toBe(env.OMB_COMPANION_DIR);
 

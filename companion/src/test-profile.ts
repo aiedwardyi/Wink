@@ -22,24 +22,24 @@ function canonicalTestHome(home: string): string | undefined {
   }
 }
 
-function markerMatches(home: string, token: string): boolean {
+function markerMatches(home: string, nonce: string): boolean {
   const marker = join(home, ".wink-vitest-home");
   return lstatSync(marker, { throwIfNoEntry: false })?.isFile() === true &&
-    readFileSync(marker, "utf8") === `${token}\n${home}\n`;
+    readFileSync(marker, "utf8") === `${nonce}\n${home}\n`;
 }
 
-export function markTestHome(home: string, token: string): void {
+export function markTestHome(home: string, nonce: string): void {
   const canonical = canonicalTestHome(home);
   if (!canonical) throw new Error("Vitest home must be a directory under the OS temp directory");
-  if (!markerMatches(canonical, token)) {
-    writeFileSync(join(canonical, ".wink-vitest-home"), `${token}\n${canonical}\n`, { flag: "wx", mode: 0o600 });
+  if (!markerMatches(canonical, nonce)) {
+    writeFileSync(join(canonical, ".wink-vitest-home"), `${nonce}\n${canonical}\n`, { flag: "wx", mode: 0o600 });
   }
 }
 
 export function requireTestHome(importer = "tests"): string {
-  const { WINK_VITEST_HOME: home, WINK_VITEST_HOME_TOKEN: token } = process.env;
+  const { WINK_VITEST_HOME: home, WINK_VITEST_HOME_NONCE: nonce } = process.env;
   const canonical = home && home === homedir() && canonicalTestHome(home);
-  if (home && canonical && token && markerMatches(canonical, token)) return home;
+  if (home && canonical && nonce && markerMatches(canonical, nonce)) return home;
   throw new Error(`load server/testing/setup.ts (vite.config.ts setupFiles) before importing ${importer}`);
 }
 

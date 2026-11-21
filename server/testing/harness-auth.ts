@@ -19,13 +19,13 @@ export function spawnHarness(command: string, args: string[], options: SpawnOpti
   if (env?.VITEST !== undefined && env.HOME && env.USERPROFILE === env.HOME) {
     const home = env.HOME;
     const setupHome = requireTestHome("server/testing/harness-auth.ts");
-    const token = process.env.WINK_VITEST_HOME_TOKEN!;
+    const nonce = process.env.WINK_VITEST_HOME_NONCE!;
     if (home !== setupHome && dirname(home) === dirname(setupHome) &&
         dirname(realpathSync.native(home)) === realpathSync.native(dirname(setupHome))) {
-      markTestHome(home, token);
+      markTestHome(home, nonce);
     }
     const temp = tmpdir();
-    env = { ...env, WINK_VITEST_HOME: home, WINK_VITEST_HOME_TOKEN: token, TEMP: temp, TMP: temp, TMPDIR: temp };
+    env = { ...env, WINK_VITEST_HOME: home, WINK_VITEST_HOME_NONCE: nonce, TEMP: temp, TMP: temp, TMPDIR: temp };
   }
   // stdio and windowsHide sit after the spread deliberately: the ipc channel
   // is load-bearing for the token handshake below, and no harness wants a console.
