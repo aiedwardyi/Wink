@@ -1052,6 +1052,7 @@ export type CompactionPlan =
       transcript: ModelContextMessage[];
       budgetTokens: number;
       estimatedTokens: number;
+      nativeReplay?: true;
     }
   | { needed: false; status: "unsupported"; messageId: string; version: number }
   | { needed: false; status: "failed"; error: string };
@@ -1073,6 +1074,7 @@ export function planCompaction(input: {
   nativePrompt?: NativePromptSize;
   /** this native cycle already has its summary */
   nativeCycleBuilt?: boolean;
+  resumeNativeReplay?: { compactionId: string | null; budgetTokens: number };
 }): CompactionPlan {
   const window = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
     ? input.contextWindow
@@ -1116,6 +1118,10 @@ export function planCompaction(input: {
   const near = real && !input.nativeCycleBuilt && nearNativeCompact({ ...real, nativeAt: input.nativeAt ?? null }) ? real : undefined;
   const fits: CompactionPlan = { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
   if ((real ? !near : currentTokens <= budgetTokens) && currentTurns <= MAX_CONTEXT_MESSAGES) return fits;
+  const replay = input.resumeNativeReplay;
+  if (replay && replay.compactionId === (previous?.messageId ?? null) && currentTokens <= replay.budgetTokens) {
+    return { ...fits, budgetTokens: replay.budgetTokens, nativeReplay: true };
+  }
   const summaryBudget = Math.max(
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
@@ -1272,11 +1278,15 @@ export async function prepareModelContext(input: {
 }): Promise<PreparedModelContext> {
   const plan = input.plan ?? planCompaction(input);
   if (input.nativeReplay && plan.needed) {
+    // The seed stays in the provider's input on every follow-up.
+    const transcript = plan.estimatedTokensBefore <= plan.budgetTokens
+      ? plan.transcript
+      : newestWithin(plan.transcript, plan.budgetTokens, Boolean(plan.previous));
     return {
       status: "ready",
-      transcript: plan.transcript,
+      transcript,
       budgetTokens: nativeReplayBudget(input.contextWindow),
-      estimatedTokens: plan.estimatedTokensBefore,
+      estimatedTokens: transcript === plan.transcript ? plan.estimatedTokensBefore : estimateContextTokens(transcript),
       compacted: Boolean(plan.previous),
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
     };

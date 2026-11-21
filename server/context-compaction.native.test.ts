@@ -198,4 +198,33 @@ describe("native compaction plan", () => {
     expect(codexResumeReplayRoom(task, "codex", "gpt-6.2-astra")).toBe(0);
     expect(codexResumeReplayRoom({ ...task, resumeCursors: { codex: "s2" } }, "codex", "gpt-6.2-sol")).toBe(0);
   });
+
+  it("skips compaction planning when the same native replay session still fits", async () => {
+    const input = { messages: longThread(), contextWindow: 128_000 };
+    const plan = planCompaction({ ...input, resumeNativeReplay: { compactionId: null, budgetTokens: 90_000 } });
+    expect(plan).toMatchObject({ needed: false, status: "fits", nativeReplay: true });
+    expect(await prepareModelContext({ ...input, plan, taskRecordText: "Goal: keep going" })).toMatchObject({
+      status: "ready", transcript: expect.arrayContaining([{ role: "user", text: "request 0", at: 1_000 }]),
+    });
+    expect(planCompaction({ ...input, resumeNativeReplay: { compactionId: "stale", budgetTokens: 90_000 } }).needed).toBe(true);
+  });
+
+  it("bounds a native seed for oversized history without writing a compaction", async () => {
+    const messages = [
+      message("old-a", "First long paste. " + "a long example line. ".repeat(5_500)),
+      message("old-b", "Second long paste. " + "another example line. ".repeat(5_500)),
+      message("recent", "The current milestone is violet telescope."),
+    ];
+    const input = { messages, contextWindow: 128_000, taskRecordText: "Goal: keep going" };
+    const plan = planCompaction(input);
+    if (!plan.needed) throw new Error("expected a plan");
+    const summarize = vi.fn();
+    const prepared = await prepareModelContext({ ...input, plan, nativeReplay: true, summarize });
+    expect(prepared).toMatchObject({ status: "ready", compacted: false });
+    if (prepared.status !== "ready") throw new Error(prepared.status);
+    expect(prepared.compaction).toBeUndefined();
+    expect(prepared.estimatedTokens).toBeLessThanOrEqual(plan.budgetTokens);
+    expect(prepared.transcript.map((row) => row.text).join("\n")).toContain("The current milestone is violet telescope.");
+    expect(summarize).not.toHaveBeenCalled();
+  });
 });

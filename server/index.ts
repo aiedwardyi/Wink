@@ -5434,6 +5434,21 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const notesBeforeSummary = instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(messagesBeforeSummary, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
+  const reactions = { delivered: task.reactionsDelivered };
+  const requestText = composeUserTurnPrompt(text, {
+    replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
+  });
+  const codexReplayEligible = instance.driverKind === "codex" && !rewound && !recovering &&
+    decodeCodexSelection(model).modelProvider === OFFICIAL_CODEX_PROVIDER;
+  const replayRoom = codexReplayEligible ? codexResumeReplayRoom(task, instanceId, model) : 0;
+  const requestTokens = codexReplayEligible
+    ? estimateContextTokens([{ text: requestText }, { text: durableTaskRecordText }]) + (notesBeforeSummary?.tokens ?? 0)
+    : 0;
+  const resumeNativeReplay = replayRoom > 0 && replayRoom >= requestTokens && task.resumeSeed &&
+    task.lastInstanceId === instanceId && !selectionChanged && sessionPrompt &&
+    !shouldRecycleProviderSession({ compacted: false, sessionPrompt }) && !instance.adapter.hasBackgroundWork?.(threadId)
+    ? { compactionId: task.resumeSeed.compactionId, budgetTokens: nativeReplayBudget(modelContextWindow) - requestTokens }
+    : undefined;
   const planBeforeSummary = planCompaction({
     messages: messagesBeforeSummary,
     contextWindow: modelContextWindow,
@@ -5441,15 +5456,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     reserveTokens: notesBeforeSummary?.tokens,
     nativeAt,
     ...nativeCycle,
+    resumeNativeReplay,
     userName: cfg.profile?.name?.trim() || "User",
     referenceMessages: store.messagesFor(threadId),
   });
-  const reactions = { delivered: task.reactionsDelivered };
   const summaryGrace: SummaryGrace = {
     knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
-    requestText: composeUserTurnPrompt(text, {
-      replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
-    }),
+    requestText,
     fresh: selectionChanged || engineIsFresh({
       instanceId, model, lastInstanceId: task.lastInstanceId, lastModel: task.lastModel,
       sessionModelSwitch: instance.adapter.capabilities.sessionModelSwitch, resumeCursors: task.resumeCursors,
@@ -5477,17 +5490,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const graceInputs = { plan: planBeforeSummary, grace: summaryGrace, taskRecordText: durableTaskRecordText || "No durable task record is available.", reserveTokens: notesBeforeSummary?.tokens };
   const sessionResumes = planSummaryGrace(graceInputs).safe;
-  const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));
-  let codexHistory = false;
-  if (instance.driverKind === "codex" && planBeforeSummary.needed && !rewound && !recovering &&
-      decodeCodexSelection(model).modelProvider === OFFICIAL_CODEX_PROVIDER) {
-    const requestTokens = estimateContextTokens([{ text: summaryGrace.requestText }, { text: durableTaskRecordText }]) +
-      (notesBeforeSummary?.tokens ?? 0);
-    const fitsReplay = planBeforeSummary.estimatedTokensBefore + requestTokens <= nativeReplayBudget(modelContextWindow);
-    codexHistory = fitsReplay && (summaryGrace.fresh || (!summaryGrace.recycle &&
+  const codexHistory = planBeforeSummary.needed
+    ? codexReplayEligible && planBeforeSummary.estimatedTokensBefore + requestTokens <= nativeReplayBudget(modelContextWindow) &&
+      (summaryGrace.fresh || (!summaryGrace.recycle &&
       task.resumeSeed?.compactionId === (planBeforeSummary.previous?.messageId ?? null) &&
-      codexResumeReplayRoom(task, instanceId, model) >= requestTokens));
-  }
+      replayRoom >= requestTokens))
+    : planBeforeSummary.status === "fits" && planBeforeSummary.nativeReplay === true;
+  const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));
   const usePlannedContext = summarySkipped || codexHistory;
   let summaryWait: SummaryWait | undefined;
   const onSummaryWait = (wait: SummaryWait) => { summaryWait = { ...wait, waitedMs: (summaryWait?.waitedMs ?? 0) + wait.waitedMs }; };
