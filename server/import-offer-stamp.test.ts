@@ -14,6 +14,7 @@ import type { Message } from "./store.ts";
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { isVoiceLine } from "../shared/live-call.ts";
 import { catalogs } from "../src/lib/i18n-catalog.ts";
+import { IMPORT_OFFER } from "../src/lib/import-links.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const parsed = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, true);
@@ -64,7 +65,7 @@ function chat() {
 }
 
 const prompts = { en: catalogs.en["aboutYou.prompt"], ko: catalogs.ko["aboutYou.prompt"] };
-const reply = (prompt: string) => `Hi!\n\nWant me to know what ChatGPT already knows?\n\n\`\`\`text\n${prompt}\n\`\`\``;
+const reply = (prompt: string) => `Hi!\n\n${IMPORT_OFFER[prompt === prompts.ko ? "ko" : "en"].join("\n")}\n\n\`\`\`text\n${prompt}\n\`\`\``;
 const stamped = (rows: Message[]) => rows.map((row) => row.importOffer === true);
 
 afterEach(() => noteOfferTurn("t1", false));
@@ -77,6 +78,18 @@ describe("the offer reply row", () => {
     c.say(reply(prompts[locale]));
     c.say(reply(prompts[locale]));
     expect(stamped(c.messages)).toEqual([false, true, false]);
+    c.done();
+  });
+
+  it.each(["en", "ko"] as const)("is not taken by %s prose, a quote or a bare box holding the prompt earlier in the offer turn", (locale) => {
+    const c = chat();
+    const prompt = prompts[locale];
+    noteOfferTurn("t1", true);
+    c.say(`You supplied this text:\n\n${prompt}`);
+    c.say(`> ${prompt.replaceAll("\n", "\n> ")}`);
+    c.say(`Your sample:\n\n\`\`\`text\n${prompt}\n\`\`\``);
+    c.say(reply(prompt));
+    expect(stamped(c.messages)).toEqual([false, false, false, true]);
     c.done();
   });
 

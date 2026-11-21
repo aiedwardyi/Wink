@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { aboutYouNote } from "../shared/about-you-note.ts";
 import { catalogs, type MessageKey } from "../src/lib/i18n-catalog.ts";
+import { IMPORT_OFFER, importOfferFence } from "../src/lib/import-links.ts";
 import { aboutYouFacts, addToAboutYou, day } from "./about-you.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
@@ -29,9 +30,9 @@ export function noteOfferTurn(threadId: string, offer: boolean): void {
   else offering.delete(threadId);
 }
 
-/** The stamp for the offer turn's reply row: the first one that holds the prompt. */
+/** The stamp for the offer turn's reply row: the first one that holds the offer and its prompt box. */
 export function takeImportOffer(threadId: string, text: string): { importOffer: true } | undefined {
-  if (!offering.has(threadId) || !Object.values(catalogs).some((catalog) => text.includes(catalog["aboutYou.prompt"]))) return undefined;
+  if (!offering.has(threadId) || importOfferFence(text) < 0) return undefined;
   offering.delete(threadId);
   return { importOffer: true };
 }
@@ -55,25 +56,10 @@ export function importMemoryTurn(messages: Iterable<Pick<Message, "role" | "kind
   return { offer: typed === 1, tool: true };
 }
 
-const OFFER = {
-  en: [
-    "Want me to know what ChatGPT, Claude, Gemini, Grok or Muse already knows about you? It takes a minute:",
-    "1. Copy the prompt in the box below.",
-    "2. Paste it into that AI, on its own app or website (not here in Wink).",
-    "3. Copy its answer and paste it back here.",
-  ],
-  ko: [
-    "ChatGPT, Claude, Gemini, Grok, Muse가 이미 알고 있는 내용을 저도 알아 둘까요? 1분이면 돼요:",
-    "1. 아래 상자의 프롬프트를 복사하세요.",
-    "2. 그 AI의 앱이나 웹사이트에 붙여 넣으세요 (여기 Wink 말고요).",
-    "3. 그 AI의 답을 복사해서 여기에 붙여 넣으세요.",
-  ],
-};
-
 export function importOfferNote(): string {
   return [
     `[Wink] The user has not imported memory from another AI yet. After your answer, end this reply with the offer below word for word, then the prompt below exactly as written in a text code block. Write nothing else about importing. When they paste that answer, call ${IMPORT_MEMORY_TOOL} and tell them its result. If they say no, call ${IMPORT_MEMORY_TOOL} with decline: true. Offer only in this reply.`,
-    OFFER[locale].join("\n"),
+    IMPORT_OFFER[locale].join("\n"),
     `\`\`\`text\n${t("aboutYou.prompt")}\n\`\`\``,
   ].join("\n\n");
 }

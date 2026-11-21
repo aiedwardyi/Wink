@@ -260,6 +260,7 @@ const Bubble = memo(function Bubble({
   streaming = false,
   pictured = false,
   peerReply = false,
+  importOffer = false,
   dock,
   sendsNext = false,
   sendsAfterSync = false,
@@ -282,6 +283,8 @@ const Bubble = memo(function Bubble({
   pictured?: boolean;
   /** the bot's answer to another bot's message */
   peerReply?: boolean;
+  /** the new-bot offer reply, proven by its thread: its prompt box gets provider buttons */
+  importOffer?: boolean;
   dock?: ReplyDock;
   sendsNext?: boolean;
   sendsAfterSync?: boolean;
@@ -327,7 +330,7 @@ const Bubble = memo(function Bubble({
     );
   }
 
-  const markdown = <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} importOffer={message.importOffer} />;
+  const markdown = <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} importOffer={importOffer} />;
   const hasReactions = !message.placeholder && Boolean(message.reactions?.length);
   // "‹ 2/3 ›" under an edited message
   const switchTo = (messageId: string | undefined) => {

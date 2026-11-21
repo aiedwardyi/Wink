@@ -91,6 +91,7 @@ import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, 
 import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
+import { importOfferId } from "@/lib/import-links";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
@@ -717,6 +718,7 @@ const MessagesList = memo(function MessagesList({
     }
     return answers;
   }, [transcript]);
+  const importOffer = useMemo(() => importOfferId(transcript), [transcript]);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
@@ -886,6 +888,7 @@ const MessagesList = memo(function MessagesList({
                   streaming={streaming}
                   pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)}
                   peerReply={Boolean(replyComm)}
+                  importOffer={m.id === importOffer}
                   dock={dockTarget === item && dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}

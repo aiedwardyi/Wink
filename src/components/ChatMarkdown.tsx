@@ -20,7 +20,7 @@ import { BADGE, ShowCard } from "./ShowCard";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { isImportPrompt } from "@/lib/import-links";
+import { importOfferFence, isImportPrompt } from "@/lib/import-links";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { fileOpen, openFile, openInApp, openOnPc, pcOffline, type FileHands } from "@/lib/open-file";
 import { linkedFileSrc, showKind, showName } from "@/lib/show-pane";
@@ -726,6 +726,8 @@ function Spoiler({ children }: { children?: ReactNode }) {
   );
 }
 
+const OFFER_LANG = "text-import-offer";
+
 function ChatMarkdownComponent({
   text: source,
   streaming = false,
@@ -748,7 +750,12 @@ function ChatMarkdownComponent({
   /** The new-bot offer reply: its import prompt gets provider buttons. */
   importOffer?: boolean;
 }) {
-  const text = useMemo(() => unwrapUserTags(source), [source]);
+  const { text, marked } = useMemo(() => {
+    const plain = unwrapUserTags(source);
+    // relabel the offer's own fence, so a quote of the prompt elsewhere in the reply gets no buttons
+    const at = importOffer && !plain.includes(OFFER_LANG) ? importOfferFence(plain) : -1;
+    return at < 0 ? { text: plain, marked: false } : { text: plain.slice(0, at) + "```" + OFFER_LANG + plain.slice(at + "```text".length), marked: true };
+  }, [source, importOffer]);
   const style = useReplyStyle();
   const root = useRef<HTMLDivElement>(null);
   const seen = useRef(new WeakSet<Element>());
@@ -803,7 +810,8 @@ function ChatMarkdownComponent({
       const flat = (n: any): string =>
         typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
       const code = flat(child?.props?.children).replace(/\n$/, "");
-      return <CodeBlock code={code} lang={lang} importOffer={importOffer} />;
+      const offer = marked && lang === OFFER_LANG;
+      return <CodeBlock code={code} lang={offer ? "text" : lang} importOffer={offer} />;
     },
     img({ src, alt }: { src?: string; alt?: string }) {
       return (
@@ -893,7 +901,7 @@ function ChatMarkdownComponent({
     hr() {
       return <hr className="border-hairline/40" />;
     },
-  }), [baseDir, threadId, localLinks, pictured, importOffer]);
+  }), [baseDir, threadId, localLinks, pictured, marked]);
   return (
     <StreamingContext.Provider value={streaming}>
       <PictureContext.Provider value={picture}>
