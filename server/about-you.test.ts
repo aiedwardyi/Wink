@@ -68,6 +68,21 @@ describe("About You save", () => {
     expect(factsOf(`- ${head} violet-meadow-finch`)).toEqual({ facts: [], hidden: 1 });
   });
 
+  it("leaves out a labeled secret value, on its line or under it, in English and Korean", () => {
+    const secrets = [
+      "- Password: river7!orchid", "- My door code is 4821", "- Gate code: 1357", "- Alarm code 2468", "- API key: abc123",
+      "Password:", "river7!orchid", "## Passwords", "- Gmail: river7!orchid", "- Bank: 4821", "",
+      "- 비밀번호: river7!orchid", "- 도어락 번호: 4821", "- 공동현관 비밀번호 1234", "- 핀: 4821", "비밀번호:", "river7!orchid",
+    ];
+    const keep = ["- Lives in Seoul.", "- Dress code at work is casual.", "- 서울에 살아요.", "- Postal code 04524 is home."];
+    const { facts, hidden } = factsOf([...secrets, ...keep].join("\n"));
+    expect(facts).toEqual(["Lives in Seoul.", "Dress code at work is casual.", "서울에 살아요.", "Postal code 04524 is home."]);
+    expect(hidden).toBe(13);
+    expect(addToAboutYou([keep[0], "Password:", "river7!orchid", "- 도어락 번호: 4821", keep[2], "Source: ChatGPT"].join("\n"), "2026-11-22"))
+      .toEqual({ source: "ChatGPT", found: 2, added: 2, duplicates: 0, hidden: 2, full: 0 });
+    expect(readFileSync(file, "utf8")).not.toMatch(/river7|4821/);
+  });
+
   it("keeps every byte of a word longer than a memory line", () => {
     const url = `https://example.com/${"a".repeat(400)}`;
     const { facts } = factsOf(`- Project page: ${url}`);
