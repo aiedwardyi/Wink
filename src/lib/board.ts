@@ -111,7 +111,7 @@ export interface BoardPostsView {
   failed: boolean;
   saved: (post: BoardPost) => void;
   removed: (post: BoardPost) => void;
-  retry: () => void;
+  retry: () => Promise<void>;
 }
 
 export function useBoardPosts(): BoardPostsView {
@@ -129,12 +129,12 @@ export function useBoardPosts(): BoardPostsView {
     while (parent && gone.current.has(parent)) parent = gone.current.get(parent)!;
     return parent === post.parent_id ? post : { ...post, parent_id: parent };
   }, []);
-  const reload = useRef(() => {});
+  const reload = useRef((): Promise<void> => Promise.resolve());
   useEffect(() => {
     let live = true;
     const load = () => {
       const seq = ++asked.current;
-      request("/api/board").then(
+      return request("/api/board").then(
         (body: { posts?: BoardPost[] }) => {
           if (!live || seq !== asked.current) return;
           const list = (Array.isArray(body?.posts) ? body.posts : []).filter((post) => !gone.current.has(post.id));
@@ -142,7 +142,7 @@ export function useBoardPosts(): BoardPostsView {
           setPosts((forumKept.posts = [...list, ...mine.current.values()].map(lift)));
           setFailed(false);
         },
-        () => live && seq === asked.current && setFailed(true),
+        () => { if (live && seq === asked.current) setFailed(true); },
       );
     };
     reload.current = load;
