@@ -102,9 +102,9 @@ export function searchOwnerChats(store: Pick<Store, "messagesFor">, threads: rea
 /** Headlines from the 1:1's latest summary, newest kept; empty with no summary. */
 export function ownerTopics(messages: readonly Message[], owner: string): string {
   const row = messages.findLast((message) => message.kind === "compaction");
-  const read = row ? readContextCompaction({ value: row.compaction, recoveredValues: row.recoveredValues }) : null;
+  const read = row ? readContextCompaction({ value: row.compaction }) : null;
   if (read?.status !== "valid" || isFallbackSummary(read.value.summary)) return "";
-  const lines = [...new Set((read.value.summary + (read.recoveredValues ?? "")).split("\n")
+  const lines = [...new Set(read.value.summary.split("\n")
     .map((line) => line.replace(/^[\s#>*•-]+/, "").trim())
     .filter((line) => line && line !== "SUMMARY" && !/^\[.*\]$/.test(line)))];
   if (!lines.length) return "";

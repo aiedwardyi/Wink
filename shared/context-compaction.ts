@@ -19,16 +19,13 @@ const contextCompactionV1Schema = z.object({
 export type ContextCompactionV1 = z.infer<typeof contextCompactionV1Schema>;
 
 export type ContextCompactionRead =
-  | { status: "valid"; value: ContextCompactionV1; recoveredValues?: string }
+  | { status: "valid"; value: ContextCompactionV1 }
   | { status: "unsupported"; version: number }
   | { status: "invalid" };
 
 export interface ContextCompactionInput {
   value: unknown;
-  recoveredValues?: unknown;
 }
-
-const recoveredValuesSchema = z.string().min(1);
 
 export function readContextCompaction(input: ContextCompactionInput): ContextCompactionRead {
   const version = versionEnvelopeSchema.safeParse(input.value);
@@ -37,10 +34,5 @@ export function readContextCompaction(input: ContextCompactionInput): ContextCom
     return { status: "unsupported", version: version.data.v };
   }
   const parsed = contextCompactionV1Schema.safeParse(input.value);
-  if (!parsed.success) return { status: "invalid" };
-  if (input.recoveredValues !== undefined) {
-    const recovered = recoveredValuesSchema.safeParse(input.recoveredValues);
-    if (recovered.success) return { status: "valid", value: parsed.data, recoveredValues: recovered.data };
-  }
-  return { status: "valid", value: parsed.data };
+  return parsed.success ? { status: "valid", value: parsed.data } : { status: "invalid" };
 }

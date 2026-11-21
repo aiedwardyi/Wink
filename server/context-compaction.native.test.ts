@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import { codexResumeReplayRoom, contextWindowFor, nativeCompactAt, nativeReplayBudget, nearNativeCompact, NATIVE_SUMMARY_WINDOW, planCompaction, prepareModelContext, prepareNativeReplay } from "./context-compaction.ts";
+import { ownerTopics } from "./one-mind.ts";
 import type { Message } from "./store.ts";
 import { buildTurnContext, reportedWindow } from "./turn-context.ts";
+import { readContextCompaction } from "../shared/context-compaction.ts";
 
 const message = (id: string, text: string, patch: Partial<Message> = {}): Message => ({
   id,
@@ -19,6 +21,23 @@ const longThread = () => Array.from({ length: 70 }, (_, index) => [
   message(`u${index}`, `request ${index}`),
   message(`b${index}`, `outcome ${index}`, { role: "bot" }),
 ]).flat();
+
+const savedSummary = (summary: string): Message[] => [
+  message("covered", "Send the release handoff to covered-owner@example.test."),
+  message("saved", "", {
+    role: "bot", kind: "compaction", compaction: {
+      v: 1, summary, coveredThroughId: "covered", firstKeptId: null,
+      contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
+    },
+  }),
+];
+
+const handoff = (contact: string, attachment: string): Message[] => [
+  message("contact", `Please use ${contact} for the release handoff.`),
+  message("4fb29a1e-df56-4371-b9ac-9dd33f02991e", `First long paste. <attached-image path="${attachment}" />\n` + "a long example line. ".repeat(5_500)),
+  message("old-b", "Second long paste. " + "another example line. ".repeat(5_500)),
+  message("recent", "The current milestone is violet telescope."),
+];
 
 describe("native compaction wiring", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -179,9 +198,23 @@ describe("native compaction plan", () => {
   });
 
   it("keeps all planned history for a bounded Codex native replay", () => {
-    const plan = planCompaction({ messages: longThread(), contextWindow: 128_000 });
+    const plan = planCompaction({ messages: [...savedSummary("The launch is approved for review."), ...longThread()], contextWindow: 128_000 });
     if (!plan.needed) throw new Error("expected a plan");
-    expect(prepareNativeReplay(plan, nativeReplayBudget(128_000))).toMatchObject({ status: "ready", transcript: plan.transcript });
+    const prepared = prepareNativeReplay(plan, nativeReplayBudget(128_000));
+    expect(prepared).toMatchObject({ status: "ready", compactionId: "saved" });
+    expect(prepared?.transcript.slice(1)).toEqual(plan.transcript.slice(1));
+  });
+
+  it.each([
+    ["no saved summary", []],
+    ["a fallback summary", savedSummary("Model summary unavailable; full transcript retained by Wink.\nReviewed the release notes.")],
+  ])("writes a fresh summary instead of a native replay with %s", (_, rows) => {
+    const messages = [...rows, ...longThread()];
+    const plan = planCompaction({ messages, contextWindow: 128_000 });
+    if (!plan.needed) throw new Error("expected a plan");
+    expect(prepareNativeReplay(plan, nativeReplayBudget(128_000))).toBeUndefined();
+    const resumeNativeReplay = { compactionId: plan.previous?.messageId ?? null, budgetTokens: 90_000 };
+    expect(planCompaction({ messages, contextWindow: 128_000, resumeNativeReplay }).needed).toBe(true);
   });
 
   it("reserves room only for the same native replay session and model", () => {
@@ -196,8 +229,8 @@ describe("native compaction plan", () => {
   });
 
   it("skips compaction planning when the same native replay session still fits", async () => {
-    const input = { messages: longThread(), contextWindow: 128_000 };
-    const plan = planCompaction({ ...input, resumeNativeReplay: { compactionId: null, budgetTokens: 90_000 } });
+    const input = { messages: [...savedSummary("The launch is approved for review."), ...longThread()], contextWindow: 128_000 };
+    const plan = planCompaction({ ...input, resumeNativeReplay: { compactionId: "saved", budgetTokens: 90_000 } });
     expect(plan).toMatchObject({ needed: false, status: "fits", nativeReplay: true });
     expect(await prepareModelContext({ ...input, plan, taskRecordText: "Goal: keep going" })).toMatchObject({
       status: "ready", transcript: expect.arrayContaining([{ role: "user", text: "request 0", at: 1_000 }]),
@@ -209,16 +242,14 @@ describe("native compaction plan", () => {
     const contact = "launch-owner@example.test";
     const attachment = "15f8108e-edbf-43f1-a54f-36a8ac67304a.png";
     const messages = [
-      message("contact", `Please use ${contact} for the release handoff.`),
-      message("4fb29a1e-df56-4371-b9ac-9dd33f02991e", `First long paste. <attached-image path="${attachment}" />\n` + "a long example line. ".repeat(5_500)),
-      message("old-b", "Second long paste. " + "another example line. ".repeat(5_500)),
-      message("recent", "The current milestone is violet telescope."),
+      ...savedSummary("The launch is approved for review."),
+      ...handoff(contact, attachment),
     ];
     const input = { messages, contextWindow: 128_000 };
     const plan = planCompaction(input);
     if (!plan.needed) throw new Error("expected a plan");
     const prepared = prepareNativeReplay(plan, nativeReplayBudget(input.contextWindow));
-    expect(prepared).toMatchObject({ status: "ready", compacted: false });
+    expect(prepared).toMatchObject({ status: "ready", compacted: true });
     if (!prepared) throw new Error("expected a native replay");
     expect(prepared.compaction).toBeUndefined();
     expect(plan.estimatedTokensBefore).toBeGreaterThan(plan.budgetTokens);
@@ -230,6 +261,22 @@ describe("native compaction plan", () => {
     expect.soft(nativeReplayPrefix?.includes(contact), "handoff contact").toBe(true);
     expect.soft(nativeReplayPrefix?.includes(attachment), "attachment filename").toBe(true);
     expect(nativeReplayPrefix?.includes("The current milestone is violet telescope.")).toBe(true);
+  });
+
+  it("lands covered and later values in the reused summary's own field", () => {
+    const later = "launch-owner@example.test";
+    const messages = [...savedSummary("The launch is approved for review."), ...handoff(later, "notes.png")];
+    const plan = planCompaction({ messages, contextWindow: 128_000 });
+    if (!plan.needed) throw new Error("expected a plan");
+    const patch = prepareNativeReplay(plan, nativeReplayBudget(128_000))?.replaySummary;
+    if (!patch) throw new Error("expected a summary patch");
+    expect(Object.keys(patch)).toEqual(["compaction"]);
+    expect(readContextCompaction({ value: patch.compaction }).status).toBe("valid");
+    const saved = messages.map((row) => row.id === "saved" ? { ...row, ...patch } : row);
+    for (const contact of ["covered-owner@example.test", later]) {
+      expect.soft(patch.compaction.summary, "older reader").toContain(contact);
+      expect.soft(ownerTopics(saved, "Owner"), "room topics").toContain(contact);
+    }
   });
 
   it("keeps typed values from already covered rows alongside the saved summary", async () => {
@@ -259,7 +306,7 @@ describe("native compaction plan", () => {
     expect(planCompaction({ ...input, resumeNativeReplay: { compactionId: "saved", budgetTokens: plan.estimatedTokensBefore } }).needed).toBe(true);
   });
 
-  it.each([31_770, 31_990, 32_000])("keeps all recovered values beside a %i-character summary", async (length) => {
+  it.each([31_770, 31_990, 32_000])("writes a fresh summary when a %i-character summary cannot also hold the values", async (length) => {
     const contacts = ["covered-owner@example.test", "covered-reviewer@example.test"];
     const summary = "Reviewed the release notes. ".repeat(1_200).slice(0, length - 20) + "Final decision: ship";
     const messages = [
@@ -276,18 +323,11 @@ describe("native compaction plan", () => {
     const plan = planCompaction(input);
     if (!plan.needed) throw new Error("expected a plan");
     const budgetTokens = nativeReplayBudget(input.contextWindow);
-    const prepared = prepareNativeReplay(plan, budgetTokens);
-    expect(prepared?.transcript[0]?.text).toContain(summary);
-    const resumed = planCompaction({ ...input, resumeNativeReplay: { compactionId: "saved", budgetTokens } });
-    expect(resumed).toMatchObject({ status: "fits", nativeReplay: true, replaySummary: prepared?.replaySummary });
-    const saved = [messages[0]!, { ...messages[1]!, ...prepared?.replaySummary }, ...messages.slice(-4)];
-    const switched = await prepareModelContext({ ...input, messages: saved, taskRecordText: "" });
-    if (switched.status !== "ready") throw new Error("expected a switched context");
-    expect(switched.transcript[0]?.text).toBe(prepared?.transcript[0]?.text);
-    for (const contact of contacts) {
-      expect.soft(prepared?.transcript[0]?.text).toContain(contact);
-      expect.soft(switched.transcript[0]?.text).toContain(contact);
-    }
+    expect(prepareNativeReplay(plan, budgetTokens)).toBeUndefined();
+    expect(planCompaction({ ...input, resumeNativeReplay: { compactionId: "saved", budgetTokens } }).needed).toBe(true);
+    const written = await prepareModelContext({ ...input, plan, taskRecordText: "", summarize: async () => "SUMMARY\nThe release review continues." });
+    if (written.status !== "ready" || !written.compaction) throw new Error("expected a new summary");
+    for (const contact of contacts) expect.soft(written.compaction.summary).toContain(contact);
   });
 
   it("keeps covered values when a long visible tail also contains typed values", () => {
@@ -307,7 +347,7 @@ describe("native compaction plan", () => {
     if (!plan.needed) throw new Error("expected a plan");
     const prepared = prepareNativeReplay(plan, nativeReplayBudget(128_000));
     expect(prepared?.transcript[0]?.text).toContain(contact);
-    expect(prepared?.transcript[0]?.text).not.toContain("reviewer-499@example.test");
+    expect(prepared?.replaySummary?.compaction.summary).toContain(contact);
     expect(prepared?.transcript[1]?.text).toContain("reviewer-499@example.test");
   });
 });

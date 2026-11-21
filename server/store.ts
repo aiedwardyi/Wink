@@ -140,8 +140,6 @@ export interface Message {
   mailbox?: { key: string };
   /** Versioned model-context state. Unknown versions stay intact on disk. */
   compaction?: unknown;
-  /** The part of a recovered values block that would overflow a saved summary. */
-  recoveredValues?: string;
   card?: OptionCardData;
   connector?: ConnectorCardData;
   secret?: SecretRequestCardData;
@@ -415,10 +413,9 @@ export function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: 
   if (message.role !== "bot" && !message.from) return message;
   const out = { ...message };
   if (typeof out.text === "string") out.text = redactSecretsInText(out.text);
-  const compaction = readContextCompaction({ value: out.compaction, recoveredValues: out.recoveredValues });
+  const compaction = readContextCompaction({ value: out.compaction });
   if (compaction.status === "valid") {
     out.compaction = { ...compaction.value, summary: redactSecretsInText(compaction.value.summary) };
-    if (compaction.recoveredValues) out.recoveredValues = redactSecretsInText(compaction.recoveredValues);
   }
   if (out.tool) {
     out.tool = {
