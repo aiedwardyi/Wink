@@ -119,7 +119,7 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, readyRelayDeviceUrl, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
 const { setMainPermissions } = require("./main-permissions.cjs");
@@ -1245,8 +1245,9 @@ async function openDeviceLinkedFile(devices, target, name) {
   }
 }
 
-async function openDeviceWindow(rawHost, rawName) {
-  const relayUrl = relayDeviceUrl(rawHost, GOOGLE_CLIENT?.teamRelay);
+async function openDeviceWindow(rawHost, rawName, relayHost) {
+  const base = GOOGLE_CLIENT?.teamRelay;
+  const relayUrl = relayDeviceUrl(rawHost, base) || (relayHost && await readyRelayDeviceUrl(relayHost, base));
   if (relayUrl) {
     await shell.openExternal(relayUrl);
     return true;
@@ -1921,7 +1922,7 @@ ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
 });
 
 // Another PC's Orbit opens beside this one; picking it again focuses that window.
-ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(host, name));
+ipcMain.handle("device-window:open", (_event, host, name, relayHost) => openDeviceWindow(host, name, relayHost));
 
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.

@@ -484,6 +484,20 @@ describe("phone Google sign-in through the relay", () => {
     }
   });
 
+  it("rejects a Google start when a relay request still reaches a disconnected PC", async () => {
+    const w = await world({ google: {} });
+    const connected = w.access.status();
+    const status = vi.spyOn(w.access, "status");
+    for (const state of ["reconnecting", "cert-error"] as const) {
+      status.mockReturnValue({ ...connected, state });
+      const res = await viaRelay(w.r, "/api/phone/google/start", { method: "HEAD" });
+      expect(res.status).toBe(503);
+      expect(res.headers["set-cookie"]).toBeUndefined();
+    }
+    status.mockRestore();
+    expect((await viaRelay(w.r, "/api/phone/google/start", { method: "HEAD" })).status).toBe(204);
+  });
+
   it("refuses a sign-in that finishes after this PC signed out of Google", async () => {
     const w = await world({ google: {} });
     const start = await viaRelay(w.r, "/api/phone/google/start");

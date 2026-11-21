@@ -187,7 +187,7 @@ contextBridge.exposeInMainWorld("ogb", {
   },
   /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
   deviceWindow: {
-    open: (host, name) => invoke("device-window:open", host, name),
+    open: (host, name, relayHost) => invoke("device-window:open", host, name, relayHost),
   },
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => invoke("desktop:pick-folder", current),
