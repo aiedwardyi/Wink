@@ -166,7 +166,8 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   );
 }
 
-/** The addition each engine waits on outlives a remount of Connections, so its failure line still shows. */
+/** The addition each engine waits on outlives a remount of Connections, so its failure line still shows,
+ * even when the failed row was retired while Connections was closed: the server keeps that result. */
 const pendingAdds = new Map<string, string>();
 
 export function AccountConnections({ accounts, reload }: { accounts: UsageAccount[]; reload: () => Promise<void> }) {
@@ -176,10 +177,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const terminal = isTerminalSkin(useSkin());
   const [busy, setBusy] = useState(false);
   const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
-  const [adding, setAdding] = useState<string | null>(() => {
-    const id = pendingAdds.get(base);
-    return id && accounts.some((account) => account.instanceId === id) ? id : null;
-  });
+  const [adding, setAdding] = useState<string | null>(() => pendingAdds.get(base) ?? null);
   const [existingId, setExistingId] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
   useEffect(() => {
@@ -203,7 +201,11 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
           setAdding(null);
           return;
         }
-      } catch { if (cancelled) return; }
+      } catch (error) {
+        if (cancelled) return;
+        // The server no longer knows this addition (it restarted): nothing is left to wait on.
+        if ((error as { status?: number }).status === 404) { setAdding(null); return; }
+      }
       timer = setTimeout(() => void poll(), 1000);
     };
     void poll();
