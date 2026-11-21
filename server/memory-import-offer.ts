@@ -20,6 +20,21 @@ const NONE = { offer: false, tool: false } as const;
 const declinedFile = () => join(DATA_DIR, "about-you", "declined");
 
 let locale: "en" | "ko" = "en";
+// Threads whose running turn carries the offer. The model writes the reply, so its row gets stamped; the prompt text alone never earns the buttons.
+const offering = new Set<string>();
+
+/** Called as a turn starts: only an offer turn may stamp a reply. */
+export function noteOfferTurn(threadId: string, offer: boolean): void {
+  if (offer) offering.add(threadId);
+  else offering.delete(threadId);
+}
+
+/** The stamp for the offer turn's reply row: the first one that holds the prompt. */
+export function takeImportOffer(threadId: string, text: string): { importOffer: true } | undefined {
+  if (!offering.has(threadId) || !Object.values(catalogs).some((catalog) => text.includes(catalog["aboutYou.prompt"]))) return undefined;
+  offering.delete(threadId);
+  return { importOffer: true };
+}
 
 /** The language of the user's latest send picks the prompt and result wording. */
 export function noteSendLocale(value: unknown): void {

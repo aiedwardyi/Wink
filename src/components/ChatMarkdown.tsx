@@ -12,6 +12,7 @@ import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy, PanelRight } from "lucide-react";
 import { LinkedFolderLink } from "./LinkedFolderLink";
 import { FileMenu, type FileMenuAt } from "./MediaMenu";
+import { ImportProviderButtons } from "./ImportProviderButtons";
 import { InlineAudio } from "./InlineAudio";
 import { ReadableImage, useMediaViewer } from "./MediaViewerProvider";
 import { PhoneVideo } from "./PhoneVideo";
@@ -19,6 +20,7 @@ import { BADGE, ShowCard } from "./ShowCard";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { isImportPrompt } from "@/lib/import-links";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { fileOpen, openFile, openInApp, openOnPc, pcOffline, type FileHands } from "@/lib/open-file";
 import { linkedFileSrc, showKind, showName } from "@/lib/show-pane";
@@ -314,7 +316,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, components }: { text: 
   );
 });
 
-function CodeBlock({ code, lang }: { code: string; lang: string }) {
+function CodeBlock({ code, lang, importOffer = false }: { code: string; lang: string; importOffer?: boolean }) {
   const streaming = useContext(StreamingContext);
   const [html, setHtml] = useState<string | null>(() => (streaming ? null : highlightCache.get(highlightKey(code, lang)) ?? null));
   const highlighted = useMemo(() => ({ __html: html ?? "" }), [html]);
@@ -370,6 +372,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const tall = code.split("\n").length > TALL_CODE_LINES;
 
   return (
+    <>
     <div className="my-2 overflow-hidden rounded-lg border border-hairline/40 bg-inset">
       <div className="flex items-center justify-between border-b border-hairline/30 px-3 py-1">
         <span className="text-[11px] uppercase tracking-wide text-ink-secondary">{lang || "code"}</span>
@@ -401,6 +404,8 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         </div>
       )}
     </div>
+    {importOffer && isImportPrompt(code) && <ImportProviderButtons prompt={code} />}
+    </>
   );
 }
 
@@ -729,6 +734,7 @@ function ChatMarkdownComponent({
   threadId,
   localLinks = true,
   pictured = false,
+  importOffer = false,
 }: {
   text: string;
   streaming?: boolean;
@@ -739,6 +745,8 @@ function ChatMarkdownComponent({
   localLinks?: boolean;
   /** The chat already shows this reply's picture, so its file links draw none. */
   pictured?: boolean;
+  /** The new-bot offer reply: its import prompt gets provider buttons. */
+  importOffer?: boolean;
 }) {
   const text = useMemo(() => unwrapUserTags(source), [source]);
   const style = useReplyStyle();
@@ -795,7 +803,7 @@ function ChatMarkdownComponent({
       const flat = (n: any): string =>
         typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
       const code = flat(child?.props?.children).replace(/\n$/, "");
-      return <CodeBlock code={code} lang={lang} />;
+      return <CodeBlock code={code} lang={lang} importOffer={importOffer} />;
     },
     img({ src, alt }: { src?: string; alt?: string }) {
       return (
@@ -885,7 +893,7 @@ function ChatMarkdownComponent({
     hr() {
       return <hr className="border-hairline/40" />;
     },
-  }), [baseDir, threadId, localLinks, pictured]);
+  }), [baseDir, threadId, localLinks, pictured, importOffer]);
   return (
     <StreamingContext.Provider value={streaming}>
       <PictureContext.Provider value={picture}>
