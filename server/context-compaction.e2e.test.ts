@@ -44,6 +44,13 @@ function codexTurn(calls: CodexCall[], text: string) {
 
 const BOT_ID = "compaction-bot";
 const THREAD_ID = "compaction-thread";
+const CODEX_RESTORED = [
+  { id: "restored-resume", cursor: "saved-resume", hasSessionSystem: true },
+  { id: "restored-reset", cursor: "saved-reset", hasSessionSystem: false },
+];
+const COVERED_CONTACT = "covered-owner@example.test";
+const LATER_CONTACT = "launch-owner@example.test";
+const RECENT_MILESTONE = "violet telescope";
 const CLAUDE_BOT_ID = "compaction-claude-bot";
 const CLAUDE_THREAD_ID = "compaction-claude-thread";
 const CLAUDE_RESUME = {
@@ -195,11 +202,11 @@ describe("context compaction e2e", () => {
   };
 
   // store.ts keys one file per resume cursor this way
-  const sessionSystemPath = (cursor: string) => join(
+  const sessionSystemPath = (cursor: string, instanceId = "claude") => join(
     home,
     ".orbit",
     "session-system",
-    `${createHash("sha256").update(`claude\n${JSON.stringify(cursor)}`).digest("hex").slice(0, 32)}.txt`,
+    `${createHash("sha256").update(`${instanceId}\n${JSON.stringify(cursor)}`).digest("hex").slice(0, 32)}.txt`,
   );
   /** Records the bot's saved session as already holding the system text the
    * server sends it, read off a real fresh turn on the bot's probe task so
@@ -257,6 +264,17 @@ describe("context compaction e2e", () => {
       },
     }));
     writeFileSync(join(dataDir, "bots.json"), JSON.stringify([
+      ...CODEX_RESTORED.map(({ id, cursor }) => ({
+        id, threadId: id, name: "Restored", title: "Release", color: "blue", createdAt: 1,
+        modelSelection: { instanceId: "codex", model: "gpt-fake-default" },
+        resumeCursors: { codex: cursor },
+        tasks: [{
+          threadId: id, title: "Release", createdAt: 1, resumeCursors: { codex: cursor },
+          resumeSeed: { instanceId: "codex", cursor, compactionId: "saved", nativeReplay: true },
+          nativePrompt: { cursor, first: 20_000, last: 20_000, window: { model: "gpt-fake-default", tokens: 128_000 } },
+          lastInstanceId: "codex", lastModel: "gpt-fake-default",
+        }],
+      })),
       {
         id: BOT_ID,
         threadId: THREAD_ID,
@@ -617,6 +635,26 @@ describe("context compaction e2e", () => {
       kind: "text",
       text: `history ${index}`,
     }));
+    for (const { id, cursor, hasSessionSystem } of CODEX_RESTORED) {
+      writeFileSync(join(dataDir, `messages-${id}.json`), JSON.stringify({
+        activeLeafId: "milestone",
+        messages: [
+          { id: "covered", at: 1, parentId: null, role: "user", kind: "text", text: `Send the handoff to ${COVERED_CONTACT}.` },
+          { id: "saved", at: 2, parentId: "covered", role: "bot", kind: "compaction", compaction: {
+            v: 1, summary: "The launch is approved for review.", coveredThroughId: "covered", firstKeptId: null,
+            contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
+          } },
+          ...messages.map((message, index) => ({ ...message, at: index + 3, parentId: message.parentId ?? "saved" })),
+          { id: "contact", at: 124, parentId: "m120", role: "bot", kind: "text", text: `The later contact is ${LATER_CONTACT}.` },
+          { id: "milestone", at: 125, parentId: "contact", role: "user", kind: "text", text: `The current milestone is ${RECENT_MILESTONE}.` },
+        ],
+      }));
+      if (hasSessionSystem) {
+        const systemPath = sessionSystemPath(cursor, "codex");
+        mkdirSync(dirname(systemPath), { recursive: true });
+        writeFileSync(systemPath, "You are Restored, a personal bot in Wink.");
+      }
+    }
     for (const threadId of [
       THREAD_ID,
       CLAUDE_THREAD_ID,
@@ -803,6 +841,23 @@ describe("context compaction e2e", () => {
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
     await removeTempDir(home);
+  });
+
+  it.each(CODEX_RESTORED)("keeps covered values on the fresh provider thread for $id", async ({ id, hasSessionSystem }) => {
+    const text = "Who receives the release handoff?";
+    rmSync(dumpPath, { force: true });
+    expect((await api("POST", `/api/bots/${id}/messages`, { text })).status).toBe(202);
+    await waitFor(async () => existsSync(dumpPath) && (await botById(id))?.busy === false);
+
+    const { calls }: { calls: CodexCall[] } = JSON.parse(readFileSync(dumpPath, "utf8"));
+    const methods = calls.map((call) => call.method);
+    expect(methods.filter((method) => method === "thread/resume")).toHaveLength(hasSessionSystem ? 1 : 0);
+    expect(methods).toContain("thread/start");
+    const prompt = codexTurn(calls, text)?.prompt;
+    expect(prompt).toContain(hasSessionSystem ? "provider session could not be resumed" : "because your instructions changed");
+    expect(prompt).toContain(LATER_CONTACT);
+    expect(prompt).toContain(RECENT_MILESTONE);
+    expect(prompt).toContain(COVERED_CONTACT);
   });
 
   it("dispatches a long thread through a driver without generateText", async () => {

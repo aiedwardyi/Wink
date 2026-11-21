@@ -1120,7 +1120,11 @@ export function planCompaction(input: {
   if ((real ? !near : currentTokens <= budgetTokens) && currentTurns <= MAX_CONTEXT_MESSAGES) return fits;
   const replay = input.resumeNativeReplay;
   if (replay && replay.compactionId === (previous?.messageId ?? null) && currentTokens <= replay.budgetTokens) {
-    return { ...fits, budgetTokens: replay.budgetTokens, nativeReplay: true };
+    const coveredValues = previous ? typedValueLines(input.messages.slice(0, previous.coveredIndex + 1), input.excludeIds) : [];
+    const projection = replayWithTypedValues(currentTranscript, currentTokens, coveredValues);
+    if (projection.estimatedTokens <= replay.budgetTokens) {
+      return { ...fits, ...projection, budgetTokens: replay.budgetTokens, nativeReplay: true };
+    }
   }
   const summaryBudget = Math.max(
     1,
@@ -1241,15 +1245,20 @@ function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, s
   return [...head, ...transcript.slice(start)];
 }
 
+function replayWithTypedValues(transcript: ModelContextMessage[], estimatedTokens: number, lines: readonly TypedLine[]) {
+  const summary = transcript[0];
+  const values = lines.length ? typedValuesBlock(lines, VALUES_CAP_TOKENS * 3) : "";
+  if (!summary || !values || summary.text.endsWith(values)) return { transcript, estimatedTokens };
+  const enriched = { ...summary, text: `${summary.text}\n\n${values}` };
+  return {
+    transcript: [enriched, ...transcript.slice(1)],
+    estimatedTokens: estimatedTokens + messageTokens(enriched) - messageTokens(summary),
+  };
+}
+
 export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number): Extract<PreparedModelContext, { status: "ready" }> | undefined {
   if (plan.estimatedTokensBefore > budgetTokens) return undefined;
-  const summary = plan.previous ? plan.transcript[0] : undefined;
-  // Already covered rows can supply values that the saved summary missed.
-  const values = summary ? typedValuesBlock(plan.typedLines, VALUES_CAP_TOKENS * 3) : "";
-  const transcript = summary && values && !summary.text.endsWith(values)
-    ? [{ ...summary, text: `${summary.text}\n\n${values}` }, ...plan.transcript.slice(1)]
-    : plan.transcript;
-  const estimatedTokens = transcript === plan.transcript ? plan.estimatedTokensBefore : estimateContextTokens(transcript);
+  const { transcript, estimatedTokens } = replayWithTypedValues(plan.transcript, plan.estimatedTokensBefore, plan.previous ? plan.typedLines : []);
   if (estimatedTokens > budgetTokens) return undefined;
   return {
     status: "ready",

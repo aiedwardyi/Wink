@@ -256,5 +256,6 @@ describe("native compaction plan", () => {
     if (!prepared) throw new Error("expected a native replay");
     expect(prepared.transcript[0]?.text.startsWith(plan.transcript[0]!.text)).toBe(true);
     expect(prepared.transcript[0]?.text).toContain(contact);
+    expect(planCompaction({ ...input, resumeNativeReplay: { compactionId: "saved", budgetTokens: plan.estimatedTokensBefore } }).needed).toBe(true);
   });
 });
