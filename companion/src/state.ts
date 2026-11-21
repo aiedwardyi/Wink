@@ -20,13 +20,13 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { isTestProfilePath, requireTestHome } from "./test-profile.ts";
+
 if (process.env.VITEST !== undefined) {
-  const home = process.env.WINK_VITEST_HOME;
-  if (!home || homedir() !== home) {
-    throw new Error("load server/testing/setup.ts (vite.config.ts setupFiles) before importing companion/src/state.ts");
-  }
+  const home = requireTestHome("companion/src/state.ts");
   const dataDir = join(home, ".openmausbot-companion");
-  if ((process.env.OMB_COMPANION_DIR ?? dataDir) !== dataDir || lstatSync(dataDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+  if ((process.env.OMB_COMPANION_DIR ?? dataDir) !== dataDir ||
+      !isTestProfilePath(dataDir, home) || lstatSync(dataDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
     throw new Error("OMB_COMPANION_DIR must point to the setupFiles scratch directory under Vitest");
   }
 }

@@ -2,11 +2,13 @@
 // DATA_DIR (~/.openmausbot) never touches the real one. os.homedir()
 // reads HOME (POSIX) / USERPROFILE (Windows) at call time, and this file
 // runs before any test module imports server/config.ts.
+import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
+import { markTestHome } from "../../companion/src/test-profile.ts";
 import { removeTempDir } from "./cleanup.ts";
 
 const home = mkdtempSync(join(tmpdir(), "omb-test-home-"));
@@ -28,7 +30,10 @@ for (const name of ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME"
 // wholesale, and "it is safe because of a line in another file" is not the
 // footing that delete should stand on.
 process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
+const token = randomBytes(32).toString("hex");
+markTestHome(home, token);
 process.env.WINK_VITEST_HOME = home;
+process.env.WINK_VITEST_HOME_TOKEN = token;
 
 // SQLite keeps the database file open for the lifetime of its handle.
 // Windows will not remove a directory containing an open database, so close

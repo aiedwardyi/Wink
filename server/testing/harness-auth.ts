@@ -1,8 +1,10 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { z } from "zod";
+
+import { markTestHome, requireTestHome } from "../../companion/src/test-profile.ts";
 
 const tokens = new Map<string, Promise<string>>();
 const stderrTails = new Map<string, string[]>();
@@ -14,13 +16,16 @@ export async function harnessToken(origin: string): Promise<string> {
 
 export function spawnHarness(command: string, args: string[], options: SpawnOptions) {
   let env = options.env;
-  const home = env?.HOME;
-  const setupHome = process.env.WINK_VITEST_HOME;
-  // Child harnesses use their own scratch homes while the suite keeps its marker.
-  if (env?.VITEST !== undefined && home && env.USERPROFILE === home && setupHome === homedir() &&
-      home !== setupHome && dirname(home) === dirname(setupHome) &&
-      dirname(realpathSync.native(home)) === realpathSync.native(dirname(setupHome))) {
-    env = { ...env, WINK_VITEST_HOME: home };
+  if (env?.VITEST !== undefined && env.HOME && env.USERPROFILE === env.HOME) {
+    const home = env.HOME;
+    const setupHome = requireTestHome("server/testing/harness-auth.ts");
+    const token = process.env.WINK_VITEST_HOME_TOKEN!;
+    if (home !== setupHome && dirname(home) === dirname(setupHome) &&
+        dirname(realpathSync.native(home)) === realpathSync.native(dirname(setupHome))) {
+      markTestHome(home, token);
+    }
+    const temp = tmpdir();
+    env = { ...env, WINK_VITEST_HOME: home, WINK_VITEST_HOME_TOKEN: token, TEMP: temp, TMP: temp, TMPDIR: temp };
   }
   // stdio and windowsHide sit after the spread deliberately: the ipc channel
   // is load-bearing for the token handshake below, and no harness wants a console.

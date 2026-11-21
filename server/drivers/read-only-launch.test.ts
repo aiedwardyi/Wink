@@ -1,10 +1,11 @@
 // Every engine's read-only turn, launched for real against its fake CLI on its most permissive
 // instance (full auto / bypass): the restriction must show in the launch itself, not just a flag.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testHome } from "../testing/test-home.ts";
 
 import { ensureDirs } from "../config.ts";
 import * as procs from "../procs.ts";
@@ -232,7 +233,7 @@ describe("Claude read-only turns run none of the owner's hooks", () => {
 
 describe("read-only launch contract", () => {
   it("runs with a throwaway HOME", () => {
-    expect(homedir().startsWith(tmpdir())).toBe(true);
+    expect(testHome().startsWith(tmpdir())).toBe(true);
   });
 
   it("covers every registered engine", () => {

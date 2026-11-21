@@ -1,12 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
+import { markTestHome } from "../companion/src/test-profile.ts";
+
 const root = fileURLToPath(new URL("../", import.meta.url));
 const setupHint = "load server/testing/setup.ts (vite.config.ts setupFiles) before importing";
+
+function scratchEnv(home, temp) {
+  const appData = join(home, "AppData");
+  const localAppData = join(home, "LocalAppData");
+  for (const dir of [appData, localAppData]) mkdirSync(dir, { recursive: true });
+  return { ...process.env, HOME: home, USERPROFILE: home, APPDATA: appData, LOCALAPPDATA: localAppData,
+    TEMP: temp, TMP: temp, TMPDIR: temp, CLAUDE_CONFIG_DIR: join(home, ".claude"), CODEX_HOME: join(home, ".codex"),
+    OMB_DATA_DIR: join(home, ".orbit"), OMB_COMPANION_DIR: join(home, ".openmausbot-companion") };
+}
 
 it("protects both profiles when Vitest skips setupFiles", () => {
   const scratch = realpathSync.native(process.env.ORBIT_SCRATCH || tmpdir());
@@ -21,11 +32,11 @@ it("protects both profiles when Vitest skips setupFiles", () => {
     const config = join(home, "vitest.config.mjs");
     writeFileSync(config, 'export default { test: { pool: "forks", fileParallelism: false } };\n');
 
-    const env = { ...process.env, ORBIT_SCRATCH: scratch, HOME: home, USERPROFILE: home,
-      TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: join(home, ".claude"), CODEX_HOME: join(home, ".codex") };
+    const env = { ...scratchEnv(home, home), ORBIT_SCRATCH: scratch };
     delete env.OMB_DATA_DIR;
     delete env.OMB_COMPANION_DIR;
     delete env.WINK_VITEST_HOME;
+    delete env.WINK_VITEST_HOME_TOKEN;
     const options = { cwd: root, env, encoding: "utf8", windowsHide: true };
     const preflight = spawnSync(process.execPath, ["-p", "require('node:os').homedir()"], options);
     expect(preflight.status, preflight.stderr).toBe(0);
@@ -47,3 +58,54 @@ it("protects both profiles when Vitest skips setupFiles", () => {
     rmSync(home, { recursive: true, force: true });
   }
 }, 30_000);
+
+function importProfile(module, env) {
+  return spawnSync(process.execPath, ["--input-type=module", "-e",
+    `console.log((await import(${JSON.stringify(`./${module}`)})).DATA_DIR)`,
+  ], { cwd: root, env, encoding: "utf8", windowsHide: true });
+}
+
+it("rejects a caller-supplied Vitest home without its setup marker", () => {
+  const temp = realpathSync.native(tmpdir());
+  const home = mkdtempSync(join(temp, "unmarked-profile-"));
+  try {
+    const env = { ...scratchEnv(home, temp), WINK_VITEST_HOME: home };
+    for (const module of ["server/config.ts", "companion/src/state.ts"]) {
+      const result = importProfile(module, env);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr).toContain(`${setupHint} ${module}`);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+it("rejects a junction above an otherwise marked companion home", () => {
+  const temp = realpathSync.native(tmpdir());
+  const scratch = mkdtempSync(join(temp, "linked-profile-"));
+  try {
+    const outside = join(scratch, "outside");
+    const home = join(outside, "home");
+    const env = { ...scratchEnv(home, temp), WINK_VITEST_HOME: home };
+    markTestHome(home, env.WINK_VITEST_HOME_TOKEN);
+    const deviceFile = join(env.OMB_COMPANION_DIR, "sentinel");
+    mkdirSync(dirname(deviceFile));
+    writeFileSync(deviceFile, "sentinel");
+    const module = "companion/src/state.ts";
+    const valid = importProfile(module, env);
+    expect(valid.status, valid.stderr).toBe(0);
+    expect(valid.stdout.trim()).toBe(env.OMB_COMPANION_DIR);
+
+    const childTemp = join(scratch, "temp");
+    const link = join(childTemp, "redirect");
+    mkdirSync(childTemp);
+    symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+    const linkedHome = join(link, "home");
+    const linked = importProfile(module, { ...scratchEnv(linkedHome, childTemp), WINK_VITEST_HOME: linkedHome });
+    expect(linked.status, linked.stdout + linked.stderr).toBe(1);
+    expect(linked.stderr).toContain(`${setupHint} ${module}`);
+    expect(readFileSync(deviceFile, "utf8")).toBe("sentinel");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});

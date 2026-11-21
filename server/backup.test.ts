@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import type { Message } from "./store.ts";
 
@@ -87,7 +88,7 @@ afterEach(() => {
 
 describe("backup place", () => {
   it("defaults to a visible Wink Backups folder in the home folder with a 2 GB cap", () => {
-    expect(backupSettings(temp())).toEqual({ dir: join(homedir(), "Wink Backups"), maxBytes: 2 * 1024 ** 3 });
+    expect(backupSettings(temp())).toEqual({ dir: join(testHome(), "Wink Backups"), maxBytes: 2 * 1024 ** 3 });
   });
 
   it("reads the folder and cap from backup.json, a file of their own", () => {
