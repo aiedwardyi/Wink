@@ -1,6 +1,7 @@
 // A new bot's first reply offers to bring in what another AI knows about the user, while Import Memory is empty.
 // The paste is saved by the Settings path from the user's own message; the bot never retypes it.
-import { existsSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 
@@ -18,6 +19,13 @@ const TOOL_TURNS = 3;
 const NONE = { offer: false, tool: false } as const;
 // beside Import Memory, so the decline travels wherever that folder does
 const declinedFile = () => join(DATA_DIR, "about-you", "declined");
+const pendingFile = (threadId: string) => join(DATA_DIR, "about-you", "pending", createHash("sha256").update(threadId).digest("hex"));
+
+export function noteImportOffer(threadId: string): void {
+  const file = pendingFile(threadId);
+  mkdirSync(join(DATA_DIR, "about-you", "pending"), { recursive: true, mode: 0o700 });
+  writeFileAtomic(file, "", { mode: 0o600 });
+}
 
 let locale: "en" | "ko" = "en";
 
@@ -32,12 +40,13 @@ function t(key: MessageKey, vars?: { count: number }): string {
 }
 
 /** An owner's 1:1 turn: the offer on a new chat's first typed message, the tool until the paste can have come. Unsent counts a send not in messages yet. */
-export function importMemoryTurn(messages: Iterable<Pick<Message, "role" | "kind">>, unsent = 0): { offer: boolean; tool: boolean } {
+export function importMemoryTurn(messages: Iterable<Pick<Message, "role" | "kind">>, unsent = 0, threadId?: string): { offer: boolean; tool: boolean } {
   let typed = unsent;
   // stops past the first few typed lines, so a long chat costs nothing
   for (const message of messages) if (message.role === "user" && message.kind === "text" && ++typed > TOOL_TURNS) return NONE;
-  if (!typed || existsSync(declinedFile()) || aboutYouFacts()) return NONE;
-  return { offer: typed === 1, tool: true };
+  if (!typed || existsSync(declinedFile())) return NONE;
+  const empty = !aboutYouFacts();
+  return { offer: typed === 1 && empty, tool: empty || Boolean(threadId && existsSync(pendingFile(threadId))) };
 }
 
 const OFFER = {
@@ -104,6 +113,7 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
   }
   const accepted: string[] = [];
   const result = addToAboutYou(pastedAnswer(deps.messages(source.threadId)), day((deps.now ?? Date.now)()), accepted);
+  if (!("error" in result) && aboutYouFacts()) rmSync(pendingFile(source.threadId), { force: true });
   const note = !("error" in result) ? aboutYouNote(result, t)
     : result.error === "too-large" ? t("aboutYou.tooLarge")
     : result.error === "empty" ? t("aboutYou.noFacts")

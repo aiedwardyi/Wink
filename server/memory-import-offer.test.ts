@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { aboutYouSources, ABOUT_YOU_MAX_PASTE } from "./about-you.ts";
+import { aboutYouRoutes, aboutYouSources, ABOUT_YOU_MAX_PASTE } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
 import type { Message } from "./store.ts";
 import { en, ko } from "../src/lib/i18n-catalog.ts";
 
@@ -48,8 +48,10 @@ describe("new bot import offer", () => {
   });
 
   it("never offers again after the user says no", async () => {
+    noteImportOffer("t1");
     expect(await call({ decline: true }, [typed("no thanks")])).toEqual({ status: 200, text: expect.stringContaining("no bot offers this again") });
     expect(importMemoryTurn([typed("hi")])).toEqual({ offer: false, tool: false });
+    expect(importMemoryTurn([typed("hi"), typed("no thanks")], 0, "t1")).toEqual({ offer: false, tool: false });
     expect(existsSync(join(dir, "MEMORY.md"))).toBe(false);
   });
 
@@ -90,6 +92,25 @@ describe("new bot import offer", () => {
 });
 
 describe("import_memory saves through the Settings path", () => {
+  it("keeps the pending tool after Settings saves a fact", async () => {
+    const chat = [typed("hi"), reply("offer")];
+    expect(importMemoryTurn([chat[0]])).toEqual({ offer: true, tool: true });
+    noteImportOffer("t1");
+    let status = 0;
+    const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
+    await aboutYouRoutes.add(Readable.from([JSON.stringify({ text: "- I play cello.\nSource: ChatGPT" })]) as IncomingMessage, res);
+    expect(status).toBe(200);
+    const answer = typed("- I play cello.\n- Call me Dana.\n- I grow tomatoes.\n- I bike to work.\n- I use a paper calendar.\nSource: ChatGPT");
+    expect(importMemoryTurn([...chat, answer], 0, "t1")).toEqual({ offer: false, tool: true });
+    expect(importMemoryTurn([...chat].reverse(), 1, "t1")).toEqual({ offer: false, tool: true });
+    expect(importMemoryTurn([...chat, answer], 0, "other")).toEqual({ offer: false, tool: false });
+    expect(importMemoryTurn([...chat, answer, typed("later"), typed("too late")], 0, "t1")).toEqual({ offer: false, tool: false });
+    const result = await call({}, [...chat, answer]);
+    expect(result.text).toContain("Added 4 new.");
+    expect(result.text).toContain("Saved facts:\n- Call me Dana.\n- I grow tomatoes.\n- I bike to work.\n- I use a paper calendar.");
+    expect(result.text).not.toContain("I play cello.");
+    expect(importMemoryTurn([...chat, answer], 0, "t1")).toEqual({ offer: false, tool: false });
+  });
   it("lists only newly saved facts for a partial import", async () => {
     await call({}, [typed("- Already saved.\nSource: ChatGPT")]);
     const text = (await call({}, [typed("- Already saved.\n- My password is hunter2-very-secret\n- Likes tea.\n- Plays tennis.\nSource: ChatGPT")])).text;
@@ -171,7 +192,7 @@ describe("import_memory saves through the Settings path", () => {
     expect(index).toContain("turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)");
     const mounts = index.split("\n").filter((line) => line.includes("agentsIntegration(bot.id"));
     expect(mounts.filter((line) => line.includes("importMemory")).map((line) => line.trim())).toEqual([
-      "const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1).tool) : undefined;",
+      "const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1, bot.threadId).tool) : undefined;",
       "integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);",
     ]);
     expect(mounts.find((line) => line.includes("hop"))).not.toContain("importMemory");
