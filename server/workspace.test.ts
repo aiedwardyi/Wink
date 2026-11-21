@@ -1,9 +1,11 @@
 // Workspace + file memory contract: the workspace is created idempotently,
 // MEMORY.md loads under a hard budget, and an empty file gets only a starter
 // block in the first-turn prompt.
-import { existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as atomic from "./atomic.ts";
 import { applyPicks, mergeTimelines } from "./picks.ts";
 import { traceClaimedTurn } from "./turn-timing.ts";
 
@@ -211,6 +213,77 @@ describe("workspace", () => {
     writeMemoryFile(BOT, "- newer from another PC\n");
     expect(saveMemoryFile(BOT, "- older client\n")).toMatchObject({ conflict: false, revision: memoryRevision("- older client\n") });
     expect(readMemoryFile(BOT).text).toBe("- older client\n");
+  });
+
+  describe("saveMemoryFile while another process writes MEMORY.md", () => {
+    const path = () => join(workspaceDir(BOT), "MEMORY.md");
+    const run = (code: string) => execFileSync(process.execPath, ["-e", `const fs = require("node:fs"), p = process.argv[1]; ${code}`, path()], { windowsHide: true });
+    const parked = () => {
+      const memory = join(workspaceDir(BOT), "memory");
+      return readdirSync(memory).filter((name) => name.startsWith("MEMORY.conflict-")).map((name) => readFileSync(join(memory, name), "utf8"));
+    };
+    // each write of MEMORY.md takes the next step: a writer just before it lands, and one just after
+    const writers = (...steps: Array<{ before?: string; after?: string }>) => {
+      const write = atomic.writeFileAtomic;
+      vi.spyOn(atomic, "writeFileAtomic").mockImplementation((target, ...args) => {
+        const step = target === path() ? steps.shift() : undefined;
+        if (step?.before) run(step.before);
+        write(target, ...args);
+        if (step?.after) run(step.after);
+      });
+    };
+    // off Windows a rename lands over a file another process still has open; a second name stands in for that writer
+    const offWindows = <T>(save: () => T): T => {
+      const own = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        return save();
+      } finally {
+        Object.defineProperty(process, "platform", { value: own });
+      }
+    };
+    afterEach(() => vi.restoreAllMocks());
+
+    it("keeps a note appended once the save lands, and parks the edit made in place before it", () => {
+      writeMemoryFile(BOT, "# Memory\n- Initial\n");
+      const initial = readMemoryFile(BOT);
+      writers({ before: 'fs.writeFileSync(p, "# Memory\\n- First hand edit\\n")', after: 'fs.appendFileSync(p, "- Second bot note\\n")' });
+      expect(saveMemoryFile(BOT, `${initial.text}- Page edit\n`, initial.revision)).toMatchObject({ conflict: false, text: "# Memory\n- Initial\n- Page edit\n- Second bot note\n" });
+      expect(parked()).toEqual(["# Memory\n- First hand edit\n"]);
+    });
+
+    it("parks a file another writer is partway through off Windows, never putting its first bytes back", () => {
+      writeMemoryFile(BOT, "# Memory\n- Initial\n");
+      const initial = readMemoryFile(BOT);
+      const held = `${path()}.held`;
+      linkSync(path(), held);
+      writers({ before: `fs.writeFileSync(${JSON.stringify(held)}, "# Memory\\n- A")` });
+      expect(offWindows(() => saveMemoryFile(BOT, `${initial.text}- Page edit\n`, initial.revision))).toMatchObject({ conflict: false, text: "# Memory\n- Initial\n- Page edit\n" });
+      appendFileSync(held, "nother hand edit\n");
+      rmSync(held);
+      expect(readMemoryFile(BOT).text).toBe("# Memory\n- Initial\n- Page edit\n");
+      expect(parked()).toEqual(["# Memory\n- Another hand edit\n"]);
+    });
+
+    it("parks a line another writer is partway through appending off Windows, never carrying a cut line", () => {
+      writeMemoryFile(BOT, "# Memory\n- Initial\n");
+      const initial = readMemoryFile(BOT);
+      const held = `${path()}.held`;
+      linkSync(path(), held);
+      writers({ before: `fs.appendFileSync(${JSON.stringify(held)}, "- Second bot no")` });
+      expect(offWindows(() => saveMemoryFile(BOT, `${initial.text}- Page edit\n`, initial.revision))).toMatchObject({ conflict: false, text: "# Memory\n- Initial\n- Page edit\n" });
+      appendFileSync(held, "te\n");
+      rmSync(held);
+      expect(parked()).toEqual(["# Memory\n- Initial\n- Second bot note\n"]);
+    });
+
+    it.skipIf(process.platform !== "win32")("puts back a file changed in place while the save lands, with a note appended to the save meanwhile", () => {
+      writeMemoryFile(BOT, "# Memory\n- Initial\n");
+      const initial = readMemoryFile(BOT);
+      writers({ before: 'fs.writeFileSync(p, "# Memory\\n- First hand edit\\n")' }, { before: 'fs.appendFileSync(p, "- Second bot note\\n")' });
+      expect(saveMemoryFile(BOT, `${initial.text}- Page edit\n`, initial.revision)).toMatchObject({ conflict: true, text: "# Memory\n- First hand edit\n- Second bot note\n" });
+      expect(parked()).toEqual([]);
+    });
   });
 
   it("accepts plain single-segment topic names and nothing else", () => {

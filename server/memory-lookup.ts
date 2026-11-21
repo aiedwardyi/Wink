@@ -1,7 +1,7 @@
 // Automatic recall: before a typed turn, up to 2 matching rows from the bot's
 // own memory and notes ride in the turn text. Off unless the bot is listed in
 // lookup-bots.json. The index is rebuilt after a reply settles, never at send.
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -43,13 +43,15 @@ const skipped = (word: string) => STOP.has(word) || CHAT.has(word);
 const SEPARATOR = /^\|[\s:|-]+\|?$/;
 const STRUCK = /^[-*\s|]*(?:\d+\s*\|\s*)?~~/;
 const DATED = /\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b|\b(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/g;
+const NOTED_AT = /\(noted (\d{4}-\d{2}-\d{2})\)$/;
+const MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
 const localDay = (at: number) => new Date(at).toLocaleDateString("sv-SE");
 const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 
 export type NoteFile = { source: string; tier: 0 | 1; text: string; mtime: number; firstLine?: number };
-type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; topic: string; title: string[]; text: string; tokens: string[] };
+type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; noted: string; topic: string; title: string[]; text: string; tokens: string[] };
 export type RecallHit = Piece & { score: number };
 type Terms = { list: string[]; groups: string[][] };
 
@@ -72,8 +74,7 @@ function clean(line: string): string {
   return redactSecretsInText(text);
 }
 
-function rowDate(text: string, mtime: number): string {
-  const modified = localDay(mtime);
+export function rowDate(text: string, modified: string): string {
   let newest = "";
   for (const match of text.matchAll(DATED)) {
     let date = match[1] ? `${match[1]}-${match[2]}-${match[3]}` : `${modified.slice(0, 4)}-${match[4]}-${match[5]}`;
@@ -81,6 +82,33 @@ function rowDate(text: string, mtime: number): string {
     if (date > newest) newest = date;
   }
   return newest || modified;
+}
+
+// a day that cannot be, like 2026-13-02, was typed by hand and stamps nothing
+export function notedDay(text: string): string {
+  const day = NOTED_AT.exec(text)?.[1] ?? "";
+  const [year, month, date] = [Number(day.slice(0, 4)), Number(day.slice(5, 7)), Number(day.slice(8))];
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  return date >= 1 && date <= (month === 2 && !leap ? 28 : (MONTH_DAYS[month - 1] ?? 0)) ? day : "";
+}
+
+// a note-taker row gives way to one noted later whatever day its words name, then a label keeps its newest-dated rows
+export function recalled(rows: Array<{ topic: string; noted: string; date: string }>): boolean[] {
+  const labels = new Map<string, { noted: string; date: string; unstamped: string }>();
+  const tops = rows.map((row) => {
+    let top = labels.get(row.topic);
+    if (!top) labels.set(row.topic, (top = { noted: "", date: "", unstamped: "" }));
+    if (!row.noted) top.unstamped = row.date > top.unstamped ? row.date : top.unstamped;
+    else if (row.noted > top.noted) {
+      top.noted = row.noted;
+      top.date = row.date;
+    } else if (row.noted === top.noted && row.date > top.date) top.date = row.date;
+    return top;
+  });
+  return rows.map((row, at) => {
+    const top = tops[at]!;
+    return (!row.noted || row.noted === top.noted) && row.date === (top.date > top.unstamped ? top.date : top.unstamped);
+  });
 }
 
 function firstCell(text: string): string {
@@ -110,6 +138,7 @@ function piecesOf(text: string): string[] {
 
 function piecesOfFile(file: NoteFile): Piece[][] {
   const rows: Piece[][] = [];
+  const modified = localDay(file.mtime);
   let heading: string[] = [];
   file.text.split(/\r?\n/).forEach((raw, at) => {
     const line = raw.trim();
@@ -131,7 +160,8 @@ function piecesOfFile(file: NoteFile): Piece[][] {
       ref: `${file.source}:${at + (file.firstLine ?? 1)}`,
       source: file.source,
       tier: file.tier,
-      date: rowDate(text, file.mtime),
+      date: rowDate(text, modified),
+      noted: notedDay(text),
       topic: label.length ? label.join(" ") : key,
       title: table ? cell : [...cell, ...heading],
     };
@@ -170,9 +200,17 @@ function hasNearPair(positions: number[][]): boolean {
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
   const parsed = files.flatMap(piecesOfFile);
-  const latest = new Map<string, string>();
-  for (const piece of parsed.flat()) if (piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
-  const rows = parsed.filter((row) => row.every((piece) => piece.date === latest.get(piece.topic)));
+  const shown = recalled(parsed.map((row) => row[0]!));
+  // a note said again is one row, the newest copy recall keeps and of equals the one search ranks first, so repeating it never makes its words common
+  const notes = parsed.map((row) => `${row[0]!.source}\0${row.map(({ text }) => text).join("\n").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)$/, "")}`);
+  const day = (row: Piece[]) => row[0]!.noted || row[0]!.date;
+  const size = (row: Piece[]) => row.reduce((sum, { tokens }) => sum + tokens.length, 0);
+  const newest = new Map<string, Piece[]>();
+  for (const [at, row] of parsed.entries()) {
+    const kept = newest.get(notes[at]!);
+    if (shown[at] && (!kept || day(row) > day(kept) || (day(row) === day(kept) && size(row) < size(kept)))) newest.set(notes[at]!, row);
+  }
+  const rows = parsed.filter((row, at) => newest.get(notes[at]!) === row);
   const pieces = rows.flat();
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, tokenize='porter unicode61')");
@@ -306,9 +344,14 @@ function pastTheCut(botId: string): { text: string; firstLine: number } | null {
 
 async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile[]> {
   const files: NoteFile[] = [];
+  const over: Source[] = [];
   let bytes = 0;
-  for (const { source, tier, path, mtime, size } of sources) {
-    if (bytes + size > MAX_CORPUS_BYTES) continue;
+  for (const entry of sources) {
+    const { source, tier, path, mtime, size } = entry;
+    if (bytes + size > MAX_CORPUS_BYTES) {
+      over.push(entry);
+      continue;
+    }
     bytes += size;
     if (tier === 0 && source === "MEMORY.md") {
       const past = pastTheCut(botId);
@@ -319,7 +362,27 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
     // a replaced pick is history, never a recall hit
     if (text !== null) files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
   }
+  // a file past the budget still gives its first lines, so one note appended to it never drops the whole topic
+  for (const { source, tier, path, mtime } of over) {
+    const room = MAX_CORPUS_BYTES - bytes;
+    if (source === "MEMORY.md" || room <= 0) continue;
+    const text = await readStart(path, room).catch(() => "");
+    if (!text) continue;
+    bytes += Buffer.byteLength(text);
+    files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
+  }
   return files;
+}
+
+/** The whole lines within the first `limit` bytes of a file. */
+async function readStart(path: string, limit: number): Promise<string> {
+  const file = await open(path, "r");
+  try {
+    const { buffer, bytesRead } = await file.read(Buffer.alloc(limit), 0, limit, 0);
+    return buffer.subarray(0, buffer.subarray(0, bytesRead).lastIndexOf(10) + 1).toString("utf8");
+  } finally {
+    await file.close();
+  }
 }
 
 export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
