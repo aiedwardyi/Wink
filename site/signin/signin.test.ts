@@ -854,6 +854,41 @@ describe("entering a PC's code", () => {
     expect(link().hidden).toBe(false);
   });
 
+  it.each([
+    ["/signin?code=ABCDEF", false],
+    ["/signin#code=ABCDEF", false],
+    ["/signin?code=ABCDEF", true],
+    ["/signin#code=ABCDEF", true],
+  ])("keeps the boxes behind the link while a remembered PC opens from a link that carries a code: %s, Navigation API %s", async (url, nav) => {
+    if (nav) stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open(url, [{ label: LABEL_B, name: "Zed" }]);
+    expect(boxesHidden()).toBe(true);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(boxesHidden()).toBe(true);
+    expect(link().hidden).toBe(false);
+  });
+
+  it.each(["/signin?code=ABCDEF", "/signin#code=ABCDEF"])("opens the boxes on a link that carries a code when the remembered PC is offline: %s", async (url) => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open(url, [{ label: LABEL_B, name: "Zed" }], undefined, "down");
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(shown()).toBe("|||||");
+  });
+
+  it("opens the boxes when a bookmark changes an open sign-in page to a code link", () => {
+    open("/signin", []);
+    expect(boxesHidden()).toBe(true);
+    history.replaceState(null, "", "/signin#code=ABCDEF");
+    window.dispatchEvent(new Event("hashchange"));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(boxes()).toHaveLength(6);
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
+  });
+
   it("opens the boxes when the remembered PC is offline where the page cannot hear a stopped open", async () => {
     localStorage.setItem(LAST_PC, LABEL_B);
     open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "down");

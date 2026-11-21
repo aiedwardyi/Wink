@@ -527,6 +527,11 @@
     });
   }
 
+  // A link that carries a code was opened to type one, also when a bookmark only changes this page's hash.
+  const codeLink = () => {
+    if (new URLSearchParams(location.search).has("code") || new URLSearchParams(location.hash.slice(1)).has("code")) showBoxes(false);
+  };
+
   async function coldStart(pick) {
     const last = remembered();
     const saved = LABEL_RE.test(last);
@@ -543,6 +548,7 @@
       return;
     }
     uncover();
+    codeLink();
     // From a PC the account is usually known to Google, so try its quiet sign-in before drawing the button.
     if (pick) $("title").textContent = "Choose a PC";
     const token = await requestToken(randomNonce(), pick);
@@ -611,8 +617,7 @@
     const m = params.get("m");
     if (pc === null && m === null) {
       showCode();
-      // A link that carries a code was opened to type one.
-      if (params.has("code") || new URLSearchParams(location.hash.slice(1)).has("code")) showBoxes(false);
+      addEventListener("hashchange", codeLink);
       void coldStart(params.get("pick") === "1").catch(() => {
         say(GOOGLE_DOWN, "error");
         showBoxes(true);
