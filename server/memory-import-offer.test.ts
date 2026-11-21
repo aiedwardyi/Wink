@@ -111,6 +111,25 @@ describe("import_memory saves through the Settings path", () => {
     expect(result.text).not.toContain("I play cello.");
     expect(importMemoryTurn([...chat, answer], 0, "t1")).toEqual({ offer: false, tool: false });
   });
+  it("ends every other chat's pending tool once one chat imports", async () => {
+    const chat = [typed("hi"), reply("offer")];
+    noteImportOffer("t1");
+    noteImportOffer("t2");
+    const res = { writeHead: () => {}, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
+    await aboutYouRoutes.add(Readable.from([JSON.stringify({ text: "- I play cello.\nSource: ChatGPT" })]) as IncomingMessage, res);
+    expect(importMemoryTurn([...chat, typed("later")], 0, "t2")).toEqual({ offer: false, tool: true });
+    expect((await call({}, [...chat, typed(paste)])).text).toContain("Added 2 new.");
+    expect(importMemoryTurn([...chat, typed("- I collect maps.\nSource: ChatGPT")], 0, "t2")).toEqual({ offer: false, tool: false });
+  });
+
+  it("a file where the pending folder goes never fails a turn or an import", async () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "pending"), "storage collision");
+    expect(importMemoryTurn([typed("Hello there")], 0, "t1")).toEqual({ offer: true, tool: true });
+    expect(() => noteImportOffer("t1")).not.toThrow();
+    expect((await call({}, [typed("Hello there"), reply("offer"), typed(paste)])).text).toContain("Added 2 new.");
+  });
+
   it("lists only newly saved facts for a partial import", async () => {
     await call({}, [typed("- Already saved.\nSource: ChatGPT")]);
     const text = (await call({}, [typed("- Already saved.\n- My password is hunter2-very-secret\n- Likes tea.\n- Plays tennis.\nSource: ChatGPT")])).text;

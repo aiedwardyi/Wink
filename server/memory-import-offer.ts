@@ -19,12 +19,17 @@ const TOOL_TURNS = 3;
 const NONE = { offer: false, tool: false } as const;
 // beside Import Memory, so the decline travels wherever that folder does
 const declinedFile = () => join(DATA_DIR, "about-you", "declined");
-const pendingFile = (threadId: string) => join(DATA_DIR, "about-you", "pending", createHash("sha256").update(threadId).digest("hex"));
+const pendingDir = () => join(DATA_DIR, "about-you", "pending");
+const pendingFile = (threadId: string) => join(pendingDir(), createHash("sha256").update(threadId).digest("hex"));
 
+// best effort: without the marker a Settings save before the paste only ends the tool early
 export function noteImportOffer(threadId: string): void {
-  const file = pendingFile(threadId);
-  mkdirSync(join(DATA_DIR, "about-you", "pending"), { recursive: true, mode: 0o700 });
-  writeFileAtomic(file, "", { mode: 0o600 });
+  try {
+    mkdirSync(pendingDir(), { recursive: true, mode: 0o700 });
+    writeFileAtomic(pendingFile(threadId), "", { mode: 0o600 });
+  } catch (error) {
+    console.warn(`[import-memory] pending note failed (${error instanceof Error ? error.name : "error"})`);
+  }
 }
 
 let locale: "en" | "ko" = "en";
@@ -113,7 +118,14 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
   }
   const accepted: string[] = [];
   const result = addToAboutYou(pastedAnswer(deps.messages(source.threadId)), day((deps.now ?? Date.now)()), accepted);
-  if (!("error" in result) && aboutYouFacts()) rmSync(pendingFile(source.threadId), { force: true });
+  // one finished import ends every chat's pending offer
+  if (!("error" in result) && aboutYouFacts()) {
+    try {
+      rmSync(pendingDir(), { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`[import-memory] pending clear failed (${error instanceof Error ? error.name : "error"})`);
+    }
+  }
   const note = !("error" in result) ? aboutYouNote(result, t)
     : result.error === "too-large" ? t("aboutYou.tooLarge")
     : result.error === "empty" ? t("aboutYou.noFacts")
