@@ -1,9 +1,37 @@
 import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { removeTempDir } from "./cleanup.ts";
 import { harnessFetch, spawnHarness } from "./harness-auth.ts";
+import { createFixtureHome } from "./test-home.ts";
+
+it("opens both profiles in an explicitly allocated Vitest child home", async () => {
+  const home = createFixtureHome("omb-harness-profile-");
+  const dataDir = join(home, "server-data");
+  const companionDir = join(home, ".openmausbot-companion");
+  try {
+    const child = spawnHarness(process.execPath, ["--input-type=module", "-e", `
+      import { DATA_DIR as server } from "./server/config.ts";
+      import { DATA_DIR as companion } from "./companion/src/state.ts";
+      console.log(JSON.stringify([server, companion]));
+    `], {
+      env: { ...process.env, HOME: home, USERPROFILE: home, OMB_DATA_DIR: dataDir, OMB_COMPANION_DIR: companionDir },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk; });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk; });
+    const [status] = await once(child, "close");
+    expect(status, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual([dataDir, companionDir]);
+  } finally {
+    await removeTempDir(home);
+  }
+});
 
 const servers: Server[] = [];
 const children: ChildProcess[] = [];

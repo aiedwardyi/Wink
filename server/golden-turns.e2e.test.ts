@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { testHome } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -122,7 +123,7 @@ windowsOnly.each(WORLDS)("golden turns with %s", (world) => {
   const mark = (name: string) => writeFileSync(log, `${JSON.stringify({ kind: "fixture", name })}\n`, { flag: "a" });
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-golden-"));
+    home = mkdtempSync(join(testHome(), "omb-golden-"));
     mkdirSync(join(home, ".orbit"), { recursive: true });
     log = join(home, "golden.ndjson");
     gate = join(home, "task.gate");

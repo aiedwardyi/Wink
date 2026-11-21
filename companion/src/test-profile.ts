@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -6,8 +6,7 @@ function isChildPath(path: string): boolean {
   return !!path && !isAbsolute(path) && path.split(sep)[0] !== "..";
 }
 
-function canonicalTestHome(home: string): string | undefined {
-  const temp = tmpdir();
+function canonicalTestHome(home: string, temp = tmpdir()): string | undefined {
   if (home !== resolve(home)) return;
   try {
     const canonicalTemp = realpathSync.native(temp);
@@ -28,25 +27,31 @@ function markerMatches(home: string, nonce: string): boolean {
     readFileSync(marker, "utf8") === `${nonce}\n${home}\n`;
 }
 
-export function markTestHome(home: string, nonce: string): void {
-  const canonical = canonicalTestHome(home);
+export function allocateTestHome(prefix: string, nonce: string, temp = tmpdir()): string {
+  const home = mkdtempSync(join(realpathSync.native(temp), prefix));
+  const canonical = canonicalTestHome(home, temp);
   if (!canonical) throw new Error("Vitest home must be a directory under the OS temp directory");
-  if (!markerMatches(canonical, nonce)) {
-    writeFileSync(join(canonical, ".wink-vitest-home"), `${nonce}\n${canonical}\n`, { flag: "wx", mode: 0o600 });
-  }
+  writeFileSync(join(canonical, ".wink-vitest-home"), `${nonce}\n${canonical}\n`, { flag: "wx", mode: 0o600 });
+  return canonical;
+}
+
+export function isMarkedTestHome(home: string, nonce: string): boolean {
+  const canonical = canonicalTestHome(home);
+  return !!canonical && markerMatches(canonical, nonce);
 }
 
 export function requireTestHome(importer = "tests"): string {
   const { WINK_VITEST_HOME: home, WINK_VITEST_HOME_NONCE: nonce } = process.env;
-  const canonical = home && home === homedir() && canonicalTestHome(home);
-  if (home && canonical && nonce && markerMatches(canonical, nonce)) return home;
+  if (home && home === homedir() && nonce && isMarkedTestHome(home, nonce)) return home;
   throw new Error(`load server/testing/setup.ts (vite.config.ts setupFiles) before importing ${importer}`);
 }
 
 export function isTestProfilePath(dataDir: string, root: string): boolean {
   if (dataDir !== resolve(dataDir)) return false;
+  const path = relative(root, dataDir);
+  if (!isChildPath(path)) return false;
   let existing = dataDir;
   while (dirname(existing) !== existing && !lstatSync(existing, { throwIfNoEntry: false })) existing = dirname(existing);
   const target = resolve(realpathSync.native(existing), relative(existing, dataDir));
-  return isChildPath(relative(realpathSync.native(root), target));
+  return !relative(join(realpathSync.native(root), path), target);
 }

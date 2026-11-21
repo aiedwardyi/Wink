@@ -3,15 +3,15 @@
 // reads HOME (POSIX) / USERPROFILE (Windows) at call time, and this file
 // runs before any test module imports server/config.ts.
 import { randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
-import { markTestHome } from "../../companion/src/test-profile.ts";
+import { allocateTestHome } from "../../companion/src/test-profile.ts";
 import { removeTempDir } from "./cleanup.ts";
 
-const home = mkdtempSync(join(tmpdir(), "omb-test-home-"));
+const nonce = randomBytes(32).toString("hex");
+const home = allocateTestHome("omb-test-home-", nonce);
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 // Worker threads on Windows keep the real profile in homedir(); refuse to run against it.
@@ -30,8 +30,6 @@ for (const name of ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME"
 // wholesale, and "it is safe because of a line in another file" is not the
 // footing that delete should stand on.
 process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
-const nonce = randomBytes(32).toString("hex");
-markTestHome(home, nonce);
 process.env.WINK_VITEST_HOME = home;
 process.env.WINK_VITEST_HOME_NONCE = nonce;
 

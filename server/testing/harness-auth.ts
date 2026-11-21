@@ -1,10 +1,8 @@
 import { spawn, type SpawnOptions } from "node:child_process";
-import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname } from "node:path";
 import { z } from "zod";
 
-import { markTestHome, requireTestHome } from "../../companion/src/test-profile.ts";
+import { isMarkedTestHome, requireTestHome } from "../../companion/src/test-profile.ts";
 
 const tokens = new Map<string, Promise<string>>();
 const stderrTails = new Map<string, string[]>();
@@ -16,13 +14,12 @@ export async function harnessToken(origin: string): Promise<string> {
 
 export function spawnHarness(command: string, args: string[], options: SpawnOptions) {
   let env = options.env;
-  if (env?.VITEST !== undefined && env.HOME && env.USERPROFILE === env.HOME) {
+  if (env?.VITEST !== undefined) {
     const home = env.HOME;
-    const setupHome = requireTestHome("server/testing/harness-auth.ts");
+    requireTestHome("server/testing/harness-auth.ts");
     const nonce = process.env.WINK_VITEST_HOME_NONCE!;
-    if (home !== setupHome && dirname(home) === dirname(setupHome) &&
-        dirname(realpathSync.native(home)) === realpathSync.native(dirname(setupHome))) {
-      markTestHome(home, nonce);
+    if (!home || env.USERPROFILE !== home || !isMarkedTestHome(home, nonce)) {
+      throw new Error("Use createFixtureHome from server/testing/test-home.ts for a Vitest child HOME and USERPROFILE");
     }
     const temp = tmpdir();
     env = { ...env, WINK_VITEST_HOME: home, WINK_VITEST_HOME_NONCE: nonce, TEMP: temp, TMP: temp, TMPDIR: temp };

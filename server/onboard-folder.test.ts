@@ -15,6 +15,7 @@ import { validateBotCwd } from "./bot-cwd.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -72,7 +73,7 @@ const api = async (method: "GET" | "POST", path: string, body?: BotsRequestBody)
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
-  home = mkdtempSync(join(tmpdir(), "omb-onboard-folder-http-"));
+  home = createFixtureHome("omb-onboard-folder-http-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
     join(home, ".orbit", "config.json"),

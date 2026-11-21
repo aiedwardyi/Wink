@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
@@ -11,13 +10,14 @@ import { DATA_DIR } from "./config.ts";
 import { closeMessageDb, messageDatabase } from "./message-db.ts";
 import type { Message } from "./store.ts";
 import type { MigrationArgs } from "./testing/thread-sync-v2-migration-pc.ts";
+import { testHome } from "./testing/test-home.ts";
 import { createSyncEngine } from "./thread-sync-v2-engine.ts";
 import { createThreadMigration, type MigrationCrash, type MigrationProgress } from "./thread-sync-v2-migration.ts";
 import type { SyncApplyResult, SyncFlushResult, SyncState, SyncVersion } from "./thread-sync-v2.ts";
 
 const roots: string[] = [];
 const clients: Array<{ close(): Promise<void> }> = [];
-const temp = () => { const dir = mkdtempSync(join(tmpdir(), "sync-v2-migration-")); roots.push(dir); return dir; };
+const temp = () => { const dir = mkdtempSync(join(testHome(), "sync-v2-migration-")); roots.push(dir); return dir; };
 const row = (id: string, text = id): Message => ({ id, text, role: "user", kind: "text", at: 1, parentId: null });
 interface Snapshot { rows: Message[]; snapshot: Message[]; variants: SyncVersion[]; state: SyncState; progress: MigrationProgress }
 type Reply = Snapshot | MigrationProgress | SyncFlushResult | SyncApplyResult | undefined;

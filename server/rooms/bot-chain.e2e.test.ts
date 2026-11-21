@@ -1,11 +1,11 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 import { spawnHarness as spawn, harnessFetch as fetch } from "../testing/harness-auth.ts";
+import { testHome } from "../testing/test-home.ts";
 
 const ROOMS_DIR = dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = join(ROOMS_DIR, "..");
@@ -47,7 +47,7 @@ const roomEntries = (roomId: string) => {
 };
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-bot-chain-"));
+  home = mkdtempSync(join(testHome(), "omb-bot-chain-"));
   mkdirSync(join(home, ".orbit"), { recursive: true });
   const fixture = join(home, "handoff.json");
   writeFileSync(fixture, JSON.stringify([

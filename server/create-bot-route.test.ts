@@ -1,6 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,6 +9,7 @@ import { agentsHeaders } from "./testing/agents-caller.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 import { freePortBlock } from "./testing/ports.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -62,7 +62,7 @@ const createBot = async (name: string, extra: Record<string, unknown> = {}) => {
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
-  home = mkdtempSync(join(tmpdir(), "omb-create-bot-route-"));
+  home = createFixtureHome("omb-create-bot-route-");
   fakeClaudeDump = join(home, "fake-claude-dump.json");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(

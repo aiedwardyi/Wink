@@ -4,7 +4,7 @@
 import { readFileSync, mkdirSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { isTestProfilePath, requireTestHome } from "../companion/src/test-profile.ts";
@@ -305,8 +305,8 @@ export function showToolCallsEnabled(cfg: AppConfig): boolean {
 if (process.env.VITEST !== undefined) {
   const home = requireTestHome("server/config.ts");
   const dataDir = process.env.OMB_DATA_DIR ?? join(home, ".orbit");
-  if (!isTestProfilePath(dataDir, dirname(home))) {
-    throw new Error("OMB_DATA_DIR must point to a scratch directory under Vitest");
+  if (!isTestProfilePath(dataDir, home)) {
+    throw new Error("OMB_DATA_DIR must point inside the verified Vitest home (use setup.ts or createFixtureHome)");
   }
 }
 

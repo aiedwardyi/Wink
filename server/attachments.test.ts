@@ -3,13 +3,14 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { testHome } from "./testing/test-home.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -23,7 +24,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 // The module reads DATA_DIR at import time, so the env var must be set
 // before the import is evaluated.
-const DATA_ROOT = mkdtempSync(join(tmpdir(), "omb-attachments-"));
+const DATA_ROOT = mkdtempSync(join(testHome(), "omb-attachments-"));
 process.env.OMB_DATA_DIR = join(DATA_ROOT, "data");
 
 const { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, extensionForMime, importLocalImage, readAttachment, receiveAttachment, saveImage, sharableLocalFile, sniffImageMime } = await import("./attachments.ts");

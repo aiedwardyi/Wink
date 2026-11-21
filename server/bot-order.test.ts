@@ -1,8 +1,7 @@
 // The sidebar order is the bots.json array. PUT /api/bots/order replaces it
 // whole, so a stale or partial list is refused rather than merged.
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -12,6 +11,7 @@ import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 import { openSse } from "./testing/sse.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -71,7 +71,7 @@ async function start() {
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
-  home = mkdtempSync(join(tmpdir(), "omb-bot-order-"));
+  home = createFixtureHome("omb-bot-order-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
     join(home, ".orbit", "config.json"),

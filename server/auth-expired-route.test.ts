@@ -1,6 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -9,6 +8,7 @@ import { z } from "zod";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 import { freePortBlock } from "./testing/ports.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -40,7 +40,7 @@ const messages = async (threadId: string) => z.object({ messages: z.array(messag
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
-  home = mkdtempSync(join(tmpdir(), "omb-auth-expired-route-"));
+  home = createFixtureHome("omb-auth-expired-route-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
     join(home, ".orbit", "config.json"),

@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { testHome } from "./testing/test-home.ts";
 
 let dir: string;
 let closeDb = () => {};
@@ -22,7 +23,7 @@ function savedQueue() {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "orbit-send-restart-"));
+  dir = mkdtempSync(join(testHome(), "orbit-send-restart-"));
   vi.stubEnv("OMB_DATA_DIR", dir);
 });
 

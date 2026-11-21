@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { testHome } from "./testing/test-home.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
 
 // deleteBotFully and removeSyncedBots are private to index.ts, which these
@@ -17,7 +19,7 @@ const fn = (name: string) => {
 let home: string;
 
 async function freshStore() {
-  home = mkdtempSync(join(tmpdir(), "omb-delete-bot-rooms-"));
+  home = mkdtempSync(join(testHome(), "omb-delete-bot-rooms-"));
   vi.resetModules();
   vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, roomResponders } = await import("./store.ts");

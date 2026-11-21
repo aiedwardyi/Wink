@@ -5,14 +5,15 @@
 // between tasks, a "fresh" task would silently resume the previous
 // conversation, which is the exact thing tasks exist to prevent.
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { testHome } from "./testing/test-home.ts";
 
 let home: string;
 
 async function freshStore() {
-  home = mkdtempSync(join(tmpdir(), "omb-tasks-"));
+  home = mkdtempSync(join(testHome(), "omb-tasks-"));
   vi.resetModules();
   vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, UNTITLED_TASK, titleFromMessage } = await import("./store.ts");

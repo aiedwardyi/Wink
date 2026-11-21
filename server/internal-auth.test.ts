@@ -1,6 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,6 +9,7 @@ import { agentsHeaders } from "./testing/agents-caller.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { harnessFetch, harnessToken, spawnHarness as spawn } from "./testing/harness-auth.ts";
 import { freePortBlock } from "./testing/ports.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -36,7 +36,7 @@ const api = async (method: "GET" | "POST" | "PATCH", path: string, body?: object
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
-  home = mkdtempSync(join(tmpdir(), "omb-internal-auth-"));
+  home = createFixtureHome("omb-internal-auth-");
   fakeClaudeDump = join(home, "fake-claude-dump.json");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(

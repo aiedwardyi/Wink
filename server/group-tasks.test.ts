@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { testHome } from "./testing/test-home.ts";
 
 let home: string;
 
 async function freshStore() {
-  home = mkdtempSync(join(tmpdir(), "omb-group-tasks-"));
+  home = mkdtempSync(join(testHome(), "omb-group-tasks-"));
   vi.resetModules();
   vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, UNTITLED_TASK } = await import("./store.ts");

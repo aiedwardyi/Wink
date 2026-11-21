@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
-import { markTestHome } from "../companion/src/test-profile.ts";
+import { allocateTestHome } from "../companion/src/test-profile.ts";
 import { scrubbedEnv } from "../server/config.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -61,10 +61,61 @@ it("protects both profiles when Vitest skips setupFiles", () => {
 }, 30_000);
 
 function importProfile(module, env) {
+  return runProbe(`console.log((await import(${JSON.stringify(`./${module}`)})).DATA_DIR)`, env);
+}
+
+function runProbe(source, env) {
   return spawnSync(process.execPath, ["--input-type=module", "-e",
-    `console.log((await import(${JSON.stringify(`./${module}`)})).DATA_DIR)`,
+    source,
   ], { cwd: root, env, encoding: "utf8", windowsHide: true });
 }
+
+it.each([
+  ["server/config.ts", "OMB_DATA_DIR"],
+  ["companion/src/state.ts", "OMB_COMPANION_DIR"],
+])("rejects an unowned sibling override in %s", (module, key) => {
+  const temp = mkdtempSync(join(realpathSync.native(tmpdir()), "profile-parent-"));
+  const home = allocateTestHome("owned-", process.env.WINK_VITEST_HOME_NONCE, temp);
+  const sibling = mkdtempSync(join(temp, "unowned-"));
+  try {
+    const env = { ...scratchEnv(home, temp), WINK_VITEST_HOME: home };
+    const sentinel = join(sibling, "sentinel");
+    writeFileSync(sentinel, "sentinel");
+    const link = join(home, key === "OMB_DATA_DIR" ? ".orbit" : ".openmausbot-companion");
+    symlinkSync(sibling, link, process.platform === "win32" ? "junction" : "dir");
+    const overrides = [sibling, link, ".", ...(process.platform === "win32" ? [sibling.toUpperCase()] : [])];
+    for (const dir of overrides) {
+      const result = importProfile(module, { ...env, [key]: dir });
+      expect(readFileSync(sentinel, "utf8")).toBe("sentinel");
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr).toContain(`${key} must point`);
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+it("refuses to mark an unowned sibling when launching a child", () => {
+  const temp = mkdtempSync(join(realpathSync.native(tmpdir()), "harness-parent-"));
+  const home = allocateTestHome("owned-", process.env.WINK_VITEST_HOME_NONCE, temp);
+  const sibling = mkdtempSync(join(temp, "unowned-"));
+  try {
+    const env = { ...scratchEnv(home, temp), WINK_VITEST_HOME: home };
+    const sentinel = join(sibling, "sentinel");
+    writeFileSync(sentinel, "sentinel");
+    const result = runProbe(`
+      import { spawnHarness } from "./server/testing/harness-auth.ts";
+      const home = ${JSON.stringify(sibling)};
+      spawnHarness("", [], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+    `, env);
+    expect(readFileSync(sentinel, "utf8")).toBe("sentinel");
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(existsSync(join(sibling, ".wink-vitest-home")), result.stderr).toBe(false);
+    expect(result.stderr).toContain("createFixtureHome");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 it("rejects a caller-supplied Vitest home without its setup marker", () => {
   const temp = realpathSync.native(tmpdir());
@@ -86,10 +137,10 @@ it("rejects a junction above an otherwise marked companion home", () => {
   const scratch = mkdtempSync(join(temp, "linked-profile-"));
   try {
     const outside = join(scratch, "outside");
-    const home = join(outside, "home");
+    mkdirSync(outside);
+    const home = allocateTestHome("home-", process.env.WINK_VITEST_HOME_NONCE, outside);
     const tempAlias = join(scratch, "os-temp");
     const env = { ...scratchEnv(home, tempAlias), WINK_VITEST_HOME: home };
-    markTestHome(home, env.WINK_VITEST_HOME_NONCE);
     const deviceFile = join(env.OMB_COMPANION_DIR, "sentinel");
     mkdirSync(dirname(deviceFile));
     writeFileSync(deviceFile, "sentinel");
@@ -104,7 +155,7 @@ it("rejects a junction above an otherwise marked companion home", () => {
     const link = join(childTemp, "redirect");
     mkdirSync(childTemp);
     symlinkSync(outside, link, linkType);
-    const linkedHome = join(link, "home");
+    const linkedHome = join(link, relative(outside, home));
     const linked = importProfile(module, { ...scratchEnv(linkedHome, childTemp), WINK_VITEST_HOME: linkedHome });
     expect(linked.status, linked.stdout + linked.stderr).toBe(1);
     expect(linked.stderr).toContain(`${setupHint} ${module}`);

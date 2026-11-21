@@ -1,5 +1,4 @@
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +9,7 @@ import { GOOGLE_REPUBLISHED_FILE, createGoogleSync, type GoogleSync } from "./go
 import { loadOrCreateSyncWorkspace, loadProfileSyncSettings, readSyncOperations, saveProfileSyncSettings, syncedInFolder } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
 import type { BotSpec, ReportBot, TestArgs, TestResult } from "./testing/google-sync-pc.ts";
+import { testHome } from "./testing/test-home.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -134,7 +134,7 @@ async function rounds(n: number): Promise<void> {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "orbit-google-republish-"));
+  root = mkdtempSync(join(testHome(), "orbit-google-republish-"));
   drive = new FakeDrive();
   drive.pageSize = 1000;
   pcs = [];

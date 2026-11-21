@@ -1,8 +1,7 @@
 // New bots persist the next Wink icon. Existing colour-mapped profiles
 // are a different path and stay peach/teal/lavender/coral.
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -12,6 +11,7 @@ import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 import { agentsHeaders } from "./testing/agents-caller.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -49,7 +49,7 @@ const listedBot = async (id: string) => {
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
-  home = mkdtempSync(join(tmpdir(), "omb-new-bot-mascot-"));
+  home = createFixtureHome("omb-new-bot-mascot-");
   fakeClaudeDump = join(home, "fake-claude-dump.json");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
