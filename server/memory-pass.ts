@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
-import { rankDate } from "./memory-lookup.ts";
+import { notedDay, recalled, rowDate } from "./memory-lookup.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
@@ -265,10 +265,10 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
-function liveRows(text: string, modified: string): { rows: string[]; dates: string[]; ranks: string[]; close: string } {
+function liveRows(text: string, modified: string): { rows: string[]; dates: string[]; days: Array<{ noted: string; date: string }>; close: string } {
   const rows: string[] = [];
   const dates: string[] = [];
-  const ranks: string[] = [];
+  const days: Array<{ noted: string; date: string }> = [];
   let block: { close: string; end: RegExp } | undefined;
   for (const row of text.split("\n")) {
     if (block) {
@@ -293,9 +293,9 @@ function liveRows(text: string, modified: string): { rows: string[]; dates: stri
     const noted = NOTED.exec(row);
     rows.push(noted?.[1] ?? bullet.trim());
     dates.push(noted?.[2] ?? "");
-    ranks.push(rankDate(bullet.trim(), modified));
+    days.push({ noted: notedDay(bullet.trim()), date: rowDate(bullet.trim(), modified) });
   }
-  return { rows, dates, ranks, close: block ? `${block.close}\n` : "" };
+  return { rows, dates, days, close: block ? `${block.close}\n` : "" };
 }
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
@@ -826,19 +826,17 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
         const modified = current ? day(statSync(path).mtimeMs) : stamp;
-        const { rows, dates, ranks, close } = liveRows(current, modified);
+        const { rows, dates, days, close } = liveRows(current, modified);
         // a row in its words noted before its day is an older copy when every row below is older too, or, if it went under an older copy, a row below falls between the two days, so a hand-edited date alone never hides it
         const older = (index: number, date: string, copy?: number) => {
           const noted = dates[index]!;
           const below = dates.slice(index + 1).filter(Boolean);
           return Boolean(noted) && noted < date && (below.every((day) => day < date) || (copy !== 0 && below.some((day) => day > noted && day < date)));
         };
-        // recall keeps a label's newest-dated rows, so a row it hides is there only when a copy as new as its write was outdated by a later row
+        // a row recall hides is there only when a copy as new as its write was outdated by a later row
         const label = (row: string) => (/^([^:]{2,60}):\s/.exec(row)?.[1] ?? row).toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
-        const shown = ({ line, date }: Landed) => {
-          const own = rows.reduce((max, row, index) => (row === line && ranks[index]! > max ? ranks[index]! : max), "");
-          return own >= date || rows.every((row, index) => ranks[index]! <= own || label(row) !== label(line));
-        };
+        const kept = new Set(recalled(rows.map((row, index) => ({ ...days[index]!, topic: label(row) ?? row, index }))).map(({ index }) => index));
+        const shown = ({ line, date }: Landed) => rows.some((row, index) => row === line && ((days[index]!.noted || days[index]!.date) >= date || kept.has(index)));
         const stays = (landed: Landed) => shown(landed) && rows.some((row, index) => row === landed.line && !older(index, landed.date, landed.copy));
         wrote = wrote.filter(stays);
         seen = seen.filter(stays);

@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { DATA_DIR } from "./config.ts";
-import { buildRecallIndex, createMemoryLookup, RECALL_HEADER, type MemoryLookup, type MemoryLookupDeps } from "./memory-lookup.ts";
+import { buildRecallIndex, createMemoryLookup, RECALL_HEADER, type MemoryLookup, type MemoryLookupDeps, type NoteFile } from "./memory-lookup.ts";
+import { userTyping } from "./memory-pass.ts";
 import { parseJson } from "./schema.ts";
+import { buildRecallIndex as baseIndex } from "./testing/recall-index-83f790c87.ts";
 import { ensureWorkspace, workspaceDir, writeMemoryFile } from "./workspace.ts";
 
 const FILLER = Array.from({ length: 120 }, (_, n) => `- Filler kettle${n} harbor${n} lantern${n} note`).join("\n");
@@ -59,6 +61,34 @@ async function lookupFor(notes: string | undefined, options: Partial<MemoryLooku
 }
 
 const ask = (lookup: MemoryLookup, botId: string, text: string, cursor?: string, threadId = "t1") => lookup.take(botId, threadId, cursor, text);
+
+// a new chat's recall over side files written on October days
+async function fresh(files: Record<string, readonly [string, number]>, query: string) {
+  const botId = `bot-${randomUUID()}`;
+  for (const [name, [text, day]] of Object.entries(files)) {
+    sideFile(botId, name, text);
+    const at = new Date(2026, 9, day, 12);
+    utimesSync(join(workspaceDir(botId), "memory", name), at, at);
+  }
+  const { lookup } = await lookupFor(undefined, { botId });
+  return ask(lookup, botId, query).join("\n");
+}
+
+// the rows a fresh chat's lookup shows from an index, so 83f790c87 and this index answer through the same pick
+function answer<T extends { list: string[] }, H extends { topic: string; tier: number; text: string }>(index: { terms(text: string): T; hits(terms: T): H[]; gate(terms: T, hits: H[]): H[] }, query: string) {
+  const terms = index.terms(userTyping(query));
+  if (!terms.list.length) return [];
+  const first = new Map<string, H>();
+  for (const hit of index.gate(terms, index.hits(terms))) if (!first.has(hit.topic)) first.set(hit.topic, hit);
+  const picked: H[] = [];
+  let chars = 0;
+  for (const hit of [...first.values()].sort((a, b) => a.tier - b.tier)) {
+    if (picked.length === 2 || chars + hit.text.length > 1_400) break;
+    picked.push(hit);
+    chars += hit.text.length;
+  }
+  return picked;
+}
 
 describe("retrieval replay", () => {
   const forms: Array<[string, RegExp]> = [
@@ -208,12 +238,140 @@ describe("corpus", () => {
   });
 
   it("ranks a note-taker row by the day it was noted, never a later day its words name", async () => {
-    const text = "- Dentist: Dr. Smith on Main Street\n- Dentist: Dr. Lee on Harbor Road, cleaning 2026-11-20 (noted 2026-10-10)\n";
+    const text = "- Dentist: Dr. Smith on Main Street (noted 2026-10-15)\n- Dentist: Dr. Lee on Harbor Road, cleaning 2026-11-20 (noted 2026-10-10)\n";
     const index = await buildRecallIndex([{ source: "memory/health.md", tier: 0, text, mtime: new Date(2026, 9, 15, 12).getTime() }]);
     const found = (query: string) => index.hits(index.terms(query)).map((hit) => hit.text).join("\n");
     expect(found("dentist main street")).toContain("Dr. Smith");
     expect(found("dentist harbor road")).not.toContain("Dr. Lee");
     index.close();
+  });
+
+  it("lets an unstamped row give way to a note-taker row naming a later day, as 83f790c87 does, since the file's day dates any edit", async () => {
+    const text = "- Dentist: Dr. Smith on Main Street\n- Dentist: Dr. Lee on Harbor Road, cleaning 2026-11-20 (noted 2026-10-10)\n";
+    const index = await buildRecallIndex([{ source: "memory/health.md", tier: 0, text, mtime: new Date(2026, 9, 15, 12).getTime() }]);
+    expect(index.hits(index.terms("dentist harbor road")).map((hit) => hit.text).join("\n")).toContain("Dr. Lee");
+    index.close();
+  });
+
+  it("keeps a stamped return ticket beside an unstamped outbound one in any order", async () => {
+    const outbound = "- Ferry ticket: outbound from Silver Pier on 2026-11-20";
+    const inbound = "- Ferry ticket: return from Amber Quay on 2026-11-20 (noted 2026-10-15)";
+    for (const rows of [[outbound, inbound], [inbound, outbound], [outbound, inbound, outbound]]) {
+      const found = (query: string) => fresh({ "connections.md": [`# Tickets\n${rows.join("\n")}\n`, 15] }, query);
+      expect(await found("amber quay"), rows.join(" | ")).toContain("return from Amber Quay");
+      expect(await found("silver pier"), rows.join(" | ")).toContain("outbound from Silver Pier");
+    }
+  });
+
+  it("treats an impossible stamp as no stamp, so it never hides a newer value", async () => {
+    const files = { "connections.md": ["# Stations\n- Station assignment: Silver Pier from 2026-10-01 (noted 2026-13-02)\n- Station assignment: Amber Quay (noted 2026-10-15)\n", 16] as const };
+    expect(await fresh(files, "amber quay")).toContain("Amber Quay");
+    expect(await fresh(files, "station assignment")).toContain("Amber Quay");
+  });
+
+  it("never lets an edit elsewhere in the file make an unstamped row hide a saved value", async () => {
+    const old = "- Ferry booking: provisional Silver Pier";
+    const saved = "- Ferry booking: confirmed Amber Quay for 2026-11-20 (noted 2026-10-15)";
+    const raincoat = "- Packs a raincoat\n";
+    const edited: Array<Record<string, readonly [string, number]>> = [
+      { "travel.md": [`# Travel\n${old}\n${saved}\n${raincoat}`, 16] },
+      { "travel.md": [`# Travel\n${saved}\n${old}\n${raincoat}`, 16] },
+      { "travel.md": [`# Travel\n${old}\n${saved}\n${old}\n${raincoat}`, 16] },
+      { "travel.md": [`# Travel\n${old}\n${raincoat}`, 16], "booking.md": [`# Confirmations\n${saved}\n`, 15] },
+    ];
+    for (const files of edited) expect(await fresh(files, "amber quay"), Object.keys(files).join(" ")).toContain("Amber Quay");
+  });
+
+  it("answers a label replayed on its day as 83f790c87 does, from the first of its copies", async () => {
+    const filler = Array.from({ length: 128 }, (_, n) => `- Supply ${n} crate${n} tent${n}`).join("\n");
+    const acme = "- Research station: Cobalt Acme (noted 2026-10-15)";
+    const globex = "- Research station: Indigo Globex (noted 2026-10-15)";
+    expect(await fresh({ "connections.md": [`# Notes\n${filler}\n${globex}\n${acme}\n${globex}\n`, 15] }, "research station")).toContain("Indigo Globex");
+    expect(await fresh({ "connections.md": [`# Notes\n${filler}\n${acme}\n${globex}\n`, 15] }, "research station")).toContain("Cobalt Acme");
+  });
+
+  it("returns every value 83f790c87 recall returns, unless a later-noted bot row of its label replaces it", async () => {
+    const value = (text: string) => text.replace(/\s*\(noted [^)]*\)$/, "");
+    const label = (text: string) => /^([^:]{2,60}):\s/.exec(text)?.[1]?.toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
+    const noted = (text: string) => {
+      const day = /\(noted (\d{4}-\d{2}-\d{2})\)$/.exec(text)?.[1] ?? "";
+      return day && new Date(`${day}T00:00:00Z`).toJSON()?.startsWith(day) ? day : "";
+    };
+    const missing: string[] = [];
+    let asked = 0;
+    const check = async (name: string, files: NoteFile[], queries: string[]) => {
+      const [before, after] = [await baseIndex(files), await buildRecallIndex(files)];
+      const rows = files.flatMap((file) => file.text.split("\n").filter((row) => row.startsWith("- ")).map((row) => row.slice(2)));
+      for (const query of queries) {
+        asked++;
+        const found = answer(after, query).map((hit) => value(hit.text));
+        for (const hit of answer(before, query)) {
+          const day = noted(hit.text);
+          if (found.includes(value(hit.text)) || (day && rows.some((row) => label(row) === hit.topic && noted(row) > day))) continue;
+          missing.push(`${name} | ${query} | 83f790c87 ${hit.text} | now ${found.join(" / ") || "nothing"}`);
+        }
+      }
+      before.close();
+      after.close();
+    };
+    const on = (day: number) => new Date(2026, 9, day, 12).getTime();
+    const file = (source: string, rows: string[], day: number, tier: 0 | 1 = 0): NoteFile => ({ source: `memory/${source}`, tier, text: `# Notes\n${rows.join("\n")}\n`, mtime: on(day) });
+    const smith = "- Dentist: Dr. Smith on Main Street";
+    const lee = "- Dentist: Dr. Lee on Harbor Road, cleaning 2026-11-20 (noted 2026-10-10)";
+    const outbound = "- Ferry ticket: outbound from Silver Pier on 2026-11-20";
+    const inbound = "- Ferry ticket: return from Amber Quay on 2026-11-20 (noted 2026-10-15)";
+    const old = "- Ferry booking: provisional Silver Pier";
+    const saved = "- Ferry booking: confirmed Amber Quay for 2026-11-20 (noted 2026-10-15)";
+    const acme = "- Research station: Cobalt Acme (noted 2026-10-15)";
+    const globex = "- Research station: Indigo Globex (noted 2026-10-15)";
+    const supplies = (count: number) => Array.from({ length: count }, (_, n) => `- Supply ${n} crate${n} tent${n}`);
+    for (const [name, files, queries] of [
+      ["dentist", [file("health.md", [smith, lee], 15)], ["dentist main street", "dentist harbor road"]],
+      ["dentist both noted", [file("health.md", [`${smith} (noted 2026-10-15)`, lee], 15)], ["dentist main street", "dentist harbor road"]],
+      ...[[outbound, inbound], [inbound, outbound], [outbound, inbound, outbound], [inbound]].map((rows) => [`P1 ${rows.length}`, [file("connections.md", rows, 15)], ["silver pier", "amber quay", "ferry ticket"]] as const),
+      ...["2026-10-02", "2026-13-02"].map((day) => [`P2 ${day}`, [file("connections.md", [`- Station assignment: Silver Pier from 2026-10-01 (noted ${day})`, "- Station assignment: Amber Quay (noted 2026-10-15)"], 16)], ["silver pier", "amber quay", "station assignment"]] as const),
+      ...[[old, saved], [saved, old], [old, saved, old]].map((rows) => [`P3 ${rows.length}`, [file("travel.md", [...rows, "- Packs a raincoat"], 16)], ["silver pier", "amber quay", "ferry booking"]] as const),
+      ["P3 two files", [file("travel.md", [old, "- Packs a raincoat"], 16), file("booking.md", [saved], 15)], ["silver pier", "amber quay", "ferry booking"]],
+      ...[24, 128].flatMap((count) => [[globex, acme, globex], [acme, globex]].map((rows) => [`P4 ${count} ${rows.length}`, [file("connections.md", [...supplies(count), ...rows], 15)], ["cobalt acme", "indigo globex", "research station"]] as const)),
+      ["O6", [file("auto-notes-overflow.md", ["- Field booking: Indigo Globex for 2026-10-16 (noted 2026-10-14)", "- Field booking: Cobalt Acme (noted 2026-10-15)"], 17)], ["cobalt acme", "indigo globex", "field booking"]],
+    ] as const) await check(name, [...files], [...queries]);
+    // seeded, so a failing plan replays
+    let seed = 1991;
+    const pick = (n: number) => {
+      seed = (seed * 48_271) % 2_147_483_647;
+      return seed % n;
+    };
+    const labels = ["Ferry booking", "Station assignment", "Research station", "Dentist"];
+    const places = ["Silver Pier", "Amber Quay", "Cobalt Acme", "Indigo Globex", "Cedar Dock", "Harbor Road", "Maple Yard", "Opal Gate"];
+    const day = (month: number, date: number) => `2026-${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
+    const stamp = () => [" (noted 2026-13-02)", " (noted 2026-02-31)", " (noted 2026-10-32)", "", "", ` (noted ${day(10, 10 + pick(10))})`, ` (noted ${day(10, 10 + pick(10))})`][pick(7)]!;
+    for (let plan = 0; plan < 2_000; plan++) {
+      const own = [labels[pick(4)]!, labels[pick(4)]!];
+      const free = [...places].sort(() => pick(3) - 1);
+      const rows: string[] = [];
+      for (let n = 2 + pick(5); n > 0; n--) {
+        const copy = rows.length && !pick(4) ? rows[pick(rows.length)]! : undefined;
+        if (copy) rows.push(pick(2) ? copy : `${value(copy)}${stamp()}`);
+        else rows.push(`- ${own[pick(2)]}: ${free.pop()}${["", "", ` from ${day(10, 1 + pick(28))}`, ` on ${day(11, 1 + pick(28))}`][pick(4)]}${stamp()}`);
+      }
+      const split = pick(3) ? 1 : 2;
+      const files = Array.from({ length: split }, (_, at) => file(`side${at}.md`, [...(at ? [] : supplies([0, 8, 24, 128][pick(4)]!)), ...rows.filter((_, n) => n % split === at)], 12 + pick(8), pick(2) ? 1 : 0));
+      const queries = [...new Set(rows.map((row) => /: ([A-Z]\w+ [A-Z]\w+)/.exec(row)![1]!.toLowerCase())), ...new Set(own.map((name) => name.toLowerCase()))];
+      await check(`plan ${plan}: ${files.map((one) => `${one.source} day ${new Date(one.mtime).getDate()} tier ${one.tier}: ${one.text.split("\n").filter((row) => row.startsWith("- ") && !row.startsWith("- Supply")).join(" | ")}`).join(" || ")}`, files, queries);
+    }
+    expect(asked).toBeGreaterThan(10_000);
+    expect(missing.slice(0, 8), `${missing.length} values 83f790c87 returns are missing`).toEqual([]);
+  }, 120_000);
+
+  it("answers two same-day values of a label from the first in the file, since a repeated copy counts once", async () => {
+    const rows = ["- Standup: moved to 10am (noted 2026-10-12)", "- Standup: starts 9am sharp (noted 2026-10-12)", "- Standup: moved to 10am (noted 2026-10-12)"];
+    const files: NoteFile[] = [{ source: "memory/team.md", tier: 0, text: `# Team\n${FILLER}\n${rows.join("\n")}\n`, mtime: new Date(2026, 9, 20, 12).getTime() }];
+    const [before, after] = [await baseIndex(files), await buildRecallIndex(files)];
+    expect(answer(before, "standup moved 10am or 9am sharp").map((hit) => hit.text)).toEqual([rows[1]]);
+    expect(answer(after, "standup moved 10am or 9am sharp").map((hit) => hit.text)).toEqual([rows[0]]);
+    expect(answer(after, "standup starts 9am sharp").map((hit) => hit.text)).toEqual([rows[1]]);
+    before.close();
+    after.close();
   });
 
   it("lets a word that occurs once count as rare in a small corpus", async () => {

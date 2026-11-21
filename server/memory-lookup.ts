@@ -50,7 +50,7 @@ const localDay = (at: number) => new Date(at).toLocaleDateString("sv-SE");
 const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 
 export type NoteFile = { source: string; tier: 0 | 1; text: string; mtime: number; firstLine?: number };
-type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; rank: string; topic: string; title: string[]; text: string; tokens: string[] };
+type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; noted: string; topic: string; title: string[]; text: string; tokens: string[] };
 export type RecallHit = Piece & { score: number };
 type Terms = { list: string[]; groups: string[][] };
 
@@ -73,7 +73,7 @@ function clean(line: string): string {
   return redactSecretsInText(text);
 }
 
-function rowDate(text: string, modified: string): string {
+export function rowDate(text: string, modified: string): string {
   let newest = "";
   for (const match of text.matchAll(DATED)) {
     let date = match[1] ? `${match[1]}-${match[2]}-${match[3]}` : `${modified.slice(0, 4)}-${match[4]}-${match[5]}`;
@@ -83,9 +83,20 @@ function rowDate(text: string, modified: string): string {
   return newest || modified;
 }
 
-// a note-taker row ranks by the day it was noted, so a later day its words name never outranks a row noted after it
-export function rankDate(text: string, modified: string): string {
-  return NOTED_AT.exec(text)?.[1] ?? rowDate(text, modified);
+// a day that cannot be, like 2026-13-02, was typed by hand and stamps nothing
+export function notedDay(text: string): string {
+  const day = NOTED_AT.exec(text)?.[1] ?? "";
+  return day && new Date(`${day}T00:00:00Z`).toJSON()?.startsWith(day) ? day : "";
+}
+
+// a note-taker row gives way to one noted later whatever day its words name, then a label keeps its newest-dated rows
+export function recalled<T extends { topic: string; noted: string; date: string }>(rows: T[]): T[] {
+  const noted = new Map<string, string>();
+  for (const row of rows) if (row.noted > (noted.get(row.topic) ?? "")) noted.set(row.topic, row.noted);
+  const current = rows.filter((row) => !row.noted || row.noted === noted.get(row.topic));
+  const latest = new Map<string, string>();
+  for (const row of current) if (row.date > (latest.get(row.topic) ?? "")) latest.set(row.topic, row.date);
+  return current.filter((row) => row.date === latest.get(row.topic));
 }
 
 function firstCell(text: string): string {
@@ -138,7 +149,7 @@ function piecesOfFile(file: NoteFile): Piece[][] {
       source: file.source,
       tier: file.tier,
       date: rowDate(text, modified),
-      rank: rankDate(text, modified),
+      noted: notedDay(text),
       topic: label.length ? label.join(" ") : key,
       title: table ? cell : [...cell, ...heading],
     };
@@ -176,15 +187,18 @@ function hasNearPair(positions: number[][]): boolean {
 }
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
-  const all = files.flatMap(piecesOfFile);
-  // a note said again is one row, its newest-dated copy wherever the file keeps it, so repeating it never makes its words common
-  const notes = all.map((row) => `${row[0]!.source}\0${row.map(({ text }) => text).join("\n").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)$/, "")}`);
+  const parsed = files.flatMap(piecesOfFile);
+  const shown = new Set(recalled(parsed.map((row) => row[0]!)));
+  // a note said again is one row, the newest copy recall keeps and of equals the one search ranks first, so repeating it never makes its words common
+  const notes = parsed.map((row) => `${row[0]!.source}\0${row.map(({ text }) => text).join("\n").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)$/, "")}`);
+  const order = (row: Piece[]) => [row[0]!.noted || row[0]!.date, -row.reduce((size, { tokens }) => size + tokens.length, 0)] as const;
   const newest = new Map<string, Piece[]>();
-  for (const [at, row] of all.entries()) if (row[0]!.rank >= (newest.get(notes[at]!)?.[0]!.rank ?? "")) newest.set(notes[at]!, row);
-  const parsed = all.filter((row, at) => newest.get(notes[at]!) === row);
-  const latest = new Map<string, string>();
-  for (const piece of parsed.flat()) if (piece.rank > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.rank);
-  const rows = parsed.filter((row) => row.every((piece) => piece.rank === latest.get(piece.topic)));
+  for (const [at, row] of parsed.entries()) {
+    const kept = newest.get(notes[at]!);
+    const [day, size] = order(row);
+    if (shown.has(row[0]!) && (!kept || day > order(kept)[0] || (day === order(kept)[0] && size > order(kept)[1]))) newest.set(notes[at]!, row);
+  }
+  const rows = parsed.filter((row, at) => newest.get(notes[at]!) === row);
   const pieces = rows.flat();
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, tokenize='porter unicode61')");
