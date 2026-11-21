@@ -185,6 +185,10 @@ export function removeTestData(dir: string): void {
 
   try {
     removeOwnedDir(target, stat);
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException;
+    if (!removingRoot || process.platform !== "win32" || failure.code !== "EBUSY" || failure.syscall !== "rmdir" || failure.path !== target) throw error;
+    console.warn(`removeTestData left a busy test home: ${dir}. Close any child processes using that home before test teardown`);
   } finally {
     if (removingRoot) {
       Atomics.store(run.active, 0, 0);

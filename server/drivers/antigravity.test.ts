@@ -1164,6 +1164,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 `);
     vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => existsSync(flag)));
     const registry = new ProviderRegistry([AntigravityDriver]);
+    vi.stubEnv("VITEST", undefined);
     try {
       await registry.load({ "agy-acp": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
       expect((await registry.get("agy-acp")!.snapshot()).authenticated).toBe(true);
@@ -1176,6 +1177,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
       expect((await registry.get("agy-acp")!.snapshot({ refresh: true })).authenticated).toBe(true);
     } finally {
       await registry.disposeAll();
+      vi.unstubAllEnvs();
       rmSync(dir, { recursive: true, force: true });
     }
   });

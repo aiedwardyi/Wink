@@ -53,9 +53,11 @@ export function checkTestProfilePaths(files = trackedFiles(testSource), read = r
       return found;
     };
     walk(source, (node) => {
-      if ((ts.isImportSpecifier(node) || ts.isBindingElement(node)) && node.propertyName && ts.isIdentifier(node.name)) {
-        const name = node.propertyName.getText(source);
-        if (profileKey.test(name)) profileAliases.add(symbol(node.name));
+      if ((ts.isImportSpecifier(node) || ts.isBindingElement(node)) && ts.isIdentifier(node.name)) {
+        const name = (node.propertyName ?? node.name).getText(source);
+        if (profileKey.test(name) || homeKey.test(name) && ts.isBindingElement(node) && isProcessEnv(node.parent.parent.initializer)) {
+          profileAliases.add(symbol(node.name));
+        }
         if (removal.test(name)) removalAliases.add(symbol(node.name));
       }
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {

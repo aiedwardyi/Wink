@@ -1,6 +1,7 @@
-import { spawn, type SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessByStdio, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
+import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
 
 import { harnessTestHome } from "../../companion/src/test-profile.ts";
@@ -15,7 +16,10 @@ export async function harnessToken(origin: string): Promise<string> {
   return await tokens.get(origin) ?? "";
 }
 
-export function spawnTestNode(command: string, args: string[], options: SpawnOptions) {
+export function spawnTestNode(command: string, args: string[], options: SpawnOptions & { stdio: ["pipe", "pipe", "pipe"] }): ChildProcessWithoutNullStreams;
+export function spawnTestNode(command: string, args: string[], options: SpawnOptions & { stdio: ["pipe", "pipe", "inherit"] }): ChildProcessByStdio<Writable, Readable, null>;
+export function spawnTestNode(command: string, args: string[], options: SpawnOptions): ChildProcess;
+export function spawnTestNode(command: string, args: string[], options: SpawnOptions): ChildProcess {
   let env = options.env ?? process.env;
   let profile;
   if (env?.VITEST !== undefined) {

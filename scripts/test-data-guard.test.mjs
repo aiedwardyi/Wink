@@ -259,12 +259,36 @@ it("the repo check rejects raw recursive deletion through aliases and keeps file
     import { DATA_DIR as profile } from "./config.ts";
     import { rmSync as erase, promises as fs } from "node:fs";
     const target = join(profile, "fixture");
+    const { USERPROFILE: inheritedHome } = process.env;
     erase(target, { recursive: true });
     fs["rm"](target, { recursive: true });
     fs.rm("/profiles/.orbit", { recursive: true });
+    fs.rm(inheritedHome, { recursive: true });
     erase(target, { force: true });
     removeTestData(target);
   `);
-  expect(hits).toHaveLength(3);
-  expect(hits.every((hit) => hit.includes("use removeTestData"))).toBe(true);
+  expect(hits).toHaveLength(5);
+  expect(hits.filter((hit) => hit.includes("use removeTestData"))).toHaveLength(4);
+});
+
+it.skipIf(process.platform !== "win32")("revokes a run even when Windows cannot remove its empty home", () => {
+  const scratch = mkdtempSync(join(testHome(), "busy-run-"));
+  try {
+    const result = runProbe(`
+      import assert from "node:assert/strict";
+      import { removeTestData, requireTestHome, startTestRun } from "./companion/src/test-profile.ts";
+      const home = startTestRun();
+      process.env.HOME = process.env.USERPROFILE = home;
+      const previous = process.cwd();
+      process.chdir(home);
+      try { removeTestData(home); }
+      finally { process.chdir(previous); }
+      assert.throws(() => requireTestHome(), /before importing/);
+      removeTestData(startTestRun());
+    `, scratchEnv(scratch, scratch));
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stderr).toContain("removeTestData left a busy test home");
+  } finally {
+    removeTestData(scratch);
+  }
 });

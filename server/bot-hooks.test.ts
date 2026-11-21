@@ -22,9 +22,9 @@ vi.mock("node:fs", async (importOriginal) => {
 
 vi.mock("./config.ts", async (importOriginal) => {
   const { mkdtempSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  return { ...await importOriginal<typeof import("./config.ts")>(), DATA_DIR: mkdtempSync(join(tmpdir(), "wink-picture-gate-")) };
+  const { testHome } = await import("./testing/test-home.ts");
+  return { ...await importOriginal<typeof import("./config.ts")>(), DATA_DIR: mkdtempSync(join(testHome(), "wink-picture-gate-")) };
 });
 
 const pixels = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");

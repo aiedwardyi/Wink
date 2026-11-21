@@ -1,5 +1,4 @@
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,7 +38,7 @@ afterEach(async () => {
 describe("hard-link fallback", { timeout: 60_000 }, () => {
   it("publishes a sealed chat when hard links are refused", async () => {
     links.n = 0;
-    const folder = mkdtempSync(join(tmpdir(), "sync-v2-link-"));
+    const folder = mkdtempSync(join(testHome(), "sync-v2-link-"));
     roots.push(folder);
     const engine = createSyncEngine({ folder, dataDir: DATA_DIR, deviceId: "a", headBytes: 4096 });
     for (let i = 0; i < 12; i++) engine.commit(scope, [{ kind: "row", value: msg(`m${i}`, "x".repeat(700)) }]);
