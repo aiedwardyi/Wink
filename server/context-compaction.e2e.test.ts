@@ -51,6 +51,7 @@ const CODEX_RESTORED = [
 const COVERED_CONTACT = "covered-owner@example.test";
 const LATER_CONTACT = "launch-owner@example.test";
 const RECENT_MILESTONE = "violet telescope";
+const CODEX_SWITCH = { id: "restored-switch", groupId: "restored-switch-room", roomThreadId: "restored-switch-room-thread" };
 const CLAUDE_BOT_ID = "compaction-claude-bot";
 const CLAUDE_THREAD_ID = "compaction-claude-thread";
 const CLAUDE_RESUME = {
@@ -167,6 +168,7 @@ type ApiBody =
   | { title: string }
   | { threadId: string }
   | { memberIds: string[] }
+  | { modelSelection: { mode: "pinned"; instanceId: string; model: string; effort: string } }
   | { cwd: string | null };
 
 describe("context compaction e2e", () => {
@@ -234,6 +236,37 @@ describe("context compaction e2e", () => {
     }
   };
 
+  const startServer = async () => {
+    const env: NodeJS.ProcessEnv = {
+      HOME: home,
+      USERPROFILE: home,
+      OMB_PORT: String(PORT),
+    };
+    if (process.env.PATH) env.PATH = process.env.PATH;
+    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+      cwd: ROOT,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    child.stderr!.on("data", (chunk) => (stderr += chunk));
+
+    await waitFor(async () => {
+      try {
+        return (await fetch(`${BASE}/api/health`)).ok;
+      } catch {
+        return false;
+      }
+    });
+    await waitFor(async () => {
+      const instances = (await api("GET", "/api/instances")).body.instances;
+      return ["codex", "claude"].every((instanceId) =>
+        instances.find((instance: { instanceId: string }) => instance.instanceId === instanceId)?.snapshot.state === "available",
+      );
+    });
+  };
+
   beforeAll(async () => {
     chmodSync(FAKE_CODEX_CLI, 0o755);
     chmodSync(FAKE_CLAUDE_CLI, 0o755);
@@ -264,6 +297,11 @@ describe("context compaction e2e", () => {
       },
     }));
     writeFileSync(join(dataDir, "bots.json"), JSON.stringify([
+      {
+        id: CODEX_SWITCH.id, threadId: CODEX_SWITCH.id, name: "Restored handoff", title: "Release", color: "blue", createdAt: 1,
+        modelSelection: { instanceId: "codex", model: "gpt-fake-default" },
+        resumeCursors: {}, tasks: [{ threadId: CODEX_SWITCH.id, title: "Release", createdAt: 1, resumeCursors: {} }],
+      },
       ...CODEX_RESTORED.map(({ id, cursor }) => ({
         id, threadId: id, name: "Restored", title: "Release", color: "blue", createdAt: 1,
         modelSelection: { instanceId: "codex", model: "gpt-fake-default" },
@@ -582,6 +620,11 @@ describe("context compaction e2e", () => {
     ]));
     writeFileSync(join(dataDir, "groups.json"), JSON.stringify([
       {
+        id: CODEX_SWITCH.groupId, threadId: CODEX_SWITCH.roomThreadId, name: "Handoff room", memberIds: [CODEX_SWITCH.id],
+        defaultResponder: { kind: "member", botId: CODEX_SWITCH.id }, bulletin: "", unread: false, createdAt: 1,
+        tasks: [{ threadId: CODEX_SWITCH.roomThreadId, title: "Release", createdAt: 1 }],
+      },
+      {
         id: ROOM_FIRST.groupId,
         threadId: ROOM_FIRST.roomThreadId,
         name: "Room first race",
@@ -634,6 +677,19 @@ describe("context compaction e2e", () => {
       role: index % 2 === 0 ? "user" : "bot",
       kind: "text",
       text: `history ${index}`,
+    }));
+    writeFileSync(join(dataDir, `messages-${CODEX_SWITCH.id}.json`), JSON.stringify({
+      activeLeafId: "milestone",
+      messages: [
+        { id: "covered", at: 1, parentId: null, role: "user", kind: "text", text: `Send the handoff to ${COVERED_CONTACT}.` },
+        { id: "saved", at: 2, parentId: "covered", role: "bot", kind: "compaction", compaction: {
+          v: 1, summary: "The launch is approved for review.", coveredThroughId: "covered", firstKeptId: null,
+          contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
+        } },
+        { id: "archive1", at: 3, parentId: "saved", role: "user", kind: "text", text: "First archived log. " + "an example line. ".repeat(7_000) },
+        { id: "archive2", at: 4, parentId: "archive1", role: "user", kind: "text", text: "Second archived log. " + "another example line. ".repeat(5_300) },
+        { id: "milestone", at: 5, parentId: "archive2", role: "user", kind: "text", text: `The later contact is ${LATER_CONTACT}. The current milestone is ${RECENT_MILESTONE}.` },
+      ],
     }));
     for (const { id, cursor, hasSessionSystem } of CODEX_RESTORED) {
       writeFileSync(join(dataDir, `messages-${id}.json`), JSON.stringify({
@@ -808,40 +864,50 @@ describe("context compaction e2e", () => {
       turnsAtWrite: 0,
     }));
 
-    const env: NodeJS.ProcessEnv = {
-      HOME: home,
-      USERPROFILE: home,
-      OMB_PORT: String(PORT),
-    };
-    if (process.env.PATH) env.PATH = process.env.PATH;
-    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
-    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
-      cwd: ROOT,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    child.stderr!.on("data", (chunk) => (stderr += chunk));
-
-    await waitFor(async () => {
-      try {
-        return (await fetch(`${BASE}/api/health`)).ok;
-      } catch {
-        return false;
-      }
-    });
-    await waitFor(async () => {
-      const instances = (await api("GET", "/api/instances")).body.instances;
-      return ["codex", "claude"].every((instanceId) =>
-        instances.find((instance: { instanceId: string }) => instance.instanceId === instanceId)?.snapshot.state === "available",
-      );
-    });
+    await startServer();
   }, 30_000);
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
     await removeTempDir(home);
   });
+
+  it("keeps covered values on the provider wire after restart and engine switch", async () => {
+    const route = `/api/bots/${CODEX_SWITCH.id}`;
+    const first = "What did we work on in this chat?";
+    expect((await api("POST", `${route}/messages`, { text: first })).status).toBe(202);
+    await waitFor(async () => existsSync(dumpPath) && (await botById(CODEX_SWITCH.id))?.busy === false);
+    const { calls }: { calls: CodexCall[] } = JSON.parse(readFileSync(dumpPath, "utf8"));
+    expect(codexTurn(calls, first)?.history).toContain(COVERED_CONTACT);
+
+    const stopped = waitForExit(child);
+    child.send({ type: "openmausbot:shutdown" });
+    await stopped;
+    await startServer();
+    expect((await api("PATCH", route, {
+      modelSelection: { mode: "pinned", instanceId: "claude", model: "claude-sonnet-5-5", effort: "low" },
+    })).status).toBe(200);
+
+    const providerInput = (text: string) => {
+      if (!existsSync(claudePromptLogPath)) return "";
+      const sent = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line) as { systemPrompt: string; text: string })
+        .findLast((line) => line.text.includes(text));
+      return sent ? `${sent.text}\n${sent.systemPrompt}` : "";
+    };
+    const roomText = "Who is handling the release in this room?";
+    expect((await api("POST", `/api/groups/${CODEX_SWITCH.groupId}/messages`, { text: roomText })).status).toBe(202);
+    await waitFor(async () => Boolean(providerInput(roomText)) && (await botById(CODEX_SWITCH.id))?.busy === false);
+    expect.soft(providerInput(roomText).includes(COVERED_CONTACT), "covered contact in room handoff").toBe(true);
+
+    const text = "Who receives the release handoff after the switch?";
+    expect((await api("POST", `${route}/messages`, { text })).status).toBe(202);
+    await waitFor(async () => Boolean(providerInput(text)) && (await botById(CODEX_SWITCH.id))?.busy === false);
+    const prompt = providerInput(text);
+    expect(prompt).toContain(LATER_CONTACT);
+    expect(prompt).toContain(RECENT_MILESTONE);
+    expect(prompt.includes(COVERED_CONTACT), "covered contact in switched Claude input").toBe(true);
+  }, 45_000);
 
   it.each(CODEX_RESTORED)("keeps covered values on the fresh provider thread for $id", async ({ id, hasSessionSystem }) => {
     const text = "Who receives the release handoff?";

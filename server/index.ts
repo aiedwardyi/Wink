@@ -5580,9 +5580,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
   let latestCompactionId = prepared.compactionId ?? null;
-  if (prepared.compaction) {
+  if (prepared.compaction || prepared.replaySummary) {
     try {
-      latestCompactionId = store.appendCompaction(threadId, prepared.compaction).id;
+      if (prepared.compaction) {
+        latestCompactionId = store.appendCompaction(threadId, prepared.compaction).id;
+      } else if (prepared.replaySummary && prepared.compactionId &&
+        !store.patchMessage(threadId, prepared.compactionId, { compaction: prepared.replaySummary })) {
+        throw new Error("the reused context summary is missing");
+      }
     } catch (error) {
       const detail = `The context summary could not be saved. Earlier messages and the last valid summary remain intact; retry this turn. ${error instanceof Error ? error.message : String(error)}`;
       store.appendMessage(threadId, {
@@ -5595,7 +5600,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       store.settleTaskPacket(threadId);
       return startedTurn(userMessage, { dispatchFailed: true, error: detail });
     }
-    if (nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
+    if (prepared.compaction && nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
   }
   ensureChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id });
   trace?.identify({ messageId: userMessage.id });

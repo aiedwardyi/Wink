@@ -5,7 +5,7 @@ import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
-import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
+import { TYPED_VALUES_HEADER, typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
 import type { NativePrompt, ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
@@ -99,6 +99,7 @@ export type PreparedModelContext =
       compaction?: ContextCompactionV1;
       /** message id of the reused summary; absent when `compaction` is new */
       compactionId?: string;
+      replaySummary?: ContextCompactionV1;
       /** the window grew past the summary's, so the original history replaced it */
       expanded?: boolean;
     }
@@ -1053,6 +1054,7 @@ export type CompactionPlan =
       budgetTokens: number;
       estimatedTokens: number;
       nativeReplay?: true;
+      replaySummary?: ContextCompactionV1;
     }
   | { needed: false; status: "unsupported"; messageId: string; version: number }
   | { needed: false; status: "failed"; error: string };
@@ -1123,7 +1125,8 @@ export function planCompaction(input: {
     const coveredValues = previous ? typedValueLines(input.messages.slice(0, previous.coveredIndex + 1), input.excludeIds) : [];
     const projection = replayWithTypedValues(currentTranscript, currentTokens, coveredValues);
     if (projection.estimatedTokens <= replay.budgetTokens) {
-      return { ...fits, ...projection, budgetTokens: replay.budgetTokens, nativeReplay: true };
+      const replaySummary = previous ? sharedReplaySummary(previous, coveredValues) : undefined;
+      return { ...fits, ...projection, budgetTokens: replay.budgetTokens, nativeReplay: true, ...(replaySummary ? { replaySummary } : {}) };
     }
   }
   const summaryBudget = Math.max(
@@ -1256,10 +1259,25 @@ function replayWithTypedValues(transcript: ModelContextMessage[], estimatedToken
   };
 }
 
+function sharedReplaySummary(previous: ApplicableCompaction, lines: readonly TypedLine[]): ContextCompactionV1 | undefined {
+  if (!lines.length) return undefined;
+  const summary = redactSecretsInText(previous.value.summary);
+  const covered = lines.filter(({ index }) => index <= previous.coveredIndex);
+  const block = typedValuesBlock(covered, Math.min(VALUES_CAP_TOKENS * 3, SUMMARY_MAX_CHARS - summary.length - 2));
+  if (!block) return undefined;
+  const storedLines = new Set(summary.split("\n"));
+  const missing = block.split("\n").filter((line) => line.startsWith("- ") && !storedLines.has(line));
+  if (!missing.length) return undefined;
+  // Keep one values section so later compactions still strip and rebuild it.
+  const header = storedLines.has(TYPED_VALUES_HEADER) ? "\n" : `\n\n${TYPED_VALUES_HEADER}\n`;
+  return { ...previous.value, summary: summary + header + missing.join("\n") };
+}
+
 export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number): Extract<PreparedModelContext, { status: "ready" }> | undefined {
   if (plan.estimatedTokensBefore > budgetTokens) return undefined;
   const { transcript, estimatedTokens } = replayWithTypedValues(plan.transcript, plan.estimatedTokensBefore, plan.previous ? plan.typedLines : []);
   if (estimatedTokens > budgetTokens) return undefined;
+  const replaySummary = plan.previous ? sharedReplaySummary(plan.previous, plan.typedLines) : undefined;
   return {
     status: "ready",
     transcript,
@@ -1267,6 +1285,7 @@ export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number
     estimatedTokens,
     compacted: Boolean(plan.previous),
     ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+    ...(replaySummary ? { replaySummary } : {}),
   };
 }
 
@@ -1314,6 +1333,7 @@ export async function prepareModelContext(input: {
       estimatedTokens: plan.needed ? plan.estimatedTokensBefore : plan.estimatedTokens,
       compacted: Boolean(plan.previous),
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+      ...(!plan.needed && plan.replaySummary ? { replaySummary: plan.replaySummary } : {}),
     };
   }
   if (!plan.needed) {
@@ -1326,6 +1346,7 @@ export async function prepareModelContext(input: {
       estimatedTokens: plan.estimatedTokens,
       compacted: Boolean(plan.previous),
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+      ...(plan.replaySummary ? { replaySummary: plan.replaySummary } : {}),
     };
   }
   const { previous, previousSummary, old, tail, coveredThrough, budgetTokens, summaryBudget, contextWindow, typedLines, valuesRoom } = plan;
