@@ -9,7 +9,7 @@ type Orders = Record<string, string[]>;
 const ROW = "[data-account-row]";
 const SECTION = "[data-usage-engine]";
 const PRESSABLE = "[data-usage-reorder]";
-const SKIP = "[data-account-name-editor], input, a, code";
+const SKIP = "button:not([data-edit-name], [data-engine-fold]), [data-account-name-editor], input, a, code";
 const DRAGGING = "data-usage-dragging";
 const EDGE = 48;
 const STEP = 10;
@@ -148,7 +148,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     active.current = null;
   };
   const touchRef = useTouchDrag(PRESSABLE, `${SECTION}, ${ROW}`, {
-    skip: `button:not([data-edit-name], [data-engine-fold]), ${SKIP}`,
+    skip: SKIP,
     selectPressed: true,
     scroller: () => scrollParent(list.current),
     lift: (pressed) => {
@@ -187,7 +187,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const move = (next: globalThis.PointerEvent) => {
       pointerY = next.clientY;
       if (!node) {
-        if (Math.hypot(next.clientX - startX, next.clientY - startY) < SLOP) return;
+        if (Math.hypot(next.clientX - startX, next.clientY - startY) <= SLOP) return;
         node = lift(pressed);
         if (!node || !active.current) { unbind.current(); return; }
         active.current.y = startY;

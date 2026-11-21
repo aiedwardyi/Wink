@@ -571,7 +571,7 @@ const drag = async (node: Element, to: number) => act(async () => {
   document.dispatchEvent(mouse("pointerup", 40, to));
 });
 
-it.each(["[data-left]", "[data-account-email]", "[data-edit-name]", "[data-use]"])("reorders with a mouse drag from a row's %s", async (from) => {
+it.each(["[data-left]", "[data-account-email]", "[data-edit-name]"])("reorders with a mouse drag from a row's %s", async (from) => {
   await mount();
   const before = rows();
   stack(claudeRows());
@@ -747,6 +747,64 @@ it("slows a dragged row into the small card's top edge instead of sliding under 
 
 it("lifts a mouse-dragged row by the scale its travel counts", () => {
   expect(usageCss).toContain(`scale: ${LIFT_SCALE};`);
+});
+
+// 12 rows of 80 px in a 200 px scroller, row 6 pressed; a lifted row held in an edge band scrolls the list under it
+it.each([
+  ["a jiggle on Use", "[data-use]", 174, [180], 5],
+  ["a 4 px jiggle on the row near the bottom", "", 174, [178], 5],
+  ["a 4 px jiggle on the row near the top", "", 22, [18], 5],
+  ["a drag to the first row", "", 100, [2], 0],
+  ["a drag to the last row", "", 100, [198], 11],
+] as const)("moves a small card row by mouse only on a real drag: %s", async (_, from, start, points, wanted) => {
+  const engine = h.board!.engines[0]!;
+  engine.accounts = Array.from({ length: 12 }, (_, i) => ({ ...engine.accounts[i ? 2 : 0]!, id: i ? `slot-${i}` : "claude", number: i + 1, main: !i }));
+  const order = engine.accounts.map((account) => account.id);
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: order }));
+  await openQuick();
+  const rows = [...quickRows()];
+  const box = document.querySelector<HTMLElement>("[data-quick-scroll]")!;
+  scroller(box, rows);
+  box.scrollTop = 414 - start;
+  for (const [i, row] of rows.entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, i * 80 - box.scrollTop, 400, 80));
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+  }
+  const pressed = from ? rows[5]!.querySelector(from)! : rows[5]!;
+  await act(async () => void pressed.dispatchEvent(mouse("pointerdown", 300, start)));
+  for (const y of points) {
+    await act(async () => void document.dispatchEvent(mouse("pointermove", 300, y)));
+    await held(32);
+  }
+  await held(wanted === 5 ? 300 : 1200);
+  await act(async () => void document.dispatchEvent(mouse("pointerup", 300, points.at(-1)!)));
+  const expected = [...order];
+  expected.splice(wanted, 0, expected.splice(5, 1)[0]!);
+  expect(quickIds()).toEqual(expected);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(expected);
+});
+
+it("keeps Connections in order after a 4 px jiggle on a row's button near the list edge", async () => {
+  const first = h.instances.find((each) => each.accountOf === "claude")!;
+  const accounts = Array.from({ length: 12 }, (_, i) => ({ ...first, instanceId: i ? `slot-${i}` : first.instanceId }));
+  const order = accounts.map((account) => account.instanceId);
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: order }));
+  await mount(createElement(AccountConnections, { accounts, reload: async () => {} }));
+  const rows = [...host.querySelectorAll<HTMLElement>("[data-connection-account]")];
+  scroller(host, rows);
+  host.scrollTop = 414 - 174;
+  for (const [i, row] of rows.entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, i * 80 - host.scrollTop, 400, 80));
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+  }
+  const button = rows[5]!.querySelector("button:not([data-edit-name])");
+  expect(button).not.toBeNull();
+  await act(async () => void button!.dispatchEvent(mouse("pointerdown", 300, 174)));
+  await act(async () => void document.dispatchEvent(mouse("pointermove", 300, 178)));
+  await held(300);
+  await act(async () => void document.dispatchEvent(mouse("pointerup", 300, 178)));
+  expect([...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount)).toEqual(order);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(order);
 });
 
 it("picks a row up on a long press", async () => {
