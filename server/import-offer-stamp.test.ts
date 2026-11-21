@@ -1,11 +1,10 @@
 // The offer turn's reply row is stamped through index.ts's own item.completed and turn.completed handling, sliced out of the source.
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ensureDirs } from "./config.ts";
+import { DATA_DIR, ensureDirs } from "./config.ts";
 import { noteOfferTurn, takeImportOffer } from "./memory-import-offer.ts";
 import { applySyncedRows, closeMessageDb, readThread } from "./message-db.ts";
 import { takePeerReplyStamp } from "./peer-takeover.ts";
@@ -123,20 +122,16 @@ describe("the offer reply row", () => {
 });
 
 describe("the stamp travels", () => {
-  const roots: string[] = [];
   const clients: ThreadSyncV2[] = [];
   afterEach(async () => {
     await Promise.all(clients.splice(0).map((client) => client.close()));
-    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
-  const temp = () => {
-    const root = mkdtempSync(join(tmpdir(), "offer-stamp-"));
-    roots.push(root);
-    return root;
-  };
+  // inside the throwaway test home, which setup removes
+  const temp = () => mkdtempSync(join(DATA_DIR, "offer-stamp-"));
   const scope = { botSyncId: "bot", threadId: "offer-thread" };
 
   it("survives a restart and reaches a second PC's store", async () => {
+    ensureDirs();
     const row: Message = { id: "offer", role: "bot", kind: "text", at: 1, parentId: null, text: reply(prompts.ko), importOffer: true };
     const folder = temp();
     const pc = (deviceId: string) => {
@@ -146,7 +141,6 @@ describe("the stamp travels", () => {
     };
     const a = pc("a");
     const b = pc("b");
-    ensureDirs();
     applySyncedRows("offer-restart", [row], "row");
     closeMessageDb();
     expect(readThread("offer-restart", join(temp(), "missing.json")).messages).toEqual([row]);
