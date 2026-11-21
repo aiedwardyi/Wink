@@ -105,6 +105,12 @@ describe("vals page", () => {
     expect(() => vals.parsePage(html.replaceAll("cost_per_test", "cost"))).toThrow(/no cost per test/);
   });
 
+  it("still reads cost per test when the page puts a stderr between latency and cost", () => {
+    const html = fixture("vals-legal-bench.html").replaceAll(",&quot;cost_per_test&quot;", ",&quot;stderr&quot;:[0,3.448],&quot;cost_per_test&quot;");
+    expect(html).not.toBe(fixture("vals-legal-bench.html"));
+    expect(vals.parsePage(html).cost.get("anthropic/claude-fable-5")).toBe(0.030639);
+  });
+
   it("builds only mapped rows and refuses a new benchmark version", () => {
     const page = vals.parsePage(fixture("vals-legal-bench.html"));
     const { snapshot, unmapped } = vals.buildSnapshot({ page, models, retrievedAt: "T", previous: { ...previous, version: "1" } });
