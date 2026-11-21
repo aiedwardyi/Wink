@@ -8,8 +8,7 @@ let home: string;
 async function freshStore() {
   home = mkdtempSync(join(tmpdir(), "omb-group-tasks-"));
   vi.resetModules();
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("USERPROFILE", home);
+  vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, UNTITLED_TASK } = await import("./store.ts");
   return { store: new Store(() => ({ instanceId: "claude", model: "m" })), Store, UNTITLED_TASK };
 }

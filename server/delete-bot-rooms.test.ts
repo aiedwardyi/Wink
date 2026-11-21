@@ -19,8 +19,7 @@ let home: string;
 async function freshStore() {
   home = mkdtempSync(join(tmpdir(), "omb-delete-bot-rooms-"));
   vi.resetModules();
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("USERPROFILE", home);
+  vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, roomResponders } = await import("./store.ts");
   return { store: new Store(() => ({ instanceId: "claude", model: "m" })), roomResponders };
 }

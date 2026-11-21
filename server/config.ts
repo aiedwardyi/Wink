@@ -1,10 +1,10 @@
 // Config + data dirs. One file, ~/.orbit/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"apiKey":"ak_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grokAgent", …} } }
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, lstatSync, realpathSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
@@ -299,6 +299,22 @@ export function detailedRepliesEnabled(cfg: AppConfig): boolean {
 
 export function showToolCallsEnabled(cfg: AppConfig): boolean {
   return cfg.features?.showToolCalls === true;
+}
+
+if (process.env.VITEST !== undefined) {
+  const home = process.env.OMB_VITEST_HOME;
+  if (!home || homedir() !== home) {
+    throw new Error("load server/testing/setup.ts (vite.config.ts setupFiles) before importing server/config.ts");
+  }
+  const dataDir = process.env.OMB_DATA_DIR ?? join(home, ".orbit");
+  const scratch = realpathSync.native(dirname(home));
+  // Resolve existing ancestors so a scratch junction cannot redirect deletion.
+  let existing = resolve(dataDir);
+  while (dirname(existing) !== existing && !lstatSync(existing, { throwIfNoEntry: false })) existing = dirname(existing);
+  const path = relative(scratch, resolve(realpathSync.native(existing), relative(existing, dataDir)));
+  if (dataDir !== resolve(dataDir) || !path || isAbsolute(path) || path.split(sep)[0] === "..") {
+    throw new Error("OMB_DATA_DIR must point to a scratch directory under Vitest");
+  }
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.

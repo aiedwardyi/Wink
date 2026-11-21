@@ -10,6 +10,7 @@ import {
   chmodSync,
   closeSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   renameSync,
@@ -18,6 +19,17 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+if (process.env.VITEST !== undefined) {
+  const home = process.env.OMB_VITEST_HOME;
+  if (!home || homedir() !== home) {
+    throw new Error("load server/testing/setup.ts (vite.config.ts setupFiles) before importing companion/src/state.ts");
+  }
+  const dataDir = join(home, ".openmausbot-companion");
+  if ((process.env.OMB_COMPANION_DIR ?? dataDir) !== dataDir || lstatSync(dataDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new Error("OMB_COMPANION_DIR must point to the setupFiles scratch directory under Vitest");
+  }
+}
 
 /** OMB_COMPANION_DIR isolates a test rig from a real paired fleet. */
 export const DATA_DIR = process.env.OMB_COMPANION_DIR ?? join(homedir(), ".openmausbot-companion");

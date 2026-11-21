@@ -28,6 +28,7 @@ for (const name of ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME"
 // wholesale, and "it is safe because of a line in another file" is not the
 // footing that delete should stand on.
 process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
+process.env.OMB_VITEST_HOME = home;
 
 // SQLite keeps the database file open for the lifetime of its handle.
 // Windows will not remove a directory containing an open database, so close
