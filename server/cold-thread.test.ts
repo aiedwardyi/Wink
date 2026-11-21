@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { chatListPage, coldLoad, coldPaneReason, coldSendIds, coldWriteRows, sentRow, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldPageBefore, coldPaneReason, coldSendIds, coldWriteRows, sentRow, WARM_ROW_CAP, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
 import { applySyncedRows, insertMessage, messageDatabase, messageDbFile, readThread } from "./message-db.ts";
@@ -109,6 +109,52 @@ describe("chat list page from a thread's tail", () => {
     writer.setActiveLeaf(bot.threadId, reply.id);
     expect(store.activeLeaf(bot.threadId)).toBe(reply.id);
     expect(store.loaded(bot.threadId)).toBe(false);
+  });
+});
+
+describe("older page from a thread's rows", () => {
+  async function expectSameOlderPages(threadId: string) {
+    const all = fresh().messagesFor(threadId);
+    for (const at of [0, 1, 37, 150, all.length - 1])
+      for (const limit of [0, 1, 50, 200, 1000]) {
+        const store = fresh();
+        const start = Math.max(0, at - limit);
+        expect(await coldPageBefore(store, threadId, all[at]!.id, limit), `at ${at} limit ${limit}`).toEqual({ messages: all.slice(start, at), hasMore: start > 0 });
+        expect(store.loaded(threadId)).toBe(false);
+      }
+  }
+
+  it("matches the loaded page on a long thread", async () => {
+    const bot = fresh().createBot({}, { seedMessages: false });
+    const store = fresh();
+    for (let i = 0; i < 300; i++) store.appendMessage(bot.threadId, { role: i % 40 ? "bot" : "user", kind: "text", text: `line ${i}`, at: i });
+    await expectSameOlderPages(bot.threadId);
+  });
+
+  it("matches on a branched thread", async () => {
+    const bot = fresh().createBot({}, { seedMessages: false });
+    const store = fresh();
+    const first = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "start" });
+    for (let i = 0; i < 200; i++) store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `ok ${i}` });
+    store.branchMessage(bot.threadId, first.id, "start over");
+    for (let i = 0; i < 20; i++) store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `again ${i}` });
+    await expectSameOlderPages(bot.threadId);
+  });
+
+  it("matches on rows imported from a legacy file without parent ids", async () => {
+    const bot = fresh().createBot({}, { seedMessages: false });
+    const legacy = Array.from({ length: 300 }, (_, i) => ({ id: `m${i}`, at: i, role: i % 30 ? "bot" : "user", kind: "text", text: `line ${i}` }));
+    writeFileSync(join(DATA_DIR, `messages-${bot.threadId}.json`), JSON.stringify(legacy));
+    fresh().messagesFor(bot.threadId);
+    await expectSameOlderPages(bot.threadId);
+  });
+
+  it("leaves a loaded thread and an unknown cursor to the store", async () => {
+    const bot = fresh().createBot({}, { seedMessages: false });
+    const store = fresh();
+    const row = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+    expect(await coldPageBefore(store, bot.threadId, row.id, 50)).toBeNull();
+    expect(await coldPageBefore(fresh(), bot.threadId, "nope", 50)).toBeNull();
   });
 });
 

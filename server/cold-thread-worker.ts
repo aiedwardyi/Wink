@@ -3,11 +3,11 @@ import { DatabaseSync } from "node:sqlite";
 import { parentPort } from "node:worker_threads";
 
 import { newestPaneLines, paneLines, type PaneLine } from "../shared/pane-note.ts";
-import { notesSinceOn, sendIdsOn, threadRowsOn, threadTailOn, writeRowsOn, type SendIdRows, type ThreadRows } from "./message-db.ts";
+import { notesSinceOn, sendIdsOn, threadPageBeforeOn, threadRowsOn, threadTailOn, writeRowsOn, type SendIdRows, type ThreadRows } from "./message-db.ts";
 import type { Message } from "./store.ts";
 
-/** The newest `count` rows, with `writes` the rows that wrote files, with `notesSince` the newest reason lines of the notes since then, with `after` a page of stored rows past that cursor, or with `sendIds` the user rows' sendIds. */
-export type TailRead = { threadId: string } & ({ count: number } | { writes: true } | { notesSince: number } | { after: number } | { sendIds: true });
+/** The newest `count` rows (before the rowid `before` when given), with `writes` the rows that wrote files, with `notesSince` the newest reason lines of the notes since then, with `after` a page of stored rows past that cursor, or with `sendIds` the user rows' sendIds. */
+export type TailRead = { threadId: string } & ({ count: number; before?: number } | { writes: true } | { notesSince: number } | { after: number } | { sendIds: true });
 export type TailRequest = TailRead & { id: number; file: string };
 export type TailReply<R extends TailRead> = R extends { notesSince: number } ? PaneLine[]
   : R extends { after: number } ? Array<{ cursor: number; json: string }>
@@ -41,7 +41,8 @@ parentPort!.on("message", (request: TailRequest) => {
     const value = "notesSince" in request ? newestPaneLines(paneLines(notesSinceOn(open.db, threadId, request.notesSince), request.notesSince))
       : "writes" in request ? { messages: writeRowsOn(open.db, threadId), options: [], activeLeafId: null }
       : "after" in request ? threadRowsOn(open.db, threadId, request.after, 1024)
-      : "sendIds" in request ? sendIdsOn(open.db, threadId) : threadTailOn(open.db, threadId, request.count);
+      : "sendIds" in request ? sendIdsOn(open.db, threadId)
+      : request.before !== undefined ? threadPageBeforeOn(open.db, threadId, request.before, request.count) : threadTailOn(open.db, threadId, request.count);
     parentPort!.postMessage({ id, value });
   } catch (error) {
     close();

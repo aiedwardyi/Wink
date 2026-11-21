@@ -8249,6 +8249,7 @@ const threadRoutes = createThreadRoutes({
   DEFAULT_PAGE,
   pageSize,
   clientMessage,
+  slimMessage,
   messagePage,
   messageWindow,
   answerRequest,
