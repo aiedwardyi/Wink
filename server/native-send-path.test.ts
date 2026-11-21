@@ -4,6 +4,7 @@ import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as compaction from "./context-compaction.ts";
+import { decodeCodexSelection, OFFICIAL_CODEX_PROVIDER } from "./drivers/codex-catalog.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
 import { Store, type Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryBuild } from "./summary-build.ts";
@@ -97,6 +98,7 @@ function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MOD
     const skipTranscript = new Set([userMessage.id]);
     const result = await runSend({
       ...compaction, ...turnContext, composeUserTurnPrompt, inlineDeadlineMs, inlineSummarizer, summaryInstance, asksNudge, isStatusTurn,
+      decodeCodexSelection, OFFICIAL_CODEX_PROVIDER,
       store, task, instance, model, instanceId: "claude", threadId: THREAD, bot, summaryBuild: build,
       cfg: {}, accounts: { snapshot: [] }, process: { env: {} }, instanceConfigs: () => ({ claude: { environment: env } }),
       text: "next request", userMessage, skipTranscript, opts: {}, holdNotes: undefined, routineTurn: false, recovering: false, priorTaskPacket: undefined, commsDepth: 0,

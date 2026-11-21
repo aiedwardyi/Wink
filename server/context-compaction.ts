@@ -7,7 +7,7 @@ import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
-import type { ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
+import type { NativePrompt, ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
   CONTEXT_COMPACTION_VERSION,
   readContextCompaction,
@@ -198,6 +198,22 @@ function contextBudget(contextWindow: number): number {
 
 export function estimateContextTokens(messages: Array<{ text: string }>): number {
   return messages.reduce((total, message) => total + messageTokens(message), 0);
+}
+
+export function nativeReplayBudget(contextWindow: number): number {
+  return Math.floor(contextWindow * SUMMARY_GRACE_INPUT_SHARE);
+}
+
+export function codexResumeReplayRoom(
+  task: { resumeCursors: Record<string, unknown>; resumeSeed?: ResumeSeed; nativePrompt?: NativePrompt },
+  instanceId: string,
+  model: string,
+): number {
+  const cursor = task.resumeCursors[instanceId];
+  const { resumeSeed: seed, nativePrompt: prompt } = task;
+  if (cursor === undefined || !seed?.nativeReplay || seed.instanceId !== instanceId || seed.cursor !== cursor ||
+      prompt?.cursor !== cursor || prompt.window?.model !== model) return 0;
+  return nativeReplayBudget(prompt.window.tokens) - prompt.last - Math.max(0, prompt.growth ?? 0);
 }
 
 /** Longest prefix that fits, ending at a line end, else at whitespace, else anywhere. */
@@ -1036,6 +1052,7 @@ export type CompactionPlan =
       transcript: ModelContextMessage[];
       budgetTokens: number;
       estimatedTokens: number;
+      nativeReplay?: true;
     }
   | { needed: false; status: "unsupported"; messageId: string; version: number }
   | { needed: false; status: "failed"; error: string };
@@ -1057,6 +1074,7 @@ export function planCompaction(input: {
   nativePrompt?: NativePromptSize;
   /** this native cycle already has its summary */
   nativeCycleBuilt?: boolean;
+  resumeNativeReplay?: { compactionId: string | null; budgetTokens: number };
 }): CompactionPlan {
   const window = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
     ? input.contextWindow
@@ -1100,6 +1118,14 @@ export function planCompaction(input: {
   const near = real && !input.nativeCycleBuilt && nearNativeCompact({ ...real, nativeAt: input.nativeAt ?? null }) ? real : undefined;
   const fits: CompactionPlan = { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
   if ((real ? !near : currentTokens <= budgetTokens) && currentTurns <= MAX_CONTEXT_MESSAGES) return fits;
+  const replay = input.resumeNativeReplay;
+  if (replay && replay.compactionId === (previous?.messageId ?? null) && currentTokens <= replay.budgetTokens) {
+    const coveredValues = previous ? typedValueLines(input.messages.slice(0, previous.coveredIndex + 1), input.excludeIds) : [];
+    const projection = replayWithTypedValues(currentTranscript, currentTokens, coveredValues);
+    if (projection.estimatedTokens <= replay.budgetTokens) {
+      return { ...fits, ...projection, budgetTokens: replay.budgetTokens, nativeReplay: true };
+    }
+  }
   const summaryBudget = Math.max(
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
@@ -1217,6 +1243,31 @@ function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, s
   let start = transcript.length;
   while (start > head.length && left >= messageTokens(transcript[start - 1]!)) left -= messageTokens(transcript[--start]!);
   return [...head, ...transcript.slice(start)];
+}
+
+function replayWithTypedValues(transcript: ModelContextMessage[], estimatedTokens: number, lines: readonly TypedLine[]) {
+  const summary = transcript[0];
+  const values = lines.length ? typedValuesBlock(lines, VALUES_CAP_TOKENS * 3) : "";
+  if (!summary || !values || summary.text.endsWith(values)) return { transcript, estimatedTokens };
+  const enriched = { ...summary, text: `${summary.text}\n\n${values}` };
+  return {
+    transcript: [enriched, ...transcript.slice(1)],
+    estimatedTokens: estimatedTokens + messageTokens(enriched) - messageTokens(summary),
+  };
+}
+
+export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number): Extract<PreparedModelContext, { status: "ready" }> | undefined {
+  if (plan.estimatedTokensBefore > budgetTokens) return undefined;
+  const { transcript, estimatedTokens } = replayWithTypedValues(plan.transcript, plan.estimatedTokensBefore, plan.previous ? plan.typedLines : []);
+  if (estimatedTokens > budgetTokens) return undefined;
+  return {
+    status: "ready",
+    transcript,
+    budgetTokens,
+    estimatedTokens,
+    compacted: Boolean(plan.previous),
+    ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+  };
 }
 
 function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
