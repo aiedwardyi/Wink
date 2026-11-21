@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AccountService } from "./accounts.ts";
+import { shareUserSetup } from "./account-shared-setup.ts";
 import { applyCredentialAllowlist, DATA_DIR } from "./config.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import { createUsageRefresh, canRefreshUsage } from "./usage-refresh.ts";
@@ -40,6 +41,17 @@ describe("account launch boundary", () => {
     await accounts.retire(saved.id);
     fs.renameSync(saved.home, `${saved.home}-archived`);
     policy!.accountLaunch(saved, "codex", [], {});
+    expect(fs.existsSync(saved.home)).toBe(false);
+  });
+
+  it.each(["being removed", "draining"] as const)("never restores the home of an account %s", async (kind) => {
+    const accounts = new AccountService(storeDir(), bases);
+    const saved = await accounts.add("codex");
+    fs.rmSync(saved.home, { recursive: true });
+    if (kind === "draining") {
+      await accounts.drain(saved.id, "codex");
+      policy!.accountLaunch(saved, "codex", [], {});
+    } else await accounts.whileRemoving(saved.id, async () => { policy!.accountLaunch(saved, "codex", [], {}); });
     expect(fs.existsSync(saved.home)).toBe(false);
   });
 
@@ -80,6 +92,69 @@ describe("account launch boundary", () => {
     expect(new AccountService(dir, bases).snapshot).toHaveLength(3);
     (["claudeAgent", "codex", "grokAgent"] as const).forEach((driver, i) => policy!.accountLaunch(saved[i], driver, [], {}));
     expect(mkdir).not.toHaveBeenCalled();
+  });
+
+  describe("shared setup", () => {
+    const prepared = async () => {
+      const dir = storeDir();
+      const accounts = new AccountService(dir, bases);
+      const saved = await accounts.add("codex");
+      const base = join(dir, "base");
+      fs.mkdirSync(base);
+      fs.writeFileSync(join(base, "AGENTS.md"), "fixture rules");
+      return { dir, accounts, saved, share: () => shareUserSetup("codex", saved, base) };
+    };
+
+    it("restores a live saved home that went missing and shares into it", async () => {
+      const { saved, share } = await prepared();
+      fs.rmSync(saved.home, { recursive: true });
+      share();
+      expect(fs.readFileSync(join(saved.home, "AGENTS.md"), "utf8")).toBe("fixture rules");
+      expect(fs.existsSync(join(saved.home, "state"))).toBe(true);
+    });
+
+    it.each(["retired", "being removed"] as const)("never brings back the home of an account %s", async (kind) => {
+      const { accounts, saved, share } = await prepared();
+      fs.renameSync(saved.home, `${saved.home}-archived`);
+      if (kind === "retired") {
+        await accounts.retire(saved.id);
+        share();
+      } else await accounts.whileRemoving(saved.id, async () => share());
+      expect(fs.existsSync(saved.home)).toBe(false);
+    });
+
+    it.each(["file", "junction", "missing drive"] as const)("writes nothing into a saved home that is a %s", async (kind) => {
+      const { dir, saved, share } = await prepared();
+      const target = join(dir, "target");
+      fs.rmSync(saved.home, { recursive: true });
+      if (kind === "file") fs.writeFileSync(saved.home, "keep");
+      else if (kind === "junction") {
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, saved.home, "junction");
+      } else {
+        fs.rmSync(dirname(saved.home), { recursive: true });
+        const mkdir = fs.mkdirSync;
+        vi.spyOn(fs, "mkdirSync").mockImplementation((path, options) => {
+          if (String(path).startsWith(dirname(saved.home))) throw Object.assign(new Error("fixture missing drive"), { code: "ENOENT" });
+          return mkdir(path, options);
+        });
+      }
+      share();
+      if (kind === "file") expect(fs.readFileSync(saved.home, "utf8")).toBe("keep");
+      else if (kind === "junction") expect(fs.readdirSync(target)).toEqual([]);
+      else expect(fs.existsSync(saved.home)).toBe(false);
+    });
+
+    it.skipIf(process.platform !== "win32")("writes nothing into a saved home Windows denies", async () => {
+      const { saved, share } = await prepared();
+      fs.rmSync(join(saved.home, "state"), { recursive: true });
+      const who = execFileSync("whoami.exe", [], { encoding: "utf8", windowsHide: true }).trim();
+      execFileSync("icacls.exe", [saved.home, "/deny", `${who}:(AD,WD)`], { windowsHide: true });
+      try {
+        share();
+        expect(fs.readdirSync(saved.home)).toEqual([]);
+      } finally { execFileSync("icacls.exe", [saved.home, "/remove:d", who], { windowsHide: true }); }
+    });
   });
 
   it("leaves a base account home to its engine", () => {

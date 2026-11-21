@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { canonicalAccountHome, type AccountContext } from "./account-policy.ts";
+import { resolveAccountHome } from "./accounts.ts";
 import { DATA_DIR } from "./config.ts";
 
 const SETTLE_MS = 2000; // coarsest timestamp tick (FAT): a change in the scan's own tick leaves mtime equal
@@ -16,6 +17,10 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
   let sameHome = true;
   attempt("home", () => { sameHome = canonicalAccountHome(baseHome) === canonicalAccountHome(account.home); });
   if (sameHome || !["claudeAgent", "codex", "grokAgent"].includes(driver)) return;
+  // Every write below lands in the account home, so the one resolver checks it (and restores a live saved one) first.
+  let open = false;
+  attempt("home", () => { open = resolveAccountHome(account, driver === "codex") !== false; });
+  if (!open) return;
   const present = (path: string) => lstatSync(path, { throwIfNoEntry: false });
   const sourceStat = (path: string) => statSync(path, { throwIfNoEntry: false });
   const link = (source: string, destination: string) => {
@@ -30,7 +35,6 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
       const defaultBase = canonicalAccountHome(baseHome) === canonicalAccountHome(join(homedir(), ".claude"));
       const path = resolve(baseHome).replace(/\\/g, "/");
       if (!defaultBase && /#|[^\S ]/u.test(path)) { console.warn("Cannot include user setup:", "CLAUDE.md"); return; }
-      mkdirSync(account.home, { recursive: true });
       writeFileSync(destination, defaultBase ? "@~/.claude/CLAUDE.md\n" : `@${path.replace(/ /g, "\\ ")}/CLAUDE.md\n`, { encoding: "utf8", flag: "wx" });
     });
     for (const name of ["rules", "agents", "commands", "output-styles"]) attempt(name, () => link(join(baseHome, name), join(account.home, name)));
@@ -76,7 +80,6 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
       return;
     }
     if (destinationInfo && (!owned || matches(sourceInfo, record?.source))) return;
-    mkdirSync(account.home, { recursive: true });
     const temporary = `${destination}.${randomUUID()}.tmp`;
     try {
       copyFileSync(source, temporary);

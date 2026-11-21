@@ -254,10 +254,12 @@ export class AccountLifecycle {
         throw error;
       }
       this.jobs.delete(id);
-      await this.accounts.stop(id);
-      await this.registry.cancelSignIn(id);
-      if (await this.registry.signOut(id) !== true) throw new AccountError("Sign-out did not finish; the account is stopped", 502);
-      await this.discard(id);
+      await this.accounts.whileRemoving(id, async () => {
+        await this.accounts.stop(id);
+        await this.registry.cancelSignIn(id);
+        if (this.homeHeld(account) && await this.registry.signOut(id) !== true) throw new AccountError("Sign-out did not finish; the account is stopped", 502);
+        await this.discard(id);
+      });
       return {};
     });
   }
@@ -307,8 +309,9 @@ export class AccountLifecycle {
       if (await this.hooks.referenced(id, true) || this.jobs.has(id) || await this.hooks.panesBusy?.(id)) return { state: "draining", destinationId: drain.destinationId };
       await this.registry.cancelSignIn(id);
       await this.accounts.drain(id, drain.destinationId, "logout");
+      const saved = this.accounts.get(id);
       try {
-        if (await this.registry.signOut(id) !== true) throw new Error("Sign-out not confirmed");
+        if ((!saved || this.homeHeld(saved)) && await this.registry.signOut(id) !== true) throw new Error("Sign-out not confirmed");
       } catch {
         await this.accounts.drain(id, drain.destinationId, "failed");
         throw new AccountError("Sign-out did not finish; the account is stopped", 502);
@@ -463,6 +466,11 @@ export class AccountLifecycle {
   private promoHome(id: string) {
     const live = this.registry.get(id);
     return live?.driverKind === "codex" ? this.accounts.get(id)?.home ?? baseAccount(id, "codex", live.loginConfig?.().env ?? process.env).home : undefined;
+  }
+
+  // A missing or odd home holds nothing Wink can sign out of, and signing out through it would recreate or follow it; the account just retires.
+  private homeHeld(account: AccountRecord) {
+    try { return this.accounts.resolveHome(account, this.registry.get(account.id)?.driverKind === "codex"); } catch { return false; }
   }
 
   private async discard(id: string) {
