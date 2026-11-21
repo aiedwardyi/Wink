@@ -458,15 +458,16 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   }, [isOpen]);
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
-  const [deleteFailed, setDeleteFailed] = useState(false);
+  const [deleteFailed, setDeleteFailed] = useState<string | null>(null);
+  const failedIn = (thread: { post: BoardPost; replies: BoardPost[] }) => [thread.post, ...thread.replies].some((post) => post.id === deleteFailed);
   const [deleting, setDeleting] = useState<BoardPost | null>(null);
   const confirm = usePresence(deleting);
   const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
   const remove = (post: BoardPost) => deleteFromBoard(post.id).then(() => {
     removed(post);
     setOpenId((current) => (current === post.id ? null : current));
-    setDeleteFailed(false);
-  }, () => setDeleteFailed(true));
+    setDeleteFailed(null);
+  }, () => setDeleteFailed(post.id));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
     if (hidden || closing || (!isOpen && phone)) return;
@@ -505,7 +506,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
       <div className="relative min-h-0 flex-1 md:animate-fade-in">
         <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] md:px-5">
           <section className={SHEET}>
-            {failed && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{retryButton}</div>}
+            {(failed || (!open && threads.some((thread) => thread.post.id === deleteFailed))) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
             {!posts && !failed && (
               <div data-board-loading role="status" className="py-24 text-center text-[14px] text-ink-secondary">{t("board.loading")}</div>
             )}
@@ -581,7 +582,7 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
             className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app md:px-5"
           >
             <section className={SHEET}>
-              {(failed || deleteFailed) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 pt-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
+              {(failed || failedIn(page.value)) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 pt-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
               <Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} onMenu={setMenu} onSaved={saved} />
             </section>
           </div>

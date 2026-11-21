@@ -146,6 +146,23 @@ export function useBoardPosts(): BoardPostsView {
     };
     return list.filter((post) => !cut(post)).map(lift);
   }, [lift]);
+  // a reply saved here shows only under a post still on screen, so a thread deleted since, here or on another PC, stays gone
+  const attach = useCallback((list: BoardPost[]) => {
+    const out = list.filter((post) => !mine.current.has(post.id));
+    const ids = new Set(out.map((post) => post.id));
+    const held = [...mine.current.values()].map((entry) => entry.post);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const post of held) {
+        const parent = lift(post).parent_id;
+        if (ids.has(post.id) || !parent || !ids.has(parent)) continue;
+        out.push(post);
+        ids.add(post.id);
+        grew = true;
+      }
+    }
+    return out;
+  }, [lift]);
   const reload = useRef(() => {});
   useEffect(() => {
     let live = true;
@@ -160,7 +177,7 @@ export function useBoardPosts(): BoardPostsView {
             mine.current.delete(post.id);
             listed.current.add(post.id);
           }
-          setPosts((forumKept.posts = prune([...list, ...[...mine.current.values()].map((held) => held.post)])));
+          setPosts((forumKept.posts = prune(attach(list))));
           setFailed(false);
         },
         () => live && seq === asked.current && setFailed(true),
@@ -173,12 +190,12 @@ export function useBoardPosts(): BoardPostsView {
       live = false;
       window.removeEventListener(BOARD_CHANGED_EVENT, load);
     };
-  }, [prune]);
+  }, [prune, attach]);
   const saved = useCallback((post: BoardPost) => {
     if (listed.current.has(post.id)) return;
     mine.current.set(post.id, { post, seq: asked.current });
-    setPosts((now) => (forumKept.posts = prune([...(now ?? []).filter((held) => held.id !== post.id), post])));
-  }, [prune]);
+    setPosts((now) => (forumKept.posts = prune(attach(now ?? []))));
+  }, [prune, attach]);
   const removed = useCallback((post: BoardPost) => {
     gone.current.set(post.id, post.parent_id);
     mine.current.delete(post.id);

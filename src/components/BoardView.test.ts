@@ -26,6 +26,7 @@ vi.mock("@/state/store", async (original) => ({
 import { I18nProvider } from "@/lib/i18n";
 import { BoardButton } from "./BoardButton";
 import { BoardView } from "./BoardView";
+import { HOLD_MS } from "./MessageMenu";
 import { ProviderMark } from "./ProviderIcons";
 
 const bot = (id: string, name: string): Bot => ({
@@ -1093,6 +1094,91 @@ describe("Forum", () => {
     await settle();
     expect(host.querySelector('[role="alert"]')!.textContent).toBe("Wink couldn't finish that. Try again.");
     expect(rows()).toEqual(["pbot", "pmine"]);
+  });
+
+  it.each([
+    ["here", "preply"], ["on another PC", "preply"], ["on another PC", "pbot"],
+  ])("a reply whose answer lands after its thread was deleted %s never shows (to %s)", async (where, to) => {
+    posts = [post("pbot", { created_at: 1 }), post("preply", { parent_id: "pbot", author_bot_id: "carbon", body: "Try this.", created_at: 2 }), post("pother", { created_at: 0 })];
+    const ok = globalThis.fetch;
+    let answer = () => {};
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/board/reply") {
+        const sent = JSON.parse(String(init?.body));
+        const mine = post("pmine", { parent_id: sent.parent_id, author_bot_id: "user", kind: "tip", body: sent.body, source_ref: `reply:${sent.client_id}`, created_at: 3 });
+        await new Promise<void>((resolve) => { answer = resolve; });
+        return new Response(JSON.stringify({ post: mine }), { headers: { "content-type": "application/json" } });
+      }
+      if (url === "/api/board/delete") {
+        posts = posts.filter((held) => held.id === "pother");
+        return new Response(JSON.stringify({ id: "pbot" }), { headers: { "content-type": "application/json" } });
+      }
+      return ok(url, init);
+    }));
+    await render(BoardView);
+    await openRow("pbot");
+    if (to === "preply") await click('[data-board-reply-to="preply"]');
+    await typeIn(box(to)!, "Mine.");
+    await click(`[data-board-reply-box="${to}"] button[type="submit"]`);
+    if (where === "here") {
+      await act(async () => { host.querySelector("article")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+      await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+      await dialogButton("Delete");
+    } else posts = posts.filter((held) => held.id === "pother");
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(rows()).toEqual(["pother"]);
+    await act(async () => answer());
+    await settle();
+    expect(rows()).toEqual(["pother"]);
+  });
+
+  it("a reply saved here leaves when a load asked before the save shows another PC deleted its thread", async () => {
+    posts = [post("pop", { created_at: 1 }), post("pother", { created_at: 0 })];
+    const ok = globalThis.fetch;
+    let land = () => {};
+    let hold = false;
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => (url === "/api/board" && hold ? new Promise<Response>((resolve) => { land = () => void ok(url, init).then(resolve); }) : ok(url, init))));
+    await render(BoardView);
+    await openRow("pop");
+    hold = true;
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await typeIn(box("pop")!, "On it.");
+    await click('[data-board-reply-box="pop"] button[type="submit"]');
+    await settle();
+    expect(rows()).toEqual(["pop", "puser"]);
+    posts = posts.filter((held) => held.id === "pother");
+    await act(async () => land());
+    await settle();
+    expect(rows()).toEqual(["pother"]);
+  });
+
+  it.each(["desktop", "touch"])("a failed delete from the list says so on the list and in its own topic, never in another (%s)", async (input) => {
+    if (input === "touch") vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(realMatchMedia(query), "matches", { value: query.includes("reduce") || query === "(pointer: coarse)" }));
+    posts = [post("pa", { created_at: 2 }), post("pb", { created_at: 1 })];
+    const ok = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (url === "/api/board/delete" ? new Response("{}", { status: 500 }) : ok(url, init))));
+    await render(BoardView);
+    const row = host.querySelector<HTMLElement>('[data-board-post="pa"] button')!;
+    if (input === "desktop") await act(async () => { row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+    else {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const touch = (type: string) => row.dispatchEvent(Object.defineProperty(new Event(type, { bubbles: true, cancelable: true }), "touches", { value: type === "touchend" ? [] : [{ clientX: 20, clientY: 20 }] }));
+      act(() => { touch("touchstart"); });
+      act(() => { vi.advanceTimersByTime(HOLD_MS); });
+      act(() => { touch("touchend"); });
+      vi.useRealTimers();
+    }
+    await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+    await dialogButton("Delete");
+    await settle();
+    expect(rows()).toEqual(["pa", "pb"]);
+    expect(host.querySelector("[role=alert]")?.textContent).toBe("Wink couldn't finish that. Try again.");
+    await openRow("pb");
+    expect(host.querySelector("[data-side-panel] [role=alert]")).toBeNull();
+    await click("[data-back-button]");
+    await openRow("pa");
+    expect(host.querySelector("[data-side-panel] [role=alert]")?.textContent).toBe("Wink couldn't finish that. Try again.");
   });
 
   it("shows the five engine marks above a friendly line when empty", async () => {
