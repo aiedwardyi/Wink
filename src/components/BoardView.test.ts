@@ -1183,6 +1183,33 @@ describe("Forum", () => {
     expect(host.querySelector("[data-side-panel] [role=alert]")?.textContent).toBe("Wink couldn't finish that. Try again.");
   });
 
+  it("the alert showing or clearing moves no row of a scrolled list", async () => {
+    posts = Array.from({ length: 30 }, (_, i) => post(`p${i}`, { created_at: i + 1 }));
+    const ok = globalThis.fetch;
+    let down = false;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (url === "/api/board" && down ? new Response("{}", { status: 500 }) : ok(url, init))));
+    // no layout engine here: the alert's box is 43.5 px tall and takes that height from the top of the list
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      // SAFETY: the Forum reads only the height of the alert box
+      return { height: this.firstElementChild?.getAttribute("role") === "alert" ? 43.5 : 0 } as DOMRect;
+    });
+    await render(BoardView);
+    const list = host.querySelector<HTMLElement>("[data-board-view] .overflow-y-auto")!;
+    const rowTop = (index: number) => (host.querySelector("[role=alert]") ? parseFloat((host.querySelector("[role=alert]")!.parentElement!).style.minHeight) || 43.5 : 0) + index * 100 - list.scrollTop;
+    list.scrollTop = 600;
+    const before = [rowTop(5), rowTop(6), rowTop(7)];
+    down = true;
+    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    await settle();
+    expect(host.querySelector("[role=alert]")).not.toBeNull();
+    expect([rowTop(5), rowTop(6), rowTop(7)]).toEqual(before);
+    down = false;
+    await click("[role=alert] button");
+    await settle();
+    expect(host.querySelector("[role=alert]")).toBeNull();
+    expect([rowTop(5), rowTop(6), rowTop(7)]).toEqual(before);
+  });
+
   it("shows the five engine marks above a friendly line when empty", async () => {
     await render(BoardView);
     const empty = host.querySelector("[data-board-empty]")!;

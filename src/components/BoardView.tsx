@@ -460,6 +460,23 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   const [deleteFailed, setDeleteFailed] = useState<string | null>(null);
   const failedIn = (thread: { post: BoardPost; replies: BoardPost[] }) => [thread.post, ...thread.replies].some((post) => post.id === deleteFailed);
+  // the alert takes its height from the top of the list column, so the list scrolls by that height in the same commit and no row moves
+  const alertShown = failed || (!open && threads.some((thread) => thread.post.id === deleteFailed));
+  const alertRef = useRef<HTMLDivElement>(null);
+  const held = useRef({ shown: false, top: 0, height: 0 });
+  if (held.current.shown !== alertShown) held.current.top = listRef.current?.scrollTop ?? 0;
+  useLayoutEffect(() => {
+    const hold = held.current;
+    hold.shown = alertShown;
+    const box = alertRef.current;
+    // whole pixels: a scroll offset lands on whole pixels, so a half-pixel alert would leave every row half a pixel off
+    if (alertShown && box) {
+      box.style.minHeight = "";
+      hold.height = Math.ceil(box.getBoundingClientRect().height);
+      box.style.minHeight = `${hold.height}px`;
+    }
+    if (listRef.current && hold.top > 0) listRef.current.scrollTop = hold.top + (alertShown ? hold.height : -hold.height);
+  }, [alertShown]);
   const [deleting, setDeleting] = useState<BoardPost | null>(null);
   const confirm = usePresence(deleting);
   const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
@@ -504,8 +521,8 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
         </div>
       </div>
       <div className="relative flex min-h-0 flex-1 flex-col md:animate-fade-in">
-        {(failed || (!open && threads.some((thread) => thread.post.id === deleteFailed))) && (
-          <div className="shrink-0 overflow-y-hidden [scrollbar-gutter:stable] md:px-5">
+        {alertShown && (
+          <div ref={alertRef} className="shrink-0 overflow-y-hidden [scrollbar-gutter:stable] md:px-5">
             <div role="alert" className={cn(SIDE, "mx-auto flex w-full max-w-[640px] items-center justify-between gap-3 bg-app py-3 text-[13px] text-danger md:rounded-t-[28px] md:bg-card")}><span>{t("errors.request")}</span>{failed && retryButton}</div>
           </div>
         )}
