@@ -85,10 +85,10 @@ function pastedAnswer(messages: readonly Message[]): string {
   return latest ?? "";
 }
 
-// Only a save that added something earns the recap; the bullets come from the user's own paste, already in the chat, so no extra model call.
+// Only a save that added something earns the recap.
 const RECAP = {
-  en: "Then tell them what you now know: up to 5 short bullets of the most specific things from their paste, fewer if it has fewer. Use only what the paste says, add nothing, skip anything Import Memory left out.",
-  ko: "그다음 지금 알게 된 내용을 말해 주세요: 붙여 넣은 내용에서 가장 구체적인 것 최대 5개를 짧은 글머리표로 (내용이 적으면 더 적게). 붙여 넣은 내용에 있는 것만 쓰고, 덧붙이지 말고, Import Memory가 뺀 것은 빼세요. 한국어로, 자연스러운 존댓말로 쓰세요.",
+  en: "Then tell them what you now know: up to 5 short bullets of the most specific things, fewer if the list has fewer. Use only from the saved facts list, add nothing.",
+  ko: "그다음 지금 알게 된 내용을 말해 주세요: 저장된 사실 목록에서 가장 구체적인 것 최대 5개를 짧은 글머리표로 (목록이 적으면 더 적게). 저장된 사실 목록에 있는 것만 쓰고, 덧붙이지 마세요. 한국어로, 자연스러운 존댓말로 쓰세요.",
 };
 
 export async function importMemoryRoute(req: IncomingMessage, res: ServerResponse, deps: ImportMemoryDeps): Promise<void> {
@@ -102,11 +102,12 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
     writeFileAtomic(declinedFile(), "", { mode: 0o600 });
     return json(res, 200, { text: "Saved: no bot offers this again. Settings > Import Memory still works." });
   }
-  const result = addToAboutYou(pastedAnswer(deps.messages(source.threadId)), day((deps.now ?? Date.now)()));
+  const accepted: string[] = [];
+  const result = addToAboutYou(pastedAnswer(deps.messages(source.threadId)), day((deps.now ?? Date.now)()), accepted);
   const note = !("error" in result) ? aboutYouNote(result, t)
     : result.error === "too-large" ? t("aboutYou.tooLarge")
     : result.error === "empty" ? t("aboutYou.noFacts")
     : t("aboutYou.failed");
-  const recap = !("error" in result) && result.added ? `\n${RECAP[locale]}` : "";
+  const recap = !("error" in result) && result.added ? `\nSaved facts:\n${accepted.map((fact) => `- ${fact}`).join("\n")}${result.added > accepted.length ? `\n+${result.added - accepted.length} more` : ""}\n${RECAP[locale]}` : "";
   return json(res, 200, { text: `Import Memory says: ${note}\nTell the user this result.${recap}` });
 }

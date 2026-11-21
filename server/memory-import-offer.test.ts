@@ -90,6 +90,20 @@ describe("new bot import offer", () => {
 });
 
 describe("import_memory saves through the Settings path", () => {
+  it("lists only newly saved facts for a partial import", async () => {
+    await call({}, [typed("- Already saved.\nSource: ChatGPT")]);
+    const text = (await call({}, [typed("- Already saved.\n- My password is hunter2-very-secret\n- Likes tea.\n- Plays tennis.\nSource: ChatGPT")])).text;
+    expect(text).toContain("Saved facts:\n- Likes tea.\n- Plays tennis.");
+    expect(text).not.toContain("Already saved.");
+    expect(text).not.toContain("hunter2");
+    expect(text).toContain("only from the saved facts list");
+  });
+
+  it("reports when the saved facts list is capped", async () => {
+    const text = (await call({}, [typed(`${Array.from({ length: 10 }, (_, i) => `- New fact ${i}.`).join("\n")}\nSource: ChatGPT`)])).text;
+    expect(text).toContain("- New fact 7.\n+2 more");
+    expect(text).not.toContain("New fact 8.");
+  });
   it("saves the user's pasted message and reports what Settings reports", async () => {
     const result = await call({}, [typed("hi"), reply("offer"), typed(paste)]);
     expect(result).toEqual({ status: 200, text: expect.stringMatching(/^Import Memory says: Added 2 new\.\nTell the user this result\.\n/) });
@@ -97,13 +111,13 @@ describe("import_memory saves through the Settings path", () => {
     expect((await call({}, [typed(paste)])).text).toContain(en["aboutYou.nothingNew"]);
   });
 
-  it("after a save that added facts, tells the bot to say what it now knows, from the paste only", async () => {
+  it("after a save that added facts, tells the bot to say what it now knows, from saved facts only", async () => {
     const text = (await call({}, [typed("hi"), reply("offer"), typed(paste)])).text;
     expect(text).toContain("Added 2 new.");
     expect(text).toContain("tell them what you now know");
     expect(text).toContain("up to 5 short bullets");
-    expect(text).toContain("Use only what the paste says");
-    expect(text).not.toContain("Dana");
+    expect(text).toContain("Use only from the saved facts list");
+    expect(text).toContain("The user is Dana Park; call her Dana.");
     expect(text).not.toMatch(/wrong or missing/i);
     noteSendLocale("ko");
     const ko = (await call({}, [typed(paste.replace("Dana", "Dan"))])).text;
@@ -135,7 +149,10 @@ describe("import_memory saves through the Settings path", () => {
   it("counts what a full memory left out", async () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "MEMORY.md"), Array.from({ length: 199 }, (_, i) => `- Fact ${i}. (from Gemini, 2026-11-18)`).join("\n") + "\n");
-    expect((await call({}, [typed(paste)])).text).toContain("Added 1 new. Memory is full: 1 not added.");
+    const text = (await call({}, [typed(paste)])).text;
+    expect(text).toContain("Added 1 new. Memory is full: 1 not added.");
+    expect(text).toContain("Saved facts:\n- The user is Dana Park; call her Dana.");
+    expect(text).not.toContain("Speaks Korean and English.");
   });
 
   it("answers a Korean user in Korean", async () => {
