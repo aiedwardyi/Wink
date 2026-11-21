@@ -1,6 +1,7 @@
 import type { ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { AccountError, AccountService, type AccountRecord } from "./accounts.ts";
+import { LoginBusyError, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import { ENGINE_OF } from "./account-names.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
 import { baseAccount } from "./worker-resume.ts";
@@ -17,6 +18,8 @@ type Hooks = {
 };
 
 type Main = { id: string; generation: number };
+/** The session asking (signInOwner) and the sign-in generation it saw when its request arrived. */
+export type SignInRequest = { owner?: string; generation?: number };
 export type MainChange = { base: string; engine: "claude" | "codex" | "grok"; from: Main; to: Main; seq: number };
 
 let mainSeq = 0;
@@ -198,16 +201,18 @@ export class AccountLifecycle {
     }, false).catch(() => { console.error("Signed-out account could not be saved"); });
   }
 
-  cancel(id: string) {
+  cancel(id: string, from?: SignInRequest) {
     return this.exclusive(async () => {
       if (!this.accounts.list().some((row) => row.id === id)) throw new AccountError("Unknown account", 404);
+      this.mayEndSignIn(id, from);
       await this.registry.cancelSignIn(id);
       return {};
     });
   }
 
-  remove(id: string, destinationId?: string) {
+  remove(id: string, destinationId?: string, from?: SignInRequest) {
     return this.exclusive(async () => {
+      this.mayEndSignIn(id, from);
       if (Object.values(this.accounts.drains).some((row) => row.destinationId === id)) throw new AccountError("This account is the destination of a pending removal");
       if (!destinationId && this.accounts.drains[id]) throw new AccountError("Use the recorded removal destination to retry explicitly");
       if (destinationId) {
@@ -471,6 +476,14 @@ export class AccountLifecycle {
     await this.accounts.retire(id);
     await this.hooks.reload();
     this.registry.blockAccount(id, false);
+  }
+
+  /** Checked inside the queue: a request ends only the pending sign-in it saw, and only from the session that started it. */
+  private mayEndSignIn(id: string, from?: SignInRequest) {
+    const logins = this.registry.logins;
+    if (!from || logins.state(id) !== "pending") return;
+    if (!logins.owns(id, from.owner)) throw new AccountError(SIGNED_IN_ELSEWHERE, 403, "sign-in-elsewhere");
+    if (logins.generation(id) !== from.generation) throw new LoginBusyError();
   }
 
   private mains() {

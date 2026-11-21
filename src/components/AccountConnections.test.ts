@@ -528,6 +528,41 @@ it("keeps the failure line after an added account rejects its code and its row i
   expect(host.querySelector('[role="alert"]')).toBeNull();
 });
 
+it("keeps the failure line when Connections remounts before the added account rejects its code", async () => {
+  // SAFETY: the phone check reads only `matches`.
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  await render(1);
+  state.instances[0]!.install = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "claudeAgent")!.install;
+  await update();
+  let failed = false;
+  request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/api/accounts" && init?.method === "POST") {
+      failed = false;
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      return { id: "new" };
+    }
+    if (path === "/api/accounts/new/sign-in/code") { failed = true; state.instances = state.instances.filter((row) => row.instanceId !== "new"); return {}; }
+    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    return {};
+  });
+  vi.useFakeTimers();
+  await act(async () => buttons("Add Account")[0]!.click());
+  await update();
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await update();
+  const input = host.querySelector<HTMLInputElement>("input[type=password]")!;
+  await act(async () => { input.value = "expired-code"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+  await act(async () => { input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+  expect(failed).toBe(true);
+  await update();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  await update();
+  expect(host.querySelector('[data-connection-account="new"]')).toBeNull();
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Didn't finish. Try again.");
+  expect(buttons("Add Account")[0]!.disabled).toBe(false);
+});
+
 it("adds Claude accounts and signs Gemini in from a phone with their real login commands", async () => {
   await render(1);
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);

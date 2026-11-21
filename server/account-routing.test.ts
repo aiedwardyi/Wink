@@ -174,6 +174,44 @@ describe("engine default account routing", () => {
     expect(f.registry.logins.state(id)).toBe("cancelled");
   });
 
+  it("lets Sign Out, Remove and a queued Cancel end only the pending sign-in they saw, from the tab that started it", async () => {
+    const f = await fixture();
+    const id = f.added[0].id;
+    const script = join(f.root, "wait-login.cjs");
+    writeFileSync(script, `process.stdout.write("Visit: https://claude.com/cai/oauth/authorize?code=true\\nPaste code here if prompted > "); setInterval(() => {}, 1000);`);
+    const tab = `phone:phone-1:${"a".repeat(32)}`;
+    const otherTab = `phone:phone-1:${"b".repeat(32)}`;
+    const start = () => f.registry.logins.start(id, `"${process.execPath}" "${script}"`, [], {}, [], { scope: "claudeAgent", paste: true, owner: tab });
+    vi.spyOn(f.registry, "cancelSignIn").mockImplementation(async (login) => { await f.registry.logins.cancel(login); return true; });
+    await start();
+    for (const [method, path] of [["POST", `/api/accounts/${id}/sign-out`], ["DELETE", `/api/accounts/${id}`], ["POST", `/api/instances/${id}/sign-out`], ["DELETE", `/api/accounts/${id}/sign-in`]] as const) {
+      expect((await f.request(method, path, {}, otherTab)).body).toMatchObject({ code: "sign-in-elsewhere" });
+    }
+    expect(f.registry.logins.state(id)).toBe("pending");
+    expect(f.accounts.get(id)).toBeDefined();
+    expect(f.logout).not.toHaveBeenCalled();
+    // Hold the account queue, then let this tab's Cancel wait behind it while its sign-in is replaced by a newer one.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(f.registry, "startSignIn").mockImplementationOnce(async () => { await held; throw new Error("held"); });
+    const busy = f.controller.signIn(f.added[1].id).catch(() => {});
+    const cancel = f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, tab);
+    const remove = f.request("DELETE", `/api/accounts/${id}`, {}, tab);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const first = f.registry.logins.generation(id);
+    await f.registry.logins.cancel(id);
+    await start();
+    expect(f.registry.logins.generation(id)).not.toBe(first);
+    release();
+    await busy;
+    expect((await cancel).status).toBe(409);
+    expect((await remove).status).toBe(409);
+    expect(f.registry.logins.state(id)).toBe("pending");
+    expect(f.accounts.get(id)).toBeDefined();
+    expect((await f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, tab)).status).toBe(200);
+    expect(f.registry.logins.state(id)).toBe("cancelled");
+  });
+
   it("uses the default for every existing and new bot without publishing account ids", async () => {
     const f = await fixture();
     const sibling = f.store.createBot({ name: "Sibling" });

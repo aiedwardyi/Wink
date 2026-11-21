@@ -19,7 +19,9 @@ export class LoginBusyError extends Error {
   constructor() { super("Another sign-in for this engine is still running"); }
 }
 
-/** A sign-in belongs to the session that started it: this PC or a paired phone, plus the browser's own id. */
+export const SIGNED_IN_ELSEWHERE = "This sign-in was started on another device";
+
+/** A sign-in belongs to the session that started it: this PC or a paired phone, plus the tab's own id. */
 export function signInOwner(headers: { [name: string]: string | string[] | undefined }, phoneId?: string): string {
   const client = String(headers["x-wink-client"] ?? "");
   return `${phoneId ? `phone:${phoneId}` : "pc"}:${/^[0-9a-f]{32}$/.test(client) ? client : ""}`;

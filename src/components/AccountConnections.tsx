@@ -166,17 +166,25 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   );
 }
 
+/** The addition each engine waits on outlives a remount of Connections, so its failure line still shows. */
+const pendingAdds = new Map<string, string>();
+
 export function AccountConnections({ accounts, reload }: { accounts: UsageAccount[]; reload: () => Promise<void> }) {
   const { t } = useI18n();
   const { state } = useStore();
   const { board } = useUsageBoard();
   const terminal = isTerminalSkin(useSkin());
   const [busy, setBusy] = useState(false);
-  const [adding, setAdding] = useState<string | null>(null);
+  const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
+  const [adding, setAdding] = useState<string | null>(() => {
+    const id = pendingAdds.get(base);
+    return id && accounts.some((account) => account.instanceId === id) ? id : null;
+  });
   const [existingId, setExistingId] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
   useEffect(() => {
-    if (!adding) return;
+    if (!adding) { pendingAdds.delete(base); return; }
+    pendingAdds.set(base, adding);
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -200,12 +208,11 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
     };
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [adding, reload]);
+  }, [adding, base, reload]);
   useEffect(() => {
     if (error?.signInIds.length && !accounts.some((account) => error.signInIds.includes(account.instanceId)
       && signInPending(account))) setError(null);
   }, [accounts, error]);
-  const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
   const drag = useUsageDrag([{ base, accounts: accounts.map((account) => ({ id: account.instanceId })) }]);
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;

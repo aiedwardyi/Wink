@@ -4,7 +4,7 @@ import { z } from "zod";
 import { AccountError, isInstanceId } from "./accounts.ts";
 import type { AccountLifecycle } from "./account-lifecycle.ts";
 import { AccountNameError, type AccountNames } from "./account-names.ts";
-import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
+import { LoginBusyError, logSignInRefusal, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 
@@ -13,8 +13,6 @@ const addSchema = signInSchema.extend({ of: z.string().refine(isInstanceId) });
 const removalSchema = z.object({ destinationId: z.string().refine(isInstanceId).optional() }).strict();
 const codeSchema = z.object({ generation: z.number().int().positive(), code: z.string().min(1).max(4096).refine((code) => !/[^!-~]/.test(code)) }).strict();
 const nameSchema = z.object({ nickname: z.string().nullable() }).strict();
-
-export const SIGNED_IN_ELSEWHERE = "This sign-in was started on another device";
 
 export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: { names?: AccountNames; onNamesChanged?: () => void } = {}) {
   /** `owner` names the requesting session (signInOwner); only the session that started a sign-in may answer or cancel it. */
@@ -100,13 +98,12 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         if (!parsed.success) throw new AccountError("device must be a boolean", 400);
         json(res, 200, await lifecycle.signIn(id, parsed.data.device, owner));
       } else if (id && action === "sign-in" && method === "DELETE") {
-        if (!registry.logins.owns(id, owner)) throw new AccountError(SIGNED_IN_ELSEWHERE, 403, "sign-in-elsewhere");
-        json(res, 200, await lifecycle.cancel(id));
+        json(res, 200, await lifecycle.cancel(id, { owner, generation: registry.logins.generation(id) }));
       }
       else if (id && ((action === "sign-out" && method === "POST") || (!action && method === "DELETE"))) {
         const parsed = removalSchema.safeParse(method === "POST" ? await body(req) : {});
         if (!parsed.success) throw new AccountError("destinationId must name an account", 400);
-        json(res, 200, await lifecycle.remove(id, parsed.data.destinationId));
+        json(res, 200, await lifecycle.remove(id, parsed.data.destinationId, { owner, generation: registry.logins.generation(id) }));
       } else {
         if (signIn) logSignInRefusal(405);
         json(res, 405, { error: "Unsupported account operation" });
