@@ -2,6 +2,12 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.292] - 2026-11-21
+
+### Fixed
+- Chat lines stay where you sent them, live and after a reload, with no "Sends next" you did not ask for.
+- A worker report that gets cut off ends with a link to the full file.
+
 ## [1.0.291] - 2026-11-20
 
 ### Fixed
