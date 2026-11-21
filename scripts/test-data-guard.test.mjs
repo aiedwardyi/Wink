@@ -25,7 +25,7 @@ it("protects both profiles when Vitest skips setupFiles", () => {
       TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: join(home, ".claude"), CODEX_HOME: join(home, ".codex") };
     delete env.OMB_DATA_DIR;
     delete env.OMB_COMPANION_DIR;
-    delete env.OMB_VITEST_HOME;
+    delete env.WINK_VITEST_HOME;
     const options = { cwd: root, env, encoding: "utf8", windowsHide: true };
     const preflight = spawnSync(process.execPath, ["-p", "require('node:os').homedir()"], options);
     expect(preflight.status, preflight.stderr).toBe(0);

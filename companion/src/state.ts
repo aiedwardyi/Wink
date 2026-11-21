@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 if (process.env.VITEST !== undefined) {
-  const home = process.env.OMB_VITEST_HOME;
+  const home = process.env.WINK_VITEST_HOME;
   if (!home || homedir() !== home) {
     throw new Error("load server/testing/setup.ts (vite.config.ts setupFiles) before importing companion/src/state.ts");
   }

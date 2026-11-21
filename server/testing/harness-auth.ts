@@ -1,4 +1,7 @@
 import { spawn, type SpawnOptions } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { z } from "zod";
 
 const tokens = new Map<string, Promise<string>>();
@@ -10,9 +13,18 @@ export async function harnessToken(origin: string): Promise<string> {
 }
 
 export function spawnHarness(command: string, args: string[], options: SpawnOptions) {
+  let env = options.env;
+  const home = env?.HOME;
+  const setupHome = process.env.WINK_VITEST_HOME;
+  // Child harnesses use their own scratch homes while the suite keeps its marker.
+  if (env?.VITEST !== undefined && home && env.USERPROFILE === home && setupHome === homedir() &&
+      home !== setupHome && dirname(home) === dirname(setupHome) &&
+      dirname(realpathSync.native(home)) === realpathSync.native(dirname(setupHome))) {
+    env = { ...env, WINK_VITEST_HOME: home };
+  }
   // stdio and windowsHide sit after the spread deliberately: the ipc channel
   // is load-bearing for the token handshake below, and no harness wants a console.
-  const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
+  const child = spawn(command, args, { ...options, env, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
   const origin = `http://127.0.0.1:${options.env?.OMB_PORT ?? options.env?.OGB_PORT ?? 8799}`;
   const token = new Promise<string>((resolve) => {
     child.on("message", (message) => {
