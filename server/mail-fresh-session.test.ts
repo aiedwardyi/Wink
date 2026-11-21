@@ -3,6 +3,7 @@ import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { closedAskNotes } from "./ask-user.ts";
+import { noteOfferTurn } from "./memory-import-offer.ts";
 import { DATA_DIR } from "./config.ts";
 import * as context from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
@@ -91,7 +92,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
     expect(prepared.compacted).toBe(false);
     const task = store.taskByThread(sender.id, threadId)!;
     const result = await runDispatch({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, stampShownAsks: () => {}, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, noteOfferTurn, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, stampShownAsks: () => {}, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
       store, bot: sender, threadId, task, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
       compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,

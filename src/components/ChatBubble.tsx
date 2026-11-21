@@ -327,7 +327,7 @@ const Bubble = memo(function Bubble({
     );
   }
 
-  const markdown = <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} />;
+  const markdown = <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} importOffer={message.importOffer} />;
   const hasReactions = !message.placeholder && Boolean(message.reactions?.length);
   // "‹ 2/3 ›" under an edited message
   const switchTo = (messageId: string | undefined) => {

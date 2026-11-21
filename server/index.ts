@@ -337,7 +337,7 @@ import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTurn, importOfferNote, noteOfferTurn, takeImportOffer } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -3933,7 +3933,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
-            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}) },
+            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}), ...takeImportOffer(event.threadId, event.text) },
         );
         markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "assistant.persisted", {
           turnId: event.turnId,
@@ -4403,6 +4403,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
+      noteOfferTurn(event.threadId, false);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
       for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
       const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
@@ -5697,6 +5698,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
     ? importMemoryTurn(activeMessages)
     : { offer: false, tool: false };
+  noteOfferTurn(threadId, importMemory.offer);
   const currentPrompt = [
     ...(importMemory.offer ? [importOfferNote()] : []),
     composeUserTurnPrompt(text, turnOpts),
