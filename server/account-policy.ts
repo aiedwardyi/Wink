@@ -1,7 +1,7 @@
-import { mkdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
 
+import { restoreAccountHome } from "./accounts.ts";
 import { CODEX_CREDIT_ARGS, CODEX_CREDIT_ENV, isCodexCredit } from "./codex-credit.ts";
 import { applyCredentialAllowlist } from "./config.ts";
 
@@ -15,16 +15,6 @@ export interface AccountContext {
 export function canonicalAccountHome(home: string): string {
   const path = resolve(home);
   return process.platform === "win32" ? path.toLowerCase() : path;
-}
-
-// A saved account whose folder vanished must come back empty and signed out: Codex refuses to start
-// when CODEX_HOME does not exist. Only creates; nothing is ever deleted or overwritten.
-function ensureAccountHome(account: AccountContext, driver: string) {
-  if (account.generation < 1) return;
-  try {
-    mkdirSync(account.home, { recursive: true, mode: 0o700 });
-    if (driver === "codex") mkdirSync(join(account.home, "state"), { recursive: true, mode: 0o700 });
-  } catch {}
 }
 
 export function claudeAccountAdmission(status: { loggedIn: boolean; email?: unknown; authMethod?: string; configDirectory?: string }, account?: AccountContext) {
@@ -49,7 +39,8 @@ export function accountLaunch(
   if (!account) return { args, env: source };
   if (driver !== "claudeAgent" && driver !== "codex" && driver !== "grokAgent") throw new Error("Unsupported account engine");
   if (args.some((arg) => /^(?:--profile(?:=|$)|--with-api-key$|--api-key(?:=|$)|--oss$|--local-provider(?:=|$))/.test(arg) || (driver === "codex" && arg === "-p"))) throw new Error("Conflicting account launch selector");
-  ensureAccountHome(account, driver);
+  // Codex refuses to start when CODEX_HOME is missing; only a saved account still in the store gets its home back.
+  if (account.generation > 0) restoreAccountHome(account, driver === "codex");
   const env = { ...source };
   const grants = Object.keys(env).filter((key) => /^WINK_MCP_[A-Z0-9_]+$/.test(key));
   applyCredentialAllowlist(env, grants);

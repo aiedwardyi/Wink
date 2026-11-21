@@ -38,13 +38,23 @@ export class AccountError extends Error {
   constructor(message: string, status = 409, code?: string, bot?: string) { super(message); this.status = status; this.code = code; this.bot = bot; }
 }
 
+const canonical = (value: string) => process.platform === "win32" ? resolve(value).toLowerCase() : resolve(value);
+const services = new Map<string, AccountService>();
+
 function plainDirectory(path: string, create: boolean) {
-  if (create) mkdirSync(path, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(path);
-  const canonical = (value: string) => process.platform === "win32" ? resolve(value).toLowerCase() : resolve(value);
+  let stat;
+  try { stat = lstatSync(path); } catch (error) {
+    if (!create || !(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+    stat = lstatSync(path);
+  }
   if (!stat.isDirectory() || stat.isSymbolicLink() || canonical(realpathSync(path)) !== canonical(join(realpathSync(dirname(path)), basename(path)))) {
     throw new AccountError("Account home must not use a link or alias");
   }
+}
+
+export function restoreAccountHome(account: AccountContext, codex: boolean) {
+  services.get(canonical(dirname(account.home)))?.restoreHome(account, codex);
 }
 
 export class AccountService {
@@ -62,6 +72,7 @@ export class AccountService {
     this.bases = bases;
     this.file = join(dataDir, "accounts.json");
     this.root = join(dataDir, "accounts");
+    services.set(canonical(this.root), this);
     try {
       const stat = lstatSync(this.file);
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a regular file");
@@ -200,6 +211,15 @@ export class AccountService {
       const defaults = Object.fromEntries(Object.entries(this.state.defaults ?? {}).filter(([, accountId]) => accountId !== id));
       this.commit({ ...this.state, defaults, accounts: this.state.accounts.filter((row) => row.id !== id), retired: [...this.state.retired, id] });
     });
+  }
+
+  // Rechecks membership at launch time: a probe captured before removal must not bring a retired home back.
+  restoreHome(account: AccountContext, codex: boolean) {
+    const row = this.get(account.id);
+    if (!row || canonical(row.home) !== canonical(account.home)) return;
+    plainDirectory(this.root, true);
+    plainDirectory(row.home, true);
+    if (codex) plainDirectory(join(row.home, "state"), true);
   }
 
   validateBases(bases = this.bases()) { if (!this.error) this.validate(this.state, bases); }
