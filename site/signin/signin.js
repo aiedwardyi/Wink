@@ -278,17 +278,19 @@
 
   const shortCodeChars = (value) => [...value.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(CODE_KEEP, "");
 
-  // Shown at once but see-through while a remembered PC may open, so the boxes do not flash. A stopped load sends the page no event, so a touch or key brings them back too.
+  // Shown at once but see-through and inert while a remembered PC may open, so the boxes do not flash. Stopping that open fires navigateerror here; with no Navigation API nothing could bring them back, so they are not covered.
   function coverCode() {
+    const nav = globalThis.navigation;
+    if (!nav) return () => {};
     const code = $("code");
     const uncover = () => {
       code.classList.remove("trying");
-      removeEventListener("pointerdown", uncover, true);
-      removeEventListener("keydown", uncover, true);
+      code.removeAttribute("inert");
+      nav.removeEventListener("navigateerror", uncover);
     };
     code.classList.add("trying");
-    addEventListener("pointerdown", uncover, true);
-    addEventListener("keydown", uncover, true);
+    code.setAttribute("inert", "");
+    nav.addEventListener("navigateerror", uncover);
     return uncover;
   }
 
