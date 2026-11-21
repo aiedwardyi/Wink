@@ -10,8 +10,19 @@ export function signedOutLanding(url?: string): void {
   landing = url ?? "/pair";
 }
 
-export function leaveSignedOut(): void {
-  location.replace(landing);
+/** Opening the landing page offline would strand the tab on the browser's error page; the live stream's next refusal tries again. */
+export async function leaveSignedOut(): Promise<void> {
+  if (await reachable(landing)) location.replace(landing);
+}
+
+/** Whether `url` answers at all; the sign-in site tells an offline browser from a PC that is down. */
+export async function reachable(url: string): Promise<boolean> {
+  try {
+    await fetch(url, { method: "HEAD", mode: "no-cors", cache: "no-store" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type SessionState = "gone" | "live" | "unreachable";

@@ -37,7 +37,7 @@ import { frontDoorHost, relayMode } from "./phone-relay/mode.ts";
 import { relayDir } from "./phone-relay/store.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import { parseJson } from "./schema.ts";
-import { removePhonePushSubscriptions } from "./web-push.ts";
+import { removePhonePushSubscriptions, removeSignedOutPushSubscriptions } from "./web-push.ts";
 
 const MINUTE_MS = 60_000;
 /** A held short code with less than a day left is swapped for a fresh one. */
@@ -495,13 +495,14 @@ export class PhoneAccess {
 
   /** A browser's own Sign Out: it stays signed in until the file drops it, then loses this site's cookie, storage and cache. */
   private signOut(req: IncomingMessage, res: ServerResponse): void {
-    let id: string | null;
     try {
-      id = this.phones.signOut(phoneCookieToken(req.headers.cookie), (phone) => removePhonePushSubscriptions(this.options.dataDir, phone));
+      const id = this.phones.signOut(phoneCookieToken(req.headers.cookie));
+      if (id) this.cut(id, req.socket);
+      // Push records follow the file, so a retry after a failed push write still clears what it left.
+      removeSignedOutPushSubscriptions(this.options.dataDir, (phone) => this.phones.paired(phone));
     } catch {
       return send(res, 500, { error: "save-failed" });
     }
-    if (id) this.cut(id, req.socket);
     // "cookies" would clear every PC host under the shared base, not just this one.
     send(res, 200, { ok: true }, { "set-cookie": PHONE_CLEAR_COOKIE, "clear-site-data": '"cache", "storage"', connection: "close" });
   }

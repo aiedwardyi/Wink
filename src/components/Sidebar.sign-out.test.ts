@@ -13,16 +13,26 @@ let host: HTMLDivElement;
 let root: Root;
 let signOut: () => Promise<Response>;
 let events: () => Promise<Response>;
+let offline = false;
+let streams: Array<{ onerror: (() => void) | null }> = [];
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  offline = false;
+  streams = [];
   vi.stubGlobal("EventSource", class {
+    onopen = null;
+    onerror: (() => void) | null = null;
     onmessage = null;
+    constructor() {
+      streams.push(this);
+    }
     close() {}
   });
   signOut = async () => new Response('{"ok":true}', { status: 200 });
   events = async () => new Response("", { status: 200 });
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    if (offline) throw new TypeError("Failed to fetch");
     if (String(path).includes("/api/phone/sign-out")) return signOut();
     if (String(path).includes("/api/events")) return events();
     if (String(path).includes("/api/bots")) return new Response(JSON.stringify({ bots: [], groups: [], computerControl: {} }));
@@ -106,13 +116,64 @@ describe("signing a browser out from the avatar", () => {
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 
-  it("lands on the sign-in page when the reply is lost and the PC can't be asked, rather than claim nothing happened", async () => {
+  it("keeps the page and says so when only the PC is unreachable, since it never got the sign-out", async () => {
     signOut = async () => {
       throw new TypeError("Failed to fetch");
     };
     events = async () => {
       throw new TypeError("Failed to fetch");
     };
+    const replace = await renderSidebar(RELAY);
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("stays on the dashboard through a full outage, then lands on the sign-in page once the PC says the session is gone", async () => {
+    const replace = await renderSidebar(RELAY);
+    signOut = async () => {
+      offline = true;
+      throw new TypeError("Failed to fetch");
+    };
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(replace).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
+
+    offline = false;
+    events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
+    await act(async () => streams.at(-1)?.onerror?.());
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
+    expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits out an outage that starts right after a successful sign-out, rather than open a page that can't load", async () => {
+    const replace = await renderSidebar(RELAY);
+    signOut = async () => {
+      offline = true;
+      return new Response('{"ok":true}', { status: 200 });
+    };
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(replace).not.toHaveBeenCalled();
+
+    offline = false;
+    events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
+    await act(async () => streams.at(-1)?.onerror?.());
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
+    expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("lands on the sign-in page when the PC dropped the session but answered with an error", async () => {
+    signOut = async () => new Response('{"error":"save-failed"}', { status: 500 });
+    events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
     const replace = await renderSidebar(RELAY);
     await click(avatar());
     await click(menuItems().at(-1));

@@ -1004,7 +1004,10 @@ describe("phone management", () => {
     stream.socket.destroy();
   });
 
-  it("keeps a browser signed in when its push cleanup can't be saved, and drops the subscription on retry", async () => {
+  it.each([
+    ["registry", PHONES_FILE, 1],
+    ["push subscriptions", WEB_PUSH_SUBS_FILE, 0],
+  ])("keeps the push subscription when the %s write fails, and drops it on retry", async (_file, failing, paired) => {
     const w = await world();
     const session = await pairPhone(w, "Lost phone");
     const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
@@ -1012,17 +1015,17 @@ describe("phone management", () => {
     const write = atomic.writeFileAtomic;
     let busy = true;
     vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, data, options) => {
-      if (busy && path === join(w.r.dataDir, WEB_PUSH_SUBS_FILE)) {
+      if (busy && path === join(w.r.dataDir, failing)) {
         busy = false;
-        throw Object.assign(new Error("push subscriptions are busy"), { code: "EBUSY" });
+        throw Object.assign(new Error("file is busy"), { code: "EBUSY" });
       }
       write(path, data, options);
     });
     const signOut = () => viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: session, origin: w.origin } });
 
     expect((await signOut()).status).toBe(500);
-    expect((await viaRelay(w.r, "/api/bots", { headers: { cookie: session } })).status).toBe(200);
-    expect(new PhoneDevices(w.r.dataDir).list().map((phone) => phone.name)).toEqual(["Lost phone"]);
+    expect(new PhoneDevices(w.r.dataDir).list()).toHaveLength(paired);
+    expect(loadPushSubscriptions(w.r.dataDir)).toHaveLength(1);
 
     expect((await signOut()).status).toBe(200);
     expect(new PhoneDevices(w.r.dataDir).list()).toEqual([]);

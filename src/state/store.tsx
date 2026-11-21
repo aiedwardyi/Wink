@@ -2644,7 +2644,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       onError: () => {
         trackStream(false);
         rawDispatch({ type: "connected", value: false });
-        if (relaySignInSite()) void sessionState().then((state) => state === "gone" && leaveSignedOut());
+        if (relaySignInSite()) void sessionState().then((state) => {
+          if (state === "gone") return leaveSignedOut();
+        });
       },
       onSnapshotRequired: (cursor) => {
         clearTimeout(hydrationFallback);

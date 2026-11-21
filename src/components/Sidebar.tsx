@@ -66,8 +66,7 @@ import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
 import { relaySignInSite } from "@/lib/devices-setup";
-import { ConnectionError } from "@/lib/error-text";
-import { leaveSignedOut, sessionState, signedOutLanding } from "@/lib/signed-out";
+import { leaveSignedOut, reachable, sessionState, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -982,14 +981,16 @@ export function Sidebar({
     signedOutLanding(`${site}/?signedout=1`);
     try {
       await api("/api/phone/sign-out", { method: "POST" });
-    } catch (error) {
-      // A lost reply may follow a revoke that landed; only a PC that still knows this session means it failed.
-      if (!(error instanceof ConnectionError) || await sessionState() === "live") {
-        signedOutLanding();
-        return setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
-      }
+      return leaveSignedOut();
+    } catch {
+      // A failed reply may follow a revoke that landed, so the PC's own answer decides.
+      const state = await sessionState();
+      if (state === "gone") return leaveSignedOut();
+      if (state === "live") signedOutLanding();
+      // Offline, no page can load; the live stream's next answer from the PC finishes it.
+      else if (!(await reachable(site))) return;
+      setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
     }
-    leaveSignedOut();
   };
 
   useEffect(() => {

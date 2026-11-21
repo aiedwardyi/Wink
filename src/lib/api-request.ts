@@ -24,7 +24,7 @@ export async function request(path: string, init?: RequestInit): Promise<any> {
   const res = await fetchResponse(path, init);
   const body = await responseBody(res);
   if (!res.ok) {
-    if (res.status === 401 && body?.code === SIGNED_OUT) leaveSignedOut();
+    if (res.status === 401 && body?.code === SIGNED_OUT) void leaveSignedOut();
     if (body?.code === "INTERNAL_ERROR") throw new Error(t("errors.request"));
     if (body?.code === "NOT_FOUND") throw new Error(t("errors.notFound"));
     const error: Error & { code?: string; bot?: string; file?: string; status?: number } = new Error(body?.error ?? `${res.status} ${res.statusText}`);
