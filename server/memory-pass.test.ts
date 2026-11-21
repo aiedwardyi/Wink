@@ -327,6 +327,61 @@ describe("memory pass", () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["mapping, then one local send", ["map", "say"]],
+    ["one local send, then mapping", ["say", "map"]],
+    ["two local sends, then mapping", ["say", "say", "map"]],
+    ["mapping, a claimed turn, then the next settlement", ["map", "say", "claim"]],
+  ])("submits a restored copy's own rows once: %s", async (_name, steps) => {
+    for (let i = 0; i < 8; i++) say("t1", "I prefer short replies");
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, host: "pc-a", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    const sync = { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: {} };
+    saveProfileSyncSettings(mirrorDir, sync);
+    // B's own store: A's rows arrived by sync, B's typing never reaches A
+    const storeB = fakeStore();
+    for (let i = 0; i < 8; i++) storeB.appendMessage("t1", { role: "user", kind: "text", text: "I prefer short replies" });
+    const claimed = new Set<string>();
+    const mirror = createMemoryPass({ store: storeB, dataDir: mirrorDir, host: "pc-b", generate: () => generator, enabled: () => true, busy: (botId) => claimed.has(botId) });
+    passes.push(mirror);
+    const mine: string[] = [];
+    for (const step of steps) {
+      if (step === "map") saveProfileSyncSettings(mirrorDir, { ...sync, botMap: { "bot-t1": "synced-bot" } });
+      if (step === "say") mine.push(storeB.appendMessage("t1", { role: "user", kind: "text", text: `I use pnpm ${mine.length}` }).id);
+      if (step === "claim") {
+        claimed.add("bot-t1");
+        mirror.onSettled("bot-t1", "t1", true);
+        await mirror.idle();
+        expect(generate).not.toHaveBeenCalled();
+        claimed.delete("bot-t1");
+      }
+    }
+    mirror.onSettled("bot-t1", "t1", true);
+    await mirror.idle();
+    expect(generate).toHaveBeenCalledTimes(1);
+    const prompt = generate.mock.calls[0]![0];
+    for (const [i] of mine.entries()) expect(prompt).toContain(`I use pnpm ${i}`);
+    expect(prompt).not.toContain("I prefer short replies");
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[1]![0]).toContain("I prefer short replies");
+    expect(generate.mock.calls[1]![0]).not.toContain("I use pnpm");
+  });
+
+  it("keeps a restored copy's local row out of the rows it leaves to the source", () => {
+    const theirs = Array.from({ length: 2 }, () => say("t1", "I prefer short replies").id);
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ host: "pc-a", threads: { t1: theirs } }));
+    pass = createMemoryPass({ store, dataDir, host: "pc-b", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    const mine = say("t1", "I use pnpm").id;
+    pass.dispose();
+    expect(stored()).toEqual({ host: "pc-b", threads: { t1: [...theirs, mine] }, foreign: { t1: theirs } });
+  });
+
   it("never starts a helper for a turn claimed after the pass was scheduled", async () => {
     say("t1", "I use pnpm");
     pass.onSettled("bot-t1", "t1", true);

@@ -640,7 +640,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (!ids.length) continue;
       pending.set(threadId, ids);
       const theirs = restored ? ids : state.foreign?.[threadId];
-      if (theirs?.length) foreign.set(threadId, theirs);
+      if (theirs?.length) foreign.set(threadId, [...theirs]);
     }
     for (const [botId, record] of Object.entries(state.dropped ?? {})) dropped.set(botId, record);
     claim = Boolean(deps.host && state.host !== deps.host);
@@ -906,8 +906,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (!deps.enabled(target.id)) continue;
       const key = group ? roomKey(target.id, threadId) : threadId;
       const ids = pending.get(key) ?? [];
-      if (!ids.includes(message.id)) ids.push(message.id);
-      pending.set(key, ids.slice(-MAX_PENDING));
+      if (!ids.includes(message.id)) pending.set(key, [...ids, message.id].slice(-MAX_PENDING));
       clearTimeout(timers.get(key));
       timers.delete(key);
       queued = true;
