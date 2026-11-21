@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 
-type Phase = "prompt_build" | "memory_read" | "hooks" | "spawn" | "retirement_wait" | "initialize" | "resume" | "start" | "dispatch" | "first_event" | "completion" | "note_wait" | "background_pass";
+type Phase = "prompt_build" | "memory_read" | "hooks" | "spawn" | "retirement_wait" | "initialize" | "resume" | "start" | "dispatch" | "first_event" | "completion" | "note_wait" | "background_pass" | "forum_lesson";
 type Part = "system" | "memory" | "playbook" | "notes" | "tool_schemas" | "history" | "current_input" | "tool_output";
 type Usage = { input: number; output: number; cachedInput?: number; cacheCreation?: number };
 type Identity = { botId?: string; threadId?: string; sendId?: string; messageId?: string; turnId?: string; nativeSessionId?: string; nativeTurnId?: string; batchId?: string; sourceMessageIds?: string[]; sourceSendIds?: string[]; engine?: string };

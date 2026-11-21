@@ -7,6 +7,7 @@ import { basename, join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { lessonSchema } from "./forum-lesson-schema.ts";
 import { redactSecretsInText } from "./redact.ts";
 
 export const BOARD_DIR = "board";
@@ -46,12 +47,13 @@ const postSchema = z.object({
   updated_at: z.number().int().nonnegative(),
   pc_id: z.string().max(LIMITS.id),
   author: authorSchema.optional(),
+  lesson: lessonSchema.optional(),
 });
 
 export type BoardAuthor = z.infer<typeof authorSchema>;
 export type BoardPost = z.infer<typeof postSchema>;
 export type BoardKind = BoardPost["kind"];
-export type NewBoardPost = Pick<BoardPost, "author_bot_id" | "kind" | "title" | "body" | "source_ref"> & Partial<Pick<BoardPost, "parent_id" | "project_id" | "error_sig" | "status" | "fix">>;
+export type NewBoardPost = Pick<BoardPost, "author_bot_id" | "kind" | "title" | "body" | "source_ref"> & Partial<Pick<BoardPost, "parent_id" | "project_id" | "error_sig" | "status" | "fix" | "lesson">>;
 
 const clean = (text: string, max: number) => redactSecretsInText(text.trim()).slice(0, max);
 
@@ -87,12 +89,18 @@ export function projectIdOf(folder: string | undefined | null): string {
 export function mergeBoardPosts(left: BoardPost, right: BoardPost): BoardPost {
   const [older, newer] = left.updated_at <= right.updated_at ? [left, right] : [right, left];
   const solved = [newer, older].find((post) => post.status === "solved");
+  const lesson = newer.lesson ?? older.lesson;
   return {
     ...newer,
     status: solved ? "solved" : "open",
     fix: solved?.fix || newer.fix || older.fix,
     helped_bot_ids: [...new Set([...older.helped_bot_ids, ...newer.helped_bot_ids])].sort(),
     created_at: Math.min(older.created_at, newer.created_at),
+    ...(lesson ? { lesson: {
+      ...(lesson.outcome === "pending" ? older.lesson ?? lesson : lesson),
+      ...(older.lesson?.superseded || newer.lesson?.superseded ? { superseded: true } : {}),
+      delivered: [...new Set([...(older.lesson?.delivered ?? []), ...(newer.lesson?.delivered ?? [])])].sort(),
+    } } : {}),
   };
 }
 
@@ -155,6 +163,15 @@ export interface BoardOptions {
 
 export function createBoard(options: BoardOptions) {
   const now = options.now ?? Date.now;
+  const listeners = new Set<() => void>();
+  let lessonsChanged = false;
+  const notifyChanged = () => {
+    if (lessonsChanged) {
+      lessonsChanged = false;
+      for (const listener of listeners) listener();
+    }
+    options.changed?.();
+  };
   let cache: Map<string, BoardPost> | null = null;
   const posts = () => (cache ??= new Map(readPosts(options.dir).map((post) => [post.id, post])));
   let view: Map<string, BoardPost> | null = null;
@@ -174,6 +191,7 @@ export function createBoard(options: BoardOptions) {
   const drop = (id: string) => {
     view = null;
     wordSets.delete(id);
+    if (posts().get(id)?.lesson) lessonsChanged = true;
     posts().delete(id);
     rmSync(join(options.dir, `${id}.json`), { force: true });
     if (gone().has(id)) return;
@@ -187,6 +205,7 @@ export function createBoard(options: BoardOptions) {
     mkdirSync(options.dir, { recursive: true });
     writeFileAtomic(join(options.dir, `${post.id}.json`), `${JSON.stringify(post, null, 2)}\n`);
     posts().set(post.id, post);
+    if (post.lesson) lessonsChanged = true;
   };
 
   /** Keeps a copy another PC wrote; returns whether this PC's copy changed. */
@@ -220,6 +239,14 @@ export function createBoard(options: BoardOptions) {
 
   const board = {
     dir: options.dir,
+    onLessonChanged(listener: () => void) { listeners.add(listener); },
+    editLesson(id: string, edit: (lesson: NonNullable<BoardPost["lesson"]>) => NonNullable<BoardPost["lesson"]>): void {
+      const held = posts().get(id);
+      if (!held?.lesson || gone().has(id)) return;
+      const lesson = edit(held.lesson);
+      write({ ...held, lesson, status: lesson.outcome === "fixed" ? "solved" : "open", updated_at: now(), pc_id: options.pcId() });
+      notifyChanged();
+    },
     list(): BoardPost[] {
       return [...readable().values()].sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
     },
@@ -255,18 +282,23 @@ export function createBoard(options: BoardOptions) {
         pc_id: options.pcId(),
       };
       if (author) next.author = author;
+      const lesson = input.lesson ?? held?.lesson;
+      if (lesson) {
+        if (gone().has(id)) return next;
+        next.lesson = lesson;
+      }
       write(next);
       // a room's fix stays a note; it never solves a post a call would be held on
       const parent = next.kind === "fix" && next.parent_id && !fromRoom(next) ? posts().get(next.parent_id) : undefined;
       if (parent) solved(parent, next.fix || next.body, at);
-      options.changed?.();
+      notifyChanged();
       return next;
     },
     solve(id: string, fix: string): BoardPost | undefined {
       const held = posts().get(id);
       if (!held) return undefined;
       const next = solved(held, fix, now());
-      options.changed?.();
+      notifyChanged();
       return next;
     },
     /** Replies under a removed post move up to its parent, so they stay in their thread. */
@@ -276,7 +308,7 @@ export function createBoard(options: BoardOptions) {
       const at = now();
       for (const child of [...posts().values()]) if (child.parent_id === id) write({ ...child, parent_id: held.parent_id, updated_at: at, pc_id: options.pcId() });
       drop(id);
-      options.changed?.();
+      notifyChanged();
       return true;
     },
     helped(ids: readonly string[], botId: string): void {
@@ -287,7 +319,7 @@ export function createBoard(options: BoardOptions) {
         write({ ...held, helped_bot_ids: [...held.helped_bot_ids, botId].sort(), updated_at: now(), pc_id: options.pcId() });
         changed = true;
       }
-      if (changed) options.changed?.();
+      if (changed) notifyChanged();
     },
     search(input: BoardSearch): BoardPost[] {
       return searchBoard(board.list(), input, wordsOf);
@@ -344,7 +376,7 @@ export function createBoard(options: BoardOptions) {
         writeFileAtomic(join(ownDir, `${post.id}.json`), `${JSON.stringify(out, null, 2)}\n`);
         pushed++;
       }
-      if (pulled) options.changed?.();
+      if (pulled) notifyChanged();
       return { pulled, pushed };
     },
   };
@@ -357,6 +389,7 @@ export function searchBoard(posts: readonly BoardPost[], input: BoardSearch, wor
   const words = boardWords(input.query);
   const minShare = input.minShare ?? 0;
   const scored = posts.flatMap((post) => {
+    if (post.lesson) return [];
     if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
     if (input.roomThread !== undefined && !post.source_ref.startsWith(`${ROOM_REF}${input.roomThread}:`)) return [];
     const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);

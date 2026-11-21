@@ -11,6 +11,7 @@ import { decodeChunks } from "../electron/verify-replay.mjs";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL, verifyCardStale, type VerifyCardData, type VerifyCardStatus, type VerifyCounts, type VerifyErrorCode, type VerifyResult, type VerifyToolReply } from "../shared/live-verify.ts";
 import type { autoVerdict } from "./auto-approve.ts";
 import { callerSnapshot } from "./comms-root.ts";
+import { lessonRequest, type ForumLessons } from "./forum-lessons.ts";
 import type { DecisionRow } from "./decision-log.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -58,6 +59,8 @@ export interface VerifySiteDeps {
   platform?: NodeJS.Platform;
   toolCheckStarted?: (threadId: string, turnId: string) => () => void;
   docRun?: (runId: string) => Pick<Run, "threadId" | "recording" | "card" | "saved"> | undefined;
+  lessons?: ForumLessons;
+  lessonBinding?: (threadId: string, turnId: string) => { project: string; model: string } | undefined;
 }
 
 interface Site { root: string; entry: string; revision: string; site: string }
@@ -412,25 +415,45 @@ export function createVerifySite(deps: VerifySiteDeps) {
     } catch (error) {
       return json(res, (error as { status?: number }).status ?? 400, { error: (error as Error).message });
     }
-    const entryText = typeof body?.entry === "string" ? body.entry.trim() : "";
+    const { entry: entryText, prediction, invalid } = lessonRequest(typeof body?.entry === "string" ? body.entry : "");
     if (!entryText || entryText.length > VERIFY_LIMITS.entryChars) return json(res, 400, { error: `entry must be 1 to ${VERIFY_LIMITS.entryChars} characters` });
+    if (invalid) return json(res, 400, { error: "Invalid Forum prediction" });
     const send = (reply: VerifyToolReply) => { if (!res.writableEnded && !res.destroyed) json(res, 200, reply); };
     const conversation = store.conversationForBot(captured.botId, captured.threadId);
     if (!conversation) return json(res, 403, { error: "source thread does not belong to sender" });
-    const bridge = deps.bridge();
-    if (!bridge) return send(blocked("desktop-required", entryText));
+    const binding = !conversation.group ? deps.lessonBinding?.(captured.threadId, captured.turnId) : undefined;
+    const source = binding && { ...binding, botId: captured.botId, threadId: captured.threadId };
     const runId = randomUUID();
+    const lessonId = prediction && source ? deps.lessons?.begin(source, prediction, runId, entryText) : undefined;
+    const finishLesson = async (reply: VerifyToolReply, run?: Run) => {
+      if (!source || !deps.lessons) return reply;
+      const checks = reply.status === "completed" && reply.result?.runId === runId && reply.result.checks;
+      const local = run && verifyLoopbackUrl(run.root);
+      const project = checks && run && !local ? await realpath(source.project).catch(() => null) : null;
+      const fullPath = run && !local ? join(run.root, run.entry) : null;
+      const page = run && local ? run.site : project && fullPath && within(project, fullPath) ? relative(project, fullPath).split(sep).join("/") : null;
+      const measured = checks && run && page ? { runId, page, entry: entryText, revision: local ? "" : run.revision, checks } : undefined;
+      const hint = measured && deps.lessons.observe(source, measured);
+      if (lessonId) {
+        deps.lessons.finish(lessonId, measured, run?.messageId ? { threadId: run.threadId, messageId: run.messageId } : undefined);
+        return { ...reply, runId, text: [reply.text, `Forum lesson: ${lessonId}.`, hint].filter(Boolean).join("\n") };
+      }
+      if (prediction) return { ...reply, text: `${reply.text}\nForum prediction did not match an eligible before check.` };
+      return hint ? { ...reply, text: `${reply.text}\n${hint}` } : reply;
+    };
+    const bridge = deps.bridge();
+    if (!bridge) return send(await finishLesson(blocked("desktop-required", entryText)));
     let site: Site | VerifyErrorCode;
     try {
       site = await resolveVerifySite(entryText, deps.botOutputRoots(conversation.bot, captured.threadId, conversation.group?.id), caller.signal);
     } catch (error) {
       const unavailable = error as { code?: string; port?: string; refused?: boolean };
-      if (unavailable.code === "page-failed" && unavailable.port) return send({ ...blocked("page-failed", entryText), text: `Not checked: ${unavailable.refused ? "nothing is running" : "nothing is responding"} on port ${unavailable.port}. Start the dev server and call verify_site again.` });
+      if (unavailable.code === "page-failed" && unavailable.port) return send(await finishLesson({ ...blocked("page-failed", entryText), text: `Not checked: ${unavailable.refused ? "nothing is running" : "nothing is responding"} on port ${unavailable.port}. Start the dev server and call verify_site again.` }));
       site = "not-a-site";
     }
     if (typeof site === "string" || caller.signal.aborted || !turnLive(captured)) {
       free(runId);
-      return send(blocked(typeof site === "string" ? site : "cancelled", typeof site === "string" ? entryText : site.site));
+      return send(await finishLesson(blocked(typeof site === "string" ? site : "cancelled", typeof site === "string" ? entryText : site.site)));
     }
     const nonce = randomBytes(16).toString("hex");
     const run: Run = {
@@ -441,11 +464,11 @@ export function createVerifySite(deps: VerifySiteDeps) {
     runs.set(runId, run);
     if (slot !== null) writeCard(run, { status: "waiting" });
     const refused = await acquire(runId, caller.signal, toolDeadline);
-    if (refused) return send(finish(run, "blocked", { errorCode: caller.signal.aborted ? "cancelled" : refused }));
-    if (!turnLive(run)) return send(finish(run, "blocked", { errorCode: "cancelled" }));
+    if (refused) return send(await finishLesson(finish(run, "blocked", { errorCode: caller.signal.aborted ? "cancelled" : refused }), run));
+    if (!turnLive(run)) return send(await finishLesson(finish(run, "blocked", { errorCode: "cancelled" }), run));
     const reply = await execute(run, bridge, false, caller.signal);
     if (reply.status === "completed") checked?.();
-    return send(reply);
+    return send(await finishLesson(reply, run));
   }
 
   async function startAuto(input: { botId: string; threadId: string; entry: string; episode: string }): Promise<boolean> {

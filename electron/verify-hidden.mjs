@@ -16,10 +16,12 @@ const fatal = new Set(["resource-limit", "isolation-failed", "cancelled", "timeo
 const SHOT_MS = 2000;
 const plain = (value, cap) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, cap);
 const fault = code => Object.assign(new Error(code), { code });
+const checkKey = (rule, tile) => `${rule.id}/${tile}${rule.id === "FIT" ? `/${rule.label}` : ""}`;
 
 export function runHiddenVerify(input) {
   const started = Date.now(), adapters = {}, disposers = [], problems = [], notChecked = new Set(), details = [];
   const counts = { planned: 0, completed: 0, passed: 0, failed: 0, blocked: 0, notRun: 0 };
+  const checks = {};
   // [done, planned] per checker and tile; planned grows when a rule's list is known, so it rides on the next progress.
   const by = {}, tally = (checker, tile) => (by[checker] ??= {})[tile] ??= [0, 0];
   const casts = {};
@@ -232,7 +234,11 @@ export function runHiddenVerify(input) {
           for (const row of checked.problems) problems.push(decorate(row));
           for (const reason of checked.notChecked) notChecked.add(reason);
           for (const row of checked.details ?? []) details.push(decorate(row));
-          looked.push({ rule, data, candidates, decorate, remaining: [...checked.problems], left: candidates.length });
+          const covered = !checked.notChecked.length && (rule === menuRule
+            ? tile === "phone" && nav.desktop?.links.length >= 2 && nav.desktopReady
+            : !candidates.some(row => row.unchecked || row.pending));
+          if (rule === menuRule && tile === "desktop") nav.desktopReady = !guard.layout;
+          looked.push({ rule, data, candidates, decorate, covered, issues: checked.problems.length, remaining: [...checked.problems], left: candidates.length });
           input.onTiming?.("first-check", Date.now());
         } catch (error) {
           if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
@@ -276,7 +282,8 @@ export function runHiddenVerify(input) {
           notChecked.add(`${look.rule.label} (${tile})`);
         }
       }
-      for (const { rule, candidates, decorate, remaining } of looked.filter(row => !row.left)) {
+      for (const { rule, candidates, decorate, remaining, covered, issues } of looked.filter(row => !row.left)) {
+        if (covered) checks[checkKey(rule, tile)] = issues ? "missed" : "passed";
         for (const row of remaining) complete(false, true, { ...decorate(row), detail: false, scrollY: 0 });
         for (const row of [...problems, ...details].filter(row => row.tile === tile && row.checker === rule.id)) {
           const element = candidates.find(item => item.where === row.where && (!item.rule || item.rule === row.rule));
@@ -286,9 +293,17 @@ export function runHiddenVerify(input) {
       flushChecks(); casts[tile]?.readerStop();
       if (tile === "desktop" && looked.some(look => look.rule === linksRule)) emit({ kind: "part", part: "links" });
       await interact(cdp, tile);
+      const menuKey = checkKey(menuRule, tile);
+      if (checks[menuKey] === "passed" && !menuRule.linksReachable(nav.phone, nav.desktop)) {
+        const opened = await observe(cdp, menuRule, tile);
+        if (!opened || !menuRule.linksReachable(opened, nav.desktop)) delete checks[menuKey];
+      }
       const data = { images: [] };
       await pageErrors(data, tiles[i], blockedGuard(blocked.filter(row => !hmr.has(row.url))).scripts || guard.scripts);
       const checked = errorsRule.check(data);
+      const errorsKey = checkKey(errorsRule, tile);
+      if (checked.notChecked.length) delete checks[errorsKey];
+      else if (checked.problems.length && checks[errorsKey]) checks[errorsKey] = "missed";
       for (const row of checked.problems) {
         const issue = { checker: errorsRule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160) };
         problems.push(issue);
@@ -310,7 +325,7 @@ export function runHiddenVerify(input) {
       if (!distinct.has(key)) distinct.set(key, row);
     }
     const unique = [...distinct.values()];
-    const result = { v: 1, runId: input.runId, site: input.site, counts: { ...counts }, issues: unique.slice(0, 40), issueTotal: unique.length, durationMs: Date.now() - started, notChecked: [...notChecked].sort().slice(0, 20), details: [...new Map(details.map(row => [JSON.stringify([row.checker, row.rule, row.where, row.measured]), row])).values()].slice(0, 40) };
+    const result = { v: 1, runId: input.runId, site: input.site, counts: { ...counts }, issues: unique.slice(0, 40), issueTotal: unique.length, durationMs: Date.now() - started, notChecked: [...notChecked].sort().slice(0, 20), details: [...new Map(details.map(row => [JSON.stringify([row.checker, row.rule, row.where, row.measured]), row])).values()].slice(0, 40), ...(!errorCode ? { checks } : {}) };
     if (errorCode) result.errorCode = errorCode;
     try { emit({ kind: "end", result }); } catch {}
     return result;

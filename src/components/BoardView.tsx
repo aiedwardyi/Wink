@@ -19,7 +19,7 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
-import { useStore } from "@/state/store";
+import { openNotificationTarget, useStore } from "@/state/store";
 import { shownProfile } from "@/state/store-transforms";
 import type { Bot } from "@/state/store-types";
 
@@ -335,6 +335,32 @@ function Comment({ node, chain, replying, setReplying, onMenu, onSaved }: { node
 const lastOf = (node: BoardReply): string => (node.replies.length ? lastOf(node.replies[node.replies.length - 1]!) : node.post.id);
 const walk = (nodes: BoardReply[]): string[] => nodes.flatMap((node) => [node.post.id, ...walk(node.replies)]);
 
+function LessonEvidence({ post }: { post: BoardPost }) {
+  const { t } = useI18n();
+  const { state, dispatch } = useStore();
+  const lesson = post.lesson;
+  if (!lesson) return null;
+  const evidence = lesson.evidence;
+  const bot = state.bots.find(item => item.id === post.author_bot_id);
+  const canOpen = evidence && bot && (bot.threadId === evidence.threadId || bot.tasks?.some(task => task.threadId === evidence.threadId));
+  return (
+    <dl className="mt-3 space-y-2 rounded-xl bg-accent/10 px-3 py-2 text-[14px] leading-relaxed">
+      <div>
+        <dt className="text-[12px] font-semibold text-accent-text">{t("board.expected")}</dt>
+        <dd>{lesson.expected}</dd>
+      </div>
+      <div>
+        <dt className="text-[12px] font-semibold text-accent-text">{t("board.happened")}</dt>
+        <dd>{t(`board.lesson.${lesson.outcome}`)}</dd>
+      </div>
+      {canOpen && <button type="button" className="text-accent hover:underline" onClick={() => {
+        openNotificationTarget(dispatch, { botId: post.author_bot_id, threadId: evidence.threadId }, state, true);
+        dispatch({ type: "focusMessage", threadId: evidence.threadId, messageId: evidence.messageId });
+      }}>{t("board.lesson.evidence")}</button>}
+    </dl>
+  );
+}
+
 function Thread({ post, replies, onMenu, onSaved }: { post: BoardPost; replies: BoardPost[]; onMenu: OnMenu; onSaved: OnSaved }) {
   const { t } = useI18n();
   const author = useAuthor(post);
@@ -352,6 +378,7 @@ function Thread({ post, replies, onMenu, onSaved }: { post: BoardPost; replies: 
         </div>
         <h2 className="mt-3.5 text-[18px] leading-normal font-normal text-pretty max-md:text-[16.5px]">{post.title}</h2>
         {post.body && post.body !== post.title && <div className="mt-2 text-[15px] leading-relaxed"><Body text={post.body} /></div>}
+        {post.lesson && <LessonEvidence post={post} />}
         {post.kind !== "fix" && post.fix && post.fix !== post.body && !replies.some((reply) => reply.body === post.fix) && (
           <div data-board-fix className="mt-3 rounded-xl bg-success/10 px-3 py-2 text-[14px] leading-relaxed">
             <span className="text-[12px] font-semibold text-success">{t("board.flairFix")}</span>

@@ -6,6 +6,7 @@ export interface LiveTurn {
   rootId: string | null;
   nowWatch: unknown[];
   docFix?: string;
+  model?: string;
 }
 
 type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId"> & { rootId?: string | null };

@@ -10,9 +10,11 @@ import type { VerifyRunState } from "../electron/verify-protocol.mjs";
 import { chunk } from "../electron/verify-replay.mjs";
 import type { VerifyCardData, VerifyResult } from "../shared/live-verify.ts";
 import { autoVerdict } from "./auto-approve.ts";
+import { createBoard, type Board } from "./board.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
+import { createForumLessons } from "./forum-lessons.ts";
 import { hasLocalUndeliveredPaneNote, isWakeNote } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
@@ -45,6 +47,7 @@ let botId: string;
 let threadId: string;
 let token: string;
 let verify: ReturnType<typeof createVerifySite>;
+let board: Board;
 
 type FakeBridge = VerifyBridge & { starts: Array<{ watch: boolean; root: string; entry: string; revision: string }>; cancels: number; watches: number; states: VerifyRunState[]; startReply: string };
 
@@ -129,8 +132,11 @@ beforeEach(async () => {
   broadcasts = [];
   decisions = [];
   verdict = vi.fn(autoVerdict);
+  board = createBoard({ dir: join(tmp, "board"), pcId: () => "device-1" });
   verify = createVerifySite({
     store,
+    lessons: createForumLessons(board, () => "device-1"),
+    lessonBinding: () => ({ project: work, model: selection().model }),
     resolveCommsCaller: (header) => callers.resolve(header),
     botOutputRoots: () => [work],
     autoVerdict: verdict,
@@ -154,6 +160,25 @@ beforeEach(async () => {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+});
+
+it("writes the Forum prediction before the desktop bridge starts the changed page", async () => {
+  bridge!.poll = async run => ({ runId: run.runId, revision: 1, state: "completed", counts: counts(10), result: result([], { runId: run.runId, checks: { "NAV/phone": "missed" } }) });
+  const previous = await tool({ entry: "site" });
+  expect(previous.body.text).toContain("To save this fix in Forum");
+  expect(board.list()).toEqual([]);
+  const prediction = { beforeRunId: previous.body.runId, check: "NAV/phone", problem: "Links hidden", change: "Add toggle", why: "Reveal links", expected: "Menu passes" };
+  const originalStart = bridge!.start;
+  bridge!.start = async (run, watch, signal) => {
+    expect(board.list()[0]?.lesson).toMatchObject({ ...prediction, outcome: "pending", afterRunId: run.runId });
+    return originalStart(run, watch, signal);
+  };
+  bridge!.poll = async run => ({ runId: run.runId, revision: 1, state: "completed", counts: counts(10), result: result([], { runId: run.runId, checks: { "NAV/phone": "passed" } }) });
+  writeFileSync(join(work, "site", "index.html"), "<!doctype html><h1>Changed</h1>");
+  const recheck = await tool({ entry: `site\n${JSON.stringify(prediction)}` });
+  expect(recheck.body.status).toBe("completed");
+  expect(board.list()[0]?.lesson).toMatchObject({ ...prediction, outcome: "fixed", afterRunId: recheck.body.runId, evidence: { threadId } });
+  expect(board.list()[0]!.lesson!.endedAt).toBeGreaterThanOrEqual(board.list()[0]!.lesson!.predictedAt);
 });
 
 it("streams to the app and the user's bots, saves after the reply, and serves replay or 404", async () => {

@@ -112,7 +112,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       graceInputs: {}, summaryGrace: {}, summarySkipped: false, logSummaryWait: () => {},
       seed: {}, systemSeed: undefined, systemSeeds: { set: () => ({}) },
       pendingInterruptThreads: { started: () => {} }, effort: undefined, leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(),
-      joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
+      joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false, forumOffer: undefined,
     });
     store.markTaskDispatched(sender.id, threadId, instanceId, model);
     const cursor = sendTurn.mock.calls.at(-1)![0].resumeCursor ?? "new-provider-session";
