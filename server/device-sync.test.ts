@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,8 @@ import {
   writeDeviceRecord,
 } from "./device-sync.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+
+const { relayDeviceUrl } = createRequire(import.meta.url)("../electron/device-window.cjs");
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -434,5 +437,47 @@ describe("relay presence", () => {
     const listed = createDevicePresence(request)(listDevices(folder, "home", NOW), "home.tail1234.ts.net");
     expect(pickerDevices(listed, null, BASE, NOW).map((d) => [d.deviceId, d.offline])).toEqual([["cafe", false], ["dorm", true], ["home", false]]);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("this PC's app opens a PC with a team relay host through Google even while its tailnet answers", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("home"), relayHost: relay("home") }, NOW);
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+    writeDeviceRecord(folder, { ...rec("dorm"), relayHost: relay("dorm") }, NOW - DEVICE_STALE_MS - 1);
+    // The tailnet answers for every other PC.
+    const listed = listDevices(folder, "home", NOW).map((item) => (item.current ? item : { ...item, offline: false, checking: false }));
+    const picked = pickerDevices(listed, null, BASE, NOW, true);
+    expect(picked.map((d) => [d.deviceId, d.host, d.offline, d.checking])).toEqual([
+      ["dorm", relay("dorm"), true, false],
+      ["home", "home.tail1234.ts.net", false, false],
+      ["work", relay("work"), false, false],
+    ]);
+    // main.mjs sends that host to the PC's Google sign-in page, never a key.
+    const opened = relayDeviceUrl(picked.find((d) => d.deviceId === "work")?.host, BASE);
+    expect(opened).toBe(`https://${relay("work")}/pair?g=1`);
+    expect(opened).not.toMatch(/key|token|remote/);
+    // A tailnet browser and another PC's window keep the tailnet hosts.
+    expect(pickerDevices(listed, null, BASE, NOW).map((d) => d.host)).toEqual(["dorm.tail1234.ts.net", "home.tail1234.ts.net", "work.tail1234.ts.net"]);
+  });
+
+  it("leaves the link window only to PCs with no signed-in path", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, rec("work"), NOW);
+    writeDeviceRecord(folder, { ...rec("lab"), relayHost: `${"l".padEnd(16, "a")}.other.test` }, NOW);
+    writeDeviceRecord(folder, { ...rec("cafe"), relayHost: relay("cafe") }, NOW);
+    const listed = listDevices(folder, "home", NOW).map((item) => ({ ...item, checking: false }));
+    const hosts = (team: string | null) => Object.fromEntries(pickerDevices(listed, null, team, NOW, true).map((d) => [d.deviceId, d.host]));
+    expect(hosts(BASE)).toEqual({ cafe: relay("cafe"), home: "home.tail1234.ts.net", lab: "lab.tail1234.ts.net", work: "work.tail1234.ts.net" });
+    // No baked team relay: every PC stays on its tailnet window.
+    expect(hosts(null)).toEqual({ cafe: "cafe.tail1234.ts.net", home: "home.tail1234.ts.net", lab: "lab.tail1234.ts.net", work: "work.tail1234.ts.net" });
+    for (const host of ["work.tail1234.ts.net", "lab.tail1234.ts.net"]) expect(relayDeviceUrl(host, BASE)).toBe("");
+  });
+
+  it("gives setup peers with a team relay host that host", () => {
+    const peers = [rec("desktop"), rec("laptop")];
+    const devices = [{ ...rec("desktop"), name: "Home", relayHost: relay("desktop") }, { ...rec("laptop"), name: "Work", relayHost: `${"l".padEnd(16, "a")}.other.test` }];
+    expect(namedDevicePeers(peers, devices, BASE)).toEqual([{ name: "Home", deviceId: "desktop", host: relay("desktop") }, { ...rec("laptop"), name: "Work" }]);
+    expect(namedDevicePeers(peers, devices)).toEqual([{ ...rec("desktop"), name: "Home" }, { ...rec("laptop"), name: "Work" }]);
   });
 });
