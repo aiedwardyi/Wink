@@ -442,6 +442,31 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await removeTempDir(scratch);
   });
 
+  it("a reload's dispose returns while a CLI that ignores EOF lives on; the server's final dispose waits for it", async () => {
+    const launcher = join(scratch, "eof-deaf-cli.mjs");
+    writeFileSync(launcher, `setInterval(() => {}, 1000);\nconst exit = process.exit;\nprocess.exit = (code) => { if (code) exit(code); };\nawait import(${JSON.stringify(pathToFileURL(FAKE_CLI).href)});\n`);
+    const log = join(scratch, "prompts.jsonl");
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const turn = async (threadId: string) => {
+      await create(undefined, { FAKE_CLAUDE_PROMPT_LOG: log }, { cli: `"${process.execPath}" "${launcher}"` });
+      await instance.adapter.sendTurn({ threadId, text: threadId });
+      await recorder.until((event) => event.type === "turn.completed");
+      recorder.stop();
+      return readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)).find((row) => row.text.includes(threadId)).pid as number;
+    };
+
+    const reloaded = await turn("t-reload");
+    const began = performance.now();
+    await instance.dispose();
+    expect(performance.now() - began).toBeLessThan(2_000);
+    expect(alive(reloaded)).toBe(true);
+
+    const exiting = await turn("t-exit");
+    await instance.dispose({ final: true });
+    expect(alive(exiting)).toBe(false);
+    await vi.waitFor(() => expect(alive(reloaded)).toBe(false), { timeout: 10_000 });
+  }, 30_000);
+
   it("keeps prompt bytes identical with tracing on and off", async () => {
     const previous = process.env.ORBIT_TURN_TIMING;
     const requests: string[] = [];
@@ -4411,7 +4436,7 @@ SETLOCAL
 CALL :find_dp0
 "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*
 `;
-  const saved = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA };
+  const saved = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA, ProgramFiles: process.env.ProgramFiles };
   let root: string;
   let instance: ProviderInstance | undefined;
 
@@ -4439,8 +4464,9 @@ CALL :find_dp0
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "omb-claude-placeholder-"));
+    // Program Files too: the shims then run this node, not a cold %ProgramFiles%\nodejs\node.exe that can outlast the 8 s version probe.
     Object.assign(process.env, { PATH: join(process.env.SystemRoot ?? "C:\\Windows", "System32"), USERPROFILE: root,
-      APPDATA: join(root, "AppData", "Roaming"), LOCALAPPDATA: join(root, "AppData", "Local") });
+      APPDATA: join(root, "AppData", "Roaming"), LOCALAPPDATA: join(root, "AppData", "Local"), ProgramFiles: join(root, "Program Files") });
     resetPathCacheForTests();
   });
 

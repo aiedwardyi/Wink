@@ -573,6 +573,10 @@ const utilityParentPort = (process as NodeJS.Process & { parentPort?: UtilityPar
 const googleAccount = new GoogleAccount(googleEnv.client, null, { awaitSession: Boolean(utilityParentPort) });
 let hostShutdown = () => {};
 let hostShutdownStarted = false;
+// A Node parent (the test harness) stops the server the same way.
+process.on("message", (message) => {
+  if (isUtilityShutdownMessage(message)) hostShutdown();
+});
 utilityParentPort?.on("message", (event) => {
   const message = event?.data;
   if (isUtilityShutdownMessage(message)) {

@@ -14,7 +14,15 @@ try {
   if ($hook.hook_event_name -ne 'SessionStart' -or @('startup','resume') -notcontains $hook.source) { exit 0 }
   $body = @{ pane = $env:ORBIT_PANE; launchGeneration = $env:ORBIT_SESSION_GENERATION; session_id = $hook.session_id; transcript_path = $hook.transcript_path; cwd = $hook.cwd; source = $hook.source } | ConvertTo-Json -Compress
   $direct = if ($PSVersionTable.PSVersion.Major -ge 6) { @{ NoProxy = $true } } else { [Net.WebRequest]::DefaultWebProxy = $null; @{} }
+  $closed = $false
   try {
+    $old = [Uri]$env:ORBIT_SESSION_URL
+    $probe = [Net.Sockets.Socket]::new([Net.Sockets.AddressFamily]::InterNetwork, [Net.Sockets.SocketType]::Stream, [Net.Sockets.ProtocolType]::Tcp)
+    # Windows retries a refused connect for 2 s; with TCP_NOSYNRETRIES (9) the port of a restarted bridge refuses at once.
+    try { $probe.SetSocketOption([Net.Sockets.SocketOptionLevel]::Tcp, [Net.Sockets.SocketOptionName]9, 1); $probe.Connect($old.Host, $old.Port) } finally { $probe.Close() }
+  } catch { $closed = $_.Exception.InnerException.SocketErrorCode -eq 'ConnectionRefused' }
+  try {
+    if ($closed) { throw 'old bridge closed' }
     Invoke-RestMethod -Uri $env:ORBIT_SESSION_URL -Method Post -Headers @{ Authorization = "Bearer $env:ORBIT_SESSION_AUTH" } -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 10 @direct | Out-Null
   } catch {
     $orbitProfile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__ORBIT_PROFILE__'))

@@ -25,6 +25,12 @@ const temps = createTempDirs();
 afterAll(() => temps.remove());
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-msp-cli.ts");
+const realExec = procs.execCli;
+// A starved runner can spend the 8 s --version deadline just starting node; the fake's version line needs no process.
+const fakeVersion: typeof procs.execCli = (cli, args, opts, cb) =>
+  cli === FAKE_CLI && args.length === 1 && args[0] === "--version"
+    ? queueMicrotask(() => cb(null, `${(opts.env ?? process.env).FAKE_MSP_VERSION ?? "fake-msp 0.0.0"}\n`, ""))
+    : realExec(cli, args, opts, cb);
 
 describe("MSP turns (fake host)", () => {
   let instance: ProviderInstance;
@@ -114,6 +120,7 @@ describe("MSP turns (fake host)", () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
     scratch = mkdtempSync(join(tmpdir(), "omb-msp-test-"));
+    vi.spyOn(procs, "execCli").mockImplementation(fakeVersion);
   });
 
   afterEach(async () => {
@@ -132,6 +139,7 @@ describe("MSP turns (fake host)", () => {
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
+    vi.restoreAllMocks();
   });
 
   it.each([
@@ -996,6 +1004,7 @@ describe("MSP prewarm (fake host)", () => {
     scratch = temps.make(join(tmpdir(), "omb-msp-prewarm-"));
     rpcDump = join(scratch, "rpc.json");
     process.env.FAKE_MSP_RPC_DUMP = rpcDump;
+    vi.spyOn(procs, "execCli").mockImplementation(fakeVersion);
   });
 
   afterEach(async () => {
@@ -1141,7 +1150,6 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
   let spawn: MockInstance<typeof procs.spawnCli>;
   let exec: MockInstance<typeof procs.execCli>;
   const realSpawn = procs.spawnCli;
-  const realExec = procs.execCli;
   const serveCalls = () => spawn.mock.calls.filter((call) => call[1].includes("serve"));
   const start = async () => (instance ??= await MspMuseAgentDriver.create({
     instanceId: "muse-direct",
@@ -1170,7 +1178,7 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
     mapped = new Set([install.exe]);
     spawn = vi.spyOn(procs, "spawnCli").mockImplementation((cli, args, opts) => realSpawn(mapped.has(cli) ? FAKE_CLI : cli, args, opts));
     // A cold PowerShell start can outlast the 8 s version probe; the host start is what these tests drive.
-    exec = vi.spyOn(procs, "execCli").mockImplementation((cli, args, opts, cb) => realExec(cli === install.cli ? FAKE_CLI : cli, args, opts, cb));
+    exec = vi.spyOn(procs, "execCli").mockImplementation((cli, args, opts, cb) => fakeVersion(cli === install.cli ? FAKE_CLI : cli, args, opts, cb));
   });
 
   afterEach(async () => {

@@ -1,6 +1,7 @@
 // A bot busy in its 1:1 answers a room @ on a second lane. Each held turn
 // names hold:<name> and answers once the test writes that file.
 import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { UTILITY_SHUTDOWN_TYPE } from "./utility-parent.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -119,12 +121,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const name of ["one1", "room1", "one2", "room2", "one3", "room3", "one4", "room4", "one5", "one6", "x6", "y6", "a7", "b7", "one8", "room8", "again8"]) open(name);
-  child?.kill();
-  await new Promise<void>((resolve) => {
-    if (!child || child.exitCode !== null) return resolve();
-    child.on("close", () => resolve());
-    setTimeout(resolve, 5_000).unref?.();
-  });
+  // A kill leaves the server's CLIs running in their workspaces under home; a shutdown ends them first.
+  if (child && child.exitCode === null) {
+    const closed = once(child, "close");
+    child.send({ type: UTILITY_SHUTDOWN_TYPE });
+    await closed;
+  }
   rmSync(home, { recursive: true, force: true });
 });
 

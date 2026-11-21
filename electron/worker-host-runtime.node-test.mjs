@@ -11,6 +11,7 @@ import { spawnGate } from "./spawn-gate.mjs";
 import { terminalEnvironment } from "./terminal-host.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createWorkerHostClient } from "./worker-host-client.mjs";
+import { workerHostLock } from "./worker-host-identity.mjs";
 import { WORKER_HOST_PROTOCOL } from "./worker-host-protocol.mjs";
 import { launchWorkerHost, stageWorkerHostRuntime, sweepWorkerHostRuntime } from "./worker-host-runtime.mjs";
 
@@ -140,7 +141,8 @@ test("a host started from the copied runtime runs a pane and keeps its layers", 
   assert.deepEqual(await exit, { exitCode: 5 });
   await pane.exited;
   client.close();
-  await until(() => !alive(hosts[0]));
+  // Windows lets go of an ended host's lock a moment after its pid is gone, and a start before that finds the old host still there.
+  await until(() => workerHostLock(path.join(root, "data", `v${WORKER_HOST_PROTOCOL}`, "host.lock")) === "dead");
 
   const next = await connect();
   assert.match(lines[1], /^worker host ready pid=\d+ launch=\d+ms staged=none$/);

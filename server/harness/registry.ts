@@ -780,7 +780,7 @@ export class ProviderRegistry {
   async disposeAll() {
     await this.logins.dispose();
     this.environmentByInstance.clear();
-    await Promise.allSettled(this.instances().map((i) => i.dispose()));
+    await Promise.allSettled(this.instances().map((i) => i.dispose({ final: true })));
     await this.warmPool.closeAll("exit", { final: true });
     this.byId.clear();
     this.cliByInstance.clear();

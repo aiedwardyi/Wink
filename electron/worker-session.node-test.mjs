@@ -10,6 +10,7 @@ import { createPaneRuns } from "./pane-runs.mjs";
 import { createPaneRuns as createLegacyPaneRuns } from "./pane-runs.legacy.fixture.mjs";
 import { createTerminalHost } from "./terminal-host.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
+import { publishTerminalDiscovery } from "./terminal-discovery.mjs";
 import { installOrbitMsg } from "./terminal-mailbox.mjs";
 import { managedWorkerCommand } from "./terminal-worker.mjs";
 import { claudeSessionArgs, codexSessionArgs, resumeSessionReason } from "./worker-session.mjs";
@@ -46,7 +47,7 @@ async function fixture(t, engine = "codex", overrides = {}) {
   const post = (index, body) => fetch(`${address.url}/v1/terminal/session`, { method: "POST",
     headers: { authorization: `Bearer ${children[index].options.env.ORBIT_SESSION_AUTH}`, "content-type": "application/json" }, body: JSON.stringify(body) });
   const read = () => JSON.parse(fs.readFileSync(file, "utf8"));
-  return { dir, file, binDir, host, children, runs, open, payload, post, read };
+  return { dir, file, binDir, host, address, children, runs, open, payload, post, read };
 }
 
 for (const engine of ["claude", "codex"]) {
@@ -316,4 +317,29 @@ test("installed startup hooks post only the native session fields", { skip: proc
   assert.match(f.children[0].writes[0], /hooks.SessionStart=/);
   assert.match(f.children[0].writes[0], /trusted_hash/);
   assert.doesNotMatch(f.children[0].writes[0], /dangerously-bypass-hook-trust/);
+});
+
+test("a startup hook from before a restart skips the closed old port and reaches the restarted bridge at once", { skip: process.platform !== "win32" }, async (t) => {
+  const f = await fixture(t);
+  await f.open();
+  const binDir = await installOrbitMsg(path.join(f.dir, "profile-bin"), "win32", f.dir);
+  await publishTerminalDiscovery(f.dir, f.address, "http://127.0.0.1:9");
+  const gone = createTerminalBridge({ host: f.host });
+  const old = await gone.start();
+  await gone.close();
+  const first = f.payload(0);
+  const hooks = [first, { ...first, source: "resume" }];
+  // One powershell runs the hook against the live port, then against the closed one, timing each run without its own start.
+  const quote = (text) => `'${text.replaceAll("'", "''")}'`;
+  const runs = [`${f.address.url}/v1/terminal/session`, `${old.url}/v1/terminal/session`].map((url, i) => `$env:ORBIT_SESSION_URL = ${quote(url)}; $sw = [Diagnostics.Stopwatch]::StartNew(); ${quote(JSON.stringify({ ...hooks[i], hook_event_name: "SessionStart" }))} | & ${quote(path.join(binDir, "orbit-session.ps1"))}; "$LASTEXITCODE $($sw.ElapsedMilliseconds)"`);
+  const stdout = await new Promise((resolve, reject) => {
+    execFile(path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(runs.join("\n"), "utf16le").toString("base64")],
+      { windowsHide: true, env: { ...process.env, ...f.children[0].options.env } }, (error, out, stderr) => error ? reject(new Error(`${error.message} ${stderr}`)) : resolve(out));
+  });
+  const [live, closed] = stdout.trim().split(/\r?\n/).map((line) => line.split(" ").map(Number));
+  assert.equal(live[0], 0);
+  assert.equal(closed[0], 0);
+  assert.deepEqual([f.read()[0].session.nativeId, f.read()[0].session.source], [first.session_id, "resume"]);
+  // Windows retries a refused connect for 2 s, which a cold hook cannot spare inside its 15 s limit.
+  assert.ok(closed[1] < 1000, `the closed old port held the hook for ${closed[1]} ms`);
 });
