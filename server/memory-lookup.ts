@@ -44,6 +44,7 @@ const SEPARATOR = /^\|[\s:|-]+\|?$/;
 const STRUCK = /^[-*\s|]*(?:\d+\s*\|\s*)?~~/;
 const DATED = /\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b|\b(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/g;
 const NOTED_AT = /\(noted (\d{4}-\d{2}-\d{2})\)$/;
+const MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
 const localDay = (at: number) => new Date(at).toLocaleDateString("sv-SE");
@@ -86,17 +87,28 @@ export function rowDate(text: string, modified: string): string {
 // a day that cannot be, like 2026-13-02, was typed by hand and stamps nothing
 export function notedDay(text: string): string {
   const day = NOTED_AT.exec(text)?.[1] ?? "";
-  return day && new Date(`${day}T00:00:00Z`).toJSON()?.startsWith(day) ? day : "";
+  const [year, month, date] = [Number(day.slice(0, 4)), Number(day.slice(5, 7)), Number(day.slice(8))];
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  return date >= 1 && date <= (month === 2 && !leap ? 28 : (MONTH_DAYS[month - 1] ?? 0)) ? day : "";
 }
 
 // a note-taker row gives way to one noted later whatever day its words name, then a label keeps its newest-dated rows
-export function recalled<T extends { topic: string; noted: string; date: string }>(rows: T[]): T[] {
-  const noted = new Map<string, string>();
-  for (const row of rows) if (row.noted > (noted.get(row.topic) ?? "")) noted.set(row.topic, row.noted);
-  const current = rows.filter((row) => !row.noted || row.noted === noted.get(row.topic));
-  const latest = new Map<string, string>();
-  for (const row of current) if (row.date > (latest.get(row.topic) ?? "")) latest.set(row.topic, row.date);
-  return current.filter((row) => row.date === latest.get(row.topic));
+export function recalled(rows: Array<{ topic: string; noted: string; date: string }>): boolean[] {
+  const labels = new Map<string, { noted: string; date: string; unstamped: string }>();
+  const tops = rows.map((row) => {
+    let top = labels.get(row.topic);
+    if (!top) labels.set(row.topic, (top = { noted: "", date: "", unstamped: "" }));
+    if (!row.noted) top.unstamped = row.date > top.unstamped ? row.date : top.unstamped;
+    else if (row.noted > top.noted) {
+      top.noted = row.noted;
+      top.date = row.date;
+    } else if (row.noted === top.noted && row.date > top.date) top.date = row.date;
+    return top;
+  });
+  return rows.map((row, at) => {
+    const top = tops[at]!;
+    return (!row.noted || row.noted === top.noted) && row.date === (top.date > top.unstamped ? top.date : top.unstamped);
+  });
 }
 
 function firstCell(text: string): string {
@@ -188,15 +200,15 @@ function hasNearPair(positions: number[][]): boolean {
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
   const parsed = files.flatMap(piecesOfFile);
-  const shown = new Set(recalled(parsed.map((row) => row[0]!)));
+  const shown = recalled(parsed.map((row) => row[0]!));
   // a note said again is one row, the newest copy recall keeps and of equals the one search ranks first, so repeating it never makes its words common
   const notes = parsed.map((row) => `${row[0]!.source}\0${row.map(({ text }) => text).join("\n").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)$/, "")}`);
-  const order = (row: Piece[]) => [row[0]!.noted || row[0]!.date, -row.reduce((size, { tokens }) => size + tokens.length, 0)] as const;
+  const day = (row: Piece[]) => row[0]!.noted || row[0]!.date;
+  const size = (row: Piece[]) => row.reduce((sum, { tokens }) => sum + tokens.length, 0);
   const newest = new Map<string, Piece[]>();
   for (const [at, row] of parsed.entries()) {
     const kept = newest.get(notes[at]!);
-    const [day, size] = order(row);
-    if (shown.has(row[0]!) && (!kept || day > order(kept)[0] || (day === order(kept)[0] && size > order(kept)[1]))) newest.set(notes[at]!, row);
+    if (shown[at] && (!kept || day(row) > day(kept) || (day(row) === day(kept) && size(row) < size(kept)))) newest.set(notes[at]!, row);
   }
   const rows = parsed.filter((row, at) => newest.get(notes[at]!) === row);
   const pieces = rows.flat();

@@ -835,8 +835,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         };
         // a row recall hides is there only when a copy as new as its write was outdated by a later row
         const label = (row: string) => (/^([^:]{2,60}):\s/.exec(row)?.[1] ?? row).toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
-        const kept = new Set(recalled(rows.map((row, index) => ({ ...days[index]!, topic: label(row) ?? row, index }))).map(({ index }) => index));
-        const shown = ({ line, date }: Landed) => rows.some((row, index) => row === line && ((days[index]!.noted || days[index]!.date) >= date || kept.has(index)));
+        const kept = recalled(rows.map((row, index) => ({ ...days[index]!, topic: label(row) ?? row })));
+        const shown = ({ line, date }: Landed) => rows.some((row, index) => row === line && ((days[index]!.noted || days[index]!.date) >= date || kept[index]));
         const stays = (landed: Landed) => shown(landed) && rows.some((row, index) => row === landed.line && !older(index, landed.date, landed.copy));
         wrote = wrote.filter(stays);
         seen = seen.filter(stays);

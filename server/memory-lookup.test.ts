@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { DATA_DIR } from "./config.ts";
-import { buildRecallIndex, createMemoryLookup, RECALL_HEADER, type MemoryLookup, type MemoryLookupDeps, type NoteFile } from "./memory-lookup.ts";
+import { buildRecallIndex, createMemoryLookup, notedDay, RECALL_HEADER, type MemoryLookup, type MemoryLookupDeps, type NoteFile } from "./memory-lookup.ts";
 import { userTyping } from "./memory-pass.ts";
 import { parseJson } from "./schema.ts";
 import { buildRecallIndex as baseIndex } from "./testing/recall-index-83f790c87.ts";
@@ -267,6 +267,11 @@ describe("corpus", () => {
     const files = { "connections.md": ["# Stations\n- Station assignment: Silver Pier from 2026-10-01 (noted 2026-13-02)\n- Station assignment: Amber Quay (noted 2026-10-15)\n", 16] as const };
     expect(await fresh(files, "amber quay")).toContain("Amber Quay");
     expect(await fresh(files, "station assignment")).toContain("Amber Quay");
+  });
+
+  it("stamps only a day the calendar has", () => {
+    const days = ["2024-02-29", "2026-02-29", "1900-02-29", "2000-02-29", "2026-04-31", "2026-12-31", "2026-13-02", "2026-00-10", "2026-10-00"];
+    expect(days.map((day) => notedDay(`- Ferry: Amber Quay (noted ${day})`))).toEqual(["2024-02-29", "", "", "2000-02-29", "", "2026-12-31", "", "", ""]);
   });
 
   it("never lets an edit elsewhere in the file make an unstamped row hide a saved value", async () => {
