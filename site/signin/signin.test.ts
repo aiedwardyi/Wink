@@ -813,6 +813,37 @@ describe("entering a PC's code", () => {
     expect(inert()).toBe(false);
   });
 
+  it("opens the boxes with the cursor in the first one when a remembered PC's open is stopped", async () => {
+    const navigation = stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(boxesHidden()).toBe(true);
+    navigation.dispatchEvent(new Event("navigateerror"));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
+  it("opens the boxes when the remembered PC does not answer", async () => {
+    stubNavigation();
+    vi.useFakeTimers();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "timeout");
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(boxesHidden()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+  });
+
+  it("shows the boxes from the start where the page cannot hear a stopped open", () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+  });
+
   it("shows the boxes when Back restores the page after a remembered PC opened", async () => {
     stubNavigation();
     localStorage.setItem(LAST_PC, LABEL_B);
