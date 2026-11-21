@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -117,6 +117,19 @@ describe("PC-local accounts", () => {
     expect(restored.list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
     await expect(restored.add("codex")).rejects.toThrow(/accounts.json/);
     expect(readFileSync(join(dir, "accounts.json"), "utf8")).toBe(before);
+  });
+
+  it("recreates a saved account's missing home on restart without deleting anything", async () => {
+    const { dir, service } = fixture();
+    const claude = await service.add("claude");
+    const codex = await service.add("codex");
+    writeFileSync(join(claude.home, "keep.json"), "keep");
+    rmSync(codex.home, { recursive: true });
+    const restored = new core!.AccountService(dir, () => bases);
+    expect(restored.error).toBeUndefined();
+    expect(restored.snapshot.map((row) => row.id)).toEqual([claude.id, codex.id]);
+    expect(existsSync(join(codex.home, "state"))).toBe(true);
+    expect(readFileSync(join(claude.home, "keep.json"), "utf8")).toBe("keep");
   });
 
   it("refuses an account-root alias", async () => {

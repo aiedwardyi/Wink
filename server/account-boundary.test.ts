@@ -408,6 +408,23 @@ it.skipIf(process.platform !== "win32")("acknowledges a natural CLI exit that be
   expect(child.kill).not.toHaveBeenCalled();
 });
 
+it("a saved Codex account whose home folder is gone probes as signed out and signs in", async () => {
+  const f = fixture("codex");
+  const gone = () => fs.rmSync(f.account.home, { recursive: true });
+  f.signedIn(false);
+  gone();
+  const instance = await f.create();
+  expect((await instance.snapshot()).authenticated).toBe(false);
+  expect(fs.existsSync(join(f.account.home, "state"))).toBe(true);
+  gone();
+  const manager = new EngineLogin(5000, 50);
+  try {
+    await manager.start("account-a", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
+    expect(fs.existsSync(join(f.account.home, "state"))).toBe(true);
+    expect(f.launches.at(-1)!.env.CODEX_HOME).toBe(f.account.home);
+  } finally { await manager.dispose(); }
+});
+
 it("Codex admits only engine-reported ChatGPT accounts", async () => {
   const f = fixture("codex");
   f.auth("apiKey");

@@ -74,10 +74,10 @@ export class AccountService {
       this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
       this.validate(this.state);
       if (this.state.accounts.length) {
-        plainDirectory(this.root, false);
+        plainDirectory(this.root, true);
         for (const row of this.state.accounts) {
-          plainDirectory(this.home(row.id), false);
-          if (this.base(row.of).driver === "codex") plainDirectory(join(this.home(row.id), "state"), false);
+          plainDirectory(this.home(row.id), true);
+          if (this.base(row.of).driver === "codex") plainDirectory(join(this.home(row.id), "state"), true);
         }
       }
       this.publish();

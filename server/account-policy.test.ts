@@ -17,6 +17,24 @@ const policy = await import("./account-policy.ts").catch(() => null);
 afterEach(() => vi.restoreAllMocks());
 
 describe("account launch boundary", () => {
+  it.each([["claudeAgent", "claude"], ["codex", "codex"], ["grokAgent", "grok"]] as const)("creates a missing saved %s home before launch and never touches what is inside", (driver, of) => {
+    const home = join(DATA_DIR, "accounts", `missing-${driver}`);
+    const saved = { ...account, of, home };
+    expect(fs.existsSync(home)).toBe(false);
+    policy!.accountLaunch(saved, driver, [], {});
+    expect(fs.statSync(home).isDirectory()).toBe(true);
+    expect(fs.existsSync(join(home, "state"))).toBe(driver === "codex");
+    fs.writeFileSync(join(home, "auth.json"), "keep");
+    policy!.accountLaunch(saved, driver, [], {});
+    expect(fs.readFileSync(join(home, "auth.json"), "utf8")).toBe("keep");
+  });
+
+  it("leaves a base account home to its engine", () => {
+    const home = join(DATA_DIR, "accounts", "missing-base");
+    policy!.accountLaunch({ ...account, of: "codex", id: "codex", generation: 0, home }, "codex", [], {});
+    expect(fs.existsSync(home)).toBe(false);
+  });
+
   it("R6 opts real Claude launches into user setup while exempting auth and version", () => {
     expect(policy!.accountLaunch(account, "claudeAgent", ["-p", "fixture"], {}, true).args.slice(-2)).toEqual(["--setting-sources", "user,project,local"]);
     for (const args of [["auth", "status"], ["--version"]]) {
