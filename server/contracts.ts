@@ -537,7 +537,8 @@ export interface ProviderInstance {
    *  Synchronous and memory only: no file, process or login read. Advisory: prepare, take and the prompt write recheck a fresh capture.
    *  The identity is an in-memory hash: never log it or put it in a response. */
   cachedCapture?(): import("./drivers/warm-pool.ts").Captured | null;
-  dispose(): Promise<void>;
+  /** `final`: the server is exiting, so resolve only once this instance's processes have exited. A reload never waits on them. */
+  dispose(opts?: { final?: boolean }): Promise<void>;
 }
 
 /** How an engine is presented in the picker rail.
