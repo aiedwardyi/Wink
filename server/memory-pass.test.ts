@@ -31,6 +31,7 @@ import { replyTurns } from "./pick-sources.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { MEMORY_MAX_BYTES, MEMORY_SEED, memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- a second writer has to land between the pass's read and its write.
 vi.mock("node:fs", async (importOriginal) => ({ ...await importOriginal<typeof import("node:fs")>() }));
@@ -145,7 +146,7 @@ describe("memory pass", () => {
     on = true;
     botSwitch = new Map();
     writeMemoryFile("bot-t1", "");
-    rmSync(join(workspaceDir("bot-t1"), "memory"), { recursive: true, force: true });
+    removeTestData(join(workspaceDir("bot-t1"), "memory"));
     pass = start();
   });
 

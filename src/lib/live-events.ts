@@ -21,6 +21,8 @@ export interface LiveFrame {
   resumed?: boolean;
   /** Set here on frames a resumed stream replays from before it reconnected. */
   replayed?: boolean;
+  /** The server's clock as it wrote a hello or ping. */
+  now?: number;
   event?: unknown;
 }
 
@@ -59,6 +61,8 @@ export interface LiveEventsHandlers {
   onSnapshotRequired: (cursor?: string) => Promise<boolean>;
   onOpen?: () => void;
   onError?: () => void;
+  /** The server's clock off each hello and ping; undefined from a server that sends none. */
+  onServerTime?: (now?: number) => void;
   screens?: boolean;
   staleMs?: number;
   retryMinMs?: number;
@@ -121,12 +125,14 @@ function parseLiveFrame(data: string): LiveFrame | null {
     kind?: unknown;
     cursor?: unknown;
     resumed?: unknown;
+    now?: unknown;
     event?: unknown;
   };
   if (candidate.kind !== String(candidate.kind)) return null;
   if (candidate.cursor !== undefined && candidate.cursor !== String(candidate.cursor)) return null;
   if (candidate.resumed !== undefined && candidate.resumed !== Boolean(candidate.resumed)) return null;
-  // SAFETY: kind is a string and the two optional transport fields were
+  if (candidate.now !== undefined && !Number.isFinite(candidate.now)) return null;
+  // SAFETY: kind is a string and the optional transport fields were
   // checked against their exact primitive representations above.
   return candidate as LiveFrame;
 }
@@ -317,6 +323,7 @@ export function openLiveEvents(
 
       const frame = parseLiveFrame(event.data);
       if (!frame) return;
+      if (frame.kind === "hello" || isLivePing(frame)) handlers.onServerTime?.(frame.now);
 
       // Heartbeats prove this socket is alive, but they are not application
       // state and never establish a replay boundary of their own.

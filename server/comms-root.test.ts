@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import { cancelPeerApprovalsFor, resolvePeerComms } from "./peer-approval.ts";
 import { _resetSteerQueue, cancelQueuedRoomParticipations, drainSteeredMessages, foldQueuedSends, queueMark, queueRoomParticipation, queueSteeredMessage } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 let store: Store;
 let from: ReturnType<Store["createBot"]>;
@@ -22,7 +23,7 @@ const bus = () => ({ store, broadcast: () => {} });
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _resetPending();
   _resetCommsRoots();
   _resetSteerQueue();

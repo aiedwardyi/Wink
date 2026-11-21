@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +9,7 @@ import { GOOGLE_BINDING_FILE, createGoogleSync, type GoogleSync } from "./google
 import { loadOrCreateSyncWorkspace, loadProfileSyncSettings, readSyncOperations, saveProfileSyncSettings, syncedInFolder } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
 import type { BotSpec, Places, TestArgs, TestResult } from "./testing/google-sync-pc.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -136,7 +136,7 @@ const both = async (a: PC, b: PC) => ({ a: await a.places(), b: await b.places()
 const inTrash = (before: Places, days = 30) => ({ bots: before.bots.filter((bot) => bot.name !== "Atlas"), trash: [{ ...atlas(before), daysLeft: days }] });
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "orbit-google-trash-"));
+  root = mkdtempSync(join(testHome(), "orbit-google-trash-"));
   drive = new FakeDrive();
   drive.pageSize = 1000;
   pcs = [];
@@ -144,7 +144,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const pc of pcs) await pc.close();
-  rmSync(root, { recursive: true, force: true });
+  removeTestData(root);
 });
 
 describe("Bot trash between two Google PCs", { timeout: 180_000 }, () => {

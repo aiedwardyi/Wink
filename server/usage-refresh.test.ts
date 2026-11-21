@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -102,6 +103,34 @@ describe("usage refresh route result", () => {
     expect(claude).toHaveBeenCalledTimes(1);
     answer(claudeWindows);
     expect((await second).report).toEqual((await first).report);
+  });
+
+  describe("a user-tapped refresh", () => {
+    const used = (result: { report?: { windows: { usedPercent: number }[] } }) => result.report?.windows.map((window) => window.usedPercent);
+    const codexAt = (percent: number) => ({ rateLimits: { primary: { usedPercent: percent, windowDurationMins: 300, resetsAt: Date.parse(reset) / 1000 } } });
+
+    it("asks the provider again inside the cooldown while automatic checks still share one read", async () => {
+      const answers = [38, 12];
+      const rpc = vi.fn(async () => codexAt(answers.shift() ?? 0));
+      const refresh = createUsageRefresh({ now: () => 1_000, rpc });
+      expect(used(await refresh("codex", { instanceId: "codex" }))).toEqual([38]);
+      expect(used(await refresh("codex", { instanceId: "codex" }))).toEqual([38]);
+      expect(rpc).toHaveBeenCalledTimes(1);
+      expect(used(await refresh("codex", { instanceId: "codex", fresh: true }))).toEqual([12]);
+      expect(used(await refresh("codex", { instanceId: "codex" }))).toEqual([12]);
+      expect(rpc).toHaveBeenCalledTimes(2);
+    });
+
+    it("joins a read that is still running instead of starting another", async () => {
+      let finish: (value: JsonValue) => void = () => {};
+      const rpc = vi.fn(() => new Promise<JsonValue>((resolve) => { finish = resolve; }));
+      const refresh = createUsageRefresh({ now: () => 1_000, rpc });
+      const auto = refresh("codex", { instanceId: "codex" });
+      const tap = refresh("codex", { instanceId: "codex", fresh: true });
+      expect(rpc).toHaveBeenCalledTimes(1);
+      finish(codexAt(12));
+      expect(await tap).toBe(await auto);
+    });
   });
 
   it("lists the default Codex bucket once when rateLimitsByLimitId repeats it", async () => {
@@ -476,7 +505,7 @@ describe("usage refresh route result", () => {
       const spawn = JSON.parse(readFileSync(dump, "utf8"));
       expect(spawn.argv).toEqual(["serve", "--no-session-log", "--disable-shell", "--disable-write"]);
       expect(spawn.cwd).toContain("omb-muse-check-");
-      expect(spawn.cwd).not.toBe(homedir());
+      expect(spawn.cwd).not.toBe(testHome());
       expect(JSON.parse(readFileSync(`${dump}.config.json`, "utf8"))).toEqual([
         { method: "session/start", modelId: "muse-spark-1.3", approvalMode: "denyUnmatched", workspaceRoot: spawn.cwd },
       ]);

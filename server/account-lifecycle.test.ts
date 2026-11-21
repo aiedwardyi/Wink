@@ -424,7 +424,7 @@ describe("account lifecycle", () => {
     const event = { type: "runtime.error", message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true, providerInstanceId: "account" };
     const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "runtimeErrorTool", "accounts", "accountRuntime", "INCOMPLETE_LOG_MESSAGE", "refreshCodexPromo", "usageBoard", javascript);
     let row: { tool: ReturnType<typeof runtimeErrorTool> } | undefined;
-    run(event, { start() {} }, { messagesFor: () => [] }, (value: typeof row) => { order.push("row"); row = value; }, null, runtimeErrorTool, new Map([["account", {}]]), { signedOut }, "incomplete fixture", refreshCodexPromo, { touch() {} });
+    run(event, { start() {} }, { messagesFor: () => [], rowMark: () => ({ count: 0 }) }, (value: typeof row) => { order.push("row"); row = value; }, null, runtimeErrorTool, new Map([["account", {}]]), { signedOut }, "incomplete fixture", refreshCodexPromo, { touch() {} });
     await Promise.resolve();
     expect(order).toEqual(["row", "mark"]);
     expect(row?.tool).toMatchObject({ signIn: true, accountId: "account" });

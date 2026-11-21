@@ -103,13 +103,16 @@ export function quickAnswersSinceLastUserTurn(messages: Message[], excludeIds: R
 }
 
 /** Marks the carried answers noted on the turn's first model event; a turn that ends before it leaves them for the next. */
-export function quickAnswersTaken(store: Pick<Store, "messagesFor" | "patchMessage">, event: RuntimeEvent): void {
+export function quickAnswersTaken(store: Pick<Store, "row" | "patchRow">, event: RuntimeEvent): void {
   const ids = carried.get(event.threadId);
   const ended = event.type === "turn.completed" || event.type === "session.exited";
   if (!ids || (!ended && !MODEL_EVENTS.has(event.type))) return;
   carried.delete(event.threadId);
   if (ended) return;
-  for (const row of store.messagesFor(event.threadId)) if (row.quick && ids.includes(row.id)) store.patchMessage(event.threadId, row.id, { quick: { ...row.quick, noted: true } });
+  for (const id of ids.toReversed()) {
+    const row = store.row(event.threadId, id);
+    if (row?.quick) store.patchRow(event.threadId, id, { quick: { ...row.quick, noted: true } });
+  }
 }
 
 export interface QuickDeps {

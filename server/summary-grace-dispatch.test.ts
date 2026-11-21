@@ -98,6 +98,7 @@ describe("summary grace dispatch", () => {
     const store = {
       taskByThread: () => undefined,
       activePath: () => [...messages],
+      pathTail: (_threadId: string, count: number) => messages.slice(-count),
       activeLeaf: () => messages.at(-1)?.id ?? null,
       messagesFor: () => messages,
       appendMessage: (_threadId: string, row: Omit<Message, "id" | "at">) => {
@@ -197,7 +198,7 @@ describe("summary grace dispatch", () => {
         skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", opts: {}, tagged: [],
         text: "next request", activeMessages, skipTranscript, userMessage, replaysTranscript: false, replaysNatively: false,
         reactions: {}, rewound: false, fresh: false, recycled: false, recycleReason: undefined, modelContextWindow: 200_000,
-        recycleDeferred: false,
+        recycleDeferred: false, coldLoading: () => undefined,
         transcript: prepared.transcript, compactedThisTurn: Boolean(prepared.compaction), taskRecord: undefined, durableTaskRecordText: taskRecordText,
         recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, sessionCompactionId: null, seed,
         seedInputs: { instanceId: "claude", cursor: "session", seed: summaryGrace.native.seed, latestCompactionId: null },

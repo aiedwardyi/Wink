@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as atomic from "./atomic.ts";
 import { applyPicks, mergeTimelines } from "./picks.ts";
 import { traceClaimedTurn } from "./turn-timing.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 import {
   ensureWorkspace,
@@ -47,7 +48,7 @@ describe("workspace", () => {
     expect(memorySystemPrompt(BOT)).not.toContain("decisions.conflict-0123abcd.md");
   });
   beforeEach(() => {
-    rmSync(WORKSPACES_DIR, { recursive: true, force: true });
+    removeTestData(WORKSPACES_DIR);
   });
 
   it("preserves memory prompt and durable bytes with tracing on and off", async () => {
@@ -205,7 +206,7 @@ describe("workspace", () => {
     });
     expect(readMemoryFile(BOT).text).toBe("- likes tea and jazz\n");
     // a fresh workspace saves against the empty revision
-    rmSync(WORKSPACES_DIR, { recursive: true, force: true });
+    removeTestData(WORKSPACES_DIR);
     expect(saveMemoryFile(BOT, "- first\n", memoryRevision("")).conflict).toBe(false);
   });
 

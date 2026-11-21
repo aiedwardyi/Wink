@@ -26,15 +26,15 @@ export function RoomCode({ code, short, label, hint }: { code: string; short?: s
   };
   return (
     <div className="flex flex-col gap-2">
-      <div data-team-room-code className="flex items-center gap-3 rounded-lg bg-inset px-3 py-2">
+      <div data-team-room-code className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-inset px-3 py-2">
         <span className="shrink-0 text-[13px] font-medium text-ink">{label ?? t("teamRoom.inviteCode")}</span>
         {short
-          ? <span data-room-code-text className="min-w-0 flex-1 select-all truncate text-right font-mono text-[15px] tracking-[0.2em] text-ink">{short}</span>
+          ? <span data-room-code-text className="flex-1 select-all text-right font-mono text-[15px] tracking-[0.2em] text-ink">{short}</span>
           : <span data-room-code-text className={`min-w-0 flex-1 select-all font-mono text-[11.5px] text-ink-secondary ${copyFailed ? "break-all" : "truncate text-right"}`}>{code}</span>}
         <button
           type="button"
           onClick={() => void copy()}
-          className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-text hover:bg-control"
+          className="ml-auto flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-text hover:bg-control"
         >
           {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
           {copied ? t("teamRoom.copied") : t("teamRoom.copy")}

@@ -23,7 +23,7 @@ export function recentDelegations(store: Pick<Store, "botByThread" | "messagesFo
   }));
 }
 
-type MailStore = Pick<Store, "bot" | "botByThread" | "taskByThread" | "groupByThread" | "activePath" | "messagesFor" | "patchMessage">;
+type MailStore = Pick<Store, "bot" | "botByThread" | "taskByThread" | "groupByThread" | "activePath" | "messagesFor" | "patchMessage" | "row" | "patchRow">;
 export interface MailPart { id: string; text: string; upto: number; part?: number }
 const replyWakeKeys = new Set<string>();
 
@@ -87,15 +87,15 @@ export function mailForTurn(store: MailStore, threadId: string, paneIds: readonl
 
 export function markMailRead(store: MailStore, threadId: string, parts: readonly Pick<MailPart, "id" | "upto" | "part">[], turnId: string, via: "fold" | "steer" = "fold"): void {
   for (const part of parts) {
-    const row = store.messagesFor(threadId).find((row) => row.id === part.id);
+    const row = store.row(threadId, part.id);
     if (!row?.comm?.mailKey || row.comm.peer !== "reply") continue;
     replyWakeKeys.delete(row.comm.mailKey);
-    store.patchMessage(threadId, row.id, { comm: { ...row.comm, read: { state: "read", via, turnId, upto: part.upto, part: part.part, at: Date.now() } } });
+    store.patchRow(threadId, row.id, { comm: { ...row.comm, read: { state: "read", via, turnId, upto: part.upto, part: part.part, at: Date.now() } } });
   }
 }
 
 export function markPaneMailRead(store: MailStore, threadId: string, ids: readonly string[], turnId: string, via: "fold" | "steer"): void {
-  markMailRead(store, threadId, store.messagesFor(threadId).filter((row) => ids.includes(row.id)).map((row) => ({ id: row.id, upto: row.text?.length ?? 0 })), turnId, via);
+  markMailRead(store, threadId, ids.flatMap((id) => store.row(threadId, id) ?? []).map((row) => ({ id: row.id, upto: row.text?.length ?? 0 })), turnId, via);
 }
 
 export function markSteeredMail(store: MailStore, threadId: string, noteId: string | undefined, turnId: string): void {

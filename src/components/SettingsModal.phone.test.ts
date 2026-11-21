@@ -9,6 +9,7 @@ import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
 import { applyTerminalMatch, readTerminalMatch } from "@/lib/terminal-appearance";
 import { saveTerminalPopups, terminalPopupsEnabled } from "@/lib/terminal-popups";
+import { landFold, spyReveal } from "./Fold.test-land";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -144,6 +145,25 @@ describe("phone Settings navigation", () => {
     expect(toggle.getAttribute("aria-checked")).toBe(String(!enabled));
     await act(async () => toggle.click());
     Reflect.deleteProperty(navigator, "vibrate");
+  });
+
+  it("brings the first Advanced row into view once it has opened, never while closing", async () => {
+    await open();
+    await tap("General");
+    const scrolled = spyReveal();
+    try {
+      await tap("Advanced");
+      expect(scrolled).not.toHaveBeenCalled();
+      await landFold(dialog()!.querySelector("[data-settings-preferences]")!);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(dialog()!.querySelector("[data-settings-preferences] .divide-y > *"));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      await tap("Advanced");
+      await wait(PRESENCE_EXIT_MS + 40);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      scrolled.mockRestore();
+    }
   });
 
   it("keeps saved terminal preferences while their controls stay hidden", async () => {

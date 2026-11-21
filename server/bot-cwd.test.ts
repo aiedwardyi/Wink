@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import { validateBotCwd } from "./bot-cwd.ts";
 
@@ -22,13 +23,13 @@ describe("validateBotCwd", () => {
   it("expands a leading ~ to the home folder", () => {
     // compare against homedir() itself: a Windows home like C:\Users\RUNNER~1
     // legitimately contains "~", so "no ~ in the output" is not a valid check
-    expect(validateBotCwd("~")).toEqual({ ok: true, cwd: resolve(homedir()) });
+    expect(validateBotCwd("~")).toEqual({ ok: true, cwd: resolve(testHome()) });
   });
 
   it("expands ~\\ the same as ~/", () => {
     const missing = validateBotCwd("~\\definitely-missing-orbit-folder");
     expect(missing.ok).toBe(false);
-    if (!missing.ok) expect(missing.error).toContain(resolve(homedir()));
+    if (!missing.ok) expect(missing.error).toContain(resolve(testHome()));
   });
 
   it("accepts a quoted existing absolute folder", () => {

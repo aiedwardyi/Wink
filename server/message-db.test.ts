@@ -12,17 +12,21 @@ import {
   deleteThread,
   insertMessage,
   messageDatabase,
+  notesBack,
+  notesSinceOn,
   readThread,
   replaceThread,
   scanThreadRows,
   searchHaystack,
   searchMessages,
   setActiveLeaf,
+  threadVersion,
   updateMessage,
   withMessageTransaction,
 } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
 import type { ModelSelection } from "./contracts.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const legacy = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
@@ -38,7 +42,7 @@ const msg = (id: string, text: string, extra: Partial<Message> = {}): Message =>
 describe("message-db", () => {
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 
@@ -196,6 +200,14 @@ describe("message-db", () => {
     expect(JSON.stringify(plan)).toContain("COVERING INDEX");
   });
 
+  it("reads notes since a time newest inserted first, as a filtered notesBack reads them", () => {
+    [500, 300, 300, 700, 100, 300, 900, 200].forEach((at, n) => insertMessage("t", msg(`n${n}`, `note ${n}`, { role: "bot", kind: "note", at })));
+    insertMessage("t", msg("text", "not a note", { at: 300 }));
+    insertMessage("other", msg("elsewhere", "other chat", { role: "bot", kind: "note", at: 300 }));
+    for (const cutoff of [0, 100, 299, 300, 301, 900, 901])
+      expect([...notesSinceOn(messageDatabase(), "t", cutoff)].map((m) => m.id), `since ${cutoff}`).toEqual([...notesBack("t")].filter((m) => m.at >= cutoff).map((m) => m.id));
+  });
+
   it("finds handed mail at boot from an index, never a scan of every row", () => {
     const plan = messageDatabase().prepare("EXPLAIN QUERY PLAN SELECT thread_id, id, json FROM messages WHERE json_extract(json, '$.comm.read.state') = 'handed'").all();
     expect(plan.map((row) => row.detail)).toEqual(["SCAN messages USING INDEX messages_handed"]);
@@ -208,6 +220,14 @@ describe("message-db", () => {
     const thread = readThread("t4", legacy("t4"));
     expect(thread.messages).toEqual([]);
     expect(thread.activeLeafId).toBeNull();
+  });
+
+  it("deleteThread drops the thread's change count", () => {
+    insertMessage("t4", msg("m1", "edited soon"));
+    updateMessage("t4", msg("m1", "edited"));
+    deleteThread("t4");
+    insertMessage("t4", msg("m1", "back"));
+    expect(threadVersion("t4")?.split(":").at(-1)).toBe("0");
   });
 
   it("search is case-insensitive, escapes LIKE wildcards, and snips long text", () => {

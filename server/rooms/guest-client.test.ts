@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import { GuestClient, roomCodeHost, uploadDeadline, type GuestClientDeps } from 
 import * as joinedFiles from "./joined-files.ts";
 import { addJoinedEntries, closeJoinedDb, endJoined, joinedEntries, joinedKey, joinedRoom, removeJoined, saveJoined, seatTaken, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
@@ -37,7 +38,7 @@ beforeAll(async () => {
 
 // A server per test: a stopped client's request still in flight meets a closed port, not the next test's `seen`.
 beforeEach(async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   server = createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
     let body = "";
@@ -646,7 +647,7 @@ describe("deleted files", () => {
     guest({ timing: { retryMs: 10 } }).start();
     await until(() => asked.length >= 2);
     expect(asked.slice(0, 2)).toEqual(["0", "0"]);
-    rmSync(copy, { recursive: true });
+    removeTestData(copy);
     await until(() => asked.includes("3"));
     expect(existsSync(copy)).toBe(false);
   });

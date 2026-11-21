@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, readMailboxBody } from "./mailbox.ts";
+import { mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, readMailboxBody, splitReportPath } from "./mailbox.ts";
 import type { createMailboxReceipts } from "./mailbox-receipts.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import type { MailboxIdentity } from "./mailbox.ts";
@@ -46,7 +46,8 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
     if (input.queued && input.sentAt !== undefined) {
       const sent = new Date(input.sentAt);
       const time = `${String(sent.getHours()).padStart(2, "0")}:${String(sent.getMinutes()).padStart(2, "0")}`;
-      note += `\n(sent ${time} while Wink was closed)`;
+      const linked = splitReportPath(note);
+      note = `${linked.text}\n(sent ${time} while Wink was closed)${linked.path ? `\n[truncated]\nFull report: ${linked.path}` : ""}`;
     }
     const row: Omit<Message, "id" | "at"> = { role: "bot", kind: "note", text: note, origin: deps.origin };
     if (key) row.mailbox = { key };

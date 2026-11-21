@@ -278,11 +278,11 @@ describe("room records over profile sync", () => {
     const routes = createGroupRoutes({
       store, startGroupTurn, groupIsWorking: () => false, resolveReplyTarget: () => undefined, sendSequencer: { run: (_key: unknown, _print: unknown, work: () => unknown) => work() },
     } as unknown as Parameters<typeof createGroupRoutes>[0]);
-    const req = Readable.from([JSON.stringify({ text: "hi", threadId: "thread-room-1" })]) as unknown as IncomingMessage;
+    const req = Readable.from([JSON.stringify({ text: "hi", threadId: "thread-room-1", sentAfterId: null })]) as unknown as IncomingMessage;
     const res = { writeHead: vi.fn(), end: vi.fn() };
     await routes.postMessage(req, res as unknown as ServerResponse, ["", "room-1"] as RegExpMatchArray);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
-    expect(startGroupTurn).toHaveBeenCalledWith("room-1", "hi", undefined, undefined, undefined, undefined, [], undefined);
+    expect(startGroupTurn).toHaveBeenCalledWith("room-1", "hi", undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, null);
   });
 });
 

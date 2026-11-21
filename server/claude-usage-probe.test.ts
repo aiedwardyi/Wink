@@ -179,6 +179,24 @@ it("uses the CLI reading on Refresh without accessing a token file or HTTP", asy
   }
 });
 
+it("reads the reset value for a managed account when an open view's report reaches 30 seconds", async () => {
+  let now = 0;
+  let usedPercent = 100;
+  const claude = vi.fn<typeof readClaudeUsage>(async () => [{ ...windows[1]!, usedPercent }]);
+  const refresh = createUsageRefresh({ claude, now: () => now, random: () => 0.5 });
+  const options = { instanceId: account.id, account, maxAgeMs: 30_000 };
+  const first = await refresh("claudeAgent", options);
+  expect(first.report?.windows[0]?.usedPercent).toBe(100);
+  usedPercent = 12;
+  now = 29_999;
+  expect((await refresh("claudeAgent", options)).report).toEqual(first.report);
+  now = 30_000;
+  const next = await refresh("claudeAgent", options, first.report);
+  expect(next.report?.windows[0]?.usedPercent).toBe(12);
+  expect(Date.parse(next.report!.observedAt)).toBe(now);
+  expect(claude).toHaveBeenCalledTimes(2);
+});
+
 it("retains the current reading and caption when the CLI read fails", async () => {
   const previous = { windows, observedAt: new Date().toISOString() };
   const refresh = createUsageRefresh({ claude: async () => { throw new Error("old CLI"); } });
@@ -243,6 +261,39 @@ it("reads single-account usage with the launch env from a lean folder without ki
     { cwd: join(DATA_DIR, "helper"), env: { PATH: "fixture", CLAUDE_CONFIG_DIR: legacyHome }, stdio: ["pipe", "pipe", "pipe"] });
   expect(f.child.stdin.writableEnded).toBe(true);
   expect(procs.killCliTree).not.toHaveBeenCalled();
+});
+
+it("reads an account again on a tap while automatic checks keep the five minute wait", async () => {
+  const levels = [[35], [12]];
+  const claude = vi.fn<typeof readClaudeUsage>(async () => levels.shift()!.map((usedPercent) => ({ ...windows[0]!, usedPercent })));
+  const refresh = createUsageRefresh({ claude });
+  const used = async (fresh?: boolean) => (await refresh("claudeAgent", { instanceId: account.id, account, fresh })).report?.windows[0]?.usedPercent;
+  expect(await used()).toBe(35);
+  expect(await used()).toBe(35);
+  expect(claude).toHaveBeenCalledTimes(1);
+  expect(await used(true)).toBe(12);
+  expect(await used()).toBe(12);
+  expect(claude).toHaveBeenCalledTimes(2);
+});
+
+it("joins an in-flight CLI read and waits out a failed probe even on a tap", async () => {
+  let now = 0;
+  let fail!: (error: Error) => void;
+  const read = vi.fn(() => new Promise<typeof windows>((_, reject) => { fail = reject; }));
+  const probe = createClaudeUsageProbe({ read, now: () => now, random: () => 0.5 });
+  const first = probe("fake", {}, account);
+  await Promise.resolve();
+  const tap = () => probe("fake", {}, account, account.id, { fresh: true });
+  expect(tap()).toBe(first);
+  fail(new Error("Claude usage unavailable"));
+  expect(await first).toBeUndefined();
+  now = 314_999;
+  expect(await tap()).toBeUndefined();
+  expect(read).toHaveBeenCalledTimes(1);
+  now = 315_000;
+  read.mockResolvedValue(windows);
+  expect((await tap())?.windows).toEqual(windows);
+  expect(read).toHaveBeenCalledTimes(2);
 });
 
 it("drops a late reading after account invalidation", async () => {

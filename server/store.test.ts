@@ -25,6 +25,7 @@ import { readContextCompaction } from "../shared/context-compaction.ts";
 import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
 import { REPLACED_MODELS, replacedModelMoves, type ReplacedModel } from "../shared/replaced-models.ts";
 import { reactionMarkKeys } from "../shared/reactions.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -52,7 +53,7 @@ const taskPacket = (
 
 describe("Store", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("tool detail survives completion folding and a database restart without a planted key", async () => {
@@ -1576,7 +1577,7 @@ describe("Store", () => {
 
 describe("Store change stream", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   const record = (store: Store) => {
@@ -1725,7 +1726,7 @@ describe("Store change stream", () => {
 
 describe("Store bot activity state", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("derives busy from activity, so every existing busy reader keeps working", () => {
@@ -1771,7 +1772,7 @@ describe("Store model picked mid-reply", () => {
   const next: ModelSelection = { instanceId: "codex", model: "gpt-6-sol", mode: "pinned" };
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetSteerQueue();
   });
 
@@ -1834,7 +1835,7 @@ describe("Store model picked mid-reply", () => {
 
 describe("Store redacts bot-authored secrets on write", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("masks a key in bot text, tools and cards — but never in what the user typed", () => {
@@ -1989,7 +1990,7 @@ describe("Store redacts bot-authored secrets on write", () => {
 
 describe("Store task usage", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("banks each turn's tokens and cost on the task, counting turns", () => {
@@ -2041,7 +2042,7 @@ describe("Store task usage", () => {
 
 describe("Store task working folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("pins the bot's folder onto a task on its first turn, and never again", () => {
@@ -2151,7 +2152,7 @@ describe("Store task working folder", () => {
 
 describe("Store remembered project folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("remembers a resolved project per bot without turning it into a pin", () => {
@@ -2283,7 +2284,7 @@ describe("Store remembered project folder", () => {
 
 describe("Store room working folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("pins the room's folder on its first turn, and never again", () => {
@@ -2318,7 +2319,7 @@ describe("Store room working folder", () => {
 
 describe("Store task working folder — cloud runs", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
   it("a cloud run pins the default so the bot's host folder never shows for that task", () => {
     const store = new Store(selection);

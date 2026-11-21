@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
@@ -6,6 +5,7 @@ import { readThread, replaceThread } from "./message-db.ts";
 import { bootPaneWakes } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = () => ({ instanceId: "claude", model: "opus" });
 const size = (threadId: string) => readThread(threadId, "").chars;
@@ -21,7 +21,7 @@ function chats(count: number, rows: number, text = (index: number) => `row ${ind
 }
 
 describe("thread cache", () => {
-  beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
+  beforeEach(() => removeTestData(DATA_DIR));
 
   it("refreshes the projection after appends, forks, head changes and sync imports", () => {
     const store = new Store(selection);
