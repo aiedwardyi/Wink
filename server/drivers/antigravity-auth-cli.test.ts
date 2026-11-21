@@ -1,17 +1,22 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { once } from "node:events";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
-import { runTestNode } from "../testing/harness-auth.ts";
+import { runTestNode, spawnTestNode } from "../testing/harness-auth.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "omb-agy-auth-cli-"));
 const calls = join(dir, "calls.txt");
 const fake = join(dir, "fake-agy.cjs");
 writeFileSync(fake, `
 const fs = require("node:fs");
-require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+if (process.argv.includes("--login")) {
+  fs.appendFileSync(process.env.FAKE_AGY_CALLS, "terminal-login " + (process.env.SSH_CONNECTION || "-") + "\\n");
+  process.stdout.write("Open this link in a browser to log in with Google:\\n  https://accounts.google.com/o/oauth2/auth?x=1\\nThen paste the authorization code, or the full URL of the page you land on, and press Enter:\\n");
+  process.stdin.once("data", (code) => { fs.appendFileSync(process.env.FAKE_AGY_CALLS, "code " + code.toString().trim() + "\\n"); process.exit(code.toString().startsWith("good") ? 0 : 1); });
+} else require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   const { id, method } = JSON.parse(line);
   fs.appendFileSync(process.env.FAKE_AGY_CALLS, method + "\\n");
   const reply = (body) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, ...body }) + "\\n");
@@ -55,6 +60,23 @@ describe("agy sign-in helper", () => {
   it("fails when agy cannot start", async () => {
     const result = await run("logout", { OMB_AGY_CLI: join(dir, "no-such-agy") });
     expect(result.status).toBe(1);
+  });
+
+  it.each([["good-code", 0], ["bad-code", 1]] as const)("hands a pasted %s to agy's terminal login", async (code, status) => {
+    writeFileSync(calls, "");
+    const child = spawnTestNode(process.execPath, [SPAWNED_PROXIES.antigravityAuth, "login", "--paste"], {
+      stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, OMB_AGY_CLI: `"${process.execPath}" "${fake}"`, FAKE_AGY_CALLS: calls, SSH_CONNECTION: "ssh" },
+    });
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      const prompted = stdout.includes("press Enter:");
+      stdout += chunk;
+      if (!prompted && stdout.includes("press Enter:")) child.stdin.write(`${code}\n`);
+    });
+    const [exit] = await once(child, "close");
+    expect(exit).toBe(status);
+    expect(stdout).toContain("https://accounts.google.com/o/oauth2/auth?x=1");
+    expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["terminal-login ssh", `code ${code}`]);
   });
 
   it("refuses an unknown mode", async () => {

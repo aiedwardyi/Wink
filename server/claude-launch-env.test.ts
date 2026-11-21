@@ -14,7 +14,7 @@ const SITES = {
   // Headless Claude: Code Mode only runs in the interactive terminal.
   "server/drivers/claude.ts": { launches: 2 },
   "server/drivers/claude-fork.ts": { launches: 1 },
-  "server/drivers/antigravity-auth-cli.ts": { launches: 1 },
+  "server/drivers/antigravity-auth-cli.ts": { launches: 2 },
   // Control requests only, never a model turn.
   "server/claude-usage-probe.ts": { launches: 1 },
   "companion/src/listener.ts": { launches: 1 },

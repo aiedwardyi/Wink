@@ -517,11 +517,11 @@ describe("ProviderRegistry", () => {
   });
 
   it.each([
-    ["claudeAgent", ["auth", "login"], undefined, ["auth", "logout"]],
+    ["claudeAgent", ["auth", "login"], ["auth", "login", "--claudeai"], ["auth", "logout"]],
     ["codex", ["login"], ["login", "--device-auth"], ["logout"]],
     ["grokAgent", ["login"], ["login", "--device-auth"], ["logout"]],
     ["museAgent", ["login"], ["login"], ["logout"]],
-    ["antigravityAgent", ["login"], undefined, ["logout"]],
+    ["antigravityAgent", ["login"], ["login", "--paste"], ["logout"]],
   ])("exposes fixed login and logout commands for %s", async (kind, args, deviceArgs, logout) => {
     const driver = BUILT_IN_DRIVERS.find((entry) => entry.driverKind === kind)!;
     const fake = makeFakeDriver({ kind: kind as string });
@@ -538,6 +538,22 @@ describe("ProviderRegistry", () => {
     await registry.disposeAll();
   });
 
+  it.each([
+    ["claudeAgent", ["auth", "login"], ["auth", "login", "--claudeai"], "BROWSER", "true"],
+    ["antigravityAgent", ["login"], ["login", "--paste"], "SSH_CONNECTION", "127.0.0.1 50000 127.0.0.1 22"],
+  ])("signs %s in from a phone with a paste prompt and no PC browser, desktop unchanged", async (kind, args, deviceArgs, key, value) => {
+    const driver = BUILT_IN_DRIVERS.find((entry) => entry.driverKind === kind)!;
+    const registry = new ProviderRegistry([{ ...makeFakeDriver({ kind }).driver, install: driver.install, defaultConfig: () => ({ cli: "fake-cli" }) }]);
+    await registry.load({ engine: { driver: kind } });
+    const start = vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://example.com/login", inputGeneration: 1 });
+    await registry.startSignIn("engine");
+    await registry.startSignIn("engine", true);
+    const [desktop, phone] = start.mock.calls;
+    expect([desktop[2], desktop[3]?.[key] === value, desktop[5]?.paste]).toEqual([args, false, false]);
+    expect([phone[2], phone[3]?.[key], phone[5]?.paste]).toEqual([deviceArgs, value, true]);
+    await registry.disposeAll();
+  });
+
   it("runs only registered argv with the configured CLI and environment", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([{ ...fake.driver, install: {
@@ -548,7 +564,7 @@ describe("ProviderRegistry", () => {
     await registry.startSignIn("a", true);
     expect(start).toHaveBeenCalledTimes(1);
     const [id, cli, args, env, hosts, options] = start.mock.calls[0];
-    expect([id, cli, args, hosts, options]).toEqual(["a", "custom-cli", ["device"], ["auth.example"], { scope: "fake", account: undefined, logExit: true }]);
+    expect([id, cli, args, hosts, options]).toEqual(["a", "custom-cli", ["device"], ["auth.example"], { scope: "fake", account: undefined, logExit: true, paste: true }]);
     expect(env?.TEST_ENV).toBe("yes");
     expect(env?.MUSE_LOGIN).toBe("0");
     expect(await registry.startSignIn("missing")).toBeNull();

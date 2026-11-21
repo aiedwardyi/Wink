@@ -48,7 +48,20 @@ async function main(mode: string): Promise<number> {
   }
 }
 
+// `agy acp --login` prints the link and reads the pasted code on stdin.
+function pasteLogin(): Promise<number> {
+  const { command, args } = resolveCliSpawn(process.env.OMB_AGY_CLI || "agy", ["acp", "--login"]);
+  const env = { ...process.env };
+  delete env.OMB_AGY_CLI;
+  const child = spawn(command, args, { stdio: "inherit", windowsHide: true, env });
+  return new Promise((resolve) => {
+    child.once("error", () => resolve(1));
+    child.once("close", (code) => resolve(code ?? 1));
+  });
+}
+
 const mode = process.argv[2];
+if (mode === "login" && process.argv[3] === "--paste") process.exit(await pasteLogin());
 if (mode === "login" || mode === "logout") process.exit(await main(mode));
 console.error("usage: antigravity-auth-cli login|logout");
 process.exit(2);
