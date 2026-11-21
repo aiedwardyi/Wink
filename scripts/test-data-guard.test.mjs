@@ -6,7 +6,8 @@ import { expect, it } from "vitest";
 
 import { runTestNode, spawnHarness } from "../server/testing/harness-auth.ts";
 import { createFixtureHome, removeTestData, testHome } from "../server/testing/test-home.ts";
-import { checkTestProfilePaths } from "./check-test-profile-paths.mjs";
+import { checkLauncherEnv, checkTestProfilePaths } from "./check-test-profile-paths.mjs";
+import { linuxDesktopEnv, relayServerEnv } from "./smoke-env.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const setupHint = "load server/testing/setup.ts (vite.config.ts setupFiles) before importing";
@@ -372,6 +373,41 @@ it("refuses ordinary replacements of imported data directories during direct and
     }
   }
   removeTestData(home);
+});
+
+const parentProfile = () => {
+  const names = ["OMB_DATA_DIR", "OMB_USER_DATA", "OMB_DOWNLOADS_DIR", "OMB_COMPANION_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"];
+  return Object.fromEntries(names.map((name) => [name, join(root, "parent-sentinel", name)]));
+};
+
+it.each([
+  ["relay smoke", (parent, home) => relayServerEnv(parent, { home, port: 1, resources: join(home, "res") })],
+  ["Linux package smoke", (parent, home) => linuxDesktopEnv(parent,
+    { home, xdgConfig: join(home, "config"), xdgRuntime: join(home, "run"), wayland: false, sentinel: join(home, "cua"), brokerPort: 1, cua: true })],
+])("the %s launch env never carries the parent's profile", (_name, build) => {
+  const home = join(root, "disposable-home");
+  const parent = { ...parentProfile(), PATH: "kept" };
+  const env = build(parent, home);
+  expect(env.PATH).toBe("kept");
+  for (const name of Object.keys(parentProfile())) {
+    const value = Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
+    expect(value === undefined || value.startsWith(home), `${name}=${value}`).toBe(true);
+  }
+  expect(env.HOME).toBe(home);
+  expect(env.USERPROFILE).toBe(home);
+});
+
+it("the repo check rejects a launcher that forwards process.env to the app and names the scrub helper", () => {
+  const hits = checkLauncherEnv(["scripts/smoke-example.mjs", "scripts/smoke-scrubbed.mjs", "scripts/smoke-driver.mjs"], (file) => ({
+    "scripts/smoke-example.mjs": 'spawn(exe, [], { env: { ...process.env, HOME: home, OMB_PORT: "1" } });',
+    "scripts/smoke-scrubbed.mjs": 'spawn(exe, [], { env: { ...smokeLauncherEnv(process.env, home), OMB_PORT: "1" } });',
+    "scripts/smoke-driver.mjs": 'spawn(exe, [], { env: { ...process.env, OMB_SMOKE_MODE: "1" } });',
+  })[file]);
+  expect(hits).toHaveLength(1);
+  expect(hits[0]).toContain("smoke-example.mjs");
+  expect(hits[0]).toContain("smokeLauncherEnv");
+  expect(checkLauncherEnv()).toEqual([]);
 });
 
 it("the repo check rejects raw recursive deletion through aliases and keeps file removal", () => {

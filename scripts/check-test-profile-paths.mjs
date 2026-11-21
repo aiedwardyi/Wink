@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { location, parseSource, readSource, runCheck, trackedFiles, walk } from "./repo-check.mjs";
+import { location, parseSource, readSource, runCheck, testFile, trackedFiles, walk } from "./repo-check.mjs";
 
 const testSource = /\.(?:test|node-test|spec)\.[cm]?[jt]sx?$|(?:^|\/)(?:test|tests|testing|__tests__|fixtures|__fixtures__|test-utils)\/.*\.[cm]?[jt]sx?$/;
 const homeKey = /^(HOME|USERPROFILE)$/i;
@@ -17,6 +17,31 @@ const allowed = new Map([
   ["server/testing/fake-claude-cli.ts", ["homedir", "homedir()"]],
   ["server/testing/setup.ts", ["homedir", "homedir()", "homedir()"]],
 ]);
+
+// Launchers that spawn the app or server must not forward the caller's profile overrides.
+const launcherSource = /^scripts\/[^/]+\.mjs$/;
+const launcherAllowed = new Set([
+  "scripts/dev.mjs", // the dev runner deliberately uses the developer's own profile
+]);
+
+export function checkLauncherEnv(files = trackedFiles(launcherSource).filter((file) => !testFile.test(file)), read = readSource) {
+  const hits = [];
+  for (const file of files) {
+    const text = read(file);
+    if (launcherAllowed.has(file) || !/process\.env/.test(text)) continue;
+    const source = parseSource(file, text);
+    walk(source, (node) => {
+      if (!ts.isObjectLiteralExpression(node)) return;
+      const forwards = node.properties.some((property) =>
+        ts.isSpreadAssignment(property) && processEnv.test(property.expression.getText(source)));
+      const launchesApp = node.properties.some((property) => /^OMB_(?!SMOKE_)/.test(property.name?.getText(source) ?? ""));
+      if (forwards && launchesApp) {
+        hits.push(`${file}:${location(source, node)}: build the launched app's env with smokeLauncherEnv from server/testing/profile-env.ts, not ...process.env`);
+      }
+    });
+  }
+  return hits;
+}
 
 export function checkTestProfilePaths(files = trackedFiles(testSource), read = readSource) {
   const hits = [];
@@ -128,4 +153,4 @@ export function checkTestProfilePaths(files = trackedFiles(testSource), read = r
   return hits;
 }
 
-runCheck(import.meta.url, checkTestProfilePaths);
+runCheck(import.meta.url, () => [...checkTestProfilePaths(), ...checkLauncherEnv()]);
