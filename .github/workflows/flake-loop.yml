@@ -1,4 +1,4 @@
-# Scratch loop for CI-FLAKES-5; lives only on loop/* branches.
+# Scratch loop for CI-FLAKES-8; lives only on loop/* branches.
 name: Flake loop
 
 on:
@@ -17,8 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { flake: "version probe 9 s", side: base, ref: 2b7da9fc6bde4784f34c73ce203332e6872e813a, prep: "msp-slow-version-base.mjs", cmd: "node node_modules/vitest/vitest.mjs run server/drivers/msp/runtime.test.ts -t \"too slow to tell its version\"", rounds: 20 }
-          - { flake: "version probe 9 s", side: head, ref: b122b42ecbb619b20ef096b003337b44120f0e4f, prep: "", cmd: "node node_modules/vitest/vitest.mjs run server/drivers/msp/runtime.test.ts -t \"too slow to tell its version\"", rounds: 20 }
+          - { flake: "room-lane linger", side: base, ref: 2b7da9fc6bde4784f34c73ce203332e6872e813a, prep: "room-lane-linger.mjs", cmd: "node node_modules/vitest/vitest.mjs run server/room-lane.e2e.test.ts", rounds: 20 }
+          - { flake: "room-lane linger", side: head, ref: 8a5cc02a497f3e5ad3a31ba1e1ca4ee49b2f8569, prep: "room-lane-linger.mjs", cmd: "node node_modules/vitest/vitest.mjs run server/room-lane.e2e.test.ts", rounds: 20 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
