@@ -437,7 +437,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, peerMemoryLanded, pinMemoryJobOwner, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, memoryJobMachine, peerMemoryLanded, pinMemoryJobOwner, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -1844,7 +1844,7 @@ async function importProfileChanges(): Promise<void> {
     }
   }
   if (!remote.invalidFiles.length) {
-    ensureMemorySyncDevice(memorySyncLedger);
+    ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice);
     for (const [botId, syncId] of Object.entries(profileSyncSettings.botMap)) {
       const owner = Object.hasOwn(state.botOrigins, syncId) ? state.botOrigins[syncId] : undefined;
       if (!owner || !pinMemoryJobOwner(memorySyncLedger, syncId, owner)) continue;
@@ -2378,7 +2378,8 @@ let profilePublishTimer: ReturnType<typeof setTimeout> | undefined;
 const memorySyncLedger = loadMemorySyncLedger(DATA_DIR);
 const legacyMemoryLedger = loadLegacyMemoryLedger(DATA_DIR);
 let savedMemoryLedger = JSON.stringify(memorySyncLedger);
-if (memorySyncLedger.device) ensureMemorySyncDevice(memorySyncLedger);
+const memoryJobDevice = memoryJobMachine(DATA_DIR);
+if (memorySyncLedger.device) ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice);
 
 function publishProfileChangesSafely(): void {
   try {
@@ -2482,7 +2483,7 @@ function saveMemoryLedger(): void {
 function memoryJobsHere(botId: string): boolean {
   const folder = profileSyncSettings.folder;
   const syncId = chatSyncBotId(profileSyncSettings, botId);
-  return !syncId || Boolean(folder && existsSync(folder) && tidiesHere(memorySyncLedger, syncId, profileSyncSettings.deviceId));
+  return !syncId || Boolean(folder && existsSync(folder) && tidiesHere(memorySyncLedger, syncId, profileSyncSettings.deviceId, memoryJobDevice));
 }
 
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
@@ -2580,7 +2581,7 @@ const googleSync = createGoogleSync({
   folder: () => profileSyncSettings.folder,
   prepare: () => {
     const device = memorySyncLedger.device;
-    if (ensureMemorySyncDevice(memorySyncLedger) !== device) {
+    if (ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice) !== device) {
       saveMemorySyncLedger(DATA_DIR, memorySyncLedger);
       savedMemoryLedger = JSON.stringify(memorySyncLedger);
     }

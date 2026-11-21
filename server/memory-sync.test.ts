@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { markTalked, memorySyncDir, pinMemoryJobOwner, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, markTalked, memorySyncDir, pinMemoryJobOwner, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
 import { MEMORY_SEED } from "./workspace.ts";
 import { applyPicks, currentPicks, parseTimeline } from "./picks.ts";
 
@@ -84,6 +84,20 @@ describe("memory sync", () => {
     expect(tidiesHere(mirror.ledger, "bot-1", "pc-a")).toBe(false);
     expect(tidiesHere(mirror.ledger, "bot-1", "pc-b")).toBe(false);
     expect(tidiesHere(owner.ledger, "bot-1", "pc-a")).toBe(true);
+  });
+
+  it("keeps background jobs on a renamed PC but not on a copy on another PC", () => {
+    const ledger: MemorySyncLedger = { bots: {} };
+    ensureMemorySyncDevice(ledger, "aaaaaaaaaaaa");
+    pinMemoryJobOwner(ledger, "bot-1", "pc-a");
+    const copy = structuredClone(ledger);
+    // saved under the old hostname
+    ledger.host = "old-host";
+    ensureMemorySyncDevice(ledger, "aaaaaaaaaaaa");
+    expect(tidiesHere(ledger, "bot-1", "pc-a", "aaaaaaaaaaaa")).toBe(true);
+    copy.host = "other-pc";
+    ensureMemorySyncDevice(copy, "bbbbbbbbbbbb");
+    expect(tidiesHere(copy, "bot-1", "pc-a", "bbbbbbbbbbbb")).toBe(false);
   });
 
   it("recovers a timeline parked by an older build without asking the bot to edit it", () => {
