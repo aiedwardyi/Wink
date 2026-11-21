@@ -337,7 +337,7 @@ import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -5232,7 +5232,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1).tool) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1, bot.threadId).tool) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5695,8 +5695,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
-    ? importMemoryTurn(activeMessages)
+    ? importMemoryTurn(activeMessages, 0, threadId)
     : { offer: false, tool: false };
+  if (importMemory.offer) noteImportOffer(threadId);
   const currentPrompt = [
     ...(importMemory.offer ? [importOfferNote()] : []),
     composeUserTurnPrompt(text, turnOpts),
