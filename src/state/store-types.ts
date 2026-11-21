@@ -105,6 +105,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** The new-bot offer reply that carries the Import Memory prompt. */
+  importOffer?: true;
   call?: import("../../shared/live-call").CallTag;
   /** Client-only accepted send; replaced by the canonical transcript row. */
   placeholder?: true;
