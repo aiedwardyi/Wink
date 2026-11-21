@@ -1520,6 +1520,14 @@ describe("fresh-session memory block", () => {
     archived.forEach(([steps, files], index) => expectOldReadingsKept({ goal: "Ship it", plan: steps.map((step) => ({ step, status: "active" as const })) }, taskFolder(`kept-${index}`, files)));
   });
 
+  it("drops 수정.md새.md최종.md from 계획.md수정.md새.md최종.md with nothing on disk, the known limit that keeps dense plans linear", () => {
+    const folder = taskFolder("bound", []);
+    const step = "계획.md수정.md새.md최종.md";
+    const kept = ["계획.md", "계획.md수정.md", "계획.md수정.md새.md", "계획.md수정.md새.md최종.md", "수정.md", "수정.md새.md", "새.md", "새.md최종.md", "최종.md"];
+    expect(stepPins(step, folder)).toEqual(kept.map((name) => join(folder, name)));
+    expect(oldPlanFiles({ goal: "Ship it", plan: [{ step, status: "active" }] }, folder)).toContain(join(folder, "수정.md새.md최종.md"));
+  });
+
   it("pins every existing file that random CJK prose touches", () => {
     const folder = taskFolder("generated", names);
     const { random, prose } = randomText(2006);
