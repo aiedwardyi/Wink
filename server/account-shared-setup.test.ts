@@ -68,6 +68,16 @@ function tree(path: string): unknown {
 }
 
 describe("Claude user setup", () => {
+  it("writes nothing when the account home is gone", () => {
+    const f = fixture();
+    f.write(join(f.base, "CLAUDE.md"));
+    f.write(join(f.base, "rules", "fixture.md"));
+    f.write(join(f.base, "skills", "fixture", "SKILL.md"));
+    fs.rmSync(f.home, { recursive: true });
+    f.share();
+    expect(fs.existsSync(f.home)).toBe(false);
+  });
+
   it("writes the default pointer using the mocked home", () => {
     const f = fixture("profile/.claude");
     vi.spyOn(os, "homedir").mockReturnValue(join(f.root, "profile"));

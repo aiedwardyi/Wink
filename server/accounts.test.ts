@@ -1,5 +1,7 @@
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR, instanceConfigs } from "./config.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import * as atomic from "./atomic.ts";
+
+vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
 
 const core = await import("./accounts.ts").catch(() => null);
 const bases: InstanceConfigMap = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" }, grok: { driver: "grokAgent" } };
@@ -21,30 +25,107 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("PC-local accounts", () => {
-  it("creates saved account homes only through AccountService.resolveHome", () => {
-    const root = fileURLToPath(new URL(".", import.meta.url));
+  it("creates a saved account home only through add and openHome", () => {
+    const repo = fileURLToPath(new URL("..", import.meta.url));
     const offenders: string[] = [];
-    for (const file of readdirSync(root, { recursive: true, encoding: "utf8" })) {
-      if (!file.endsWith(".ts") || file.endsWith(".test.ts") || /^testing[\\/]/.test(file)) continue;
-      const source = ts.createSourceFile(file, readFileSync(join(root, file), "utf8"), ts.ScriptTarget.Latest, true);
+    for (const dir of ["server", "electron"]) for (const file of readdirSync(join(repo, dir), { recursive: true, encoding: "utf8" })) {
+      if (!/\.(?:ts|mjs|cjs)$/.test(file) || /[.-]test\.\w+$|\.d\.ts$/.test(file) || /^(?:testing|vendor|node_modules)[\\/]/.test(file)) continue;
+      const name = `${dir}/${file.replace(/\\/g, "/")}`;
+      const source = ts.createSourceFile(file, readFileSync(join(repo, dir, file), "utf8"), ts.ScriptTarget.Latest, true);
       const visit = (node: ts.Node, owner: string): void => {
         if ((ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) && node.name) owner = node.name.getText(source);
         if (ts.isCallExpression(node)) {
-          const name = node.expression.getText(source).replace(/^(?:fs\.|this\.)/, "");
-          const args = node.arguments.map((arg) => arg.getText(source)).join(", ");
-          const at = `${file.replace(/\\/g, "/")}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1} ${node.getText(source)}`;
-          if (file === "accounts.ts") {
-            if (name === "plainDirectory" && owner !== "openHome") offenders.push(at);
-            if (name === "openHome" && owner !== "resolveHome" && owner !== "add") offenders.push(at);
-            if (name === "mkdirSync" && owner !== "plainDirectory" && args !== "this.dataDir, { recursive: true, mode: 0o700 }") offenders.push(at);
+          const call = node.expression.getText(source).replace(/^(?:fs\.promises\.|fs\.|promises\.|this\.)/, "");
+          const args = node.arguments.map((arg) => arg.getText(source));
+          const at = `${name}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1} ${node.getText(source)}`;
+          if (name === "server/accounts.ts") {
+            if (call === "plainDirectory" && args[1] !== "false" && owner !== "add" && owner !== "openHome") offenders.push(at);
+            if (call === "mkdirSync" && owner !== "plainDirectory" && args[0] !== "this.dataDir") offenders.push(at);
           // OpenAI credit keeps its own folder beside the data, not a saved account home.
-          } else if (/^(?:mkdirSync|mkdir|promises\.mkdir)$/.test(name) && /\bhome\b/i.test(args) && !(file.startsWith("worker-launch") && args.startsWith('join(account.home, "state")'))) offenders.push(at);
+          } else if (/^mkdir(?:Sync)?$/.test(call) && /\bhome\b|CODEX_HOME|CLAUDE_CONFIG_DIR|GROK_HOME/i.test(args.join()) && !(name === "server/worker-launch.ts" && args[0] === 'join(account.home, "state")')) offenders.push(at);
         }
         ts.forEachChild(node, (child) => visit(child, owner));
       };
       visit(source, "");
     }
-    expect(offenders, "Create or restore a saved account home only through AccountService.resolveHome (resolveAccountHome outside accounts.ts): it rechecks the account is live and refuses links, files and removals").toEqual([]);
+    expect(offenders, "Only AccountService.openHome (Sign In) creates a missing saved account home; add() births new ones. Everything else reads a missing home as signed out").toEqual([]);
+  });
+
+  it("keeps saved accounts whose home is gone and creates nothing at startup", async () => {
+    const { dir, service } = fixture();
+    const saved = [await service.add("claude"), await service.add("codex"), await service.add("grok")];
+    writeFileSync(join(saved[0].home, "keep.json"), "keep");
+    rmSync(saved[1].home, { recursive: true });
+    rmSync(saved[2].home, { recursive: true });
+    const mkdir = vi.spyOn(fs, "mkdirSync");
+    const restored = new core!.AccountService(dir, () => bases);
+    expect(restored.error).toBeUndefined();
+    expect(restored.snapshot.map((row) => row.id)).toEqual(saved.map((row) => row.id));
+    expect(saved.map((row) => core!.missingAccountHome(row, row.of === "codex"))).toEqual([false, true, true]);
+    expect([existsSync(saved[1].home), existsSync(saved[2].home)]).toEqual([false, false]);
+    rmSync(dirname(saved[0].home), { recursive: true });
+    expect(new core!.AccountService(dir, () => bases).snapshot).toHaveLength(3);
+    expect(mkdir).not.toHaveBeenCalled();
+  });
+
+  it.each(["claude", "codex", "grok"])("openHome creates a missing saved %s home once and never touches what is inside", async (of) => {
+    const { service } = fixture();
+    const saved = await service.add(of);
+    rmSync(dirname(saved.home), { recursive: true });
+    service.openHome(saved.id);
+    expect(readdirSync(saved.home)).toEqual(of === "codex" ? ["state"] : []);
+    writeFileSync(join(saved.home, "auth.json"), "keep");
+    const mkdir = vi.spyOn(fs, "mkdirSync");
+    service.openHome(saved.id);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(readFileSync(join(saved.home, "auth.json"), "utf8")).toBe("keep");
+  });
+
+  it("openHome refuses an account that is gone", async () => {
+    const { service } = fixture();
+    const saved = await service.add("codex");
+    await service.retire(saved.id);
+    rmSync(saved.home, { recursive: true });
+    expect(() => service.openHome(saved.id)).toThrow(expect.objectContaining({ status: 404 }));
+    expect(existsSync(saved.home)).toBe(false);
+  });
+
+  it.each(["file", "home junction", "root junction", "missing drive"] as const)("openHome fails closed on a saved home that is a %s", async (kind) => {
+    const { dir, service } = fixture();
+    const saved = await service.add("codex");
+    const target = join(dir, "target");
+    rmSync(saved.home, { recursive: true });
+    if (kind === "file") writeFileSync(saved.home, "keep");
+    else if (kind === "home junction") {
+      mkdirSync(target);
+      symlinkSync(target, saved.home, "junction");
+    } else if (kind === "root junction") {
+      fs.renameSync(dirname(saved.home), target);
+      symlinkSync(target, dirname(saved.home), "junction");
+    } else {
+      rmSync(dirname(saved.home), { recursive: true });
+      const mkdir = fs.mkdirSync;
+      vi.spyOn(fs, "mkdirSync").mockImplementation((path, options) => {
+        if (String(path).startsWith(dirname(saved.home))) throw Object.assign(new Error("fixture missing drive"), { code: "ENOENT" });
+        return mkdir(path, options);
+      });
+    }
+    expect(() => service.openHome(saved.id)).toThrow();
+    if (kind === "file") expect(readFileSync(saved.home, "utf8")).toBe("keep");
+    else if (kind === "missing drive") expect(existsSync(dirname(saved.home))).toBe(false);
+    else expect(readdirSync(target)).toEqual([]);
+  });
+
+  it.skipIf(process.platform !== "win32")("openHome fails closed when Windows denies creating inside a saved home", async () => {
+    const { service } = fixture();
+    const saved = await service.add("codex");
+    rmSync(join(saved.home, "state"), { recursive: true });
+    const who = execFileSync("whoami.exe", [], { encoding: "utf8", windowsHide: true }).trim();
+    execFileSync("icacls.exe", [saved.home, "/deny", `${who}:(AD,WD)`], { windowsHide: true });
+    try {
+      expect(() => service.openHome(saved.id)).toThrow();
+      expect(existsSync(join(saved.home, "state"))).toBe(false);
+    } finally { execFileSync("icacls.exe", [saved.home, "/remove:d", who], { windowsHide: true }); }
   });
 
   it("accepts account directories below a linked ancestor", async () => {
@@ -145,19 +226,6 @@ describe("PC-local accounts", () => {
     expect(restored.list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
     await expect(restored.add("codex")).rejects.toThrow(/accounts.json/);
     expect(readFileSync(join(dir, "accounts.json"), "utf8")).toBe(before);
-  });
-
-  it("recreates a saved account's missing home on restart without deleting anything", async () => {
-    const { dir, service } = fixture();
-    const claude = await service.add("claude");
-    const codex = await service.add("codex");
-    writeFileSync(join(claude.home, "keep.json"), "keep");
-    rmSync(codex.home, { recursive: true });
-    const restored = new core!.AccountService(dir, () => bases);
-    expect(restored.error).toBeUndefined();
-    expect(restored.snapshot.map((row) => row.id)).toEqual([claude.id, codex.id]);
-    expect(existsSync(join(codex.home, "state"))).toBe(true);
-    expect(readFileSync(join(claude.home, "keep.json"), "utf8")).toBe("keep");
   });
 
   it("refuses an account-root alias", async () => {

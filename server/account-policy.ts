@@ -1,7 +1,6 @@
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
 
-import { resolveAccountHome } from "./accounts.ts";
 import { CODEX_CREDIT_ARGS, CODEX_CREDIT_ENV, isCodexCredit } from "./codex-credit.ts";
 import { applyCredentialAllowlist } from "./config.ts";
 
@@ -39,8 +38,6 @@ export function accountLaunch(
   if (!account) return { args, env: source };
   if (driver !== "claudeAgent" && driver !== "codex" && driver !== "grokAgent") throw new Error("Unsupported account engine");
   if (args.some((arg) => /^(?:--profile(?:=|$)|--with-api-key$|--api-key(?:=|$)|--oss$|--local-provider(?:=|$))/.test(arg) || (driver === "codex" && arg === "-p"))) throw new Error("Conflicting account launch selector");
-  // Codex refuses to start when CODEX_HOME is missing; only a saved account still in the store gets its home back.
-  if (account.generation > 0) resolveAccountHome(account, driver === "codex");
   const env = { ...source };
   const grants = Object.keys(env).filter((key) => /^WINK_MCP_[A-Z0-9_]+$/.test(key));
   applyCredentialAllowlist(env, grants);

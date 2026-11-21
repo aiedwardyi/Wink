@@ -23,8 +23,6 @@ import { loadProfileSyncSettings, saveProfileSyncSettings } from "./profile-sync
 import { reportServerFailure } from "./error-reports.ts";
 import { ERROR_SITES } from "../shared/error-report.mjs";
 import { EngineLogin } from "./engine-login.ts";
-import { AccountService } from "./accounts.ts";
-import type { AccountContext } from "./account-policy.ts";
 const { buildDiagnosticsReport, decodeLogTail } = await import(new URL("../electron/diagnostics.mjs", import.meta.url).href);
 
 vi.mock("node:fs", async (original) => {
@@ -47,14 +45,14 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function fixture(kind: "claudeAgent" | "codex", saved?: AccountContext) {
+function fixture(kind: "claudeAgent" | "codex") {
   const root = join(DATA_DIR, `boundary-${++serial}`);
-  const home = saved?.home ?? join(root, "accounts", "fixture");
+  const home = join(root, "accounts", "fixture");
   fs.mkdirSync(join(home, "state"), { recursive: true });
   fs.writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [
     { slug: "unselected", never: "copy" }, { slug: "gpt-6.1-sol", context_window: 200_000, tool_mode: "code_mode_only" },
   ], unrelated: "never copy" }));
-  const account = saved ?? { id: "acct_7d6e234b-8046-4a5a-9354-2cf05f27d775", of: kind === "codex" ? "codex" : "claude", home, generation: 1 };
+  const account = { id: "acct_7d6e234b-8046-4a5a-9354-2cf05f27d775", of: kind === "codex" ? "codex" : "claude", home, generation: 1 };
   const base = join(root, "base");
   fs.mkdirSync(base, { recursive: true });
   fs.writeFileSync(join(base, kind === "codex" ? "AGENTS.md" : "CLAUDE.md"), "fixture global rules");
@@ -408,24 +406,6 @@ it.skipIf(process.platform !== "win32")("acknowledges a natural CLI exit that be
   procs.killCliTree(child as unknown as cp.ChildProcess, stopped);
   expect(stopped).toHaveBeenCalledTimes(1);
   expect(child.kill).not.toHaveBeenCalled();
-});
-
-it("a saved Codex account whose home folder is gone probes as signed out and signs in", async () => {
-  const saved = await new AccountService(join(DATA_DIR, `boundary-saved-${++serial}`), () => ({ codex: { driver: "codex" } })).add("codex");
-  const f = fixture("codex", saved);
-  const gone = () => fs.rmSync(f.account.home, { recursive: true });
-  f.signedIn(false);
-  gone();
-  const instance = await f.create();
-  expect((await instance.snapshot()).authenticated).toBe(false);
-  expect(fs.existsSync(join(f.account.home, "state"))).toBe(true);
-  gone();
-  const manager = new EngineLogin(5000, 50);
-  try {
-    await manager.start("account-a", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
-    expect(fs.existsSync(join(f.account.home, "state"))).toBe(true);
-    expect(f.launches.at(-1)!.env.CODEX_HOME).toBe(f.account.home);
-  } finally { await manager.dispose(); }
 });
 
 it("Codex admits only engine-reported ChatGPT accounts", async () => {

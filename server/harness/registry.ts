@@ -14,6 +14,7 @@ import { applyCredentialAllowlist } from "../config.ts";
 import { findCliCandidates, refreshPathCache, splitCliString } from "../env-path.ts";
 import { clearVersionCache, cliRevision } from "../procs.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
+import { MISSING_HOME, missingAccountHome } from "../accounts.ts";
 import { EngineLogin } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
 import { warmPool as sharedWarmPool, type WarmPool } from "../drivers/warm-pool.ts";
@@ -393,10 +394,8 @@ export class ProviderRegistry {
   }
 
   async cancelSignIn(instanceId: InstanceId) {
-    // Only checks the target: resolving the launch env would restore a missing account home mid-removal.
-    const live = this.get(instanceId);
-    const driver = live && this.driversByKind.get(live.driverKind);
-    if (!live || !driver || !(live.loginConfig?.()?.cli ?? this.cliByInstance.get(instanceId) ?? cliDefaultOf(driver))) return false;
+    const config = this.loginConfig(instanceId);
+    if (!config) return false;
     if (this.signingOut.has(instanceId)) return true;
     await this.logins.cancel(instanceId);
     return true;
@@ -676,6 +675,11 @@ export class ProviderRegistry {
     const inst = entry.live;
     let snapshot: ProviderSnapshot;
     try {
+      const account = this.accounts.get(inst.instanceId);
+      // Launching would fail (Codex) or create the home (Claude, Grok); Sign In creates it.
+      if (account && missingAccountHome(account, inst.driverKind === "codex")) {
+        return { snapshot: { ...MISSING_HOME, authChecked: true }, cliCandidates: candidatesFor(driver), models: this.cacheDir ? structuredClone(inst.models) : undefined };
+      }
       const discovery = this.modelRefreshInFlight.get(inst.instanceId);
       if (discovery) await discovery;
       const lastRefresh = this.modelRefreshAt.get(inst.instanceId) ?? 0;

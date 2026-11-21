@@ -1,6 +1,6 @@
 import type { ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
-import { AccountError, AccountService, type AccountRecord } from "./accounts.ts";
+import { AccountError, AccountService, MISSING_HOME, missingAccountHome, type AccountRecord } from "./accounts.ts";
 import { ENGINE_OF } from "./account-names.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
 import { baseAccount } from "./worker-resume.ts";
@@ -74,9 +74,11 @@ export class AccountLifecycle {
     });
   }
 
-  private async restoreAccount({ id, generation }: AccountRecord) {
+  private async restoreAccount(account: AccountRecord) {
+    const { id, generation } = account;
     this.registry.checkAccount(id);
-    const snapshot = await this.registry.get(id)?.snapshot({ refresh: true }).catch(() => undefined);
+    const live = this.registry.get(id);
+    const snapshot = live && missingAccountHome(account, live.driverKind === "codex") ? MISSING_HOME : await live?.snapshot({ refresh: true }).catch(() => undefined);
     if (!this.registry.accountChecking(id) || this.accounts.get(id)?.generation !== generation) return;
     try {
       await this.observe(id, snapshot ?? { state: "unavailable" }, generation);
@@ -172,6 +174,7 @@ export class AccountLifecycle {
       this.registry.blockAccount(id, true);
       try {
         if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id, account.state === "stopped" && destinations.length === 0)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
+        this.accounts.openHome(id);
         return await this.begin(account, device);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);
@@ -254,12 +257,10 @@ export class AccountLifecycle {
         throw error;
       }
       this.jobs.delete(id);
-      await this.accounts.whileRemoving(id, async () => {
-        await this.accounts.stop(id);
-        await this.registry.cancelSignIn(id);
-        if (this.homeHeld(account) && await this.registry.signOut(id) !== true) throw new AccountError("Sign-out did not finish; the account is stopped", 502);
-        await this.discard(id);
-      });
+      await this.accounts.stop(id);
+      await this.registry.cancelSignIn(id);
+      if (await this.registry.signOut(id) !== true) throw new AccountError("Sign-out did not finish; the account is stopped", 502);
+      await this.discard(id);
       return {};
     });
   }
@@ -309,9 +310,8 @@ export class AccountLifecycle {
       if (await this.hooks.referenced(id, true) || this.jobs.has(id) || await this.hooks.panesBusy?.(id)) return { state: "draining", destinationId: drain.destinationId };
       await this.registry.cancelSignIn(id);
       await this.accounts.drain(id, drain.destinationId, "logout");
-      const saved = this.accounts.get(id);
       try {
-        if ((!saved || this.homeHeld(saved)) && await this.registry.signOut(id) !== true) throw new Error("Sign-out not confirmed");
+        if (await this.registry.signOut(id) !== true) throw new Error("Sign-out not confirmed");
       } catch {
         await this.accounts.drain(id, drain.destinationId, "failed");
         throw new AccountError("Sign-out did not finish; the account is stopped", 502);
@@ -466,11 +466,6 @@ export class AccountLifecycle {
   private promoHome(id: string) {
     const live = this.registry.get(id);
     return live?.driverKind === "codex" ? this.accounts.get(id)?.home ?? baseAccount(id, "codex", live.loginConfig?.().env ?? process.env).home : undefined;
-  }
-
-  // A missing or odd home holds nothing Wink can sign out of, and signing out through it would recreate or follow it; the account just retires.
-  private homeHeld(account: AccountRecord) {
-    try { return this.accounts.resolveHome(account, this.registry.get(account.id)?.driverKind === "codex"); } catch { return false; }
   }
 
   private async discard(id: string) {

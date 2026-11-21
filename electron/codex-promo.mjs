@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -20,7 +20,6 @@ export function codexPromoBlocked(home, generation) {
 }
 
 function writeMark(home, mark) {
-  mkdirSync(home, { recursive: true });
   const file = join(home, FILE);
   const temp = `${file}.${process.pid}.tmp`;
   try {
