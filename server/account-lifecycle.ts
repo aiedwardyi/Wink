@@ -1,6 +1,6 @@
 import type { ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
-import { AccountError, AccountService, type AccountRecord } from "./accounts.ts";
+import { AccountError, AccountService, MISSING_HOME, missingAccountHome, type AccountRecord } from "./accounts.ts";
 import { LoginBusyError, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import { ENGINE_OF } from "./account-names.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
@@ -77,9 +77,11 @@ export class AccountLifecycle {
     });
   }
 
-  private async restoreAccount({ id, generation }: AccountRecord) {
+  private async restoreAccount(account: AccountRecord) {
+    const { id, generation } = account;
     this.registry.checkAccount(id);
-    const snapshot = await this.registry.get(id)?.snapshot({ refresh: true }).catch(() => undefined);
+    const live = this.registry.get(id);
+    const snapshot = live && missingAccountHome(account) ? MISSING_HOME : await live?.snapshot({ refresh: true }).catch(() => undefined);
     if (!this.registry.accountChecking(id) || this.accounts.get(id)?.generation !== generation) return;
     try {
       await this.observe(id, snapshot ?? { state: "unavailable" }, generation);
@@ -175,6 +177,7 @@ export class AccountLifecycle {
       this.registry.blockAccount(id, true);
       try {
         if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id, account.state === "stopped" && destinations.length === 0)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
+        this.accounts.openHome(id);
         return await this.begin(account, device, owner);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);

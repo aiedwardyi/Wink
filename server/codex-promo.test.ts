@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 
@@ -28,6 +29,7 @@ it("reads persisted promo marks for the exact base, added and credit account", (
   const status = () => createCodexPromoStatus(() => configs, () => credit);
   for (const account of [{ id: "codex", home: join(root, "base"), generation: 0 }, added, credit.account]) {
     expect(status()(account.id, account.generation)).toBe(false);
+    mkdirSync(account.home, { recursive: true });
     markCodexPromo(account.home, account.generation);
     expect(status()(account.id, account.generation)).toBe(true);
     expect(status()(account.id, account.generation + 1)).toBe(false);

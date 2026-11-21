@@ -14,6 +14,7 @@ import { applyCredentialAllowlist } from "../config.ts";
 import { findCliCandidates, refreshPathCache, splitCliString } from "../env-path.ts";
 import { clearVersionCache, cliRevision } from "../procs.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
+import { MISSING_HOME, missingAccountHome } from "../accounts.ts";
 import { EngineLogin } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
 import { warmPool as sharedWarmPool, type WarmPool } from "../drivers/warm-pool.ts";
@@ -180,7 +181,8 @@ export class ProviderRegistry {
           enabled: entry.enabled ?? true,
           config,
           ...(entry.account ? { account: entry.account } : {}),
-          ...(entry.account && options?.deferAccountAuth ? { deferAccountAuth: true } : {}),
+          // A provider reload defers like a cold load where the check would start the CLI in a missing home; Sign In creates it.
+          ...(entry.account && (options?.deferAccountAuth || missingAccountHome(entry.account)) ? { deferAccountAuth: true } : {}),
         });
         return { entry: { instanceId, live }, rawCli, incarnation } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       } catch (e) {
@@ -676,6 +678,11 @@ export class ProviderRegistry {
     const inst = entry.live;
     let snapshot: ProviderSnapshot;
     try {
+      const account = this.accounts.get(inst.instanceId);
+      // Launching would fail (Codex) or create the home (Claude, Grok); Sign In creates it.
+      if (account && missingAccountHome(account)) {
+        return { snapshot: { ...MISSING_HOME, authChecked: true }, cliCandidates: candidatesFor(driver), models: this.cacheDir ? structuredClone(inst.models) : undefined };
+      }
       const discovery = this.modelRefreshInFlight.get(inst.instanceId);
       if (discovery) await discovery;
       const lastRefresh = this.modelRefreshAt.get(inst.instanceId) ?? 0;
