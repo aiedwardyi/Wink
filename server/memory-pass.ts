@@ -167,12 +167,17 @@ const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
 const WITHDRAWN = /^(?:(?:actually|oh|oops|sorry|wait|no)[,!.]?\s+)*(?:scratch that|never ?mind|cancel that)\b|취소할게요/i;
 const DONE_NOW = /\bi(?:['’]ve| have)?\s.*\bjust now\b|방금/i;
 const DENIED = /\b(?:not|never|no|cannot)\b|n['’]t\b|(?:^|\s)(?:안|못)\s/i;
+// "cancel that if we have to" takes nothing back yet
+const HEDGED = /\b(?:if|unless|maybe|perhaps|in case)\b/i;
 const TIMES = new RegExp(DEFERRED.source, "gi");
 const PLAIN = new Set(["a", "an", "the", "i", "me", "my", "myself", "you", "your", "yourself", "we", "us", "our", "it", "its", "this", "that", "these", "those", "there", "here", "them", "they", "their", "to", "of", "for", "on", "in", "at", "with", "from", "into", "about", "up", "out", "off", "as", "and", "or", "but", "so", "if", "then", "than", "until", "also", "just", "now", "still", "really", "actually", "sorry", "okay", "ok", "anyway", "instead", "though", "again", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "will", "would", "can", "could", "going", "s", "t", "ll", "ve", "re", "d", "m", "그거", "그건", "이거"]);
 // whole words, never stems; a lone capital like the B of "PC B" is a name, not an article
 const terms = (text: string) => new Set((text.match(/[\p{L}\p{N}]+/gu) ?? [])
   .map((word) => (/^\p{Lu}$/u.test(word) && word !== "I" ? word : word.toLowerCase())).filter((word) => !PLAIN.has(word)));
 const named = (text: string) => terms(text.replace(TIMES, " "));
+// plain words that still point somewhere, at a person or a condition: "Never mind me" and "Cancel that if we have to" are not bare
+const POINTED = new Set(["i", "me", "my", "myself", "you", "your", "yourself", "we", "us", "our", "them", "they", "their", "if", "until"]);
+const bare = (text: string) => (text.match(/[\p{L}\p{N}]+/gu) ?? []).every((word) => PLAIN.has(word.toLowerCase()) && !POINTED.has(word.toLowerCase()));
 /** What a promise is about: its words after "I'll" and the verb, before a Korean ending, or after the verb of a plain title. */
 function object(promise: string): Set<string> {
   const marker = COMMIT.exec(promise);
@@ -197,7 +202,7 @@ const own = (promise: string) => {
   return new Set([...terms(promise.replace(COMMIT, " ")), ...(does ? forms(does) : [])]);
 };
 
-/** A line is about a promise only when it names that promise's whole object and its action, as whole words, and more of it than of each other promise; anything less keeps the promise. */
+/** A line is about a promise only when it names that promise's whole object in its order, or nothing but its time, and its action, as whole words, and more of it than of each other promise; anything less keeps the promise. */
 export function namesPromise(line: string, promise: string, others: readonly string[] = []): boolean {
   const said = line.replace(WITHDRAWN, " ");
   const words = terms(said);
@@ -207,7 +212,9 @@ export function namesPromise(line: string, promise: string, others: readonly str
   const hits = shared(promise);
   // "cancel that production report" leaves the emailing unsaid but names nothing else; "cancel that plan to publish" never names a draft
   const action = (does !== undefined && [...forms(does)].some((form) => words.has(form))) || hits.length === words.size;
-  return !DENIED.test(said) && about.size > 0 && [...about].every((word) => words.has(word)) && action
+  // "email Bob about Alice" never names "email Alice about Bob"; "cancel that for Friday" names only a time
+  const whole = about.size > 0 && [...words].filter((word) => about.has(word)).join(" ") === [...about].join(" ");
+  return !DENIED.test(said) && !HEDGED.test(said) && hits.length > 0 && (whole || !named(said).size) && action
     && others.map(shared).every((theirs) => theirs.length < hits.length && theirs.every((word) => hits.includes(word)));
 }
 
@@ -246,9 +253,9 @@ export function botLines(messages: readonly Message[], ids: readonly string[], o
       if (sentence.length > SAID_CHARS || sentence.endsWith("?") || secretLike(sentence)) continue;
       const commit = COMMIT.test(sentence) && DEFERRED.test(sentence) && !FILLER.test(sentence);
       // a take-back that names nothing is about the promise right before it, never an older one
-      if (WITHDRAWN.test(sentence)) reply = named(sentence.replace(WITHDRAWN, " ")).size
-        ? reply.filter((promise) => !namesPromise(sentence, promise, reply.filter((other) => other !== promise)))
-        : reply.filter((promise) => promise !== before);
+      if (WITHDRAWN.test(sentence)) reply = bare(sentence.replace(WITHDRAWN, " "))
+        ? reply.filter((promise) => promise !== before)
+        : reply.filter((promise) => !namesPromise(sentence, promise, reply.filter((other) => other !== promise)));
       if (commit) {
         last = reply.find((promise) => restates(promise, sentence));
         if (!last) reply.push(last = sentence);
@@ -281,6 +288,8 @@ export function acceptPromises(facts: Fact[], said: BotLines): KeptPromises {
   const promises: KeptPromise[] = [];
   const done: TaskAsk[] = [];
   const quoted = (lines: string[], quote: string) => Boolean(quote.trim()) && lines.some((line) => squash(line).includes(squash(quote)));
+  // a quote cut from "I never checked the laptop backup just now" finishes nothing
+  const negated = (quote: string) => said.lines.some((line) => squash(line).includes(squash(quote)) && DENIED.test(squash(line).slice(0, squash(line).indexOf(squash(quote))).split(/[,;:]/).pop() ?? ""));
   for (const { kind, fact, quote, replaces } of facts) {
     const line = fact.replace(/\s+/g, " ").trim();
     const repeats = said.open.find((ask) => ask.id === replaces?.trim().toUpperCase());
@@ -291,7 +300,7 @@ export function acceptPromises(facts: Fact[], said: BotLines): KeptPromises {
     }
     const finished = kind === "done" ? said.open.find((ask) => ask.id === line.toUpperCase()) : undefined;
     // the note-taker's id counts only when its quote names that promise, and no other open one as well
-    if (finished && quoted(said.lines, quote) && namesPromise(quote, finished.ask, said.open.filter((ask) => ask !== finished).map(({ ask }) => ask)) && !done.includes(finished)) done.push(finished);
+    if (finished && quoted(said.lines, quote) && !negated(quote) && namesPromise(quote, finished.ask, said.open.filter((ask) => ask !== finished).map(({ ask }) => ask)) && !done.includes(finished)) done.push(finished);
   }
   return { promises, done };
 }

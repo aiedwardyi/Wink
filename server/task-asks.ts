@@ -141,10 +141,14 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
 const gist = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{4,}|[가-힣]{2,}/gu) ?? []);
 // "PC A" and "PC B", or 4 pm and 5 pm: a number or one-letter name only one of them has keeps them apart
 const marks = (text: string) => [...new Set(text.replace(/\b(\d{1,2}):00\b/g, "$1").match(/\p{N}+|(?<![\p{L}\p{N}'’])\p{Lu}(?![\p{L}\p{N}'’])/gu)?.filter((mark) => mark !== "I"))].sort().join(" ");
+// a reworded lead ("Once your laptop is on" or "When the laptop is on") keeps the promise; a word swapped after "I'll", payroll for billing, makes another
+const clause = (text: string) => gist(text.replace(/^.*?\bi(?:['’]ll| will)\b/i, ""));
 function samePromise(a: string, b: string): boolean {
   const [x, y] = [gist(a), gist(b)];
+  const [p, q] = [clause(a), clause(b)];
   const least = Math.min(x.size, y.size);
-  return least >= 3 && [...x].filter((word) => y.has(word)).length >= 0.8 * least && marks(a) === marks(b);
+  return least >= 3 && [...x].filter((word) => y.has(word)).length >= 0.8 * least && marks(a) === marks(b)
+    && ([...p].every((word) => q.has(word)) || [...q].every((word) => p.has(word)));
 }
 
 export function fileBotPromises(book: AskBook | undefined, promises: readonly { ask: string; repeats?: TaskAsk }[], done: readonly TaskAsk[], now: number): SavedAsks | null {

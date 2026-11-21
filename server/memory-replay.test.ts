@@ -449,3 +449,70 @@ describe("memory replay: gate 2073E cases", () => {
     run.dispose();
   });
 });
+
+describe("memory replay: gate 2073F cases", () => {
+  const friday = "I'll book the pickup on Friday.";
+  const monday = "I'll email the invoice on Monday.";
+  const invoice = "I'll email the signed invoice tomorrow.";
+  const toAlice = "I'll email Alice about Bob tomorrow.";
+  const ifDisk = "Cancel that plan to check the laptop backup only if the disk fails.";
+
+  it("removes a promise a cancel names by its time alone, never one whose object comes in another order or a hedged line names", () => {
+    const ties: [string, string, string[]][] = [
+      ["Cancel that for Friday.", friday, [monday]],
+      ["Cancel that for Friday.", friday, []],
+    ];
+    const loose: [string, string, string[]][] = [
+      ["Cancel that for Friday.", monday, [friday]],
+      ["Cancel that for tomorrow.", LAPTOP, [invoice]],
+      ["Cancel that email to Bob about Alice.", toAlice, []],
+      ["I emailed Bob about Alice just now.", toAlice, []],
+      [ifDisk, LAPTOP, []],
+    ];
+    expect(ties.filter(([line, promise, others]) => !namesPromise(line, promise, others))).toEqual([]);
+    expect(loose.filter(([line, promise, others]) => namesPromise(line, promise, others))).toEqual([]);
+  });
+
+  it.each([
+    { name: "the Monday invoice beside a cancel for Friday", rows: [friday, monday, "Cancel that for Friday."], kept: [monday] },
+    { name: "the Monday invoice beside a cancel for Friday promised last", rows: [monday, friday, "Cancel that for Friday."], kept: [monday] },
+    { name: "the backup beside a never-mind about the user", rows: [LAPTOP, "Never mind me."], kept: [LAPTOP] },
+    { name: "the backup beside a cancel if it has to", rows: [LAPTOP, "Cancel that if we have to."], kept: [LAPTOP] },
+    { name: "the backup beside a cancel only if the disk fails", rows: [LAPTOP, ifDisk], kept: [LAPTOP] },
+    { name: "the email to Alice beside a cancel of the one to Bob about Alice", rows: [toAlice, "Cancel that email to Bob about Alice."], kept: [toAlice] },
+    { name: "the backup when a scratch-that follows another statement", rows: [LAPTOP, "The light is green.", "Actually, scratch that."], kept: [LAPTOP] },
+  ])("keeps $name", async ({ name, rows, kept }) => {
+    const run = replay(name.replace(/\W+/g, "-"));
+    await run.talk([ask, { role: "bot", text: rows.join(" ") }], filesWill);
+    expect(run.asks().map((item) => item.ask)).toEqual(kept);
+    run.dispose();
+  });
+
+  it("files the Monday invoice when the note-taker quotes only it beside a cancel for Friday", async () => {
+    const run = replay("monday-only-helper");
+    await run.talk([ask, { role: "bot", text: `${friday} ${monday} Cancel that for Friday.` }], async (prompt) => promised(botLinesIn(prompt).filter((line) => line === monday)));
+    expect(run.asks().map((item) => item.ask)).toEqual([monday]);
+    run.dispose();
+  });
+
+  it("files a billing backup promised a turn after the payroll one", async () => {
+    const payroll = "I'll check the nightly payroll backup tomorrow.";
+    const billing = "I'll check the nightly billing backup tomorrow.";
+    const run = replay("payroll-later");
+    await run.talk([ask, { role: "bot", text: payroll }], filesEvery);
+    await run.talk([ask, { role: "bot", text: billing }], filesEvery);
+    expect(run.asks().map((item) => item.ask)).toEqual([payroll, billing]);
+    run.dispose();
+  });
+
+  it.each([
+    { name: "a report naming Bob and Alice the other way round", promise: toAlice, report: "I emailed Bob about Alice just now.", quote: "I emailed Bob about Alice just now." },
+    { name: "a quote cut from a negated report", promise: LAPTOP, report: "I never checked the laptop backup just now.", quote: "checked the laptop backup just now" },
+  ])("keeps a promise open beside $name", async ({ name, promise, report, quote }) => {
+    const run = replay(`open-${name.replace(/\W+/g, "-")}`);
+    await run.talk([{ role: "user", text: "Please handle these tasks." }, { role: "bot", text: promise }], filesWill);
+    await run.talk([{ role: "user", text: "What did you finish?" }, { role: "bot", text: report }], async () => JSON.stringify([{ kind: "done", fact: "A1", quote }]));
+    expect(run.asks().map((item) => item.status)).toEqual(["open"]);
+    run.dispose();
+  });
+});
