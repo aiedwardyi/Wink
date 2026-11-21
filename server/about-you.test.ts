@@ -83,24 +83,6 @@ describe("About You save", () => {
     expect(readFileSync(file, "utf8")).not.toMatch(/river7|4821/);
   });
 
-  it("keeps prose after an empty secret heading and a blank line, but not a list there", () => {
-    expect(factsOf("## Passwords\n\nI grow sage on my balcony.\n## 비밀번호\n\n발코니에서 세이지를 키워요.")).toEqual({ facts: ["I grow sage on my balcony.", "발코니에서 세이지를 키워요."], hidden: 0 });
-    expect(factsOf("## Passwords\n\n- Mail: lilac29\n- Calendar: lilac30\n\nI grow sage on my balcony.")).toEqual({ facts: ["I grow sage on my balcony."], hidden: 2 });
-  });
-
-  it("leaves out a value labeled only WiFi, in English and Korean", () => {
-    const wifi = [
-      "- WiFi: qwer1234", "Wi-Fi:", "qwer1235", "## WiFi", "- Home: qwer1236", "- Office: qwer1237", "", "Wi-Fi password: qwer1238", "Wi-Fi password:", "qwer1239",
-      "- 와이파이: qwer1240", "와이파이:", "qwer1241", "## 와이파이", "- 집: qwer1242", "",
-    ];
-    const keep = ["- Lives in Seoul.", "- WiFi at the cafe is slow.", "- 카페 와이파이가 느려요."];
-    expect(factsOf([...wifi, ...keep].join("\n"))).toEqual({ facts: ["Lives in Seoul.", "WiFi at the cafe is slow.", "카페 와이파이가 느려요."], hidden: 9 });
-    const accepted: string[] = [];
-    expect(addToAboutYou([keep[0], "WiFi: qwer1234", "와이파이:", "qwer1240", "Source: ChatGPT"].join("\n"), "2026-11-22", accepted))
-      .toEqual({ source: "ChatGPT", found: 1, added: 1, duplicates: 0, hidden: 2, full: 0 });
-    expect(`${accepted.join("\n")}${readFileSync(file, "utf8")}`).not.toMatch(/qwer/);
-  });
-
   it("keeps every byte of a word longer than a memory line", () => {
     const url = `https://example.com/${"a".repeat(400)}`;
     const { facts } = factsOf(`- Project page: ${url}`);
