@@ -14,14 +14,14 @@ let root: Root;
 let signOut: () => Promise<Response>;
 let events: () => Promise<Response>;
 let offline = false;
-let streams: Array<{ onerror: (() => void) | null }> = [];
+let streams: Array<{ onopen: (() => void) | null; onerror: (() => void) | null }> = [];
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   offline = false;
   streams = [];
   vi.stubGlobal("EventSource", class {
-    onopen = null;
+    onopen: (() => void) | null = null;
     onerror: (() => void) | null = null;
     onmessage = null;
     constructor() {
@@ -74,6 +74,9 @@ async function click(element: Element | null | undefined) {
 
 const avatar = () => document.querySelector("[data-sidebar-profile-row] button");
 const menuItems = () => [...document.querySelectorAll('[data-profile-menu] [role="menuitem"]')];
+const settle = () => act(async () => {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+});
 const signOutCalls = () => vi.mocked(fetch).mock.calls.filter(([path]) => String(path).includes("/api/phone/sign-out"));
 
 describe("signing a browser out from the avatar", () => {
@@ -116,18 +119,52 @@ describe("signing a browser out from the avatar", () => {
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 
-  it("keeps the page and says so when only the PC is unreachable, since it never got the sign-out", async () => {
+  // Through the relay a PC that is gone drops the socket, before or after it saved the sign-out alike.
+  it.each([
+    ["drops the connection", async () => { throw new TypeError("Failed to fetch"); }],
+    ["is answered for by the gateway with 503", async () => new Response("PC unavailable", { status: 503 })],
+  ])("claims nothing while the PC %s, then says it failed once the PC still has the session", async (_case, gone) => {
     signOut = async () => {
       throw new TypeError("Failed to fetch");
     };
-    events = async () => {
-      throw new TypeError("Failed to fetch");
-    };
+    events = gone;
     const replace = await renderSidebar(RELAY);
     await click(avatar());
     await click(menuItems().at(-1));
+    await settle();
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
+    expect(replace).not.toHaveBeenCalled();
+
+    events = async () => new Response("", { status: 200 });
+    await act(async () => streams.at(-1)?.onopen?.());
     await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
     expect(replace).not.toHaveBeenCalled();
+    // still signed in, so a later sign-out from elsewhere lands where a reload would
+    events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
+    await act(async () => streams.at(-1)?.onerror?.());
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("/pair"));
+  });
+
+  it.each([
+    ["drops the connection", async () => { throw new TypeError("Failed to fetch"); }],
+    ["is answered for by the gateway with 503", async () => new Response("PC unavailable", { status: 503 })],
+  ])("never says sign-out failed when the PC saved it and then %s, and lands on the sign-in page once it is back", async (_case, gone) => {
+    signOut = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    events = gone;
+    const replace = await renderSidebar(RELAY);
+    await click(avatar());
+    await click(menuItems().at(-1));
+    await settle();
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
+    expect(replace).not.toHaveBeenCalled();
+
+    events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
+    await act(async () => streams.at(-1)?.onerror?.());
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 
   it("stays on the dashboard through a full outage, then lands on the sign-in page once the PC says the session is gone", async () => {

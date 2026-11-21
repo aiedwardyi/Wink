@@ -66,7 +66,7 @@ import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
 import { relaySignInSite } from "@/lib/devices-setup";
-import { leaveSignedOut, reachable, sessionState, signedOutLanding } from "@/lib/signed-out";
+import { leaveSignedOut, sessionLiveAgain, sessionState, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -983,12 +983,12 @@ export function Sidebar({
       await api("/api/phone/sign-out", { method: "POST" });
       return leaveSignedOut();
     } catch {
-      // A failed reply may follow a revoke that landed, so the PC's own answer decides.
+      // A failed reply may follow a revoke that landed, so only the PC's own answer decides.
+      // A PC that is gone can't give one, so nothing is claimed until it does: its refusal on the live stream lands on sign-in.
       const state = await sessionState();
       if (state === "gone") return leaveSignedOut();
-      if (state === "live") signedOutLanding();
-      // Offline, no page can load; the live stream's next answer from the PC finishes it.
-      else if (!(await reachable(site))) return;
+      if (state === "unknown") await sessionLiveAgain();
+      signedOutLanding();
       setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
     }
   };

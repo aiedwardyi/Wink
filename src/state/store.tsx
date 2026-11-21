@@ -48,7 +48,7 @@ import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-a
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { relaySignInSite } from "@/lib/devices-setup";
-import { leaveSignedOut, sessionState } from "@/lib/signed-out";
+import { leaveSignedOut, sessionLive, sessionState } from "@/lib/signed-out";
 import { trackReplyText, trackStream } from "@/lib/usage-stats";
 import { trackAction } from "@/lib/usage-stats-actions";
 import { holdReload } from "@/lib/reload-hold";
@@ -2635,6 +2635,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
       onServerTime: noteServerTime,
       onOpen: () => {
+        sessionLive();
         trackStream(true);
         rawDispatch({ type: "connected", value: true });
         usageBoardReconnected();
