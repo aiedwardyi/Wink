@@ -121,6 +121,10 @@ const REAL_OUTPUT = {
   muse: "Open this page to sign in:\n  https://auth.meta.com/oauth/device/?code=BBDN-DDKV\nconfirm this code matches:\n  BBDN-DDKV\n\nWaiting for approval…\n",
   claude: "Opening browser to sign in…\nIf the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=x"
     + "&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=x\nPaste code here if prompted > ",
+  claudePhone: "Opening browser to sign in…\nIf the browser didn't open, visit:\nhttps://claude.ai/oauth/authorize?z-urKJghPMIEbsa4ZY8DSczY9mVrkak\nPaste code here if prompted > ",
+  agy: "Open this link in a browser to log in with Google:\n  https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=x.apps.googleusercontent.com&code_challenge=x"
+    + "&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=openid&state=x\n"
+    + "Then paste the authorization code, or the full URL of the page you land on, and press Enter:\n",
 };
 
 async function replay(engine: string, output: string, authHosts?: string[]) {
@@ -140,7 +144,7 @@ describe("EngineLogin", () => {
     writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT.claude)});
       process.stdin.once('data', (code) => { require('node:fs').writeFileSync(${JSON.stringify(received)}, code); process.exit(0); });`);
     const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], {
-      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 },
+      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 }, paste: true,
     });
     expect(capture.url).toContain("https://claude.com/cai/oauth/authorize?code=true");
     expect(capture.inputGeneration).toBe(manager.generation("added"));
@@ -166,9 +170,34 @@ describe("EngineLogin", () => {
     const script = join(dir, "unsafe-claude.cjs");
     writeFileSync(script, `process.stdout.write(${JSON.stringify(url + "\nPaste code here if prompted > ")}); setInterval(() => {}, 1000);`);
     const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], {
-      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 },
+      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 }, paste: true,
     });
     expect(capture.url).toBeUndefined();
+  });
+
+  it.each([
+    ["claudeAgent", "claudePhone", [], "https://claude.ai/oauth/authorize?z-urKJghPMIEbsa4ZY8DSczY9mVrkak"],
+    ["antigravityAgent", "agy", ["accounts.google.com"], "https://accounts.google.com/o/oauth2/auth?"],
+  ] as const)("takes a phone's pasted code for %s only when asked to", async (scope, output, hosts, url) => {
+    const { manager, dir } = fixture();
+    const script = join(dir, "phone.cjs");
+    const received = join(dir, "received.txt");
+    writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT[output])});
+      process.stdin.once('data', (code) => { require('node:fs').writeFileSync(${JSON.stringify(received)}, code); process.exit(code.toString().startsWith('good') ? 0 : 1); });`);
+    const cli = `"${process.execPath}" "${script}"`;
+    expect((await manager.start("desktop", cli, [], {}, [...hosts], { scope: `${scope}-desktop` })).inputGeneration).toBeUndefined();
+    const capture = await manager.start("phone", cli, [], {}, [...hosts], { scope, paste: true });
+    expect(capture.url?.startsWith(url)).toBe(true);
+    expect(capture.inputGeneration).toBe(manager.generation("phone"));
+    expect(manager.submit("phone", capture.inputGeneration!, "good-code#state")).toBe(true);
+    await manager.wait("phone");
+    expect(manager.state("phone")).toBe("complete");
+    expect(readFileSync(received, "utf8")).toBe("good-code#state\n");
+    expect(JSON.stringify(manager.capture("phone"))).not.toContain("good-code");
+    const retry = await manager.start("phone", cli, [], {}, [...hosts], { scope, paste: true });
+    expect(manager.submit("phone", retry.inputGeneration!, "wrong-code")).toBe(true);
+    await manager.wait("phone");
+    expect(manager.state("phone")).toBe("failed");
   });
 
   it("releases a finished login scope when neither kill nor close completes", async () => {

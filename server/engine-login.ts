@@ -42,6 +42,7 @@ function logCliExit(code: string, line?: string): void {
 }
 
 const VERSION_PROBE_MS = 10_000;
+const PASTE_PROMPT = /^(?:Paste code here if prompted\s*>|Then paste the authorization code\b.*:)\s*$/;
 
 type LoginState = "pending" | "complete" | "failed" | "cancelled";
 interface LoginJob {
@@ -101,7 +102,7 @@ export class EngineLogin {
     return job?.state === "pending" || (job?.state === "complete" && !job.acknowledged);
   }
 
-  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean } = {}): Promise<LoginCapture> {
+  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean } = {}): Promise<LoginCapture> {
     if (this.disposed) return {};
     let job = this.jobs.get(engine);
     const scope = options.scope ?? engine;
@@ -119,7 +120,7 @@ export class EngineLogin {
     }
     if (job?.state !== "pending") {
       job = this.create(engine, scope);
-      job.pasteBack = Boolean(options.account && scope === "claudeAgent" && args[0] === "auth" && args[1] === "login");
+      job.pasteBack = options.paste === true;
       try {
         // A cold Windows sign-in can beat the status check that selects the usable Claude binary.
         if (process.platform === "win32" && scope === "claudeAgent" && cli === "claude" && args[0] === "auth" && args[1] === "login" && findCliCandidates(cli).length > 1) {
@@ -245,7 +246,7 @@ export class EngineLogin {
       const clean = stripVTControlCharacters(line).trim();
       if (stderr && clean) job.lastStderr = safeStderr(clean);
       if (job.state !== "pending") { line = ""; return; }
-      if (job.pasteBack && /^Paste code here if prompted\s*>\s*$/.test(clean)) job.capture.inputGeneration = job.generation;
+      if (job.pasteBack && PASTE_PROMPT.test(clean)) job.capture.inputGeneration = job.generation;
       if (job.scope === "codex" && /\bdevice[ _-]+limit(?:[ _-]+reached)?\b|\btoo many (?:paid )?accounts (?:on|for) (?:this|the same) device\b/i.test(clean)) {
         job.capture.error = "device_cap";
         job.finish("failed");

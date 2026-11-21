@@ -52,7 +52,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         if (!result) throw new AccountError("Unknown account", 404);
         json(res, 200, result);
       } else if (id && action === "sign-in/code" && method === "POST") {
-        if (!lifecycle.accounts.get(id) || registry.get(id)?.driverKind !== "claudeAgent") throw new AccountError("Unknown managed Claude account", 404);
+        if (!registry.get(id)) throw new AccountError("Unknown engine", 404);
         const parsed = codeSchema.safeParse(await body(req));
         if (!parsed.success) throw new AccountError("A login generation and one code are required", 400);
         if (!registry.logins.submit(id, parsed.data.generation, parsed.data.code)) throw new AccountError("This sign-in is no longer waiting for a code", 409);

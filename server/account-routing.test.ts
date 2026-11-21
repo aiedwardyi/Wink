@@ -125,7 +125,7 @@ describe("engine default account routing", () => {
     expect(instances.find((row) => row.instanceId === "claude")?.loginCapture).toEqual({ url: capture.url });
   });
 
-  it("submits a code only to a managed Claude pending login", async () => {
+  it("submits a code only to a known engine's pending login", async () => {
     const f = await fixture();
     const submit = vi.fn(() => true);
     Object.assign(f.registry.logins, { submit });
@@ -136,8 +136,10 @@ describe("engine default account routing", () => {
     for (const value of [{ generation: 7, code: "a\nb" }, { generation: 7, code: "code\n" }, { generation: 7, code: "" }, { generation: 0, code: "code" }, { code: "code" }]) {
       expect((await f.request("POST", path, value)).status).toBe(400);
     }
-    expect((await f.request("POST", "/api/accounts/claude/sign-in/code", { generation: 7, code: "code" })).status).toBe(404);
+    expect((await f.request("POST", "/api/accounts/missing/sign-in/code", { generation: 7, code: "code" })).status).toBe(404);
     expect(submit).not.toHaveBeenCalled();
+    expect((await f.request("POST", "/api/accounts/claude/sign-in/code", { generation: 7, code: "code" })).status).toBe(200);
+    expect(submit).toHaveBeenCalledExactlyOnceWith("claude", 7, "code");
     submit.mockReturnValue(false);
     expect((await f.request("POST", path, { generation: 7, code: "stale" })).status).toBe(409);
   });

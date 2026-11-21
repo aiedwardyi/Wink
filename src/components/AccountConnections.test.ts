@@ -20,6 +20,7 @@ import { EnginesSettings } from "./EnginesSettings";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { landFold, spyReveal } from "./Fold.test-land";
 import { ROW_BUTTON } from "./SettingsPrimitives";
+import { BUILT_IN_DRIVERS } from "../../server/drivers/builtIn.ts";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -463,7 +464,7 @@ it("uses browser login when Claude does not advertise device login", async () =>
   expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: false }) });
 });
 
-it("keeps computer-only guidance for Claude account creation on a phone", async () => {
+it("keeps computer-only guidance for account creation on a phone without device login", async () => {
   await render(1);
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };
@@ -471,6 +472,20 @@ it("keeps computer-only guidance for Claude account creation on a phone", async 
   expect(buttons("Add Account")).toHaveLength(0);
   expect(host.textContent).toContain("Add on computer");
   expect(request).not.toHaveBeenCalledWith("/api/accounts", expect.anything());
+});
+
+it("adds Claude accounts and signs Gemini in from a phone with their real login commands", async () => {
+  await render(1);
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  const install = (kind: string) => BUILT_IN_DRIVERS.find((driver) => driver.driverKind === kind)!.install;
+  state.instances[0]!.install = install("claudeAgent");
+  state.instances.push({ ...engine("gemini", false), accountOf: undefined, accountMain: undefined, accountState: undefined, driverKind: "antigravityAgent", displayName: "Gemini", install: install("antigravityAgent") });
+  await update();
+  expect(host.querySelector("[data-computer-only]")).toBeNull();
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: true }) });
+  await act(async () => buttons("Sign In")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/instances/gemini/sign-in", { method: "POST", body: JSON.stringify({ device: true }) });
 });
 
 it.each([
