@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -471,7 +471,7 @@ describe("memory pass", () => {
     await settle("t1", 3 * MINUTE);
     expect(chips("t1")).toHaveLength(0);
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("auto-notes-overflow.md write failed"));
-    rmSync(overflowPath(), { recursive: true });
+    removeTestData(overflowPath());
     writeFileSync(overflowPath(), "# Overflow\n- Uses pnpm\n");
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
@@ -1586,7 +1586,7 @@ describe("memory pass", () => {
     say("t1", "i now live in Vancouver");
     await settle("t1", 3 * MINUTE);
     expect(memoryFileRaw("bot-t1")).toBe(full);
-    rmSync(overflowPath(), { recursive: true });
+    removeTestData(overflowPath());
     await settle("t1");
     expect(memoryFileRaw("bot-t1")).not.toContain("Toronto");
     expect(overflow()).toContain("- Home city: Vancouver (noted 2026-10-15)");
