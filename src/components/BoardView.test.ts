@@ -1174,8 +1174,6 @@ describe("Forum", () => {
     await settle();
     expect(rows()).toEqual(["pa", "pb"]);
     expect(host.querySelector("[role=alert]")?.textContent).toBe("Wink couldn't finish that. Try again.");
-    // inside the scroller the alert would overlay a row or scroll out of view
-    expect(host.querySelector("[role=alert]")!.closest(".overflow-y-auto")).toBeNull();
     await openRow("pb");
     expect(host.querySelector("[data-side-panel] [role=alert]")).toBeNull();
     await click("[data-back-button]");
@@ -1183,31 +1181,26 @@ describe("Forum", () => {
     expect(host.querySelector("[data-side-panel] [role=alert]")?.textContent).toBe("Wink couldn't finish that. Try again.");
   });
 
-  it("the alert showing or clearing moves no row of a scrolled list", async () => {
+  it.each(["refresh", "delete"])("a failed %s shows the released alert first in the list's own sheet, scrolling with its rows", async (what) => {
     posts = Array.from({ length: 30 }, (_, i) => post(`p${i}`, { created_at: i + 1 }));
     const ok = globalThis.fetch;
     let down = false;
-    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (url === "/api/board" && down ? new Response("{}", { status: 500 }) : ok(url, init))));
-    // no layout engine here: the alert's box is 43.5 px tall and takes that height from the top of the list
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      // SAFETY: the Forum reads only the height of the alert box
-      return { height: this.firstElementChild?.getAttribute("role") === "alert" ? 43.5 : 0 } as DOMRect;
-    });
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (down && url === (what === "refresh" ? "/api/board" : "/api/board/delete") ? new Response("{}", { status: 500 }) : ok(url, init))));
     await render(BoardView);
-    const list = host.querySelector<HTMLElement>("[data-board-view] .overflow-y-auto")!;
-    const rowTop = (index: number) => (host.querySelector("[role=alert]") ? parseFloat((host.querySelector("[role=alert]")!.parentElement!).style.minHeight) || 43.5 : 0) + index * 100 - list.scrollTop;
-    list.scrollTop = 600;
-    const before = [rowTop(5), rowTop(6), rowTop(7)];
+    host.querySelector<HTMLElement>("[data-board-view] .overflow-y-auto")!.scrollTop = 600;
     down = true;
-    await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    if (what === "refresh") await act(async () => window.dispatchEvent(new Event(BOARD_CHANGED_EVENT)));
+    else {
+      await act(async () => { host.querySelector('[data-board-post="p5"] button')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); });
+      await act(async () => document.body.querySelector<HTMLButtonElement>("[data-menu-delete]")!.click());
+      await dialogButton("Delete");
+    }
     await settle();
-    expect(host.querySelector("[role=alert]")).not.toBeNull();
-    expect([rowTop(5), rowTop(6), rowTop(7)]).toEqual(before);
-    down = false;
-    await click("[role=alert] button");
-    await settle();
-    expect(host.querySelector("[role=alert]")).toBeNull();
-    expect([rowTop(5), rowTop(6), rowTop(7)]).toEqual(before);
+    // anywhere outside the scroller the alert covers or moves the rows under a pointer
+    const alert = host.querySelector("[data-board-view] .overflow-y-auto > section > [role=alert]:first-child");
+    expect(alert?.className).toBe("px-6 max-md:px-4 flex items-center justify-between gap-3 py-3 text-[13px] text-danger");
+    expect(alert?.textContent).toBe(what === "refresh" ? "Wink couldn't finish that. Try again.Retry" : "Wink couldn't finish that. Try again.");
+    expect(host.querySelectorAll("[data-board-view] [role=alert]")).toHaveLength(1);
   });
 
   it("shows the five engine marks above a friendly line when empty", async () => {
