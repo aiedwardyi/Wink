@@ -7,7 +7,7 @@ import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
-import type { ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
+import type { NativePrompt, ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
   CONTEXT_COMPACTION_VERSION,
   readContextCompaction,
@@ -198,6 +198,22 @@ function contextBudget(contextWindow: number): number {
 
 export function estimateContextTokens(messages: Array<{ text: string }>): number {
   return messages.reduce((total, message) => total + messageTokens(message), 0);
+}
+
+export function nativeReplayBudget(contextWindow: number): number {
+  return Math.floor(contextWindow * SUMMARY_GRACE_INPUT_SHARE);
+}
+
+export function codexResumeReplayRoom(
+  task: { resumeCursors: Record<string, unknown>; resumeSeed?: ResumeSeed; nativePrompt?: NativePrompt },
+  instanceId: string,
+  model: string,
+): number {
+  const cursor = task.resumeCursors[instanceId];
+  const { resumeSeed: seed, nativePrompt: prompt } = task;
+  if (cursor === undefined || !seed?.nativeReplay || seed.instanceId !== instanceId || seed.cursor !== cursor ||
+      prompt?.cursor !== cursor || prompt.window?.model !== model) return 0;
+  return nativeReplayBudget(prompt.window.tokens) - prompt.last - Math.max(0, prompt.growth ?? 0);
 }
 
 /** Longest prefix that fits, ending at a line end, else at whitespace, else anywhere. */
@@ -1251,9 +1267,20 @@ export async function prepareModelContext(input: {
   summaryGrace?: SummaryGrace;
   /** the caller's own plan for these same inputs, so a send plans once */
   plan?: CompactionPlan;
+  nativeReplay?: boolean;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {
   const plan = input.plan ?? planCompaction(input);
+  if (input.nativeReplay && plan.needed) {
+    return {
+      status: "ready",
+      transcript: plan.transcript,
+      budgetTokens: nativeReplayBudget(input.contextWindow),
+      estimatedTokens: plan.estimatedTokensBefore,
+      compacted: Boolean(plan.previous),
+      ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+    };
+  }
   const grace = input.summaryGrace ? planSummaryGrace({ ...input, plan, grace: input.summaryGrace }) : null;
   if (grace?.safe && (plan.needed || plan.status === "fits")) {
     return {

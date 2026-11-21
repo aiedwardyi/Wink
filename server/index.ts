@@ -152,7 +152,8 @@ import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { codexResumeReplayRoom, contextWindowFor, estimateContextTokens, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nativeReplayBudget, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { decodeCodexSelection, OFFICIAL_CODEX_PROVIDER } from "./drivers/codex-catalog.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -3040,6 +3041,7 @@ const summaryBuild = createSummaryBuild({
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
     if (!instance?.generateText) return null;
+    if (instance.driverKind === "codex" && codexResumeReplayRoom(task, selection.instanceId, selection.model) > 0) return null;
     const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
@@ -4460,6 +4462,7 @@ bus.subscribe((event: RuntimeEvent) => {
               instanceId: seed.instanceId,
               cursor: seed.cursor,
               compactionId: seed.compactionId,
+              ...(seed.nativeReplay ? { nativeReplay: true } : {}),
             });
           }
           const systemSeed = systemSeeds.take(event.threadId, event.turnId);
@@ -5475,20 +5478,31 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const graceInputs = { plan: planBeforeSummary, grace: summaryGrace, taskRecordText: durableTaskRecordText || "No durable task record is available.", reserveTokens: notesBeforeSummary?.tokens };
   const sessionResumes = planSummaryGrace(graceInputs).safe;
   const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));
+  let codexHistory = false;
+  if (instance.driverKind === "codex" && planBeforeSummary.needed && !rewound && !recovering &&
+      decodeCodexSelection(model).modelProvider === OFFICIAL_CODEX_PROVIDER) {
+    const requestTokens = estimateContextTokens([{ text: summaryGrace.requestText }, { text: durableTaskRecordText }]) +
+      (notesBeforeSummary?.tokens ?? 0);
+    const fitsReplay = planBeforeSummary.estimatedTokensBefore + requestTokens <= nativeReplayBudget(modelContextWindow);
+    codexHistory = fitsReplay && (summaryGrace.fresh || (!summaryGrace.recycle &&
+      task.resumeSeed?.compactionId === (planBeforeSummary.previous?.messageId ?? null) &&
+      codexResumeReplayRoom(task, instanceId, model) >= requestTokens));
+  }
+  const usePlannedContext = summarySkipped || codexHistory;
   let summaryWait: SummaryWait | undefined;
   const onSummaryWait = (wait: SummaryWait) => { summaryWait = { ...wait, waitedMs: (summaryWait?.waitedMs ?? 0) + wait.waitedMs }; };
   const logSummaryWait = () => {
     if (summaryWait) console.info(`[summary-wait] ${JSON.stringify(summaryWait)}`);
     summaryWait = undefined;
   };
-  const summaryWaitMs = await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
-  const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);
+  const summaryWaitMs = codexHistory ? 0 : await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
+  const activeMessages = usePlannedContext ? messagesBeforeSummary : store.activePath(threadId);
   holdNotes?.(activeMessages);
   // Inline replay carries this turn's notes after the reply marker, so they leave history and claim their room first.
-  let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
+  let inlineNotes = usePlannedContext ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
-  const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle) => {
+  const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle, nativeReplay = false) => {
     if (!grace) {
       rewound = threadId === bot.threadId && Boolean(bot.rewound);
       taskRecord = taskPacketForWrite(threadId);
@@ -5517,6 +5531,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       ...native,
       summaryGrace: grace,
       plan: grace ? planBeforeSummary : undefined,
+      nativeReplay,
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
@@ -5539,7 +5554,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       } : undefined,
     });
   };
-  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);
+  const prepared = await prepareContext(activeMessages, summaryWaitMs, usePlannedContext ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined, codexHistory);
   if (prepared.status !== "ready") {
     const detail = prepared.status === "unsupported"
       ? `This conversation uses context summary version ${String(prepared.version)}. Update Wink before continuing.`
@@ -5728,7 +5743,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
-  const { turnText, resume } = buildTurnContext({
+  const { turnText, resume, nativeReplayPrefix } = buildTurnContext({
     driverKind: instance.driverKind,
     model,
     text: turnPrompt,
@@ -5738,6 +5753,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recycled,
     recycleReason,
     replaysNatively,
+    nativeReplay: codexHistory && summaryGrace.fresh,
     taskRecord: taskRecord ?? undefined,
     taskRecordText: durableTaskRecordText || undefined,
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
@@ -5830,6 +5846,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     }),
     instanceId,
     cursor: resume ? task.resumeCursors[instanceId] : undefined,
+    ...(codexHistory ? { nativeReplay: true } : {}),
   });
 
   const settleTrace = holdTurnTrace(trace);
@@ -6327,6 +6344,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         leanStartup,
         resumeCursor,
         resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
+        ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,

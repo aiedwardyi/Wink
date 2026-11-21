@@ -1012,6 +1012,19 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (codexThreadId) lastThread.set(threadId, { cwd: turn.cwd ?? homedir(), model: turn.model, cursor: codexThreadId });
         emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
         let prompt = resumeFailed ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
+        const replay = turn.nativeReplayPrefix;
+        if (!cursor && replay && prompt.startsWith(replay)) {
+          try {
+            await request("thread/inject_items", {
+              threadId: codexThreadId,
+              items: [{ type: "message", role: "user", content: [{ type: "input_text", text: replay.trimEnd() }] }],
+            });
+            trace?.delivered("native-history", () => ({ history: replay.trimEnd() }));
+            prompt = prompt.slice(replay.length);
+          } catch (error) {
+            if ((error as { code?: number }).code !== -32601) throw error;
+          }
+        }
         if (cursor && !resumeFailed && turn.systemUpdate) {
           // older CLIs lack inject_items; the diff then stays in the prompt
           try {

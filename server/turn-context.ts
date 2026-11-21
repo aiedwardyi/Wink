@@ -75,6 +75,7 @@ export interface TurnContextInput {
   recycleReason?: "compaction" | "session-fat" | "system";
   /** transcript-replay drivers get history via SendTurnInput.transcript instead */
   replaysNatively: boolean;
+  nativeReplay?: boolean;
   /** durable harness state, included only at a recovery boundary */
   taskRecord?: TaskRecordContext;
   /** Pre-sized durable state for the selected model window. */
@@ -318,6 +319,7 @@ export interface ResumeSeed {
   instanceId: string;
   cursor: unknown;
   compactionId: string | null;
+  nativeReplay?: true;
 }
 
 /** A cursor is resumable only once the provider accepted a prompt carrying the
@@ -658,6 +660,7 @@ export function withTaskRecord(text: string, record: string): string {
 
 export function buildTurnContext(input: TurnContextInput): {
   turnText: string;
+  nativeReplayPrefix?: string;
   /** false when the native session must not be resumed */
   resume: boolean;
 } {
@@ -682,18 +685,18 @@ export function buildTurnContext(input: TurnContextInput): {
     : asksText;
   if (!replay && !record) return { turnText: text, resume };
   if (!replay) return { turnText: `${record}\n\n${text}`, resume };
+  const history = [
+    record,
+    record ? "" : null,
+    replayPreamble(input),
+    "",
+    ...transcript.map((message) => replayLine(message, input.driverKind, input.model)),
+    "",
+    "",
+  ].filter((line) => line !== null).join("\n");
   return {
-    turnText: [
-      record,
-      record ? "" : null,
-      replayPreamble(input),
-      "",
-      ...transcript.map((message) => replayLine(message, input.driverKind, input.model)),
-      "",
-      REPLY_MARKER,
-      "",
-      text,
-    ].filter((line) => line !== null).join("\n"),
+    turnText: `${history}${REPLY_MARKER}\n\n${text}`,
+    ...(input.nativeReplay ? { nativeReplayPrefix: history } : {}),
     resume,
   };
 }

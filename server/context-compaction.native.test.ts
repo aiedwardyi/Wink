@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
-import { contextWindowFor, nativeCompactAt, nearNativeCompact, NATIVE_SUMMARY_WINDOW, planCompaction, prepareModelContext } from "./context-compaction.ts";
+import { codexResumeReplayRoom, contextWindowFor, nativeCompactAt, nearNativeCompact, NATIVE_SUMMARY_WINDOW, planCompaction, prepareModelContext } from "./context-compaction.ts";
 import type { Message } from "./store.ts";
 import { reportedWindow } from "./turn-context.ts";
 
@@ -176,5 +176,26 @@ describe("native compaction plan", () => {
     expect(summarize).not.toHaveBeenCalled();
     await prepareModelContext({ ...input, summaryGrace: { ...grace, fresh: true }, summarize });
     expect(summarize).toHaveBeenCalledOnce();
+  });
+
+  it("keeps all planned history for a bounded Codex native replay without running a summarizer", async () => {
+    const plan = planCompaction({ messages: longThread(), contextWindow: 128_000 });
+    const summarize = vi.fn(async () => "SUMMARY\ninline");
+    const input = { messages: longThread(), contextWindow: 128_000, taskRecordText: "Goal: keep going", plan, nativeReplay: true, summarize };
+    expect(plan.needed).toBe(true);
+    if (!plan.needed) return;
+    expect(await prepareModelContext(input)).toMatchObject({ status: "ready", transcript: plan.transcript });
+    expect(summarize).not.toHaveBeenCalled();
+  });
+
+  it("reserves room only for the same native replay session and model", () => {
+    const task = {
+      resumeCursors: { codex: "s1" },
+      resumeSeed: { instanceId: "codex", cursor: "s1", compactionId: null, nativeReplay: true as const },
+      nativePrompt: { cursor: "s1", first: 73_000, last: 80_000, growth: 10_000, window: { model: "gpt-6.2-sol", tokens: 128_000 } },
+    };
+    expect(codexResumeReplayRoom(task, "codex", "gpt-6.2-sol")).toBe(6_000);
+    expect(codexResumeReplayRoom(task, "codex", "gpt-6.2-astra")).toBe(0);
+    expect(codexResumeReplayRoom({ ...task, resumeCursors: { codex: "s2" } }, "codex", "gpt-6.2-sol")).toBe(0);
   });
 });
