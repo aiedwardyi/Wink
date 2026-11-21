@@ -187,6 +187,22 @@ export function threadTailOn(handle: DatabaseSync, threadId: string, count: numb
   return { messages: rows.reverse().map(rowToMessage), options: options.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
 }
 
+/** A stored row's rowid, or undefined when the row is not stored here. */
+export function rowCursor(threadId: string, id: string): number | undefined {
+  // SAFETY: This projection selects SQLite's rowid.
+  const row = db().prepare("SELECT rowid AS cursor FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { cursor: number } | undefined;
+  return row?.cursor;
+}
+
+/** The `count` stored rows before a rowid, oldest first; cold-thread-worker.ts runs it on its own handle. */
+export function threadPageBeforeOn(handle: DatabaseSync, threadId: string, before: number, count: number): ThreadRows & { options: Message[] } {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = handle
+    .prepare("SELECT json FROM messages WHERE thread_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?")
+    .all(threadId, before, count) as Array<{ json: string }>;
+  return { messages: rows.reverse().map(rowToMessage), options: [], activeLeafId: null };
+}
+
 function importLegacy(threadId: string, legacyFile: string): ThreadRows {
   let messages: Message[] = [];
   let activeLeafId: string | null = null;
