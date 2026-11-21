@@ -15,6 +15,7 @@ import * as auth from "./antigravity-auth.ts";
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { summaryInstance } from "../summary-instance.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { ProviderRegistry } from "../harness/registry.ts";
 import {
@@ -32,7 +33,8 @@ import {
   STATIC_ANTIGRAVITY_MODELS,
   WIN32_CREATEPROCESS_CMDLINE_MAX,
 } from "./antigravity.ts";
-import { describeSpawnFailure } from "../procs.ts";
+import { noteGenerator } from "../memory-pass.ts";
+import * as procs from "../procs.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
 
@@ -1710,6 +1712,84 @@ describe("Antigravity computer MCP config", () => {
     }
   });
 
+  it("a note helper gives way to a computer turn, which starts at once", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpyield-"));
+    const hold = join(home, "hold");
+    const helperReady = join(home, "helper.ready");
+    const helper = await createIn(home, "helper", { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: helperReady });
+    const computer = await createIn(home, "computer", { FAKE_AGY_HOLD_FILE: hold });
+    const computerRecorder = recordEvents(computer.adapter);
+    try {
+      const notes = helper.generateText!("notes").catch((error: unknown) => error);
+      await expect.poll(() => existsSync(helperReady)).toBe(true);
+      const turn = computer.adapter.sendTurn({ threadId: "t-mcp-yield", text: "click", integrations: boxIntegrations });
+      await computerRecorder.until((event) => event.type === "turn.started", 1_000);
+      expect(await notes).toMatchObject({ message: "agy summary aborted" });
+      await turn;
+      writeFileSync(hold, "");
+      await computerRecorder.until((event) => event.type === "turn.completed");
+      expect(computerRecorder.events.at(-1)).toMatchObject({ ok: true });
+    } finally {
+      writeFileSync(hold, "");
+      computerRecorder.stop();
+      await helper.dispose();
+      await computer.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a note helper's quota failure from the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-notelimit-"));
+    const helper = await createIn(home, "limited", { FAKE_AGY_RESULT_ERROR: "RESOURCE_EXHAUSTED (code 429): Quota exceeded for quota metric Generate requests." });
+    try {
+      await expect(helper.generateText!("notes")).rejects.toThrow("Account text rate limit");
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("holds a note helper after a sign-in rejection in the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-signedout-"));
+    const helper = await createIn(home, "signed-out", { FAKE_AGY_RESULT_ERROR: "UNAUTHENTICATED (code 401): Sign in again." });
+    const usage = { limits: new Map(), save: () => {}, signedOut: new Set<string>() };
+    try {
+      await expect(noteGenerator([], undefined, helper, usage)!("notes", new AbortController().signal)).rejects.toThrow("UNAUTHENTICATED (code 401)");
+      expect(noteGenerator([], undefined, helper, usage)).toBeNull();
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("writes notes on the bot's chat model only when the account is denied the text model", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-denied-"));
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const models = () => spawn.mock.calls.flatMap(([, args]) => args.includes("--model") ? [args[args.indexOf("--model") + 1]] : []);
+    const allowed = await createIn(home, "allowed");
+    const denied = await createIn(home, "denied", { FAKE_AGY_DENIED_MODEL: "gemini-3.8-flash-low" });
+    try {
+      await expect(summaryInstance(allowed, "gemini-4-carbon-low").generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low"]);
+      spawn.mockClear();
+      const own = summaryInstance(denied, "gemini-4-carbon-low");
+      for (let i = 0; i < 2; i++) await expect(own.generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low", "gemini-4-carbon-low", "gemini-4-carbon-low"]);
+    } finally {
+      await allowed.dispose();
+      await denied.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("reaps a child that hangs after result, restores the mount, and unblocks the next turn", async () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
@@ -1984,11 +2064,11 @@ describe("Antigravity Windows long-prompt transport", () => {
 
   it("maps ENAMETOOLONG spawn failures to a clear recoverable message", () => {
     const err = Object.assign(new Error("spawn agy ENAMETOOLONG"), { code: "ENAMETOOLONG" });
-    expect(describeSpawnFailure(err, "agy")).toEqual({
+    expect(procs.describeSpawnFailure(err, "agy")).toEqual({
       message: "spawn failed: command line too long for this OS (`agy`)",
       setup: false,
     });
     const e2big = Object.assign(new Error("spawn agy E2BIG"), { code: "E2BIG" });
-    expect(describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
+    expect(procs.describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
   });
 });

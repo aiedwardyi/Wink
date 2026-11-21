@@ -18,7 +18,7 @@ import {
   noteLines,
   type MemorySleep,
 } from "./memory-sleep.ts";
-import { markTalked, markTidied, memorySyncDir, readMemorySnapshots, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
+import { markTalked, markTidied, memorySyncDir, pinMemoryJobOwner, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
 import { listMemoryTopics, loadMemory, MEMORY_MAX_LINES, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
@@ -701,6 +701,10 @@ describe("memory sleep", () => {
       };
       type Pc = ReturnType<typeof pc>;
       const [a, b] = [pc(botA, 0), pc(botB, 1)];
+      for (const pc of [a, b]) pinMemoryJobOwner(pc.ledger, "bot-1", a.host);
+      const standby = () => {
+        for (const pc of [a, b]) if (!tidiesHere(pc.ledger, "bot-1", pc.host)) away.add(pc.bot);
+      };
       const sync = (pc: Pc) => pc.syncBotMemory(pc.folder, "bot-1", pc.workspace, pc.ledger, { legacy: pc.legacy, host: pc.host });
       const receive = (from: Pc, to: Pc) => {
         mkdirSync(memorySyncDir(to.folder, "bot-1"), { recursive: true });
@@ -719,21 +723,27 @@ describe("memory sleep", () => {
           sync(a);
         }
       };
-      return { a, b, sync, receive, share, settle };
+      return { a, b, sync, receive, share, settle, standby };
     };
     const parked = (...botIds: string[]) => botIds.flatMap((botId) => listMemoryTopics(botId).map(({ name }) => name).filter((name) => name.includes(".conflict-")));
 
     it("tidy on one PC only, so model answers that differ park no copy", async () => {
       const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
-      const { a, b, share, settle } = twoPcs(botA, botB);
+      const { a, b, share, sync, settle, standby } = twoPcs(botA, botB);
       markTalked(a.ledger, "bot-1");
-      writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Wants short replies with bullets (noted 2026-11-10)", "- Wants short replies (noted 2026-11-01)", "- Lives in Seoul"));
+      const initial = memory("- Uses  pnpm.", "- Uses pnpm", "- Wants short replies with bullets (noted 2026-11-10)", "- Wants short replies (noted 2026-11-01)", "- Lives in Seoul");
+      writeMemoryFile(botA, initial);
       share();
-      for (const pc of [a, b]) if (!tidiesHere(pc.ledger, "bot-1", await readMemorySnapshots(pc.folder, "bot-1"))) away.add(pc.bot);
+      markTalked(b.ledger, "bot-1", NOW + 1);
+      sync(b);
+      expect(memoryFileRaw(botB)).toBe(initial);
+      standby();
       expect([...away]).toEqual([botB]);
       perBot.set(botA, reply({ duplicates: [{ keep: "L5", drop: ["L6"] }] }));
-      perBot.set(botB, reply({}));
+      const mirror = vi.fn<NoteGenerator>().mockResolvedValue("{}");
+      perBot.set(botB, mirror);
       await quiet();
+      expect(mirror).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(7 * MIN);
       sleep.onSettled(botB);
       await quiet();
@@ -744,11 +754,11 @@ describe("memory sleep", () => {
 
     it("park no note a routine turn on the other PC added while one of them tidied", async () => {
       const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
-      const { a, b, share, settle } = twoPcs(botA, botB);
+      const { a, share, settle, standby } = twoPcs(botA, botB);
       markTalked(a.ledger, "bot-1");
       writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
       share();
-      for (const pc of [a, b]) if (!tidiesHere(pc.ledger, "bot-1", await readMemorySnapshots(pc.folder, "bot-1"))) away.add(pc.bot);
+      standby();
       expect([...away]).toEqual([botB]);
       writeMemoryFile(botB, `${memoryFileRaw(botB)}- Phone is 555-0100\n`);
       generator = null;

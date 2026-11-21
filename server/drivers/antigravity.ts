@@ -46,6 +46,7 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
+import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
 import { antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
@@ -62,6 +63,8 @@ const AGY_ACCOUNT_ERROR =
   /unauthorized|unauthenticated|\bforbidden\b|(?<![\w-])40[13](?![\w-])|not logged in|\bsign[\s-]?in\b|authentication failed|permission_denied|permission denied|has not been used in project|\bapi\b[^.\n]{0,120}\bdisabled\b/i;
 const AGY_NOT_ACCOUNT_ERROR = /\brate[\s-]?limit\b|(?<![\w-])429(?![\w-])|\berror-code-(?:429|5\d\d)\b|\btoo many requests\b|resource[ _]exhausted|quota exceeded|exceeded[^.\n]{0,40}\bquota\b|(?<![\w-])5\d\d(?![\w-])|\b5xx\b/i;
 const AGY_TIMEOUT_ERROR = /\b(?:watchdog timeout|timed out|time-out|timeout)\b/i;
+const AGY_TEXT_MODEL = "gemini-3.8-flash-low";
+const AGY_MODEL_DENIED = /\bpermission\b[^\n]{0,80}\bdenied\b[^\n]{0,200}\bmodels\/|\bmodels\/[^\n]{0,200}\b(?:permission[_ ]denied|not[_ ]found|(?:may|does) not exist)\b/i;
 
 /** Account or permission failure. Rate limits, 5xx, and timeout-only lines are not. */
 export function isAgyAccountError(text: string): boolean {
@@ -219,6 +222,7 @@ export interface AntigravityComputerMcpServer {
 let mcpSharedHolders = 0;
 let mcpExclusiveHeld = false;
 const mcpWaiters: Array<{ exclusive: boolean; grant: () => void }> = [];
+const mcpYielders = new Set<() => void>();
 
 function pumpAntigravityMcpLock() {
   while (mcpWaiters.length && !mcpExclusiveHeld && !(mcpWaiters[0].exclusive && mcpSharedHolders > 0)) {
@@ -227,21 +231,29 @@ function pumpAntigravityMcpLock() {
     else mcpSharedHolders += 1;
     waiter.grant();
   }
+  if (mcpWaiters[0]?.exclusive) for (const giveWay of mcpYielders) giveWay();
 }
 
-/** Resolves with the release once granted; cancel() drops a waiter that was never granted. */
-function acquireAntigravityMcpLock(exclusive: boolean) {
+/** Resolves with the release once granted; cancel() drops a waiter that was never granted. A shared holder with onYield gives way to a waiting computer turn. */
+function acquireAntigravityMcpLock(exclusive: boolean, onYield?: () => void) {
   let cancel = () => {};
   const granted = new Promise<() => void>((resolve) => {
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
+      if (onYield) mcpYielders.delete(onYield);
       if (exclusive) mcpExclusiveHeld = false;
       else mcpSharedHolders -= 1;
       pumpAntigravityMcpLock();
     };
-    const waiter = { exclusive, grant: () => resolve(release) };
+    const waiter = {
+      exclusive,
+      grant: () => {
+        if (onYield) mcpYielders.add(onYield);
+        resolve(release);
+      },
+    };
     cancel = () => {
       const index = mcpWaiters.indexOf(waiter);
       if (index === -1) return;
@@ -690,10 +702,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         },
         turnId,
       });
+      emit({ ...base(threadId, turnId), type: "turn.started" });
       const releaseMcpLock = await mcpLock.granted;
       if (interrupted) {
         releaseMcpLock();
-        emit({ ...base(threadId, turnId), type: "turn.started" });
         settle(false, "interrupted");
         return { turnId };
       }
@@ -1128,8 +1140,6 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       }, 61 * 60_000);
       watchdog.unref?.();
 
-      emit({ ...base(threadId, turnId), type: "turn.started" });
-
       return { turnId };
     };
 
@@ -1143,6 +1153,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
       return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
     };
+
+    const textModelDenied = new Set<string>();
 
     return {
       instanceId,
@@ -1197,27 +1209,39 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           return () => listeners.delete(listener);
         },
       },
-      generateText: async (prompt: string) => {
+      generateText: async (prompt, opts) => {
         // A shared slot, so a computer turn's box token never reaches this child.
-        const releaseMcpLock = await acquireAntigravityMcpLock(false).granted;
+        const signal = opts?.signal;
+        signal?.throwIfAborted();
+        const yielded = new AbortController();
+        const lock = acquireAntigravityMcpLock(false, () => yielded.abort());
+        signal?.addEventListener("abort", lock.cancel, { once: true });
+        const releaseMcpLock = await lock.granted;
+        signal?.removeEventListener("abort", lock.cancel);
+        const stopped = signal ? AbortSignal.any([signal, yielded.signal]) : yielded.signal;
         let restoreMcp = () => {};
         let cwd: string | null = null;
         try {
+          stopped.throwIfAborted();
           restoreMcp = mountAntigravityMcp(null, env);
-          cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
+          const dir = cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
+          let denied = false;
           // stdin like a turn: a summary prompt on argv blows the Windows command line
-          const child = spawnCli(
-            config.cli,
-            ["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low"],
-            { cwd, env, stdio: ["pipe", "pipe", "pipe"] },
-          );
-          return await new Promise<string>((resolve, reject) => {
-            let result: { status?: unknown; response?: unknown } | null = null;
+          const run = (model: string) => new Promise<string>((resolve, reject) => {
+            const child = spawnCli(
+              config.cli,
+              ["--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
+              { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] },
+            );
+            let result: { status?: unknown; response?: unknown; error?: unknown } | null = null;
             let failure: Error | null = null;
-            const timer = setTimeout(() => {
-              failure = new Error("agy summary timed out");
+            const stop = (error: Error) => {
+              failure ??= error;
               killCliTree(child);
-            }, 120_000);
+            };
+            const abort = () => stop(new Error("agy summary aborted"));
+            stopped.addEventListener("abort", abort, { once: true });
+            const timer = setTimeout(() => stop(new Error("agy summary timed out")), opts?.timeoutMs ?? 120_000);
             timer.unref?.();
             let buf = "";
             child.stdout.setEncoding("utf8");
@@ -1242,14 +1266,30 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             });
             child.on("close", (code) => {
               clearTimeout(timer);
+              stopped.removeEventListener("abort", abort);
               const response = typeof result?.response === "string" ? result.response.trim() : "";
+              const error = typeof result?.error === "string" ? result.error : undefined;
+              denied = !failure && !response && AGY_MODEL_DENIED.test(`${error ?? ""}\n${stderr}`);
               if (failure) reject(failure);
-              else if (!result) reject(new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
-              else if (result.status !== "SUCCESS" || !response) reject(new Error(`agy summary failed (${String(result.status)})`));
+              else if (!result) reject(textUsageError(stderr) ?? new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
+              else if (result.status !== "SUCCESS" || !response) {
+                reject(textUsageError(error) ?? textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})${error && isAgyAccountError(error) ? `: ${error}` : ""}`));
+              }
               else resolve(response);
             });
             child.stdin.end(antigravityStreamUserLine(prompt));
           });
+          // an account denied the text model writes notes on the bot's own chat model
+          const fallback = opts?.fallbackModel && opts.fallbackModel !== AGY_TEXT_MODEL ? opts.fallbackModel : undefined;
+          const account = fallback ? readAntigravityAccount(env) ?? "" : "";
+          if (fallback && textModelDenied.has(account)) return await run(fallback);
+          try {
+            return await run(AGY_TEXT_MODEL);
+          } catch (error) {
+            if (!fallback || !denied || stopped.aborted) throw error;
+            textModelDenied.add(account);
+            return await run(fallback);
+          }
         } finally {
           try {
             restoreMcp();

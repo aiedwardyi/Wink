@@ -91,6 +91,15 @@ afterEach(() => {
 });
 
 describe("usage board", () => {
+  it("keeps a background note limit out of displayed usage", async () => {
+    const s = setup();
+    s.rateLimits.set("claude", { observedAt: new Date(now).toISOString(), windows: [], noteLimit: { resetsAt: null } });
+    expect(account(await s.board.read())).toMatchObject({ windows: [], observedAt: null });
+    const observed = report(30);
+    s.rateLimits.set("claude", { ...observed, noteLimit: { resetsAt: null } });
+    expect(account(await s.board.read())).toMatchObject({ windows: [{ usedPercent: 30 }, { usedPercent: 40 }], observedAt: now });
+  });
+
   it("drops an old identity's queued history before it drains", async () => {
     const s = setup();
     s.rows()[0].status = { state: "available", authenticated: true, account: "old@example.test" };

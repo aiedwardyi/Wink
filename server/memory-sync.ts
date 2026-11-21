@@ -51,6 +51,8 @@ type Snapshot = z.infer<typeof snapshotSchema>;
 
 const ledgerSchema = z.object({
   device: z.string().regex(DEVICE).optional(),
+  jobDevice: z.string().regex(DEVICE).optional(),
+  jobOwners: z.record(z.string().regex(ID), z.string().regex(ID)).optional(),
   host: z.string().optional(),
   clock: z.number().int().nonnegative().optional(),
   talked: z.record(z.string(), time).optional(),
@@ -247,10 +249,16 @@ export async function readMemorySnapshots(folder: string, botSyncId: string): Pr
   }
 }
 
-/** The idle tidy runs on one PC per bot, the one the user last messaged it on; a copy not read counts against this PC. */
-export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string, snapshots: SnapshotsRead): boolean {
-  const mine = ledger.talked?.[botSyncId] ?? 0;
-  return snapshots.every((group) => group !== undefined && !group.partial && group.every((copy) => copy.device === ledger.device || copy.talkedAt < mine));
+/** Background jobs belong to the bot's original profile publisher, even during delayed sync. */
+export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string, device: string): boolean {
+  return Boolean(ledger.device && ledger.device === ledger.jobDevice && ledger.jobOwners?.[botSyncId] === device);
+}
+
+export function pinMemoryJobOwner(ledger: MemorySyncLedger, botSyncId: string, owner: string): boolean {
+  const owners = ledger.jobOwners ??= {};
+  if (Object.hasOwn(owners, botSyncId)) return false;
+  owners[botSyncId] = owner;
+  return true;
 }
 
 /** The idle tidy changed MEMORY.md from `before` to `after`: if the next pass finds only that change, a copy that holds what the tidy started from wins over it with nothing set aside. Save the ledger after it. */
@@ -275,10 +283,13 @@ function machine(): string {
 
 // a ledger copied or restored onto another PC must not keep writing as the PC it came from
 function deviceId(ledger: MemorySyncLedger, host: string): string {
+  // A copied ledger gets a new sync device, but keeps its original job binding.
+  ledger.jobDevice ??= ledger.device;
   if (!ledger.device || ledger.host !== host) {
     ledger.device = randomBytes(6).toString("hex");
     ledger.host = host;
   }
+  ledger.jobDevice ??= ledger.device;
   return ledger.device;
 }
 

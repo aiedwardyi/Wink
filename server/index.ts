@@ -334,7 +334,7 @@ import {
   supportsWorkspaceFiles,
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
-import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
+import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
@@ -437,7 +437,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, peerMemoryLanded, pinMemoryJobOwner, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -1843,6 +1843,15 @@ async function importProfileChanges(): Promise<void> {
       markSynced(synced, { entity: "bot", entityId: item.globalId, changes: Object.fromEntries(Object.entries(local).filter(([field]) => !(field in remoteBot))) });
     }
   }
+  if (!remote.invalidFiles.length) {
+    ensureMemorySyncDevice(memorySyncLedger);
+    for (const [botId, syncId] of Object.entries(profileSyncSettings.botMap)) {
+      const owner = Object.hasOwn(state.botOrigins, syncId) ? state.botOrigins[syncId] : undefined;
+      if (!owner || !pinMemoryJobOwner(memorySyncLedger, syncId, owner)) continue;
+      if (memoryJobsHere(botId)) memorySleep.onSettled(botId);
+    }
+    saveMemoryLedger();
+  }
   const finish = () => {
     if (botTrash) finishRevive(trashSyncHost(), marks.revive, (botId) => threadSyncV2?.rebuild(botId));
     for (const key of Object.keys(state.tombstones).filter((value) => value.startsWith("bot:"))) {
@@ -2369,6 +2378,7 @@ let profilePublishTimer: ReturnType<typeof setTimeout> | undefined;
 const memorySyncLedger = loadMemorySyncLedger(DATA_DIR);
 const legacyMemoryLedger = loadLegacyMemoryLedger(DATA_DIR);
 let savedMemoryLedger = JSON.stringify(memorySyncLedger);
+if (memorySyncLedger.device) ensureMemorySyncDevice(memorySyncLedger);
 
 function publishProfileChangesSafely(): void {
   try {
@@ -2469,8 +2479,11 @@ function saveMemoryLedger(): void {
   }
 }
 
-// whether this PC is the one that tidies each synced bot, as of its last sync pass
-const memoryTidyHere = new Map<string, boolean>();
+function memoryJobsHere(botId: string): boolean {
+  const folder = profileSyncSettings.folder;
+  const syncId = chatSyncBotId(profileSyncSettings, botId);
+  return !syncId || Boolean(folder && existsSync(folder) && tidiesHere(memorySyncLedger, syncId, profileSyncSettings.deviceId));
+}
 
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
 async function syncMemoryPass(botId: string): Promise<boolean> {
@@ -2483,7 +2496,6 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
-  memoryTidyHere.set(botId, tidiesHere(memorySyncLedger, botSyncId, snapshots));
   // the poll runs for every idle bot, so only pulled changes refresh the page and check
   if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
     memoryHealthCheck.refresh(botId);
@@ -3060,31 +3072,33 @@ const summaryBuild = createSummaryBuild({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   userName: () => cfg.profile?.name?.trim() || "User",
 });
+const signedOutHelpers = new Set<string>();
+registry.onProbed((instanceId) => signedOutHelpers.delete(instanceId));
+const noteHelper = (botId: string) => {
+  const bot = store.bot(botId);
+  return bot ? botAccounts.notes(bot, { limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR), signedOut: signedOutHelpers }) : null;
+};
+const memoryJobEnabled = (botId: string) => {
+  const bot = store.bot(botId);
+  const instance = bot && registry.get(bot.modelSelection.instanceId);
+  return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
+};
+const ownNoteEngine = (botId: string) => registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.driverKind !== "claudeAgent";
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
-  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
-  enabled: (botId) => {
-    const bot = store.bot(botId);
-    const instance = bot && registry.get(bot.modelSelection.instanceId);
-    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
-  },
+  generate: noteHelper,
+  enabled: memoryJobEnabled,
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  host: deviceMachine,
 });
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
-  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
-  enabled: (botId) => {
-    const bot = store.bot(botId);
-    const instance = bot && registry.get(bot.modelSelection.instanceId);
-    const folder = profileSyncSettings.folder;
-    // two PCs tidying the same notes apart would leave parked copies, so a synced bot is tidied on one, and not while its folder is out of reach
-    const synced = Boolean(folder && chatSyncBotId(profileSyncSettings, botId));
-    const tidier = memoryTidyHere.get(botId) === true && Boolean(folder && existsSync(folder));
-    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot) && (!synced || tidier);
-  },
+  generate: noteHelper,
+  requiresGenerator: ownNoteEngine,
+  enabled: (botId) => memoryJobEnabled(botId) && memoryJobsHere(botId),
   busy: (botId) => botHasActiveTurn(botId),
   changed: (botId) => broadcast({ kind: "memory.changed", botId }),
   // saved now, so a restart before the next sync pass still knows the tidy alone made this change
@@ -3907,7 +3921,10 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       limitWaits.bind(event.threadId, event.turnId);
       unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
-      if (turnOwnerId) memorySleep.onTurn(turnOwnerId);
+      if (turnOwnerId) {
+        if (ownNoteEngine(turnOwnerId)) memoryPass.onTurn(turnOwnerId);
+        memorySleep.onTurn(turnOwnerId);
+      }
       break;
     case "session.started":
       if (bot && event.sessionId && event.providerInstanceId && !staleTurnEvent(event.threadId, event.turnId)) {
@@ -5124,6 +5141,11 @@ function botHasLiveTurn(botId: string, threadId?: string): boolean {
 function tryClaimTurnStart(botId: string, threadId: string | undefined): boolean {
   if (turnStartClaims.has(botId)) return false;
   turnStartClaims.set(botId, threadId);
+  // agy's note helper holds the machine-global MCP file a computer turn needs alone, so stop it before preparation.
+  if (registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.driverKind === "antigravityAgent") {
+    memoryPass.onTurn(botId);
+    memorySleep.onTurn(botId);
+  }
   return true;
 }
 
