@@ -22,7 +22,8 @@
 // ensureAntigravityComputerMcp below. Computer use is full-auto instances
 // only; the host desktop stays off (no approval channel in print mode, ever).
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -222,7 +223,6 @@ export interface AntigravityComputerMcpServer {
 let mcpSharedHolders = 0;
 let mcpExclusiveHeld = false;
 const mcpWaiters: Array<{ exclusive: boolean; grant: () => void }> = [];
-const mcpYielders = new Set<() => void>();
 
 function pumpAntigravityMcpLock() {
   while (mcpWaiters.length && !mcpExclusiveHeld && !(mcpWaiters[0].exclusive && mcpSharedHolders > 0)) {
@@ -231,28 +231,23 @@ function pumpAntigravityMcpLock() {
     else mcpSharedHolders += 1;
     waiter.grant();
   }
-  if (mcpWaiters[0]?.exclusive) for (const giveWay of mcpYielders) giveWay();
 }
 
-/** Resolves with the release once granted; cancel() drops a waiter that was never granted. A shared holder with onYield gives way to a waiting computer turn. */
-function acquireAntigravityMcpLock(exclusive: boolean, onYield?: () => void) {
+/** Resolves with the release once granted; cancel() drops a waiter that was never granted. */
+function acquireAntigravityMcpLock(exclusive: boolean) {
   let cancel = () => {};
   const granted = new Promise<() => void>((resolve) => {
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
-      if (onYield) mcpYielders.delete(onYield);
       if (exclusive) mcpExclusiveHeld = false;
       else mcpSharedHolders -= 1;
       pumpAntigravityMcpLock();
     };
     const waiter = {
       exclusive,
-      grant: () => {
-        if (onYield) mcpYielders.add(onYield);
-        resolve(release);
-      },
+      grant: () => resolve(release),
     };
     cancel = () => {
       const index = mcpWaiters.indexOf(waiter);
@@ -290,6 +285,34 @@ function mountAntigravityMcp(
     sharedMcpMounts.delete(path);
     mount.restore();
   };
+}
+
+/** agy home for note helpers: ~/.gemini linked through (dirs) or copied (files), but its own config/ with no MCP servers, so a helper never sees a computer turn's box token and never takes the MCP lock. Sign-in is in the OS keyring, so it carries over. */
+export function antigravityHelperHome(env: Record<string, string | undefined>, dataDir = DATA_DIR): string {
+  const source = join(env.HOME || env.USERPROFILE || homedir(), ".gemini");
+  const home = join(dataDir, "agy-helper", createHash("sha256").update(source).digest("hex").slice(0, 16));
+  const gemini = join(home, ".gemini");
+  mkdirSync(join(gemini, "config"), { recursive: true, mode: 0o700 });
+  writeFileSync(join(gemini, "config", "mcp_config.json"), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`, { mode: 0o600 });
+  for (const name of existsSync(source) ? readdirSync(source) : []) {
+    if (name === "config") continue;
+    const from = join(source, name);
+    const to = join(gemini, name);
+    const stat = statSync(from, { throwIfNoEntry: false });
+    const existing = lstatSync(to, { throwIfNoEntry: false });
+    if (stat?.isDirectory()) {
+      if (existing) continue;
+      try {
+        symlinkSync(from, to, "junction");
+      } catch (error) {
+        // SAFETY: Filesystem failures expose Node's errno code; EEXIST is a concurrent helper's link.
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    } else if (stat?.isFile() && (!existing || existing.mtimeMs < stat.mtimeMs)) {
+      copyFileSync(from, to);
+    }
+  }
+  return home;
 }
 
 function antigravityMcpConfigPath(env: Record<string, string | undefined>): string {
@@ -1210,20 +1233,12 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         },
       },
       generateText: async (prompt, opts) => {
-        // A shared slot, so a computer turn's box token never reaches this child.
-        const signal = opts?.signal;
-        signal?.throwIfAborted();
-        const yielded = new AbortController();
-        const lock = acquireAntigravityMcpLock(false, () => yielded.abort());
-        signal?.addEventListener("abort", lock.cancel, { once: true });
-        const releaseMcpLock = await lock.granted;
-        signal?.removeEventListener("abort", lock.cancel);
-        const stopped = signal ? AbortSignal.any([signal, yielded.signal]) : yielded.signal;
-        let restoreMcp = () => {};
+        const stopped = opts?.signal ?? new AbortController().signal;
+        stopped.throwIfAborted();
         let cwd: string | null = null;
         try {
-          stopped.throwIfAborted();
-          restoreMcp = mountAntigravityMcp(null, env);
+          const home = antigravityHelperHome(env);
+          const helperEnv = { ...env, HOME: home, USERPROFILE: home };
           const dir = cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
           let denied = false;
           // stdin like a turn: a summary prompt on argv blows the Windows command line
@@ -1231,7 +1246,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             const child = spawnCli(
               config.cli,
               ["--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
-              { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] },
+              { cwd: dir, env: helperEnv, stdio: ["pipe", "pipe", "pipe"] },
             );
             let result: { status?: unknown; response?: unknown; error?: unknown } | null = null;
             let failure: Error | null = null;
@@ -1292,13 +1307,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           }
         } finally {
           try {
-            restoreMcp();
-          } finally {
-            releaseMcpLock();
-            try {
-              if (cwd) rmSync(cwd, { recursive: true, force: true });
-            } catch {}
-          }
+            if (cwd) rmSync(cwd, { recursive: true, force: true });
+          } catch {}
         }
       },
       dispose: async () => {

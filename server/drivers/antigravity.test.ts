@@ -22,6 +22,7 @@ import {
   ANTIGRAVITY_COMPUTER_MCP_KEY,
   AntigravityDriver,
   antigravityComputerMcpServer,
+  antigravityHelperHome,
   antigravityStreamUserLine,
   buildAntigravityTurnArgv,
   composeAntigravityPrompt,
@@ -1712,30 +1713,62 @@ describe("Antigravity computer MCP config", () => {
     }
   });
 
-  it("a note helper gives way to a computer turn, which starts at once", async () => {
+  it("a note helper runs on its own empty MCP config, so a computer turn starts beside it", async () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
     const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpyield-"));
-    const hold = join(home, "hold");
+    const holdHelper = join(home, "hold-helper");
+    const holdComputer = join(home, "hold-computer");
     const helperReady = join(home, "helper.ready");
-    const helper = await createIn(home, "helper", { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: helperReady });
-    const computer = await createIn(home, "computer", { FAKE_AGY_HOLD_FILE: hold });
+    const computerReady = join(home, "computer.ready");
+    const helperDump = join(home, "helper.json");
+    const helper = await createIn(home, "helper", { FAKE_AGY_HOLD_FILE: holdHelper, FAKE_AGY_READY_FILE: helperReady, FAKE_AGY_MCP_DUMP: helperDump });
+    const computer = await createIn(home, "computer", { FAKE_AGY_HOLD_FILE: holdComputer, FAKE_AGY_READY_FILE: computerReady });
     const computerRecorder = recordEvents(computer.adapter);
     try {
       const notes = helper.generateText!("notes").catch((error: unknown) => error);
       await expect.poll(() => existsSync(helperReady)).toBe(true);
-      const turn = computer.adapter.sendTurn({ threadId: "t-mcp-yield", text: "click", integrations: boxIntegrations });
-      await computerRecorder.until((event) => event.type === "turn.started", 1_000);
-      expect(await notes).toMatchObject({ message: "agy summary aborted" });
-      await turn;
-      writeFileSync(hold, "");
+      await computer.adapter.sendTurn({ threadId: "t-mcp-yield", text: "click", integrations: boxIntegrations });
+      await expect.poll(() => existsSync(computerReady), { timeout: 1_000 }).toBe(true);
+      expect(readConfig(home).mcpServers[ANTIGRAVITY_COMPUTER_MCP_KEY]).toEqual(boxEntry());
+
+      writeFileSync(holdHelper, "");
+      expect(await notes).toBe("done from fake agy");
+      const seen = readFileSync(helperDump, "utf8");
+      expect(JSON.parse(seen)).toEqual({ mcpServers: {} });
+      expect(seen).not.toContain("box-tok");
+
+      writeFileSync(holdComputer, "");
       await computerRecorder.until((event) => event.type === "turn.completed");
       expect(computerRecorder.events.at(-1)).toMatchObject({ ok: true });
     } finally {
-      writeFileSync(hold, "");
+      writeFileSync(holdHelper, "");
+      writeFileSync(holdComputer, "");
       computerRecorder.stop();
       await helper.dispose();
       await computer.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("builds a note helper's agy home: own empty MCP config, the rest of ~/.gemini carried over", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-helperhome-"));
+    const data = mkdtempSync(join(tmpdir(), "omb-agy-helperdata-"));
+    const user = JSON.stringify({ mcpServers: { "sqlite-helper": { command: "sqlite-mcp-server" } } });
+    mkdirSync(join(home, ".gemini", "antigravity-cli", "log"), { recursive: true });
+    mkdirSync(join(home, ".gemini", "config"));
+    writeFileSync(configPath(home), user);
+    writeFileSync(join(home, ".gemini", "GEMINI.md"), "remember this");
+    try {
+      const helperHome = antigravityHelperHome({ HOME: home }, data);
+      expect(antigravityHelperHome({ HOME: home }, data)).toBe(helperHome);
+      expect(readConfig(helperHome)).toEqual({ mcpServers: {} });
+      expect(readFileSync(join(helperHome, ".gemini", "GEMINI.md"), "utf8")).toBe("remember this");
+      writeFileSync(join(helperHome, ".gemini", "antigravity-cli", "log", "cli-1.log"), "applyAuthResult: email=a@b.c,");
+      expect(readFileSync(join(home, ".gemini", "antigravity-cli", "log", "cli-1.log"), "utf8")).toContain("a@b.c");
+      expect(readFileSync(configPath(home), "utf8")).toBe(user);
+    } finally {
+      rmSync(data, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
   });
