@@ -1,5 +1,1 @@
-{"event":"error","error":{"message":"/usage is not available with a Gemini API key; see https://aistudio.google.com/usage for the key's usage"}}
-{"event":"command_result","command":{"name":"usage","data":{"description":"","groups":[]}}}
-{"event":"command_result","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[]}]}}}
-{"event":"command_result","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly"},{"id":"gemini-5h","name":"Five Hour Limit Remaining","window":"5h"}]}]}}}
-{"event":"result","result":{"status":"ERROR","response":"","error":"quota unavailable for this credential"}}
+{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}

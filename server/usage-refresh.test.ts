@@ -771,9 +771,12 @@ describe("antigravity /usage as agy 1.5 prints it", () => {
   const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "testing", "fixtures");
   // Real `agy -p /usage --output-format stream-json` output from a Google AI Pro plan (11-21).
   const live = readFileSync(join(fixtureDir, "agy-usage-live.jsonl"), "utf8");
-  // Constructed, not captured: what a Gemini API key / Cloud account can plausibly print
-  // (error event, empty groups, buckets without a fill level, errored result), one per line.
-  const gcpLines = readFileSync(join(fixtureDir, "agy-usage-gcp.jsonl"), "utf8").split("\n").filter(Boolean);
+  // Captured 11-22 from the real agy 1.5.12 with Cloud ADC forced (AGY_ADC_AUTH=1, an empty credentials file, an isolated
+  // profile): exit 1, stderr "authentication required", this one errored result line and no buckets.
+  // The other lines are constructed shapes a Cloud / API-key account could print: error event, empty groups,
+  // an empty bucket list, buckets without a fill level.
+  const constructed = ["{\"event\":\"error\",\"error\":{\"message\":\"/usage is not available with a Gemini API key; see https://aistudio.google.com/usage for the key's usage\"}}","{\"event\":\"command_result\",\"command\":{\"name\":\"usage\",\"data\":{\"description\":\"\",\"groups\":[]}}}","{\"event\":\"command_result\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":[{\"name\":\"Gemini Models\",\"buckets\":[]}]}}}","{\"event\":\"command_result\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":[{\"name\":\"Gemini Models\",\"buckets\":[{\"id\":\"gemini-weekly\",\"name\":\"Weekly Limit Remaining\",\"window\":\"weekly\"},{\"id\":\"gemini-5h\",\"name\":\"Five Hour Limit Remaining\",\"window\":\"5h\"}]}]}}}"];
+  const gcpLines = [readFileSync(join(fixtureDir, "agy-usage-gcp.jsonl"), "utf8").trim(), ...constructed];
   const quotaOf = (stdout: string | null) => readAntigravityQuota("agy", {}, {
     usage: (cli, env) => readAntigravityUsageCommand(cli, env, async () => stdout),
     rpc: async () => { throw new Error("refresh"); },
@@ -797,7 +800,7 @@ describe("antigravity /usage as agy 1.5 prints it", () => {
     expect(result.report?.windows.map((window) => [window.id, window.usedPercent])).toEqual([["five_hour", 30], ["seven_day", 8.7]]);
   });
 
-  it.each([0, 1, 2, 3, 4])("shows no bar for the Cloud / API-key output line %i", async (index) => {
+  it.each(gcpLines.map((_, index) => index))("shows no bar for the Cloud / API-key output line %i (0 is captured)", async (index) => {
     const line = gcpLines[index];
     await expect(quotaOf(line)).rejects.toThrow("refresh");
     const refresh = createUsageRefresh({ platform: "linux", antigravity: async () => quotaOf(line) });
