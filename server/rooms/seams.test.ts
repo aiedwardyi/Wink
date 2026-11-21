@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import { DATA_DIR } from "../config.ts";
 import { Store, type GroupRecord } from "../store.ts";
 import { closeRoomsDb } from "./db.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./guards.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const SERVER = join(import.meta.dirname, "..");
 const parse = (file: string) => {
@@ -49,7 +50,7 @@ const json = (_res: unknown, status: number, body: unknown) => ({ status, body }
 
 beforeEach(() => {
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   const bot = store.createBot();
   plain = store.createGroup("Plain", [bot.id]);

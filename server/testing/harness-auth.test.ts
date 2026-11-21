@@ -5,9 +5,8 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { removeTempDir } from "./cleanup.ts";
 import { harnessFetch, spawnHarness } from "./harness-auth.ts";
-import { createFixtureHome } from "./test-home.ts";
+import { createFixtureHome, removeTestData } from "./test-home.ts";
 
 it("opens both profiles in an explicitly allocated Vitest child home", async () => {
   const home = createFixtureHome("omb-harness-profile-");
@@ -29,7 +28,7 @@ it("opens both profiles in an explicitly allocated Vitest child home", async () 
     expect(status, stderr).toBe(0);
     expect(JSON.parse(stdout)).toEqual([dataDir, companionDir]);
   } finally {
-    await removeTempDir(home);
+    removeTestData(home);
   }
 });
 

@@ -2,7 +2,7 @@
 // the name-lock that keeps the serving route inside the attachments dir.
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { basename, dirname, join } from "node:path";
@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -41,7 +41,7 @@ function uploadRequest(name: string | undefined, chunks: Buffer[], mime = "appli
 
 describe("document uploads", () => {
   afterEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
 
   it.each(["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt", "md", "csv", "json"])("stores .%s bytes under a random name", async (ext) => {
@@ -104,10 +104,10 @@ describe("extensionForMime", () => {
 
 describe("saveImage", () => {
   beforeEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
   afterEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
 
   it("persists bytes under the attachments dir with a generated name", () => {
@@ -139,10 +139,10 @@ describe("saveImage", () => {
 
 describe("readAttachment name lock", () => {
   beforeEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
   afterEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
 
   it("refuses traversal, dotfiles, and names the saver never writes", () => {
@@ -176,14 +176,14 @@ describe("importLocalImage", () => {
   const outside = join(DATA_ROOT, "outside");
   const roots = [src];
   beforeEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
     mkdirSync(src, { recursive: true });
     mkdirSync(outside, { recursive: true });
   });
   afterEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
-    rmSync(src, { recursive: true, force: true });
-    rmSync(outside, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
+    removeTestData(src);
+    removeTestData(outside);
   });
 
   it("copies a real PNG into the store under a generated name", () => {
@@ -266,7 +266,7 @@ describe("importLocalImage", () => {
 describe("sharableLocalFile", () => {
   const project = join(DATA_ROOT, "project");
   beforeEach(() => mkdirSync(join(project, ".secretdir"), { recursive: true }));
-  afterEach(() => rmSync(project, { recursive: true, force: true }));
+  afterEach(() => removeTestData(project));
   const shortName = (dir: string, name: string) => execFileSync("cmd.exe", ["/d", "/c", "dir", "/x", "/a"], { cwd: dir, encoding: "utf8", windowsHide: true })
     .split(/\r?\n/).find((line) => line.trim().endsWith(` ${name}`))?.match(/\s(\S*~\d+\S*)\s+\S+$/)?.[1];
 

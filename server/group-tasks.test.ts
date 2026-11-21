@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 let home: string;
 
@@ -18,7 +18,7 @@ afterEach(async () => {
   const { closeMessageDb } = await import("./message-db.ts");
   closeMessageDb();
   vi.unstubAllEnvs();
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 describe("channel tasks", () => {

@@ -10,6 +10,7 @@ import { hasLocalUndeliveredPaneNote, isWakeNote, paneWakeEnabled, PaneWakeSched
 import { Store, type StoreChange } from "./store.ts";
 import { chiefSnagIds, claimTeamSnags, postChiefNote, teamSnagNote, type ClaimedSnag, type TeamSnagOwnerOptions } from "./team-snags-owner.ts";
 import { teamOwnerHash } from "./team-stats.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const snag: ClaimedSnag = {
   id: "9f2c41d07a5e4b6c8d1e3f2a0b9c7d6e", at: 1_793_425_560_000, event: "stalled", build: "1.0.217", os: "win32",
@@ -81,7 +82,7 @@ describe("team snag owner", () => {
   const email = "owner@example.com";
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     store = new Store(() => ({ instanceId: "claude", model: "fake-model" }));
     dir = mkdtempSync(join(tmpdir(), "omb-team-snags-owner-"));
   });

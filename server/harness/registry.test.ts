@@ -4,7 +4,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { testHome } from "../testing/test-home.ts";
+import { removeTestData, testHome } from "../testing/test-home.ts";
 
 import { findCliCandidates, refreshPathCache, resetPathCacheForTests } from "../env-path.ts";
 import * as procs from "../procs.ts";
@@ -12,7 +12,6 @@ import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { ProviderRegistry } from "./registry.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { MuseAgentDriver } from "../drivers/acp/muse.ts";
-import { removeTempDir } from "../testing/cleanup.ts";
 import { setWslGateForTests } from "../wsl-gate.ts";
 import { createWarmPool, type Lease } from "../drivers/warm-pool.ts";
 
@@ -208,7 +207,7 @@ describe("ProviderRegistry", () => {
       expect(next.describeSaved()[0].snapshot.authenticated).toBeUndefined();
     } finally {
       await Promise.all([first.disposeAll(), next.disposeAll()]);
-      await removeTempDir(cacheDir);
+      removeTestData(cacheDir);
     }
   });
 
@@ -305,7 +304,7 @@ describe("ProviderRegistry", () => {
       expect(rows.find((row) => row.instanceId === "b")?.loginCapture).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
     } finally {
       await registry.disposeAll();
-      await removeTempDir(dir);
+      removeTestData(dir);
     }
   });
 
@@ -348,7 +347,7 @@ describe("ProviderRegistry", () => {
       expect(JSON.parse(readFileSync(second, "utf8"))[0]).not.toBe(pids[0]);
     } finally {
       await registry.disposeAll();
-      await removeTempDir(dir);
+      removeTestData(dir);
     }
   });
 
@@ -513,7 +512,7 @@ describe("ProviderRegistry", () => {
       expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
     } finally {
       await registry.disposeAll();
-      await removeTempDir(dir);
+      removeTestData(dir);
     }
   });
 
@@ -705,7 +704,7 @@ describe("ProviderRegistry", () => {
       expect(next.counts.snapshots).toBe(0);
       await registry.disposeAll();
     } finally {
-      rmSync(cacheDir, { recursive: true, force: true });
+      removeTestData(cacheDir);
     }
   });
 

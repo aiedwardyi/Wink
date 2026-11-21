@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +14,7 @@ import { hasLocalUndeliveredPaneNote, isWakeNote, PANE_WAKE_DEBOUNCE_MS, PANE_WA
 import * as paneWake from "./pane-wake.ts";
 import { Store, type BotRecord } from "./store.ts";
 import { buildTurnContext } from "./turn-context.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 describe("asksSender", () => {
   it.each([
@@ -63,7 +64,7 @@ describe("delegated ask-back", () => {
   };
 
   beforeEach(async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetPending();
     wake.mockReset();
     busy = false;

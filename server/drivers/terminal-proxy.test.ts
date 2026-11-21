@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { DATA_DIR } from "../config.ts";
+import { spawnTestNode as spawn } from "../testing/harness-auth.ts";
 import { STATIC_GROK_MODELS } from "./acp/grok.ts";
 import { STATIC_CLAUDE_MODELS } from "./claude.ts";
 import { STATIC_CODEX_MODELS } from "./codex-catalog.ts";

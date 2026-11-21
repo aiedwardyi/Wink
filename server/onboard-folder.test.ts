@@ -12,10 +12,10 @@ import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { Store } from "./store.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
-import { createFixtureHome } from "./testing/test-home.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -23,7 +23,7 @@ const dir = mkdtempSync(join(tmpdir(), "omb-onboard-folder-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
 });
 
 describe("onboard folder choice", () => {
@@ -111,7 +111,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("POST /api/bots folder choice", () => {

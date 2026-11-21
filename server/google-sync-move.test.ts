@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,7 +12,7 @@ import { GOOGLE_REPUBLISHED_FILE, createGoogleSync, googleSyncRoute, readGoogleB
 import { loadOrCreateSyncWorkspace, loadProfileSyncSettings, readSyncOperations, saveProfileSyncSettings, syncedInFolder } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
 import type { BotSpec, ReportBot, TestArgs, TestResult } from "./testing/google-sync-pc.ts";
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -169,7 +169,7 @@ beforeEach(() => {
 afterEach(async () => {
   for (const value of gates) value.open();
   for (const pc of pcs) await pc.close();
-  rmSync(root, { recursive: true, force: true });
+  removeTestData(root);
 });
 
 describe("Move from folder sync to Google", { timeout: 60_000 }, () => {

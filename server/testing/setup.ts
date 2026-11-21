@@ -2,16 +2,13 @@
 // DATA_DIR (~/.openmausbot) never touches the real one. os.homedir()
 // reads HOME (POSIX) / USERPROFILE (Windows) at call time, and this file
 // runs before any test module imports server/config.ts.
-import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
-import { allocateTestHome } from "../../companion/src/test-profile.ts";
-import { removeTempDir } from "./cleanup.ts";
+import { removeTestData, startTestRun } from "../../companion/src/test-profile.ts";
 
-const nonce = randomBytes(32).toString("hex");
-const home = allocateTestHome("omb-test-home-", nonce);
+const home = startTestRun();
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 // Worker threads on Windows keep the real profile in homedir(); refuse to run against it.
@@ -30,8 +27,6 @@ for (const name of ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME"
 // wholesale, and "it is safe because of a line in another file" is not the
 // footing that delete should stand on.
 process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
-process.env.WINK_VITEST_HOME = home;
-process.env.WINK_VITEST_HOME_NONCE = nonce;
 
 // SQLite keeps the database file open for the lifetime of its handle.
 // Windows will not remove a directory containing an open database, so close
@@ -39,9 +34,7 @@ process.env.WINK_VITEST_HOME_NONCE = nonce;
 const { closeMessageDb } = await import("../message-db.ts");
 afterEach(closeMessageDb);
 
-// Windows holds a directory that is a live process's cwd, and a just-killed
-// CLI lets go a beat after the kill call returns — see removeTempDir.
-afterAll(async () => {
+afterAll(() => {
   closeMessageDb();
-  await removeTempDir(home);
+  removeTestData(home);
 });

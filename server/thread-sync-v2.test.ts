@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -6,7 +6,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { Message } from "./store.ts";
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 import { syncContentHash } from "./thread-sync-v2-engine.ts";
 import { ThreadSyncV2, type SealCrash, type SyncHead, type SyncOptions } from "./thread-sync-v2.ts";
 
@@ -17,7 +17,7 @@ const msg = (id: string, text: string, extra: Partial<Message> = {}): Message =>
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTestData(root);
 });
 
 function temp(): string {

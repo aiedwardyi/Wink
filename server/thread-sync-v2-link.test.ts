@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Message } from "./store.ts";
 import { DATA_DIR } from "./config.ts";
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 import { createSyncEngine } from "./thread-sync-v2-engine.ts";
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 
@@ -33,7 +33,7 @@ const msg = (id: string, text: string): Message => ({ id, role: "user", kind: "t
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTestData(root);
 });
 
 describe("hard-link fallback", { timeout: 60_000 }, () => {

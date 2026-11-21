@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -13,7 +12,8 @@ import {
   BUILT_REMINDER, loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody, splitReportPath,
 } from "./mailbox.ts";
 import { PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_PROMPT } from "./pane-wake.ts";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FAKE_CLAUDE = join(ROOT, "server", "testing", "fake-claude-cli.ts");
@@ -77,7 +77,7 @@ async function transcript(threadId: string) {
 }
 
 beforeAll(async () => {
-  const scratch = process.env.OMB_DATA_DIR ?? tmpdir();
+  const scratch = testHome();
   mkdirSync(scratch, { recursive: true });
   home = mkdtempSync(join(scratch, "mailbox-"));
   const data = join(home, "data");
@@ -161,7 +161,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
   await new Promise<void>((resolve) => terminalStub.close(() => resolve()));
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("mailbox note text", () => {

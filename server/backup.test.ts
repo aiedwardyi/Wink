@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 import type { Message } from "./store.ts";
 
@@ -82,7 +82,7 @@ afterEach(() => {
   closeMessageDb();
   const link = join(DATA_DIR, "workspaces", "atlas", "project");
   if (existsSync(link)) unlinkSync(link);
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 

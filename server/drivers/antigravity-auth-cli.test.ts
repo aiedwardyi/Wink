@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { runTestNode } from "../testing/harness-auth.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "omb-agy-auth-cli-"));
 const calls = join(dir, "calls.txt");
@@ -23,41 +23,41 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-function run(mode: string, env: Record<string, string> = {}) {
+async function run(mode: string, env: Record<string, string> = {}) {
   writeFileSync(calls, "");
-  const result = spawnSync(process.execPath, [SPAWNED_PROXIES.antigravityAuth, mode], {
-    encoding: "utf8", timeout: 20_000, windowsHide: true,
+  const result = await runTestNode([SPAWNED_PROXIES.antigravityAuth, mode], {
+    timeout: 20_000,
     env: { ...process.env, OMB_AGY_CLI: `"${process.execPath}" "${fake}"`, FAKE_AGY_CALLS: calls, ...env },
   });
   return { ...result, calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean) };
 }
 
 describe("agy sign-in helper", () => {
-  it("logs in over ACP with the Google method and prints the sign-in link", () => {
-    const result = run("login");
+  it("logs in over ACP with the Google method and prints the sign-in link", async () => {
+    const result = await run("login");
     expect(result.status).toBe(0);
     expect(result.calls).toEqual(["initialize", "authenticate"]);
     expect(result.stdout.trim()).toBe("https://accounts.google.com/o/oauth2/auth?x=1");
   });
 
-  it("logs out over ACP", () => {
-    const result = run("logout");
+  it("logs out over ACP", async () => {
+    const result = await run("logout");
     expect(result.status).toBe(0);
     expect(result.calls).toEqual(["initialize", "logout"]);
   });
 
-  it.each(["login", "logout"])("fails %s when agy refuses", (mode) => {
-    const result = run(mode, { FAKE_AGY_REFUSE: mode === "login" ? "authenticate" : "logout" });
+  it.each(["login", "logout"])("fails %s when agy refuses", async (mode) => {
+    const result = await run(mode, { FAKE_AGY_REFUSE: mode === "login" ? "authenticate" : "logout" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("refused");
   });
 
-  it("fails when agy cannot start", () => {
-    const result = run("logout", { OMB_AGY_CLI: join(dir, "no-such-agy") });
+  it("fails when agy cannot start", async () => {
+    const result = await run("logout", { OMB_AGY_CLI: join(dir, "no-such-agy") });
     expect(result.status).toBe(1);
   });
 
-  it("refuses an unknown mode", () => {
-    expect(run("whoami").status).toBe(2);
+  it("refuses an unknown mode", async () => {
+    expect((await run("whoami")).status).toBe(2);
   });
 });

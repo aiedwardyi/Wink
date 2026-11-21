@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testHome } from "../testing/test-home.ts";
+import { removeTestData, testHome } from "../testing/test-home.ts";
 
 import { ATTACHMENTS_DIR } from "../attachments.ts";
 import { DATA_DIR } from "../config.ts";
@@ -87,7 +87,7 @@ const lastEntry = () => recentRoomEntries(group.hosted.roomId, 1).at(-1)!;
 beforeEach(() => {
   closeRoomsDb();
   closeAsksDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   local = mkdtempSync(join(tmpdir(), "host-files-"));
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   const wink = store.patchBot(store.createBot().id, { name: "Wink", cwd: local })!.id;

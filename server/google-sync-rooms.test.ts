@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -11,7 +11,7 @@ import { loadOrCreateSyncWorkspace, loadProfileSyncSettings, saveProfileSyncSett
 import { createDriveMirror as oldMirror } from "./testing/drive-mirror-1.0.213.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
 import type { BotSpec, PlaceRoom, TestArgs, TestResult } from "./testing/google-sync-pc.ts";
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -132,7 +132,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const pc of pcs) await pc.close();
-  rmSync(root, { recursive: true, force: true });
+  removeTestData(root);
 });
 
 describe("Room records between Google PCs", { timeout: 180_000 }, () => {

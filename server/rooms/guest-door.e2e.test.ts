@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpsServer, request as httpsRequest, type Server } from "node:https";
@@ -32,6 +32,7 @@ import { publishTurnAnswer } from "./multiplayer.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { MyRoomBotTurns } from "./my-room-bots.ts";
 import { hostedSend, stopBotChain } from "./send.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const BASE = "wink.test";
 /** The entry an older guest build accepts. */
@@ -150,7 +151,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
   vi.setSystemTime(Date.now() + (skew += 2 * 60_000));
   close();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   hop.up = true;
   doorHeaders = [];

@@ -9,7 +9,7 @@ import { FakeDrive } from "./testing/fake-drive.ts";
 import type { Message } from "./store.ts";
 import type { SyncHead, SyncVersion, ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { testBootReads } from "./testing/boot-rows.ts";
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 let root: string;
 let close = async () => {};
@@ -26,7 +26,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  rmSync(root, { recursive: true, force: true });
+  removeTestData(root);
 });
 
 async function boot(google = false) {

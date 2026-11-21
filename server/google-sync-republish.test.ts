@@ -9,7 +9,7 @@ import { GOOGLE_REPUBLISHED_FILE, createGoogleSync, type GoogleSync } from "./go
 import { loadOrCreateSyncWorkspace, loadProfileSyncSettings, readSyncOperations, saveProfileSyncSettings, syncedInFolder } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
 import type { BotSpec, ReportBot, TestArgs, TestResult } from "./testing/google-sync-pc.ts";
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -142,7 +142,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const pc of pcs) await pc.close();
-  rmSync(root, { recursive: true, force: true });
+  removeTestData(root);
 });
 
 describe("Google Start after folder sync", () => {

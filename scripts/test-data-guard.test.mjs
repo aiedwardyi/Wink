@@ -1,15 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
-import { allocateTestHome } from "../companion/src/test-profile.ts";
-import { scrubbedEnv } from "../server/config.ts";
+import { runTestNode, spawnHarness } from "../server/testing/harness-auth.ts";
+import { createFixtureHome, removeTestData, testHome } from "../server/testing/test-home.ts";
+import { checkTestProfilePaths } from "./check-test-profile-paths.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const setupHint = "load server/testing/setup.ts (vite.config.ts setupFiles) before importing";
+const linkType = process.platform === "win32" ? "junction" : "dir";
 
 function scratchEnv(home, temp) {
   const appData = join(home, "AppData");
@@ -21,7 +22,7 @@ function scratchEnv(home, temp) {
 }
 
 it("protects both profiles when Vitest skips setupFiles", () => {
-  const scratch = realpathSync.native(process.env.ORBIT_SCRATCH || tmpdir());
+  const scratch = realpathSync.native(testHome());
   const home = mkdtempSync(join(scratch, "profile-guard-"));
   try {
     const accounts = join(home, ".orbit", "accounts", "x");
@@ -56,7 +57,7 @@ it("protects both profiles when Vitest skips setupFiles", () => {
     expect(output).toContain(`${setupHint} companion/src/state.ts`);
     for (const sentinel of [accounts, devices]) expect(readFileSync(sentinel, "utf8")).toBe("sentinel");
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    removeTestData(home);
   }
 }, 30_000);
 
@@ -73,52 +74,46 @@ function runProbe(source, env) {
 it.each([
   ["server/config.ts", "OMB_DATA_DIR"],
   ["companion/src/state.ts", "OMB_COMPANION_DIR"],
-])("rejects an unowned sibling override in %s", (module, key) => {
-  const temp = mkdtempSync(join(realpathSync.native(tmpdir()), "profile-parent-"));
-  const home = allocateTestHome("owned-", process.env.WINK_VITEST_HOME_NONCE, temp);
-  const sibling = mkdtempSync(join(temp, "unowned-"));
+])("rejects an unowned sibling override in %s", async (module, key) => {
+  const temp = testHome();
+  const home = createFixtureHome("owned-");
+  const sibling = createFixtureHome("sibling-");
   try {
-    const env = { ...scratchEnv(home, temp), WINK_VITEST_HOME: home };
+    const env = scratchEnv(home, temp);
     const sentinel = join(sibling, "sentinel");
     writeFileSync(sentinel, "sentinel");
-    const link = join(home, key === "OMB_DATA_DIR" ? ".orbit" : ".openmausbot-companion");
-    symlinkSync(sibling, link, process.platform === "win32" ? "junction" : "dir");
-    const overrides = [sibling, link, ".", ...(process.platform === "win32" ? [sibling.toUpperCase()] : [])];
+    const link = join(home, "redirect");
+    symlinkSync(sibling, link, linkType);
+    const overrides = [sibling, join(link, "data"), ".", ...(process.platform === "win32" ? [sibling.toUpperCase()] : [])];
     for (const dir of overrides) {
-      const result = importProfile(module, { ...env, [key]: dir });
+      const result = await runTestNode(["--input-type=module", "-e", `await import(${JSON.stringify(`./${module}`)})`],
+        { cwd: root, env: { ...env, [key]: dir } });
       expect(readFileSync(sentinel, "utf8")).toBe("sentinel");
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stderr).toContain(`${key} must point`);
     }
   } finally {
-    rmSync(temp, { recursive: true, force: true });
+    removeTestData(home);
+    removeTestData(sibling);
   }
 });
 
 it("refuses to mark an unowned sibling when launching a child", () => {
-  const temp = mkdtempSync(join(realpathSync.native(tmpdir()), "harness-parent-"));
-  const home = allocateTestHome("owned-", process.env.WINK_VITEST_HOME_NONCE, temp);
+  const temp = testHome();
   const sibling = mkdtempSync(join(temp, "unowned-"));
   try {
-    const env = { ...scratchEnv(home, temp), WINK_VITEST_HOME: home };
     const sentinel = join(sibling, "sentinel");
     writeFileSync(sentinel, "sentinel");
-    const result = runProbe(`
-      import { spawnHarness } from "./server/testing/harness-auth.ts";
-      const home = ${JSON.stringify(sibling)};
-      spawnHarness("", [], { env: { ...process.env, HOME: home, USERPROFILE: home } });
-    `, env);
+    expect(() => spawnHarness("", [], { env: scratchEnv(sibling, temp) })).toThrow("createFixtureHome");
     expect(readFileSync(sentinel, "utf8")).toBe("sentinel");
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(existsSync(join(sibling, ".wink-vitest-home")), result.stderr).toBe(false);
-    expect(result.stderr).toContain("createFixtureHome");
+    expect(existsSync(join(sibling, ".wink-vitest-home"))).toBe(false);
   } finally {
-    rmSync(temp, { recursive: true, force: true });
+    removeTestData(sibling);
   }
 });
 
 it("rejects a caller-supplied Vitest home without its setup marker", () => {
-  const temp = realpathSync.native(tmpdir());
+  const temp = testHome();
   const home = mkdtempSync(join(temp, "unmarked-profile-"));
   try {
     const env = { ...scratchEnv(home, temp), WINK_VITEST_HOME: home };
@@ -128,44 +123,148 @@ it("rejects a caller-supplied Vitest home without its setup marker", () => {
       expect(result.stderr).toContain(`${setupHint} ${module}`);
     }
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    removeTestData(home);
   }
 });
 
 it("rejects a junction above an otherwise marked companion home", () => {
-  const temp = realpathSync.native(tmpdir());
-  const scratch = mkdtempSync(join(temp, "linked-profile-"));
+  const scratch = mkdtempSync(join(testHome(), "linked-profile-"));
   try {
     const outside = join(scratch, "outside");
     mkdirSync(outside);
     const tempAlias = join(scratch, "os-temp");
-    const linkType = process.platform === "win32" ? "junction" : "dir";
     symlinkSync(outside, tempAlias, linkType);
-    const home = allocateTestHome("home-", process.env.WINK_VITEST_HOME_NONCE, tempAlias);
-    expect(dirname(home)).toBe(tempAlias);
-    const env = { ...scratchEnv(home, tempAlias), WINK_VITEST_HOME: home };
-    const deviceFile = join(env.OMB_COMPANION_DIR, "sentinel");
-    mkdirSync(dirname(deviceFile));
-    writeFileSync(deviceFile, "sentinel");
-    const module = "companion/src/state.ts";
-    const valid = importProfile(module, scrubbedEnv(env));
-    expect(valid.status, valid.stderr).toBe(0);
-    expect(valid.stdout.trim()).toBe(env.OMB_COMPANION_DIR);
-    const canonicalData = join(realpathSync.native(home), ".orbit");
-    const server = importProfile("server/config.ts", { ...env, OMB_DATA_DIR: canonicalData });
-    expect(server.status, server.stderr).toBe(0);
-    expect(server.stdout.trim()).toBe(canonicalData);
-
-    const childTemp = join(scratch, "temp");
-    const link = join(childTemp, "redirect");
-    mkdirSync(childTemp);
-    symlinkSync(outside, link, linkType);
-    const linkedHome = join(link, relative(tempAlias, home));
-    const linked = importProfile(module, { ...scratchEnv(linkedHome, childTemp), WINK_VITEST_HOME: linkedHome });
-    expect(linked.status, linked.stdout + linked.stderr).toBe(1);
-    expect(linked.stderr).toContain(`${setupHint} ${module}`);
-    expect(readFileSync(deviceFile, "utf8")).toBe("sentinel");
+    const result = runProbe(`
+      import assert from "node:assert/strict";
+      import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+      import { basename, dirname, join } from "node:path";
+      import { startTestRun } from "./companion/src/test-profile.ts";
+      const alias = ${JSON.stringify(tempAlias)};
+      const home = startTestRun(alias);
+      assert.equal(dirname(home), alias);
+      process.env.HOME = process.env.USERPROFILE = home;
+      process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
+      process.env.OMB_DATA_DIR = join(realpathSync.native(home), ".orbit");
+      const deviceFile = join(process.env.OMB_COMPANION_DIR, "sentinel");
+      mkdirSync(dirname(deviceFile));
+      writeFileSync(deviceFile, "sentinel");
+      assert.equal((await import("./companion/src/state.ts")).DATA_DIR, process.env.OMB_COMPANION_DIR);
+      assert.equal((await import("./server/config.ts")).DATA_DIR, process.env.OMB_DATA_DIR);
+      const link = join(${JSON.stringify(scratch)}, "redirect");
+      symlinkSync(${JSON.stringify(outside)}, link, ${JSON.stringify(linkType)});
+      process.env.HOME = process.env.USERPROFILE = join(link, basename(home));
+      await assert.rejects(import("./companion/src/state.ts?redirected"), /before importing companion/);
+      assert.equal(readFileSync(deviceFile, "utf8"), "sentinel");
+    `, scratchEnv(scratch, scratch));
+    expect(result.status, result.stdout + result.stderr).toBe(0);
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    removeTestData(scratch);
   }
+});
+
+it("refuses a marker left by an exited launcher even with its original nonce", () => {
+  const scratch = mkdtempSync(join(testHome(), "abandoned-run-"));
+  try {
+    const env = scratchEnv(scratch, scratch);
+    const abandoned = runProbe(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      import { startTestRun } from "./companion/src/test-profile.ts";
+      const home = startTestRun();
+      writeFileSync(join(home, "sentinel"), "original");
+      console.log(JSON.stringify([home, readFileSync(join(home, ".wink-vitest-home"), "utf8").split("\\n")[0]]));
+    `, env);
+    expect(abandoned.status, abandoned.stderr).toBe(0);
+    const [home, nonce] = JSON.parse(abandoned.stdout);
+    const stale = { ...scratchEnv(home, scratch), WINK_VITEST_HOME: home, WINK_VITEST_HOME_NONCE: nonce };
+    for (const module of ["server/config.ts", "companion/src/state.ts"]) {
+      const result = importProfile(module, stale);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr).toContain(setupHint);
+    }
+    const fresh = runProbe(`
+      import assert from "node:assert/strict";
+      import { readFileSync } from "node:fs";
+      import { join } from "node:path";
+      import { removeTestData, startTestRun } from "./companion/src/test-profile.ts";
+      const home = startTestRun();
+      assert.notEqual(readFileSync(join(home, ".wink-vitest-home"), "utf8").split("\\n")[0], process.env.WINK_VITEST_HOME_NONCE);
+      assert.throws(() => removeTestData(process.env.WINK_VITEST_HOME), /removeTestData.*unowned/);
+      removeTestData(home);
+    `, stale);
+    expect(fresh.status, fresh.stdout + fresh.stderr).toBe(0);
+    expect(readFileSync(join(home, "sentinel"), "utf8")).toBe("original");
+  } finally {
+    removeTestData(scratch);
+  }
+});
+
+it("rechecks the run nonce and refuses a junction swapped in after config import", () => {
+  const scratch = mkdtempSync(join(testHome(), "changed-profile-"));
+  try {
+    const result = runProbe(`
+      import assert from "node:assert/strict";
+      import { lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import os from "node:os";
+      import { join } from "node:path";
+      import { removeTestData, startTestRun } from "./companion/src/test-profile.ts";
+      const scratch = ${JSON.stringify(scratch)};
+      const osHome = join(scratch, "os-user");
+      os.userInfo = () => ({ homedir: osHome });
+      syncBuiltinESMExports();
+      const home = startTestRun();
+      process.env.HOME = process.env.USERPROFILE = home;
+      const branch = join(home, "original");
+      process.env.OMB_DATA_DIR = join(branch, "data");
+      const fakeProfile = join(osHome, ".orbit");
+      const sentinel = join(fakeProfile, "data", "sentinel");
+      mkdirSync(join(fakeProfile, "data"), { recursive: true });
+      writeFileSync(sentinel, "original");
+      mkdirSync(process.env.OMB_DATA_DIR, { recursive: true });
+      const { DATA_DIR } = await import("./server/config.ts");
+      const marker = join(home, ".wink-vitest-home");
+      const original = readFileSync(marker);
+      writeFileSync(marker, "changed");
+      assert.throws(() => removeTestData(DATA_DIR), /removeTestData requires the live run/);
+      assert(lstatSync(DATA_DIR).isDirectory());
+      writeFileSync(marker, original);
+      renameSync(branch, join(home, "parked"));
+      symlinkSync(fakeProfile, branch, ${JSON.stringify(linkType)});
+      assert.throws(() => removeTestData(DATA_DIR), /removeTestData refused a real profile path/);
+      for (const target of [osHome, fakeProfile, join(fakeProfile, "data")]) {
+        assert.throws(() => removeTestData(target), /removeTestData refused a real profile path/);
+      }
+      for (const name of [".codex", ".openmausbot-companion"]) {
+        const protectedDir = join(home, name);
+        mkdirSync(protectedDir);
+        const alias = join(osHome, name);
+        symlinkSync(protectedDir, alias, ${JSON.stringify(linkType)});
+        assert.throws(() => removeTestData(protectedDir), /removeTestData refused a real profile path/);
+        assert.throws(() => removeTestData(home), /removeTestData refused a real profile path/);
+        unlinkSync(alias);
+      }
+      removeTestData(home);
+      assert.equal(readFileSync(sentinel, "utf8"), "original");
+    `, scratchEnv(scratch, scratch));
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  } finally {
+    removeTestData(scratch);
+  }
+});
+
+it("the repo check rejects raw recursive deletion through aliases and keeps file removal", () => {
+  const file = "example.test.ts";
+  const hits = checkTestProfilePaths([file], () => `
+    import { DATA_DIR as profile } from "./config.ts";
+    import { rmSync as erase, promises as fs } from "node:fs";
+    const target = join(profile, "fixture");
+    erase(target, { recursive: true });
+    fs["rm"](target, { recursive: true });
+    fs.rm("/profiles/.orbit", { recursive: true });
+    erase(target, { force: true });
+    removeTestData(target);
+  `);
+  expect(hits).toHaveLength(3);
+  expect(hits.every((hit) => hit.includes("use removeTestData"))).toBe(true);
 });

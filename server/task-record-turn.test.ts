@@ -13,8 +13,8 @@ import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { Store } from "./store.ts";
 import { asksNudge } from "./task-asks.ts";
-import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // Run the production turn-text preparation without booting the server.
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -31,7 +31,7 @@ const RECORD = "[Wink task record]\nGoal: ship the trim";
 
 beforeEach(async () => {
   closeMessageDb();
-  await removeTempDir(DATA_DIR);
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   vi.spyOn(console, "info").mockImplementation(() => {});
 });
