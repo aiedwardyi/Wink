@@ -9,6 +9,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR, instanceConfigs } from "./config.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import * as atomic from "./atomic.ts";
+import { ProviderRegistry } from "./harness/registry.ts";
+import { ProviderReload } from "./harness/provider-reload.ts";
+import { EventBus } from "./harness/bus.ts";
+import { makeFakeDriver } from "./testing/fake-driver.ts";
 
 vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
 
@@ -49,6 +53,29 @@ describe("PC-local accounts", () => {
       visit(source, "");
     }
     expect(offenders, "Only AccountService.openHome (Sign In) creates a missing saved account home; add() births new ones. Everything else reads a missing home as signed out").toEqual([]);
+  });
+
+  it("a provider reload runs no account check in a saved home that is missing", async () => {
+    const { service } = fixture();
+    const saved = await service.add("claude");
+    rmSync(saved.home, { recursive: true });
+    const fake = makeFakeDriver({ kind: "claudeAgent" }).driver;
+    const checked: string[] = [];
+    // As a first-run Claude CLI does: its account check sets up the config folder it is pointed at.
+    const driver = { ...fake, create: async (input: Parameters<typeof fake.create>[0]) => {
+      if (input.account && !input.deferAccountAuth) { checked.push(input.account.home); mkdirSync(input.account.home, { recursive: true }); }
+      return fake.create(input);
+    } };
+    const registry = new ProviderRegistry([driver]);
+    try {
+      const configs = () => instanceConfigs({ instances: bases }, service.snapshot);
+      await registry.load(configs(), { deferAccountAuth: true });
+      const providers = new ProviderReload(registry, new EventBus(() => {}), configs());
+      await service.stop(saved.id);
+      await providers.reload(configs());
+      expect(checked).toEqual([]);
+      expect(existsSync(saved.home)).toBe(false);
+    } finally { await registry.disposeAll(); }
   });
 
   it("keeps saved accounts whose home is gone and creates nothing at startup", async () => {

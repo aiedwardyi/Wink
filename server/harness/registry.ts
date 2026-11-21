@@ -181,7 +181,8 @@ export class ProviderRegistry {
           enabled: entry.enabled ?? true,
           config,
           ...(entry.account ? { account: entry.account } : {}),
-          ...(entry.account && options?.deferAccountAuth ? { deferAccountAuth: true } : {}),
+          // A provider reload defers like a cold load where the check would start the CLI in a missing home; Sign In creates it.
+          ...(entry.account && (options?.deferAccountAuth || missingAccountHome(entry.account)) ? { deferAccountAuth: true } : {}),
         });
         return { entry: { instanceId, live }, rawCli, incarnation } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       } catch (e) {
