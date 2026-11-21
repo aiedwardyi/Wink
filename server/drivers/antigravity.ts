@@ -63,6 +63,8 @@ const AGY_ACCOUNT_ERROR =
   /unauthorized|unauthenticated|\bforbidden\b|(?<![\w-])40[13](?![\w-])|not logged in|\bsign[\s-]?in\b|authentication failed|permission_denied|permission denied|has not been used in project|\bapi\b[^.\n]{0,120}\bdisabled\b/i;
 const AGY_NOT_ACCOUNT_ERROR = /\brate[\s-]?limit\b|(?<![\w-])429(?![\w-])|\berror-code-(?:429|5\d\d)\b|\btoo many requests\b|resource[ _]exhausted|quota exceeded|exceeded[^.\n]{0,40}\bquota\b|(?<![\w-])5\d\d(?![\w-])|\b5xx\b/i;
 const AGY_TIMEOUT_ERROR = /\b(?:watchdog timeout|timed out|time-out|timeout)\b/i;
+const AGY_TEXT_MODEL = "gemini-3.8-flash-low";
+const AGY_MODEL_DENIED = /\bpermission\b[^\n]{0,80}\bdenied\b[^\n]{0,200}\bmodels\/|\bmodels\/[^\n]{0,200}\b(?:permission[_ ]denied|not[_ ]found|(?:may|does) not exist)\b/i;
 
 /** Account or permission failure. Rate limits, 5xx, and timeout-only lines are not. */
 export function isAgyAccountError(text: string): boolean {
@@ -1152,6 +1154,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
     };
 
+    const textModelDenied = new Set<string>();
+
     return {
       instanceId,
       driverKind: DRIVER_KIND,
@@ -1220,14 +1224,15 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         try {
           stopped.throwIfAborted();
           restoreMcp = mountAntigravityMcp(null, env);
-          cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
+          const dir = cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
+          let denied = false;
           // stdin like a turn: a summary prompt on argv blows the Windows command line
-          const child = spawnCli(
-            config.cli,
-            ["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low"],
-            { cwd, env, stdio: ["pipe", "pipe", "pipe"] },
-          );
-          return await new Promise<string>((resolve, reject) => {
+          const run = (model: string) => new Promise<string>((resolve, reject) => {
+            const child = spawnCli(
+              config.cli,
+              ["--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
+              { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] },
+            );
             let result: { status?: unknown; response?: unknown; error?: unknown } | null = null;
             let failure: Error | null = null;
             const stop = (error: Error) => {
@@ -1263,16 +1268,28 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               clearTimeout(timer);
               stopped.removeEventListener("abort", abort);
               const response = typeof result?.response === "string" ? result.response.trim() : "";
+              const error = typeof result?.error === "string" ? result.error : undefined;
+              denied = !failure && !response && AGY_MODEL_DENIED.test(`${error ?? ""}\n${stderr}`);
               if (failure) reject(failure);
               else if (!result) reject(textUsageError(stderr) ?? new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
               else if (result.status !== "SUCCESS" || !response) {
-                const error = typeof result.error === "string" ? result.error : undefined;
                 reject(textUsageError(error) ?? textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})${error && isAgyAccountError(error) ? `: ${error}` : ""}`));
               }
               else resolve(response);
             });
             child.stdin.end(antigravityStreamUserLine(prompt));
           });
+          // an account denied the text model writes notes on the bot's own chat model
+          const fallback = opts?.fallbackModel && opts.fallbackModel !== AGY_TEXT_MODEL ? opts.fallbackModel : undefined;
+          const account = fallback ? readAntigravityAccount(env) ?? "" : "";
+          if (fallback && textModelDenied.has(account)) return await run(fallback);
+          try {
+            return await run(AGY_TEXT_MODEL);
+          } catch (error) {
+            if (!fallback || !denied || stopped.aborted) throw error;
+            textModelDenied.add(account);
+            return await run(fallback);
+          }
         } finally {
           try {
             restoreMcp();

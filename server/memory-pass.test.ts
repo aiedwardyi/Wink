@@ -23,6 +23,8 @@ import {
 import * as atomic from "./atomic.ts";
 import { memoryNotesEnabled } from "./config.ts";
 import type { ProviderInstance } from "./contracts.ts";
+import { AntigravityDriver } from "./drivers/antigravity.ts";
+import { createCliText } from "./drivers/cli-text.ts";
 import { CodexDriver } from "./drivers/codex.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { replyTurns } from "./pick-sources.ts";
@@ -271,7 +273,7 @@ describe("memory pass", () => {
     generate.mockResolvedValueOnce(facts(["Uses pnpm", "I use pnpm"]));
     pass = createMemoryPass({ store, dataDir, host: "new-home", generate: () => generator, enabled: () => true, busy: () => false });
     passes.push(pass);
-    expect(stored()).toEqual({ host: "new-home", threads: { t1: [id] } });
+    expect(stored()).toEqual({ host: "new-home", threads: { t1: [id] }, foreign: { t1: [id] } });
     await settle("t1", 3 * MINUTE);
     expect(generate).toHaveBeenCalledTimes(1);
     expect(memoryFileRaw("bot-t1")).toContain("Uses pnpm");
@@ -300,6 +302,29 @@ describe("memory pass", () => {
     expect(generate.mock.calls[0]![0]).toContain("I use pnpm");
     expect(generate.mock.calls[0]![0]).toContain("I prefer tabs");
     expect(stored()).toEqual({ host: "pc-a", threads: {} });
+  });
+
+  it("leaves a restored batch to its source when the sync mapping lands after startup", async () => {
+    for (let i = 0; i < 8; i++) say("t1", "I use pnpm");
+    pass.dispose();
+    const startOn = (host: string, path: string) => {
+      const copy = createMemoryPass({ store, dataDir: path, host, generate: () => generator, enabled: () => true, busy: () => false });
+      passes.push(copy);
+      return copy;
+    };
+    pass = startOn("pc-a", dataDir);
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    const sync = { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: {} };
+    saveProfileSyncSettings(mirrorDir, sync);
+    startOn("pc-b", mirrorDir).dispose();
+    const mirror = startOn("pc-b", mirrorDir);
+    saveProfileSyncSettings(mirrorDir, { ...sync, botMap: { "bot-t1": "synced-bot" } });
+    mirror.onSettled("bot-t1", "t1");
+    await mirror.idle();
+    expect(generate).not.toHaveBeenCalled();
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 
   it("never starts a helper for a turn claimed after the pass was scheduled", async () => {
@@ -1292,6 +1317,61 @@ describe("notes on the bot's own engine", () => {
     pass.dispose();
     expect(memoryFileRaw("bot-c1")).toMatch(/^- Uses pnpm for projects \(noted \d{4}-\d{2}-\d{2}\)$/m);
     expect(readMemoryTopic("bot-c1", "decisions.md")).toContain("- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n");
+  });
+});
+
+describe("signed-out note helpers", () => {
+  const FAKE_AGY = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-agy-cli.ts");
+  const cliHelper = (name: string, stderr: string) => {
+    const text = createCliText({ name, model: "text", timeoutMs: 30_000, parse: (stdout) => stdout,
+      command: async () => ({ cli: process.execPath, args: ["-e", `process.stderr.write(${JSON.stringify(stderr)});process.exit(1)`], env: { ...process.env } }) });
+    return { instanceId: name, driverKind: `${name.toLowerCase()}Agent`, enabled: true, generateText: text.generateText, dispose: async () => text.dispose() };
+  };
+  const geminiHelper = async (error: string) => {
+    chmodSync(FAKE_AGY, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-agy-signed-out-"));
+    return AntigravityDriver.create({ instanceId: "Gemini", displayName: undefined, enabled: true,
+      environment: { HOME: home, USERPROFILE: home, FAKE_AGY_RESULT_ERROR: error }, config: { cli: FAKE_AGY, fullAuto: false } });
+  };
+
+  // each engine's own words for a signed-out account; a wording missing here retries on every settlement
+  it.each([
+    ["Muse", "run ended with Failed: your API key from META_API_KEY was rejected — update or unset it"],
+    ["Muse", "run ended with Failed: your saved API key was rejected — run `muse login` or add a new key"],
+    ["Muse", "run ended with Failed: still unauthorized after a token refresh; run `muse login` again"],
+    ["Muse", "missing meta credentials: run `muse login` or set META_API_KEY"],
+    ["Grok", "Error: Not signed in. To authenticate without a browser, run:\n  grok login --device-code"],
+    ["Grok", "Error: Session expired. Run `grok login` to re-authenticate."],
+    ["Grok", "Error: Authentication failed. Run `grok login`, set XAI_API_KEY, or add api_key to ~/.grok/config.toml."],
+    ["Grok", "HTTP 401 Unauthorized: session expired"],
+    ["Gemini", "Unauthorized (code 401)"],
+    ["Gemini", "UNAUTHENTICATED (code 401): Sign in again."],
+  ])("makes five settlements cost one %s attempt: %s", async (engine, text) => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const helper = engine === "Gemini" ? await geminiHelper(text) : cliHelper(engine, text);
+    const generateText = vi.fn(helper.generateText!);
+    const usage = { limits: new Map() as RateLimitsMap, save: vi.fn(), signedOut: new Set<string>() };
+    const store = fakeStore();
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, { ...helper, generateText }, usage) });
+    try {
+      store.appendMessage("s1", { role: "user", kind: "text", text: "I use pnpm." });
+      for (let i = 0; i < 5; i++) {
+        pass.onSettled("bot-s1", "s1", true);
+        await pass.idle();
+      }
+      expect(generateText).toHaveBeenCalledTimes(1);
+      expect([...usage.signedOut]).toEqual([helper.instanceId]);
+      expect(store.rows("s1").map(({ role }) => role)).toEqual(["user"]);
+      // a fresh account probe clears the hold
+      usage.signedOut.clear();
+      expect(noteGenerator([], undefined, helper, usage)).not.toBeNull();
+    } finally {
+      pass.dispose();
+      await helper.dispose();
+      vi.restoreAllMocks();
+    }
   });
 });
 

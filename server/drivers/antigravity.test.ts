@@ -15,6 +15,7 @@ import * as auth from "./antigravity-auth.ts";
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { summaryInstance } from "../summary-instance.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { ProviderRegistry } from "../harness/registry.ts";
 import {
@@ -33,7 +34,7 @@ import {
   WIN32_CREATEPROCESS_CMDLINE_MAX,
 } from "./antigravity.ts";
 import { noteGenerator } from "../memory-pass.ts";
-import { describeSpawnFailure } from "../procs.ts";
+import * as procs from "../procs.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
 
@@ -1767,6 +1768,28 @@ describe("Antigravity computer MCP config", () => {
     }
   });
 
+  it("writes notes on the bot's chat model only when the account is denied the text model", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-denied-"));
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const models = () => spawn.mock.calls.flatMap(([, args]) => args.includes("--model") ? [args[args.indexOf("--model") + 1]] : []);
+    const allowed = await createIn(home, "allowed");
+    const denied = await createIn(home, "denied", { FAKE_AGY_DENIED_MODEL: "gemini-3.8-flash-low" });
+    try {
+      await expect(summaryInstance(allowed, "gemini-4-carbon-low").generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low"]);
+      spawn.mockClear();
+      const own = summaryInstance(denied, "gemini-4-carbon-low");
+      for (let i = 0; i < 2; i++) await expect(own.generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low", "gemini-4-carbon-low", "gemini-4-carbon-low"]);
+    } finally {
+      await allowed.dispose();
+      await denied.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("reaps a child that hangs after result, restores the mount, and unblocks the next turn", async () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
@@ -2041,11 +2064,11 @@ describe("Antigravity Windows long-prompt transport", () => {
 
   it("maps ENAMETOOLONG spawn failures to a clear recoverable message", () => {
     const err = Object.assign(new Error("spawn agy ENAMETOOLONG"), { code: "ENAMETOOLONG" });
-    expect(describeSpawnFailure(err, "agy")).toEqual({
+    expect(procs.describeSpawnFailure(err, "agy")).toEqual({
       message: "spawn failed: command line too long for this OS (`agy`)",
       setup: false,
     });
     const e2big = Object.assign(new Error("spawn agy E2BIG"), { code: "E2BIG" });
-    expect(describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
+    expect(procs.describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
   });
 });

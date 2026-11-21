@@ -54,6 +54,8 @@ const stateSchema = z.object({
   host: z.string().optional(),
   threads: z.record(z.string(), z.array(z.string())),
   dropped: z.record(z.string(), droppedSchema).optional(),
+  // restored from another PC: left to it once this copy syncs the bot's chats
+  foreign: z.record(z.string(), z.array(z.string())).optional(),
 });
 
 export type NoteGenerator = ((prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>) & { engine?: string };
@@ -605,6 +607,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const statePath = join(deps.dataDir, STATE_FILE);
   const pending = new Map<string, string[]>();
   const dropped = new Map<string, DroppedNotes>();
+  const foreign = new Map<string, string[]>();
   // generated but unsaved, so a busy turn or a moved revision never pays for the same batch twice
   const held = new Map<string, Batch>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -633,10 +636,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   try {
     const state = stateSchema.parse(JSON.parse(readFileSync(statePath, "utf8")));
     const restored = Boolean(state.host && deps.host && state.host !== deps.host);
-    const sync = restored ? loadProfileSyncSettings(deps.dataDir) : undefined;
     for (const [threadId, ids] of Object.entries(state.threads)) {
-      const bot = sync && sourceBot(threadId);
-      if (ids.length && !(sync && bot && chatSyncBotId(sync, bot.id))) pending.set(threadId, ids);
+      if (!ids.length) continue;
+      pending.set(threadId, ids);
+      const theirs = restored ? ids : state.foreign?.[threadId];
+      if (theirs?.length) foreign.set(threadId, theirs);
     }
     for (const [botId, record] of Object.entries(state.dropped ?? {})) dropped.set(botId, record);
     claim = Boolean(deps.host && state.host !== deps.host);
@@ -650,6 +654,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     try {
       const state: z.infer<typeof stateSchema> = { host: deps.host, threads: Object.fromEntries(pending) };
       if (dropped.size) state.dropped = Object.fromEntries(dropped);
+      if (foreign.size) state.foreign = Object.fromEntries(foreign);
       writeFileAtomic(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
     } catch (error) {
       console.warn(`[memory-pass] state save failed (${error instanceof Error ? error.name : "error"})`);
@@ -690,13 +695,20 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   const log = (fields: PassLog) => console.info(`[memory-pass] ${JSON.stringify(fields)}`);
 
-  const done = (threadId: string, ids: string[]) => {
-    held.delete(threadId);
+  const drop = (threadId: string, ids: string[]) => {
     const taken = new Set(ids);
     const rest = (pending.get(threadId) ?? []).filter((id) => !taken.has(id));
     if (rest.length) pending.set(threadId, rest);
     else pending.delete(threadId);
+    const theirs = foreign.get(threadId)?.filter((id) => !taken.has(id));
+    if (theirs?.length) foreign.set(threadId, theirs);
+    else foreign.delete(threadId);
     save();
+  };
+
+  const done = (threadId: string, ids: string[]) => {
+    held.delete(threadId);
+    drop(threadId, ids);
   };
 
   const land = (botId: string, threadId: string, batch: Batch, memory: { text: string; revision: string }, raw: string, ms: number) => {
@@ -776,8 +788,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const run = async (botId: string, threadId: string, signal: AbortSignal) => {
+    if (signal.aborted || !deps.enabled(botId)) return;
+    const theirs = foreign.get(threadId);
+    const source = theirs && sourceBot(threadId);
+    // read now, not at startup: the bot's sync mapping can land after a restore
+    if (source && chatSyncBotId(loadProfileSyncSettings(deps.dataDir), source.id)) drop(threadId, theirs);
     const ids = [...(pending.get(threadId) ?? [])];
-    if (!ids.length || signal.aborted || !deps.enabled(botId)) return;
+    if (!ids.length) return;
     if (busy(botId, threadId)) return arm(botId, threadId);
     const kept = held.get(threadId);
     if (kept) {
@@ -913,6 +930,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     for (const threadId of held.keys()) if (off(threadId)) held.delete(threadId);
     const before = pending.size;
     for (const threadId of pending.keys()) if (off(threadId)) pending.delete(threadId);
+    for (const threadId of foreign.keys()) if (!pending.has(threadId)) foreign.delete(threadId);
     if (pending.size !== before) save();
   };
 

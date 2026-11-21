@@ -11,6 +11,7 @@
 // FAKE_AGY_RESULT_ERROR, when set, is the result.error of a status ERROR turn.
 // FAKE_AGY_RESULT_RESPONSE, with it, is that turn's result.response (else "").
 // While FAKE_AGY_RESULT_ERROR_FILE exists, its text is that result.error.
+// FAKE_AGY_DENIED_MODEL, when set, is a --model whose turns fail with Vertex's permission denial.
 // FAKE_AGY_USAGE, when set, is the JSON usage on the response step and the result.
 // FAKE_AGY_STREAM=1 streams result.response as two text_delta steps first.
 // Deterministic, no network.
@@ -115,7 +116,11 @@ const CONV = "conv-fake-123";
 const systemNotice = "The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n<SYSTEM_MESSAGE>internal notice</SYSTEM_MESSAGE>";
 const cancelledTool = process.env.FAKE_AGY_CANCELLED_TOOL === "1";
 const errorFile = process.env.FAKE_AGY_RESULT_ERROR_FILE;
-const resultError = process.env.FAKE_AGY_RESULT_ERROR || (errorFile && existsSync(errorFile) ? readFileSync(errorFile, "utf8") : undefined);
+const model = argv.includes("--model") ? argv[argv.indexOf("--model") + 1] : undefined;
+const deniedModel = process.env.FAKE_AGY_DENIED_MODEL && model === process.env.FAKE_AGY_DENIED_MODEL
+  ? `Permission 'aiplatform.endpoints.predict' denied on resource '/publishers/google/models/${model.replace(/-low$/, "")}' (or it may not exist).`
+  : undefined;
+const resultError = deniedModel || process.env.FAKE_AGY_RESULT_ERROR || (errorFile && existsSync(errorFile) ? readFileSync(errorFile, "utf8") : undefined);
 
 // stream-json / --print with no prompt yields no turn (mirrors real CLI).
 if (!prompt) process.exit(0);
