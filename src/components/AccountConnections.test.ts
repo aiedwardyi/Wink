@@ -20,6 +20,7 @@ import { EnginesSettings } from "./EnginesSettings";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { landFold, spyReveal } from "./Fold.test-land";
 import { ROW_BUTTON } from "./SettingsPrimitives";
+import { BUILT_IN_DRIVERS } from "../../server/drivers/builtIn.ts";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -268,6 +269,11 @@ it.each([false, true])("opens the existing add/sign-in flow with desktop bridge 
   expect(host.textContent).toContain("ABCD");
   expect(host.querySelector('a[href="https://example.com/login"]')).not.toBeNull();
   expect(buttons("Add Account")).toHaveLength(1);
+  // Connections keeps waiting on a pending addition across mounts: end it so the next test starts clean.
+  request.mockResolvedValue({ state: "cancelled" });
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await update();
 });
 
 it.each([7, 8])("enforces the Add Account limit at %i accounts", async (count) => {
@@ -463,7 +469,7 @@ it("uses browser login when Claude does not advertise device login", async () =>
   expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: false }) });
 });
 
-it("keeps computer-only guidance for Claude account creation on a phone", async () => {
+it("keeps computer-only guidance for account creation on a phone without device login", async () => {
   await render(1);
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };
@@ -471,6 +477,184 @@ it("keeps computer-only guidance for Claude account creation on a phone", async 
   expect(buttons("Add Account")).toHaveLength(0);
   expect(host.textContent).toContain("Add on computer");
   expect(request).not.toHaveBeenCalledWith("/api/accounts", expect.anything());
+});
+
+it.each([
+  ["phone", true, false, true], ["desktop browser", false, false, false], ["desktop app", false, true, false],
+] as const)("adds a Claude account with phone login only on a phone (%s)", async (_surface, narrow, bridge, device) => {
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: narrow } as MediaQueryList);
+  if (bridge) vi.stubGlobal("ogb", { platform: "win32" });
+  await render(1);
+  state.instances[0]!.install = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "claudeAgent")!.install;
+  await update();
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device }) });
+});
+
+it("keeps device login for a Codex account added in a desktop browser", async () => {
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: false } as MediaQueryList);
+  await render(1);
+  state.instances[0]!.install = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "codex")!.install;
+  await update();
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: true }) });
+});
+
+it("keeps the failure line after an added account rejects its code and its row is retired", async () => {
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  await render(1);
+  state.instances[0]!.install = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "claudeAgent")!.install;
+  await update();
+  let failed = false;
+  request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/api/accounts" && init?.method === "POST") {
+      failed = false;
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      return { id: "new" };
+    }
+    if (path === "/api/accounts/new/sign-in/code") { failed = true; state.instances = state.instances.filter((row) => row.instanceId !== "new"); return {}; }
+    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    return {};
+  });
+  vi.useFakeTimers();
+  await act(async () => buttons("Add Account")[0]!.click());
+  await update();
+  const input = host.querySelector<HTMLInputElement>("input[type=password]")!;
+  await act(async () => { input.value = "expired-code"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+  await act(async () => { input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+  expect(failed).toBe(true);
+  await update();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  await update();
+  expect(host.querySelector('[data-connection-account="new"]')).toBeNull();
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Didn't finish. Try again.");
+  expect(buttons("Add Account")[0]!.disabled).toBe(false);
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("keeps the failure line when Connections remounts before the added account rejects its code", async () => {
+  // SAFETY: the phone check reads only `matches`.
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  await render(1);
+  state.instances[0]!.install = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "claudeAgent")!.install;
+  await update();
+  let failed = false;
+  request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/api/accounts" && init?.method === "POST") {
+      failed = false;
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      return { id: "new" };
+    }
+    if (path === "/api/accounts/new/sign-in/code") { failed = true; state.instances = state.instances.filter((row) => row.instanceId !== "new"); return {}; }
+    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    return {};
+  });
+  vi.useFakeTimers();
+  await act(async () => buttons("Add Account")[0]!.click());
+  await update();
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await update();
+  const input = host.querySelector<HTMLInputElement>("input[type=password]")!;
+  await act(async () => { input.value = "expired-code"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+  await act(async () => { input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+  expect(failed).toBe(true);
+  await update();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  await update();
+  expect(host.querySelector('[data-connection-account="new"]')).toBeNull();
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Didn't finish. Try again.");
+  expect(buttons("Add Account")[0]!.disabled).toBe(false);
+});
+
+it("shows the failure line once when the user returns after the failed added account has retired", async () => {
+  // SAFETY: the phone check reads only `matches`.
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  await render(1);
+  state.instances[0]!.install = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "claudeAgent")!.install;
+  await update();
+  let failed = false;
+  request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/api/accounts" && init?.method === "POST") {
+      failed = false;
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      return { id: "new" };
+    }
+    if (path === "/api/accounts/new/sign-in/code") return {};
+    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    return {};
+  });
+  vi.useFakeTimers();
+  await act(async () => buttons("Add Account")[0]!.click());
+  await update();
+  const input = host.querySelector<HTMLInputElement>("input[type=password]")!;
+  await act(async () => { input.value = "expired-code"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+  await act(async () => { input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+  // The user leaves Connections; the provider rejects the code (or times out) and the row retires meanwhile.
+  await act(async () => root.unmount());
+  failed = true;
+  state.instances = state.instances.filter((row) => row.instanceId !== "new");
+  root = createRoot(host);
+  await update();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  await update();
+  expect(host.querySelector('[data-connection-account="new"]')).toBeNull();
+  expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Didn't finish. Try again.");
+  expect(buttons("Add Account")[0]!.disabled).toBe(false);
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await update();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("stops waiting on an addition the server no longer knows", async () => {
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  await render(1);
+  state.instances[0]!.install = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "claudeAgent")!.install;
+  await update();
+  let known = true;
+  request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/api/accounts" && init?.method === "POST") {
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      return { id: "new" };
+    }
+    if (path === "/api/accounts/new/sign-in") {
+      if (!known) throw Object.assign(new Error("Unknown account"), { status: 404 });
+      return { state: "pending" };
+    }
+    return {};
+  });
+  vi.useFakeTimers();
+  await act(async () => buttons("Add Account")[0]!.click());
+  await update();
+  await act(async () => root.unmount());
+  known = false;
+  state.instances = state.instances.filter((row) => row.instanceId !== "new");
+  root = createRoot(host);
+  await update();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  const polls = () => request.mock.calls.filter(([path]) => path === "/api/accounts/new/sign-in").length;
+  const after = polls();
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(polls()).toBe(after);
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("adds Claude accounts and signs Gemini in from a phone with their real login commands", async () => {
+  await render(1);
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  const install = (kind: string) => BUILT_IN_DRIVERS.find((driver) => driver.driverKind === kind)!.install;
+  state.instances[0]!.install = install("claudeAgent");
+  state.instances.push({ ...engine("gemini", false), accountOf: undefined, accountMain: undefined, accountState: undefined, driverKind: "antigravityAgent", displayName: "Gemini", install: install("antigravityAgent") });
+  await update();
+  expect(host.querySelector("[data-computer-only]")).toBeNull();
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: true }) });
+  await act(async () => buttons("Sign In")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/instances/gemini/sign-in", { method: "POST", body: JSON.stringify({ device: true }) });
 });
 
 it.each([

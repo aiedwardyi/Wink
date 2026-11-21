@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +12,7 @@ import { admitPaneWake, markMailRead, mailForTurn, registerReplyWake, unreadMail
 import { PaneWakeScheduler } from "./pane-wake.ts";
 import { Store } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const EXHAUSTED = "This request reached its 24 bot turn limit. Finish with what you have; the user can send a message to continue.";
 const PAUSED = "Bot messaging limit reached. Send a message to reset it.";
@@ -22,7 +22,7 @@ let from: ReturnType<Store["createBot"]>;
 let target: ReturnType<Store["createBot"]>;
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _resetPending();
   roots._resetCommsRoots();
   store = new Store(() => ({ instanceId: "claude", model: "fake" }));

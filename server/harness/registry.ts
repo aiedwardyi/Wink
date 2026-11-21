@@ -381,14 +381,16 @@ export class ProviderRegistry {
     } : null;
   }
 
-  async startSignIn(instanceId: InstanceId, device = false) {
+  async startSignIn(instanceId: InstanceId, device = false, owner?: string) {
     const config = this.loginConfig(instanceId);
     if (!config || this.signingOut.has(instanceId)) return null;
     this.holdIdentity(instanceId, "sign-in");
     const login = config.install?.login;
     const args = device ? login?.deviceArgs : login?.args;
     if (!args) return null;
-    const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true });
+    const env = device ? { ...config.env, ...login?.deviceEnv } : config.env;
+    const paste = device || Boolean(config.account && config.engine === "claudeAgent");
+    const capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
     return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
       ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
     };

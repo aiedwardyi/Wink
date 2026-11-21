@@ -1,6 +1,7 @@
 import type { ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { AccountError, AccountService, MISSING_HOME, missingAccountHome, type AccountRecord } from "./accounts.ts";
+import { LoginBusyError, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import { ENGINE_OF } from "./account-names.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
 import { baseAccount } from "./worker-resume.ts";
@@ -17,6 +18,8 @@ type Hooks = {
 };
 
 type Main = { id: string; generation: number };
+/** The session asking (signInOwner) and the sign-in generation it saw when its request arrived. */
+export type SignInRequest = { owner?: string; generation?: number };
 export type MainChange = { base: string; engine: "claude" | "codex" | "grok"; from: Main; to: Main; seq: number };
 
 let mainSeq = 0;
@@ -114,13 +117,13 @@ export class AccountLifecycle {
     });
   }
 
-  add(of: string, device = false) {
+  add(of: string, device = false, owner?: string) {
     return this.exclusive(async () => {
       const account = await this.accounts.add(of);
       this.registry.blockAccount(account.id, true);
       try {
         await this.hooks.reload();
-        const capture = await this.begin(account, device);
+        const capture = await this.begin(account, device, owner);
         return { id: account.id, generation: account.generation, ...capture };
       } catch (error) {
         await this.discard(account.id);
@@ -129,7 +132,7 @@ export class AccountLifecycle {
     });
   }
 
-  signIn(id: string, device = false) {
+  signIn(id: string, device = false, owner?: string) {
     return this.exclusive(async () => {
       const destinations = Object.values(this.accounts.drains).filter((row) => row.destinationId === id);
       if (destinations.some((row) => row.phase !== "signed-out") || (destinations.length > 0 && this.registry.accountAvailable(id))) throw new AccountError("This account is the destination of a pending removal");
@@ -153,7 +156,7 @@ export class AccountLifecycle {
         }
         let capture;
         try {
-          capture = await this.registry.startSignIn(id, device);
+          capture = await this.registry.startSignIn(id, device, owner);
           if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
         } catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
         if (this.registry.accountBlocked(id)) {
@@ -175,7 +178,7 @@ export class AccountLifecycle {
       try {
         if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id, account.state === "stopped" && destinations.length === 0)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
         this.accounts.openHome(id);
-        return await this.begin(account, device);
+        return await this.begin(account, device, owner);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);
         else this.registry.blockAccount(id, blocked || account.state !== "ready");
@@ -201,16 +204,18 @@ export class AccountLifecycle {
     }, false).catch(() => { console.error("Signed-out account could not be saved"); });
   }
 
-  cancel(id: string) {
+  cancel(id: string, from?: SignInRequest) {
     return this.exclusive(async () => {
       if (!this.accounts.list().some((row) => row.id === id)) throw new AccountError("Unknown account", 404);
+      this.mayEndSignIn(id, from);
       await this.registry.cancelSignIn(id);
       return {};
     });
   }
 
-  remove(id: string, destinationId?: string) {
+  remove(id: string, destinationId?: string, from?: SignInRequest) {
     return this.exclusive(async () => {
+      this.mayEndSignIn(id, from);
       if (Object.values(this.accounts.drains).some((row) => row.destinationId === id)) throw new AccountError("This account is the destination of a pending removal");
       if (!destinationId && this.accounts.drains[id]) throw new AccountError("Use the recorded removal destination to retry explicitly");
       if (destinationId) {
@@ -358,13 +363,13 @@ export class AccountLifecycle {
     this.retries.set(account.id, retry);
   }
 
-  private async begin(account: AccountRecord, device: boolean) {
+  private async begin(account: AccountRecord, device: boolean, owner?: string) {
     const token = {};
     this.results.delete(account.id);
     this.jobs.set(account.id, token);
     let capture;
     try {
-      capture = await this.registry.startSignIn(account.id, device);
+      capture = await this.registry.startSignIn(account.id, device, owner);
       if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
     } catch (error) {
       this.jobs.delete(account.id);
@@ -474,6 +479,14 @@ export class AccountLifecycle {
     await this.accounts.retire(id);
     await this.hooks.reload();
     this.registry.blockAccount(id, false);
+  }
+
+  /** Checked inside the queue: a request ends only the pending sign-in it saw, and only from the session that started it. */
+  private mayEndSignIn(id: string, from?: SignInRequest) {
+    const logins = this.registry.logins;
+    if (!from || logins.state(id) !== "pending") return;
+    if (!logins.owns(id, from.owner)) throw new AccountError(SIGNED_IN_ELSEWHERE, 403, "sign-in-elsewhere");
+    if (logins.generation(id) !== from.generation) throw new LoginBusyError();
   }
 
   private mains() {

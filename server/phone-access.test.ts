@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -33,6 +32,7 @@ import { listenLocal } from "./phone-relay/testing/net.ts";
 import { isRelayRequest, markRelaySocket } from "./phone-relay/via.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
 import { createTerminalLive } from "./terminal-live.ts";
+import { runTestNode } from "./testing/harness-auth.ts";
 import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
 import { addPushSubscription, loadPushSubscriptions } from "./web-push.ts";
 
@@ -482,6 +482,20 @@ describe("phone Google sign-in through the relay", () => {
         expect(res.headers["set-cookie"]).toBeUndefined();
       }
     }
+  });
+
+  it("rejects a Google start when a relay request still reaches a disconnected PC", async () => {
+    const w = await world({ google: {} });
+    const connected = w.access.status();
+    const status = vi.spyOn(w.access, "status");
+    for (const state of ["reconnecting", "cert-error"] as const) {
+      status.mockReturnValue({ ...connected, state });
+      const res = await viaRelay(w.r, "/api/phone/google/start", { method: "HEAD" });
+      expect(res.status).toBe(503);
+      expect(res.headers["set-cookie"]).toBeUndefined();
+    }
+    status.mockRestore();
+    expect((await viaRelay(w.r, "/api/phone/google/start", { method: "HEAD" })).status).toBe(204);
   });
 
   it("refuses a sign-in that finishes after this PC signed out of Google", async () => {
@@ -1181,7 +1195,7 @@ describe("phone removal that fails to save", () => {
 });
 
 describe("dev boot", () => {
-  it("loads the relay integration and the lazily loaded client under Node's own type stripping", () => {
+  it("loads the relay integration and the lazily loaded client under Node's own type stripping", async () => {
     const root = fileURLToPath(new URL("..", import.meta.url));
     const files = [
       "server/phone-access.ts",
@@ -1195,7 +1209,7 @@ describe("dev boot", () => {
     ];
     for (const file of files) {
       const href = pathToFileURL(join(root, file)).href;
-      const run = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(href)});`], { encoding: "utf8", windowsHide: true });
+      const run = await runTestNode(["--input-type=module", "-e", `await import(${JSON.stringify(href)});`]);
       expect(run.status, `${file}: ${run.stderr}`).toBe(0);
     }
   });
@@ -1265,10 +1279,10 @@ describe("no relay configured", () => {
     }
   });
 
-  it("imports the relay client only once the relay is on", () => {
+  it("imports the relay client only once the relay is on", async () => {
     const { dir, cleanup } = tempDataDir();
     worlds.push(async () => cleanup());
-    const clientLoads = (config: PhoneRelayConfig) => {
+    const clientLoads = async (config: PhoneRelayConfig) => {
       const script = `
         import { registerHooks } from "node:module";
         const loaded = [];
@@ -1286,12 +1300,12 @@ describe("no relay configured", () => {
         await access.stop();
         console.log(JSON.stringify(loaded.filter((url) => /\\/phone-relay\\/(index|ingress)\\.ts$/.test(url))));
       `;
-      const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", windowsHide: true });
+      const run = await runTestNode(["--input-type=module", "-e", script]);
       expect(run.status, run.stderr).toBe(0);
       return z.array(z.string()).parse(JSON.parse(run.stdout));
     };
-    expect(clientLoads({ enabled: true })).toEqual([]);
-    expect(clientLoads({ base: "wink.test", enabled: true })).toHaveLength(2);
+    expect(await clientLoads({ enabled: true })).toEqual([]);
+    expect(await clientLoads({ base: "wink.test", enabled: true })).toHaveLength(2);
   });
 });
 

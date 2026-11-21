@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { shareUserSetup } from "./account-shared-setup.ts";
 import { DATA_DIR } from "./config.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
@@ -259,7 +260,7 @@ describe.each(["claudeAgent", "codex"])("%s setup safety", (driver) => {
     f.share(driver);
     expect(tree(f.home)).toEqual(first);
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
-    fs.rmSync(f.home, { recursive: true });
+    removeTestData(f.home);
     expect(tree(f.base)).toEqual(before);
   });
 

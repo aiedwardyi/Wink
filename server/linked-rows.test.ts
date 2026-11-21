@@ -1,9 +1,10 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { messageDatabase } from "./message-db.ts";
 import { Store } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = () => ({ instanceId: "claude", model: "opus" });
 const picture = "C:\\Users\\me\\shots\\Screen shot_2.png";
@@ -20,7 +21,7 @@ function chat() {
 const rowsModule = () => import("./linked-rows.ts");
 
 describe("linked file rows", () => {
-  beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
+  beforeEach(() => removeTestData(DATA_DIR));
   afterEach(() => vi.restoreAllMocks());
 
   it("reads only the rows naming the file and leaves the chat unloaded", async () => {

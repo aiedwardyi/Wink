@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,6 +11,7 @@ import { createInternalRoutes } from "../internal-routes.ts";
 import type { BotRecord, Message } from "../store.ts";
 import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, setJoinedWorks, type JoinedEntry } from "./joined.ts";
 import { MyRoomBotTurns, type MyRoomBotDeps } from "./my-room-bots.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const ROOM = "room1";
 const ME = { id: "p1", name: "Peter" };
@@ -34,7 +35,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
   closeJoinedDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   seq = 0;
   thread = [];

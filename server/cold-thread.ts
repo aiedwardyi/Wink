@@ -4,7 +4,7 @@ import { Worker } from "node:worker_threads";
 
 import { offscreenLimit } from "./chat-tail.ts";
 import type { TailRead, TailReply, TailRequest } from "./cold-thread-worker.ts";
-import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
+import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowCursor, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
 import { paneReason, type PaneLine } from "../shared/pane-note.ts";
 import type { Message, Store } from "./store.ts";
 import { rowChars } from "./thread-cache.ts";
@@ -79,6 +79,27 @@ export async function chatListPage(
   const { messages, options, activeLeafId } = chained(tail, limit + 1);
   const rows = offscreen ? offscreenLimit(messages, limit, offscreen, activeLeafId || messages.at(-1)!.id, options) : limit;
   const start = Math.max(0, messages.length - rows);
+  return { messages: messages.slice(start), hasMore: start > 0 };
+}
+
+/** The page messagePage would send before `before`, or null when the store must answer (loaded, an unknown cursor, or the read failed). */
+export async function coldPageBefore(store: Pick<Store, "loaded">, threadId: string, before: string, limit: number): Promise<{ messages: Message[]; hasMore: boolean } | null> {
+  await committed();
+  if (store.loaded(threadId)) return null;
+  const cursor = rowCursor(threadId, before);
+  if (cursor === undefined) return null;
+  let page: Tail;
+  try {
+    // one row past the page: chained gives the oldest its parent with it
+    page = await (reader ??= startReader())({ threadId, before: cursor, count: limit + 1 });
+  } catch (error) {
+    console.error("cold older page read failed; the store answers", threadId, error);
+    return null;
+  }
+  // a write during the read loaded the chat
+  if (store.loaded(threadId)) return null;
+  const { messages } = chained(page, limit + 1);
+  const start = Math.max(0, messages.length - limit);
   return { messages: messages.slice(start), hasMore: start > 0 };
 }
 
