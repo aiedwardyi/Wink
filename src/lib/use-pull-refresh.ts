@@ -56,6 +56,7 @@ export function usePullRefresh(ref: RefObject<HTMLElement | null>, badgeRef: Ref
       timer = setTimeout(() => { busy = false; clear(); }, SWIPE_MOTION_MS);
     };
     const start = (event: TouchEvent) => {
+      if (drag?.pulling && event.touches.length !== 1) { finish(false, event); return; }
       drag = null;
       const touch = event.touches[0];
       if (busy || event.touches.length !== 1 || !touch || !(event.target instanceof Element) || scroller.scrollTop > 0) return;
@@ -73,6 +74,8 @@ export function usePullRefresh(ref: RefObject<HTMLElement | null>, badgeRef: Ref
         if (!axis) return;
         if (axis === "x" || dy < 0) { drag = null; return; }
         drag.pulling = true;
+        clearTimeout(timer);
+        clear();
       }
       if (event.cancelable) event.preventDefault();
       drag.offset = Math.min(PULL_MAX, Math.max(0, dy) * PULL_RESIST);
@@ -87,7 +90,7 @@ export function usePullRefresh(ref: RefObject<HTMLElement | null>, badgeRef: Ref
       drag = null;
       if (!done?.pulling) return;
       // Suppress the click a touch drag can otherwise leave behind.
-      if (event.cancelable) event.preventDefault();
+      if (event.cancelable && event.type !== "touchstart") event.preventDefault();
       if (!commit || done.offset < PULL_THRESHOLD) { springBack(done.reduced); return; }
       busy = true;
       badge.dataset.spin = "";

@@ -26,11 +26,11 @@ function Harness({ enabled = true }) {
   );
 }
 
-function touch(type: string, x: number, y: number, target: Element = content()) {
+function touch(type: string, x: number, y: number, target: Element = content(), others: [number, number][] = []) {
   time += 16;
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
-    touches: { value: type === "touchend" || type === "touchcancel" ? [] : [{ clientX: x, clientY: y }] },
+    touches: { value: type === "touchend" || type === "touchcancel" ? [] : [[x, y], ...others].map(([clientX, clientY]) => ({ clientX, clientY })) },
     timeStamp: { value: time },
   });
   target.dispatchEvent(event);
@@ -174,6 +174,47 @@ describe("pull to refresh", () => {
     await release();
     expect(refresh).toHaveBeenCalledTimes(1);
     await settleAll();
+  });
+
+  it("a second finger mid-pull springs the list back without refreshing", async () => {
+    pull(PULL_THRESHOLD * 2 + 4);
+    touch("touchstart", 100, 220, content(), [[220, 320]]);
+    expect(content().style.transform).toBe("translate3d(0, 0px, 0)");
+    touch("touchmove", 100, 240, content(), [[220, 340]]);
+    await release();
+    await settleAll();
+    expect(refresh).not.toHaveBeenCalled();
+    idle();
+  });
+
+  it("a full pull right after a short one keeps its spinner and runs one refresh", async () => {
+    let done!: () => void;
+    refresh.mockReturnValue(new Promise<void>((resolve) => { done = resolve; }));
+    pull(PULL_THRESHOLD * 2 - 8);
+    await release();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    pull(PULL_THRESHOLD * 2 + 4);
+    await release();
+    await act(async () => { await vi.advanceTimersByTimeAsync(SWIPE_MOTION_MS); });
+    expect(badge().dataset.spin).toBe("");
+    pull(PULL_THRESHOLD * 2 + 4);
+    await release();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    done();
+    await settleAll();
+    idle();
+  });
+
+  it("a pull begun during a spring-back keeps following the finger", async () => {
+    pull(PULL_THRESHOLD * 2 - 8);
+    await release();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    pull(80);
+    await act(async () => { await vi.advanceTimersByTimeAsync(SWIPE_MOTION_MS); });
+    expect(content().style.transform).toBe("translate3d(0, 40px, 0)");
+    await release();
+    await settleAll();
+    idle();
   });
 
   it("paints no drag under reduced motion but still refreshes", async () => {
