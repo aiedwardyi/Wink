@@ -646,6 +646,23 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(1);
   });
 
+  it.each([
+    ["another memory file", `# Memory\n${"- note\n".repeat(198)}`, "- Home city: Vancouver (noted 2026-10-10)\n"],
+    ["a table row in another file", `# Memory\n${"- note\n".repeat(198)}`, "| Home city | Vancouver (noted 2026-10-10) |\n"],
+    ["a plain line in another file", `# Memory\n${"- note\n".repeat(198)}`, "Home city: Vancouver (noted 2026-10-10)\n"],
+    ["MEMORY.md past the cut", `# Memory\n${"- note\n".repeat(199)}- Home city: Vancouver (noted 2026-10-10)\n`, ""],
+  ])("saves a value said again when %s holds a later one", async (_kind, memory, places) => {
+    writeMemoryFile("bot-t1", memory);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), "# Notebook\n- Home city: Toronto (noted 2026-10-01)\n");
+    if (places) writeFileSync(join(dirname(overflowPath()), "places.md"), `# Places\n${places}`);
+    generate.mockResolvedValue(facts(["Home city: Toronto", "i moved back to Toronto"]));
+    say("t1", "i moved back to Toronto");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe("# Notebook\n- Home city: Toronto (noted 2026-10-01)\n- Home city: Toronto (noted 2026-10-15)\n");
+    expect(chips("t1")).toHaveLength(1);
+  });
+
   it("saves a value an overflow file had before a later correction as the latest", async () => {
     writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
     mkdirSync(dirname(overflowPath()), { recursive: true });

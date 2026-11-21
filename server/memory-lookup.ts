@@ -43,7 +43,7 @@ const skipped = (word: string) => STOP.has(word) || CHAT.has(word);
 const SEPARATOR = /^\|[\s:|-]+\|?$/;
 const STRUCK = /^[-*\s|]*(?:\d+\s*\|\s*)?~~/;
 const DATED = /\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b|\b(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/g;
-const NOTED_AT = /\(noted (\d{4}-\d{2}-\d{2})\)$/;
+const NOTED_AT = /\(noted (20\d{2}-\d{2}-\d{2})\)$/;
 const MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -84,7 +84,7 @@ export function rowDate(text: string, modified: string): string {
   return newest || modified;
 }
 
-// a day that cannot be, like 2026-13-02, was typed by hand and stamps nothing
+// a day that cannot be, like 2026-13-02, or past the years a row's words date, like 2926-10-02, was typed by hand and stamps nothing
 export function notedDay(text: string): string {
   const day = NOTED_AT.exec(text)?.[1] ?? "";
   const [year, month, date] = [Number(day.slice(0, 4)), Number(day.slice(5, 7)), Number(day.slice(8))];
@@ -92,12 +92,13 @@ export function notedDay(text: string): string {
   return date >= 1 && date <= (month === 2 && !leap ? 28 : (MONTH_DAYS[month - 1] ?? 0)) ? day : "";
 }
 
-// a note-taker row gives way to one noted later whatever day its words name, then a label keeps its newest-dated rows
+// a note-taker row gives way to one noted later whatever day its words name, unless an unstamped row outdates every latest-noted one; then a label keeps its newest-dated rows
 export function recalled(rows: Array<{ topic: string; noted: string; date: string }>): boolean[] {
-  const labels = new Map<string, { noted: string; date: string; unstamped: string }>();
+  const labels = new Map<string, { noted: string; date: string; unstamped: string; newest: string }>();
   const tops = rows.map((row) => {
     let top = labels.get(row.topic);
-    if (!top) labels.set(row.topic, (top = { noted: "", date: "", unstamped: "" }));
+    if (!top) labels.set(row.topic, (top = { noted: "", date: "", unstamped: "", newest: "" }));
+    if (row.date > top.newest) top.newest = row.date;
     if (!row.noted) top.unstamped = row.date > top.unstamped ? row.date : top.unstamped;
     else if (row.noted > top.noted) {
       top.noted = row.noted;
@@ -107,7 +108,8 @@ export function recalled(rows: Array<{ topic: string; noted: string; date: strin
   });
   return rows.map((row, at) => {
     const top = tops[at]!;
-    return (!row.noted || row.noted === top.noted) && row.date === (top.date > top.unstamped ? top.date : top.unstamped);
+    if (top.date < top.unstamped) return row.date === top.newest;
+    return (!row.noted || row.noted === top.noted) && row.date === top.date;
   });
 }
 
@@ -170,6 +172,11 @@ function piecesOfFile(file: NoteFile): Piece[][] {
   return rows;
 }
 
+// the writer ranks a note by these rows, so it never keeps one recall hides
+export function recallRows(files: NoteFile[]): Array<{ topic: string; noted: string; date: string }> {
+  return files.flatMap(piecesOfFile).map((row) => row[0]!);
+}
+
 function editDistance(a: string, b: string, limit: number): number {
   if (Math.abs(a.length - b.length) > limit) return limit + 1;
   let before: number[] = [];
@@ -209,6 +216,11 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
   for (const [at, row] of parsed.entries()) {
     const kept = newest.get(notes[at]!);
     if (shown[at] && (!kept || day(row) > day(kept) || (day(row) === day(kept) && size(row) < size(kept)))) newest.set(notes[at]!, row);
+  }
+  // a copy under another heading still answers to that heading
+  for (const [at, row] of parsed.entries()) {
+    const kept = newest.get(notes[at]!);
+    if (shown[at] && kept && kept !== row) for (const piece of kept) piece.title = [...piece.title, ...row[0]!.title];
   }
   const rows = parsed.filter((row, at) => newest.get(notes[at]!) === row);
   const pieces = rows.flat();
@@ -335,7 +347,7 @@ async function statSource(source: string, tier: 0 | 1, path: string): Promise<So
   return stat(path).then((info) => (info.isFile() ? { source, tier, path, mtime: info.mtimeMs, size: info.size } : null), () => null);
 }
 
-function pastTheCut(botId: string): { text: string; firstLine: number } | null {
+export function pastTheCut(botId: string): { text: string; firstLine: number } | null {
   const loaded = loadMemory(botId);
   const raw = memoryFileRaw(botId);
   if (!loaded?.truncated || !raw.startsWith(loaded.text)) return null;
@@ -362,14 +374,14 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
     // a replaced pick is history, never a recall hit
     if (text !== null) files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
   }
-  // a file past the budget still gives its first lines, so one note appended to it never drops the whole topic
-  for (const { source, tier, path, mtime } of over) {
+  // a file past the budget still gives its first lines, so one note appended to it never drops the whole topic; they take no day from its modified time, which a later line set
+  for (const { source, tier, path } of over) {
     const room = MAX_CORPUS_BYTES - bytes;
     if (source === "MEMORY.md" || room <= 0) continue;
     const text = await readStart(path, room).catch(() => "");
     if (!text) continue;
     bytes += Buffer.byteLength(text);
-    files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
+    files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime: 0 });
   }
   return files;
 }

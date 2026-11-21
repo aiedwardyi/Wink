@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
-import { notedDay, recalled, rowDate } from "./memory-lookup.ts";
+import { notedDay, pastTheCut, recalled, recallRows, rowDate } from "./memory-lookup.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
@@ -14,10 +14,12 @@ import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import {
   appendLines,
   ensureWorkspace,
+  listMemoryTopics,
   MEMORY_MAX_BYTES,
   MEMORY_MAX_LINES,
   MEMORY_SEED,
   memoryFileRaw,
+  PARKED_COPY,
   readMemoryFile,
   readMemoryTopic,
   saveMemoryFile,
@@ -835,7 +837,18 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         };
         // a row recall hides is there only when a copy as new as its write was outdated by a later row
         const label = (row: string) => (/^([^:]{2,60}):\s/.exec(row)?.[1] ?? row).toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
-        const kept = recalled(rows.map((row, index) => ({ ...days[index]!, topic: label(row) ?? row })));
+        // ranked against every row of its label recall reads, parsed as recall parses them, so a later row anywhere outdates it here too
+        const projectNotes = deps.store.bot?.(botId)?.projectNotes;
+        const memory = join(dirname(dirname(path)), "MEMORY.md");
+        const files = [memory, ...listMemoryTopics(botId).filter(({ name }) => name !== OVERFLOW_FILE && name !== PICKS_FILE && !PARKED_COPY.test(name)).map(({ name }) => join(dirname(path), name)), ...(projectNotes ? [projectNotes] : [])].flatMap((other) => {
+          try {
+            return [{ source: other, tier: 0 as const, text: other === memory ? (pastTheCut(botId)?.text ?? "") : readFileSync(other, "utf8"), mtime: statSync(other).mtimeMs }];
+          } catch {
+            return [];
+          }
+        });
+        const own = { source: path, tier: 0 as const, text: current, mtime: current ? statSync(path).mtimeMs : 0 };
+        const kept = recalled([...rows.map((row, index) => ({ ...days[index]!, topic: label(row) ?? row })), ...recallRows([own, ...files])]);
         const shown = ({ line, date }: Landed) => rows.some((row, index) => row === line && ((days[index]!.noted || days[index]!.date) >= date || kept[index]));
         const stays = (landed: Landed) => shown(landed) && rows.some((row, index) => row === landed.line && !older(index, landed.date, landed.copy));
         wrote = wrote.filter(stays);
