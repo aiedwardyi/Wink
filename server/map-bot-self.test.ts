@@ -16,6 +16,7 @@ import type { TailRequest } from "./cold-thread-worker.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { DATA_DIR } from "./config.ts";
 import { SendSequencer } from "./send-idempotency.ts";
+import { serverSendClock } from "./send-clock.ts";
 import { cancelQueuedSends } from "./steer-queue.ts";
 import { Store, type BotRecord, type Message, type StoreChange } from "./store.ts";
 import { messageDatabase, withMessageTransaction } from "./message-db.ts";
@@ -209,7 +210,20 @@ async function loadingChat(more?: (setup: Store, bot: BotRecord) => void) {
   return { store, bot, release };
 }
 
-function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: { sendId?: string }) => Promise<unknown>, turnClaimed = false) {
+// chats Store read whole while unloaded: the server thread freezing on a heavy chat
+function wholeReads(store: Store): string[] {
+  const reads: string[] = [];
+  // SAFETY: thread() is Store's whole read of a chat into its cache; the test only watches it.
+  const whole = store as unknown as { thread(threadId: string): unknown };
+  const thread = whole.thread.bind(store);
+  whole.thread = (threadId) => {
+    if (!store.loaded(threadId)) reads.push(threadId);
+    return thread(threadId);
+  };
+  return reads;
+}
+
+function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: { sendId?: string; actedAt?: number }) => Promise<unknown>, turnClaimed = false) {
   const noop = () => {};
   const routes = createBotChatRoutes({
     cfg: {}, store, threadSyncGate: { enabled: false }, sendSequencer: new SendSequencer(), startTurn, pullSyncedThread: noop, noteTalked: noop,
@@ -225,49 +239,63 @@ function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: 
   };
 }
 
-it("starts a send made while Map loads the chat before the load lands", async () => {
-  const { store, bot, release } = await loadingChat();
-  const loadedAtTurn: boolean[] = [];
-  const send = sendRoute(store, async (_botId, text, { sendId }) => {
-    loadedAtTurn.push(store.loaded(bot.threadId));
-    return { message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId }) };
+it("shows a send made while Map loads the chat once, stamped as a loaded chat would be, without reading it on the server thread", async () => {
+  const now = Date.now() + 1_000;
+  const { store, bot, release } = await loadingChat((setup, made) => {
+    setup.appendMessage(made.threadId, { role: "bot", kind: "text", text: "stamped ahead", at: now + 30_000 });
   });
+  const reads = wholeReads(store);
+  const loadedAtTurn: boolean[] = [];
+  const send = sendRoute(store, async (_botId, text, { sendId, actedAt }) => {
+    loadedAtTurn.push(store.loaded(bot.threadId));
+    return { message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId, actedAt }) };
+  });
+  const clock = [vi.spyOn(Date, "now").mockReturnValue(now), vi.spyOn(performance, "now").mockReturnValue(0)];
   const sendId = randomUUID();
-  const { status, data } = await send(bot.id, { text: "sent right after Map opened", sendId });
-  expect(loadedAtTurn).toEqual([false]);
-  expect(status).toBe(202);
+  const actedAt = now + 60_000;
+  const sent = send(bot.id, { text: "sent right after Map opened", sendId, actedAt });
   await release();
-  expect(store.loaded(bot.threadId)).toBe(true);
-  expect(store.messagesFor(bot.threadId).filter(message => message.sendId === sendId).map(message => message.id)).toEqual([data.message.id]);
+  const { status, data } = await sent;
+  expect(reads).toEqual([]);
+  expect(loadedAtTurn).toEqual([true]);
+  expect(status).toBe(202);
+  const lines = store.messagesFor(bot.threadId).filter(message => message.sendId === sendId);
+  expect(lines.map(message => message.id)).toEqual([data.message.id]);
   expect(store.activeLeaf(bot.threadId)).toBe(data.message.id);
+  expect(lines[0]!.actedAt).toBe(Math.min(actedAt, serverSendClock(store.messagesFor(bot.threadId).filter(message => message.sendId !== sendId))));
+  expect(lines[0]!.actedAt).toBe(now + 30_001);
+  for (const spy of clock) spy.mockRestore();
 });
 
-it("answers a retry of a send stored before Map opened by its key while Map loads the chat", async () => {
+it("answers a retry of a send stored before Map opened by its key once Map's load lands", async () => {
   const sendId = randomUUID();
   let stored: Message | undefined;
   const { store, bot, release } = await loadingChat((setup, made) => {
     stored = setup.appendMessage(made.threadId, { role: "user", kind: "text", text: "sent before Map opened", sendId });
   });
+  const reads = wholeReads(store);
   const startTurn = vi.fn(async () => ({}));
   const send = sendRoute(store, startTurn);
-  const retry = await send(bot.id, { text: "sent before Map opened", sendId });
-  expect(store.loaded(bot.threadId)).toBe(false);
-  expect(retry).toMatchObject({ status: 202, data: { message: { id: stored!.id } } });
-  await expect(send(bot.id, { text: "something else", sendId })).rejects.toMatchObject({ status: 409 });
-  expect(startTurn).not.toHaveBeenCalled();
+  const retry = send(bot.id, { text: "sent before Map opened", sendId, actedAt: Date.now() });
   await release();
-  expect(store.loaded(bot.threadId)).toBe(true);
+  expect(await retry).toMatchObject({ status: 202, data: { message: { id: stored!.id } } });
+  await expect(send(bot.id, { text: "something else", sendId, actedAt: Date.now() })).rejects.toMatchObject({ status: 409 });
+  expect(startTurn).not.toHaveBeenCalled();
+  expect(reads).toEqual([]);
+  expect(store.messagesFor(bot.threadId).filter(message => message.sendId === sendId).map(message => message.id)).toEqual([stored!.id]);
 });
 
-it("queues a send made while a turn waits for Map's load without reading the chat", async () => {
+it("queues a send made while a turn waits for Map's load without reading the chat on the server thread", async () => {
   const { store, bot, release } = await loadingChat();
   onTestFinished(() => void cancelQueuedSends(bot.id));
+  const reads = wholeReads(store);
   const send = sendRoute(store, vi.fn(), true);
-  const { status, data } = await send(bot.id, { text: "one more thing", sendId: randomUUID() });
-  expect(store.loaded(bot.threadId)).toBe(false);
+  const sent = send(bot.id, { text: "one more thing", sendId: randomUUID(), actedAt: Date.now() });
+  await release();
+  const { status, data } = await sent;
+  expect(reads).toEqual([]);
   expect(status).toBe(202);
   expect(data).toMatchObject({ queued: true });
-  await release();
   expect(store.loaded(bot.threadId)).toBe(true);
 });
 

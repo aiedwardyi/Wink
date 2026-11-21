@@ -7,7 +7,7 @@ import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { serverSendClock } from "./send-clock.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
-import { coldLoading, sentRow } from "./cold-thread.ts";
+import { coldLoad, coldLoading, sentRow } from "./cold-thread.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -383,8 +383,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
       const call = parseCallTag(body.call);
       const cardId = typeof body.cardId === "string" ? body.cardId : undefined;
-      // the card must be on the active branch: a chat Map is loading lands first rather than be read here
-      const loading = cardId === undefined ? undefined : coldLoading(threadId);
+      // the card and the send clock read the chat: an unloaded one loads off the server thread rather than be read here
+      const loading = (cardId === undefined && typeof body.actedAt !== "number") || store.loaded(threadId) ? undefined : coldLoad(store, threadId);
       if (loading) await loading;
       const asked = cardId === undefined ? undefined : store.activePath(threadId).find((message) => message.id === cardId);
       const answersCard = asked?.card?.askUser ? asked.id : undefined;

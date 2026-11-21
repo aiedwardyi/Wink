@@ -202,8 +202,8 @@ export function coldSendIds(store: Pick<Store, "loaded">, threadId: string): voi
   for (const older of sendIdReads.keys()) if (sendIdReads.size > 2) sendIdReads.delete(older);
 }
 
-/** The row a send was first accepted as: the store's when the chat is loaded, else by key from Map's sendId read and the rows stored since, else from the chat once a load under way lands. */
-export async function sentRow(store: Pick<Store, "loaded" | "messagesFor" | "row">, threadId: string, sendId: string): Promise<Message | undefined> {
+/** The row a send was first accepted as: the store's when the chat is loaded, else by key from Map's sendId read and the rows stored since, else from the chat once it loads off the server thread. */
+export async function sentRow(store: Pick<Store, "adopt" | "loaded" | "messagesFor" | "row">, threadId: string, sendId: string): Promise<Message | undefined> {
   const read = store.loaded(threadId) ? undefined : sendIdReads.get(threadId);
   const known = await read?.ids;
   if (known && !read!.stale && !store.loaded(threadId)) {
@@ -214,8 +214,7 @@ export async function sentRow(store: Pick<Store, "loaded" | "messagesFor" | "row
     const since = scanThreadRows(threadId, known.cursor, 1024);
     if (since.messages.length < 1024) return since.messages.find((message) => message.sendId === sendId);
   }
-  const loading = loads.get(threadId);
-  if (loading) await loading;
+  if (!store.loaded(threadId)) await coldLoad(store, threadId);
   return store.messagesFor(threadId).find((message) => message.sendId === sendId);
 }
 
@@ -269,11 +268,19 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
       chars = before;
       cursor = after;
     };
+    // the reader reads the next page while this thread parses the last
+    const ask = (after: number) => {
+      const page = (reader ??= startReader())({ threadId, after });
+      page.catch(() => {});
+      return { asked: deletes, page };
+    };
+    let next = ask(cursor);
     for (;;) {
-      const asked = deletes;
-      const page = await (reader ??= startReader())({ threadId, after: cursor });
+      const { asked, page: reading } = next;
+      const page = await reading;
       if (store.loaded(threadId) || changed.size > 1024) return;
       if (page.length) {
+        next = ask(page.at(-1)!.cursor);
         const length = messages.length;
         const before = chars;
         for (const row of page) {
@@ -282,11 +289,15 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
         }
         pages.push({ after: cursor, asked, length, chars: before, last: messages.at(-1)!.id });
         cursor = page.at(-1)!.cursor;
+        // a page read ahead is already here, so let the server answer between pages
+        await new Promise((resolve) => setImmediate(resolve));
       }
       // read again from the first page whose last row was deleted after it was asked for
       const from = pages.findIndex((read) => (deletedAt.get(read.last) ?? 0) > read.asked);
-      if (from >= 0) rewind(from);
-      else if (!page.length) break;
+      if (from >= 0) {
+        rewind(from);
+        next = ask(cursor);
+      } else if (!page.length) break;
     }
     // rows added since the worker's last page
     for (let tail = scanThreadRows(threadId, cursor, 1024); tail.messages.length; tail = scanThreadRows(threadId, tail.cursor, 1024)) {
