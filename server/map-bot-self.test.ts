@@ -278,7 +278,8 @@ it("caps a send stamped ahead by the clock it arrived at, while Map's load of th
   const elapsed = vi.spyOn(performance, "now").mockReturnValue(0);
   const sendId = randomUUID();
   const sent = send(bot.id, { text: "stamped ahead of this clock", sendId, actedAt: now + 60_000 });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // the clock moves once the route has read it; a route that reads it only after the load is caught by the stamp below
+  await vi.waitFor(() => expect(elapsed).toHaveBeenCalled(), { timeout: 1_000 }).catch(() => {});
   wall.mockReturnValue(now + 500);
   await release();
   const { status, data } = await sent;
