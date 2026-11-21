@@ -503,10 +503,14 @@ export function BoardView({ hidden = false, closing = false }: { hidden?: boolea
           )}
         </div>
       </div>
-      <div className="relative min-h-0 flex-1 md:animate-fade-in">
-        <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] md:px-5">
+      <div className="relative flex min-h-0 flex-1 flex-col md:animate-fade-in">
+        {(failed || (!open && threads.some((thread) => thread.post.id === deleteFailed))) && (
+          <div className="shrink-0 overflow-y-hidden [scrollbar-gutter:stable] md:px-5">
+            <div role="alert" className={cn(SIDE, "mx-auto flex w-full max-w-[640px] items-center justify-between gap-3 bg-app py-3 text-[13px] text-danger md:rounded-t-[28px] md:bg-card")}><span>{t("errors.request")}</span>{failed && retryButton}</div>
+          </div>
+        )}
+        <div ref={listRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] md:px-5">
           <section className={SHEET}>
-            {(failed || (!open && threads.some((thread) => thread.post.id === deleteFailed))) && <div role="alert" className={cn(SIDE, "sticky top-0 z-10 flex items-center justify-between gap-3 bg-app py-3 text-[13px] text-danger md:rounded-t-[28px] md:bg-card")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
             {!posts && !failed && (
               <div data-board-loading role="status" className="py-24 text-center text-[14px] text-ink-secondary">{t("board.loading")}</div>
             )}

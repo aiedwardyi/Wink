@@ -1174,6 +1174,8 @@ describe("Forum", () => {
     await settle();
     expect(rows()).toEqual(["pa", "pb"]);
     expect(host.querySelector("[role=alert]")?.textContent).toBe("Wink couldn't finish that. Try again.");
+    // inside the scroller the alert would overlay a row or scroll out of view
+    expect(host.querySelector("[role=alert]")!.closest(".overflow-y-auto")).toBeNull();
     await openRow("pb");
     expect(host.querySelector("[data-side-panel] [role=alert]")).toBeNull();
     await click("[data-back-button]");
