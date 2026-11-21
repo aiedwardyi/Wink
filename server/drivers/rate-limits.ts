@@ -123,7 +123,8 @@ export function grokRateLimitWindows(payload: unknown): RateLimitWindow[] {
 /** Antigravity quota buckets into subscription windows. Three wire shapes,
  * one account: the statusline JSON dict (`gemini-5h` / `gemini-weekly` with
  * `remaining_fraction` + `reset_in_seconds`), RetrieveUserQuotaSummary
- * `groups[].buckets[]` (the same RPC behind agy's own `/usage`), and the
+ * `groups[].buckets[]` (the same RPC behind agy's own `/usage`; agy 1.5's
+ * `-p /usage` prints the same groups with `id` / `name` / `reset_time`), and the
  * legacy GetUserStatus model configs. A bucket is matched by the window
  * length named in its id or display name; anything without a fill level is
  * dropped. Both pools (Gemini, Claude + GPT) report the same two windows,
@@ -176,9 +177,9 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
           if (!isRecord(bucket)) continue;
           const remaining = isRecord(bucket.remaining) ? bucket.remaining : null;
           candidates.push({
-            name: `${String(bucket.bucketId ?? "")} ${String(bucket.displayName ?? "")}`,
+            name: `${String(bucket.bucketId ?? bucket.id ?? "")} ${String(bucket.displayName ?? bucket.name ?? "")}`,
             fraction: remaining?.remainingFraction ?? bucket.remainingFraction ?? bucket.remaining_fraction,
-            resetMs: resetFromUnknown(bucket.resetTime ?? bucket.resetsAt ?? bucket.reset_at),
+            resetMs: resetFromUnknown(bucket.resetTime ?? bucket.resetsAt ?? bucket.reset_at ?? bucket.reset_time),
           });
         }
       }

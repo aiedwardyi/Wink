@@ -766,3 +766,51 @@ describe("antigravity /usage quota command", () => {
     })).rejects.toThrow("refresh");
   });
 });
+
+describe("antigravity /usage as agy 1.5 prints it", () => {
+  const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "testing", "fixtures");
+  // Real `agy -p /usage --output-format stream-json` output from a Google AI Pro plan (11-21).
+  const live = readFileSync(join(fixtureDir, "agy-usage-live.jsonl"), "utf8");
+  // Constructed, not captured: what a Gemini API key / Cloud account can plausibly print
+  // (error event, empty groups, buckets without a fill level, errored result), one per line.
+  const gcpLines = readFileSync(join(fixtureDir, "agy-usage-gcp.jsonl"), "utf8").split("\n").filter(Boolean);
+  const quotaOf = (stdout: string | null) => readAntigravityQuota("agy", {}, {
+    usage: (cli, env) => readAntigravityUsageCommand(cli, env, async () => stdout),
+    rpc: async () => { throw new Error("refresh"); },
+  });
+
+  it("reads the plan's two windows through the same path Usage refresh takes", async () => {
+    // The Gemini pool's reset times as the payload itself states them.
+    const buckets = new Map(z.object({ command: z.object({ data: z.object({ groups: z.array(z.object({ buckets: z.array(z.object({ id: z.string(), reset_time: z.string() })) })) }) }) })
+      .parse(JSON.parse(live.split("\n")[0]!)).command.data.groups[0]!.buckets.map((bucket) => [bucket.id, Date.parse(bucket.reset_time)] as const));
+    const windows = antigravityRateLimitWindows(await quotaOf(live));
+    expect(windows).toEqual([
+      { id: "five_hour", usedPercent: 30, resetsAt: buckets.get("gemini-5h"), windowMinutes: 300 },
+      { id: "seven_day", usedPercent: 8.7, resetsAt: buckets.get("gemini-weekly"), windowMinutes: 10_080 },
+    ]);
+  });
+
+  it("shows both bars through refresh", async () => {
+    const refresh = createUsageRefresh({ platform: "linux", antigravity: async () => quotaOf(live) });
+    const result = await refresh("antigravityAgent", { instanceId: "agy" });
+    expect(result.error).toBeUndefined();
+    expect(result.report?.windows.map((window) => [window.id, window.usedPercent])).toEqual([["five_hour", 30], ["seven_day", 8.7]]);
+  });
+
+  it.each([0, 1, 2, 3, 4])("shows no bar for the Cloud / API-key output line %i", async (index) => {
+    const line = gcpLines[index];
+    await expect(quotaOf(line)).rejects.toThrow("refresh");
+    const refresh = createUsageRefresh({ platform: "linux", antigravity: async () => quotaOf(line) });
+    const result = await refresh("antigravityAgent", { instanceId: "agy" });
+    expect(result.report).toBeUndefined();
+    expect(result.error).toBe("Could not refresh Antigravity limits");
+  });
+
+  it("shows no bar when /usage exits non-zero (API key: code 2) or times out", async () => {
+    await expect(quotaOf(null)).rejects.toThrow("refresh");
+    const refresh = createUsageRefresh({ platform: "linux", antigravity: async () => quotaOf(null) });
+    const result = await refresh("antigravityAgent", { instanceId: "agy" });
+    expect(result.report).toBeUndefined();
+    expect(result.error).toBe("Could not refresh Antigravity limits");
+  });
+});
