@@ -25,6 +25,7 @@
   let config = null;
   let listed = [];
   let account = "";
+  let showBoxes = () => {};
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
@@ -168,6 +169,8 @@
     remember(label);
     holdAccount(label);
     holdName(label, name);
+    // A stopped open leaves this page up, and the code is the other way in.
+    globalThis.navigation?.addEventListener("navigateerror", () => showBoxes(true), { once: true });
     location.assign(`https://${label}.${config.base}/pair${suffix}${name ? `&n=${encodeURIComponent(name)}` : ""}`);
   }
 
@@ -202,6 +205,7 @@
     }
     showList(listed);
     say(`${pc.name} is offline.`, "error");
+    showBoxes(true);
   }
 
   function showList(pcs) {
@@ -226,6 +230,7 @@
   function choose(pcs, pick = false) {
     if (pcs.length === 0) {
       say(EMPTY);
+      showBoxes(true);
       return;
     }
     if (pick) {
@@ -278,15 +283,17 @@
 
   const shortCodeChars = (value) => [...value.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(CODE_KEEP, "");
 
-  // Shown at once but see-through and inert while a remembered PC may open, so the boxes do not flash. Stopping that open fires navigateerror here; with no Navigation API nothing could bring them back, so they are not covered.
+  // Shown at once but see-through and inert while a remembered PC may open, so the boxes do not flash. Stopping that open fires navigateerror here; with no Navigation API nothing could bring them back, so they are not covered and stay behind the link.
   function coverCode() {
     const nav = globalThis.navigation;
-    if (!nav) return () => {};
+    if (!nav) return () => showBoxes(false);
     const code = $("code");
-    const uncover = () => {
+    // A stopped open brings the cursor with the boxes; a probe that fails or Back does not.
+    const uncover = (stopped) => {
       code.classList.remove("trying");
       code.removeAttribute("inert");
       nav.removeEventListener("navigateerror", uncover);
+      showBoxes(Boolean(stopped));
     };
     code.classList.add("trying");
     code.setAttribute("inert", "");
@@ -383,6 +390,15 @@
     }
     render();
     $("boxes").replaceChildren(...boxes);
+    // The boxes stay out of sight, and out of the tab order, until the person asks for them or the way to a PC falls through.
+    // Only when they open: a late failure must not pull the cursor out of boxes already in use.
+    showBoxes = (focus) => {
+      if (!$("boxes").hidden) return;
+      $("usecode").hidden = true;
+      $("boxes").hidden = false;
+      if (focus) focusAt(0);
+    };
+    $("usecode").addEventListener("click", () => showBoxes(true));
     // Back from the PC's page can restore this one as it was left: locked on a code that already went.
     addEventListener("pageshow", (event) => {
       if (!event.persisted) return;
@@ -534,6 +550,7 @@
     const listed = await loadPcs(token);
     if (!listed) {
       say(OFFLINE, "error");
+      showBoxes(true);
       return;
     }
     choose(listed, pick || saved);
@@ -594,7 +611,12 @@
     const m = params.get("m");
     if (pc === null && m === null) {
       showCode();
-      void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
+      // A link that carries a code was opened to type one.
+      if (params.has("code") || new URLSearchParams(location.hash.slice(1)).has("code")) showBoxes(false);
+      void coldStart(params.get("pick") === "1").catch(() => {
+        say(GOOGLE_DOWN, "error");
+        showBoxes(true);
+      });
       return;
     }
     // A cold start is already the chooser, so the link would only reload it.
