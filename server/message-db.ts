@@ -321,7 +321,7 @@ export function messageTransactionEnd(): Promise<void> | undefined {
   });
 }
 
-export type SendIdRows = { cursor: number; at: number; rows: Array<{ id: string; sendId: string }> };
+export type SendIdRows = { cursor: number; rows: Array<{ id: string; sendId: string }> };
 
 export interface ThreadRowPage {
   messages: Message[];
@@ -476,23 +476,16 @@ export function writeRowsOn(handle: DatabaseSync, threadId: string): Message[] {
   return rows.map(rowToMessage);
 }
 
-/** A thread's top rowid, the sendIds of its user rows up to it, oldest first, and the newest stamp sendClock reads from those rows (at, or actedAt unless waited); cold-thread-worker.ts runs it on its own handle. */
+/** A thread's top rowid and the sendIds of its user rows up to it, oldest first; cold-thread-worker.ts runs it on its own handle. */
 export function sendIdsOn(handle: DatabaseSync, threadId: string): SendIdRows {
-  // SAFETY: An aggregate always yields one row, whose columns are null for an empty thread.
-  const top = handle.prepare("SELECT MAX(rowid) AS cursor, MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null; at: number | null };
-  const cursor = top.cursor ?? 0;
-  // only a person's line carries sendId or actedAt, and reading only those skips the tool rows' overflow pages
-  // SAFETY: This projection selects the row id, its sendId string and its actedAt number unless waited.
-  const lines = handle.prepare(
-    "SELECT id, json_extract(json, '$.sendId') AS sendId, CASE WHEN json_extract(json, '$.waited') THEN NULL ELSE json_extract(json, '$.actedAt') END AS actedAt FROM messages WHERE thread_id = ? AND rowid <= ? AND role = 'user' ORDER BY rowid",
-  ).all(threadId, cursor) as Array<{ id: string; sendId: string | null; actedAt: number | null }>;
-  let at = top.at ?? 0;
-  const rows: SendIdRows["rows"] = [];
-  for (const line of lines) {
-    at = Math.max(at, line.actedAt ?? 0);
-    if (line.sendId !== null) rows.push({ id: line.id, sendId: line.sendId });
-  }
-  return { cursor, at, rows };
+  // SAFETY: An aggregate always yields one row, whose cursor is null for an empty thread.
+  const top = handle.prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null } | undefined;
+  const cursor = top?.cursor ?? 0;
+  // SAFETY: This projection selects the row id and the sendId string it carries.
+  const rows = handle.prepare(
+    "SELECT id, json_extract(json, '$.sendId') AS sendId FROM messages WHERE thread_id = ? AND rowid <= ? AND role = 'user' AND json_extract(json, '$.sendId') IS NOT NULL ORDER BY rowid",
+  ).all(threadId, cursor) as SendIdRows["rows"];
+  return { cursor, rows };
 }
 
 /** Newest message time without loading the transcript. */

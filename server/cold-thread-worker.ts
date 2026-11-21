@@ -6,7 +6,7 @@ import { newestPaneLines, paneLines, type PaneLine } from "../shared/pane-note.t
 import { notesSinceOn, sendIdsOn, threadPageBeforeOn, threadRowsOn, threadTailOn, writeRowsOn, type SendIdRows, type ThreadRows } from "./message-db.ts";
 import type { Message } from "./store.ts";
 
-/** The newest `count` rows (before the rowid `before` when given), with `writes` the rows that wrote files, with `notesSince` the newest reason lines of the notes since then, with `after` a page of stored rows past that cursor, or with `sendIds` the user rows' sendIds and the newest send stamp. */
+/** The newest `count` rows (before the rowid `before` when given), with `writes` the rows that wrote files, with `notesSince` the newest reason lines of the notes since then, with `after` a page of stored rows past that cursor, or with `sendIds` the user rows' sendIds. */
 export type TailRead = { threadId: string } & ({ count: number; before?: number } | { writes: true } | { notesSince: number } | { after: number } | { sendIds: true });
 export type TailRequest = TailRead & { id: number; file: string };
 export type TailReply<R extends TailRead> = R extends { notesSince: number } ? PaneLine[]
@@ -31,7 +31,7 @@ parentPort!.on("message", (request: TailRequest) => {
     // no messages.db yet: no rows here, so the store answers and imports any legacy file
     if (!existsSync(file)) {
       close();
-      parentPort!.postMessage({ id, value: "notesSince" in request ? [] : "after" in request ? [] : "sendIds" in request ? { cursor: 0, at: 0, rows: [] } : { messages: [], options: [], activeLeafId: null } });
+      parentPort!.postMessage({ id, value: "notesSince" in request ? [] : "after" in request ? [] : "sendIds" in request ? { cursor: 0, rows: [] } : { messages: [], options: [], activeLeafId: null } });
       return;
     }
     if (open?.file !== file) {
