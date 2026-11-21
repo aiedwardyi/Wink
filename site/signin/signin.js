@@ -383,6 +383,12 @@
     }
     render();
     $("boxes").replaceChildren(...boxes);
+    // The boxes stay out of sight, and out of the tab order, until the person asks for them.
+    $("usecode").addEventListener("click", () => {
+      $("usecode").hidden = true;
+      $("boxes").hidden = false;
+      focusAt(0);
+    });
     // Back from the PC's page can restore this one as it was left: locked on a code that already went.
     addEventListener("pageshow", (event) => {
       if (!event.persisted) return;
