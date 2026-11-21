@@ -2,16 +2,16 @@
 // plan, an API key / Cloud login and a signed-out CLI without a restart, while Connections' view of the
 // instance (its snapshot) never moves.
 import type { ChildProcess } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -54,7 +54,7 @@ const setMode = (mode: string) => writeFileSync(modeFile, mode);
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1], 24_300, 2_000);
-  home = mkdtempSync(join(tmpdir(), "omb-usage-gemini-route-"));
+  home = createFixtureHome("omb-usage-gemini-route-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   modeFile = join(home, "agy-usage-mode");
   setMode("plan");
@@ -85,7 +85,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("Gemini usage follows the login, not a restart", () => {
