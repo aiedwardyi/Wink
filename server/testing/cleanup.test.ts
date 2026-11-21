@@ -60,6 +60,6 @@ describe("test temp ownership", () => {
     const text = readFileSync(resolve(process.env.DISK_AUTO_SOURCE_ROOT || ".", file), "utf8");
     expect(text).toContain("createTempDirs");
     expect(text).toContain("afterAll(() => temps.remove())");
-    expect(text).toContain("temps.make(join(tmpdir(),");
+    expect(text).toMatch(/temps\.make\(join\((?:tmpdir|testHome)\(\),/);
   });
 });

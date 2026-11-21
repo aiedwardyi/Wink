@@ -28,11 +28,11 @@ function markerMatches(home: string, nonce: string): boolean {
 }
 
 export function allocateTestHome(prefix: string, nonce: string, temp = tmpdir()): string {
-  const home = mkdtempSync(join(realpathSync.native(temp), prefix));
+  const home = mkdtempSync(join(temp, prefix));
   const canonical = canonicalTestHome(home, temp);
   if (!canonical) throw new Error("Vitest home must be a directory under the OS temp directory");
   writeFileSync(join(canonical, ".wink-vitest-home"), `${nonce}\n${canonical}\n`, { flag: "wx", mode: 0o600 });
-  return canonical;
+  return home;
 }
 
 export function isMarkedTestHome(home: string, nonce: string): boolean {
@@ -48,10 +48,12 @@ export function requireTestHome(importer = "tests"): string {
 
 export function isTestProfilePath(dataDir: string, root: string): boolean {
   if (dataDir !== resolve(dataDir)) return false;
-  const path = relative(root, dataDir);
+  const canonicalRoot = realpathSync.native(root);
+  const lexicalPath = relative(root, dataDir);
+  const path = isChildPath(lexicalPath) ? lexicalPath : relative(canonicalRoot, dataDir);
   if (!isChildPath(path)) return false;
   let existing = dataDir;
   while (dirname(existing) !== existing && !lstatSync(existing, { throwIfNoEntry: false })) existing = dirname(existing);
   const target = resolve(realpathSync.native(existing), relative(existing, dataDir));
-  return !relative(join(realpathSync.native(root), path), target);
+  return !relative(join(canonicalRoot, path), target);
 }

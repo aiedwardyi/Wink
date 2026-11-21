@@ -9,6 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { testHome } from "../server/testing/test-home.ts";
+
 const XAI_SECRET = "xai-plaintext-secret";
 const COMPOSIO_SECRET = "ak_plaintext_installation_identity";
 
@@ -115,7 +117,7 @@ describe("packaged boot credential migration", () => {
   const removedHomes = [];
 
   beforeEach(() => {
-    h.home = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-boot-credentials-"));
+    h.home = fs.mkdtempSync(path.join(testHome(), "orbit-boot-credentials-"));
     h.encryptionAvailable = true;
     h.packaged = true;
     h.writes = [];

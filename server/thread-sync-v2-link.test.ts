@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Message } from "./store.ts";
 import { DATA_DIR } from "./config.ts";
+import { testHome } from "./testing/test-home.ts";
 import { createSyncEngine } from "./thread-sync-v2-engine.ts";
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 
@@ -46,7 +47,7 @@ describe("hard-link fallback", { timeout: 60_000 }, () => {
     expect(links.n).toBeGreaterThan(0);
     expect(flushed.segments).toBeGreaterThan(0);
     expect(flushed.sealedThrough).toBeGreaterThan(0);
-    const dataDir = mkdtempSync(join(tmpdir(), "sync-v2-link-"));
+    const dataDir = mkdtempSync(join(testHome(), "sync-v2-link-"));
     roots.push(dataDir);
     const peer = new ThreadSyncV2({ folder, dataDir, deviceId: "b", headBytes: 4096 });
     clients.push(peer);

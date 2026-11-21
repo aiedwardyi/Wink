@@ -138,24 +138,29 @@ it("rejects a junction above an otherwise marked companion home", () => {
   try {
     const outside = join(scratch, "outside");
     mkdirSync(outside);
-    const home = allocateTestHome("home-", process.env.WINK_VITEST_HOME_NONCE, outside);
     const tempAlias = join(scratch, "os-temp");
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    symlinkSync(outside, tempAlias, linkType);
+    const home = allocateTestHome("home-", process.env.WINK_VITEST_HOME_NONCE, tempAlias);
+    expect(dirname(home)).toBe(tempAlias);
     const env = { ...scratchEnv(home, tempAlias), WINK_VITEST_HOME: home };
     const deviceFile = join(env.OMB_COMPANION_DIR, "sentinel");
     mkdirSync(dirname(deviceFile));
     writeFileSync(deviceFile, "sentinel");
     const module = "companion/src/state.ts";
-    const linkType = process.platform === "win32" ? "junction" : "dir";
-    symlinkSync(outside, tempAlias, linkType);
     const valid = importProfile(module, scrubbedEnv(env));
     expect(valid.status, valid.stderr).toBe(0);
     expect(valid.stdout.trim()).toBe(env.OMB_COMPANION_DIR);
+    const canonicalData = join(realpathSync.native(home), ".orbit");
+    const server = importProfile("server/config.ts", { ...env, OMB_DATA_DIR: canonicalData });
+    expect(server.status, server.stderr).toBe(0);
+    expect(server.stdout.trim()).toBe(canonicalData);
 
     const childTemp = join(scratch, "temp");
     const link = join(childTemp, "redirect");
     mkdirSync(childTemp);
     symlinkSync(outside, link, linkType);
-    const linkedHome = join(link, relative(outside, home));
+    const linkedHome = join(link, relative(tempAlias, home));
     const linked = importProfile(module, { ...scratchEnv(linkedHome, childTemp), WINK_VITEST_HOME: linkedHome });
     expect(linked.status, linked.stdout + linked.stderr).toBe(1);
     expect(linked.stderr).toContain(`${setupHint} ${module}`);
