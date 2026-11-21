@@ -142,6 +142,8 @@ const deviceWindows = new Map();
 const deviceOrigin = (contents) => [...deviceWindows].find(([, open]) => !open.isDestroyed() && open.webContents === contents)?.[0];
 const micAllowed = () => process.platform !== "win32" || !["denied", "restricted"].includes(systemPreferences.getMediaAccessStatus("microphone"));
 const deviceLinkPages = new WeakMap();
+// Device window -> its one-time Google sign-in hand-off, for a PC that also has a trusted relay host.
+const devicePairing = new WeakMap();
 const deviceLoads = new WeakMap();
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let pendingNotificationTarget = parseNotificationTargetFromCommandLine(process.argv);
@@ -1247,7 +1249,7 @@ async function openDeviceLinkedFile(devices, target, name) {
 
 async function openDeviceWindow(rawHost, rawName, relayHost) {
   const base = GOOGLE_CLIENT?.teamRelay;
-  const relayUrl = relayDeviceUrl(rawHost, base) || (relayHost && await readyRelayDeviceUrl(relayHost, base));
+  const relayUrl = relayDeviceUrl(rawHost, base);
   if (relayUrl) {
     await shell.openExternal(relayUrl);
     return true;
@@ -1272,7 +1274,7 @@ async function openDeviceWindow(rawHost, rawName, relayHost) {
       },
       ...verifyProbe?.windowOptions(),
     });
-    deviceLinkPages.set(win, deviceLinkPage({
+    const linkPage = deviceLinkPage({
       host: url.host,
       title,
       heading: title,
@@ -1280,7 +1282,21 @@ async function openDeviceWindow(rawHost, rawName, relayHost) {
       placeholder: `https://${url.host}/remote?key=...`,
       submit: nativeText("packaged.deviceLinkSubmit"),
       invalid: nativeText("packaged.deviceLinkInvalid"),
-    }));
+    });
+    deviceLinkPages.set(win, linkPage);
+    // The paste page is for a PC with no signed-in path. One on this Google account with a ready relay
+    // opens through Google sign-in instead; anything else falls back to the paste page as before.
+    if (relayDeviceUrl(relayHost, base)) {
+      let pairing = false;
+      devicePairing.set(win, async () => {
+        if (pairing) return;
+        pairing = true;
+        const ready = await readyRelayDeviceUrl(relayHost, base);
+        if (ready && await shell.openExternal(ready).then(() => true, () => false)) return void (win.isDestroyed() || win.close());
+        devicePairing.delete(win);
+        if (!win.isDestroyed() && win.webContents.getURL() !== linkPage) void win.loadURL(linkPage);
+      });
+    }
     const devices = win.webContents.session;
     const linkedFile = (target) => handleDeviceLinkedFile(target, url.origin, { createWindow: (options) => new BrowserWindow(verifyProbe ? verifyProbe.windowOptions(options) : options), webContents: win.webContents, openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
     setDevicePermissions(devices, { origin: deviceOrigin, micAllowed });
@@ -1291,7 +1307,10 @@ async function openDeviceWindow(rawHost, rawName, relayHost) {
       if (!target || !sameDesktopViewerOrigin(href, origin)) return;
       if (statusCode === 403) return deviceLoads.get(target)?.refused(href);
       // Not a data: check: a retry from the unreachable page answers 401 before it commits.
-      if (target.webContents.getURL() !== deviceLinkPages.get(target)) void target.loadURL(deviceLinkPages.get(target));
+      if (target.webContents.getURL() === deviceLinkPages.get(target)) return;
+      const pair = devicePairing.get(target);
+      if (pair) void pair();
+      else void target.loadURL(deviceLinkPages.get(target));
     });
     win.on("page-title-updated", (event) => {
       event.preventDefault();

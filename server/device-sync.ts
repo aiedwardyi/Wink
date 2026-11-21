@@ -182,21 +182,16 @@ export function heldRemovals(folder: string, removed: Record<string, number>): R
 /**
  * What the picker may navigate to: relay hosts under this PC's base for a relay phone, tailnet hosts otherwise.
  * A desktop gets a PC's relay host under the baked team base while its tailnet host does not answer.
- * This PC's own app gets both hosts so it can check the relay on Open and fall back to the tailnet window.
+ * This PC's own app also gets the trusted relay host of a PC it opens on the tailnet, for that window's pairing page.
  */
 export function pickerDevices(items: DeviceListItem[], relayBase: string | null, teamBase: string | null = null, now = Date.now(), localDesktop = false): Omit<DeviceListItem, "unreachable">[] {
   return items.flatMap(({ relayHost, unreachable, ...item }) => {
     if (relayBase === null) {
       const team = teamBase !== null && relayHost !== undefined && labelFromHost(relayHost, teamBase) !== null;
       if (item.host === relayHost) return team ? [item] : [];
-      if (!team) return [item];
       // A failed tailnet probe says nothing about the relay, so the record's own freshness decides.
-      const useRelayPresence = item.offline || unreachable;
-      const presence = useRelayPresence
-        ? { ...item, offline: !item.current && now - item.lastSeen > DEVICE_STALE_MS, checking: false }
-        : item;
-      if (localDesktop && !item.current) return [{ ...presence, relayHost }];
-      return [useRelayPresence ? { ...presence, host: relayHost } : presence];
+      if (team && (item.offline || unreachable)) return [{ ...item, host: relayHost, offline: !item.current && now - item.lastSeen > DEVICE_STALE_MS, checking: false }];
+      return [team && localDesktop && !item.current ? { ...item, relayHost } : item];
     }
     return relayHost && labelFromHost(relayHost, relayBase) ? [{ ...item, host: relayHost }] : [];
   });

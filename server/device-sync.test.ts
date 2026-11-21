@@ -460,6 +460,16 @@ describe("relay presence", () => {
     expect(pickerDevices(listed, null, BASE, NOW).map((d) => d.host)).toEqual(["dorm.tail1234.ts.net", "home.tail1234.ts.net", "work.tail1234.ts.net"]);
   });
 
+  it("keeps the base relay route on loopback when the tailnet does not answer", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+    writeDeviceRecord(folder, { ...rec("dorm"), relayHost: relay("dorm") }, NOW - DEVICE_STALE_MS - 1);
+    const listed = listDevices(folder, "home", NOW).map((item) => ({ ...item, unreachable: true }));
+    const picked = pickerDevices(listed, null, BASE, NOW, true);
+    expect(picked).toEqual(pickerDevices(listed, null, BASE, NOW));
+    expect(picked.map((d) => [d.host, d.offline])).toEqual([[relay("dorm"), true], [relay("work"), false]]);
+  });
+
   it("leaves the link window only to PCs with no signed-in path", () => {
     const folder = freshDir();
     writeDeviceRecord(folder, rec("home"), NOW);
