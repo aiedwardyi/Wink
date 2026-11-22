@@ -112,7 +112,7 @@ describe("room send route", () => {
     const startGroupTurn = vi.fn();
     const routes = createGroupRoutes({
       ...deps,
-      store: { ...deps.store, group: () => room, messagesFor: () => [] },
+      store: { ...deps.store, group: () => room, messagesFor: () => [], loaded: () => true },
       instanceForBot: () => ({ adapter: { capabilities: { queueing: true }, steer: async () => {
         room.busyBotId = null;
         await routes.interrupt(Readable.from([]) as unknown as IncomingMessage, { writeHead: vi.fn(), end: vi.fn() } as unknown as ServerResponse, ["", room.id] as RegExpMatchArray);

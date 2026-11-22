@@ -35,6 +35,7 @@ import "./bot-cwd.ts";
 import { resolveBotTerminalFolder } from "./terminal-cwd.ts";
 import {
   applyResolvedProjectFolder,
+  checkProjectFolders,
   opensHostFiles,
   projectFolderPrompt,
   projectNotesPrompt,
@@ -184,7 +185,7 @@ import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.t
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, coldLoading, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldLoading, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -5413,9 +5414,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     persistTaskPacket(packet, { staged: true });
   }
 
-  // Map may be loading this chat off the server thread, and the model context below reads all of it
-  const loading = coldLoading(threadId);
-  if (loading) await loading;
+  // the model context below reads the whole chat: an unloaded one loads off the server thread, joining a load Map started
+  if (!store.loaded(threadId)) await coldLoad(store, threadId);
 
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
@@ -5432,9 +5432,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
   );
-  const earlierMessages = messagesBeforeSummary.filter((message) => !skipTranscript.has(message.id));
-  const latestUser = lastUserInstruction(earlierMessages);
-  const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, earlierMessages);
+  const latestUser = lastUserInstruction(messagesBeforeSummary, skipTranscript);
+  const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, messagesBeforeSummary, skipTranscript);
   // Recovery Current request must be this send's text. skipTranscript excludes
   // userMessage.id, so transcript lookup alone would show a prior user turn.
   // A Resume card carries no request of its own, so it falls back to the turn
@@ -5522,7 +5521,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           turnsAtWrite: task.usage?.turns ?? taskRecord.turnsAtWrite,
         })) ?? taskRecord;
       }
-      recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages.filter((message) => !skipTranscript.has(message.id)))?.text) || "";
+      recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages, skipTranscript)?.text) || "";
       durableTaskRecordText = taskRecord
         ? taskRecordBlock(taskRecord, Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
             { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn })
@@ -5927,17 +5926,28 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const namedByUser = !opts?.cardContinuation && !opts?.automationSource && !opts?.commsDepth;
       // The send was persisted before the awaits above, so a Clear that
       // landed meanwhile spends it like any other history line.
-      const clearedAt = bot.projectFolderClearedAt ?? -Infinity;
-      const currentFolderText = namedByUser && userMessage.at > clearedAt ? text : undefined;
-      const resolvedProject = worksInWorkspace && opts?.runOn !== "cloud"
-        ? applyResolvedProjectFolder({
+      const clearedAt = bot.projectFolderClearedAt;
+      const folderInput = () => worksInWorkspace && opts?.runOn !== "cloud"
+        ? {
             pin: bot.cwd,
             remembered: bot.lastProjectCwd,
             continuation: !namedByUser,
-            userTexts: userProjectTexts(store.messagesFor(threadId), currentFolderText, {
+            userTexts: userProjectTexts(store.messagesFor(threadId), namedByUser && userMessage.at > (bot.projectFolderClearedAt ?? -Infinity) ? text : undefined, {
               since: bot.projectFolderClearedAt,
             }),
             recentPaths: projectPathsFromRecords({ bots: store.bots, groups: store.groups }),
+          }
+        : undefined;
+      const checking = folderInput();
+      // the folders a long chat names are checked off the server thread first; a pin reads none of them
+      const checked = checking && !checking.pin?.trim() ? await checkProjectFolders(checking) : undefined;
+      // a Settings Clear or pin during the check is read as it is now, so the lines it spent stay spent
+      const unchanged = checking?.pin === bot.cwd && checking?.remembered === bot.lastProjectCwd && clearedAt === bot.projectFolderClearedAt;
+      const resolving = unchanged ? checking : folderInput();
+      const resolvedProject = resolving
+        ? applyResolvedProjectFolder({
+            ...resolving,
+            checked,
             remember: (cwd) => store.rememberProjectCwd(bot.id, cwd),
             forget: () => store.forgetProjectCwd(bot.id),
           })

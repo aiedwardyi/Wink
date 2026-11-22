@@ -50,6 +50,20 @@ describe("thread cache", () => {
     expect(store.activePath(threadId)).toEqual([replacement]);
   });
 
+  it("finds a synced ancestor that lands after its child's path was read", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    const { threadId } = bot;
+    const first = store.appendMessage(threadId, { role: "user", kind: "text", text: "first" });
+    const parent: Message = { id: "synced-parent", parentId: first.id, at: first.at + 1, role: "bot", kind: "text", text: "parent" };
+    const child: Message = { id: "synced-child", parentId: parent.id, at: first.at + 2, role: "user", kind: "text", text: "child" };
+    const row = (message: Message): SyncChange => ({ cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false });
+    store.applySyncChanges(bot.id, threadId, [row(child), { cursor: 0, kind: "head", rowId: "head", value: child.id, conflict: false }]);
+    expect(store.activePath(threadId)).toEqual([child]);
+    store.applySyncChanges(bot.id, threadId, [row(parent)]);
+    expect(store.activePath(threadId)).toEqual([first, parent, child]);
+  });
+
   it("drops the least recently used chats once their size passes the budget", () => {
     const [a, b, c, d] = chats(4, 4);
     const store = new Store(selection, { threadCacheChars: size(a!) * 2.5 });

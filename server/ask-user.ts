@@ -131,14 +131,14 @@ export function settledAsk(messages: readonly Message[], messageId: string): Mes
 
 /** The bot's notes on the person's message: an older ask_user card it closed unanswered, or every card still open when two or more wait. No `closerId`: a steer not yet in `messages`. */
 export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string): string[] {
-  const end = closerId === undefined ? messages.length : messages.findIndex((message) => message.id === closerId);
+  // ids are unique, and the closer is the newest line: read from the end
+  const end = closerId === undefined ? messages.length : messages.findLastIndex((message) => message.id === closerId);
   if (end < 0 || (closerId !== undefined && !isSentByPerson(messages[end]!))) return [];
-  const before = messages.slice(0, end);
-  return [...closedNote(before, text, botId), ...openAsksNote(before, text, botId)];
+  return [...closedNote(messages, end, text, botId), ...openAsksNote(messages, end, text, botId)];
 }
 
-function closedNote(messages: readonly Message[], text: string, botId?: string): string[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
+function closedNote(messages: readonly Message[], end: number, text: string, botId?: string): string[] {
+  for (let i = end - 1; i >= 0; i--) {
     const message = messages[i]!;
     if (isSentByPerson(message)) return [];
     if (!isAskUserCard(message)) continue;
@@ -152,9 +152,9 @@ function closedNote(messages: readonly Message[], text: string, botId?: string):
 }
 
 // full questions, not excerpts: closing one needs its exact text
-function openAsksNote(messages: readonly Message[], text: string, botId?: string): string[] {
+function openAsksNote(messages: readonly Message[], end: number, text: string, botId?: string): string[] {
   const typed: Message = { id: "", at: 0, role: "user", kind: "text", text };
-  const states = [...askStates([...messages, typed])];
+  const states = [...askStates(messages, end, typed)];
   // `by` is the row itself, so identity marks what the typed message answered
   if (states.some(([, state]) => state.state === "answered" && state.by === typed)) return [];
   const open = states.filter(([card, state]) => state.state === "waiting" && (!botId || card.from?.botId === botId)).map(([card]) => `"${card.card!.subtitle.trim()}"`);

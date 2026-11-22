@@ -488,6 +488,15 @@ export function sendIdsOn(handle: DatabaseSync, threadId: string): SendIdRows {
   return { cursor, rows };
 }
 
+/** The newest stamp a send is clocked past, by sendClock's rule over every stored row: a row's time, or the later acted time of a row that did not wait. */
+export function newestStampOn(handle: DatabaseSync, threadId: string): number {
+  // SAFETY: Two aggregates always yield one row; each is null for an empty thread.
+  const row = handle.prepare(
+    "SELECT MAX(at) AS at, MAX(CASE WHEN json_type(json, '$.actedAt') IN ('integer', 'real') AND COALESCE(json_type(json, '$.waited'), 'null') IN ('null', 'false') THEN json_extract(json, '$.actedAt') END) AS acted FROM messages WHERE thread_id = ?",
+  ).get(threadId) as { at: number | null; acted: number | null } | undefined;
+  return Math.max(0, row?.at ?? 0, row?.acted ?? 0);
+}
+
 /** Newest message time without loading the transcript. */
 export function lastMessageAt(threadId: string): number | null {
   const row = db().prepare("SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { at: number | null } | undefined;
