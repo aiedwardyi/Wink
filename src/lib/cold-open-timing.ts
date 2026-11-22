@@ -175,6 +175,8 @@ function cached(entry: Resource | undefined): boolean | undefined {
 
 interface TerminalOpen {
   tap: number;
+  /** The worker's session id the tap asked for, null for Main, undefined when it named none. */
+  pane?: string | null;
   sinceResume?: number;
   hiddenMs?: number;
   fetchStart?: number;
@@ -253,6 +255,10 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     }
   };
 
+  /** `target` is the session id the read asked for, undefined for the default pane, which is `main` once the roster names it. */
+  const terminalWants = (open: TerminalOpen, target: string | undefined, main: string | undefined) =>
+    open.pane === undefined || (open.pane === null ? target === undefined : (target ?? main) === open.pane);
+
   const finishTerminal = (paint?: number) => {
     const open = terminal;
     if (!open) return;
@@ -260,7 +266,7 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     clearTimeout(open.timer);
     try {
       const { fetchStart } = open;
-      const read = fetchStart === undefined ? undefined : page.resources().find((entry) => entry.startTime >= fetchStart - 1 && TERMINAL_READ.test(new URL(entry.name, page.href).pathname));
+      const read = fetchStart === undefined ? undefined : page.resources().find((entry) => entry.startTime >= fetchStart - 1 && readsPane(entry.name, open.pane));
       const sent: ColdOpenRecord = {
         label: "terminal",
         hiddenMs: open.hiddenMs,
@@ -271,6 +277,11 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     } catch {
       // Timing is best effort; it never surfaces.
     }
+  };
+
+  const readsPane = (name: string, pane: string | null | undefined) => {
+    const url = new URL(name, page.href);
+    return TERMINAL_READ.test(url.pathname) && (pane === undefined || url.searchParams.get("sessionId") === pane);
   };
 
   const search = new URL(page.href).searchParams;
@@ -353,26 +364,27 @@ export function createColdOpenTiming(page: ColdOpenPage) {
         if (pending === open) finish(Math.round(page.now()));
       });
     },
-    /** A terminal view came on screen. */
-    terminalOpened() {
+    /** The tap that opens the terminal; `pane` is the worker it asked for, null for Main. */
+    terminalOpened(pane?: string | null) {
       finishTerminal();
       const tap = page.now();
       terminal = {
         tap: Math.round(tap),
+        pane,
         sinceResume: resumed && Math.round(tap - resumed.at),
         hiddenMs: resumed?.hiddenMs,
         painting: false,
         timer: setTimeout(() => finishTerminal(), COLD_OPEN_TIMEOUT_MS),
       };
     },
-    /** The terminal view is about to read; only the first read of an open counts. */
-    terminalFetching() {
-      if (terminal) terminal.fetchStart ??= Math.round(page.now());
+    /** The terminal view is about to read `target` (undefined for Main); only the first read of the opened pane counts. */
+    terminalFetching(target?: string, main?: string) {
+      if (terminal && terminalWants(terminal, target, main)) terminal.fetchStart ??= Math.round(page.now());
     },
-    /** The terminal view applied a read. */
-    terminalShown() {
+    /** The terminal view applied a read of `target`. */
+    terminalShown(target?: string, main?: string) {
       const open = terminal;
-      if (!open || open.painting || open.fetchStart === undefined) return;
+      if (!open || open.painting || open.fetchStart === undefined || !terminalWants(open, target, main)) return;
       open.painting = true;
       page.afterPaint(() => {
         if (terminal === open) finishTerminal(Math.round(page.now()));
@@ -458,16 +470,16 @@ export function firstBotsHeader() {
   return active?.botsHeader() ?? {};
 }
 
-export function noteTerminalOpened() {
-  active?.terminalOpened();
+export function noteTerminalOpened(pane?: string | null) {
+  active?.terminalOpened(pane);
 }
 
-export function noteTerminalFetching() {
-  active?.terminalFetching();
+export function noteTerminalFetching(target?: string, main?: string) {
+  active?.terminalFetching(target, main);
 }
 
-export function noteTerminalShown() {
-  active?.terminalShown();
+export function noteTerminalShown(target?: string, main?: string) {
+  active?.terminalShown(target, main);
 }
 
 export function startWarmOpenTiming(t0: number, threadId: string) {

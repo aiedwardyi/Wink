@@ -49,6 +49,8 @@ const resources = [
     decodedBodySize: 9000,
     nextHopProtocol: "h2",
   },
+  { name: "https://home.example/api/bots/b1/terminal?sessionId=s2", startTime: 5100.8, responseEnd: 9000.2, transferSize: 7000, encodedBodySize: 6500, ...hidden },
+  { name: "https://home.example/api/bots/b1/terminal", startTime: 5100.6, responseEnd: 8000.4, transferSize: 5000, encodedBodySize: 4500, ...hidden },
 ];
 
 const USER_AGENT = "Mozilla/5.0 (Linux; Android 14; SM-S928N) SamsungBrowser/27.0";
@@ -583,6 +585,53 @@ describe("cold-open timing", () => {
     timing.terminalShown();
     fake.paint();
     expect(fake.sent.map((sent) => [sent.terminal?.tap, sent.terminal?.paint])).toEqual([[5_000, undefined], [8_000, 8_200]]);
+  });
+
+  it("finishes a worker open on that worker's read and times that read, not an earlier pane's", () => {
+    const fake = createFake();
+    const timing = createColdOpenTiming(fake.page);
+    fake.at(5_000);
+    timing.terminalOpened("s2");
+    fake.at(5_100);
+    timing.terminalFetching(undefined);
+    timing.terminalFetching("s1");
+    timing.terminalShown(undefined);
+    timing.terminalShown("s1");
+    fake.paint();
+    expect(fake.sent).toEqual([]);
+    fake.at(5_101);
+    timing.terminalFetching("s2");
+    fake.at(9_000);
+    timing.terminalShown("s2");
+    fake.at(9_050);
+    fake.paint();
+    expect(fake.sent.map((sent) => [sent.terminal?.fetchStart, sent.terminal?.read?.transferSize, sent.terminal?.paint])).toEqual([[5_101, 7_000, 9_050]]);
+  });
+
+  it("finishes a Main open on the default pane's read, or on Main's own session id once the roster names it", () => {
+    const fake = createFake();
+    const timing = createColdOpenTiming(fake.page);
+    timing.terminalOpened(null);
+    fake.at(5_100);
+    timing.terminalFetching("s1");
+    timing.terminalShown("s1");
+    fake.paint();
+    expect(fake.sent).toEqual([]);
+    timing.terminalFetching(undefined);
+    timing.terminalShown(undefined);
+    fake.at(8_000);
+    fake.paint();
+    expect(fake.sent.map((sent) => [sent.terminal?.read?.transferSize, sent.terminal?.paint])).toEqual([[5_000, 8_000]]);
+    timing.terminalOpened("main-id");
+    fake.at(8_100);
+    timing.terminalFetching(undefined);
+    timing.terminalShown(undefined);
+    fake.paint();
+    expect(fake.sent).toHaveLength(1);
+    timing.terminalFetching(undefined, "main-id");
+    timing.terminalShown(undefined, "main-id");
+    fake.paint();
+    expect(fake.sent).toHaveLength(2);
   });
 
   it("leaves a pending cold open alone while a terminal opens", () => {

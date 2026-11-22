@@ -63,7 +63,7 @@ import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
 import { warmViews } from "@/lib/warm-views";
-import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
+import { markColdOpen, noteCacheShown, noteChatShown, noteTerminalOpened, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
 import { trackFeature, trackScreen } from "@/lib/usage-stats";
@@ -234,6 +234,14 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     if (botId) setPaneFocus({ sessionId: null, botId });
   }, [botId, openTerminal]);
   const botPaneFocus = paneFocus?.botId && paneFocus.botId !== botId ? null : paneFocus;
+  // The tap, before the remote view's chunk loads; a focus an earlier open already used names no pane.
+  const seenFocus = useRef(botPaneFocus);
+  useEffect(() => {
+    if (terminalOpen && !window.ogb?.terminal && !webTerminal) noteTerminalOpened(botPaneFocus === seenFocus.current ? undefined : botPaneFocus?.sessionId);
+  }, [terminalOpen, botId]);
+  useEffect(() => {
+    seenFocus.current = botPaneFocus;
+  }, [botPaneFocus]);
   useEffect(() => {
     setPaneFocus((focus) => focus?.botId && focus.botId !== botId ? null : focus);
   }, [botId]);
