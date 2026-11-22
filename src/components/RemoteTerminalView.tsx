@@ -43,6 +43,8 @@ const MAIN_CLOSED: RemoteTerminalSnapshot = { state: "no-terminal" };
 const REFRESH_MS = 1_000;
 const SPIN_MS = 500;
 const REFRESH_TIMEOUT_MS = 5_000;
+// Chromium holds a GET behind an identical one still waiting on headers (its cache lock), so a hung read would stall every later poll.
+const READ: RequestInit = { cache: "no-store" };
 const SEND_MAY_HAVE_RUN = "Send may have run. Check the screen before resending.";
 
 type TerminalKey = "up" | "down" | "enter" | "esc" | "clear";
@@ -143,13 +145,13 @@ export function RemoteTerminalView({
   const onMainTab = picked === MAIN_TAB;
   const activePaneId = picked ?? mainPane?.sessionId ?? fallbackPane;
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     const request = ++requestRef.current;
     const path = `/api/bots/${encodeURIComponent(bot.id)}/terminal`;
     const targetPane = onMainTab ? undefined : picked ?? fallbackPane;
     try {
       const qs = targetPane ? `?sessionId=${encodeURIComponent(targetPane)}` : "";
-      const next = await api(`${path}${qs}`);
+      const next = await api(`${path}${qs}`, { ...READ, signal });
       if (request < appliedRequestRef.current) return;
       appliedRequestRef.current = request;
       restoringRef.current = null;
@@ -157,7 +159,8 @@ export function RemoteTerminalView({
       setError(null);
       setActionError(null);
     } catch (cause) {
-      if (request < appliedRequestRef.current) return;
+      // A read the watchdog cancelled leaves the screen to the next one.
+      if (signal?.aborted || request < appliedRequestRef.current) return;
       appliedRequestRef.current = request;
       const message = cause instanceof Error ? cause.message : String(cause);
       if (targetPane && /unknown terminal/i.test(message)) {
@@ -170,12 +173,12 @@ export function RemoteTerminalView({
         }
         // The roster still lists the closed pane, so re-read it or the fallback keeps targeting it.
         try {
-          const roster = await api(path);
+          const roster = await api(path, { ...READ, signal });
           if (request < appliedRequestRef.current) return;
           setSnapshot(roster);
           setError(null);
         } catch (retry) {
-          if (request < appliedRequestRef.current) return;
+          if (signal?.aborted || request < appliedRequestRef.current) return;
           setError(retry instanceof Error ? retry.message : String(retry));
         }
         return;
@@ -192,7 +195,9 @@ export function RemoteTerminalView({
     if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
     const spin = new Promise<void>((done) => window.setTimeout(done, SPIN_MS));
     // api() has no timeout, so a dropped connection would pin the spinner until TCP gives up
-    await Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
+    const read = new AbortController();
+    await Promise.race([refresh(read.signal), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
+    read.abort();
     await spin;
     setRefreshing(false);
   }, [refresh]);
@@ -223,14 +228,18 @@ export function RemoteTerminalView({
     if (!visible) return;
     let timer = 0;
     let live = true;
-    // The next tick waits for this read, so a slow link never stacks them; a dropped one holds the poll only until the timeout.
+    let read = new AbortController();
+    // The next tick waits for this read, so a slow link never stacks them; a dropped one is cancelled at the timeout.
     const tick = async () => {
-      await Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
+      read = new AbortController();
+      await Promise.race([refresh(read.signal), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
+      read.abort();
       if (live) timer = window.setTimeout(tick, REFRESH_MS);
     };
     void tick();
     return () => {
       live = false;
+      read.abort();
       window.clearTimeout(timer);
       appliedRequestRef.current = ++requestRef.current;
     };

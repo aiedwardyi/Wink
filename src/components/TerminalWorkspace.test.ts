@@ -2451,3 +2451,77 @@ it("never shows Main or sends it a key while a clicked worker waits on the pane 
     await webBridge.cancelOpen?.("bot-web");
   }
 });
+
+it("never sends Main a key when the bridge's pane list would land before the workspace's", async () => {
+  const { createWebTerminalBridge } = await import("@/lib/web-terminal-bridge");
+  vi.stubGlobal("localStorage", window.localStorage);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const writes: { sessionId: string; data: string }[] = [];
+  const lives: string[] = [];
+  let bridgeRosters = 0;
+  let release!: () => void;
+  const listed = new Promise<void>((resolve) => { release = resolve; });
+  let asked!: () => void;
+  const rosterAsked = new Promise<void>((resolve) => { asked = resolve; });
+  const roster = [{ sessionId: "main", label: "Main", generation: 1, main: true }, { sessionId: "worker", label: "Worker", generation: 1, main: false }];
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(String(input), "http://127.0.0.1");
+    if (url.pathname.endsWith("/terminal/live")) {
+      const sessionId = url.searchParams.get("sessionId") ?? "main";
+      lives.push(sessionId);
+      const frame = { kind: "snapshot", lease: "lease", sessionId, generation: 1, output: `${sessionId} scrollback`, seq: 5, cols: 80, rows: 24, exitCode: null };
+      const body = new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
+        init?.signal?.addEventListener("abort", () => { try { controller.close(); } catch {} }, { once: true });
+      } });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    }
+    if (url.pathname.endsWith("/terminal/input")) {
+      writes.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: true });
+    }
+    if (url.pathname.endsWith("/terminal")) {
+      // The bridge's own pane read carries its abort signal and answers at once; the workspace's waits.
+      if (init?.signal) bridgeRosters++;
+      else {
+        asked();
+        await listed;
+      }
+      return Response.json({ panes: roster });
+    }
+    return Response.json({ ok: true });
+  }));
+  const webBridge = createWebTerminalBridge("bot-web");
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const painted = terminal.write.mock.calls.length;
+  try {
+    await act(async () => root.render(createElement(TerminalWorkspace, { bot: { id: "bot-web", name: "Web" }, visible: true, focusBlocked: false, onClose: vi.fn(), paneFocus: { sessionId: "worker" }, webBridge })));
+    await act(async () => { await rosterAsked; });
+    await act(async () => { terminal.__emitData("q"); });
+    expect(bridgeRosters).toBe(0);
+    expect(lives).toEqual([]);
+    expect(writes).toEqual([]);
+    await act(async () => { release(); });
+    await vi.waitFor(() => expect(terminal.write.mock.calls.slice(painted).map(([text]) => text)).toContain("worker scrollback"));
+    expect(lives).toEqual(["worker"]);
+    await act(async () => { terminal.__emitData("z"); });
+    await vi.waitFor(() => expect(writes).toEqual([expect.objectContaining({ sessionId: "worker", data: "z" })]));
+  } finally {
+    release();
+    await webBridge.cancelOpen?.("bot-web");
+  }
+});
+
+it("opens Main once the pane list lands without the clicked worker", async () => {
+  const f = paneFixture();
+  let release!: (snapshot: typeof f.snapshot) => void;
+  f.readBot.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+  await act(async () => root.render(createElement(TerminalWorkspace, { ...f.props, paneFocus: { sessionId: "pane-gone" } })));
+  expect(f.open).not.toHaveBeenCalled();
+  await act(async () => { release(f.snapshot); });
+  expect(f.open).toHaveBeenCalledTimes(1);
+  expect(f.open.mock.calls[0]?.[0].sessionId).toBeUndefined();
+});

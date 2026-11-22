@@ -129,6 +129,12 @@ export function TerminalWorkspace({
   panesRef.current = panes;
   const paneRef = useRef(pane);
   paneRef.current = pane;
+  const seededRef = useRef(seeded);
+  seededRef.current = seeded;
+  const paneFocusRef = useRef(paneFocus);
+  paneFocusRef.current = paneFocus;
+  const focusedRef = useRef<typeof paneFocus>(null);
+  const heldOpenRef = useRef(false);
   // A pane the host closes hands the view to Main; the keyboard follows only if it was in the terminal.
   const quietAttachRef = useRef(false);
 
@@ -529,6 +535,12 @@ export function TerminalWorkspace({
     const openShell = (restart: boolean) => {
       if (!alive || opening || !visibleRef.current) return;
       if (id && !restart) return;
+      // A clicked worker waits for the pane list: a bare open would attach Main first and take its keys.
+      const focus = paneFocusRef.current;
+      if (!pane && focus?.sessionId && focusedRef.current !== focus && !seededRef.current) {
+        heldOpenRef.current = true;
+        return;
+      }
       if (restart && replacingRef.current) return;
       const expectedBotId = botIdRef.current;
       const expectedProject = projectRef.current;
@@ -686,13 +698,21 @@ export function TerminalWorkspace({
   }, [visible, seeded, panes, bot.id]);
 
   // Waits for the pane: a cold open seeds panes after mount.
-  const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
     if (paneFocus.sessionId !== null && !panes.some((item) => item.id === paneFocus.sessionId)) return;
     focusedRef.current = paneFocus;
     selectPane(paneFocus.sessionId);
   }, [paneFocus, panes]);
+
+  // Opens what a pending worker click held: the pick above remounts onto the worker, or an unlisted one leaves Main.
+  useEffect(() => {
+    if (!seeded || !heldOpenRef.current) return;
+    heldOpenRef.current = false;
+    const focus = paneFocusRef.current;
+    if (focus?.sessionId && focusedRef.current === focus && paneRef.current !== focus.sessionId) return;
+    openShellRef.current?.(false);
+  }, [seeded]);
 
   const onTerminalWheel = (event: WheelEvent<HTMLDivElement>) => {
     if (!(event.ctrlKey || event.metaKey) || event.deltaY === 0) return;
