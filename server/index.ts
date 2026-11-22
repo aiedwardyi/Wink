@@ -5698,8 +5698,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
     ? importMemoryTurn(activeMessages, 0, threadId)
     : { offer: false, tool: false };
-  if (importMemory.offer) noteImportOffer(threadId);
   noteOfferTurn(threadId, importMemory.offer);
+  if (importMemory.offer) noteImportOffer(threadId);
   const currentPrompt = [
     ...(importMemory.offer ? [importOfferNote()] : []),
     composeUserTurnPrompt(text, turnOpts),
