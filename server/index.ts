@@ -16,6 +16,7 @@ import {
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
 import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
+import { WEB_READ_ROUTE, WEB_READ_RULE } from "../shared/web-read.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
@@ -487,6 +488,7 @@ import { createGroupRoutes, roomSetupPending } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
 import { createVerifyAuto } from "./verify-auto.ts";
+import { createWebReader, webReadRoute } from "./web-read.ts";
 import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { keepErrorReports, reportServerFailure, turnOffErrorReports } from "./error-reports.ts";
@@ -2861,6 +2863,8 @@ const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> 
 const readOnlyTurnThreads = new Set<string>();
 /** Task threads that answer a room this PC joined: their Board posts are room posts. */
 const joinedRoomThreads = new Set<string>();
+/** Joined-room task threads whose current turn someone other than this PC's person asked for. */
+const joinedGuestThreads = new Set<string>();
 
 function settlePendingToolMessages(threadId: string, turnId?: string): void {
   const prefix = `${threadId}:`;
@@ -5126,7 +5130,7 @@ const REPEAT_MISTAKES_INSTRUCTIONS =
 const FORUM_INSTRUCTIONS =
   ` After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
-const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
+const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + WEB_READ_RULE + modelPicksPrompt();
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -7025,8 +7029,10 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => {
+  startTurn: (botId, threadId, prompt, typed, failed, readOnly, guest) => {
     joinedRoomThreads.add(threadId);
+    if (guest) joinedGuestThreads.add(threadId);
+    else joinedGuestThreads.delete(threadId);
     return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
   },
   readOnlyTurns: (botId, threadId) => {
@@ -8160,6 +8166,11 @@ function readOnlyRoomTurn(botId: string, threadId: string) {
   const hosted = store.groupByThread(threadId)?.hosted;
   return readOnlyTurnThreads.has(threadId) || Boolean(hosted && readOnlyAskTurn(hosted.roomId, threadId, botId));
 }
+/** A room turn anyone but this PC's owner asked for, read-only or with "Can make bots work". */
+function guestRoomTurn(botId: string, threadId: string) {
+  const hosted = store.groupByThread(threadId)?.hosted;
+  return readOnlyRoomTurn(botId, threadId) || joinedGuestThreads.has(threadId) || Boolean(hosted && teammateAskTurn(hosted.roomId, threadId, botId));
+}
 const boardRoutes = createBoardRoutes({
   board,
   caller: (header) => commsCallers.resolve(header),
@@ -8229,6 +8240,14 @@ const verifyDoc = createVerifyDoc({
   broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
   log: line => console.log(line),
 });
+const webRead = webReadRoute(createWebReader({
+  readers: () => store.bots.map((bot) => {
+    const instance = registry.get(bot.modelSelection.instanceId);
+    const snapshot = providerSnapshots.get(bot.modelSelection.instanceId);
+    const ready = snapshot?.state === "available" && snapshot.authenticated !== false;
+    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy) };
+  }),
+}), (header) => commsCallers.resolve(header), guestRoomTurn);
 const verifySite = createVerifySite({
   store,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
@@ -8440,6 +8459,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, await teamReports.handle(await readBody(req)));
       }
       if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
+      if (method === "POST" && path === WEB_READ_ROUTE) return await webRead(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
         const body = await readBody(req);
         const url = typeof body?.url === "string" ? body.url.trim().replace(/\/$/, "") : "";

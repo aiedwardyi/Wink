@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import type { ServerResponse } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
@@ -20,6 +21,8 @@ import { askNote, COLLAB_LINE, publishTurnAnswer, teammatesLine } from "./multip
 import { hostedSend } from "./send.ts";
 import { addTeamBot, removeTeamBot } from "./team-bots.ts";
 import { removeTestData } from "../testing/test-home.ts";
+import { createWebReader, webReadRoute } from "../web-read.ts";
+import type { Transport } from "../web-read-net.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -634,5 +637,80 @@ describe("the answer", () => {
     publishTurnAnswer(store, group, group.threadId, store.bot(wink)!, since, ask!.id);
     expect(botEntries()).toEqual([]);
     expect(asks().map((row) => row.state)).toEqual(["stopping"]);
+  });
+});
+
+describe("web_read in a room", () => {
+  /** The predicate index.ts really hands webReadRoute, run on this room's live asks. */
+  function guestTurn(joinedGuestThreads = new Set<string>()): (botId: string, threadId: string) => boolean {
+    let call: ts.CallExpression | undefined;
+    const walk = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.getText(index) === "webReadRoute") call = node;
+      ts.forEachChild(node, walk);
+    };
+    walk(index);
+    const readOnlyRoomTurn = load("readOnlyRoomTurn", { store, readOnlyTurnThreads, readOnlyAskTurn });
+    return load(call!.arguments[2]!.getText(index), { store, readOnlyTurnThreads, readOnlyAskTurn, teammateAskTurn, joinedGuestThreads, readOnlyRoomTurn });
+  }
+
+  async function serve() {
+    const transport: Transport = async (url) => ({
+      status: url.pathname === "/robots.txt" ? 404 : url.hostname === "blocked.example" ? 403 : 200,
+      headers: { "content-type": "text/html" },
+      body: Buffer.from(`<main>${"The library opens at nine on Saturday and closes at noon. ".repeat(8)}</main>`),
+      truncated: false,
+    });
+    const reader = createWebReader({ transport, readers: () => [{ botId: "cody", name: "Cody", engine: "codex", busy: false }] });
+    const route = webReadRoute(reader, () => ({ botId: wink, threadId: group.threadId }), guestTurn());
+    const server = createServer((req, res) => void route(req, res));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const read = async (url: string) =>
+      (await fetch(`http://127.0.0.1:${port}/`, { method: "POST", headers: { authorization: "Bearer bot", "content-type": "application/json" }, body: JSON.stringify({ url, own_tool_failed: true }) })).json() as Promise<{ status: string; reader?: unknown; tried: string[] }>;
+    return { read, close: () => new Promise((resolve) => server.close(resolve)) };
+  }
+
+  const teammateAsks = (text: string) => {
+    const { ask } = hostedSend(group, said(sora), text);
+    expect(startAsk(ask!.id)).toBe(true);
+    return ask!;
+  };
+
+  it("never borrows another bot for a teammate's turn, read-only or switched on; the host's own turn still can", async () => {
+    const room = await serve();
+    try {
+      expect((await room.read("https://blocked.example/")).reader).toEqual({ botId: "cody", name: "Cody", engine: "codex" });
+      const readOnly = teammateAsks("@Wink read this page");
+      const guest = await room.read("https://blocked.example/");
+      expect(guest.reader).toBeUndefined();
+      expect(guest.tried.join("\n")).toContain("another person started this turn");
+      expect(settleAsk(readOnly.id, true)).not.toBeNull();
+      setPersonWorks(group.hosted.roomId, sora.id, true);
+      teammateAsks("@Wink read it again");
+      expect(readOnlyAskTurn(group.hosted.roomId, group.threadId, wink)).toBe(false);
+      expect((await room.read("https://blocked.example/")).reader).toBeUndefined();
+    } finally {
+      await room.close();
+    }
+  });
+
+  it("a teammate's read never fills the shared page cache", async () => {
+    const room = await serve();
+    try {
+      const ask = teammateAsks("@Wink read this page");
+      expect((await room.read("https://open.example/")).status).toBe("ok");
+      expect(settleAsk(ask.id, true)).not.toBeNull();
+      const own = await room.read("https://open.example/");
+      expect(own.status).toBe("ok");
+      expect(own.tried.join("\n")).not.toContain("step 0 cache");
+    } finally {
+      await room.close();
+    }
+  });
+
+  it("counts a joined room's turn from anyone but this PC's person as a guest turn", () => {
+    expect(guestTurn(new Set(["joined-task"]))(wink, "joined-task")).toBe(true);
+    expect(guestTurn()(wink, "joined-task")).toBe(false);
+    expect(index.text).toContain("if (guest) joinedGuestThreads.add(threadId);\n    else joinedGuestThreads.delete(threadId);");
   });
 });
