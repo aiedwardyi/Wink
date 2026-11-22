@@ -93,7 +93,7 @@ import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
-import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
+import { chatMovedOn, openQuestions, pinnedQuestion, questionJumpId } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -291,6 +291,7 @@ export function Composer({
   const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
   const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
+  const jumpId = question ? questionJumpId(threadMessages, question, pinned, Boolean(group ? group.hasMore : bot?.hasMore)) : null;
   const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
   const questionAsker = question
     ? group
@@ -714,6 +715,7 @@ export function Composer({
         replyToId: entry.replyToId,
         threadId: entry.draft.threadId,
         actedAt: entry.at,
+        waited: true,
         onError: () => restoreDraft(entry.draft),
       });
     } : undefined,
@@ -988,6 +990,7 @@ export function Composer({
       replyToId: next.replyToId,
       threadId: next.draft.threadId,
       actedAt: next.at,
+      waited: true,
       onError: () => {
         restoreDraft(next.draft);
         if (!mountedRef.current) return;
@@ -1261,6 +1264,7 @@ export function Composer({
             askerName={questionAsker}
             count={questions.length}
             index={questionIndex}
+            onJump={jumpId ? () => dispatch({ type: "focusMessage", threadId, messageId: jumpId }) : undefined}
             onStep={(step) => {
               const next = questions[questionIndex + step];
               if (!next || !pinned) return;

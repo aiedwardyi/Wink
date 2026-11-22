@@ -44,7 +44,8 @@ const legacyParents = new WeakMap<Message[], Map<Message, string>>();
 
 // The parent identifies a reply slot before the server assigns its message id.
 export function replySlot(threadId: string, message: Message, transcript: Message[]) {
-  if (message.parentId != null) return `reply:${threadId}:${message.parentId}`;
+  // null is a chat's first row: the row drawn above it may be a line sorted there, whose reply owns that slot
+  if (message.parentId !== undefined) return `reply:${threadId}:${message.parentId ?? ""}`;
   let parents = legacyParents.get(transcript);
   if (!parents) {
     parents = new Map();

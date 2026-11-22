@@ -8,6 +8,7 @@ import { EVENTS_DIR, NATIVE_DIR, type AppConfig } from "./config.ts";
 import { paneNoteText } from "./context-compaction.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { coldLoad, coldPageBefore } from "./cold-thread.ts";
 import { createMediaIndex } from "./media-index.ts";
 import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -30,6 +31,7 @@ type ThreadRouteDeps = {
   DEFAULT_PAGE: number;
   pageSize: (raw: string | null) => number | null | undefined;
   clientMessage: (message: Message) => Message;
+  slimMessage: (message: Message) => Message | Record<string, unknown>;
   messagePage: (threadId: string, limit: number | undefined, before?: string | null) => { messages: unknown[]; hasMore?: boolean };
   messageWindow: (threadId: string, messageId: string, limit: number) => { messages: unknown[]; hasMore: boolean } | null;
   answerRequest: (threadId: string, instanceId: string, requestId: string, behavior: "allow" | "deny" | "answer", message?: string, decidedFor?: { id: string; name: string }) => Promise<RequestOutcome>;
@@ -47,6 +49,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
     DEFAULT_PAGE,
     pageSize,
     clientMessage,
+    slimMessage,
     messagePage,
     messageWindow,
     answerRequest,
@@ -88,6 +91,9 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
         if (!window) return json(res, 404, { error: "no such message" });
         return json(res, 200, window);
       }
+      // an unloaded chat pages off disk: loading a 234k-row chat for one page held this answer 5-7 s
+      const cold = before ? await coldPageBefore(store, threadId, before, (limit ?? DEFAULT_PAGE) * pages) : null;
+      if (cold) return json(res, 200, { messages: cold.messages.map(slimMessage), hasMore: cold.hasMore });
       // An unknown cursor must not silently answer with the newest page -
       // the client would paginate in a circle and never reach the top.
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {
@@ -100,6 +106,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!store.botByThread(threadId)) return json(res, 404, { error: "no such conversation" });
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
+      // the rail asks as the phone scrolls up; a whole-chat read here held every other request, the older page too
+      if (!store.loaded(threadId)) await coldLoad(store, threadId);
       return json(res, 200, turnIndex(store.activePath(threadId)));
     },
     media: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {

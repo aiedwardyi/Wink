@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { gunzipSync } from "node:zlib";
@@ -13,6 +12,7 @@ import { loadOrCreateSyncWorkspace, loadProfileSyncSettings, saveProfileSyncSett
 import { createDriveMirror as oldMirror } from "./testing/drive-mirror-1.0.213.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
 import type { BotSpec, PlaceRoom, ReportBot, RoomChat, TestArgs, TestResult } from "./testing/google-sync-pc.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -146,7 +146,7 @@ function roomHeads(pc: PC): string[] {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "orbit-google-room-chats-"));
+  root = mkdtempSync(join(testHome(), "orbit-google-room-chats-"));
   drive = new FakeDrive();
   drive.pageSize = 1000;
   pcs = [];
@@ -155,7 +155,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const pc of pcs) await pc.close();
-  rmSync(root, { recursive: true, force: true });
+  removeTestData(root);
 });
 
 describe("Room messages between Google PCs", { timeout: 240_000 }, () => {

@@ -3,7 +3,7 @@
 // + entry file + env) against a scripted stub of the harness's /api/internal
 // endpoints, and drive the MCP stdio surface end to end. No shebang, no
 // shell — plain node child, so this runs on every OS like index.test.ts.
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { spawnTestNode as spawn } from "../testing/harness-auth.ts";
 import { handle } from "./agents-proxy.ts";
 
 const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/check-delegation.json", import.meta.url), "utf8"));

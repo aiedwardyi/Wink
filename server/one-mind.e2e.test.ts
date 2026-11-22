@@ -2,13 +2,13 @@
 // the search tool mounts, the 1:1 stays out of everything the room keeps, and
 // the room echo reaches the next 1:1 turn once.
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -51,7 +51,7 @@ describe.skipIf(process.platform !== "win32")("one mind between a room and its b
   };
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-one-mind-"));
+    home = createFixtureHome("omb-one-mind-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     log = join(home, "turns.ndjson");
     writeFileSync(log, "");
@@ -86,7 +86,7 @@ describe.skipIf(process.platform !== "win32")("one mind between a room and its b
       child.on("close", () => resolve());
       setTimeout(resolve, 5_000).unref?.();
     });
-    rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeTestData(home);
   });
 
   it("keeps the 1:1 private, searches it live and echoes the room once", async () => {
@@ -120,7 +120,7 @@ describe.skipIf(process.platform !== "win32")("one mind between a room and its b
     const search = await api("POST", "/api/internal/my-chats", { query: "zebra-route" }, env.OMB_COMMS_TOKEN);
     expect(search.body.text).toContain("Edward: use the zebra-route for deploys");
     await replied;
-    expect((await room()).messages.at(-1).tool.name).toBe("Searched your 1:1: zebra-route");
+    expect(JSON.stringify((await room()).messages)).not.toContain("zebra-route");
     const own = turns().filter((line) => line.input.threadId !== group.threadId).at(-1).input.integrations.agents.env;
     const fromOwn = await api("POST", "/api/internal/my-chats", { query: "starzum" }, own.OMB_COMMS_TOKEN);
     expect(fromOwn.status).toBe(200);

@@ -9,6 +9,7 @@ import { Onboarding } from "./Onboarding";
 import { NoEngines } from "./NoEngines";
 import { EngineConnect } from "./EngineConnect";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
+import { landFold, spyReveal } from "./Fold.test-land";
 
 let instances: InstanceInfo[];
 let host: HTMLDivElement;
@@ -182,6 +183,24 @@ describe("first engine connection", () => {
     await click("Show Commands");
     await advance(PRESENCE_EXIT_MS);
     expect(host.querySelector("code")).toBeNull();
+  });
+
+  it("brings the first command into view once Show Commands has opened, never while closing", async () => {
+    await connect();
+    const scrolled = spyReveal();
+    try {
+      await click("Show Commands");
+      expect(scrolled).not.toHaveBeenCalled();
+      await landFold(host.querySelector("[data-engine-connect-commands]")!);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(host.querySelector("[data-engine-connect-commands]")!.firstElementChild);
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      await click("Show Commands");
+      await advance(PRESENCE_EXIT_MS);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      scrolled.mockRestore();
+    }
   });
 
   it("polls every five seconds after a click and stops on installation, retaining sign-in and ready states", async () => {

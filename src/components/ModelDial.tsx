@@ -122,6 +122,37 @@ export function useDialFontWarm(enabled: boolean, open: boolean) {
   }, [desktop, open]);
 }
 
+const faceWarm = { done: false };
+
+// A face's first open pays its first style, layout and code warm-up (about twice a later open); desktop pays it once per page at idle,
+// on a hidden face the picker mounts for one frame. True while that face should be mounted.
+export function useDialWarm(enabled: boolean, open: boolean): boolean {
+  const desktop = useMatch(DIAL_QUERY, enabled);
+  const [warm, setWarm] = useState(false);
+  useEffect(() => {
+    if (open) faceWarm.done = true;
+    if (!desktop || open || faceWarm.done || !window.requestIdleCallback) return;
+    let idle = 0;
+    const timer = window.setTimeout(() => {
+      idle = window.requestIdleCallback(() => {
+        if (faceWarm.done || document.querySelector("[data-model-picker-content]")) return;
+        faceWarm.done = true;
+        setWarm(true);
+      }, { timeout: 3000 });
+    }, 2000);
+    return () => {
+      clearTimeout(timer);
+      if (idle) window.cancelIdleCallback(idle);
+    };
+  }, [desktop, open]);
+  useEffect(() => {
+    if (!warm) return;
+    const frame = requestAnimationFrame(() => setWarm(false));
+    return () => cancelAnimationFrame(frame);
+  }, [warm]);
+  return warm && !open;
+}
+
 export type ModelDialHandle = { key: (event: ReactKeyboardEvent) => boolean };
 
 type ModelDialProps = {
@@ -203,7 +234,10 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   }
   const { turn, lab: labTurn, lead, labMs } = track.current;
 
-  const [boot, setBoot] = useState(true);
+  // The first ring sweep snaps; later ones animate.
+  const boot = useRef(true);
+  // The face mounts only once the stage has its size: a face laid out at the default size, then restyled and laid out again, cost the open twice.
+  const [sized, setSized] = useState(false);
   const [fit, setFit] = useState<{ zoom: number; room: number[]; floor: number; frame?: ReturnType<typeof dialFrame> }>({ zoom: 1, room: PHONE_MIN, floor: 0 });
   const [typed, setTyped] = useState<{ text: string; i: number; on: boolean }>({ text: "", i: -1, on: false });
   const [live, setLive] = useState("");
@@ -222,7 +256,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const shown = useRef<{ i?: number; effort?: string; cost?: number }>({});
 
   useEffect(() => {
-    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => setBoot(false)); });
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => { boot.current = false; }); });
     return () => {
       cancelAnimationFrame(frame);
       clearTimeout(bar.current.timer);
@@ -244,6 +278,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
       setFit({ zoom: fill, room: [mouse ? Math.min(width / fill, MOUSE_ROOM) : width / fill, height / fill], floor: mouse ? 12 / fill : 0 });
     };
     resize();
+    setSized(true);
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, [phone]);
@@ -264,7 +299,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const sweep = (deg: number) => {
     const state = ring.current;
     const now = performance.now();
-    const duration = reducedMotion() || boot ? 0 : ms;
+    const duration = reducedMotion() || boot.current ? 0 : ms;
     // A forced style read; a zero-duration sweep only needs its end pose.
     const spring = duration ? getComputedStyle(stage.current!).getPropertyValue("--spring").match(/\d*\.\d+|\d+/g)?.map(Number) ?? [0, 1] : [0, 1];
     const from = state.from + (state.to - state.from) * ease(state.ms ? (now - state.start) / state.ms : 1, spring);
@@ -290,6 +325,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   };
 
   useLayoutEffect(() => {
+    if (!sized) return;
     const moved = shown.current.i !== undefined && shown.current.i !== index;
     const landed = max && shown.current.effort !== "max" && shown.current.i !== undefined;
     if (phone && (moved || (shown.current.i !== undefined && shown.current.effort !== effort?.label))) hapticTick(window, undefined, landed ? MAX_BUZZ : undefined);
@@ -335,7 +371,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     shown.current = { i: index, effort: effort?.label, cost: bigCost };
     const settle = window.setTimeout(() => setLive(`${item?.label ?? ""} ${names[index]?.name ?? ""}, ${t("model.effort")}: ${effort ? modelEffortLabel(effort.label, t) : "-"}`), 220);
     return () => clearTimeout(settle);
-  }, [index, effort?.id, labLocked]);
+  }, [sized, index, effort?.id, labLocked]);
 
   // Landing on max: the pointer overshoots, a head races the outer arc round once and a shockwave leaves the logo.
   const overdrive = () => {
@@ -443,7 +479,8 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
 
   return (
     <div ref={stageRef} className="model-dial">
-      <div ref={stage} className="dial-stage" style={stageStyle} data-boot={boot || undefined} data-max={max || undefined} data-phone={phone || undefined}>
+      <div ref={stage} className="dial-stage" style={stageStyle} data-max={max || undefined} data-phone={phone || undefined}>
+        {sized && <>
         <div className="dial-layer dial-scene" aria-hidden>
           <div className="dial-layer dial-scene-base" />
           {rows.map((row, j) => <div key={row.instance.instanceId} className="dial-layer dial-scene-lab" data-on={j === lab || undefined} style={{ "--c": modelFamilyAccent(row.instance.driverKind) } as CSSProperties} />)}
@@ -629,6 +666,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
           <span>{item?.label.toUpperCase()} · <b>{names[index]?.name.toUpperCase()}</b> · {String(index + 1).padStart(2, "0")}/{String(count).padStart(2, "0")}</span>
         </footer>
         <div className="sr-only" aria-live="polite">{live}</div>
+        </>}
       </div>
     </div>
   );

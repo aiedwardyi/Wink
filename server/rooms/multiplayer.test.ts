@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -19,6 +19,7 @@ import { goLive, openDoorStream } from "./door-streams.ts";
 import { askNote, COLLAB_LINE, publishTurnAnswer, teammatesLine } from "./multiplayer.ts";
 import { hostedSend } from "./send.ts";
 import { addTeamBot, removeTeamBot } from "./team-bots.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -59,7 +60,7 @@ beforeEach(() => {
   closeRoomsDb();
   closeAsksDb();
   _resetSteerQueue();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   wink = store.patchBot(store.createBot().id, { name: "Wink", color: "blue" })!.id;
   group = store.createGroup("Crew", [wink], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;

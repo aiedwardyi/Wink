@@ -28,6 +28,7 @@ import {
 } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
 import type { ModelSelection } from "./contracts.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const legacy = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
@@ -43,7 +44,7 @@ const msg = (id: string, text: string, extra: Partial<Message> = {}): Message =>
 describe("message-db", () => {
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 

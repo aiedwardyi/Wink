@@ -4,7 +4,7 @@ import { Worker } from "node:worker_threads";
 
 import { offscreenLimit } from "./chat-tail.ts";
 import type { TailRead, TailReply, TailRequest } from "./cold-thread-worker.ts";
-import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
+import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowCursor, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
 import { paneReason, type PaneLine } from "../shared/pane-note.ts";
 import type { Message, Store } from "./store.ts";
 import { rowChars } from "./thread-cache.ts";
@@ -79,6 +79,27 @@ export async function chatListPage(
   const { messages, options, activeLeafId } = chained(tail, limit + 1);
   const rows = offscreen ? offscreenLimit(messages, limit, offscreen, activeLeafId || messages.at(-1)!.id, options) : limit;
   const start = Math.max(0, messages.length - rows);
+  return { messages: messages.slice(start), hasMore: start > 0 };
+}
+
+/** The page messagePage would send before `before`, or null when the store must answer (loaded, an unknown cursor, or the read failed). */
+export async function coldPageBefore(store: Pick<Store, "loaded">, threadId: string, before: string, limit: number): Promise<{ messages: Message[]; hasMore: boolean } | null> {
+  await committed();
+  if (store.loaded(threadId)) return null;
+  const cursor = rowCursor(threadId, before);
+  if (cursor === undefined) return null;
+  let page: Tail;
+  try {
+    // one row past the page: chained gives the oldest its parent with it
+    page = await (reader ??= startReader())({ threadId, before: cursor, count: limit + 1 });
+  } catch (error) {
+    console.error("cold older page read failed; the store answers", threadId, error);
+    return null;
+  }
+  // a write during the read loaded the chat
+  if (store.loaded(threadId)) return null;
+  const { messages } = chained(page, limit + 1);
+  const start = Math.max(0, messages.length - limit);
   return { messages: messages.slice(start), hasMore: start > 0 };
 }
 
@@ -181,8 +202,8 @@ export function coldSendIds(store: Pick<Store, "loaded">, threadId: string): voi
   for (const older of sendIdReads.keys()) if (sendIdReads.size > 2) sendIdReads.delete(older);
 }
 
-/** The row a send was first accepted as: the store's when the chat is loaded, else by key from Map's sendId read and the rows stored since, else from the chat once a load under way lands. */
-export async function sentRow(store: Pick<Store, "loaded" | "messagesFor" | "row">, threadId: string, sendId: string): Promise<Message | undefined> {
+/** The row a send was first accepted as: the store's when the chat is loaded, else by key from Map's sendId read and the rows stored since, else from the chat once it loads off the server thread. */
+export async function sentRow(store: Pick<Store, "adopt" | "loaded" | "messagesFor" | "row">, threadId: string, sendId: string): Promise<Message | undefined> {
   const read = store.loaded(threadId) ? undefined : sendIdReads.get(threadId);
   const known = await read?.ids;
   if (known && !read!.stale && !store.loaded(threadId)) {
@@ -193,9 +214,22 @@ export async function sentRow(store: Pick<Store, "loaded" | "messagesFor" | "row
     const since = scanThreadRows(threadId, known.cursor, 1024);
     if (since.messages.length < 1024) return since.messages.find((message) => message.sendId === sendId);
   }
-  const loading = loads.get(threadId);
-  if (loading) await loading;
+  if (!store.loaded(threadId)) await coldLoad(store, threadId);
   return store.messagesFor(threadId).find((message) => message.sendId === sendId);
+}
+
+/** sendClock's newest stamp of an unloaded chat, read on the reader; undefined when the store holds the chat and answers itself. */
+export async function coldNewestStamp(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<number | undefined> {
+  if (store.loaded(threadId)) return undefined;
+  try {
+    await committed();
+    const newest = await (reader ??= startReader())({ threadId, newest: true });
+    return store.loaded(threadId) ? undefined : newest;
+  } catch (error) {
+    console.error("cold send clock read failed; the send waits for the chat to load", threadId, error);
+    await coldLoad(store, threadId);
+    return undefined;
+  }
 }
 
 /** Loads an unloaded chat into the store, a worker reading its pages and this thread parsing one per turn: else the first send after Map's cold read reads it all at once. */
@@ -248,11 +282,19 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
       chars = before;
       cursor = after;
     };
+    // the reader reads the next page while this thread parses the last
+    const ask = (after: number) => {
+      const page = (reader ??= startReader())({ threadId, after });
+      page.catch(() => {});
+      return { asked: deletes, page };
+    };
+    let next = ask(cursor);
     for (;;) {
-      const asked = deletes;
-      const page = await (reader ??= startReader())({ threadId, after: cursor });
+      const { asked, page: reading } = next;
+      const page = await reading;
       if (store.loaded(threadId) || changed.size > 1024) return;
       if (page.length) {
+        next = ask(page.at(-1)!.cursor);
         const length = messages.length;
         const before = chars;
         for (const row of page) {
@@ -261,11 +303,15 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
         }
         pages.push({ after: cursor, asked, length, chars: before, last: messages.at(-1)!.id });
         cursor = page.at(-1)!.cursor;
+        // a page read ahead is already here, so let the server answer between pages
+        await new Promise((resolve) => setImmediate(resolve));
       }
       // read again from the first page whose last row was deleted after it was asked for
       const from = pages.findIndex((read) => (deletedAt.get(read.last) ?? 0) > read.asked);
-      if (from >= 0) rewind(from);
-      else if (!page.length) break;
+      if (from >= 0) {
+        rewind(from);
+        next = ask(cursor);
+      } else if (!page.length) break;
     }
     // rows added since the worker's last page
     for (let tail = scanThreadRows(threadId, cursor, 1024); tail.messages.length; tail = scanThreadRows(threadId, tail.cursor, 1024)) {

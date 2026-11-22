@@ -140,7 +140,7 @@ async function openPlus() {
   await click(button("New or share") ?? button("새로 만들기 또는 공유"));
 }
 
-const joinedSource = () => FakeEventSource.all.find((source) => source.url.includes("screens=off"));
+const joinedSource = () => FakeEventSource.all.at(-1);
 
 async function joinedFrame(roomId: string) {
   await act(async () => joinedSource()!.onmessage?.({ data: JSON.stringify({ kind: "joined", hosted: true, roomId }), lastEventId: `${Date.now()}` }));

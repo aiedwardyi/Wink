@@ -2,10 +2,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } fr
 import { readdir, readFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { homedir, hostname, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { readOsMachineId } from "./device-sync.ts";
 import { mergeTimelines, PICKS_FILE } from "./picks.ts";
 import { syncRoots, syncWriteRoot } from "./sync-roots.ts";
 import { isMemoryTopicName, MEMORY_SEED } from "./workspace.ts";
@@ -51,6 +52,8 @@ type Snapshot = z.infer<typeof snapshotSchema>;
 
 const ledgerSchema = z.object({
   device: z.string().regex(DEVICE).optional(),
+  jobDevice: z.string().regex(DEVICE).optional(),
+  jobOwners: z.record(z.string().regex(ID), z.string().regex(ID)).optional(),
   host: z.string().optional(),
   clock: z.number().int().nonnegative().optional(),
   talked: z.record(z.string(), time).optional(),
@@ -247,10 +250,22 @@ export async function readMemorySnapshots(folder: string, botSyncId: string): Pr
   }
 }
 
-/** The idle tidy runs on one PC per bot, the one the user last messaged it on; a copy not read counts against this PC. */
-export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string, snapshots: SnapshotsRead): boolean {
-  const mine = ledger.talked?.[botSyncId] ?? 0;
-  return snapshots.every((group) => group !== undefined && !group.partial && group.every((copy) => copy.device === ledger.device || copy.talkedAt < mine));
+/** Background jobs belong to the bot's original profile publisher, even during delayed sync. */
+export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string, device: string, jobMachine?: string): boolean {
+  return Boolean(ledger.device && ledger.jobDevice === (jobMachine ?? ledger.device) && ledger.jobOwners?.[botSyncId] === device);
+}
+
+/** Kept across a hostname change, different for a copied ~/.orbit; undefined when the OS has no machine id. */
+export function memoryJobMachine(dataDir: string): string | undefined {
+  const id = readOsMachineId();
+  return id && createHash("sha256").update(`wink-memory-jobs\0${id}\0${resolve(dataDir)}`).digest("hex").slice(0, 12);
+}
+
+export function pinMemoryJobOwner(ledger: MemorySyncLedger, botSyncId: string, owner: string): boolean {
+  const owners = ledger.jobOwners ??= {};
+  if (Object.hasOwn(owners, botSyncId)) return false;
+  owners[botSyncId] = owner;
+  return true;
 }
 
 /** The idle tidy changed MEMORY.md from `before` to `after`: if the next pass finds only that change, a copy that holds what the tidy started from wins over it with nothing set aside. Save the ledger after it. */
@@ -274,17 +289,22 @@ function machine(): string {
 }
 
 // a ledger copied or restored onto another PC must not keep writing as the PC it came from
-function deviceId(ledger: MemorySyncLedger, host: string): string {
-  if (!ledger.device || ledger.host !== host) {
+function deviceId(ledger: MemorySyncLedger, host: string, jobMachine?: string): string {
+  const moved = Boolean(ledger.device && ledger.host !== host);
+  // A copied ledger gets a new sync device, but keeps its original job binding; one bound to this unmoved device moves to the machine key.
+  if (moved) ledger.jobDevice ??= ledger.device;
+  else if (jobMachine && ledger.jobDevice === ledger.device) ledger.jobDevice = jobMachine;
+  if (!ledger.device || moved) {
     ledger.device = randomBytes(6).toString("hex");
     ledger.host = host;
   }
+  ledger.jobDevice ??= jobMachine ?? ledger.device;
   return ledger.device;
 }
 
 /** Mints this PC's memory device before the first sync, as the first sync would. */
-export function ensureMemorySyncDevice(ledger: MemorySyncLedger): string {
-  return deviceId(ledger, machine());
+export function ensureMemorySyncDevice(ledger: MemorySyncLedger, jobMachine?: string): string {
+  return deviceId(ledger, machine(), jobMachine);
 }
 
 function tick(ledger: MemorySyncLedger): number {
