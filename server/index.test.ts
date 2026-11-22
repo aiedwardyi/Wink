@@ -4735,7 +4735,7 @@ describe("resumable event stream", () => {
     }
   });
 
-  it("replays exactly what a disconnected client missed", async () => {
+  it("replays what a disconnected client missed, in order", async () => {
     const { body } = await api("GET", "/api/bots");
     const botId = body.bots[0].id;
 
@@ -4758,16 +4758,14 @@ describe("resumable event stream", () => {
       // ...and an old cursor still replays them, in order, without a hydrate
       const back = await resumed.until((f) => f.kind === "hello");
       expect(back.resumed).toBe(true);
-      // This file shares one server. Leftover runtime traffic can occupy
-      // sequence numbers between nudges, so the missed bot frames are not
-      // always seen.seq+1..+3. Wait for the three nudges themselves.
-      await resumed.until(
-        () => resumed.frames.filter((f) => f.kind === "bot" && f.bot?.id === botId && f.seq > seen.seq).length >= 3,
-      );
+      // A bot frame carries the whole bot, so the ring keeps only the newest
+      // of the three nudges. This file shares one server, so other numbered
+      // frames can sit between them.
+      await resumed.until((f) => f.kind === "bot" && f.bot?.id === botId && f.seq > seen.seq);
       const replayed = resumed.frames
         .filter((f) => f.kind === "bot" && f.bot?.id === botId)
         .map((f) => f.seq);
-      expect(replayed.length).toBeGreaterThanOrEqual(3);
+      expect(replayed.length).toBeGreaterThanOrEqual(1);
       expect(replayed.every((seq) => seq > seen.seq)).toBe(true);
       expect(replayed).toEqual([...replayed].sort((a, b) => a - b));
     } finally {
