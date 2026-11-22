@@ -1,7 +1,7 @@
 // Automatic recall: before a typed turn, up to 2 matching rows from the bot's
 // own memory and notes ride in the turn text. Off unless the bot is listed in
 // lookup-bots.json. The index is rebuilt after a reply settles, never at send.
-import { open, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -43,15 +43,13 @@ const skipped = (word: string) => STOP.has(word) || CHAT.has(word);
 const SEPARATOR = /^\|[\s:|-]+\|?$/;
 const STRUCK = /^[-*\s|]*(?:\d+\s*\|\s*)?~~/;
 const DATED = /\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b|\b(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/g;
-const NOTED_AT = /\(noted (20\d{2}-\d{2}-\d{2})\)$/;
-const MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
 const localDay = (at: number) => new Date(at).toLocaleDateString("sv-SE");
 const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 
 export type NoteFile = { source: string; tier: 0 | 1; text: string; mtime: number; firstLine?: number };
-type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; noted: string; topic: string; title: string[]; text: string; tokens: string[] };
+type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; topic: string; title: string[]; text: string; tokens: string[] };
 export type RecallHit = Piece & { score: number };
 type Terms = { list: string[]; groups: string[][] };
 
@@ -74,7 +72,8 @@ function clean(line: string): string {
   return redactSecretsInText(text);
 }
 
-export function rowDate(text: string, modified: string): string {
+function rowDate(text: string, mtime: number): string {
+  const modified = localDay(mtime);
   let newest = "";
   for (const match of text.matchAll(DATED)) {
     let date = match[1] ? `${match[1]}-${match[2]}-${match[3]}` : `${modified.slice(0, 4)}-${match[4]}-${match[5]}`;
@@ -82,35 +81,6 @@ export function rowDate(text: string, modified: string): string {
     if (date > newest) newest = date;
   }
   return newest || modified;
-}
-
-// a day that cannot be, like 2026-13-02, or past the years a row's words date, like 2926-10-02, was typed by hand and stamps nothing
-export function notedDay(text: string): string {
-  const day = NOTED_AT.exec(text)?.[1] ?? "";
-  const [year, month, date] = [Number(day.slice(0, 4)), Number(day.slice(5, 7)), Number(day.slice(8))];
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  return date >= 1 && date <= (month === 2 && !leap ? 28 : (MONTH_DAYS[month - 1] ?? 0)) ? day : "";
-}
-
-// a label keeps the rows naming its latest-noted row's day, so an older note naming another day gives way, unless an unstamped row outdates every latest-noted one; then it keeps its newest-dated rows
-export function recalled(rows: Array<{ topic: string; noted: string; date: string }>): boolean[] {
-  const labels = new Map<string, { noted: string; date: string; unstamped: string; newest: string }>();
-  const tops = rows.map((row) => {
-    let top = labels.get(row.topic);
-    if (!top) labels.set(row.topic, (top = { noted: "", date: "", unstamped: "", newest: "" }));
-    if (row.date > top.newest) top.newest = row.date;
-    if (!row.noted) top.unstamped = row.date > top.unstamped ? row.date : top.unstamped;
-    else if (row.noted > top.noted) {
-      top.noted = row.noted;
-      top.date = row.date;
-    } else if (row.noted === top.noted && row.date > top.date) top.date = row.date;
-    return top;
-  });
-  return rows.map((row, at) => {
-    const top = tops[at]!;
-    if (top.date < top.unstamped) return row.date === top.newest;
-    return row.date === top.date;
-  });
 }
 
 function firstCell(text: string): string {
@@ -140,7 +110,6 @@ function piecesOf(text: string): string[] {
 
 function piecesOfFile(file: NoteFile): Piece[][] {
   const rows: Piece[][] = [];
-  const modified = localDay(file.mtime);
   let heading: string[] = [];
   file.text.split(/\r?\n/).forEach((raw, at) => {
     const line = raw.trim();
@@ -162,19 +131,13 @@ function piecesOfFile(file: NoteFile): Piece[][] {
       ref: `${file.source}:${at + (file.firstLine ?? 1)}`,
       source: file.source,
       tier: file.tier,
-      date: rowDate(text, modified),
-      noted: notedDay(text),
+      date: rowDate(text, file.mtime),
       topic: label.length ? label.join(" ") : key,
       title: table ? cell : [...cell, ...heading],
     };
     rows.push(piecesOf(text).map((part) => ({ ...shared, text: part, tokens: words(part) })));
   });
   return rows;
-}
-
-// the writer ranks a note by these rows, so it never keeps one recall hides
-export function recallRows(files: NoteFile[]): Array<{ topic: string; noted: string; date: string }> {
-  return files.flatMap(piecesOfFile).map((row) => row[0]!);
 }
 
 function editDistance(a: string, b: string, limit: number): number {
@@ -207,89 +170,32 @@ function hasNearPair(positions: number[][]): boolean {
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
   const parsed = files.flatMap(piecesOfFile);
-  // review-base's rows answer first, so recall never returns less than it did: a label keeps its newest-dated rows of the files read whole
-  const readWhole = new Set(files.filter((file) => file.mtime).map((file) => file.source));
   const latest = new Map<string, string>();
-  for (const piece of parsed.flat()) if (readWhole.has(piece.source) && piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
-  const rows = parsed.filter((row) => readWhole.has(row[0]!.source) && row.every((piece) => piece.date === latest.get(piece.topic)));
+  for (const piece of parsed.flat()) if (piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
+  const rows = parsed.filter((row) => row.every((piece) => piece.date === latest.get(piece.topic)));
   const pieces = rows.flat();
-  // when none of them pass, the rows recall keeps by the day each was noted answer, the start of a file past the budget among them;
-  // a note said again is one row there, the newest copy recall keeps and of equals the one search ranks first, so repeating it never makes its words common
-  const shown = recalled(parsed.map((row) => row[0]!));
-  const notes = parsed.map((row) => `${row[0]!.source}\0${row.map(({ text }) => text).join("\n").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)$/, "")}`);
-  const day = (row: Piece[]) => row[0]!.noted || row[0]!.date;
-  const size = (row: Piece[]) => row.reduce((sum, { tokens }) => sum + tokens.length, 0);
-  const newest = new Map<string, Piece[]>();
-  for (const [at, row] of parsed.entries()) {
-    const kept = newest.get(notes[at]!);
-    if (shown[at] && (!kept || day(row) > day(kept) || (day(row) === day(kept) && size(row) < size(kept)))) newest.set(notes[at]!, row);
-  }
-  const kept = [...newest.values()];
-  const keptRefs = new Set(kept.map((row) => row[0]!.ref));
-  const indexed = new Set(rows);
-  const later = kept.filter((row) => !indexed.has(row)).flat();
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, tokenize='porter unicode61')");
-  db.exec("CREATE VIRTUAL TABLE later USING fts5(text, tokenize='porter unicode61')");
+  const insert = db.prepare("INSERT INTO notes(rowid, text) VALUES (?, ?)");
   db.exec("BEGIN");
-  for (const [table, list] of [["notes", pieces], ["later", later]] as const) {
-    const insert = db.prepare(`INSERT INTO ${table}(rowid, text) VALUES (?, ?)`);
-    for (const [index, piece] of list.entries()) {
-      insert.run(index + 1, piece.text);
-      if ((index + 1) % YIELD_EVERY === 0) await yieldLoop();
-    }
+  for (const [index, piece] of pieces.entries()) {
+    insert.run(index + 1, piece.text);
+    if ((index + 1) % YIELD_EVERY === 0) await yieldLoop();
   }
   db.exec("COMMIT");
-  const search = (table: string, list: Piece[]) => {
-    const statement = db.prepare(`SELECT rowid AS id, bm25(${table}) AS score FROM ${table} WHERE ${table} MATCH ? ORDER BY bm25(${table}), rowid LIMIT ${HIT_LIMIT}`);
-    // SAFETY: the SELECT above names exactly these two columns.
-    return (match: string) => (statement.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...list[hit.id - 1]!, score: hit.score }));
-  };
-  const [first, then] = [search("notes", pieces), search("later", later)];
+  const search = db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? ORDER BY bm25(notes), rowid LIMIT ${HIT_LIMIT}`);
 
-  const weigh = (rows: Piece[][]) => {
-    const documents = new Map<string, number>();
-    for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
-    const total = rows.length;
-    const maxIdf = Math.log(1 + (total + 0.5) / 0.5);
-    const idfOf = (count: number) => Math.log(1 + (total - count + 0.5) / (count + 0.5));
-    const idf = (word: string) => {
-      const count = documents.get(word) ?? 0;
-      return count ? idfOf(count) : maxIdf;
-    };
-    return { documents, maxIdf, idfOf, idf, rareBar: Math.min(RARE_IDF, idfOf(1)) };
-  };
-  const strict = weigh(rows);
-  let loose: ReturnType<typeof weigh> | undefined;
-  const { documents, idf } = strict;
-  // recall answers one row per label, so a word only one label's kept rows hold is rare however many copies or edits of a note repeat it
-  const labels = new Map<string, number>();
-  const labelsOf = (word: string) => {
-    if (!labels.has(word)) labels.set(word, new Set(kept.filter((row) => row.some((piece) => piece.tokens.includes(word))).map((row) => row[0]!.topic)).size);
-    return labels.get(word)!;
-  };
+  const documents = new Map<string, number>();
+  for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
   const vocabulary = [...documents.keys()].filter((word) => word.length >= 3);
-  const pass = (weights: ReturnType<typeof weigh>, byLabels: boolean, { list, groups }: Terms, hits: RecallHit[]) => {
-    if (list.length < 2) return [];
-    const known = groups.map((group) => group.filter((option) => weights.documents.has(option)));
-    const weight = (options: string[]) => (options.length ? Math.max(...options.map(weights.idf)) : weights.maxIdf);
-    const whole = known.reduce((sum, options) => sum + weight(options), 0);
-    return hits.filter((hit) => {
-      let cover = 0;
-      let rare = 0;
-      const positions: number[][] = [];
-      for (const options of known) {
-        const at = hit.tokens.flatMap((token, position) => (options.some((option) => matchesToken(token, option)) ? [position] : []));
-        if (!at.length) continue;
-        const value = weight(options);
-        cover += value;
-        if (value >= weights.rareBar || (byLabels && Math.max(...options.map((option) => weights.idfOf(labelsOf(option)))) >= weights.rareBar)) rare++;
-        positions.push(at);
-      }
-      if (positions.length < 2 || rare < 1 || cover / whole < MIN_COVER || !hasNearPair(positions)) return false;
-      return known.flat().some((option) => hit.title.some((token) => matchesToken(token, option)));
-    });
+  const total = rows.length;
+  const maxIdf = Math.log(1 + (total + 0.5) / 0.5);
+  const idfOf = (count: number) => Math.log(1 + (total - count + 0.5) / (count + 0.5));
+  const idf = (word: string) => {
+    const count = documents.get(word) ?? 0;
+    return count ? idfOf(count) : maxIdf;
   };
+  const rareBar = Math.min(RARE_IDF, idfOf(1));
 
   const repair = (term: string, expired?: () => boolean): string[] => {
     if (term.length < 4 || documents.has(term)) return [term];
@@ -323,15 +229,30 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     },
     hits({ groups }) {
       const match = [...new Set(groups.flat())].map((term) => `"${term}"`).join(" OR ");
-      return match ? first(match) : [];
+      if (!match) return [];
+      // SAFETY: the SELECT above names exactly these two columns.
+      return (search.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
     },
-    gate(terms, hits) {
-      const passed = pass(strict, false, terms, hits);
-      if (passed.length) return passed;
-      // review-base's rows pass none: the kept rows answer, weighed as kept, and a word only one label holds counts as rare
-      loose ??= weigh(kept);
-      const match = [...new Set(terms.groups.flat())].map((term) => `"${term}"`).join(" OR ");
-      return pass(loose, true, terms, [...hits.filter((hit) => keptRefs.has(hit.ref)), ...(match ? then(match) : [])]);
+    gate({ list, groups }, hits) {
+      if (list.length < 2) return [];
+      const known = groups.map((group) => group.filter((option) => documents.has(option)));
+      const weight = (options: string[]) => (options.length ? Math.max(...options.map(idf)) : maxIdf);
+      const whole = known.reduce((sum, options) => sum + weight(options), 0);
+      return hits.filter((hit) => {
+        let cover = 0;
+        let rare = 0;
+        const positions: number[][] = [];
+        for (const options of known) {
+          const at = hit.tokens.flatMap((token, position) => (options.some((option) => matchesToken(token, option)) ? [position] : []));
+          if (!at.length) continue;
+          const value = weight(options);
+          cover += value;
+          if (value >= rareBar) rare++;
+          positions.push(at);
+        }
+        if (positions.length < 2 || rare < 1 || cover / whole < MIN_COVER || !hasNearPair(positions)) return false;
+        return known.flat().some((option) => hit.title.some((token) => matchesToken(token, option)));
+      });
     },
     close: () => db.close(),
   };
@@ -376,7 +297,7 @@ async function statSource(source: string, tier: 0 | 1, path: string): Promise<So
   return stat(path).then((info) => (info.isFile() ? { source, tier, path, mtime: info.mtimeMs, size: info.size } : null), () => null);
 }
 
-export function pastTheCut(botId: string): { text: string; firstLine: number } | null {
+function pastTheCut(botId: string): { text: string; firstLine: number } | null {
   const loaded = loadMemory(botId);
   const raw = memoryFileRaw(botId);
   if (!loaded?.truncated || !raw.startsWith(loaded.text)) return null;
@@ -385,14 +306,9 @@ export function pastTheCut(botId: string): { text: string; firstLine: number } |
 
 async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile[]> {
   const files: NoteFile[] = [];
-  const over: Source[] = [];
   let bytes = 0;
-  for (const entry of sources) {
-    const { source, tier, path, mtime, size } = entry;
-    if (bytes + size > MAX_CORPUS_BYTES) {
-      over.push(entry);
-      continue;
-    }
+  for (const { source, tier, path, mtime, size } of sources) {
+    if (bytes + size > MAX_CORPUS_BYTES) continue;
     bytes += size;
     if (tier === 0 && source === "MEMORY.md") {
       const past = pastTheCut(botId);
@@ -403,27 +319,7 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
     // a replaced pick is history, never a recall hit
     if (text !== null) files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
   }
-  // a file past the budget still gives its first lines, so one note appended to it never drops the whole topic; they take no day from its modified time, which a later line set
-  for (const { source, tier, path } of over) {
-    const room = MAX_CORPUS_BYTES - bytes;
-    if (source === "MEMORY.md" || room <= 0) continue;
-    const text = await readStart(path, room).catch(() => "");
-    if (!text) continue;
-    bytes += Buffer.byteLength(text);
-    files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime: 0 });
-  }
   return files;
-}
-
-/** The whole lines within the first `limit` bytes of a file. */
-async function readStart(path: string, limit: number): Promise<string> {
-  const file = await open(path, "r");
-  try {
-    const { buffer, bytesRead } = await file.read(Buffer.alloc(limit), 0, limit, 0);
-    return buffer.subarray(0, buffer.subarray(0, bytesRead).lastIndexOf(10) + 1).toString("utf8");
-  } finally {
-    await file.close();
-  }
 }
 
 export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {

@@ -1,12 +1,11 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
-import { notedDay, pastTheCut, recalled, recallRows, rowDate } from "./memory-lookup.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
@@ -19,12 +18,10 @@ import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import {
   appendLines,
   ensureWorkspace,
-  listMemoryTopics,
   MEMORY_MAX_BYTES,
   MEMORY_MAX_LINES,
   MEMORY_SEED,
   memoryFileRaw,
-  PARKED_COPY,
   readMemoryFile,
   readMemoryTopic,
   saveMemoryFile,
@@ -303,10 +300,9 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
-function liveRows(text: string, modified: string): { rows: string[]; dates: string[]; days: Array<{ noted: string; date: string }>; close: string } {
+function liveRows(text: string): { rows: string[]; dates: string[]; close: string } {
   const rows: string[] = [];
   const dates: string[] = [];
-  const days: Array<{ noted: string; date: string }> = [];
   let block: { close: string; end: RegExp } | undefined;
   for (const row of text.split("\n")) {
     if (block) {
@@ -331,9 +327,8 @@ function liveRows(text: string, modified: string): { rows: string[]; dates: stri
     const noted = NOTED.exec(row);
     rows.push(noted?.[1] ?? bullet.trim());
     dates.push(noted?.[2] ?? "");
-    days.push({ noted: notedDay(bullet.trim()), date: rowDate(bullet.trim(), modified) });
   }
-  return { rows, dates, days, close: block ? `${block.close}\n` : "" };
+  return { rows, dates, close: block ? `${block.close}\n` : "" };
 }
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
@@ -881,44 +876,31 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       try {
         // a locked file must hold the batch, never be rewritten from the header
         const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-        const modified = current ? day(statSync(path).mtimeMs) : stamp;
-        const { rows, dates, days, close } = liveRows(current, modified);
+        const { rows, dates, close } = liveRows(current);
         // a row in its words noted before its day is an older copy when every row below is older too, or, if it went under an older copy, a row below falls between the two days, so a hand-edited date alone never hides it
         const older = (index: number, date: string, copy?: number) => {
           const noted = dates[index]!;
           const below = dates.slice(index + 1).filter(Boolean);
           return Boolean(noted) && noted < date && (below.every((day) => day < date) || (copy !== 0 && below.some((day) => day > noted && day < date)));
         };
-        // a row recall hides is there only when a copy as new as its write was outdated by a later row
+        // recall keeps a label's newest-dated rows, so a row it hides is there only when a copy as new as its write was outdated by a later row
+        const modified = current ? day(statSync(path).mtimeMs) : stamp;
         const label = (row: string) => (/^([^:]{2,60}):\s/.exec(row)?.[1] ?? row).toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
-        // ranked against every row of its label recall reads, parsed as recall parses them, so a later row anywhere outdates it here too
-        const projectNotes = deps.store.bot?.(botId)?.projectNotes;
-        const memory = join(dirname(dirname(path)), "MEMORY.md");
-        const files = [memory, ...listMemoryTopics(botId).filter(({ name }) => name !== OVERFLOW_FILE && name !== PICKS_FILE && !PARKED_COPY.test(name)).map(({ name }) => join(dirname(path), name)), ...(projectNotes ? [projectNotes] : [])].flatMap((other) => {
-          try {
-            return [{ source: other, tier: 0 as const, text: other === memory ? (pastTheCut(botId)?.text ?? "") : readFileSync(other, "utf8"), mtime: statSync(other).mtimeMs }];
-          } catch {
-            return [];
-          }
-        });
-        const own = { source: path, tier: 0 as const, text: current, mtime: current ? statSync(path).mtimeMs : 0 };
-        const kept = recalled([...rows.map((row, index) => ({ ...days[index]!, topic: label(row) ?? row })), ...recallRows([own, ...files])]);
-        const shown = ({ line, date }: Landed) => rows.some((row, index) => row === line && ((days[index]!.noted || days[index]!.date) >= date || kept[index]));
+        const shown = ({ line, date }: Landed) => {
+          const own = rows.reduce((max, row, index) => (row === line && (dates[index] || modified) > max ? dates[index] || modified : max), "");
+          return own >= date || rows.every((row, index) => (dates[index] || modified) <= own || label(row) !== label(line));
+        };
         const stays = (landed: Landed) => shown(landed) && rows.some((row, index) => row === landed.line && !older(index, landed.date, landed.copy));
         wrote = wrote.filter(stays);
         seen = seen.filter(stays);
         // from its first row gone on, so a later line of the batch still lands after an earlier one written again
         const gone = overflow.findIndex(({ line }) => ![...wrote, ...seen].some((row) => row.line === line));
         const due = gone < 0 ? [] : overflow.slice(gone);
-        // written again on the day it was first noted, so it never outranks a row said after it
-        const first = (line: string) => batch.wrote?.find((row) => row.line === line)?.date ?? stamp;
-        // a row in its words counts as there only when recall would return it
-        const present = (line: string | undefined) => line !== undefined && shown({ line, date: first(line) });
         // a restart can replay a batch whose notes already landed in order
         let ends = due.length;
-        while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line || !present(line))) ends -= 1;
+        while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line)) ends -= 1;
         // a line said again lands unless it is already the newest row, so the newest row is what was said last
-        let newest = present(rows.at(-1)) ? rows.at(-1) : undefined;
+        let newest = rows.at(-1);
         const fresh = due.slice(ends).filter(({ line }) => {
           if (line === newest) return false;
           newest = line;
@@ -926,6 +908,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         });
         seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => ({ line, date: dates[rows.lastIndexOf(line)] ?? "" }))];
         if (fresh.length) {
+          // written again on the day it was first noted, so it never outranks a row said after it
+          const first = (line: string) => batch.wrote?.find((row) => row.line === line)?.date ?? stamp;
           const added = fresh.map(({ line }) => `- ${line} (noted ${first(line)})\n`).join("");
           appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);
