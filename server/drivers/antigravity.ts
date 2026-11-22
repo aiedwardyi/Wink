@@ -1159,6 +1159,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       get models() {
         return models;
       },
+      // undefined once agy denies this account the text model: notes then run on the bot's own model
+      get textModel() {
+        return textModelDenied.size && textModelDenied.has(readAntigravityAccount(env) ?? "") ? undefined : AGY_TEXT_MODEL;
+      },
       refreshModels,
       snapshot,
       loginConfig: () => ({

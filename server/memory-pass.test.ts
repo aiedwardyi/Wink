@@ -1397,6 +1397,48 @@ describe("notes on the bot's own engine", () => {
     expect(limits.get("codex")?.noteLimit?.resetsAt).toBeGreaterThan(Date.now());
   });
 
+  it("agy denies the text model, fallback model's pool spent, Gemini Models free: helper stays off, 0 calls until reset", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const FAKE_AGY = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-agy-cli.ts");
+    chmodSync(FAKE_AGY, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-agy-denied-"));
+    const errorFile = join(home, "result-error.txt");
+    const agy = await AntigravityDriver.create({ instanceId: "Gemini", displayName: undefined, enabled: true,
+      environment: { HOME: home, USERPROFILE: home, FAKE_AGY_DENIED_MODEL: "gemini-3.8-flash-low", FAKE_AGY_RESULT_ERROR_FILE: errorFile }, config: { cli: FAKE_AGY, fullAuto: false } });
+    const live = JSON.parse(readFileSync(new URL("./testing/fixtures/agy-usage-live.jsonl", import.meta.url), "utf8").split("\n")[0]!).command.data;
+    const reset = Date.now() + 72 * 3_600_000;
+    const report = (argonSpent: boolean, at = Date.now()): RateLimitsReport => {
+      const data = structuredClone(live);
+      for (const group of data.groups) for (const bucket of group.buckets) {
+        bucket.reset_time = new Date(reset).toISOString();
+        if (argonSpent && at < reset && bucket.id === "gemini-argon-wtu-weekly") bucket.remaining_fraction = 0;
+      }
+      return { windows: antigravityRateLimitWindows(data, at), observedAt: new Date(at).toISOString() };
+    };
+    const own = summaryInstance(agy, "gemini-4-argon-low");
+    const generateText = vi.fn(own.generateText!);
+    const limits: RateLimitsMap = new Map();
+    const usage = { limits, save: vi.fn(), signedOut: new Set<string>() };
+    const notes = () => noteGenerator([], undefined, { ...own, generateText }, usage);
+    try {
+      // denied the text model, the account writes its notes on the bot's Argon model
+      usage.limits.set("Gemini", report(false));
+      await expect(notes()!("notes", new AbortController().signal)).resolves.toBe("done from fake agy");
+      // then Argon runs out while Gemini Models has room; agy's weekly wording stores no limit
+      writeFileSync(errorFile, "RESOURCE_EXHAUSTED: You have reached your weekly limit. Upgrade your plan or try again later.");
+      usage.limits.set("Gemini", report(true));
+      generateText.mockClear();
+      for (let i = 0; i < 5; i++) await notes()?.("notes", new AbortController().signal).catch(() => {});
+      expect(generateText).not.toHaveBeenCalled();
+      vi.spyOn(Date, "now").mockReturnValue(reset + 1);
+      usage.limits.set("Gemini", report(true, reset + 1));
+      expect(notes()).not.toBeNull();
+    } finally {
+      await agy.dispose();
+    }
+  });
+
   it.each([
     ["an RPC error", undefined],
     ["an error event", { method: "error", params: { error: { message: "unexpected status 401 Unauthorized" }, willRetry: false } }],

@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
-import { exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
+import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
@@ -94,7 +94,7 @@ export interface MemoryPass {
   dispose(): void;
 }
 
-type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string };
+type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText" | "textModel"> & { instanceId?: string };
 export type NoteLimits = { limits: RateLimitsMap; save(): void; signedOut?: Set<string> };
 
 export function noteGenerator(
@@ -109,8 +109,8 @@ export function noteGenerator(
   const id = helper.instanceId;
   const report = id && usage ? usage.limits.get(id) : undefined;
   const now = Date.now();
-  // a window spent in one pool while another still has room: the helper's own rejection decides
-  if (exhaustedWindow(report?.windows?.filter((w) => !w.otherPoolLeft), now) || (report?.noteLimit?.resetsAt ?? 0) > now) return null;
+  // a window spent in one pool while the helper's own pool still has room: the helper's own rejection decides
+  if (exhaustedWindow(report?.windows?.filter((w) => !w.otherPoolLeft || (helper.textModel ?? AGY_TEXT_MODEL) !== AGY_TEXT_MODEL), now) || (report?.noteLimit?.resetsAt ?? 0) > now) return null;
   if (id && usage?.signedOut?.has(id)) return null;
   const generate: NoteGenerator = async (prompt, signal, onUsage) => {
     try {
