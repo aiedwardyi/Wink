@@ -4,7 +4,7 @@ import { callPace, isVoiceLine, spokenText, type CallPrefs } from "../../../shar
 import { activeLocale } from "@/lib/i18n";
 import { isShownMessage } from "@/lib/shown-message";
 import type { Message } from "@/state/store-types";
-import { MAX_RECONNECTS, MIC_ERRORS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
+import { MAX_RECONNECTS, MIC_ERRORS, READY_MS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
 
 const QUOTA = /quota|resource.?exhausted/i;
@@ -22,8 +22,8 @@ type Deps = {
   engine: () => LiveEngine;
   audio: CallAudioPort;
   post: (path: string, body: object) => Promise<Posted>;
-  /** The same send a typed message takes. */
-  send: (text: string) => void;
+  /** The same send a typed message takes; onError runs when it never reached the bot. */
+  send: (text: string, sendId: string, onError: () => void) => void;
   prefs?: CallPrefs;
   now?: () => number;
 };
@@ -38,11 +38,16 @@ export class SameBotCall {
   private callId?: string;
   private handle?: string;
   private reconnects = 0;
+  private readyTimer?: ReturnType<typeof setTimeout>;
   private stalled = false;
   private busy = false;
-  /** Sent to the bot, its reply not read yet. */
-  private waiting = false;
-  private seen?: Set<string>;
+  /** This call's sends: only the bot's replies to these are read. */
+  private sends = new Set<string>();
+  /** Sent to the bot, its turn not settled yet. */
+  private waiting = new Set<string>();
+  private readIds = new Set<string>();
+  /** The line the voice was asked to read; a reconnect that cuts it reads it again. */
+  private reading?: string;
   private heard = "";
   private said = "";
   /** Whose words the voice is answering: his (never played) or a [READ] it was sent. */
@@ -92,7 +97,7 @@ export class SameBotCall {
   private refresh() {
     const { status } = this.snapshot;
     if (status === "ended" || status === "failed" || status === "needsKey" || status === "starting") return;
-    const next = this.stalled ? "paused" : this.speaking ? "speaking" : this.busy || this.waiting ? "working" : "listening";
+    const next = this.stalled ? "paused" : this.speaking ? "speaking" : this.busy || this.waiting.size ? "working" : "listening";
     if (next !== status) this.set({ status: next });
   }
 
@@ -144,6 +149,8 @@ export class SameBotCall {
   private connect(session: LiveSession) {
     const engine = this.deps.engine();
     this.engine = engine;
+    clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => { if (this.engine === engine && !this.ended) void this.reconnect(); }, READY_MS);
     engine.connect(session, this.events(engine));
   }
 
@@ -164,6 +171,7 @@ export class SameBotCall {
     return {
       ready: () => {
         if (!mine()) return;
+        clearTimeout(this.readyTimer);
         this.connected = true;
         this.reconnects = 0;
         if (this.snapshot.status === "starting") this.set({ status: "listening" });
@@ -190,8 +198,10 @@ export class SameBotCall {
       },
       turnDone: () => {
         if (!mine()) return;
-        if (this.turn === "read") this.deps.audio.endTurn();
-        else this.commit();
+        if (this.turn === "read") {
+          this.deps.audio.endTurn();
+          this.reading = undefined;
+        } else this.commit();
         this.turn = null;
         this.said = "";
         this.cut = false;
@@ -200,7 +210,10 @@ export class SameBotCall {
       },
       interrupted: () => {
         if (!mine()) return;
-        if (this.turn === "read") this.deps.audio.flush();
+        if (this.turn === "read") {
+          this.deps.audio.flush();
+          this.reading = undefined;
+        }
         this.turn = null;
         this.refresh();
       },
@@ -229,21 +242,39 @@ export class SameBotCall {
     const text = spokenText(this.heard);
     this.heard = "";
     if (!text || MUTTER.test(text)) return;
-    this.waiting = true;
+    const sendId = crypto.randomUUID();
+    this.sends.add(sendId);
+    this.waiting.add(sendId);
     this.spokeAt = this.loudAt;
-    this.deps.send(text);
+    if (this.snapshot.notice) this.set({ notice: undefined });
+    this.deps.send(text, sendId, () => this.unsent(sendId, text));
   }
 
-  /** The bot's own reply, read once its turn settles; anything already in the chat at the start stays unread. */
+  /** A send the bot never got: the call stops working on it and says so, as a Gemini call does. */
+  private unsent(sendId: string, text: string) {
+    if (this.ended || !this.waiting.delete(sendId)) return;
+    this.set({ notice: { kind: "notSent", text } });
+    this.refresh();
+  }
+
+  /** The bot's replies to this call's own sends, each read once and in order once its turn settles; another task or older chat stays unread. */
   observe({ busy, messages }: { busy: boolean; messages: Message[] }) {
     this.busy = busy;
-    if (!this.seen) this.seen = new Set(messages.map((message) => message.id));
-    else if (!busy) {
-      const fresh = messages.filter((message) => !this.seen!.has(message.id) && isShownMessage(message));
-      for (const message of fresh) this.seen.add(message.id);
-      const reply = [...fresh].reverse().find((message) => message.role === "bot" && message.kind === "text" && !isVoiceLine(message) && message.text?.trim());
-      if (fresh.some((message) => message.role !== "user")) this.waiting = false;
-      if (reply?.text) this.read(reply.text);
+    if (!busy) {
+      let ours = false;
+      const asked: string[] = [];
+      for (const message of messages) {
+        if (message.role === "user") {
+          ours = Boolean(message.sendId && this.sends.has(message.sendId));
+          if (ours) asked.push(message.sendId!);
+          continue;
+        }
+        if (!isShownMessage(message)) continue;
+        for (const sendId of asked.splice(0)) this.waiting.delete(sendId);
+        if (!ours || message.role !== "bot" || message.kind !== "text" || isVoiceLine(message) || !message.text?.trim() || this.readIds.has(message.id)) continue;
+        this.readIds.add(message.id);
+        this.read(message.text);
+      }
     }
     this.refresh();
   }
@@ -259,6 +290,7 @@ export class SameBotCall {
     const next = this.reads.shift();
     if (!next) return;
     this.asked = true;
+    this.reading = next;
     this.engine.sendText(`${READ}${next}`);
     this.refresh();
   }
@@ -267,6 +299,7 @@ export class SameBotCall {
   interrupt() {
     if (!this.speaking) return;
     this.reads = [];
+    this.reading = undefined;
     this.cut = this.turn === "read" || this.asked;
     this.deps.audio.flush();
     this.refresh();
@@ -305,6 +338,8 @@ export class SameBotCall {
     this.connected = false;
     this.turn = null;
     this.asked = false;
+    if (this.reading) this.reads.unshift(this.reading);
+    this.reading = undefined;
     old?.close();
     if (this.ended) return;
     if (!this.handle || this.reconnects >= MAX_RECONNECTS) return this.fail("The call dropped");
@@ -333,6 +368,7 @@ export class SameBotCall {
     this.engine = null;
     this.connected = false;
     this.reads = [];
+    clearTimeout(this.readyTimer);
     engine?.close();
     this.deps.audio.close();
     const started = this.snapshot.startedAt;

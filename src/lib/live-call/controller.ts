@@ -104,7 +104,7 @@ const MIC_SILENT_RMS = 1e-5;
 // A gate input with no engine event for this long is stale: a stray fragment, not a turn.
 const QUIET_MS = 4_000;
 // A socket that never sets up would hold the call open and silent.
-const READY_MS = 15_000;
+export const READY_MS = 15_000;
 const REPORT_CHARS = 1_500;
 const READ_CHARS = 8_000;
 const RETRY_MS = 1_500;

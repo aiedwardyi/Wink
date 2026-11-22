@@ -24,6 +24,12 @@ import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./
 import { addJoinedEntries, closeJoinedDb, joinedEntries, saveJoined } from "./rooms/joined.ts";
 
 const KEY = "AIzaTEST-not-a-real-key-0123456789";
+const sameBot = vi.hoisted(() => ({ loads: 0 }));
+// Counts loads of the same-bot voice setup: a Gemini voice call must never pull it in.
+vi.mock("./same-bot-call.ts", async (importOriginal) => {
+  sameBot.loads += 1;
+  return importOriginal();
+});
 const dirs: string[] = [];
 afterEach(() => { closeRoomsDb(); closeJoinedDb(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
@@ -52,6 +58,15 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
 }
 
 describe("call token", () => {
+  // First, so nothing earlier has asked for a same-bot call.
+  it("loads the same-bot code only when a same-bot call asks for its voice", async () => {
+    const h = harness();
+    expect((await h.post("token")).status).toBe(200);
+    expect(sameBot.loads).toBe(0);
+    expect((await h.post("token", { mode: "bot" })).status).toBe(200);
+    expect(sameBot.loads).toBe(1);
+  });
+
   it("gives the voice the live waiting asks and forbids an empty to-do answer", async () => {
     const h = harness();
     const now = Date.now();

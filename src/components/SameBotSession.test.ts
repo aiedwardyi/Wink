@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { StoreProvider, type Bot } from "@/state/store";
+import { StoreProvider, useStore, type Bot } from "@/state/store";
 import { I18nProvider } from "@/lib/i18n";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
@@ -57,22 +57,36 @@ const atlas = {
   id: "atlas", threadId: "thread-atlas", name: "Atlas", title: "", description: "", notifications: false,
   color: "iris", unread: false, modelSelection: { instanceId: "inst", model: "m" }, messages: [], hasMore: false,
 } as unknown as Bot;
+const older = {
+  ...atlas, threadId: "thread-previous", messages: [
+    { id: "old-user", role: "user", kind: "text", text: "Earlier user fixture.", at: 1 },
+    { id: "old-bot", role: "bot", kind: "text", text: "Crocus 918 old only.", at: 2, parentId: "old-user" },
+  ],
+};
 const config = (answer?: "bot" | "gemini") => ({ gemini: { configured: true }, features: { voiceCalls: true }, liveCall: { voice: "Aoede", ...(answer ? { answer } : {}) } });
 
 const posts: Array<{ path: string; body?: any }> = [];
 let current = config();
+let rejectMessage = false;
 const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
   const path = String(input);
   posts.push({ path, body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined });
   if (path === "/api/config") return Response.json(current);
+  if (path.includes("/tasks/thread-previous")) return Response.json({ bot: older });
   if (path.endsWith("/call/token")) return Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" });
-  if (path.endsWith("/messages")) return Response.json({ ok: true }, { status: 202 });
+  if (path.endsWith("/messages")) return rejectMessage ? Response.json({ error: "Fixture engine could not start." }, { status: 503 }) : Response.json({ ok: true }, { status: 202 });
   if (path.startsWith("/api/bots?")) return Response.json({ bots: [atlas], groups: [], computerControl: {} });
   return new Response("{}", { status: 404 });
 };
 
 let root: Root;
 let host: HTMLElement;
+let dispatch!: ReturnType<typeof useStore>["dispatch"];
+function Chat() {
+  const store = useStore();
+  dispatch = store.dispatch;
+  return createElement(ChatView, { bot: store.state.bots.find((bot) => bot.id === atlas.id) ?? atlas });
+}
 async function mount(answer?: "bot" | "gemini") {
   current = config(answer);
   localStorage.setItem("wink.liveCall.intro", "1");
@@ -85,7 +99,7 @@ async function mount(answer?: "bot" | "gemini") {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root.render(createElement(I18nProvider, null, createElement(StoreProvider, null, createElement(ChatView, { bot: atlas }), createElement(CallHostSlot)))));
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(StoreProvider, null, createElement(Chat), createElement(CallHostSlot)))));
   await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
   await vi.waitFor(() => expect(posts.some(({ path }) => path.startsWith("/api/bots?"))).toBe(true));
   await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", ...current }), lastEventId: "qa:2" }));
@@ -107,6 +121,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   localStorage.clear();
   posts.length = 0;
+  rejectMessage = false;
   fakes.engines.length = 0;
   fakes.sse = undefined;
   Reflect.deleteProperty(navigator, "mediaDevices");
@@ -137,6 +152,31 @@ describe("who answers a call", () => {
     });
     await vi.waitFor(() => expect(posts.find(({ path }) => path === "/api/bots/atlas/messages")?.body).toMatchObject({ text: "what is the build status" }));
     expect(host.textContent).toContain("what is the build status");
+    expect(engine.texts).toEqual([]);
+  });
+  it("Same bot reads nothing when he switches to a task that already has a reply", async () => {
+    await mount("bot");
+    const engine = await call();
+    await act(async () => dispatch({ type: "switchTask", botId: atlas.id, threadId: "thread-previous" }));
+    await vi.waitFor(() => expect(host.textContent).toContain("Crocus 918 old only."));
+    await act(async () => {});
+    expect(engine.texts).toEqual([]);
+    expect(posts.filter(({ path }) => path.endsWith("/messages"))).toHaveLength(0);
+  });
+
+  it("Same bot leaves Working and says the line was not sent when the send fails", async () => {
+    await mount("bot");
+    const engine = await call();
+    rejectMessage = true;
+    await act(async () => {
+      engine.events.heard("Check the fixture engine.");
+      engine.events.answering();
+      engine.events.turnDone();
+    });
+    await vi.waitFor(() => expect(host.textContent).toContain("Fixture engine could not start."));
+    await vi.waitFor(() => expect(host.querySelector("[data-call-box]")?.getAttribute("data-call-box")).toBe("listening"));
+    expect(host.textContent).toContain("Not sent: Check the fixture engine.");
+    expect(posts.filter(({ path }) => path.endsWith("/messages"))).toHaveLength(1);
     expect(engine.texts).toEqual([]);
   });
 });

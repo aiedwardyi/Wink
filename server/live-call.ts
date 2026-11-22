@@ -16,7 +16,6 @@ import { aboutYouFacts } from "./about-you.ts";
 import { estimateContextTokens, fittingHead, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { RoomVoiceTail } from "./rooms/voice-tail.ts";
-import { sameBotSetup } from "./same-bot-call.ts";
 import { hasQueuedSends } from "./steer-queue.ts";
 import type { BotRecord, Message, SecretRequestCardData, Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
@@ -329,7 +328,8 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
           expireTime: new Date(expiresAt).toISOString(),
           newSessionExpireTime: new Date(at + NEW_SESSION_MS).toISOString(),
           // REST takes the SDK's liveConnectConstraints as bidiGenerateContentSetup.
-          bidiGenerateContentSetup: sameBot ? sameBotSetup(bot.name, locale, voice) : liveSetup(`${brief}\n\n${taskContext(bot)}`, locale, voice, style),
+          // Loaded only here, so a Gemini voice call never loads same-bot code.
+          bidiGenerateContentSetup: sameBot ? (await import("./same-bot-call.ts")).sameBotSetup(bot.name, locale, voice) : liveSetup(`${brief}\n\n${taskContext(bot)}`, locale, voice, style),
         }),
         signal: AbortSignal.timeout(15_000),
       });
