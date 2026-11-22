@@ -155,7 +155,7 @@ describe("web_read steps 3-6", () => {
     { botId: "cl", name: "Claudey", engine: "claudeAgent", busy: false },
   ];
 
-  it("tells the bot to try its own web tool first, then borrows a free Grok bot before Codex, never itself", async () => {
+  it("tells the bot to try its own web tool first, then borrows a free bot on another engine, never its own", async () => {
     const { transport, requests } = fake(blocked);
     const reader = createWebReader({ transport, readers: () => bots });
     const first = await reader.read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "me" });
@@ -164,9 +164,17 @@ describe("web_read steps 3-6", () => {
     expect(first.tried.at(-1)).toBe("step 3 your own web tool: not tried yet");
     const second = await reader.read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "me", ownToolFailed: true });
     expect(second.next).toBeUndefined();
-    expect(second.reader).toEqual({ botId: "g1", name: "Groky", engine: "grokAgent" });
+    expect(second.reader).toEqual({ botId: "c1", name: "Coder", engine: "codex" });
     expect(second.tried[0]).toMatch(/^step 0 cache/);
     expect(requests).toHaveLength(1);
+  });
+
+  it("a Codex caller borrows a free Grok bot, and a caller on neither engine gets Grok before Codex", async () => {
+    const { transport } = fake(blocked);
+    const reader = createWebReader({ transport, readers: () => bots });
+    expect((await reader.read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "c1", ownToolFailed: true })).reader).toMatchObject({ engine: "grokAgent" });
+    expect((await reader.read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "cl", ownToolFailed: true })).reader).toMatchObject({ engine: "grokAgent" });
+    expect((await createWebReader({ transport, readers: () => [bots[0]!, bots[3]!] }).read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "me", ownToolFailed: true })).reader).toBeUndefined();
   });
 
   it("stops honestly when no Codex or Grok bot is free", async () => {
@@ -185,7 +193,7 @@ describe("web_read steps 3-6", () => {
     const first = await reader.read("linkedin.com/in/someone", { callerBotId: "me" });
     expect(first).toMatchObject({ status: "blocked", next: WEB_READ_SEARCH_ONLY, searchOnly: true });
     const second = await reader.read("https://www.linkedin.com/in/someone", { callerBotId: "me", ownToolFailed: true });
-    expect(second).toMatchObject({ searchOnly: true, reader: { botId: "g1" } });
+    expect(second).toMatchObject({ searchOnly: true, reader: { botId: "c1" } });
     reader.remember("https://www.linkedin.com/in/someone", "reader:grokAgent", "page text");
     expect((await reader.read("https://www.linkedin.com/in/someone")).status).toBe("blocked");
     expect(requests).toEqual([]);
@@ -879,7 +887,7 @@ describe("web_read gate follow-up (2123E)", () => {
         if (body.remember) remembered.push(body.remember.first);
         return (body.remember ? {} : await reader.read(body.url, { ownToolFailed: body.own_tool_failed, callerBotId: "me" })) as unknown as Record<string, unknown>;
       };
-      const askBot = async () => ({ text: reply });
+      const askBot = async () => ({ text: reply, replied: true });
       const first = JSON.parse((await webRead({ url: "https://terminal.example/times" }, api, askBot)).text);
       expect(first.text).toContain(hours);
       const last = JSON.parse((await webRead({ url: "https://terminal.example/times", own_tool_failed: true }, api, askBot)).text);
@@ -907,7 +915,7 @@ describe("web_read gate follow-up (2123E)", () => {
         if (body.remember) reader.remember(body.url, body.remember.route, body.remember.text, body.remember.first);
         return (body.remember ? {} : await reader.read(body.url, { ownToolFailed: body.own_tool_failed, callerBotId: "me" })) as unknown as Record<string, unknown>;
       };
-      const askBot = async () => ({ text: "Ferry timetable. ".repeat(Math.ceil(replyChars / 17)).slice(0, replyChars) });
+      const askBot = async () => ({ text: "Ferry timetable. ".repeat(Math.ceil(replyChars / 17)).slice(0, replyChars), replied: true });
       await webRead({ url: "https://terminal.example/long" }, api, askBot);
       const live = JSON.parse((await webRead({ url: "https://terminal.example/long", own_tool_failed: true }, api, askBot)).text);
       expect(live.text).toContain(lastFact);

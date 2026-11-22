@@ -81,6 +81,14 @@ it("refuses a scoped ask after its caller turn settled", async () => {
   expect(ask).not.toHaveBeenCalled();
 });
 
+it.each([
+  [true, "answer"],
+  [false, "(couldn't start that bot: provider process exited before the reader turn could start)"],
+])("an inline ask says whether the peer really replied (%s)", async (replied, text) => {
+  start();
+  expect(await send(request(vi.fn(async () => ({ replied, text }))))).toMatchObject({ text, replied });
+});
+
 it("keeps a receipt root across save and load", () => {
   const receipt = { id: "root-receipt", sourceThreadId: from.threadId, toBotId: target.id, toBotName: target.name, status: "done" as const, root: "opaque-root" };
   recordDelegationReceipt(receipt);

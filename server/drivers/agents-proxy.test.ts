@@ -1634,7 +1634,7 @@ describe("web_read in the agents proxy", () => {
     webReadBodies = [];
     lastAskBody = null;
     webReadResponse = { status: "blocked", url: "https://www.reddit.com/r/a/", route: "fetch", text: "", tried: ["step 2 fetch: site's network security block (HTTP 403)", "step 3 your own web tool: failed"], reader: { botId: "bot-helper", name: "Helper", engine: "grokAgent" } };
-    askResponse = { botName: "Helper", text: "The thread says the self-hosted setup runs on a Raspberry Pi with 4 GB of memory." };
+    askResponse = { botName: "Helper", text: "The thread says the self-hosted setup runs on a Raspberry Pi with 4 GB of memory.", replied: true };
     try {
       const { call } = await probeWithIdentity(identity(0), "web_read", { url: "https://www.reddit.com/r/a/", own_tool_failed: true });
       const out = JSON.parse(call.result.content[0].text);

@@ -54,8 +54,9 @@ export async function webRead(args: Json, api: Api, askBot: AskBot, guestTurn = 
     reply = { error: (error as Error).message };
   }
   const answer = typeof reply.text === "string" ? reply.text.trim() : "";
-  const failed = reply.limit ?? reply.error ?? (reply.busy ? "busy" : reply.taskId ? "still working after the wait limit" : "");
-  if (!failed && answer.length > 40 && !/^BLOCKED\b/i.test(answer)) {
+  // Only a real reply is page text: a peer that never started or never answered says so in its text.
+  const failed = reply.limit ?? reply.error ?? (reply.busy ? "busy" : reply.taskId ? "still working after the wait limit" : reply.replied !== true ? answer.split("\n")[0] || "no reply" : "");
+  if (!failed && answer && !/^BLOCKED\b/i.test(answer)) {
     const search = /^SEARCH:/i.test(answer);
     const route = `${search ? "search" : "reader"}:${reader.engine}`;
     const text = search ? `From search results, not the page:\n${answer.replace(/^SEARCH:\s*/i, "")}` : answer;

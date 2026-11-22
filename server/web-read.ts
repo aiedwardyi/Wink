@@ -348,8 +348,11 @@ export function createWebReader(deps: WebReaderDeps = {}) {
 
   function pickReader(callerBotId: string): WebReadReader | undefined {
     const rank = (engine: string) => READER_ENGINES.indexOf(engine);
-    const reader = (deps.readers?.() ?? [])
-      .filter((bot) => bot.botId !== callerBotId && !bot.busy && rank(bot.engine) >= 0)
+    const bots = deps.readers?.() ?? [];
+    // Step 4 is another engine's web tools: the caller's own engine already failed at step 3.
+    const own = bots.find((bot) => bot.botId === callerBotId)?.engine;
+    const reader = bots
+      .filter((bot) => bot.botId !== callerBotId && bot.engine !== own && !bot.busy && rank(bot.engine) >= 0)
       .sort((a, b) => rank(a.engine) - rank(b.engine))[0];
     return reader ? { botId: reader.botId, name: reader.name, engine: reader.engine } : undefined;
   }
