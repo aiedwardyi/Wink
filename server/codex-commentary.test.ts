@@ -72,7 +72,7 @@ function chat(threadId: string) {
     Object.assign(messages.find((message) => message.id === id)!, patch);
   };
   const deps: Record<string, unknown> = {
-    turnSummaries, takePeerReplyStamp, takeImportOffer, isVoiceLine, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(),
+    turnSummaries, takePeerReplyStamp, takeImportOffer, isVoiceLine, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(), askTexts: { text() {} }, turnOwnerId: undefined,
     store: {
       messagesFor: () => messages,
       findLast: (_threadId: string, predicate: (message: Message) => boolean) => messages.findLast(predicate),

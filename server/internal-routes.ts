@@ -65,6 +65,8 @@ type InternalRouteDeps = {
   readOnlyTurn: (botId: string, threadId: string) => boolean;
   /** The user line a running room turn was dispatched to answer. */
   answeredLine: (threadId: string) => string | undefined;
+  /** The last text the bot's current turn in that thread wrote. */
+  turnText?: (botId: string, threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
   boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask">;
@@ -498,6 +500,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
           whenSettled: (botId, threadId, post, question, forum) => askHold.whenSettled(botId, threadId, post, question, forum),
           forum: (botId, threadId, question, choices) => deps.boardCalls?.ask(botId, threadId, question, choices) ?? "",
+          turnText: (botId, threadId) => deps.turnText?.(botId, threadId),
         },
         askUserRequestSchema.parse(body),
       );

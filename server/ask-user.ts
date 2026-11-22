@@ -66,6 +66,8 @@ export interface AskUserDeps<B extends Sender> {
   whenSettled(botId: string, threadId: string, post: () => void, question: string, forum?: boolean): void;
   /** Forum posts that may answer a question the bot marked as a fact, sent to the bot while its card waits for the turn to settle; "" for none. */
   forum?(botId: string, threadId: string, question: string, choices: readonly string[]): string;
+  /** The last text the bot's current turn in that thread wrote. */
+  turnText?(botId: string, threadId: string): string | undefined;
 }
 
 export interface AskUserResult {
@@ -114,11 +116,33 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   deps.whenSettled(from.id, threadId, () => {
     // a bot deleted or removed from the room while its card waited has nobody to ask for
     if (!deps.conversation(from.id, threadId)) return;
-    posted = deps.appendMessage(threadId, message);
+    const replyId = deps.turnText?.(from.id, threadId);
+    posted = deps.appendMessage(threadId, replyId ? { ...message, card: { ...message.card!, replyId } } : message);
     deps.notifyQuestion(from, target, question);
   }, question, Boolean(notice));
   if (notice) return { status: 200, body: { notice } };
   return posted ? { status: 201, body: { messageId: posted.id } } : { status: 202, body: { held: true } };
+}
+
+/** Per bot and thread, the current turn's last text: where a tap on its ask_user card lands. */
+export function askTurnTexts() {
+  const turns = new Map<string, { turnId?: string; messageId?: string; final?: boolean }>();
+  const key = (botId: string, threadId: string) => `${botId}\n${threadId}`;
+  return {
+    started(botId: string, threadId: string, turnId: string | undefined) {
+      turns.set(key(botId, threadId), { turnId });
+    },
+    text(botId: string, threadId: string, turnId: string | undefined, messageId: string, phase?: string) {
+      const turn = turns.get(key(botId, threadId));
+      const same = turn && (!turn.turnId || !turnId || turn.turnId === turnId);
+      // commentary after the final answer is hidden
+      if (same && turn.final && phase === "commentary") return;
+      turns.set(key(botId, threadId), { turnId: (same && turn.turnId) || turnId, messageId, final: (same && turn.final) || phase === "final_answer" });
+    },
+    last(botId: string, threadId: string): string | undefined {
+      return turns.get(key(botId, threadId))?.messageId;
+    },
+  };
 }
 
 const isAskUserCard = (message: Message) => message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;

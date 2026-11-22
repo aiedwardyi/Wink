@@ -89,6 +89,8 @@ export interface OptionCardData {
   askUser?: true;
   /** an ask_user card that waits until answered; older ones closed when typed past */
   staysOpen?: true;
+  /** an ask_user card: the asking turn's last text; absent when that turn wrote none */
+  replyId?: string;
   /** permission cards: the tool being requested, so the card can show what
    * is actually being asked and offer "always allow this tool". */
   tool?: string;

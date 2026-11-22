@@ -161,7 +161,7 @@ import { summaryInstance } from "./summary-instance.ts";
 import { resetPathCache } from "./env-path.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import { watchAskHold } from "./ask-hold.ts";
-import { closedAskNotes, memberClosedAskNotes, watchSkippedQuestions } from "./ask-user.ts";
+import { askTurnTexts, closedAskNotes, memberClosedAskNotes, watchSkippedQuestions } from "./ask-user.ts";
 import {
   createPingLimiter,
   pingForMailbox,
@@ -2945,6 +2945,7 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
+const askTexts = askTurnTexts();
 const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); });
 const unreadTurns = turnUnread();
 
@@ -3922,6 +3923,7 @@ bus.subscribe((event: RuntimeEvent) => {
         bindPeerTurn(event.threadId, event.turnId);
       }
       limitWaits.bind(event.threadId, event.turnId);
+      if (turnOwnerId) askTexts.started(turnOwnerId, event.threadId, event.turnId);
       unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
       if (turnOwnerId) {
         if (ownNoteEngine(turnOwnerId)) memoryPass.onTurn(turnOwnerId);
@@ -3961,6 +3963,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // kept so "finished" can say what it finished with, rather than
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
+        if (!event.summarized && turnOwnerId) askTexts.text(turnOwnerId, event.threadId, event.turnId, message.id, event.phase);
         turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
@@ -8105,6 +8108,7 @@ const boardRoutes = createBoardRoutes({
 const internalRoutes = createInternalRoutes({
   readOnlyTurn: readOnlyRoomTurn,
   answeredLine: (threadId) => roomTurnInstruction.get(threadId),
+  turnText: (botId, threadId) => askTexts.last(botId, threadId),
   runDelegatedTurn,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,
