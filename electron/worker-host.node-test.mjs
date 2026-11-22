@@ -403,6 +403,48 @@ test("the host refuses to run from inside the app folder", { ...windows, timeout
   assert.equal(alive(f.hosts[0]), false);
 });
 
+test("a host that died leaves its record, and the next host is still found while that record is being read", { ...windows, timeout: 60_000 }, async (t) => {
+  const f = fixture(t, { publishMs: 5_000 });
+  const dead = path.join(f.slot, "host.json");
+  fs.mkdirSync(f.slot, { recursive: true });
+  writeWorkerHostRecord(dead, { protocol: WORKER_HOST_PROTOCOL, pid: 1, nonce: "dead", secret: "5".repeat(64), pipe: `\\\\.\\pipe\\wink-worker-test-${randomUUID()}` });
+  // The app's own wait reads this file while the new host publishes; a busy app keeps it open across that.
+  const reading = fs.openSync(dead, "r");
+  f.undo.push(() => fs.closeSync(reading));
+  const client = f.make();
+  assert.equal(await client.prewarm(), true);
+  assert.equal(workerHostRecord(dead).pid, f.hosts[0]);
+  const pane = client.spawn(f.pane("pane-1"), noLocal);
+  await pane.ready;
+  assert.equal(pane.hosted(), true);
+});
+
+test("a host whose record never landed is reached on the pipe it was launched with", { ...windows, timeout: 60_000 }, async (t) => {
+  const f = fixture(t);
+  const dead = path.join(f.slot, "host.json");
+  fs.mkdirSync(f.slot, { recursive: true });
+  writeWorkerHostRecord(dead, { protocol: WORKER_HOST_PROTOCOL, pid: 1, nonce: "dead", secret: "5".repeat(64), pipe: `\\\\.\\pipe\\wink-worker-test-${randomUUID()}` });
+  const reading = fs.openSync(dead, "r");
+  f.undo.push(() => fs.closeSync(reading));
+  // An app before this fix launched over the dead host's record without clearing it.
+  const nonce = randomUUID();
+  const launch = { nonce, secret: "6".repeat(64), pipe: `\\\\.\\pipe\\wink-worker-test-${nonce}`, ptyModule: require.resolve("node-pty") };
+  writeWorkerHostRecord(path.join(f.slot, "launch.json"), launch);
+  const orphan = spawn(process.execPath, [entry, f.slot], { detached: true, windowsHide: true, stdio: "ignore" });
+  orphan.unref();
+  f.hosts.push(orphan.pid);
+  await until(() => fs.existsSync(path.join(f.slot, "host-errors.log")));
+  assert.match(fs.readFileSync(path.join(f.slot, "host-errors.log"), "utf8"), /EPERM: operation not permitted, rename/);
+  assert.equal(workerHostLock(path.join(f.slot, "host.lock")), "alive");
+  const client = f.make({ adopt: true });
+  assert.equal(await client.prewarm(), true);
+  assert.equal(client.state().host.pid, orphan.pid);
+  const pane = client.spawn(f.pane("pane-1"), noLocal);
+  await pane.ready;
+  assert.equal(pane.hosted(), true);
+  assert.deepEqual(f.lines, [`worker host ready pid=${orphan.pid} already running`]);
+});
+
 test("a host of an unknown version is left alone", windows, async (t) => {
   let launched = 0;
   const f = fixture(t, { launch: async () => { launched++; throw new Error("Launched over a live host"); } });

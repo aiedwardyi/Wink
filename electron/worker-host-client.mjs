@@ -232,13 +232,17 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
       const state = workerHostLock(path.join(slot, "host.lock"));
       if (state === "unknown") throw down("unknown version", "host lock unreadable");
       if (state === "alive") {
-        const record = await readRecord(path.join(slot, "host.json"));
+        // A host that could not publish its record (its rename failed) still listens on the pipe it was launched with.
+        const launched = await readRecord(path.join(slot, "launch.json"));
+        const record = launched ? { protocol: WORKER_HOST_PROTOCOL, ...launched } : await readRecord(path.join(slot, "host.json"));
         if (record?.protocol !== WORKER_HOST_PROTOCOL || !record.pipe || !record.secret) throw down("unknown version", record ? `protocol ${record.protocol}` : "no host record");
         return await reach(record);
       }
       const slots = await fs.promises.readdir(root, { withFileTypes: true });
       const others = slots.filter((item) => item.isDirectory() && /^v\d+$/.test(item.name) && item.name !== path.basename(slot) && workerHostLock(path.join(root, item.name, "host.lock")) === "alive");
       if (others.length >= MAX_OTHER_HOSTS) throw down("at cap", `${others.length} older hosts still run`);
+      // Windows refuses to rename the new host's record over a file the wait below has open, so the dead host's goes first.
+      await fs.promises.rm(path.join(slot, "host.json"), { force: true }).catch(() => {});
       const nonce = randomUUID();
       const pipe = `\\\\.\\pipe\\wink-worker-${createHash("sha256").update(path.resolve(slot)).digest("hex").slice(0, 16)}-${nonce}`;
       const began = performance.now();
