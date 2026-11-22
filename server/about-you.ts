@@ -10,6 +10,7 @@ import { redactRoomMemory } from "../shared/redact.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { importSecrets } from "./import-secrets.ts";
 import { secretLike } from "./memory-pass.ts";
 import { MEMORY_LINE_MAX_BYTES, MEMORY_MAX_BYTES, MEMORY_MAX_LINES } from "./workspace.ts";
 
@@ -82,11 +83,13 @@ export function sourceOf(paste: string): string {
 export function factsOf(paste: string): { facts: string[]; hidden: number } {
   const facts: string[] = [];
   let hidden = 0;
+  const secret = importSecrets();
   for (const raw of paste.split(/\r?\n/)) {
     const line = clean(raw);
-    if (!line || SKIP.test(raw.trim()) || /[:：]$/.test(line)) continue;
+    const kind = secret(raw, line);
+    if (!line || kind === "label" || SKIP.test(raw.trim()) || /[:：]$/.test(line)) continue;
     // a split could part a label from its value, so the whole line is checked
-    if (secretLike(line) || redactRoomMemory(line) !== line) hidden++;
+    if (kind) hidden++;
     else facts.push(...pieces(line));
   }
   return { facts, hidden };

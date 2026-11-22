@@ -265,7 +265,7 @@ export const BOARD_TOOLS = [
 
 const IMPORT_MEMORY_TOOL = {
   name: "import_memory",
-  description: "Saves the user's latest message, the answer they pasted from their other AI, to Import Memory, which all their bots read. Wink reads the message itself and leaves out password, key and code lines, so call it even when the paste has one. Tell the user the returned result. decline: true when they say no to importing, so no bot offers again.",
+  description: "Saves the user's latest message, the answer they pasted from their other AI, to Import Memory, which all their bots read. Wink reads the message itself and leaves out lines that give a password, PIN, key or code, so call it even when the paste has one. Tell the user the returned result. decline: true when they say no to importing, so no bot offers again.",
   inputSchema: { type: "object", properties: { decline: { type: "boolean" } }, additionalProperties: false },
 };
 
