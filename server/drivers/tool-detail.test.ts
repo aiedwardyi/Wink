@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -442,12 +442,12 @@ describe("Claude tool run", () => {
     });
     const recorder = recordEvents(instance.adapter);
     try {
-      await instance.adapter.sendTurn({ threadId: "t-claude-run", text: "typecheck" });
+      await instance.adapter.sendTurn({ threadId: "t-claude-run", text: "typecheck", cwd: scratch });
       await recorder.until((event) => event.type === "turn.completed");
       const tools = recorder.events.filter((event) => event.type === "item.completed" && event.itemType === "tool");
       const line = "src/app.ts(3,1): error TS2304: Cannot find name 'foo'.";
       expect(tools).toMatchObject([
-        { ok: false, run: { shown: command, error: line, sig: runSig(line, { place: shellPlace(command, homedir())!, command }) } },
+        { ok: false, run: { shown: command, error: line, sig: runSig(line, { place: shellPlace(command, scratch)!, command }) } },
         { ok: true, writes: [join(scratch, "app.ts")] },
         { ok: true, run: { cmd: (tools[0] as { run: { cmd: string } }).run.cmd } },
       ]);
