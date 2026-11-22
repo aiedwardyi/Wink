@@ -4,6 +4,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly;
 // spawnCli resolves it to `node <script>`, so these run everywhere.
+import { execFileSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -37,6 +38,24 @@ import { noteGenerator } from "../memory-pass.ts";
 import * as procs from "../procs.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
+
+// agy's sign-in entry is a throwaway Credential Manager name here, never the real gemini:antigravity.
+const keyringTarget = vi.hoisted(() => `omb-test-${crypto.randomUUID()}:antigravity`);
+vi.mock("./antigravity-auth.ts", async (original) => ({ ...await original<typeof import("./antigravity-auth.ts")>(), ANTIGRAVITY_KEYRING: keyringTarget }));
+
+/** agy 1.3.0 as recorded: no `acp`, and `agy update` with no network. */
+function oldOfflineAgy(dir: string, calls: string): string {
+  const reply = (name: string) => JSON.parse(readFileSync(new URL(`../../test/fixtures/recorded/antigravity/${name}.json`, import.meta.url), "utf8")).reply;
+  const fake = join(dir, "fake-agy.cjs");
+  writeFileSync(fake, `
+const fs = require("node:fs");
+if (process.argv.includes("--version")) { console.log("1.3.0"); process.exit(0); }
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+const reply = process.argv.includes("update") ? ${JSON.stringify(reply("update-offline"))} : ${JSON.stringify(reply("acp-unsupported"))};
+process.stdout.write(reply.stdout ?? "", () => process.stderr.write(reply.stderr, () => process.exit(reply.exitCode)));
+`);
+  return fake;
+}
 
 const createSignIn = auth.antigravitySignIn;
 beforeEach(() => {
@@ -1222,6 +1241,49 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       expect(await registry.signOut("agy-old")).toBe(true);
       expect(existsSync(flag)).toBe(false);
       expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update", "acp"]);
+    } finally {
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === "win32")("signs an agy without ACP (1.3.0) out offline, and the Connections row reads signed out", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-offline-"));
+    const calls = join(dir, "calls.txt");
+    const fake = oldOfflineAgy(dir, calls);
+    const listed = () => execFileSync("cmdkey.exe", ["/list"], { encoding: "utf8", windowsHide: true }).includes(`target=${keyringTarget}`);
+    execFileSync("cmdkey.exe", [`/generic:${keyringTarget}`, "/user:antigravity", "/pass:not-a-token"], { windowsHide: true });
+    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => listed()));
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      expect(registry.get("agy-old")!.loginConfig!().env.OMB_AGY_KEYRING).not.toBe("gemini:antigravity");
+      expect((await registry.get("agy-old")!.snapshot()).authenticated).toBe(true);
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(listed()).toBe(false);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update"]);
+      expect((await registry.describe()).find((row) => row.instanceId === "agy-old")!.snapshot.authenticated).toBe(false);
+    } finally {
+      await registry.disposeAll();
+      try { execFileSync("cmdkey.exe", [`/delete:${keyringTarget}`], { stdio: "ignore", windowsHide: true }); } catch {}
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("tells Sign in why an agy without ACP (1.3.0) could not update offline, after one try", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-offline-"));
+    const calls = join(dir, "calls.txt");
+    const fake = oldOfflineAgy(dir, calls);
+    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => false));
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      await registry.startSignIn("agy-old");
+      await registry.logins.wait("agy-old");
+      const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-old")!;
+      expect(row.loginState).toBe("failed");
+      expect(row.loginError).toBe("update_offline");
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update"]);
     } finally {
       await registry.disposeAll();
       rmSync(dir, { recursive: true, force: true });

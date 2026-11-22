@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { antigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
 
 const execFile = vi.fn();
 
@@ -30,6 +30,20 @@ describe("Antigravity keyring sign-in", () => {
     expect(await probeAntigravitySignIn("win32", execFile)).toBeUndefined();
     execFile.mockClear();
     expect(await probeAntigravitySignIn("linux", execFile)).toBeUndefined();
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("deletes the saved sign-in the probe reads, on Windows and macOS only", async () => {
+    execFile.mockImplementation((_file, _args, _opts, done) => done(null, ""));
+    expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "win32", execFile)).toBe(true);
+    expect(execFile).toHaveBeenLastCalledWith("cmdkey.exe", ["/delete:gemini:antigravity"], expect.objectContaining({ windowsHide: true, timeout: 5000 }), expect.any(Function));
+    expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "darwin", execFile)).toBe(true);
+    expect(execFile).toHaveBeenLastCalledWith("security", ["delete-generic-password", "-s", "gemini", "-a", "antigravity"], expect.objectContaining({ timeout: 5000 }), expect.any(Function));
+    execFile.mockImplementation((_file, _args, _opts, done) => done({ code: 1 }, ""));
+    expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "win32", execFile)).toBe(false);
+    execFile.mockClear();
+    for (const target of ["gemini", ":antigravity", "gemini:"]) expect(await forgetAntigravitySignIn(target, "win32", execFile)).toBe(false);
+    expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "linux", execFile)).toBe(false);
     expect(execFile).not.toHaveBeenCalled();
   });
 
