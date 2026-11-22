@@ -140,16 +140,86 @@ describe("Antigravity keyring sign-out", () => {
     expect(keyring.waiting).toBe(false);
   });
 
-  it("drops a waiting delete when a sign-in starts", async () => {
+  it("drops a waiting delete once a sign-in succeeds, and holds it off while the sign-in runs", async () => {
     const forget = vi.fn(async () => true);
     const keyring = antigravityKeyringSignOut(forget);
     keyring.turnStarted("a");
     await keyring.signOut();
-    keyring.signingIn();
-    expect(keyring.waiting).toBe(false);
+    const ended = await keyring.signingIn();
+    expect(keyring.waiting).toBe(true);
     keyring.turnEnded("a");
     await Promise.resolve();
     expect(forget).not.toHaveBeenCalled();
+    ended(true);
+    expect(keyring.waiting).toBe(false);
+    await Promise.resolve();
+    expect(forget).not.toHaveBeenCalled();
+  });
+
+  it("stays signed out after a failed sign-in, and deletes once no turn runs", async () => {
+    const forget = vi.fn(async () => true);
+    const keyring = antigravityKeyringSignOut(forget);
+    keyring.turnStarted("a");
+    expect(await keyring.signOut()).toBe(true);
+    const ended = await keyring.signingIn();
+    ended(false);
+    ended(true); // a second end changes nothing
+    expect(keyring.waiting).toBe(true);
+    expect(forget).not.toHaveBeenCalled();
+    keyring.turnEnded("a");
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
+    expect(keyring.waiting).toBe(false);
+  });
+
+  it("deletes when a sign-in fails after the running turns already ended", async () => {
+    const forget = vi.fn(async () => true);
+    const keyring = antigravityKeyringSignOut(forget);
+    keyring.turnStarted("a");
+    await keyring.signOut();
+    const ended = await keyring.signingIn();
+    keyring.turnEnded("a");
+    expect(forget).not.toHaveBeenCalled();
+    ended(false);
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
+  });
+
+  it("stays signed out when the store refuses the waiting delete, until a sign-in succeeds", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const forget = vi.fn(async () => false);
+    const keyring = antigravityKeyringSignOut(forget);
+    keyring.turnStarted("a");
+    expect(await keyring.signOut()).toBe(true);
+    keyring.turnEnded("a");
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    expect(keyring.waiting).toBe(true);
+    // Sign out again: tries the delete once more and says it failed, still signed out.
+    expect(await keyring.signOut()).toBe(false);
+    expect(forget).toHaveBeenCalledTimes(2);
+    expect(keyring.waiting).toBe(true);
+    // A failed sign-in tries once more; a successful one ends it.
+    (await keyring.signingIn())(false);
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(3));
+    expect(keyring.waiting).toBe(true);
+    (await keyring.signingIn())(true);
+    expect(keyring.waiting).toBe(false);
+    warn.mockRestore();
+  });
+
+  it("lets a delete already running finish before a sign-in goes ahead", async () => {
+    const pending = deferred();
+    const keyring = antigravityKeyringSignOut(() => pending.promise);
+    keyring.turnStarted("a");
+    await keyring.signOut();
+    keyring.turnEnded("a");
+    let started = false;
+    const signingIn = keyring.signingIn().then((ended) => { started = true; return ended; });
+    await Promise.resolve();
+    expect(started).toBe(false);
+    pending.resolve(true);
+    (await signingIn)(true);
+    expect(started).toBe(true);
+    expect(keyring.waiting).toBe(false);
   });
 });
 

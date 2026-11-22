@@ -1335,6 +1335,173 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     }
   });
 
+  // Gate 2120D: a Sign in that fails while the delete waits must not hand the old sign-in back.
+  it("stays signed out when Sign in fails offline while Sign out waits on a running turn, then deletes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-reconnect-"));
+    const calls = join(dir, "calls.txt");
+    const hold = join(dir, "hold");
+    const ready = join(dir, "ready");
+    const keyring = fakeKeyring(dir);
+    const fake = oldOfflineAgy(dir, calls, { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry });
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      const live = registry.get("agy-old")!;
+      const recorder = recordEvents(live.adapter);
+      const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const errors = (threadId: string) => recorder.events.filter((event) => event.type === "runtime.error" && event.threadId === threadId);
+
+      await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
+      await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(existsSync(keyring.entry)).toBe(true);
+
+      await registry.startSignIn("agy-old");
+      await registry.logins.wait("agy-old");
+      const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-old")!;
+      expect(row.loginError).toBe("update_offline");
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
+      rmSync(ready);
+      await live.adapter.sendTurn({ threadId: "t-during", text: "hi" });
+      expect(await ended("t-during")).toMatchObject({ ok: false });
+      expect(errors("t-during")).toEqual([expect.objectContaining({ signIn: true, signedOut: true })]);
+      expect(existsSync(ready)).toBe(false);
+      expect(keyring.forget).not.toHaveBeenCalled();
+
+      writeFileSync(hold, "");
+      expect(await ended("t-before")).toMatchObject({ ok: true });
+      expect(errors("t-before")).toEqual([]);
+      await vi.waitFor(() => expect(existsSync(keyring.entry)).toBe(false));
+      expect(keyring.forget.mock.calls).toEqual([["gemini:antigravity"]]);
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
+      await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect(await ended("t-next")).toMatchObject({ ok: false });
+      expect(errors("t-next")).toEqual([expect.objectContaining({ signIn: true })]);
+    } finally {
+      writeFileSync(hold, "");
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120D: Sign out already said done, so a refused delete afterwards still reads signed out.
+  it("stays signed out when the store refuses the delete that waited on a running turn", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-refused-"));
+    const calls = join(dir, "calls.txt");
+    const hold = join(dir, "hold");
+    const ready = join(dir, "ready");
+    const keyring = fakeKeyring(dir);
+    keyring.forget.mockImplementation(async () => false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fake = oldOfflineAgy(dir, calls, { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry });
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      const live = registry.get("agy-old")!;
+      const recorder = recordEvents(live.adapter);
+      const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const errors = (threadId: string) => recorder.events.filter((event) => event.type === "runtime.error" && event.threadId === threadId);
+
+      await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
+      await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect((await registry.describe()).find((entry) => entry.instanceId === "agy-old")!.snapshot.authenticated).toBe(false);
+
+      writeFileSync(hold, "");
+      expect(await ended("t-before")).toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(keyring.forget).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not delete agy's saved sign-in")));
+      expect(existsSync(keyring.entry)).toBe(true);
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
+      await registry.refreshLogins();
+      expect((await registry.describe()).find((entry) => entry.instanceId === "agy-old")!.snapshot.authenticated).toBe(false);
+
+      rmSync(ready);
+      await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect(await ended("t-next")).toMatchObject({ ok: false });
+      expect(errors("t-next")).toEqual([expect.objectContaining({ signIn: true, signedOut: true })]);
+      expect(existsSync(ready)).toBe(false);
+
+      // Sign out again once the store accepts: it deletes now and still reads signed out.
+      keyring.forget.mockImplementation(async () => { rmSync(keyring.entry); return true; });
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(existsSync(keyring.entry)).toBe(false);
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
+    } finally {
+      writeFileSync(hold, "");
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("signs back in while Sign out waits on a running turn: the turn keeps its reply and the new sign-in stays", async () => {
+    const noAcp = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/acp-unsupported.json", import.meta.url), "utf8")).reply;
+    const offline = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/update-offline.json", import.meta.url), "utf8")).reply;
+    const update = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/update.json", import.meta.url), "utf8")).reply;
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-back-in-"));
+    const calls = join(dir, "calls.txt");
+    const hold = join(dir, "hold");
+    const ready = join(dir, "ready");
+    const online = join(dir, "online");
+    const updated = join(dir, "updated");
+    const keyring = fakeKeyring(dir);
+    const fake = join(dir, "fake-agy.cjs");
+    const turnEnv = { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry };
+    writeFileSync(fake, `
+const fs = require("node:fs");
+const updated = fs.existsSync(${JSON.stringify(updated)});
+if (process.argv.includes("--version")) { console.log(updated ? "1.5.14" : "1.3.0"); process.exit(0); }
+if (process.argv[2] !== "acp" && process.argv[2] !== "update") {
+  const turn = require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(FAKE_CLI)}, ...process.argv.slice(2)], { stdio: "inherit", env: { ...process.env, ...${JSON.stringify(turnEnv)} } });
+  process.exit(turn.status ?? 1);
+}
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+if (process.argv[2] === "update") {
+  const isOnline = fs.existsSync(${JSON.stringify(online)});
+  if (isOnline) fs.writeFileSync(${JSON.stringify(updated)}, "");
+  const reply = isOnline ? ${JSON.stringify(update)} : ${JSON.stringify(offline)};
+  process.stdout.write(reply.stdout ?? "", () => process.stderr.write(reply.stderr ?? "", () => process.exit(reply.exitCode)));
+} else if (!updated) process.stderr.write(${JSON.stringify(noAcp.stderr)}, () => process.exit(${noAcp.exitCode}));
+else require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "authenticate") fs.writeFileSync(${JSON.stringify(keyring.entry)}, "new-sign-in");
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      const live = registry.get("agy-old")!;
+      const recorder = recordEvents(live.adapter);
+      const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const errors = (threadId: string) => recorder.events.filter((event) => event.type === "runtime.error" && event.threadId === threadId);
+
+      await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
+      await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(existsSync(keyring.entry)).toBe(true);
+
+      writeFileSync(online, "");
+      await registry.startSignIn("agy-old");
+      await registry.logins.wait("agy-old");
+      expect(registry.logins.state("agy-old")).toBe("complete");
+      expect(readFileSync(keyring.entry, "utf8")).toBe("new-sign-in");
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
+
+      writeFileSync(hold, "");
+      expect(await ended("t-before")).toMatchObject({ ok: true });
+      expect(errors("t-before")).toEqual([]);
+      await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect(await ended("t-next")).toMatchObject({ ok: true });
+      expect(keyring.forget).not.toHaveBeenCalled();
+      expect(readFileSync(keyring.entry, "utf8")).toBe("new-sign-in");
+    } finally {
+      writeFileSync(hold, "");
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("tells Sign in why an agy without ACP (1.3.0) could not update offline, after one try", async () => {
     const dir = mkdtempSync(join(tmpdir(), "omb-agy-offline-"));
     const calls = join(dir, "calls.txt");

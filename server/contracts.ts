@@ -518,8 +518,9 @@ export interface ProviderInstance {
   /** Its logout command failed for `failure`: sign out without it where the engine can. True once signed out
    * (the engine may finish the job when its running turns end); false leaves the logout failed. */
   signOutWithoutCli?(failure: import("./engine-login.ts").LoginCapture["error"]): Promise<boolean>;
-  /** A sign-in is starting: drop any sign-out still waiting on running turns. */
-  signingIn?(): void;
+  /** A sign-in is starting. Resolves once it may proceed, with the call to make when it ends: a sign-out that
+   * already reported done stays signed out until a sign-in succeeds. */
+  signingIn?(): Promise<(succeeded: boolean) => void>;
   readonly adapter: ProviderAdapter;
   /** `rescan` = the user asked (Check again, saved a CLI): probes that
    * would start WSL are allowed to, where a passive refresh may not.

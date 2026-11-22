@@ -37,44 +37,69 @@ export function forgetAntigravitySignIn(target: typeof ANTIGRAVITY_KEYRING, plat
 /**
  * Signs agy out by deleting its saved sign-in, without cutting off a running turn: agy before 1.5 rereads that
  * sign-in on every request, so a delete under a running turn fails its reply. While turns run, sign-out reads as
- * done and no new turn starts; the delete lands when the last running turn ends. A sign-in drops a waiting delete.
+ * done and no new turn starts; the delete lands when the last running turn ends.
+ *
+ * Once sign-out has reported done, Wink reads signed out until a sign-in succeeds, whatever else fails: a refused
+ * delete or a failed sign-in leaves the saved sign-in in place but never usable. A sign-in holds the delete off
+ * while it runs (it may be saving a new sign-in); if it fails, the delete lands as soon as no turn runs.
  */
 export function antigravityKeyringSignOut(forget: () => Promise<boolean>) {
   const running = new Set<string>();
   const signedOut = new Set<() => void>();
-  let waiting = false;
+  // Sign-out reported done, and no sign-in has succeeded since.
+  let promised = false;
+  let signIns = 0;
   let landing: Promise<boolean> | undefined;
   const land = () => landing ??= (async () => {
     try {
       const ok = await forget();
-      if (ok) for (const listener of signedOut) listener();
+      if (ok) {
+        promised = false;
+        for (const listener of signedOut) listener();
+      }
       return ok;
     } finally {
-      waiting = false;
       landing = undefined;
     }
   })();
+  const landWhenFree = () => {
+    if (!promised || running.size || landing || signIns) return;
+    void land().then((ok) => {
+      if (!ok) console.warn("[antigravity] could not delete agy's saved sign-in after its running turns ended; Wink keeps it signed out");
+    });
+  };
   return {
-    /** A sign-out is waiting for running turns or its delete: read as signed out, start no turn. */
+    /** Signed out by Wink, or deleting: read as signed out, start no turn. */
     get waiting() {
-      return waiting;
+      return promised || landing !== undefined;
     },
     turnStarted(id: string) {
       running.add(id);
     },
     turnEnded(id: string) {
-      if (!running.delete(id) || !waiting || running.size || landing) return;
-      void land().then((ok) => {
-        if (!ok) console.warn("[antigravity] could not delete agy's saved sign-in after its running turns ended");
-      });
+      if (running.delete(id)) landWhenFree();
     },
-    /** True once signed out, or once the delete is waiting on running turns. */
+    /** True once signed out, or once the delete is waiting on running turns or a sign-in. */
     async signOut(): Promise<boolean> {
-      waiting = true;
-      return running.size && !landing ? true : land();
+      if (landing) await landing;
+      if (running.size || signIns) {
+        promised = true;
+        return true;
+      }
+      return land();
     },
-    signingIn() {
-      waiting = false;
+    /** A sign-in is starting: once any delete in flight has finished, holds the delete off until `ended`. */
+    async signingIn(): Promise<(succeeded: boolean) => void> {
+      signIns += 1;
+      await landing;
+      let open = true;
+      return (succeeded) => {
+        if (!open) return;
+        open = false;
+        signIns -= 1;
+        if (succeeded) promised = false;
+        else landWhenFree();
+      };
     },
     onSignedOut(listener: () => void) {
       signedOut.add(listener);

@@ -15,7 +15,7 @@ import { findCliCandidates, refreshPathCache, splitCliString } from "../env-path
 import { clearVersionCache, cliRevision } from "../procs.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
 import { MISSING_HOME, missingAccountHome } from "../accounts.ts";
-import { EngineLogin } from "../engine-login.ts";
+import { EngineLogin, type LoginCapture } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
 import { warmPool as sharedWarmPool, type WarmPool } from "../drivers/warm-pool.ts";
 import { retiredEngineLabel } from "../../shared/model-selection.ts";
@@ -391,8 +391,15 @@ export class ProviderRegistry {
     if (!args) return null;
     const env = device ? { ...config.env, ...login?.deviceEnv } : config.env;
     const paste = device || Boolean(config.account && config.engine === "claudeAgent");
-    this.get(instanceId)?.signingIn?.();
-    const capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
+    const signInEnded = await this.get(instanceId)?.signingIn?.();
+    let capture: LoginCapture;
+    try {
+      capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
+    } catch (error) {
+      signInEnded?.(false);
+      throw error;
+    }
+    if (signInEnded) void this.logins.wait(instanceId).then(() => signInEnded(this.logins.state(instanceId) === "complete"));
     return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
       ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
     };

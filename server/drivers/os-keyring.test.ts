@@ -5,6 +5,8 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
+import { runTestNode } from "../testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "../testing/test-home.ts";
 import { runKeyringTool, usesOsKeyringTool } from "./os-keyring.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -39,6 +41,33 @@ describe("the OS credential store in tests", () => {
     const done = vi.fn();
     runKeyringTool("cmdkey.exe", ["/list"], { encoding: "utf8" }, done);
     expect(done).toHaveBeenCalledWith(expect.objectContaining({ message: "tests never run the OS keyring tool" }), "");
+  });
+
+  it("is a fake in a server child a test spawns, with only the env a route test hands it", async () => {
+    // server/usage-gemini-route.test.ts starts server/index.ts this way: a fixture home, PATH and nothing else.
+    const home = createFixtureHome("omb-keyring-child-");
+    try {
+      const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home };
+      if (process.env.PATH) env.PATH = process.env.PATH;
+      if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+      const keyring = JSON.stringify(new URL("./os-keyring.ts", import.meta.url).href);
+      const auth = JSON.stringify(new URL("./antigravity-auth.ts", import.meta.url).href);
+      // Only asks the store anything once it is known not to be the OS one.
+      const run = await runTestNode(["--input-type=module", "-e", `
+        const { usesOsKeyringTool } = await import(${keyring});
+        const { probeAntigravitySignIn, forgetAntigravitySignIn, ANTIGRAVITY_KEYRING } = await import(${auth});
+        const usesOs = usesOsKeyringTool();
+        const asked = usesOs ? {} : {
+          probe: (await probeAntigravitySignIn("win32")) ?? null,
+          forget: await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "win32"),
+        };
+        console.log(JSON.stringify({ usesOs, ...asked }));
+      `], { env });
+      expect(run.status, run.stderr).toBe(0);
+      expect(JSON.parse(run.stdout.trim().split("\n").at(-1)!)).toEqual({ usesOs: false, probe: null, forget: false });
+    } finally {
+      removeTestData(home);
+    }
   });
 
   it("is never run by a test file directly", () => {

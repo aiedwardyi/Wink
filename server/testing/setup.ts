@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
 import { removeTestData, startTestRun } from "../../companion/src/test-profile.ts";
-import { replaceKeyringTool } from "../drivers/os-keyring.ts";
+import { refusingKeyringTool, replaceKeyringTool } from "../drivers/os-keyring.ts";
 import { scrubProfileEnv } from "./profile-env.ts";
 
 const home = startTestRun();
@@ -28,10 +28,9 @@ delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
 
 // The OS credential store (Windows Credential Manager, macOS keychain) is the user's real one whatever HOME
-// says: no test runs its tool. Here it is a store that refuses everything; a test that needs one injects its own.
-replaceKeyringTool((file, args, _options, done) => {
-  done(Object.assign(new Error("tests never run the OS keyring tool"), { cmd: [file, ...args].join(" ") }), "");
-});
+// says: no test runs its tool. os-keyring.ts already refuses in a test process (and in the servers tests spawn);
+// installed here as well so the refusal does not hang on that detection alone.
+replaceKeyringTool(refusingKeyringTool);
 
 // SQLite keeps the database file open for the lifetime of its handle.
 // Windows will not remove a directory containing an open database, so close
