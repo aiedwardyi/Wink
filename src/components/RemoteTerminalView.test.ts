@@ -157,6 +157,11 @@ describe("RemoteTerminalView", () => {
         expect(header.querySelector("p")).toBeNull();
         expect(header.textContent).not.toContain("wink");
         expect(title(host)).toBe("Terminal / Ada");
+        // The title word and slash hide below md so the worker name takes the room; the name itself never hides.
+        const h1 = header.querySelector("h1")!;
+        const hidden = [...h1.querySelectorAll("span")].filter((el) => el.className.split(" ").includes("max-md:hidden"));
+        expect(hidden.map((el) => el.textContent)).toEqual(["Terminal ", "/ "]);
+        expect(h1.querySelector("span.max-md\\:text-ink")?.textContent).toBe("/ Ada");
         expect(header.className.split(" ")).toContain("max-md:gap-0.5");
         const buttons = [...header.querySelectorAll<HTMLButtonElement>("button:not([data-worker-strip])")];
         expect(buttons.map((el) => el.getAttribute("aria-label"))).toEqual(["Refresh", "Copy", "Close terminal"]);
