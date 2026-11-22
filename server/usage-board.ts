@@ -4,12 +4,12 @@ import { usageIdentity } from "../shared/usage-identity.ts";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngineId, UsageBoardEvent, UsageBoardFrame, UsageBoardRun, UsageBoardWindow } from "../src/lib/usage-board.ts";
 import { isInstanceId, type AccountDrain } from "./accounts.ts";
 import { CODEX_CREDIT_NAME } from "./codex-credit.ts";
-import type { RateLimitsReport } from "./rate-limits-store.ts";
+import { observedRateLimits, type RateLimitsReport } from "./rate-limits-store.ts";
 import type { createUsageHistory } from "./usage-history.ts";
 
 type AccountRow = {
   id: string; of: string; driverKind: string; generation: number; existing: boolean; state: "pending" | "ready" | "stopped";
-  blocked?: boolean; identity?: string; credit?: true;
+  blocked?: boolean; checking?: boolean; identity?: string; credit?: true;
   status?: { state: "available" | "unavailable" | "checking"; cliMissing?: boolean; authenticated?: boolean; account?: string; accountIdentity?: string };
 };
 type Bot = { id: string; name: string; base: string };
@@ -67,7 +67,7 @@ export function createUsageBoard(deps: Deps) {
   const identities = new Map<string, string | null>();
 
   for (const row of deps.accounts.list()) {
-    const report = deps.rateLimits.get(row.id);
+    const report = observedRateLimits(deps.rateLimits.get(row.id));
     const at = report ? Date.parse(report.observedAt) : NaN;
     if (report && Number.isSafeInteger(at) && at >= 0) reports.set(row.id, { generation: row.generation, at, windows: report.windows.map((window) => ({ ...window })) });
   }
@@ -91,7 +91,10 @@ export function createUsageBoard(deps: Deps) {
     for (const row of rows) {
       const identity = usageIdentity(row.status ?? {});
       if (identity === undefined) continue;
-      if (identities.has(row.id) && identities.get(row.id) !== identity) {
+      const changed = identities.has(row.id) && identities.get(row.id) !== identity;
+      // Stored before accountChanged runs: its callbacks read the board again.
+      identities.set(row.id, identity);
+      if (changed) {
         deps.rateLimits.delete(row.id);
         deps.history.purge(row.id);
         reports.delete(row.id);
@@ -99,7 +102,6 @@ export function createUsageBoard(deps: Deps) {
         seenReports.clear();
         deps.accountChanged?.(row.id, row.status?.authenticated !== false);
       }
-      identities.set(row.id, identity);
     }
     const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation, identities.get(row.id), row.codexPromo]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
     if (signature !== accountSet) {
@@ -134,6 +136,7 @@ export function createUsageBoard(deps: Deps) {
   }
 
   function recordReport(accountId: string, report: RateLimitsReport) {
+    if (!observedRateLimits(report)) return;
     const row = accounts().find((row) => row.id === accountId);
     const at = Date.parse(report.observedAt);
     if (!row || !Number.isSafeInteger(at) || at < 0) return;
@@ -217,7 +220,7 @@ export function createUsageBoard(deps: Deps) {
       const fallback = row.credit ? CODEX_CREDIT_NAME : engine === "claude" || engine === "codex" || engine === "grok" ? `${titles[engine]} ${number}` : titles[engine];
       // Validated user labels may match the provider's sign-in name.
       const nickname = named?.nickname && named.name === named.nickname && !named.nickname.includes("@") ? named.nickname : null;
-      const report = deps.rateLimits.get(row.id);
+      const report = observedRateLimits(deps.rateLimits.get(row.id));
       const windows: UsageBoardWindow[] = (report?.windows ?? []).filter((window) => Number.isFinite(window.usedPercent)).map((window) => ({
         id: text(window.id, "other"), kind: kind(window), usedPercent: window.usedPercent,
         resetsAt: Number.isFinite(window.resetsAt) ? window.resetsAt : null,
@@ -232,6 +235,7 @@ export function createUsageBoard(deps: Deps) {
       let signIn: UsageBoardAccount["signIn"] = "unknown";
       if (Object.hasOwn(deps.accounts.drains, row.id)) signIn = "draining";
       else if (row.status?.cliMissing || byId.get(row.of)?.status?.cliMissing) signIn = "cli-missing";
+      else if (row.checking) signIn = "unknown";
       // A ready account is blocked while its sign-in is unconfirmed, not only after a sign-out.
       else if (row.blocked && !row.existing && row.state === "ready") signIn = "unknown";
       else if (row.blocked || row.state === "stopped") signIn = "signed-out";

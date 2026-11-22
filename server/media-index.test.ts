@@ -1,12 +1,20 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { buildMediaIndex, createMediaIndex } from "./media-index.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
+
+// a test can hold every disk size read until it lets go
+const disk = vi.hoisted(() => ({ hold: undefined as Promise<void> | undefined }));
+vi.mock("node:fs/promises", async (load) => {
+  const real = await load<typeof import("node:fs/promises")>();
+  return { ...real, stat: async (...args: Parameters<typeof real.stat>) => { await disk.hold; return real.stat(...args); } };
+});
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const HOUR = 3_600_000;
@@ -17,7 +25,7 @@ const upload = 'see\n<attached-image path="C:\\att\\abc-1.png" />\n<attached-fil
 describe("media index", () => {
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 
@@ -102,5 +110,26 @@ describe("media index", () => {
 
     expect("name" in first && first.name).toEqual(["a.pdf"]);
     expect(await media(threadId, first.v)).toMatchObject({ name: ["b.pdf", "a.pdf"] });
+  });
+
+  it("never lets a slower, older build replace a newer one", async () => {
+    const store = new Store(selection);
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[a.pdf](C:\\w\\a.pdf)" });
+    const media = createMediaIndex(store);
+    await media(threadId);
+
+    let release!: () => void;
+    disk.hold = new Promise((resolve) => { release = resolve; });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[b.pdf](C:\\w\\b.pdf)" });
+    const older = media(threadId);
+    disk.hold = undefined;
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[c.pdf](C:\\w\\c.pdf)" });
+    const newer = await media(threadId);
+    release();
+    await older;
+
+    expect("name" in newer && newer.name).toEqual(["c.pdf", "b.pdf", "a.pdf"]);
+    expect(await media(threadId, newer.v)).toEqual({ v: newer.v });
   });
 });

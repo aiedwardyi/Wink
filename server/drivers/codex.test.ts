@@ -1013,6 +1013,35 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(sentCalls(dump).find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: "again" }]);
   });
 
+  it("loads restored history into the native thread before it sends the first request", async () => {
+    await create();
+    const dump = join(scratch, "restored.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const nativeReplayPrefix = "User: earlier request\nAssistant: earlier reply\n\n";
+    const input = { threadId: "t-restored", text: nativeReplayPrefix + "go", nativeReplayPrefix };
+    await instance.adapter.sendTurn(input);
+    await recorder.until((e) => e.type === "turn.completed");
+    const calls = sentCalls(dump);
+    expect(calls.map((call) => call.method)).toEqual(["initialize", "initialized", "thread/start", "thread/inject_items", "turn/start"]);
+    expect(calls[3].params).toEqual({
+      threadId: "codex-thread-1",
+      items: [{ type: "message", role: "user", content: [{ type: "input_text", text: nativeReplayPrefix.trimEnd() }] }],
+    });
+    expect(calls[4].params.input).toEqual([{ type: "text", text: "go" }]);
+  });
+
+  it.each(["-32601", "-32603"])("delivers the first reply inline when history injection returns %s", async (code) => {
+    await create();
+    const dump = join(scratch, "restore-inline.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    process.env.FAKE_CODEX_NO_INJECT = code;
+    const nativeReplayPrefix = "User: earlier request\n\n";
+    const text = nativeReplayPrefix + "go";
+    await instance.adapter.sendTurn({ threadId: "t-restore-inline", text, nativeReplayPrefix });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(sentCalls(dump).find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text }]);
+  });
+
   it.each([
     ["a fresh thread", {}, "go"],
     ["a failed resume", { resumeCursor: "gone-thread", resumeFallback: { text: "durable summary and recent tail\n\ngo" } }, "durable summary and recent tail\n\ngo"],

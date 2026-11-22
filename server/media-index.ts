@@ -67,6 +67,9 @@ export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) 
   const held = new Map<string, MediaIndex>();
   const dirty = new Set<string>();
   const building = new Set<string>();
+  // the build each held index came from, so a slower older build never replaces a newer one
+  const builtBy = new WeakMap<MediaIndex, number>();
+  let builds = 0;
   let count = 0;
   store.onChange((change) => {
     if (!("threadId" in change) || !(held.has(change.threadId) || building.has(change.threadId))) return;
@@ -78,9 +81,13 @@ export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) 
     if (!index || dirty.has(threadId)) {
       dirty.delete(threadId);
       building.add(threadId);
+      const build = ++builds;
       const list = await linkedSizes(buildMediaIndex(threadId, store.activePath(threadId))).finally(() => building.delete(threadId));
       index = held.get(threadId);
-      if (!index || !same(index, list)) index = { v: `${boot}.${++count}`, ...list };
+      if (!index || (builtBy.get(index) ?? 0) < build) {
+        if (!index || !same(index, list)) index = { v: `${boot}.${++count}`, ...list };
+        builtBy.set(index, build);
+      }
     }
     held.delete(threadId);
     held.set(threadId, index);

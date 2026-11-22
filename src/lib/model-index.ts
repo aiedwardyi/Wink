@@ -60,7 +60,7 @@ export function priceOn(price: ModelPrice, today: string): ModelPrice {
 }
 
 export function pickerPrice(model: string, today = modelIndexToday()): string | undefined {
-  const id = model.replace(/^(gemini-.+)-(high|medium|low)$/, "$1");
+  const id = model.replace(/^(gemini-.+)-(xhigh|high|medium|low)$/, "$1");
   const price = MODEL_INDEX_ENTRIES.find((entry) => entry.index === "cost" && entry.model === id)?.price;
   return price ? formatPrice(priceOn(price, today)) : undefined;
 }
@@ -88,7 +88,7 @@ export function winkCatalog(instances: InstanceInfo[]): CatalogModel[] {
     const option = cell.options[0];
     // Contributor shares its base model's scores; only its price differs.
     if (!option || option.id.endsWith("-contributor")) return [];
-    const model = instance.driverKind === "antigravityAgent" ? option.id.replace(/-(high|medium|low)$/, "") : option.id;
+    const model = instance.driverKind === "antigravityAgent" ? option.id.replace(/-(xhigh|high|medium|low)$/, "") : option.id;
     if (seen.has(model)) return [];
     seen.add(model);
     return [{ provider: DRIVER_PROVIDER[instance.driverKind] ?? "other", model, label: cell.label }];

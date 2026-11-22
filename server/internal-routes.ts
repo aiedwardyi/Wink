@@ -32,6 +32,7 @@ import type { KeepGoing } from "./keep-going.ts";
 import { callApi, callApiRequestSchema, recordKeyUse } from "./key-broker.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
+import type { RoomFile } from "./rooms/db.ts";
 import type { RoutineRequestService } from "./routine-requests.ts";
 import type { RoutineManager, RoutineRun } from "./routines.ts";
 import { cancelWake, setWake } from "./self-wake.ts";
@@ -64,9 +65,11 @@ type InternalRouteDeps = {
   readOnlyTurn: (botId: string, threadId: string) => boolean;
   /** The user line a running room turn was dispatched to answer. */
   answeredLine: (threadId: string) => string | undefined;
+  /** The last text the bot's current turn in that thread wrote. */
+  turnText?: (botId: string, threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
-  boardCalls?: Pick<BoardCalls, "hold">;
+  boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -81,7 +84,26 @@ type InternalRouteDeps = {
   botOutputRoots: (bot: BotRecord, threadId: string, groupId?: string) => string[];
   routineProposalPersistence: (botId: string, threadId: string) => { ok: false; status: number; error: string } | { ok: true };
   maybeResumeConnectors: (botId: string, threadId: string, resumeKey: string) => boolean;
+  captureRoomPicture?: (bot: BotRecord, threadId: string) => RoomPicture | null;
 };
+
+type RoomPicture = (path: string, name: string, caption: string) => Promise<
+  { roomEntryId: string; roomFiles: RoomFile[]; replyToId?: string; url: string } | { messageId: string; url: string }
+>;
+
+/** A bot's token names its one conversation; only the boot token may speak for another. */
+const tokenMismatch = (claimed: { botId: string; threadId: string } | undefined, botId: string, threadId: string) =>
+  Boolean(claimed && (claimed.botId !== botId || claimed.threadId !== threadId));
+
+const roomRefusal = (e: unknown) => ({ status: (e as { status?: number }).status ?? 500, error: `the room refused it: ${(e as Error).message}` });
+
+async function publishRoomPicture(picture: RoomPicture, path: string, name: string, caption: string) {
+  try {
+    return await picture(path, name, caption);
+  } finally {
+    try { unlinkSync(path); } catch {}
+  }
+}
 
 export function createInternalRoutes(deps: InternalRouteDeps) {
   const caller = (req: IncomingMessage | undefined, botId: string, threadId: string) => deps.resolveCommsCaller
@@ -209,7 +231,14 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next);
-      if (saved && body.blockers !== undefined) deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+      if (saved && body.blockers !== undefined) {
+        deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
+        try {
+          deps.boardCalls?.cleared(body.fromThreadId, current.blockers, saved.blockers, body.completed_note);
+        } catch (cause) {
+          console.warn(`board: ${cause}`);
+        }
+      }
       if (saved && body.pause_automatic_wakes) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
@@ -402,7 +431,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         if (chip?.comm) store.patchMessage(fromThreadId, chip.id, { comm: { ...chip.comm, taskId: reply.taskId } });
         return json(res, 200, { botName: currentTarget.name, text: reply.text, taskId: reply.taskId, shown: false });
       }
-      const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true }, reply.replied, reply.text, reply.text);
+      const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true, engine: reply.engine }, reply.replied, reply.text, reply.text);
       if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId, requestingTurn);
       return json(res, 200, { botName: currentTarget.name, text: reply.text, shown });
     },
@@ -462,14 +491,16 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           appendMessage: (threadId, message) => store.appendMessage(threadId, message),
           activePath: (threadId) => store.activePath(threadId),
           patchMessage: (threadId, messageId, patch) => store.patchMessage(threadId, messageId, patch),
-          cancelHeld: (botId, threadId, question) => askHold.cancel(botId, threadId, question),
+          cancelHeld: (botId, threadId, question, forumOnly) => askHold.cancel(botId, threadId, question, forumOnly),
           alertThread: (bot, threadId) => {
             // A routine run's alert opens the conversation that owns the routine.
             const run = routines?.activeRunForBot(bot.id);
             return (run?.threadId === threadId && routineSourceThread(run)) || threadId;
           },
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
-          whenSettled: (botId, threadId, post, question) => askHold.whenSettled(botId, threadId, post, question),
+          whenSettled: (botId, threadId, post, question, forum) => askHold.whenSettled(botId, threadId, post, question, forum),
+          forum: (botId, threadId, question, choices) => deps.boardCalls?.ask(botId, threadId, question, choices) ?? "",
+          turnText: (botId, threadId) => deps.turnText?.(botId, threadId),
         },
         askUserRequestSchema.parse(body),
       );
@@ -484,6 +515,8 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!fromThreadId) return json(res, 400, { error: "no active thread" });
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), from.id, fromThreadId)) return json(res, 403, { error: "source thread does not belong to sender" });
+      const picture = deps.captureRoomPicture?.(from, fromThreadId);
       const roots = [
         store.taskByThread(from.id, fromThreadId)?.cwd,
         owner.group ? store.groupTaskByThread(owner.group.id, fromThreadId)?.pinnedCwd : undefined,
@@ -502,15 +535,23 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 403, { error: `picture gate: ${verdict.reason}. Run picture-gate check ${body.path}` });
       }
       const caption = typeof body.caption === "string" ? body.caption.trim().slice(0, 500) : "";
+      let shared: Awaited<ReturnType<RoomPicture>> | undefined;
+      try {
+        if (picture) shared = await publishRoomPicture(picture, saved.path, basename(String(body.path)), caption);
+      } catch (e) {
+        const { status, error } = roomRefusal(e);
+        return json(res, status, { error });
+      }
+      if (shared && "messageId" in shared) return json(res, 201, shared);
       const message = store.appendMessage(fromThreadId, {
         role: "bot",
         kind: "screen",
         ...(owner.group ? { from: { botId: from.id, name: from.name, color: from.color } } : {}),
-        image: saved.name,
+        ...(shared ? { roomEntryId: shared.roomEntryId, roomFiles: shared.roomFiles, replyToId: shared.replyToId } : { image: saved.name }),
         shown: true,
         ...(caption ? { text: caption } : {}),
       });
-      return json(res, 201, { messageId: message.id, url: `/api/attachments/${saved.name}` });
+      return json(res, 201, { messageId: message.id, url: shared?.url ?? `/api/attachments/${saved.name}` });
     },
     generateImage: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
@@ -521,10 +562,13 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!fromThreadId) return json(res, 400, { error: "no active thread" });
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), from.id, fromThreadId)) return json(res, 403, { error: "source thread does not belong to sender" });
       const parsed = generateImageRequestSchema.safeParse(body);
       if (!parsed.success) {
         return json(res, 400, { error: "needs a prompt and a supported size and quality" });
       }
+      // The room task thread can start another ask while generation is pending.
+      const picture = body.show === false || from.hooks?.pictures ? null : deps.captureRoomPicture?.(from, fromThreadId);
       const roots = botOutputRoots(from, fromThreadId, owner.group?.id);
       let generated: Awaited<ReturnType<typeof generateImageFile>>;
       try {
@@ -543,15 +587,22 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       } catch (e) {
         return json(res, 201, { path: generated.path, showError: (e as Error).message });
       }
+      let shared: Awaited<ReturnType<RoomPicture>> | undefined;
+      try {
+        if (picture) shared = await publishRoomPicture(picture, shown.path, basename(generated.path), "");
+      } catch (e) {
+        return json(res, 201, { path: generated.path, showError: roomRefusal(e).error });
+      }
+      if (shared && "messageId" in shared) return json(res, 201, { path: generated.path, ...shared });
       const name = basename(shown.path);
       const message = store.appendMessage(fromThreadId, {
         role: "bot",
         kind: "screen",
         ...(current.group ? { from: { botId: from.id, name: from.name, color: from.color } } : {}),
-        image: name,
+        ...(shared ? { roomEntryId: shared.roomEntryId, roomFiles: shared.roomFiles, replyToId: shared.replyToId } : { image: name }),
         shown: true,
       });
-      return json(res, 201, { path: generated.path, messageId: message.id, url: `/api/attachments/${name}` });
+      return json(res, 201, { path: generated.path, messageId: message.id, url: shared?.url ?? `/api/attachments/${name}` });
     },
     callKeyApi: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);

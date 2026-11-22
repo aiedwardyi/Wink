@@ -2,7 +2,7 @@
 // Invite secrets and keys live only as SHA-256 digests; a room code is kept whole
 // so the host can show it again. A key works only while its person row exists.
 // Every call is synchronous, so no two joins race one invite.
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,6 +16,7 @@ import { MAX_PAIRING_ATTEMPTS, sameText, sha256 } from "../phone-devices.ts";
 import { RoomError, roomById, type RoomPerson } from "./db.ts";
 import { endDoorPerson } from "./door-streams.ts";
 import { checkedRoomName, joinerName } from "./names.ts";
+import { OWNER_SEAT_PREFIX } from "./seat-key.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
 const SHORT_CODE_REFRESH_MS = 24 * 60 * 60_000;
@@ -39,7 +40,7 @@ type JoinError = "busy" | "no-invite" | "wrong-secret" | "too-many-tries" | "roo
 export type JoinResult = { ok: true; roomId: string; person: RoomPerson; key: string } | { ok: false; error: JoinError };
 
 /** Who is knocking, from their own Wink. `device` stays the same on their PC. */
-export type Joiner = { name?: unknown; device?: unknown };
+export type Joiner = { name?: unknown; device?: unknown; key?: string };
 
 type InviteRow = {
   id: string; room_id: string; name: string; secret_hash: string; created_at: number; expires_at: number; tries_left: number;
@@ -74,6 +75,11 @@ function open(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS guest_keys_person ON guest_keys(room_id, person_id);
     CREATE TABLE IF NOT EXISTS room_codes (
+      room_id TEXT PRIMARY KEY,
+      id TEXT NOT NULL UNIQUE,
+      secret TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS room_owner_codes (
       room_id TEXT PRIMARY KEY,
       id TEXT NOT NULL UNIQUE,
       secret TEXT NOT NULL
@@ -129,7 +135,7 @@ function transaction<T>(work: (database: DatabaseSync) => T): T {
 const pruneExpired = (database: DatabaseSync) => database.prepare("DELETE FROM invites WHERE expires_at <= ?").run(Date.now());
 
 const peopleNames = (database: DatabaseSync, roomId: string) =>
-  (database.prepare("SELECT name FROM people WHERE room_id = ?").all(roomId) as Array<{ name: string }>).map((row) => row.name);
+  (database.prepare("SELECT name FROM people WHERE room_id = ? AND id NOT IN (SELECT person_id FROM room_host_seats WHERE room_id = ?)").all(roomId, roomId) as Array<{ name: string }>).map((row) => row.name);
 
 const newCredential = (prefix: string) => `${prefix}${randomBytes(32).toString("base64url")}`;
 
@@ -170,6 +176,15 @@ export function roomCode(roomId: string): { id: string; secret: string } {
   return { id: row.id, secret: row.secret };
 }
 
+const ownerSecret = (secret: string, device: string) => `${SECRET_PREFIX}${createHmac("sha256", secret).update(device).digest("base64url")}`;
+
+export function ownerRoomCode(roomId: string, device: string): { id: string; secret: string } {
+  const database = db();
+  database.prepare("INSERT OR IGNORE INTO room_owner_codes (room_id, id, secret) VALUES (?, ?, ?)").run(roomId, `${OWNER_SEAT_PREFIX}${newId()}`, newCredential(SECRET_PREFIX));
+  const { id, secret } = database.prepare("SELECT id, secret FROM room_owner_codes WHERE room_id = ?").get(roomId) as { id: string; secret: string };
+  return { id, secret: ownerSecret(secret, device) };
+}
+
 /** The room's short code with a day or more left, else a fresh one from `mint`, else null. */
 export async function shortRoomCode(roomId: string, mint: () => Promise<{ code: string; exp: number } | null>): Promise<string | null> {
   const { id } = roomCode(roomId);
@@ -199,31 +214,46 @@ export function shortCodeTarget(text: string): { id: string; secret: string } | 
 
 /** One person per PC: the same device back while still in the room gets a fresh key, not a second seat. */
 function joinByRoomCode(database: DatabaseSync, codeId: string, secret: string, taken: readonly string[], joiner: Joiner): JoinResult {
-  const code = database.prepare("SELECT room_id, secret FROM room_codes WHERE id = ?").get(codeId) as { room_id: string; secret: string } | undefined;
+  const owner = codeId.startsWith(OWNER_SEAT_PREFIX);
+  const code = database.prepare(owner ? "SELECT room_id, secret FROM room_owner_codes WHERE id = ?" : "SELECT room_id, secret FROM room_codes WHERE id = ?").get(codeId) as { room_id: string; secret: string } | undefined;
   if (!code) return { ok: false, error: "no-invite" };
-  if (!sameText(sha256(code.secret), sha256(secret))) return { ok: false, error: "wrong-secret" };
+  if (!owner && !sameText(sha256(code.secret), sha256(secret))) return { ok: false, error: "wrong-secret" };
   if (typeof joiner.device !== "string" || !DEVICE.test(joiner.device)) return { ok: false, error: "bad-code" };
+  if (owner && !sameText(sha256(ownerSecret(code.secret, joiner.device)), sha256(secret))) return { ok: false, error: "wrong-secret" };
   const roomId = code.room_id;
   const seen = database.prepare("SELECT person_id, removed FROM room_devices WHERE room_id = ? AND device = ?").get(roomId, joiner.device) as
     | { person_id: string; removed: number }
     | undefined;
   if (seen?.removed) return { ok: false, error: "removed" };
-  const back = seen && (database.prepare("SELECT id, name, joined_at, works FROM people WHERE room_id = ? AND id = ?").get(roomId, seen.person_id) as
-    | { id: string; name: string; joined_at: number; works: number }
+  const back = seen && (database.prepare(`
+    SELECT p.id, p.name, p.joined_at, p.works, h.person_id AS host FROM people p
+    LEFT JOIN room_host_seats h ON h.room_id = p.room_id AND h.person_id = p.id
+    WHERE p.room_id = ? AND p.id = ?
+  `).get(roomId, seen.person_id) as
+    | { id: string; name: string; joined_at: number; works: number; host: string | null }
     | undefined);
+  if (back?.host && !owner) return { ok: false, error: "removed" };
+  const previousKey = owner && back && joiner.key && database.prepare("SELECT 1 FROM guest_keys WHERE hash = ? AND room_id = ? AND person_id = ?")
+    .get(sha256(joiner.key), roomId, back.id) ? joiner.key : undefined;
+  if (owner && back && !back.host && !previousKey) return { ok: false, error: "wrong-secret" };
+  const hostName = taken[0] ?? "Host";
   let person: RoomPerson;
   if (back) {
-    person = { id: back.id, name: back.name, joinedAt: back.joined_at, works: back.works === 1 };
-    database.prepare("DELETE FROM guest_keys WHERE room_id = ? AND person_id = ?").run(roomId, person.id);
+    person = { id: back.id, name: owner ? hostName : back.name, joinedAt: back.joined_at, works: back.works === 1 };
+    if (!previousKey) database.prepare("DELETE FROM guest_keys WHERE room_id = ? AND person_id = ?").run(roomId, person.id);
   } else {
     const people = peopleNames(database, roomId);
-    if (people.length >= MAX_PEOPLE) return { ok: false, error: "room-full" };
-    person = { id: newId(), name: joinerName(joiner.name, [...taken, ...people]), joinedAt: Date.now(), works: false };
+    if (!owner && people.length >= MAX_PEOPLE) return { ok: false, error: "room-full" };
+    person = { id: newId(), name: owner ? hostName : joinerName(joiner.name, [...taken, ...people]), joinedAt: Date.now(), works: false };
     database.prepare("INSERT INTO people (room_id, id, name, level, joined_at, works) VALUES (?, ?, ?, 'member', ?, 0)").run(roomId, person.id, person.name, person.joinedAt);
     database.prepare("INSERT OR REPLACE INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)").run(roomId, joiner.device, person.id);
   }
-  const key = newCredential(KEY_PREFIX);
-  database.prepare("INSERT INTO guest_keys (hash, room_id, person_id, created_at) VALUES (?, ?, ?, ?)").run(sha256(key), roomId, person.id, Date.now());
+  if (owner) {
+    person.host = true;
+    database.prepare("INSERT OR IGNORE INTO room_host_seats (room_id, person_id, host_name) VALUES (?, ?, ?)").run(roomId, person.id, hostName);
+  }
+  const key = previousKey ?? newCredential(KEY_PREFIX);
+  if (!previousKey) database.prepare("INSERT INTO guest_keys (hash, room_id, person_id, created_at) VALUES (?, ?, ?, ?)").run(sha256(key), roomId, person.id, Date.now());
   return { ok: true, roomId, person, key };
 }
 
@@ -257,11 +287,15 @@ export function joinRoom(inviteId: string, secret: string, taken: readonly strin
     database.prepare("INSERT INTO guest_keys (hash, room_id, person_id, created_at) VALUES (?, ?, ?, ?)")
       .run(sha256(key), invite.room_id, person.id, person.joinedAt);
     if (typeof joiner.device === "string" && DEVICE.test(joiner.device)) {
-      database.prepare("INSERT OR REPLACE INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)").run(invite.room_id, joiner.device, person.id);
+      database.prepare(`
+        INSERT INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)
+        ON CONFLICT(room_id, device) DO UPDATE SET person_id = excluded.person_id, removed = 0
+        WHERE NOT EXISTS (SELECT 1 FROM room_host_seats WHERE room_id = room_devices.room_id AND person_id = room_devices.person_id)
+      `).run(invite.room_id, joiner.device, person.id);
     }
     return { ok: true, roomId: invite.room_id, person, key };
   });
-  if (result.ok) endDoorPerson(result.roomId, result.person.id);
+  if (result.ok && result.key !== joiner.key) endDoorPerson(result.roomId, result.person.id);
   return result;
 }
 
@@ -270,19 +304,20 @@ export function guestByKey(key: string, device?: string | string[]): { roomId: s
   if (!key.startsWith(KEY_PREFIX) || key.length > MAX_CREDENTIAL_LENGTH) return null;
   const database = db();
   const row = database.prepare(`
-    SELECT p.room_id, p.id, p.name, p.joined_at, p.works FROM guest_keys k
-    JOIN people p ON p.room_id = k.room_id AND p.id = k.person_id WHERE k.hash = ?
-  `).get(sha256(key)) as { room_id: string; id: string; name: string; joined_at: number; works: number } | undefined;
+    SELECT p.room_id, p.id, p.name, p.joined_at, p.works, h.person_id AS host FROM guest_keys k
+    JOIN people p ON p.room_id = k.room_id AND p.id = k.person_id
+    LEFT JOIN room_host_seats h ON h.room_id = p.room_id AND h.person_id = p.id WHERE k.hash = ?
+  `).get(sha256(key)) as { room_id: string; id: string; name: string; joined_at: number; works: number; host: string | null } | undefined;
   if (row && typeof device === "string" && DEVICE.test(device)) {
     database.prepare("INSERT OR IGNORE INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)").run(row.room_id, device, row.id);
   }
-  return row ? { roomId: row.room_id, person: { id: row.id, name: row.name, joinedAt: row.joined_at, works: row.works === 1 } } : null;
+  return row ? { roomId: row.room_id, person: { id: row.id, name: row.name, joinedAt: row.joined_at, works: row.works === 1, ...(row.host ? { host: true } : {}) } } : null;
 }
 
 /** The room a live invite or room code is for, without spending a try. */
 export function inviteRoomId(inviteId: string): string | null {
-  const row = db().prepare("SELECT room_id FROM invites WHERE id = ? AND expires_at > ? UNION ALL SELECT room_id FROM room_codes WHERE id = ?")
-    .get(inviteId, Date.now(), inviteId) as { room_id: string } | undefined;
+  const row = db().prepare("SELECT room_id FROM invites WHERE id = ? AND expires_at > ? UNION ALL SELECT room_id FROM room_codes WHERE id = ? UNION ALL SELECT room_id FROM room_owner_codes WHERE id = ?")
+    .get(inviteId, Date.now(), inviteId, inviteId) as { room_id: string } | undefined;
   return row?.room_id ?? null;
 }
 

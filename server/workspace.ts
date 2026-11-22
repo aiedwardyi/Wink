@@ -95,6 +95,11 @@ export function loadMemory(
     return null;
   }
   if (!raw.trim() || raw === MEMORY_SEED) return null;
+  return loadedMemory(raw);
+}
+
+/** raw cut the way loadMemory cuts it for the prompt. */
+export function loadedMemory(raw: string) {
   let truncated = false;
   let text = raw;
   const lines = text.split("\n");
@@ -244,11 +249,20 @@ export function memoryHealth(botId: string): MemoryHealth {
 
 /** Read one topic file. The name gate runs here too, not only in the HTTP
  * route — a future caller must not be able to turn this into a read of an
- * arbitrary path. Null for anything invalid or unreadable. */
+ * arbitrary path. Null for an invalid name or a missing file. */
 export function readMemoryTopic(botId: string, name: string): string | null {
   if (!isMemoryTopicName(name)) return null;
   try {
     return readFileSync(join(workspaceDir(botId), "memory", name), "utf8");
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    return null;
+  }
+}
+
+function readOptionalMemoryTopic(botId: string, name: string): string | null {
+  try {
+    return readMemoryTopic(botId, name);
   } catch {
     return null;
   }
@@ -261,7 +275,7 @@ const LESSON_RULE =
 
 /** The current picks block, the one copy chats and calls both read. */
 export function picksPrompt(botId: string): string {
-  return picksBlock(readMemoryTopic(botId, PICKS_FILE));
+  return picksBlock(readOptionalMemoryTopic(botId, PICKS_FILE));
 }
 
 /** The memory block appended to a bot's system prompt. A short starter block
@@ -275,7 +289,7 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
   const parked = listMemoryTopics(botId)
     .map((topic) => `memory/${topic.name}`)
     // sync merges timeline copies itself; one it could not merge still needs the bot
-    .filter((name) => PARKED_COPY.test(name) && !(/^memory\/decisions\.conflict-/.test(name) && timelineHolds(readMemoryTopic(botId, PICKS_FILE), readMemoryTopic(botId, name.slice("memory/".length)) ?? "")));
+    .filter((name) => PARKED_COPY.test(name) && !(/^memory\/decisions\.conflict-/.test(name) && timelineHolds(readOptionalMemoryTopic(botId, PICKS_FILE), readOptionalMemoryTopic(botId, name.slice("memory/".length)) ?? "")));
   const memoryFile = join(workspaceDir(botId), "MEMORY.md");
   const topicDir = join(workspaceDir(botId), "memory");
   const current = picksPrompt(botId);

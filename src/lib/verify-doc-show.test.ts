@@ -38,6 +38,24 @@ it("plays a 150-line, four-chunk replay in about 5 s", () => {
   expect(length).toBeLessThanOrEqual(5_300);
 });
 
+it("reads a replay's chunks top to bottom, one after another, though the run read them side by side", () => {
+  const show = new VerifyDocShow(false), opened = new Map<number, number>();
+  show.plan([text(150), band(4, 1, 40, "start"), band(5, 41, 80, "start"), band(6, 81, 120, "start"), band(9_000, 1, 40, "done"), band(9_001, 121, 150, "start"), band(11_000, 41, 80, "done"), band(12_500, 81, 120, "done"), band(16_000, 121, 150, "done")], 19_000, false);
+  play(show, (_, open) => { for (const from of open.keys()) if (!opened.has(from)) opened.set(from, show.clock); });
+  const at = [1, 41, 81, 121].map(from => opened.get(from)!);
+  at.slice(1).forEach((ms, i) => expect(ms - at[i]!).toBeGreaterThanOrEqual(600));
+});
+
+it("closes each chunk before the next one opens, even a short chunk after a long one", () => {
+  const show = new VerifyDocShow(false), opened = new Map<number, number>(), closed = new Map<number, number>();
+  show.plan([text(420), band(4, 1, 400, "start"), band(5, 401, 410, "start"), band(6, 411, 420, "start"), band(9_000, 1, 400, "done"), band(9_001, 401, 410, "done"), band(9_002, 411, 420, "done")], 9_002, false);
+  play(show, step => {
+    for (const mark of step.marks) if (mark.kind === "doc-chunk") (mark.state === "done" ? closed : opened).set(mark.from as number, show.clock);
+  });
+  expect(opened.get(401)!).toBeGreaterThanOrEqual(closed.get(1)!);
+  expect(opened.get(411)!).toBeGreaterThanOrEqual(closed.get(401)!);
+});
+
 it("glides each cursor quickly and rests only on a quote it marked", () => {
   const show = new VerifyDocShow(false), last = new Map<string, { end: number; quote: boolean }>();
   let reading = 0, quote = 0;
@@ -108,17 +126,17 @@ it("keeps the names cursor alone for the comparison, only when the check really 
   expect(after(20)).toEqual(["none"]);
 });
 
-it("keeps reading a live chunk until its done mark, then lands what the reply found and leaves", () => {
+it("reads a live chunk once, rests on the last spot until its done mark, then lands what the reply found and leaves", () => {
   const show = new VerifyDocShow(true);
   let moves = 0;
   show.feed(text(22));
   show.feed(band(5, 1, 22, "start"));
   for (let ms = 0; ms < 30_000; ms += 20) {
     const step = show.advance(20);
-    moves += step.moved.length;
+    if (ms > 8_000) moves += step.moved.length;
     if (ms > 3_000) expect([...show.cursors.keys()].sort()).toEqual(["1:grammar", "1:names", "1:spelling", "1:translation"]);
-    if (ms > 3_000 && ms % 1_000 === 0) expect(moves).toBeGreaterThan(0), moves = 0;
   }
+  expect(moves).toBe(0);
   show.feed(hit(30_000, "spelling", 5));
   show.feed(band(30_001, 1, 22, "done"));
   show.finish(30_002, false);
@@ -128,6 +146,33 @@ it("keeps reading a live chunk until its done mark, then lands what the reply fo
   expect(show.clock).toBeGreaterThan(30_200);
   expect(show.cursors.size).toBe(0);
   expect(show.due()).toBe(Infinity);
+});
+
+it("reads a live two-page chunk once in order, never starting over, then rests with no lag", () => {
+  const show = new VerifyDocShow(true), seen = new Map<string, number[]>(), rest = new Map<string, number>();
+  let last = 0, gap = 0;
+  show.feed(text(27));
+  show.feed(band(41, 1, 26, "start"));
+  for (let ms = 0; ms < 16_000; ms += 20) {
+    const step = show.advance(20);
+    for (const c of step.moved) {
+      seen.set(c.id, [...seen.get(c.id) ?? [], c.line]);
+      if (c.duration) {
+        expect(c.duration).toBeGreaterThanOrEqual(220);
+        expect(c.duration).toBeLessThanOrEqual(320);
+      }
+      if (c.kind !== "numbering") gap = Math.max(gap, ms - (rest.get(c.id) ?? ms));
+      if (c.duration) rest.set(c.id, ms + c.duration);
+      last = ms;
+    }
+  }
+  for (const [id, line] of seen) if (!id.endsWith(":numbering")) {
+    expect(line, id).toEqual([...line].sort((a, b) => a - b));
+    expect(line.at(-1)!, id).toBeGreaterThan(18);
+  }
+  expect(gap).toBeLessThanOrEqual(40);
+  expect(last).toBeLessThan(6_000);
+  expect([...show.cursors.keys()].sort()).toEqual(["1:grammar", "1:names", "1:spelling", "1:translation"]);
 });
 
 it("shows marks that were waiting when a live watch joined at once", () => {

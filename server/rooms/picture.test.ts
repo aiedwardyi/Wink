@@ -1,12 +1,13 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
 import { joinedFileRoute } from "./joined-files.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
-afterEach(() => rmSync(join(DATA_DIR, "picture-test"), { recursive: true, force: true }));
+afterEach(() => removeTestData(join(DATA_DIR, "picture-test")));
 
 it("serves the joined state's picture through a read-only route", async () => {
   const path = join(DATA_DIR, "picture-test", "photo");

@@ -271,6 +271,39 @@ it("paints a checkout's last rows before the tree and the code, then swaps in on
   expect(host.querySelector(".map-flow-row")).toBe(row);
 });
 
+it.each([["last", { open: true, active: false }], ["read", { open: false, active: true }]] as const)("paints every worker's %s row in one go, after the slowest answer", async (_kind, gate) => {
+  // measured on 8 real checkouts: rows answered from 1.07 s to 3.6 s
+  const late = new Map([["a", 1_070], ["b", 2_000], ["c", 3_605]]);
+  flows.b = flow({ pr: null });
+  flows.c = flow({ pr: null, pushed: 1 });
+  vi.mocked(fetch).mockImplementation((url: string | URL | Request) => { const id = new URL(String(url), "http://x").searchParams.get("worker")!; return new Promise(done => setTimeout(() => done(Response.json(flows[id])), late.get(id))); });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA"), worker("c", "GAMMA")], all: true, ...gate });
+  const seen = new Set<number>();
+  for (let ms = 0; ms < 4_000; ms += 100) { await tick(100); seen.add(host.querySelectorAll(".map-flow-row").length); }
+  expect([...seen]).toEqual([0, 3]);
+  expect(calls()).toHaveLength(3);
+});
+
+it("paints the rows that read when one fails, and nothing from a chat switched away mid-read", async () => {
+  let hold: () => void = () => {};
+  vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const id = new URL(String(url), "http://x").searchParams.get("worker"); if (id === "c") await new Promise<void>(done => { hold = done; }); return id === "b" ? Response.json({ error: "Could not read git" }, { status: 503 }) : Response.json(flows.a); });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true });
+  expect([...host.querySelectorAll(".map-flow-row > b")].map(nick => nick.textContent)).toEqual(["ALPHA"]);
+  await render({ base: "/api/bots/other/map", workers: [worker("c", "GAMMA")], worker: "c" });
+  await render({ base: "/api/bots/other/map", workers: [worker("d", "DELTA", false)], worker: "d" });
+  await act(async () => hold());
+  expect(host.querySelector(".map-flow-row")).toBeNull();
+});
+
+it("holds the other checkouts' last rows until the read when one checkout has none", async () => {
+  vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const at = new URL(String(url), "http://x"); return Response.json(at.searchParams.get("cached") && at.searchParams.get("worker") === "b" ? null : flows[at.searchParams.get("worker")!]); });
+  flows.b = flow({ pr: null });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true, open: true, active: false });
+  expect(host.querySelector(".map-flow-row")).toBeNull();
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true, open: true, active: true });
+  expect(host.querySelectorAll(".map-flow-row")).toHaveLength(2);
+});
+
 it("waits for the read when a checkout has no last rows, and a late cached answer never covers it", async () => {
   let late: (value: Response) => void = () => {};
   vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const at = new URL(String(url), "http://x"); return at.searchParams.get("cached") ? new Promise<Response>(done => { late = done; }) : Response.json(flows.a); });

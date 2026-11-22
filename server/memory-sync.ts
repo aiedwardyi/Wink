@@ -2,10 +2,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } fr
 import { readdir, readFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { homedir, hostname, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { readOsMachineId } from "./device-sync.ts";
 import { mergeTimelines, PICKS_FILE } from "./picks.ts";
 import { syncRoots, syncWriteRoot } from "./sync-roots.ts";
 import { isMemoryTopicName, MEMORY_SEED } from "./workspace.ts";
@@ -43,13 +44,16 @@ const snapshotSchema = z.object({
   talkedAt: time,
   files: z.record(
     z.string().refine(isSyncedFile),
-    z.object({ vv: versionsSchema, at: time, text: z.string().nullable(), by: rankSchema.optional() }),
+    // tidied: the versions an idle tidy removed lines from, when that is all that changed since them
+    z.object({ vv: versionsSchema, at: time, text: z.string().nullable(), by: rankSchema.optional(), tidied: versionsSchema.optional() }),
   ),
 });
 type Snapshot = z.infer<typeof snapshotSchema>;
 
 const ledgerSchema = z.object({
   device: z.string().regex(DEVICE).optional(),
+  jobDevice: z.string().regex(DEVICE).optional(),
+  jobOwners: z.record(z.string().regex(ID), z.string().regex(ID)).optional(),
   host: z.string().optional(),
   clock: z.number().int().nonnegative().optional(),
   talked: z.record(z.string(), time).optional(),
@@ -57,9 +61,11 @@ const ledgerSchema = z.object({
     z.string(),
     z.object({
       // per file: the versions this PC holds, the hash of the text they describe, when that text was edited, and the PC it came from
-      files: z.record(z.string(), z.object({ vv: versionsSchema, hash: z.string().nullable(), at: time, by: rankSchema.optional() })),
+      files: z.record(z.string(), z.object({ vv: versionsSchema, hash: z.string().nullable(), at: time, by: rankSchema.optional(), tidied: versionsSchema.optional() })),
       // what the last pass read, so a bot nothing touched since skips reading every PC's copy
       seen: z.string().optional(),
+      // the idle tidy's last change to MEMORY.md, as text hashes, until a pass takes it in
+      tidy: z.object({ from: z.string(), to: z.string() }).optional(),
     }),
   ),
 });
@@ -244,6 +250,30 @@ export async function readMemorySnapshots(folder: string, botSyncId: string): Pr
   }
 }
 
+/** Background jobs belong to the bot's original profile publisher, even during delayed sync. */
+export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string, device: string, jobMachine?: string): boolean {
+  return Boolean(ledger.device && ledger.jobDevice === (jobMachine ?? ledger.device) && ledger.jobOwners?.[botSyncId] === device);
+}
+
+/** Kept across a hostname change, different for a copied ~/.orbit; undefined when the OS has no machine id. */
+export function memoryJobMachine(dataDir: string): string | undefined {
+  const id = readOsMachineId();
+  return id && createHash("sha256").update(`wink-memory-jobs\0${id}\0${resolve(dataDir)}`).digest("hex").slice(0, 12);
+}
+
+export function pinMemoryJobOwner(ledger: MemorySyncLedger, botSyncId: string, owner: string): boolean {
+  const owners = ledger.jobOwners ??= {};
+  if (Object.hasOwn(owners, botSyncId)) return false;
+  owners[botSyncId] = owner;
+  return true;
+}
+
+/** The idle tidy changed MEMORY.md from `before` to `after`: if the next pass finds only that change, a copy that holds what the tidy started from wins over it with nothing set aside. Save the ledger after it. */
+export function markTidied(ledger: MemorySyncLedger, botSyncId: string, before: string, after: string): void {
+  const bot = ledger.bots[botSyncId];
+  if (bot) bot.tidy = { from: hash(before)!, to: hash(after)! };
+}
+
 let machineId: string | undefined;
 
 function machine(): string {
@@ -259,17 +289,22 @@ function machine(): string {
 }
 
 // a ledger copied or restored onto another PC must not keep writing as the PC it came from
-function deviceId(ledger: MemorySyncLedger, host: string): string {
-  if (!ledger.device || ledger.host !== host) {
+function deviceId(ledger: MemorySyncLedger, host: string, jobMachine?: string): string {
+  const moved = Boolean(ledger.device && ledger.host !== host);
+  // A copied ledger gets a new sync device, but keeps its original job binding; one bound to this unmoved device moves to the machine key.
+  if (moved) ledger.jobDevice ??= ledger.device;
+  else if (jobMachine && ledger.jobDevice === ledger.device) ledger.jobDevice = jobMachine;
+  if (!ledger.device || moved) {
     ledger.device = randomBytes(6).toString("hex");
     ledger.host = host;
   }
+  ledger.jobDevice ??= jobMachine ?? ledger.device;
   return ledger.device;
 }
 
 /** Mints this PC's memory device before the first sync, as the first sync would. */
-export function ensureMemorySyncDevice(ledger: MemorySyncLedger): string {
-  return deviceId(ledger, machine());
+export function ensureMemorySyncDevice(ledger: MemorySyncLedger, jobMachine?: string): string {
+  return deviceId(ledger, machine(), jobMachine);
 }
 
 function tick(ledger: MemorySyncLedger): number {
@@ -450,11 +485,15 @@ export function syncBotMemory(
     let state: FileState | undefined = bot.files[file];
     let result: MemorySyncResult = "current";
     const localHash = hash(text);
+    const tidy = file === MEMORY_FILE ? bot.tidy : undefined;
+    if (tidy) delete bot.tidy;
     if (state ? state.hash !== localHash : localHash !== null) {
       // a copy unchanged since the older build agreed on it is no new edit: a pulled one gives way, and none wins a tie on talkedAt
       const legacyCopy = !state && firstSync && legacy?.[`${botSyncId}/${file}`] === localHash;
+      // versions the tidy started from; none at all would be held by every copy
+      const tidied = state && Object.keys(state.vv).length && tidy?.from === state.hash && tidy.to === localHash ? (state.tidied ?? state.vv) : undefined;
       const vv = legacyCopy && settled(legacy, botSyncId, file, localHash) ? {} : { ...state?.vv, [me]: tick(ledger) };
-      state = bot.files[file] = { vv, hash: localHash, at: editedAt(path, now), by: legacyCopy ? { device: me, talkedAt: 0 } : undefined };
+      state = bot.files[file] = { vv, hash: localHash, at: editedAt(path, now), by: legacyCopy ? { device: me, talkedAt: 0 } : undefined, tidied };
       result = "pushed";
     } else if (!state && deletes.has(file)) {
       state = bot.files[file] = { vv: { [me]: tick(ledger) }, hash: null, at: deletes.get(file)!, by: { device: me, talkedAt: 0 } };
@@ -471,7 +510,7 @@ export function syncBotMemory(
           text = entry.text;
           result = "pulled";
         }
-        state = bot.files[file] = state ? { ...state, vv: joined(state.vv, entry.vv) } : { vv: entry.vv, hash: theirs, at: entry.at, by };
+        state = bot.files[file] = state ? { ...state, vv: joined(state.vv, entry.vv) } : { vv: entry.vv, hash: theirs, at: entry.at, by, tidied: entry.tidied };
         continue;
       }
       const newer = covers(entry.vv, state.vv);
@@ -480,7 +519,7 @@ export function syncBotMemory(
       if (newer && !older) {
         writeText(path, entry.text);
         text = entry.text;
-        state = bot.files[file] = { vv: entry.vv, hash: theirs, at: entry.at, by };
+        state = bot.files[file] = { vv: entry.vv, hash: theirs, at: entry.at, by, tidied: entry.tidied };
         result = "pulled";
         continue;
       }
@@ -493,8 +532,19 @@ export function syncBotMemory(
         result = "pulled";
         continue;
       }
-      const keep = wins({ ...(state.by ?? mine), at: state.at }, { ...(by ?? mine), at: entry.at });
       const vv = joined(state.vv, entry.vv);
+      // a copy the idle tidy only took lines out of gives way, with nothing set aside, to a copy that holds every line it started from
+      const ours: boolean = Boolean(state.tidied && !entry.tidied && covers(entry.vv, state.tidied));
+      if (ours || (entry.tidied && !state.tidied && covers(state.vv, entry.tidied))) {
+        if (ours) {
+          writeText(path, entry.text);
+          text = entry.text;
+          result = "pulled";
+        }
+        state = bot.files[file] = ours ? { vv, hash: theirs, at: entry.at, by } : { ...state, vv };
+        continue;
+      }
+      const keep = wins({ ...(state.by ?? mine), at: state.at }, { ...(by ?? mine), at: entry.at });
       const lost = keep ? entry.text : text;
       const lostAt = keep ? entry.at : state.at;
       const parked = lost === null ? null : park(workspace, file, lost, lostAt);
@@ -507,7 +557,7 @@ export function syncBotMemory(
         writeText(path, entry.text);
         text = entry.text;
       }
-      state = bot.files[file] = keep ? { ...state, vv } : { vv, hash: theirs, at: entry.at, by };
+      state = bot.files[file] = keep ? { ...state, vv } : { vv, hash: theirs, at: entry.at, by, tidied: entry.tidied };
       result = "conflict";
       console.warn(
         `memory sync: ${botSyncId}/${file} changed on two PCs; kept ${keep ? "this" : "the other"} PC's copy${parked ? `, set the other aside as ${parked.name}` : ""}`,
@@ -537,7 +587,7 @@ export function syncBotMemory(
   for (const [file, state] of Object.entries(bot.files)) {
     const text = texts.get(file);
     // unreadable this pass: keep what this PC last published rather than claim a delete
-    const entry = text === undefined ? own?.files[file] : { vv: state.vv, at: state.at, text, by: state.by };
+    const entry = text === undefined ? own?.files[file] : { vv: state.vv, at: state.at, text, by: state.by, tidied: state.tidied };
     if (entry) published[file] = entry;
   }
   const body = `${JSON.stringify({ format: FORMAT, version: 1, device: me, talkedAt, files: published })}\n`;

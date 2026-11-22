@@ -2,6 +2,7 @@ import {
   deliveredReactionKeys,
   formatReactionAnnotation,
   promptWithReactions,
+  reactedRows,
   type ReactionMessage,
 } from "../shared/reactions.ts";
 import type { Message } from "./store.ts";
@@ -77,7 +78,7 @@ function reactionIdsAlreadyInTranscript(
   userName: string,
 ): Set<string> {
   const ids = new Set<string>();
-  for (const message of messages) {
+  for (const message of reactedRows(messages)) {
     if (message.role === "user") continue;
     const annotation = formatReactionAnnotation(message, userName, messages);
     if (!annotation) continue;
@@ -97,7 +98,16 @@ type UserTurnOpts = {
   delivered?: readonly string[];
 };
 
+// a turn composes its prompt and records its keys from the same opts: the transcript check reads every reacted line
+const reactionOptsByTurn = new WeakMap<UserTurnOpts, ReturnType<typeof readReactionOpts>>();
+
 function reactionOpts(opts: UserTurnOpts) {
+  let found = reactionOptsByTurn.get(opts);
+  if (!found) reactionOptsByTurn.set(opts, (found = readReactionOpts(opts)));
+  return found;
+}
+
+function readReactionOpts(opts: UserTurnOpts) {
   const userName = opts.userName ?? "User";
   const omitMessageIds = opts.replayedTranscript
     ? reactionIdsAlreadyInTranscript(opts.messages, opts.replayedTranscript, userName)

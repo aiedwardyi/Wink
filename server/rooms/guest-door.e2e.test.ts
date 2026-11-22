@@ -1,25 +1,30 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpsServer, request as httpsRequest, type Server } from "node:https";
 import { createConnection, createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
+import { Readable } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { PHONE_RELAY_OFF } from "../../shared/relay-protocol.ts";
 import { DATA_DIR } from "../config.ts";
+import { createInternalRoutes } from "../internal-routes.ts";
 import { PhoneAccess } from "../phone-access.ts";
 import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
-import { Store, type Message } from "../store.ts";
-import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
-import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
+import { Store, type BotRecord, type Message } from "../store.ts";
+import { asksWork, closeAsksDb, configureRoomAsks, readOnlyAskTurn, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
+import { appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, recentRoomEntries, roomEntry, roomPeople, setPersonWorks } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
+import { listRoomFiles } from "./files.ts";
+import { roomFilesRoot } from "./files-folder.ts";
 import { GuestClient } from "./guest-client.ts";
+import * as invites from "./invites.ts";
 import { barRoomPerson, closeInvitesDb, createInvite, revokeGuestKeys, roomCode } from "./invites.ts";
 import { joinedRoute } from "./joined-routes.ts";
 import { addJoinedEntries, closeJoinedDb, joinedCursor, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
@@ -27,6 +32,7 @@ import { publishTurnAnswer } from "./multiplayer.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { MyRoomBotTurns } from "./my-room-bots.ts";
 import { hostedSend, stopBotChain } from "./send.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const BASE = "wink.test";
 /** The entry an older guest build accepts. */
@@ -49,6 +55,10 @@ let doorHeaders: IncomingHttpHeaders[] = [];
 let client: GuestClient | null = null;
 let changes: unknown[] = [];
 let ownName = "Mina";
+let refusePicture: (() => Promise<number>) | undefined;
+let hostAlert = vi.fn();
+let guestAlert = vi.fn();
+const device = "pc-mina-0123456789abcdef";
 
 /** The relay hop: splices TCP to the PC, which ends TLS, as the real relay does. */
 const hop = {
@@ -66,6 +76,13 @@ const hop = {
 async function app(req: IncomingMessage, res: ServerResponse) {
   if (isRelayRequest(req)) {
     doorHeaders.push(req.headers);
+    if (refusePicture && req.url?.split("?")[0]?.endsWith("/bot-picture")) {
+      const status = await refusePicture();
+      req.resume();
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: status === 404 ? "not found" : "unavailable" }));
+      return;
+    }
     if ((await access.gate(req, res)).handled) return;
   }
   res.writeHead(404, { "content-type": "application/json" });
@@ -130,15 +147,18 @@ const close = () => {
 let skew = 0;
 
 beforeEach(() => {
+  refusePicture = undefined;
   vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
   vi.setSystemTime(Date.now() + (skew += 2 * 60_000));
   close();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   hop.up = true;
   doorHeaders = [];
   changes = [];
   ownName = "Mina";
+  hostAlert = vi.fn();
+  guestAlert = vi.fn();
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   engine = { sendTurn: vi.fn(), generateText: vi.fn(), generateReview: vi.fn(), answerWords: vi.fn() };
   roomAskHooks.words = vi.fn();
@@ -149,6 +169,7 @@ beforeEach(() => {
     dispatch: vi.fn(),
     stopTurn: vi.fn(async () => {}),
     endSession: vi.fn(async () => {}),
+    alert: hostAlert,
   });
   configureRoomDoor({ store, hostName: () => "Edward" });
 });
@@ -165,10 +186,11 @@ afterEach(() => {
 const teammate = (timing?: { silenceMs?: number; retryMs?: number; maxRetryMs?: number }) =>
   (client = new GuestClient({
     bases: () => [null, BASE],
-    joiner: () => ({ name: ownName, device: "pc-mina-0123456789abcdef" }),
+    joiner: () => ({ name: ownName, device }),
     https: { ca: caPem, lookup: loopbackLookup, port: hop.port },
     onChange: (roomId) => changes.push({ kind: "joined", hosted: true, roomId }),
-    timing: { retryMs: 50, maxRetryMs: 200, ...timing },
+    alert: guestAlert,
+    timing: { retryMs: 50, maxRetryMs: 200, alertMs: 10, ...timing },
   }));
 
 function teamRoom(name = "Team"): HostedGroup {
@@ -194,6 +216,21 @@ const texts = (roomId: string) => joinedEntries(roomId, 500).map((entry) => entr
 const seqs = (roomId: string) => joinedEntries(roomId, 500).map((entry) => entry.seq);
 const live = (c: GuestClient, roomId: string) => until(() => c.rooms().find((room) => room.roomId === roomId)?.link === "live");
 
+function snapshotFor(roomId: string, key: string): Promise<{ state: { people: Array<{ name: string }> }; entries: Array<{ author: unknown }> }> {
+  return new Promise((resolve, reject) => {
+    const req = httpsRequest({ host: "127.0.0.1", port: hop.port, servername: HOST, ca: caPem, path: `/room/v1/rooms/${roomId}/snapshot`,
+      headers: { host: HOST, authorization: `Bearer ${key}` } }, async (res) => {
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of res) chunks.push(chunk);
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch (error) { reject(error); }
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 async function joinedTeam(name = "Mina") {
   const group = teamRoom();
   hostSays(group, "welcome");
@@ -206,6 +243,167 @@ async function joinedTeam(name = "Mina") {
 }
 
 describe("teammate and the real door", () => {
+  function ownerCode(roomId: string) {
+    const { id, secret } = invites.ownerRoomCode(roomId, device);
+    return `wkr1:${HOST}:${id}.${secret}`;
+  }
+
+  it("shows just one Edward to ordinary guests and upgrades an existing synced seat and its history", async () => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    const publicCode = roomCode(roomId);
+    const guest = invites.joinRoom(publicCode.id, publicCode.secret, ["Edward"], { name: "Mina", device: "pc-other-0123456789abcdef" });
+    if (!guest.ok) throw new Error(guest.error);
+    const privateCode = invites.ownerRoomCode(roomId, device);
+    expect(invites.joinRoom(privateCode.id, privateCode.secret, ["Edward"], { name: "Mina", device: "pc-other-0123456789abcdef" })).toMatchObject({ ok: false, error: "wrong-secret" });
+    ownName = "Edward";
+    const c = teammate();
+    expect((await c.seat(`wkr1:${HOST}:${publicCode.id}.${publicCode.secret}`, roomId)).ok).toBe(true);
+    await live(c, roomId);
+    const previousKey = joinedKey(roomId);
+    const sent = await c.send(roomId, "old line from Work");
+    expect(sent.ok).toBe(true);
+    expect(await c.seat(ownerCode(roomId), roomId)).toMatchObject({ ok: true });
+    await live(c, roomId);
+    expect(joinedKey(roomId)).toEqual(previousKey);
+    expect(c.rooms()[0]?.state?.people.map(({ name }) => name)).toEqual(["Mina"]);
+    expect(c.rooms()[0]?.me.name).toBe("Edward");
+    const snapshot = await snapshotFor(roomId, guest.key);
+    expect(snapshot.state.people.map(({ name }) => name)).toEqual(["Mina"]);
+    expect(snapshot.entries[0].author).toEqual({ kind: "host", id: "host", name: "Edward" });
+    expect(joinedEntries(roomId, 10)[0]?.author).toEqual(snapshot.entries[0].author);
+    expect(store.messagesFor(group.threadId)[0]?.author).toEqual(snapshot.entries[0].author);
+    expect(store.group(group.id)?.unread).toBe(false);
+    expect(invites.joinRoom(publicCode.id, publicCode.secret, ["Edward"], { name: "Mina", device })).toMatchObject({ ok: false, error: "removed" });
+  });
+
+  it("counts neither PC's own room lines as unread", async () => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    hostSays(group, "earlier from Home");
+    ownName = "Edward";
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    expect(c.rooms()[0]?.unread).toBe(0);
+    const work = await c.send(roomId, "from Work");
+    expect(work).toMatchObject({ ok: true, value: { author: { kind: "host", id: "host", name: "Edward" } } });
+    expect(store.group(group.id)?.unread).toBeFalsy();
+    hostSays(group, "live from Home");
+    await until(() => texts(roomId).includes("live from Home"));
+    expect(c.rooms()[0]?.unread).toBe(0);
+    expect(guestAlert).not.toHaveBeenCalled();
+  });
+
+  it.each(["offline upgrade", "startup upgrade", "reconnect control"])("keeps all 455 lines after %s, paging and restart", async (mode) => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    const { id, secret } = roomCode(roomId);
+    ownName = "Edward";
+    let c = teammate(mode === "offline upgrade" ? { retryMs: 60_000, maxRetryMs: 60_000 } : undefined);
+    expect((await c.seat(`wkr1:${HOST}:${id}.${secret}`, roomId)).ok).toBe(true);
+    await live(c, roomId);
+    for (let i = 1; i <= 5; i++) hostSays(group, `line ${i}`);
+    await until(() => joinedCursor(roomId) === 5);
+
+    if (mode === "offline upgrade") {
+      hop.up = false;
+      hop.drop();
+      await until(() => c.room(roomId)?.link === "offline");
+    } else {
+      c.stop();
+    }
+    for (let i = 6; i <= 455; i++) hostSays(group, `line ${i}`);
+    hop.up = true;
+    if (mode !== "offline upgrade") {
+      closeJoinedDb();
+      c = teammate();
+      c.start();
+    }
+    if (mode !== "reconnect control") expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    await until(() => joinedCursor(roomId) === 455, 10_000);
+    expect(Boolean(joinedRoom(roomId)?.me.host)).toBe(mode !== "reconnect control");
+    const caughtUp = seqs(roomId).length;
+    expect(await c.older(roomId, 256)).toEqual({ ok: true, value: true });
+    const paged = seqs(roomId).length;
+
+    c.stop();
+    closeJoinedDb();
+    c = teammate();
+    c.start();
+    await live(c, roomId);
+    expect({ caughtUp, paged, restarted: seqs(roomId).length }).toEqual({ caughtUp: 455, paged: 455, restarted: 455 });
+    expect(seqs(roomId)).toEqual(Array.from({ length: 455 }, (_, i) => i + 1));
+  });
+
+  it.each(["fresh", "upgraded"])("lets the %s owner seat ask the host's bot to work", async (mode) => {
+    const bot = store.patchBot(store.createBot().id, { name: "Wink" })!;
+    const group = store.createGroup("Crew", [bot.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    const { roomId } = group.hosted;
+    ownName = "Edward";
+    const c = teammate();
+    if (mode === "upgraded") {
+      const { id, secret } = roomCode(roomId);
+      expect((await c.seat(`wkr1:${HOST}:${id}.${secret}`, roomId)).ok).toBe(true);
+      await live(c, roomId);
+    }
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    expect((await c.send(roomId, "@Wink fix the build")).ok).toBe(true);
+    const asks = roomAsks(roomId, ["queued"]);
+    expect(asks).toEqual([expect.objectContaining({ botId: bot.id, grant: "work" })]);
+    expect(startAsk(asks[0]!.id)).toBe(true);
+    expect({ works: asksWork(asks), readOnly: readOnlyAskTurn(roomId, group.threadId, bot.id) }).toEqual({ works: true, readOnly: false });
+  });
+
+  it("retries a capped owner-seat send with the same committed text and entry", async () => {
+    const { roomId } = teamRoom().hosted;
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    const capped = `${"a".repeat(PERSON_TEXT_MAX - 1)} `;
+    const text = `${capped}b`;
+    const sendId = "seat-retry-capped-text";
+    const first = await c.send(roomId, text, undefined, sendId);
+    expect(await c.send(roomId, text, undefined, sendId)).toEqual(first);
+    expect(first).toMatchObject({ ok: true, value: { text: capped } });
+    expect(recentRoomEntries(roomId, 10)).toHaveLength(1);
+  });
+
+  it("delivers @Edward only on the host PC", async () => {
+    const group = teamRoom();
+    const { roomId } = group.hosted;
+    ownName = "Edward";
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    const { invite, secret } = createInvite(roomId, "Mina", ["Edward"]);
+    const guest = invites.joinRoom(invite.id, secret, ["Edward"]);
+    if (!guest.ok) throw new Error(guest.error);
+    hostedSend(group, { kind: "person", id: guest.person.id }, "@Edward please check this");
+    await until(() => hostAlert.mock.calls.length > 0);
+    expect(hostAlert.mock.calls).toEqual([[expect.objectContaining({ text: "@Edward please check this", name: "Mina" })]]);
+    expect(guestAlert).not.toHaveBeenCalled();
+    expect(c.rooms()[0]?.unread).toBe(1);
+    hostedSend(group, { kind: "person", id: guest.person.id }, "ordinary message from Mina");
+    await until(() => guestAlert.mock.calls.length > 0);
+    expect(guestAlert.mock.calls).toEqual([[expect.objectContaining({ text: "ordinary message from Mina", name: "Mina" })]]);
+  });
+
+  it("delivers a host bot's @Edward only on the host PC", async () => {
+    const bot = store.patchBot(store.createBot().id, { name: "Wink" })!;
+    const group = store.createGroup("Crew", [bot.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    const { roomId } = group.hosted;
+    const c = teammate();
+    expect((await c.seat(ownerCode(roomId), roomId)).ok).toBe(true);
+    await live(c, roomId);
+    store.appendMessage(group.threadId, { role: "bot", kind: "text", from: { botId: bot.id, name: bot.name, color: bot.color }, text: "@Edward please review" });
+    publishTurnAnswer(store, group, group.threadId, bot, 0);
+    await until(() => hostAlert.mock.calls.length > 0);
+    expect(hostAlert.mock.calls).toEqual([[expect.objectContaining({ text: "@Edward please review", name: "Wink" })]]);
+    expect(guestAlert).not.toHaveBeenCalled();
+  });
   it("saves an old left copy's code once and reuses it after restart", async () => {
     const group = teamRoom();
     const shared = roomCode(group.hosted.roomId);
@@ -686,7 +884,7 @@ describe("bots in two homes hand work to each other", () => {
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   /** Edward hosts Rando; JJ's PC joins and runs 스타줌. Both engines answer from a script. */
-  async function homes(rando: (ask: RoomAsk) => string, starzoom: (prompt: string) => string) {
+  async function homes(rando: (ask: RoomAsk) => string, starzoom: (prompt: string) => string, during?: (threadId: string) => Promise<unknown>) {
     const bot = store.patchBot(store.createBot().id, { name: "Rando" })!;
     const group = store.createGroup("Dinner", [bot.id], false, undefined, undefined, { roomId: createRoom("Dinner").id }) as HostedGroup;
     const roomId = group.hosted.roomId;
@@ -705,14 +903,15 @@ describe("bots in two homes hand work to each other", () => {
     });
     const thread: Message[] = [];
     const turns: MyRoomBotTurns = new MyRoomBotTurns({
-      client: { botSend: (...args) => c.botSend(...args), file: (...args) => c.file(...args) },
+      client: { botSend: (...args) => c.botSend(...args), botPicture: (...args) => c.botPicture(...args), file: (...args) => c.file(...args) },
       bot: (botId) => (botId === "jj-local" ? { id: botId, name: "스타줌" } : null),
       busy: () => false,
       hasTask: (_botId, threadId) => threadId === "jj-task",
       createTask: () => ({ threadId: "jj-task" }),
       startTurn: async (_botId, threadId, prompt, typed) => {
         thread.push({ id: `u${thread.length}`, at: Date.now(), role: "user", kind: "text", text: typed });
-        void wait(20).then(() => {
+        void wait(20).then(async () => {
+          await during?.(threadId);
           thread.push({ id: `b${thread.length}`, at: Date.now(), role: "bot", kind: "text", text: starzoom(prompt) });
           return turns.settled(threadId, true);
         });
@@ -737,8 +936,98 @@ describe("bots in two homes hand work to each other", () => {
     await until(() => Boolean(joinedRoom(roomId)?.state?.teamBots?.length));
     const log = () => recentRoomEntries(roomId, 100).map((entry) => `${entry.author.name}: ${entry.text}`);
     const joinedLog = () => joinedEntries(roomId, 100).map((entry) => `${entry.author.name}: ${entry.text}`);
-    return { roomId, group, answer, log, joinedLog };
+    return { roomId, group, answer, log, joinedLog, turns, thread, c };
   }
+
+  /** JJ's own show_image route, as JJ's PC wires it for a room turn. */
+  async function showOnJJ(home: Awaited<ReturnType<typeof homes>>, threadId: string, folder: string, path: string, caption: string) {
+    const bot = { id: "jj-local", threadId: "jj-main", name: "스타줌", color: "teal", cwd: folder } as BotRecord;
+    const routes = createInternalRoutes({
+      cfg: {},
+      store: {
+        bot: (id: string) => (id === bot.id ? bot : undefined),
+        taskByThread: () => undefined,
+        groupTaskByThread: () => undefined,
+        appendMessage: (_threadId: string, message: Partial<Message>) => {
+          const row = { id: `s${home.thread.length}`, at: Date.now(), ...message } as Message;
+          home.thread.push(row);
+          return row;
+        },
+      },
+      connectorThread: () => ({}),
+      botOutputRoots: () => [folder],
+      captureRoomPicture: (_bot: BotRecord, thread: string) => home.turns.capturePicture(thread),
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    await routes.showImage(Readable.from([JSON.stringify({ fromBotId: bot.id, fromThreadId: threadId, path, caption })]) as unknown as IncomingMessage, res as unknown as ServerResponse);
+    return { status: res.writeHead.mock.calls[0]![0] as number, body: JSON.parse(res.end.mock.calls[0]![0] as string) as Record<string, unknown> };
+  }
+
+  it("posts JJ's bot's picture as a room file that Edward and the room both get", async () => {
+    const folder = join(DATA_DIR, "jj-work");
+    mkdirSync(folder, { recursive: true });
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
+    writeFileSync(join(folder, "cat.png"), png);
+    let shown: Awaited<ReturnType<typeof showOnJJ>> | undefined;
+    const home: Awaited<ReturnType<typeof homes>> = await homes(() => "", () => "Here's a cat.", async (threadId) => {
+      shown = await showOnJJ(home, threadId, folder, join(folder, "cat.png"), "A cat");
+    });
+    hostSays(home.group, "@스타줌 show me a cat");
+    await until(() => home.log().includes("스타줌: Here's a cat."));
+    const entry = recentRoomEntries(home.roomId, 100).find((each) => each.author.name === "스타줌" && each.text === "A cat");
+    expect(entry?.files?.map((file) => [file.name, file.type])).toEqual([["cat.png", "image/png"]]);
+    // the bot gets the room's own line, never a private copy in its hidden task
+    expect(shown).toEqual({ status: 201, body: { messageId: entry!.id, url: `/api/joined/rooms/${home.roomId}/files/${entry!.files![0]!.id}/preview` } });
+    expect(home.thread.some((message) => message.kind === "screen")).toBe(false);
+    expect(store.messagesFor(home.group.threadId).find((message) => message.roomEntryId === entry!.id)?.roomFiles).toEqual(entry!.files);
+    await until(() => Boolean(joinedEntries(home.roomId, 100).find((each) => each.id === entry!.id)));
+    const held = await home.c.file(home.roomId, entry!.files![0]!.id);
+    expect(held.ok && readFileSync(held.value.path)).toEqual(png);
+  });
+
+  it.each([404, 503])("leaves no file when the picture post gets %s", async (status) => {
+    const folder = join(DATA_DIR, "jj-work");
+    mkdirSync(folder, { recursive: true });
+    const path = join(folder, "cat.png");
+    writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    let received!: () => void;
+    const receiving = new Promise<void>((resolve) => (received = resolve));
+    let refuse!: (status: number) => void;
+    const refusal = new Promise<number>((resolve) => (refuse = resolve));
+    let shown: Awaited<ReturnType<typeof showOnJJ>> | undefined;
+    refusePicture = vi.fn(() => {
+      received();
+      return refusal;
+    });
+    const count = refusePicture;
+    const home: Awaited<ReturnType<typeof homes>> = await homes(() => "", () => "", async (threadId) => {
+      shown = await showOnJJ(home, threadId, folder, path, "A cat");
+    });
+    hostSays(home.group, "@스타줌 show me a cat");
+    await receiving;
+    if (status === 503) await home.turns.stopMine(home.roomId);
+    refuse(status);
+    await until(() => Boolean(shown));
+    expect({
+      status: shown?.status,
+      posts: vi.mocked(count).mock.calls.length,
+      files: listRoomFiles(home.roomId, "Edward").files,
+      used: listRoomFiles(home.roomId, "Edward").used,
+      log: home.log(),
+    }).toEqual({ status: status === 503 ? 409 : 404, posts: 1, files: [], used: 0, log: ["Edward: @스타줌 show me a cat"] });
+  });
+
+  it("removes the bytes and quota entry when the host rejects a saved picture payload", async () => {
+    const { c, group, roomId } = await joinedTeam();
+    const bot = await c.addBot(roomId, "mine", "Helper", "");
+    if (!bot.ok) throw new Error(bot.error);
+    const ask = hostSays(group, "@Helper show me a cat");
+    expect(await c.botPicture(roomId, bot.value.id, "A cat", ask.id, "cat.png", Buffer.from("plain text"), new AbortController().signal))
+      .toMatchObject({ ok: false, status: 415 });
+    expect(listRoomFiles(roomId, "Edward")).toMatchObject({ files: [], used: 0 });
+    expect(readdirSync(join(roomFilesRoot(), roomId))).toEqual([]);
+    expect(recentRoomEntries(roomId, 10).map((entry) => entry.text)).toEqual(["welcome", ask.text]);
+  });
 
   it("tells JJ's bot the host's switches as of each turn, and that only an @ here reaches Edward's bots", async () => {
     const prompts: string[] = [];

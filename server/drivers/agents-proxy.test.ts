@@ -3,7 +3,7 @@
 // + entry file + env) against a scripted stub of the harness's /api/internal
 // endpoints, and drive the MCP stdio surface end to end. No shebang, no
 // shell — plain node child, so this runs on every OS like index.test.ts.
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { spawnTestNode as spawn } from "../testing/harness-auth.ts";
 import { handle } from "./agents-proxy.ts";
 
 const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/check-delegation.json", import.meta.url), "utf8"));
@@ -497,6 +498,16 @@ describe("agents-proxy MCP surface", () => {
     expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Ship it?", close: true });
   });
 
+  it("forwards a fact mark so the Forum may answer first", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "ask_user");
+    expect(tool.inputSchema.properties.fact).toMatchObject({ type: "boolean" });
+    await callTool("ask_user", { question: " Which port? ", fact: true });
+    expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Which port?", fact: true });
+    await callTool("ask_user", { question: "Which port?", fact: "true" });
+    expect(lastAskUserBody).toMatchObject({ fact: "true" });
+  });
+
   it("surfaces ask_user rejections and an empty question as tool errors", async () => {
     const refused = await callTool("ask_user", { question: "refuse me" });
     expect(refused.result.isError).toBe(true);
@@ -733,7 +744,9 @@ describe("agents-proxy MCP surface", () => {
     expect(asks).toMatchObject({ type: "array" });
     expect(asks).not.toHaveProperty("maxItems");
     expect(asks.items.required).toEqual(["status"]);
-    expect(asks.items.properties.status.enum).toEqual(["open", "building", "waiting-for-user", "done", "declined"]);
+    expect(asks.items.properties.status.enum).toEqual(["open", "building", "waiting-for-user", "parked", "done", "declined"]);
+    expect(asks.items.properties.until).toMatchObject({ type: "string", pattern: "\\S" });
+    expect(asks.items.properties.until.description).toContain("parked");
     expect(asks.items.properties.ask).toMatchObject({ maxLength: 80, pattern: "\\S" });
     expect(asks.items.properties.ref).toMatchObject({ maxLength: 80, pattern: "^$|\\S" });
     for (const [field, limit] of [[asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
@@ -744,6 +757,7 @@ describe("agents-proxy MCP surface", () => {
     const sent = [
       { ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348" },
       { id: "A2", status: "done" },
+      { id: "A4", status: "parked", until: "2026-12-01" },
     ];
     taskStateNotice = "Asks saved: added A3; 2 open.";
     const res = await callTool("update_task_state", { asks: sent });

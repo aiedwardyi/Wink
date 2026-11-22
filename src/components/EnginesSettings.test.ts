@@ -1,4 +1,5 @@
 import "./ProfileFields.test-dom.ts";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -46,6 +47,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   };
 });
 
+import { landFold, spyReveal } from "./Fold.test-land";
 import { EngineRow, EnginesSettings, isEngineConnected } from "./EnginesSettings";
 import { EngineSetup } from "./EngineSetup";
 import { ROW_BUTTON } from "./SettingsPrimitives";
@@ -285,7 +287,7 @@ it.each(["en", "ko"] as const)("says a settings install failed when no docs link
   }
 });
 
-it.each(["grokAgent", "museAgent"])("signs %s out on one click while guarding a slow logout", async (driverKind) => {
+it.each(["grokAgent", "museAgent", "antigravityAgent"])("signs %s out on one click while guarding a slow logout", async (driverKind) => {
   const connected = instance({ instanceId: driverKind, driverKind, install: { login: { args: ["login"] }, logout: ["logout"] } });
   const signedOut = { ...connected, snapshot: { state: "available" as const, authenticated: false } };
   let finish!: () => void;
@@ -312,6 +314,21 @@ it.each(["grokAgent", "museAgent"])("signs %s out on one click while guarding a 
     finish();
     await act(async () => root.unmount());
     fetch.mockRestore();
+  }
+});
+
+it("shows the signed-in Gemini account beside Sign Out like Muse", async () => {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(EngineRow, {
+      instance: instance({ instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", install: { login: { args: ["login"] }, logout: ["logout"] },
+        snapshot: { state: "available", authenticated: true, account: "ed@example.com" } }),
+    }))));
+    expect(host.querySelector("[data-account-row]")!.textContent).toBe("Gemini (Antigravity)ed@example.comSign Out");
+    expect(host.querySelector("[data-account-email]")!.textContent).toBe("ed@example.com");
+  } finally {
+    await act(async () => root.unmount());
   }
 });
 
@@ -386,6 +403,30 @@ describe("EnginesSettings friends Connections list", () => {
       Object.assign(target, previous);
     };
   }
+
+  it("brings its first missing engine into view once More Engines has opened, never while closing", async () => {
+    const restore = stage("muse", { snapshot: { state: "unavailable" } });
+    const { host, root, row } = await renderList();
+    const scrolled = spyReveal();
+    try {
+      const more = () => [...host.querySelectorAll("button")].find((node) => node.textContent === "More Engines")!;
+      await act(async () => more().click());
+      expect(scrolled).not.toHaveBeenCalled();
+      await landFold(row("muse"));
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(row("muse"));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      vi.useFakeTimers();
+      await act(async () => more().click());
+      await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+      vi.useRealTimers();
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      scrolled.mockRestore();
+      await act(async () => root.unmount());
+      restore();
+    }
+  });
 
   it("shows a single account with its label, Sign Out and Add Account", async () => {
     const restore = stage("claude", { cli: OTHER, install: { logout: ["auth", "logout"], signInCommand: "claude auth login", docsUrl: "https://example.com/claude" } });
@@ -639,6 +680,18 @@ describe("EnginesSettings friends Connections list", () => {
     } finally {
       mockInstances.forEach((row, index) => { row.snapshot = saved[index]!; });
     }
+  });
+
+  it("draws each Connections engine in its brand color", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
+    const head = (name: string) => [...host.querySelectorAll("[data-engine-head]")].find((row) => row.textContent!.startsWith(name))!;
+    const ink = (name: string) => head(name).querySelector("[data-brand-mark]")?.getAttribute("style") ?? "";
+    expect(ink("Codex")).toContain("--color-ink:#3594ff");
+    expect(ink("Grok")).toContain("--color-ink:#8b929c");
+    expect(ink("Meta Muse")).toContain("--color-ink:#43ce8b");
+    expect(head("Claude").querySelector("svg")!.getAttribute("class")).toContain("fill-[#d97757]");
+    expect(head("Gemini (Antigravity)").innerHTML).toContain("linearGradient");
   });
 
   it("shows installed engines once with no path or Details controls", () => {

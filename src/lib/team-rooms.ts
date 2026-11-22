@@ -29,6 +29,9 @@ export type TeamRoom = Group & { hosted: { roomId: string } };
 export const isTeamRoom = (group: Group | undefined): group is TeamRoom => Boolean(group?.hosted && group.memberIds.length === 0);
 
 export const roomPeople = (group: Group) => (group.room && "people" in group.room ? group.room.people : []);
+export const roomHostSeats = (group: Group) => (group.room && "people" in group.room ? group.room.hostSeats : undefined);
+
+export const roomMentionPeople = (people: JoinedPerson[], host?: string): JoinedPerson[] => host ? [{ id: "host", name: host }, ...people] : people;
 
 const NO_BOTS: TeamBot[] = [];
 
@@ -68,8 +71,8 @@ export interface JoinedView {
   roomId: string;
   status: "joined" | "removed" | "left";
   link: JoinedLink | null;
-  me: JoinedPerson;
-  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string; bots?: JoinedBot[]; teamBots?: TeamBot[]; notice?: { entryId: string; by: string; at: number; text?: string } } | null;
+  me: JoinedPerson & { host?: true };
+  state: { roomName: string; host: string; hostSeats?: string[]; people: JoinedPerson[]; picture?: string; bots?: JoinedBot[]; teamBots?: TeamBot[]; notice?: { entryId: string; by: string; at: number; text?: string } } | null;
   unread?: number;
   lastEntry?: JoinedEntry;
   /** False for an older host: no emoji row and no notice pin. */
@@ -108,10 +111,10 @@ export const joinedPhase = (view: JoinedView): JoinedPhase =>
   view.status !== "joined" ? view.status : view.link === "live" ? "live" : view.link === "offline" ? "offline" : "connecting";
 
 /** Own marks read as "user", like the bot chat's. */
-export const joinedLines = (entries: readonly JoinedEntry[], bots: readonly JoinedBot[] = [], meId?: string): RoomLine[] =>
+export const joinedLines = (entries: readonly JoinedEntry[], bots: readonly JoinedBot[] = [], meId?: string, host = false): RoomLine[] =>
   entries.map((entry) => {
     const bot = entry.author.kind === "bot" ? bots.find((candidate) => candidate.id === entry.author.id) : undefined;
-    const reactions = entry.reactions?.map((mark) => (mark.by === `person:${meId}` ? { ...mark, by: "user" } : mark));
+    const reactions = entry.reactions?.map((mark) => (mark.by === (host ? "host" : `person:${meId}`) ? { ...mark, by: "user" } : mark));
     return { id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId, ...(reactions?.length ? { reactions } : {}), ...(bot?.color ? { color: bot.color } : {}), ...(bot?.mascotStyle ? { mascotStyle: bot.mascotStyle } : {}) };
   });
 

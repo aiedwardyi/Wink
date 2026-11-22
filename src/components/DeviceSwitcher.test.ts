@@ -38,6 +38,7 @@ afterEach(async () => {
   roots.clear();
   store.api.mockReset();
   store.dispatch.mockReset();
+  localStorage.clear();
   delete window.ogb;
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
@@ -129,6 +130,17 @@ describe("DeviceSwitcher", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("paints the saved PCs before /api/devices answers", async () => {
+    setDesktop();
+    localStorage.setItem("omb-devices", JSON.stringify([device("home", { current: true }), device("work")]));
+    store.api.mockReturnValue(new Promise(() => {}));
+    const host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => renderRoot(host).render(createElement(I18nProvider, null, createElement(DeviceSwitcher))));
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    expect(document.querySelector('[data-device-id="work"]')?.textContent).toBe("work");
   });
 
   it("opens Devices from the final Connect a Device row", async () => {
@@ -232,7 +244,7 @@ describe("DeviceSwitcher", () => {
       expect(navigate).not.toHaveBeenCalled();
       expect(open).not.toHaveBeenCalled();
     } else {
-      expect(open).toHaveBeenCalledWith("laptop.tail1234.ts.net", "laptop");
+      expect(open).toHaveBeenCalledWith("laptop.tail1234.ts.net", "laptop", undefined);
       expect(navigate).not.toHaveBeenCalled();
       expect(host.querySelector("ul:not([inert])")).toBeNull();
     }
@@ -354,7 +366,7 @@ describe("DeviceSwitcher", () => {
     expect(host.querySelector("ul:not([inert])")).toBeNull();
     await act(async () => click(toggle));
     await act(async () => click(host.querySelector("[data-device-id=work]")!));
-    expect(open).toHaveBeenCalledWith("work.tail1234.ts.net", "Work");
+    expect(open).toHaveBeenCalledWith("work.tail1234.ts.net", "Work", undefined);
     expect(navigate).not.toHaveBeenCalled();
     expect(host.querySelector("ul:not([inert])")).toBeNull();
   });

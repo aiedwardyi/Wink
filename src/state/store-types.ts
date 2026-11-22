@@ -25,6 +25,8 @@ export interface OptionCardData {
   askUser?: true;
   /** an ask_user card that waits until answered; older ones closed when typed past */
   staysOpen?: true;
+  /** an ask_user card: the asking turn's last text; absent when that turn wrote none */
+  replyId?: string;
   /** permission asks: the tool being requested (drives the approval box) */
   tool?: string;
   /** why auto mode stopped to ask anyway */
@@ -81,6 +83,7 @@ export interface Message {
   /** `setup` marks an error fixed by installing something, not by retrying. */
   tool?: {
     name: string;
+    memoryBotId?: string;
     /** Claude Code tool name, when the engine said the kind. */
     verb?: string;
     ok?: boolean;
@@ -104,6 +107,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** The new-bot offer reply that carries the Import Memory prompt. */
+  importOffer?: true;
   call?: import("../../shared/live-call").CallTag;
   /** Client-only accepted send; replaced by the canonical transcript row. */
   placeholder?: true;
@@ -142,6 +147,13 @@ export interface Message {
   /** steer-queue entry this drained user line came from. Pending chips
    * match on this id, not on equal text. Absent on ordinary sends. */
   queueId?: string;
+  /** When the person acted; a queue or card persistence can land the row later. */
+  actedAt?: number;
+  /** Waited below the turn (after this turn, sync hold, Send now): drawn where it landed, not by actedAt. */
+  waited?: boolean;
+  /** One past every send the sending window knew: orders two lines the server stamped alike. */
+  sendSeq?: number;
+  sentAfterId?: string | null;
 }
 
 export type GroupDefaultResponder =
@@ -195,7 +207,7 @@ export interface Group {
   hasMore?: boolean;
   /** A team room this PC hosts; `room` is its live roster. */
   hosted?: { roomId: string };
-  room?: { name: string; people: Array<{ id: string; name: string; works?: boolean }>; joins: RoomJoin[]; teamBots?: TeamBot[]; removed?: Array<{ id: string; name: string }>; noticeText?: string } | { missing: true };
+  room?: { name: string; people: Array<{ id: string; name: string; works?: boolean }>; joins: RoomJoin[]; teamBots?: TeamBot[]; hostSeats?: string[]; removed?: Array<{ id: string; name: string }>; noticeText?: string } | { missing: true };
 }
 
 /** A teammate's own bot in a team room; it runs on its owner's PC. */
@@ -395,7 +407,7 @@ export interface ConfigStatus {
   /** who's using the app - collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean };
   /** Opt-in flags. Absent means off, except memoryNotes. */
-  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; terminalLive?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; terminalLive?: boolean; modelDial?: boolean; voiceCalls?: boolean };
 }
 
 export type ConfigStatusFrame = Pick<
@@ -410,7 +422,7 @@ export interface EngineInstall {
   command?: Partial<Record<"darwin" | "win32" | "linux", string>>;
   docsUrl?: string;
   signInCommand?: string;
-  login?: { args: string[]; deviceArgs?: string[]; env?: Record<string, string>; authHosts?: string[] };
+  login?: { args: string[]; deviceArgs?: string[]; deviceEnv?: Record<string, string>; env?: Record<string, string>; authHosts?: string[] };
   logout?: string[];
   needsNode?: boolean;
 }
@@ -418,6 +430,7 @@ export interface EngineInstall {
 export interface RateLimitReport {
   windows: RateLimitWindow[];
   observedAt: string;
+  ageMs?: number;
 }
 
 /** One row of GET /api/instances - the model picker's data. */
@@ -545,7 +558,7 @@ export interface AppState {
   } | null;
   /** 1:1 queue-fallback lines waiting for drain; keyed by threadId.
    * Each entry is identified by the server queueId, not by text. */
-  pendingQueued: Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync" }>>;
+  pendingQueued: Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }>>;
   /** queueIds whose drain frame beat the POST continuation. One-shot and
    * bounded to a short event window so other clients cannot grow it forever. */
   consumedQueueIds: Record<string, true>;
@@ -594,7 +607,7 @@ export type Action =
       queued?: AppState["pendingQueued"];
       sidebarOrder: SidebarOrder;
     }
-  | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
+  | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean; focusNonce?: number }
   | { type: "routinesHydrated"; routines: Routine[]; runs: RoutineRun[] }
   | { type: "routinePatched"; routine: Routine }
   | { type: "routineDeleted"; routineId: string }
@@ -617,6 +630,9 @@ export type Action =
       groupId: string;
       text: string;
       actedAt?: number;
+      waited?: boolean;
+      sendSeq?: number;
+      sentAfterId?: string | null;
       sendId?: string;
       replyToId?: string;
       threadId?: string;
@@ -636,7 +652,7 @@ export type Action =
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
   | { type: "rateLimits"; instanceId: string; report: RateLimitReport; identity?: string | null }
   | { type: "configStatus"; config: ConfigStatus }
-  | { type: "select"; id: string; reveal?: boolean }
+  | { type: "select"; id: string; reveal?: boolean; searchLanding?: { threadId: string; request: AbortController } }
   | {
       type: "send";
       botId: string;
@@ -647,9 +663,12 @@ export type Action =
       /** Wait for the running turn instead of steering into it. */
       after?: boolean;
       queueId?: string;
+      actedAt?: number;
+      sendSeq?: number;
+      sentAfterId?: string | null;
       onError?: () => void;
     }
-  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync" }
+  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }
   | { type: "sendQueuedNow"; botId: string; threadId: string; queueId: string }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; threadId: string; queueId: string }

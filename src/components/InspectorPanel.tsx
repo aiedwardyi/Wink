@@ -16,6 +16,7 @@ import { cn } from "@/lib/cn";
 import { formatTime, toRows, type InspectorEntry, type InspectorPage, type InspectorRow } from "@/lib/inspector";
 import { openLiveEvents } from "@/lib/live-events";
 import type { RuntimeEvent } from "../../server/contracts.ts";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { Fold } from "./Fold";
 
 type Lens = "events" | "raw";
@@ -271,6 +272,7 @@ export function InspectorPanel({ bot, closing = false }: { bot: Bot; closing?: b
 }
 
 function Row({ row, open, onToggle }: { row: InspectorRow; open: boolean; onToggle: () => void }) {
+  const data = useRef<HTMLPreElement>(null);
   return (
     <div
       className={cn(
@@ -293,8 +295,8 @@ function Row({ row, open, onToggle }: { row: InspectorRow; open: boolean; onTogg
         </span>
         <span className={cn("min-w-0 flex-1 truncate", row.tone === "error" ? "text-danger" : "text-ink")}>{row.summary}</span>
       </button>
-      <Fold open={open}>
-        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all border-t border-hairline/20 bg-app px-3 py-2 text-[11px] leading-relaxed text-ink">
+      <Fold open={open} onOpened={() => revealOnOpen(data.current)}>
+        <pre ref={data} className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all border-t border-hairline/20 bg-app px-3 py-2 text-[11px] leading-relaxed text-ink">
           {JSON.stringify(row.data, null, 2)}
         </pre>
       </Fold>

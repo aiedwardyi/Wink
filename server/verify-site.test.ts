@@ -13,10 +13,12 @@ import { autoVerdict } from "./auto-approve.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
+import { closeMessageDb } from "./message-db.ts";
 import { hasLocalUndeliveredPaneNote, isWakeNote } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { createVerifySite, type VerifyBridge } from "./verify-site.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const flags = vi.hoisted(() => ({ on: true, limits: {} as Record<string, number>, original: {} as Record<string, number> }));
 vi.mock("../shared/live-verify.ts", async (importOriginal) => {
@@ -102,7 +104,8 @@ function decide(runId: string, action: string, nonce: string, headers: Record<st
 }
 
 beforeEach(async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  closeMessageDb();
+  removeTestData(DATA_DIR);
   mkdirSync(scratch, { recursive: true });
   tmp = mkdtempSync(join(scratch, "site-"));
   work = join(tmp, "work");
@@ -146,6 +149,8 @@ beforeEach(async () => {
   server = createServer((req, res) => {
     const stream = /^\/api\/verify\/runs\/([a-z0-9-]{8,64})\/(live|replay)$/.exec(req.url ?? "");
     if (stream) return void verify.handleStream(req, res, stream[1]!, stream[2] === "replay", { relay: req.headers["x-relay"] === "1", phoneSession: req.headers["x-phone"] === "1" });
+    const kept = /^\/api\/verify\/threads\/([a-zA-Z0-9_-]{1,128})\/replays$/.exec(req.url ?? "");
+    if (kept) return void verify.handleReplays(req, res, kept[1]!, { relay: req.headers["x-relay"] === "1", phoneSession: req.headers["x-phone"] === "1" });
     const id = /^\/decision\/(.+)$/.exec(req.url ?? "")?.[1];
     if (id) return void verify.handleDecision(req, res, id, { relay: req.headers["x-relay"] === "1", phoneSession: req.headers["x-relay"] === "1" });
     void verify.handleTool(req, res).catch(error => { res.writeHead(500); res.end(JSON.stringify({ error: error.message })); });
@@ -186,6 +191,22 @@ it("streams to the app and the user's bots, saves after the reply, and serves re
   expect(Buffer.from(await (await get("live")).arrayBuffer())).toEqual(fileBytes);
   await unlink(join(DATA_DIR, "verify-replays", threadId, `${runId}.lvr`));
   expect((await get("replay")).status).toBe(404);
+});
+
+it("lists the replays kept on this PC for a chat, to the app only", async () => {
+  mkdirSync(join(DATA_DIR, "verify-replays", threadId), { recursive: true });
+  writeFileSync(join(DATA_DIR, "verify-replays", threadId, "run-kept001.lvr"), "LVR1");
+  writeFileSync(join(DATA_DIR, "verify-replays", "index.json"), JSON.stringify({ [`${threadId}/run-kept001`]: { card: "c", order: 1 } }));
+  const get = (id: string, headers: Record<string, string> = { authorization: "Bearer app-token" }) => fetch(`${base}/api/verify/threads/${id}/replays`, { headers });
+  expect((await get(threadId, {})).status).toBe(401);
+  expect((await get(threadId, { "x-relay": "1", authorization: "Bearer app-token" })).status).toBe(401);
+  const nobody = await get("nobody");
+  expect(nobody.status).toBe(404);
+  expect(await nobody.json()).toEqual({ error: "not found" });
+  const reply = await get(threadId);
+  expect(reply.status).toBe(200);
+  expect(await reply.json()).toEqual({ runs: ["run-kept001"] });
+  expect((await get(threadId, { "x-relay": "1", "x-phone": "1" })).status).toBe(200);
 });
 
 it("bounds waiting runs to two in FIFO order", async () => {
@@ -243,6 +264,7 @@ afterEach(async () => {
   turnRegistry.settle("turn-2");
   server.closeAllConnections();
   await new Promise((r) => server.close(r));
+  closeMessageDb();
   Object.assign(flags.limits, flags.original);
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -686,6 +708,7 @@ describe("verify_site kill switch", () => {
     expect((await tool({ entry: "site" })).status).toBe(404);
     expect((await decide("abcdefgh-1234", "skip", "n")).status).toBe(404);
     for (const kind of ["live", "replay"]) expect((await fetch(`${base}/api/verify/runs/abcdefgh-1234/${kind}`, { headers: { authorization: "Bearer app-token" } })).status).toBe(404);
+    expect((await fetch(`${base}/api/verify/threads/${threadId}/replays`, { headers: { authorization: "Bearer app-token" } })).status).toBe(404);
     expect(existsSync(join(DATA_DIR, "verify-replays"))).toBe(false);
   });
 });

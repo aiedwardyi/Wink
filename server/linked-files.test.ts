@@ -68,7 +68,7 @@ async function linkedSite(files: Record<string, string>) {
   const links = Object.keys(files).filter((name) => name.endsWith(".html")).map((name) => `[page](${join(root, name)})`);
   const server = await listen((req, res) => serveLinkedFile(req, res, {
     bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-    messages: [{ id: "m1", text: links.join(" ") }],
+    messages: () => [{ id: "m1", text: links.join(" ") }],
     writerDeviceId: () => null, rootsFor: () => [root],
   }));
   const open = (name: string) => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(root, name))}`);
@@ -129,7 +129,7 @@ describe("linked files", () => {
     const alias = join(root, "alias.mp4");
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [{ id: "m1", role: "bot", text: `[video](<${alias}>)` }],
+      messages: () => [{ id: "m1", role: "bot", text: `[video](<${alias}>)` }],
       writerDeviceId: () => null, rootsFor: () => [folder],
     }));
     try {
@@ -161,7 +161,7 @@ describe("linked files", () => {
     const options = {
       bearerOk: false, remoteKey: client === "other-PC" ? "k" : undefined,
       phoneSession: client === "phone", threadId: "t1", deviceId: "home",
-      messages, writerDeviceId: () => null, rootsFor: () => [folder],
+      messages: () => messages, writerDeviceId: () => null, rootsFor: () => [folder],
     };
     const server = await listen((req, res) => serveLinkedFile(req, res, options));
     try {
@@ -195,7 +195,7 @@ describe("linked files", () => {
     writeFileSync(file, "docx-bytes");
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [{ id: "m1", role: "bot", text: `([UN-Certificate_Vertia.docx](<${file}>))` }],
+      messages: () => [{ id: "m1", role: "bot", text: `([UN-Certificate_Vertia.docx](<${file}>))` }],
       writerDeviceId: () => null, rootsFor: () => [join(desktop, "..", "bot")],
     }));
     try {
@@ -238,7 +238,7 @@ describe("linked files", () => {
     const hiddenMedia = join(hiddenAlias, "linked.png");
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [...refused, disguised, secretMedia, hiddenMedia].map((path) => ({ id: path, role: "bot", text: `[file](<${path}>)` })),
+      messages: () => [...refused, disguised, secretMedia, hiddenMedia].map((path) => ({ id: path, role: "bot", text: `[file](<${path}>)` })),
       writerDeviceId: () => null, rootsFor: () => [folder],
     }));
     try {
@@ -266,7 +266,7 @@ describe("linked files", () => {
     if (![...short, folderShort, privateShort].every((path) => existsSync(path))) return context.skip();
     const server = await listen((req, res) => (req.url?.includes("/linked-folder") ? serveLinkedFolder : serveLinkedFile)(req, res, {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [...short, join(folder, "shared"), privateShort].map((path) => ({ id: path, role: "bot", text: `[file](<${path}>)` })),
+      messages: () => [...short, join(folder, "shared"), privateShort].map((path) => ({ id: path, role: "bot", text: `[file](<${path}>)` })),
       writerDeviceId: () => null, rootsFor: () => [folder],
     }));
     try {
@@ -293,7 +293,7 @@ describe("linked files", () => {
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       bearerOk: false, remoteKey: client === "other-PC" ? "k" : undefined,
       phoneSession: client === "phone", threadId: "t1", deviceId: "home",
-      messages: [file, join(desktop, "missing.mp4"), join(desktop, "directory.mp4")].map((path) => ({ id: path, role: "bot", text: `[video](<${path}>)` })),
+      messages: () => [file, join(desktop, "missing.mp4"), join(desktop, "directory.mp4")].map((path) => ({ id: path, role: "bot", text: `[video](<${path}>)` })),
       writerDeviceId: () => null, rootsFor: () => [folder],
     }));
     try {
@@ -319,7 +319,7 @@ describe("linked files", () => {
     for (const name of names) writeFileSync(join(root, name), name === "empty.zip" ? "" : name);
     const options = {
       bearerOk: false, remoteKey: "k", threadId: "t1", deviceId: "home",
-      messages: names.map((name) => ({ id: name, text: `[file](${join(root, name)})` })),
+      messages: () => names.map((name) => ({ id: name, text: `[file](${join(root, name)})` })),
       writerDeviceId: () => null, rootsFor: () => [root],
     };
     const server = await listen((req, res) => serveLinkedFile(req, res, options));
@@ -343,7 +343,7 @@ describe("linked files", () => {
     writeFileSync(file, "private");
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [{ id: "m1", role: "user", text: `[notes](${file})` }],
+      messages: () => [{ id: "m1", role: "user", text: `[notes](${file})` }],
       writerDeviceId: () => null, rootsFor: () => [root],
     }));
     try {
@@ -361,7 +361,7 @@ describe("linked files", () => {
     for (const file of [clip, code, unlinked]) writeFileSync(file, "0123456789abcdef");
     const options: ServeLinkedFileOptions = {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [
+      messages: () => [
         { id: "m1", role: "user", text: `<attached-file path="${clip}" name="clip.mp4" size="16" />` },
         { id: "m2", role: "bot", text: `Run [main.py](<${code}>).` },
       ],
@@ -404,7 +404,7 @@ describe("linked files", () => {
     const tag = (path: string) => `<attached-file path="${path.replaceAll("&", "&amp;")}" name="${basename(path)}" size="6" />`;
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [{ id: "m1", role: "user", text: `look\n\n${tag(picture)}\n${tag(notes)}\n[other](${other})` }],
+      messages: () => [{ id: "m1", role: "user", text: `look\n\n${tag(picture)}\n${tag(notes)}\n[other](${other})` }],
       writerDeviceId: () => null, rootsFor: () => [],
     }));
     try {
@@ -435,7 +435,7 @@ describe("linked files", () => {
     symlinkSync(outside, join(site, "escape"), "junction");
     const options = {
       bearerOk: false, remoteKey: "k", threadId: "t1", deviceId: "home",
-      messages: [{ id: "m1", text: `[site](${join(site, "index.html")})` }],
+      messages: () => [{ id: "m1", text: `[site](${join(site, "index.html")})` }],
       writerDeviceId: () => null, rootsFor: () => [root],
     };
     const server = await listen((req, res) => serveLinkedFile(req, res, options));
@@ -505,7 +505,7 @@ describe("linked files", () => {
     const page = join(site, "index.html");
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [page, hidden, appdata].map((path) => ({ id: path, role: "bot", text: `Open the [live draft](<${path}>) in your browser.` })),
+      messages: () => [page, hidden, appdata].map((path) => ({ id: path, role: "bot", text: `Open the [live draft](<${path}>) in your browser.` })),
       writerDeviceId: () => null, rootsFor: () => [folder],
     }));
     try {
@@ -663,7 +663,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: "k",
       threadId: "t1",
-      messages,
+      messages: () => messages,
       deviceId: "this-pc",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -705,7 +705,7 @@ describe("linked files", () => {
     writeFileSync(join(root, `clip.${ext}`), clip);
     const base = {
       threadId: "t1",
-      messages: [{ id: "m1", text: `[clip](${join(root, `clip.${ext}`)})` }],
+      messages: () => [{ id: "m1", text: `[clip](${join(root, `clip.${ext}`)})` }],
       deviceId: "this-pc",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -740,7 +740,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages: [{ id: "m1", text: `[clip](${filePath})` }],
+      messages: () => [{ id: "m1", text: `[clip](${filePath})` }],
       deviceId: "this-pc",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -765,7 +765,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages: [{ id: "m1", text: `[clip](${filePath})` }],
+      messages: () => [{ id: "m1", text: `[clip](${filePath})` }],
       deviceId: "this-pc",
       writerDeviceId: (id) => (id === "m1" ? "other-pc" : null),
       rootsFor: () => [root],
@@ -789,7 +789,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages: [{ id: "m1", text: `[clip](<${filePath}>)` }],
+      messages: () => [{ id: "m1", text: `[clip](<${filePath}>)` }],
       deviceId: "this-pc",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -822,7 +822,7 @@ describe("linked files", () => {
         bearerOk: true,
         remoteKey: undefined,
         threadId: "t1",
-        messages: [{ id: "m1", text: `[clip](${filePath})` }],
+        messages: () => [{ id: "m1", text: `[clip](${filePath})` }],
         deviceId: "this-pc",
         writerDeviceId: () => null,
         rootsFor: () => [root],
@@ -881,7 +881,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages,
+      messages: () => messages,
       deviceId: "this-pc",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -926,7 +926,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages: [{ id: "m1", text: `[clip](${plainPath}) [look](<${anglePath}>)` }],
+      messages: () => [{ id: "m1", text: `[clip](${plainPath}) [look](<${anglePath}>)` }],
       deviceId: "this-pc",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -954,7 +954,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages: [{ id: "m1", text: `[clip](${clipPath}), and ${otherPath} is next` }],
+      messages: () => [{ id: "m1", text: `[clip](${clipPath}), and ${otherPath} is next` }],
       deviceId: "this-pc",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -1000,7 +1000,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages: home.threads.get("t1")!.messages.map((message) => ({ id: message.id, text: message.text })),
+      messages: () => home.threads.get("t1")!.messages.map((message) => ({ id: message.id, text: message.text })),
       deviceId: "home",
       writerDeviceId: (messageId) => messageWriter(home.dataDir, "t1", messageId),
       rootsFor: () => [folder],
@@ -1041,7 +1041,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages: pc.threads.get("t1")!.messages.map((message) => ({ id: message.id, role: message.role, text: message.text })),
+      messages: () => pc.threads.get("t1")!.messages.map((message) => ({ id: message.id, role: message.role, text: message.text })),
       deviceId: pc.host.deviceId,
       writerDeviceId: (messageId) => messageWriter(pc.dataDir, "t1", messageId),
       rootsFor: () => [bot],
@@ -1079,7 +1079,7 @@ describe("linked files", () => {
       bearerOk: true,
       remoteKey: undefined,
       threadId: "t1",
-      messages: [{ id: "m1", text: `[notes](${filePath.replaceAll("\\", "/")}#L10)` }],
+      messages: () => [{ id: "m1", text: `[notes](${filePath.replaceAll("\\", "/")}#L10)` }],
       deviceId: "home",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -1105,7 +1105,7 @@ describe("linked files", () => {
           bearerOk: true,
           remoteKey: undefined,
           threadId: "t1",
-          messages: [{ id: "m1", text: `[주간 보고서](${filePath.replaceAll(" ", "%20")})` }],
+          messages: () => [{ id: "m1", text: `[주간 보고서](${filePath.replaceAll(" ", "%20")})` }],
           deviceId: "this-pc",
           writerDeviceId: () => "other-pc",
           rootsFor: () => [],
@@ -1137,7 +1137,7 @@ describe("linked folders", () => {
     }
     const options: ServeLinkedFileOptions = {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [{ id: "m1", text: `[showcase-1111](${link(folder)})` }],
+      messages: () => [{ id: "m1", text: `[showcase-1111](${link(folder)})` }],
       writerDeviceId: () => null, rootsFor: () => [root], ...overrides,
     };
     const server = await listen((req, res) => (req.url?.includes("/linked-folder") ? serveLinkedFolder : serveLinkedFile)(req, res, options));
@@ -1200,7 +1200,7 @@ describe("linked folders", () => {
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       ...(phone ? requestCredentials(true, true, false, "k") : { bearerOk: false, remoteKey: "k" }),
       holder: phone ? "phone-1" : undefined, threadId: "t1", deviceId: "home",
-      messages: [{ id: "m1", text: `[forum-look-mock-2](${folder})` }],
+      messages: () => [{ id: "m1", text: `[forum-look-mock-2](${folder})` }],
       writerDeviceId: () => null, rootsFor: () => [root],
     }));
     try {
@@ -1241,7 +1241,7 @@ describe("linked folders", () => {
     writeFileSync(join(root, ".private", "a.txt"), "a");
     const options: ServeLinkedFileOptions = {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
-      messages: [{ id: "m1", text: `[alias](${alias}) [private](${join(root, ".private")}) [root](${root})` }, { id: "m2", role: "user", text: `[mine](${join(root, "unlinked")})` }],
+      messages: () => [{ id: "m1", text: `[alias](${alias}) [private](${join(root, ".private")}) [root](${root})` }, { id: "m2", role: "user", text: `[mine](${join(root, "unlinked")})` }],
       writerDeviceId: () => null, rootsFor: () => [root],
     };
     const server = await listen((req, res) => (req.url?.includes("/linked-folder") ? serveLinkedFolder : serveLinkedFile)(req, res, options));

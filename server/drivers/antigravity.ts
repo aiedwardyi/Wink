@@ -46,9 +46,11 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
+import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { antigravitySignIn } from "./antigravity-auth.ts";
+import { antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 
@@ -62,6 +64,8 @@ const AGY_ACCOUNT_ERROR =
   /unauthorized|unauthenticated|\bforbidden\b|(?<![\w-])40[13](?![\w-])|not logged in|\bsign[\s-]?in\b|authentication failed|permission_denied|permission denied|has not been used in project|\bapi\b[^.\n]{0,120}\bdisabled\b/i;
 const AGY_NOT_ACCOUNT_ERROR = /\brate[\s-]?limit\b|(?<![\w-])429(?![\w-])|\berror-code-(?:429|5\d\d)\b|\btoo many requests\b|resource[ _]exhausted|quota exceeded|exceeded[^.\n]{0,40}\bquota\b|(?<![\w-])5\d\d(?![\w-])|\b5xx\b/i;
 const AGY_TIMEOUT_ERROR = /\b(?:watchdog timeout|timed out|time-out|timeout)\b/i;
+const AGY_TEXT_MODEL = "gemini-3.8-flash-low";
+const AGY_MODEL_DENIED = /\bpermission\b[^\n]{0,80}\bdenied\b[^\n]{0,200}\bmodels\/|\bmodels\/[^\n]{0,200}\b(?:permission[_ ]denied|not[_ ]found|(?:may|does) not exist)\b/i;
 
 /** Account or permission failure. Rate limits, 5xx, and timeout-only lines are not. */
 export function isAgyAccountError(text: string): boolean {
@@ -104,13 +108,18 @@ export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
     { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)", contextWindow: 1_048_576 },
     { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)", contextWindow: 1_048_576 },
     { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)", contextWindow: 1_048_576 },
-    { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
-    { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
-    { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
+    // Neon ids confirmed against `agy models` on agy 1.5.11
+    { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)", contextWindow: 1_048_576 },
+    { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)", contextWindow: 1_048_576 },
+    { id: "gemini-4-neon-low", label: "Gemini 4 Neon (Low)", contextWindow: 1_048_576 },
+    { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)", contextWindow: 1_048_576 },
     // Hydrogen ids confirmed against `agy models` on agy 1.5.5
     { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)", contextWindow: 1_048_576 },
     { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)", contextWindow: 1_048_576 },
     { id: "gemini-4-hydrogen-low", label: "Gemini 4 Hydrogen (Low)", contextWindow: 1_048_576 },
+    { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
+    { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
+    { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
     { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)", contextWindow: 1_048_576 },
     { id: "gemini-3.1-pro-low", label: "Gemini 3.1 Pro (Low)", contextWindow: 1_048_576 },
     // 3.8 ids confirmed against the agy 1.1.26 binary's own model table;
@@ -236,7 +245,10 @@ function acquireAntigravityMcpLock(exclusive: boolean) {
       else mcpSharedHolders -= 1;
       pumpAntigravityMcpLock();
     };
-    const waiter = { exclusive, grant: () => resolve(release) };
+    const waiter = {
+      exclusive,
+      grant: () => resolve(release),
+    };
     cancel = () => {
       const index = mcpWaiters.indexOf(waiter);
       if (index === -1) return;
@@ -530,6 +542,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     },
     docsUrl: "https://github.com/google-antigravity/antigravity-cli#installation",
     signInCommand: "agy",
+    // agy has no login or logout subcommand: a helper runs them over agy's ACP server (see loginConfig).
+    // agy opens no browser over SSH, so a phone gets the link and paste prompt.
+    login: { args: ["login"], deviceArgs: ["login", "--paste"], deviceEnv: { SSH_CONNECTION: "127.0.0.1 50000 127.0.0.1 22" }, authHosts: ["accounts.google.com"] },
+    logout: ["logout"],
   },
   models: STATIC_ANTIGRAVITY_MODELS,
   decodeConfig,
@@ -538,7 +554,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
   async create(input: DriverCreateInput<AntigravityConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const env = antigravityEnvironment(input.environment);
-    const signIn = antigravitySignIn();
+    const signIn = antigravitySignIn(undefined, () => readAntigravityLogSignIn(env));
     const catalogEnv: Record<string, string | undefined> = env;
     let models = STATIC_ANTIGRAVITY_MODELS;
     const refreshModels = async () => {
@@ -682,10 +698,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         },
         turnId,
       });
+      emit({ ...base(threadId, turnId), type: "turn.started" });
       const releaseMcpLock = await mcpLock.granted;
       if (interrupted) {
         releaseMcpLock();
-        emit({ ...base(threadId, turnId), type: "turn.started" });
         settle(false, "interrupted");
         return { turnId };
       }
@@ -1120,8 +1136,6 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       }, 61 * 60_000);
       watchdog.unref?.();
 
-      emit({ ...base(threadId, turnId), type: "turn.started" });
-
       return { turnId };
     };
 
@@ -1132,8 +1146,11 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      return { state: "available", version, authenticated: await signIn.check(opts?.rescan || opts?.refresh) };
+      const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
+      return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
     };
+
+    const textModelDenied = new Set<string>();
 
     return {
       instanceId,
@@ -1145,6 +1162,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       },
       refreshModels,
       snapshot,
+      loginConfig: () => ({
+        cli: `"${process.execPath}" "${SPAWNED_PROXIES.antigravityAuth}"`,
+        env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli },
+      }),
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {
@@ -1184,27 +1205,31 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           return () => listeners.delete(listener);
         },
       },
-      generateText: async (prompt: string) => {
-        // A shared slot, so a computer turn's box token never reaches this child.
-        const releaseMcpLock = await acquireAntigravityMcpLock(false).granted;
-        let restoreMcp = () => {};
+      generateText: async (prompt, opts) => {
+        const stopped = opts?.signal ?? new AbortController().signal;
+        stopped.throwIfAborted();
         let cwd: string | null = null;
         try {
-          restoreMcp = mountAntigravityMcp(null, env);
-          cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
+          const home = antigravityHelperHome(env);
+          const helperEnv = { ...env, HOME: home, USERPROFILE: home };
+          const dir = cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
+          let denied = false;
           // stdin like a turn: a summary prompt on argv blows the Windows command line
-          const child = spawnCli(
-            config.cli,
-            ["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low"],
-            { cwd, env, stdio: ["pipe", "pipe", "pipe"] },
-          );
-          return await new Promise<string>((resolve, reject) => {
-            let result: { status?: unknown; response?: unknown } | null = null;
+          const run = (model: string) => new Promise<string>((resolve, reject) => {
+            const child = spawnCli(
+              config.cli,
+              ["--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
+              { cwd: dir, env: helperEnv, stdio: ["pipe", "pipe", "pipe"] },
+            );
+            let result: { status?: unknown; response?: unknown; error?: unknown } | null = null;
             let failure: Error | null = null;
-            const timer = setTimeout(() => {
-              failure = new Error("agy summary timed out");
+            const stop = (error: Error) => {
+              failure ??= error;
               killCliTree(child);
-            }, 120_000);
+            };
+            const abort = () => stop(new Error("agy summary aborted"));
+            stopped.addEventListener("abort", abort, { once: true });
+            const timer = setTimeout(() => stop(new Error("agy summary timed out")), opts?.timeoutMs ?? 120_000);
             timer.unref?.();
             let buf = "";
             child.stdout.setEncoding("utf8");
@@ -1229,23 +1254,34 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             });
             child.on("close", (code) => {
               clearTimeout(timer);
+              stopped.removeEventListener("abort", abort);
               const response = typeof result?.response === "string" ? result.response.trim() : "";
+              const error = typeof result?.error === "string" ? result.error : undefined;
+              denied = !failure && !response && AGY_MODEL_DENIED.test(`${error ?? ""}\n${stderr}`);
               if (failure) reject(failure);
-              else if (!result) reject(new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
-              else if (result.status !== "SUCCESS" || !response) reject(new Error(`agy summary failed (${String(result.status)})`));
+              else if (!result) reject(textUsageError(stderr) ?? new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
+              else if (result.status !== "SUCCESS" || !response) {
+                reject(textUsageError(error) ?? textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})${error && isAgyAccountError(error) ? `: ${error}` : ""}`));
+              }
               else resolve(response);
             });
             child.stdin.end(antigravityStreamUserLine(prompt));
           });
+          // an account denied the text model writes notes on the bot's own chat model
+          const fallback = opts?.fallbackModel && opts.fallbackModel !== AGY_TEXT_MODEL ? opts.fallbackModel : undefined;
+          const account = fallback ? readAntigravityAccount(env) ?? "" : "";
+          if (fallback && textModelDenied.has(account)) return await run(fallback);
+          try {
+            return await run(AGY_TEXT_MODEL);
+          } catch (error) {
+            if (!fallback || !denied || stopped.aborted) throw error;
+            textModelDenied.add(account);
+            return await run(fallback);
+          }
         } finally {
           try {
-            restoreMcp();
-          } finally {
-            releaseMcpLock();
-            try {
-              if (cwd) rmSync(cwd, { recursive: true, force: true });
-            } catch {}
-          }
+            if (cwd) rmSync(cwd, { recursive: true, force: true });
+          } catch {}
         }
       },
       dispose: async () => {

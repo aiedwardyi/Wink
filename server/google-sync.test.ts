@@ -20,6 +20,7 @@ import { FakeGoogle, WEB_CLIENT } from "./phone-relay/testing/google-issuer.ts";
 import { StatusLog, enroll, rig, type Rig } from "./phone-relay/testing/harness.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
+import { THREAD_SYNC_V2_CUTOVER_FILE } from "./thread-sync-v2-gate.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
 const A: GoogleSession = { refreshToken: "refresh-a", sub: "account-a", email: "a@example.com" };
@@ -147,6 +148,8 @@ async function settle(pc: PC): Promise<void> {
   await pc.sync.idle();
 }
 
+const keepStart = (pc: PC) => writeFileSync(join(pc.dataDir, THREAD_SYNC_V2_CUTOVER_FILE), JSON.stringify({ version: 2, cutoverAt: 1 }));
+
 async function startOn(pc: PC, session = A) {
   pc.account.setSession(session);
   const started = await pc.sync.start();
@@ -228,6 +231,7 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     write(home.folder!, `changes/000000000001-notes-only-pc-${record.operationId}.${ext}`, JSON.stringify(record));
     await settle(home);
     const work = makePC("work");
+    keepStart(work);
     work.account.setSession(A);
     expect((await work.sync.read()).join).toEqual({ first: false, pcs: 2 });
   });
@@ -243,8 +247,7 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
 
     const work = makePC("work");
     work.account.setSession(A);
-    expect((await work.sync.read()).join).toEqual({ first: false, pcs: 1 });
-    await work.sync.start();
+    expect((await work.sync.read()).state).toBe("joining");
     await work.sync.idle();
     importPeers(work);
     expect(work.workspaceId).toBe(home.workspaceId);
@@ -1150,5 +1153,120 @@ describe("Google sync routes", () => {
     expect(route).toBeGreaterThan(source.indexOf("return json(res, 401, { error: \"unauthorized\" });"));
     expect(source.includes("const bots = profileSyncBots();")).toBe(true);
     expect(source.indexOf("googleSync.resume();")).toBeGreaterThan(source.lastIndexOf("\nsyncAllThreads();"));
+  });
+});
+
+describe("auto start after sign-in", { timeout: 60_000 }, () => {
+  async function homeOnA(): Promise<PC> {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    return home;
+  }
+
+  it("joins an account other PCs already sync without a Start click", async () => {
+    await homeOnA();
+    const work = makePC("work");
+    work.account.setSession(A);
+    expect(await work.sync.read()).toMatchObject({ state: "joining", boundEmail: A.email });
+    await work.sync.idle();
+    expect(work.sync.status().state).toBe("up-to-date");
+    expect(work.activations).toHaveLength(1);
+  });
+
+  it("keeps Start on an install that ever had a chat writer", async () => {
+    await homeOnA();
+    const work = makePC("work");
+    keepStart(work);
+    work.account.setSession(A);
+    expect(await work.sync.read()).toMatchObject({ state: "ready", join: { first: false, pcs: 1 } });
+    expect(readGoogleBinding(work.dataDir).kind).toBe("none");
+  });
+
+  it("keeps Start for the first PC on an account", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    home.account.setSession(A);
+    expect(await home.sync.read()).toMatchObject({ state: "ready", join: { first: true, pcs: 0 } });
+    expect(readGoogleBinding(home.dataDir).kind).toBe("none");
+  });
+
+  it.each([false, true])("keeps Start when this PC's folder sync would move (other workspace: %s)", async (other) => {
+    const home = await homeOnA();
+    const work = makePC("work");
+    work.folder = join(root, "work-folder");
+    mkdirSync(work.folder, { recursive: true });
+    loadOrCreateSyncWorkspace(work.folder, other ? randomUUID() : home.workspaceId);
+    work.account.setSession(A);
+    const read = await work.sync.read();
+    expect(read).toMatchObject({ state: "ready", move: true });
+    expect(read.problem !== undefined).toBe(other);
+    expect(readGoogleBinding(work.dataDir).kind).toBe("none");
+  });
+
+  it("keeps Start for a session restored at boot", async () => {
+    await homeOnA();
+    const work = makePC("work");
+    work.sync.stop();
+    work.account = new GoogleAccount(CLIENT, null, { fetch: tokenFetch, log: () => {}, awaitSession: true });
+    work.sync = boot(work);
+    work.account.setSession(A);
+    expect(await work.sync.read()).toMatchObject({ state: "ready", join: { first: false, pcs: 1 } });
+  });
+
+  it("starts once beside a Start click and not again after signing out and in", async () => {
+    await homeOnA();
+    const work = makePC("work");
+    work.account.setSession(A);
+    await work.sync.start();
+    await work.sync.read();
+    await work.sync.idle();
+    const binding = readGoogleBinding(work.dataDir);
+    work.account.setSession(null);
+    work.account.setSession(A);
+    expect((await work.sync.read()).state).not.toBe("ready");
+    await work.sync.idle();
+    expect(work.activations).toHaveLength(1);
+    expect(readGoogleBinding(work.dataDir)).toEqual(binding);
+  });
+
+  it("joins the new account's sync when another account lands without a sign-out", async () => {
+    const homeA = await homeOnA();
+    const homeB = makePC("home-b", { bots: [bot("Notes")] });
+    await startOn(homeB, B);
+    const work = makePC("work");
+    work.account.setSession(A);
+    work.account.setSession(B);
+    expect(await work.sync.read()).toMatchObject({ state: "joining", email: B.email, boundEmail: B.email });
+    await work.sync.idle();
+    importPeers(work);
+    expect(readGoogleBinding(work.dataDir)).toMatchObject({ kind: "ok", binding: { owner: { sub: B.sub }, phase: "ready" } });
+    expect(work.workspaceId).toBe(homeB.workspaceId);
+    expect(work.workspaceId).not.toBe(homeA.workspaceId);
+    expect(work.bots.map((item) => item.name)).toEqual(["Notes"]);
+    expect(drivePaths(driveA()).some((path) => path.includes(work.deviceId))).toBe(false);
+  });
+
+  it("keeps Start when the account that lands has no sync yet", async () => {
+    await homeOnA();
+    const work = makePC("work");
+    work.account.setSession(A);
+    work.account.setSession(B);
+    expect(await work.sync.read()).toMatchObject({ state: "ready", email: B.email, join: { first: true, pcs: 0 } });
+    expect(readGoogleBinding(work.dataDir).kind).toBe("none");
+    expect(work.activations).toHaveLength(0);
+  });
+
+  it("leaves a PC bound to one account alone when another lands without a sign-out", async () => {
+    await homeOnA();
+    const homeB = makePC("home-b", { bots: [bot("Notes")] });
+    await startOn(homeB, B);
+    const work = makePC("work");
+    await startOn(work);
+    const binding = readGoogleBinding(work.dataDir);
+    work.account.setSession(B);
+    expect(await work.sync.read()).toMatchObject({ state: "other-account", boundEmail: A.email });
+    await work.sync.idle();
+    expect(work.activations).toHaveLength(1);
+    expect(readGoogleBinding(work.dataDir)).toEqual(binding);
+    expect(work.logs).toEqual([]);
   });
 });

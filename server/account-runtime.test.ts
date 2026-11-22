@@ -115,11 +115,11 @@ describe("account removal references", () => {
     }
     f.request.mockResolvedValue(Response.json({ count: 0, unknown: 0, generations: {} }));
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(f.accounts.get(f.account.id)).toMatchObject({
-      state: authenticated ? "ready" : "stopped", generation: f.account.generation + 1,
-    });
+    expect(f.accounts.get(f.account.id)).toEqual(authenticated
+      ? { ...f.account, state: "ready", identity: "changed", generation: f.account.generation + 1 }
+      : { ...f.account, state: "stopped" });
     expect(f.registry.accountBlocked(f.account.id)).toBe(!authenticated);
-    expect(f.invalidate).toHaveBeenCalledExactlyOnceWith(f.account.id);
+    expect(f.invalidate.mock.calls).toEqual(authenticated ? [[f.account.id]] : []);
     expect(vi.getTimerCount()).toBe(0);
   });
 

@@ -48,6 +48,8 @@ export interface PhoneRelayOptions {
   account?: RelayAccountSource;
   /** Another PC of this Google account uploaded a change. */
   onPoked?: () => void;
+  /** The sign-in page's base. A PC enrolled on another base answers there too. */
+  frontDoor?: string | null;
 }
 
 export interface PhoneRelay {

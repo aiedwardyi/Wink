@@ -1,17 +1,19 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { botChain } from "../../shared/bot-chain.ts";
 import { DATA_DIR } from "../config.ts";
 import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, roomCodeHost, uploadDeadline, type GuestClientDeps } from "./guest-client.ts";
 import * as joinedFiles from "./joined-files.ts";
-import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedKey, joinedRoom, saveJoined, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, endJoined, joinedEntries, joinedKey, joinedRoom, removeJoined, saveJoined, seatTaken, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
@@ -36,7 +38,7 @@ beforeAll(async () => {
 
 // A server per test: a stopped client's request still in flight meets a closed port, not the next test's `seen`.
 beforeEach(async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   server = createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
     let body = "";
@@ -249,6 +251,44 @@ describe("join", () => {
     }
     expect(result).toEqual({ ok: false, status: 409, error: "room is busy" });
     await until(() => c.rooms()[0]?.link === "live");
+  });
+
+  it("joins one at a time, so the key kept is the last one the door gave this PC", async () => {
+    const issued: string[] = [];
+    route = (req, res) => {
+      if (req.url !== "/room/v1/join") return quietDoor(req, res);
+      // the door reuses the seat and replaces the key; the first reply is the slow one
+      const key = `wkg_${String(issued.length + 1).repeat(43)}`;
+      issued.push(key);
+      const answer = () => reply(res, 200, { roomId: "r1", person: { id: "p1", name: "Mina" }, key });
+      if (issued.length === 1) setTimeout(answer, 200);
+      else answer();
+    };
+    const c = guest();
+    const results = await Promise.all([c.join(CODE), c.join(CODE)]);
+    expect(results.map((result) => result.ok)).toEqual([true, true]);
+    expect(issued).toHaveLength(2);
+    expect(joinedKey("r1")?.key).toBe(issued.at(-1));
+  });
+
+  it("seats sync's join only where this PC has no seat and never left one by hand", async () => {
+    route = quietDoor;
+    const c = guest();
+    const together = await Promise.all([c.join(CODE), c.seat(CODE, "r1")]);
+    expect(together[1]).toEqual({ ok: false, status: 409, error: "seated" });
+    expect(seen.filter((request) => request.url === "/room/v1/join")).toHaveLength(1);
+    expect(endJoined("r1", "left")).toBe(true);
+    expect(removeJoined("r1")).toBe(true);
+    expect(await c.seat(CODE, "r1")).toEqual({ ok: false, status: 409, error: "seated" });
+    expect(seen.filter((request) => request.url === "/room/v1/join")).toHaveLength(1);
+    // a join by hand is the user's own choice again, and clears the leave
+    expect((await c.join(CODE)).ok).toBe(true);
+    expect(seatTaken("r1")).toBe(true);
+    expect(endJoined("r1", "removed")).toBe(true);
+    expect(removeJoined("r1")).toBe(true);
+    expect(seatTaken("r1")).toBe(false);
+    expect((await c.seat(CODE, "r1")).ok).toBe(true);
+    expect(JSON.parse(seen.filter((request) => request.url === "/room/v1/join").at(-1)!.body)).toMatchObject({ code: CODE, roomId: "r1" });
   });
 
   it("is one call with the pasted code: the door gets the code and this PC's own name, nothing typed", async () => {
@@ -474,10 +514,10 @@ describe("room alerts on a teammate", () => {
   const edward = { kind: "host" as const, id: "host", name: "Edward" };
   const mina = { kind: "person" as const, ...STATE.me };
   const ping = (text: string) => [{ chat: "joined:r1", threadId: "joined:r1", room: "Team", name: "Edward", text }];
-  const stream = (frames: Array<[number, string]>) => (req: IncomingMessage, res: ServerResponse) => {
+  const stream = (frames: Array<[number, string]>, state: unknown = STATE) => (req: IncomingMessage, res: ServerResponse) => {
     if (!req.url?.includes("/stream")) return quietDoor(req, res);
     res.writeHead(200, { "content-type": "text/event-stream" });
-    res.write(`data: ${JSON.stringify({ kind: "state", state: STATE })}\n\n`);
+    res.write(`data: ${JSON.stringify({ kind: "state", state })}\n\n`);
     for (const [ms, frame] of frames) setTimeout(() => res.write(frame), ms);
   };
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -517,6 +557,26 @@ describe("room alerts on a teammate", () => {
     await until(() => c.room("r1")?.entries.length === 3);
     await sleep(200);
     expect(alert.mock.calls).toEqual([[{ chat: "joined:r1", threadId: "joined:r1", room: "Team", name: "스타줌", text: "Done: Sat 7:30. @Edward @JJ" }]]);
+  });
+
+  it("alerts for a picture caption naming a bot without starting a chain", async () => {
+    const state = { ...STATE, bots: [{ id: "b1", name: "Wink", color: "blue" }] };
+    const caption = {
+      seq: 1, id: "e1", at: Date.now(), author: { kind: "bot", id: "b2", name: "Pete" }, text: "Chart from @Wink",
+      files: [{ id: "f".repeat(24), name: "cat.png", type: "image/png", bytes: 8, sha256: "0".repeat(64) }],
+    };
+    const showPicture = stream([[0, `data: ${JSON.stringify({ kind: "entry", entry: caption })}\n\n`]], state);
+    route = (req, res) => req.url?.includes("/snapshot") ? reply(res, 200, { head: 0, entries: [], state }) : showPicture(req, res);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 0 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 1);
+    const entries = joinedEntries("r1", 1);
+    expect(c.room("r1")?.state?.bots).toEqual(state.bots);
+    await vi.waitFor(() => expect({
+      alerts: alert.mock.calls.map(([line]) => line.text),
+      chain: botChain(entries, state.bots, [state.host]),
+    }).toEqual({ alerts: ["Chart from @Wink"], chain: 0 }));
   });
 
   it("pings a reconnect replay once with its latest line, then live lines again", async () => {
@@ -587,7 +647,7 @@ describe("deleted files", () => {
     guest({ timing: { retryMs: 10 } }).start();
     await until(() => asked.length >= 2);
     expect(asked.slice(0, 2)).toEqual(["0", "0"]);
-    rmSync(copy, { recursive: true });
+    removeTestData(copy);
     await until(() => asked.includes("3"));
     expect(existsSync(copy)).toBe(false);
   });
@@ -764,6 +824,21 @@ describe("bot lines", () => {
     await c.botSend("r1", "tb-pete", "@Wink yours");
     expect(onLine.mock.calls.map(([roomId, entry]) => [roomId, entry.id])).toEqual([["r1", "e2"], ["r1", "e3"], ["r1", "e4"]]);
     expect(onStop).toHaveBeenCalledWith("r1");
+  });
+
+  it("never posts a picture's caption to a host that can't take the picture", async () => {
+    const mine = { kind: "bot", id: "tb-pete", name: "Pete", owner: "p1" } as const;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: STATE.me, key: KEY });
+      if (req.url?.includes("/snapshot")) return reply(res, 200, { head: 0, entries: [], state: STATE });
+      // an older door: bot-send takes the words and drops fileIds
+      if (req.url?.includes("/bot-send")) return reply(res, 200, { entry: { seq: 1, id: "e1", at: 1, author: mine, text: "A cat" } });
+      reply(res, 404, { error: "not found" });
+    };
+    const c = guest();
+    expect((await c.join(CODE)).ok).toBe(true);
+    expect(await c.botPicture("r1", "tb-pete", "A cat", "e1", "cat.png", Buffer.from([1]), new AbortController().signal)).toMatchObject({ ok: false, status: 404 });
+    expect(seen.filter((row) => row.url.includes("/bot-send"))).toEqual([]);
   });
 
   it("reads an older host's state with no bots as none", async () => {

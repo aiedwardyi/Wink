@@ -36,9 +36,9 @@ it("shows plain text in the pane on a click, never on its own", () => {
 it("marks the replies of a turn that already put a picture in the chat", () => {
   const picture = (id: string, botId?: string): Message => ({ id, role: "bot", kind: "screen", image: `${id}.png`, shown: true, at: 2, ...(botId ? { from: { botId, name: botId, color: "blue" } } : {}) });
   const said = (id: string, botId: string): Message => ({ ...bot(id, "[dog.png](C:\\w\\dog.png)"), from: { botId, name: botId, color: "blue" } });
-  expect([...picturedReplies([user("u1"), bot("b1", "On it."), picture("p1"), bot("b2", "Saved to [dog.png](C:\\w\\dog.png)."), user("u2"), bot("b3", "[cat.png](C:\\w\\cat.png)")])]).toEqual(["b1", "b2"]);
-  expect([...picturedReplies([user("u1"), picture("p1", "alpha"), said("b1", "beta"), said("b2", "alpha")])]).toEqual(["b2"]);
-  expect([...picturedReplies([user("u1"), { ...user("s1"), role: "bot", kind: "screen", png: "AAAA" }, bot("b1", "ok")])]).toEqual([]);
+  expect(picturedReplies([user("u1"), bot("b1", "On it."), picture("p1"), bot("b2", "Saved to [dog.png](C:\\w\\dog.png)."), user("u2"), bot("b3", "[cat.png](C:\\w\\cat.png)")])).toEqual({ pictured: new Set(["b1", "b2"]), tailPictures: new Set() });
+  expect(picturedReplies([user("u1"), picture("p1", "alpha"), said("b1", "beta"), said("b2", "alpha")])).toEqual({ pictured: new Set(["b2"]), tailPictures: new Set(["alpha"]) });
+  expect(picturedReplies([user("u1"), { ...user("s1"), role: "bot", kind: "screen", png: "AAAA" }, bot("b1", "ok")])).toEqual({ pictured: new Set(), tailPictures: new Set() });
 });
 
 it("finds absolute file links, angle-bracketed and file:// ones too", () => {

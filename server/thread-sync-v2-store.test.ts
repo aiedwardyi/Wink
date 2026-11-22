@@ -1,5 +1,4 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
@@ -15,13 +14,14 @@ import { writeDeviceRecord } from "./device-sync.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import type { Snapshot, TestArgs, TestResult } from "./testing/thread-sync-v2-pc.ts";
 import { bootRowsNow, testBootReads } from "./testing/boot-rows.ts";
+import { testHome } from "./testing/test-home.ts";
 
 const roots: string[] = [];
 const peers: Array<{ close(): Promise<void> }> = [];
 const CONFLICT_NOTICE_V2 = "This chat also changed on another PC. Both versions were kept.";
 const isConflictNotice = (message: Message) => [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].some((notice) => message.tool?.name === `error: ${notice}`);
 const temp = () => {
-  const root = mkdtempSync(join(tmpdir(), "sync-v2-store-"));
+  const root = mkdtempSync(join(testHome(), "sync-v2-store-"));
   roots.push(root);
   return root;
 };
@@ -1271,12 +1271,12 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     const folder = temp();
     const a = pc(folder, "a");
     const b = pc(folder, "b");
-    const row = await a.call<Message>("append", { text: "first" });
+    const row = await a.call<Message>("append", { role: "bot", text: "first", patch: { engine: "grokAgent" } });
     await a.call("flush");
     await b.call("cursor");
     await b.call("pull");
     const first = await b.snapshot();
-    expect(first.rows).toMatchObject([{ id: row.id, text: "first" }]);
+    expect(first.rows).toMatchObject([{ id: row.id, text: "first", engine: "grokAgent" }]);
     expect(first.events).toContainEqual(expect.objectContaining({ type: "message", imported: true, importing: true }));
     expect(first.tasks.find((task) => task.threadId === "thread")?.resumeCursors).toEqual({});
     expect(first.outbox).toBe(0);
@@ -1285,7 +1285,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await a.call("flush");
     await b.call("pull");
     const second = await b.snapshot();
-    expect(second.rows[0].text).toBe("edited");
+    expect(second.rows[0]).toMatchObject({ text: "edited", engine: "grokAgent" });
     expect(second.events).toContainEqual(expect.objectContaining({ type: "message.patch", importing: true }));
     expect(second.tasks.find((task) => task.threadId === "thread")?.title).toBe("Renamed");
     expect(second.outbox).toBe(0);
