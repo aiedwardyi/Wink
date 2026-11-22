@@ -3,23 +3,25 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { WEB_READ_OWN_TOOL, WEB_READ_SEARCH_ONLY, WEB_READ_STOP } from "../shared/web-read.ts";
 import { createWebReader, PAUSE_429_MS, SITE_BUDGET, siteKey, youtubeId } from "./web-read.ts";
-import { guardedLookup, privateAddress, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
+import { guardedLookup, POST_URLS, privateAddress, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
 import { TEXT_CAP } from "./web-read-text.ts";
 
 type Fixture = { status?: number; type?: string; html?: string; body?: string | Buffer; location?: string; error?: Error; truncated?: boolean };
 type Routes = Record<string, Fixture>;
 
-const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+const seen: Array<{ url: string; headers: Record<string, string>; body?: Buffer }> = [];
 const unexpected: string[] = [];
 
 function fake(routes: Routes) {
   const requests: string[] = [];
-  const transport: Transport = async (url, headers) => {
-    requests.push(url.href);
-    seen.push({ url: url.href, headers });
-    const fixture = routes[url.href];
+  const transport: Transport = async (url, headers, _signal, body) => {
+    // A POST's fixture key and request entry start with "POST ".
+    const key = body ? `POST ${url.href}` : url.href;
+    requests.push(key);
+    seen.push({ url: url.href, headers, body });
+    const fixture = routes[key];
     if (!fixture) {
-      unexpected.push(url.href);
+      unexpected.push(key);
       throw Object.assign(new Error("no fixture"), { code: "ENOTFOUND" });
     }
     if (fixture.error) throw fixture.error;
@@ -42,6 +44,10 @@ const pdf = (text: string) => {
   return Buffer.concat([Buffer.from(`%PDF-1.4\n1 0 obj\n<< /Length ${stream.length} /Filter /FlateDecode >>\nstream\n`, "latin1"), stream, Buffer.from("\nendstream\nendobj\n%%EOF\n", "latin1")]);
 };
 const player = (tracks: unknown[]) => `<html><body><script>var ytInitialPlayerResponse = ${JSON.stringify({ videoDetails: { title: "How tides work", author: "Ocean Lab", shortDescription: "A short explainer about tides and the moon." }, captions: { playerCaptionsTracklistRenderer: { captionTracks: tracks } } })};var meta = 1;</script></body></html>`;
+const ytPlayer = (tracks: unknown[], details = true) => JSON.stringify({ playabilityStatus: { status: "OK" }, ...(details ? { videoDetails: { title: "How tides work", author: "Ocean Lab", shortDescription: "A short explainer about tides and the moon." } } : {}), captions: { playerCaptionsTracklistRenderer: { captionTracks: tracks } } });
+const YT_API = "POST https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
+const YT_API_TRACK = { baseUrl: "https://www.youtube.com/api/timedtext?v=abc123XYZ00&lang=en&fmt=srv3", languageCode: "en" };
+const YT_UNPLAYABLE = { type: "application/json", body: JSON.stringify({ playabilityStatus: { status: "UNPLAYABLE" } }) };
 const YT_WATCH = "https://www.youtube.com/watch?v=abc123XYZ00&hl=en";
 const YT_CAPTION = "https://www.youtube.com/api/timedtext?v=abc123XYZ00&lang=en&fmt=json3";
 const json3 = JSON.stringify({ events: [{ segs: [{ utf8: "The moon pulls on the ocean" }] }, { segs: [{ utf8: " and that makes the tide rise twice a day." }] }] });
@@ -79,9 +85,11 @@ const CASES: Case[] = [
   { name: "timeout", url: "https://slow.example.com/", routes: { "https://slow.example.com/": { error: Object.assign(new Error("timed out"), { name: "TimeoutError" }) } }, status: "blocked", route: "fetch", tried: /no answer in 10 s/, next: true },
   { name: "huge page", url: "https://big.example.com/", routes: { "https://big.example.com/": { truncated: true, html: page("Big", `<article>${paras(400, "Huge")}</article>`) } }, status: "ok", route: "fetch", tried: /over 2 MB/, text: /\[truncated: showing 8,000 of/ },
   { name: "image (non-text)", url: "https://cdn.example.com/cat.png", routes: { "https://cdn.example.com/cat.png": { type: "image/png", body: Buffer.alloc(4096, 1) } }, status: "blocked", route: "fetch", tried: /not a text page \(image\/png, 4 KB\)/, next: false },
-  { name: "YouTube with captions", url: "https://youtu.be/abc123XYZ00", routes: { [YT_WATCH]: { html: player([{ baseUrl: "/api/timedtext?v=abc123XYZ00&lang=en", languageCode: "en" }]) }, [YT_CAPTION]: { type: "application/json", body: json3 } }, status: "ok", route: "youtube-captions", text: /Transcript \(en\):\nThe moon pulls on the ocean and that makes the tide rise/, requests: 2 },
-  { name: "YouTube caption needs a token", url: "https://www.youtube.com/watch?v=abc123XYZ00", routes: { [YT_WATCH]: { html: player([{ baseUrl: "https://www.youtube.com/api/timedtext?v=abc123XYZ00&lang=en", languageCode: "en" }]) }, [YT_CAPTION]: { type: "text/html", body: "" } }, status: "blocked", route: "youtube", tried: /YouTube sent no caption text/, text: /Partial: no transcript[\s\S]*tides and the moon/, next: true, requests: 2 },
-  { name: "YouTube 429", url: "https://m.youtube.com/shorts/abc123XYZ00", routes: { [YT_WATCH]: { status: 429, html: "" } }, status: "blocked", route: "youtube", tried: /HTTP 429, youtube.com paused for 10 min, no retry/, next: true, requests: 1 },
+  { name: "YouTube captions through YouTube's player API", url: "https://youtu.be/abc123XYZ00", routes: { [YT_API]: { type: "application/json", body: ytPlayer([YT_API_TRACK]) }, [YT_CAPTION]: { type: "application/json", body: json3 } }, status: "ok", route: "youtube-captions", tried: /\(player API\): ok/, text: /# How tides work[\s\S]*Transcript \(en\):\nThe moon pulls on the ocean and that makes the tide rise/, requests: 2 },
+  { name: "YouTube player API unplayable, watch page captions (GET fallback)", url: "https://www.youtube.com/watch?v=abc123XYZ00", routes: { [YT_API]: YT_UNPLAYABLE, [YT_WATCH]: { html: player([{ baseUrl: "/api/timedtext?v=abc123XYZ00&lang=en", languageCode: "en" }]) }, [YT_CAPTION]: { type: "application/json", body: json3 } }, status: "ok", route: "youtube-captions", tried: /\(player API\): no video data[\s\S]*\(watch page\): ok/, text: /Transcript \(en\):\nThe moon pulls/, requests: 3 },
+  { name: "YouTube player API down, caption needs a token", url: "https://www.youtube.com/watch?v=abc123XYZ00", routes: { [YT_API]: { status: 403, html: "" }, [YT_WATCH]: { html: player([{ baseUrl: "https://www.youtube.com/api/timedtext?v=abc123XYZ00&lang=en", languageCode: "en" }]) }, [YT_CAPTION]: { type: "text/html", body: "" } }, status: "blocked", route: "youtube", tried: /\(player API\): HTTP 403[\s\S]*YouTube sent no caption text/, text: /Partial: no transcript[\s\S]*tides and the moon/, next: true, requests: 3 },
+  { name: "YouTube video with no captions", url: "https://www.youtube.com/watch?v=abc123XYZ00", routes: { [YT_API]: { type: "application/json", body: ytPlayer([]) } }, status: "blocked", route: "youtube", tried: /\(player API\): this video has no captions/, text: /Partial: no transcript[\s\S]*tides and the moon/, next: true, requests: 1 },
+  { name: "YouTube 429", url: "https://m.youtube.com/shorts/abc123XYZ00", routes: { [YT_API]: { status: 429, html: "" } }, status: "blocked", route: "youtube", tried: /HTTP 429, youtube.com paused for 10 min, no retry/, next: true, requests: 1 },
   { name: "LinkedIn company page", url: "https://www.linkedin.com/company/microsoft/", routes: {}, status: "blocked", route: "search-only", tried: /never fetches linkedin.com/, next: true, requests: 0 },
   { name: "redirect into LinkedIn", url: "https://lnk.example.com/go", routes: { "https://lnk.example.com/go": { status: 302, location: "https://www.linkedin.com/in/someone" } }, status: "blocked", route: "fetch", tried: /linkedin.com, which Wink never fetches/, next: true, requests: 1 },
 ];
@@ -106,10 +114,11 @@ describe("web_read ladder over URL classes", () => {
   afterAll(() => {
     expect(unexpected).toEqual([]);
     const hosts = new Set(seen.map((request) => new URL(request.url).hostname));
-    const allowed = new Set(CASES.flatMap((c) => [new URL(c.url).hostname, ...Object.keys(c.routes).map((u) => new URL(u).hostname)]));
+    const allowed = new Set(CASES.flatMap((c) => [new URL(c.url).hostname, ...Object.keys(c.routes).map((u) => new URL(u.replace(/^POST /, "")).hostname)]));
     for (const host of hosts) expect(allowed.has(host)).toBe(true);
     for (const host of hosts) expect(host).not.toMatch(/jina\.ai|fxtwitter|vxtwitter|fixupx|nitter|twstalker|youtubetranscript|downsub|savesubs|tactiq|notegpt|kome\.ai|linkedin\.com|lnkd\.in/);
     for (const request of seen) {
+      if (request.body) expect(POST_URLS.has(request.url.split("?")[0]!)).toBe(true);
       expect(Object.keys(request.headers).map((key) => key.toLowerCase())).not.toContain("cookie");
       expect(request.headers["user-agent"]).toMatch(/Chrome\//);
     }
@@ -246,6 +255,74 @@ describe("web_read politeness", () => {
     now += PAUSE_429_MS + 1;
     expect((await reader.read("https://rate.example.com/b")).status).toBe("ok");
     expect(requests).toEqual(["https://rate.example.com/a", "https://rate.example.com/b"]);
+  });
+});
+
+describe("web_read YouTube captions", () => {
+  const caption = { type: "application/json", body: json3 };
+
+  it("asks YouTube's player API with one JSON POST naming the video, then reads captions with a GET", async () => {
+    const { transport, requests } = fake({ [YT_API]: { type: "application/json", body: ytPlayer([YT_API_TRACK]) }, [YT_CAPTION]: caption });
+    const start = seen.length;
+    expect((await createWebReader({ transport, now: () => 0 }).read("https://youtu.be/abc123XYZ00")).status).toBe("ok");
+    expect(requests).toEqual([YT_API, YT_CAPTION]);
+    const post = seen[start]!;
+    expect(post.headers["content-type"]).toBe("application/json");
+    expect(JSON.parse(post.body!.toString("utf8"))).toEqual({ context: { client: { clientName: "ANDROID", clientVersion: expect.any(String), hl: "en" } }, videoId: "abc123XYZ00" });
+    expect(seen[start + 1]!.body).toBeUndefined();
+  });
+
+  it("spends one unit of youtube.com's budget per read, however many requests it makes", async () => {
+    const routes: Routes = {};
+    const ids = ["vidAAAAAAA1", "vidAAAAAAA2", "vidAAAAAAA3", "vidAAAAAAA4"];
+    for (const id of ids) {
+      routes[`POST https://www.youtube.com/youtubei/v1/player?prettyPrint=false`] = YT_UNPLAYABLE;
+      routes[`https://www.youtube.com/watch?v=${id}&hl=en`] = { html: player([{ baseUrl: `/api/timedtext?v=${id}&lang=en`, languageCode: "en" }]) };
+      routes[`https://www.youtube.com/api/timedtext?v=${id}&lang=en&fmt=json3`] = caption;
+    }
+    const { transport, requests } = fake(routes);
+    const reader = createWebReader({ transport, now: () => 0 });
+    for (const id of ids.slice(0, 3)) expect((await reader.read(`https://youtu.be/${id}`)).status).toBe("ok");
+    expect(requests).toHaveLength(9);
+    const fourth = await reader.read(`https://youtu.be/${ids[3]}`);
+    expect(fourth.tried[0]).toMatch(/polite limit reached/);
+    expect(requests).toHaveLength(9);
+  });
+
+  it("never follows a redirect from the player API, and falls back to the watch page", async () => {
+    const { transport, requests } = fake({
+      [YT_API]: { status: 302, location: "https://evil.example.net/steal" },
+      [YT_WATCH]: { html: player([{ baseUrl: "/api/timedtext?v=abc123XYZ00&lang=en", languageCode: "en" }]) },
+      [YT_CAPTION]: caption,
+    });
+    const out = await createWebReader({ transport, now: () => 0 }).read("https://youtu.be/abc123XYZ00");
+    expect(out.status).toBe("ok");
+    expect(out.tried.join("\n")).toMatch(/\(player API\): redirected \(HTTP 302\), not followed/);
+    expect(requests).toEqual([YT_API, YT_WATCH, YT_CAPTION]);
+  });
+
+  it("does not follow a caption link that points off youtube.com", async () => {
+    const { transport, requests } = fake({
+      [YT_API]: { type: "application/json", body: ytPlayer([{ baseUrl: "https://captions.example.net/t?v=1", languageCode: "en" }]) },
+      [YT_WATCH]: { html: player([{ baseUrl: "http://127.0.0.1:8799/api/internal/agents", languageCode: "en" }]) },
+    });
+    const out = await createWebReader({ transport, now: () => 0 }).read("https://youtu.be/abc123XYZ00");
+    expect(out.status).toBe("blocked");
+    expect(out.tried.join("\n")).toMatch(/\(player API\): caption link points off youtube.com[\s\S]*\(watch page\): caption link points off youtube.com/);
+    expect(requests).toEqual([YT_API, YT_WATCH]);
+  });
+
+  it("a 429 from the caption link pauses youtube.com with no retry", async () => {
+    let now = 0;
+    const { transport, requests } = fake({ [YT_API]: { type: "application/json", body: ytPlayer([YT_API_TRACK]) }, [YT_CAPTION]: { status: 429, html: "" } });
+    const reader = createWebReader({ transport, now: () => now });
+    expect((await reader.read("https://youtu.be/abc123XYZ00")).tried.join("\n")).toMatch(/HTTP 429, youtube.com paused for 10 min, no retry/);
+    expect(requests).toEqual([YT_API, YT_CAPTION]);
+    expect((await reader.read("https://www.youtube.com/watch?v=abc123XYZ01")).tried[0]).toMatch(/answered 429/);
+    expect(requests).toHaveLength(2);
+    now += 11 * 60_000;
+    await reader.read("https://www.youtube.com/watch?v=abc123XYZ01");
+    expect(requests).toEqual([YT_API, YT_CAPTION, YT_API, YT_CAPTION]);
   });
 });
 

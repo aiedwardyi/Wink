@@ -1,4 +1,5 @@
 // web_read's only way out to the network: GET, no cookies, public addresses only.
+// The one POST is YouTube's own player API (POST_URLS), which hands out caption links plain page reads no longer get.
 import { lookup as dnsLookup, type LookupAddress, type LookupAllOptions } from "node:dns";
 import http from "node:http";
 import https from "node:https";
@@ -9,7 +10,10 @@ import type { Readable } from "node:stream";
 export const MAX_BODY_BYTES = 2_000_000;
 
 export type Hop = { status: number; headers: Record<string, string>; body: Buffer; truncated: boolean };
-export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal) => Promise<Hop>;
+/** With a body the request is a POST, and only to a POST_URLS address. */
+export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal, body?: Buffer) => Promise<Hop>;
+
+export const POST_URLS: ReadonlySet<string> = new Set(["https://www.youtube.com/youtubei/v1/player"]);
 
 // Ranges and the embedded-IPv4 forms follow the earlier read_url reader (PR 1821).
 const NON_PUBLIC = new BlockList();
@@ -71,11 +75,13 @@ function decoded(res: http.IncomingMessage): Readable {
   return res;
 }
 
-/** One GET, no redirect following; the caller checks each hop. Bodies stop at MAX_BODY_BYTES after decoding. */
-export const nodeTransport: Transport = (url, headers, signal) =>
+/** One GET (or a POST to a POST_URLS address), no redirect following; the caller checks each hop. Bodies stop at MAX_BODY_BYTES after decoding. */
+export const nodeTransport: Transport = (url, headers, signal, body) =>
   new Promise((resolve, reject) => {
+    if (body && !POST_URLS.has(url.origin + url.pathname)) return reject(new Error(`web_read only POSTs to YouTube's player API, not ${url.origin}${url.pathname}`));
     const client = url.protocol === "https:" ? https : http;
-    const req = client.request(url, { method: "GET", headers, lookup: guardedLookup(), signal, agent: false }, (res) => {
+    const sent = body ? { ...headers, "content-length": String(body.length) } : headers;
+    const req = client.request(url, { method: body ? "POST" : "GET", headers: sent, lookup: guardedLookup(), signal, agent: false }, (res) => {
       const flat: Record<string, string> = {};
       for (const [key, value] of Object.entries(res.headers)) if (key !== "set-cookie" && value !== undefined) flat[key] = Array.isArray(value) ? value.join(", ") : value;
       const status = res.statusCode ?? 0;
@@ -115,5 +121,5 @@ export const nodeTransport: Transport = (url, headers, signal) =>
       stream.on("error", fail);
     });
     req.on("error", reject);
-    req.end();
+    req.end(body);
   });

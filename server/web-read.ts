@@ -65,7 +65,7 @@ export class SiteGate {
 }
 
 type Step = { ok: boolean; route: string; text: string; tried: string[]; final?: boolean; keep?: boolean };
-type Got = { hop: Hop; url: URL } | { error: string; final?: boolean };
+type Got = { hop: Hop; url: URL } | { error: string; final?: boolean; gated?: boolean };
 
 export function youtubeId(url: URL): string | null {
   const host = url.hostname.toLowerCase().replace(/^(www|m|music)\./, "");
@@ -84,6 +84,10 @@ function captionText(body: string): string {
   }
 }
 
+// YouTube's player API, asked as its Android app (the web client gets no playable answer without a browser token).
+const YT_PLAYER_URL = "https://www.youtube.com/youtubei/v1/player";
+const YT_CLIENT = { clientName: "ANDROID", clientVersion: "20.10.38", hl: "en" };
+
 type CaptionTrack = { baseUrl?: string; languageCode?: string; kind?: string };
 type PlayerResponse = { videoDetails?: { title?: string; author?: string; shortDescription?: string }; captions?: { playerCaptionsTracklistRenderer?: { captionTracks?: CaptionTrack[] } } };
 
@@ -101,11 +105,12 @@ export function createWebReader(deps: WebReaderDeps = {}) {
   const cache = new Map<string, { step: Step; at: number }>();
   const inflight = new Map<string, Promise<Step>>();
 
-  async function get(start: URL, label: string): Promise<Got> {
+  /** GET with redirects checked hop by hop; with `body`, one POST that is never redirected. */
+  async function get(start: URL, label: string, opts: { admitted?: Set<string>; body?: Buffer } = {}): Promise<Got> {
     let current = start;
     const seen = new Set<string>();
     // One read spends one unit of a site's budget; its redirects within that site are free.
-    const admitted = new Set<string>();
+    const admitted = opts.admitted ?? new Set<string>();
     for (let hop = 0; hop <= MAX_HOPS; hop++) {
       const refused = refusedTarget(current);
       if (refused) return { error: `redirected to ${refused}, not followed`, final: true };
@@ -114,12 +119,14 @@ export function createWebReader(deps: WebReaderDeps = {}) {
       seen.add(current.href);
       if (!admitted.has(siteKey(current.hostname))) {
         const held = gate.admit(current.hostname);
-        if (held) return { error: held };
+        if (held) return { error: held, gated: true };
         admitted.add(siteKey(current.hostname));
       }
       let got: Hop;
       try {
-        got = await transport(current, { ...BROWSER_HEADERS }, AbortSignal.timeout(HOP_MS));
+        got = opts.body
+          ? await transport(current, { ...BROWSER_HEADERS, "content-type": "application/json" }, AbortSignal.timeout(HOP_MS), opts.body)
+          : await transport(current, { ...BROWSER_HEADERS }, AbortSignal.timeout(HOP_MS));
       } catch (error) {
         const code = (error as { code?: string }).code;
         if (code === "EPRIVATE") return { error: "the site name points to a private address, not read", final: true };
@@ -128,6 +135,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
       }
       const location = got.status >= 300 && got.status < 400 ? got.headers.location : undefined;
       if (!location) return { hop: got, url: current };
+      if (opts.body) return { error: `redirected (HTTP ${got.status}), not followed` };
       try {
         current = new URL(location, current);
       } catch {
@@ -137,36 +145,77 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     return { error: `more than ${MAX_HOPS} redirects` };
   }
 
+  /** Caption text for a player response, read from the caption link it carries; `stop` means the next path would not help. */
+  async function captions(player: PlayerResponse, label: string, admitted: Set<string>): Promise<Step & { meta?: string; stop?: boolean }> {
+    const details = player.videoDetails ?? {};
+    const head = [details.title ? `# ${details.title}` : "", details.author ? `Channel: ${details.author}` : ""].filter(Boolean).join("\n");
+    const meta = [head, details.shortDescription ? `Description:\n${details.shortDescription}` : ""].filter(Boolean).join("\n\n");
+    const tracks = player.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+    const track = tracks.find((t) => t.languageCode?.startsWith("en") && !t.kind) ?? tracks.find((t) => t.languageCode?.startsWith("en")) ?? tracks[0];
+    if (!track?.baseUrl) return { ok: false, route: "youtube", text: "", meta, stop: Boolean(details.title), tried: [`${label}: ${details.title ? "this video has no captions" : "no video data"}`] };
+    let captionUrl: URL;
+    try {
+      captionUrl = new URL(track.baseUrl, "https://www.youtube.com");
+    } catch {
+      return { ok: false, route: "youtube", text: "", meta, tried: [`${label}: bad caption link`] };
+    }
+    if (siteKey(captionUrl.hostname) !== "youtube.com") return { ok: false, route: "youtube", text: "", meta, tried: [`${label}: caption link points off youtube.com, not followed`] };
+    captionUrl.searchParams.set("fmt", "json3");
+    const caption = await get(captionUrl, label, { admitted });
+    if ("error" in caption) return { ok: false, route: "youtube", text: "", meta, stop: caption.gated || caption.final, tried: [`${label}: ${caption.error}`] };
+    if (caption.hop.status === 429) {
+      gate.pause(caption.url.hostname);
+      return { ok: false, route: "youtube", text: "", meta, stop: true, tried: [`${label}: HTTP 429, youtube.com paused for 10 min, no retry`] };
+    }
+    const transcript = caption.hop.status === 200 ? captionText(caption.hop.body.toString("utf8")) : "";
+    if (!transcript) return { ok: false, route: "youtube", text: "", meta, keep: true, tried: [`${label}: YouTube sent no caption text (HTTP ${caption.hop.status}; it can require a token plain reads don't have)`] };
+    return { ok: true, route: "youtube-captions", text: `${head}\n\nTranscript (${track.languageCode ?? "?"}${track.kind === "asr" ? ", auto-generated" : ""}):\n${transcript}`, keep: true, tried: [`${label}: ok, ${transcript.length.toLocaleString("en-US")} chars`] };
+  }
+
   async function youtube(id: string): Promise<Step & { meta?: string }> {
     const label = "step 1 YouTube captions";
-    const page = await get(new URL(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}&hl=en`), label);
-    if ("error" in page) return { ok: false, route: "youtube", text: "", tried: [`${label}: ${page.error}`] };
-    if (page.hop.status === 429) {
-      gate.pause(page.url.hostname);
+    // However many of these requests run, one read spends one unit of youtube.com's budget.
+    const admitted = new Set<string>();
+    const paused = (url: URL) => {
+      gate.pause(url.hostname);
       return { ok: false, route: "youtube", text: "", tried: [`${label}: HTTP 429, youtube.com paused for 10 min, no retry`] };
+    };
+
+    // First YouTube's own player API: its caption links work without the token the watch page's links now need.
+    const api = await get(new URL(`${YT_PLAYER_URL}?prettyPrint=false`), `${label} (player API)`, { admitted, body: Buffer.from(JSON.stringify({ context: { client: YT_CLIENT }, videoId: id })) });
+    const tried: string[] = [];
+    let fromApi: Step & { meta?: string; stop?: boolean } = { ok: false, route: "youtube", text: "", tried: [] };
+    if ("error" in api) {
+      if (api.gated || api.final) return { ok: false, route: "youtube", text: "", tried: [`${label}: ${api.error}`] };
+      tried.push(`${label} (player API): ${api.error}`);
+    } else if (api.hop.status === 429) {
+      return paused(api.url);
+    } else if (api.hop.status !== 200) {
+      tried.push(`${label} (player API): HTTP ${api.hop.status}`);
+    } else {
+      let player: PlayerResponse = {};
+      try {
+        player = JSON.parse(api.hop.body.toString("utf8")) as PlayerResponse;
+      } catch {}
+      fromApi = await captions(player, `${label} (player API)`, admitted);
+      if (fromApi.ok || fromApi.stop) return fromApi;
+      tried.push(...fromApi.tried);
+    }
+
+    // Fallback, GET only: the watch page and the caption link it carries.
+    const page = await get(new URL(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}&hl=en`), `${label} (watch page)`, { admitted });
+    if ("error" in page) return { ok: false, route: "youtube", text: "", meta: fromApi.meta, tried: [...tried, `${label} (watch page): ${page.error}`] };
+    if (page.hop.status === 429) {
+      const stop = paused(page.url);
+      return { ...stop, meta: fromApi.meta, tried: [...tried, ...stop.tried] };
     }
     const html = page.hop.body.toString("utf8");
     let player: PlayerResponse = {};
     try {
       player = JSON.parse(html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});\s*(?:var\s|<\/script)/s)?.[1] ?? "{}") as PlayerResponse;
     } catch {}
-    const details = player.videoDetails ?? {};
-    const head = [details.title ? `# ${details.title}` : "", details.author ? `Channel: ${details.author}` : ""].filter(Boolean).join("\n");
-    const meta = [head, details.shortDescription ? `Description:\n${details.shortDescription}` : ""].filter(Boolean).join("\n\n");
-    const tracks = player.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
-    const track = tracks.find((t) => t.languageCode?.startsWith("en") && !t.kind) ?? tracks.find((t) => t.languageCode?.startsWith("en")) ?? tracks[0];
-    if (!track?.baseUrl) return { ok: false, route: "youtube", text: "", meta, tried: [`${label}: ${details.title ? "this video has no captions" : "no video data on the page"}`] };
-    const captionUrl = new URL(track.baseUrl, "https://www.youtube.com");
-    captionUrl.searchParams.set("fmt", "json3");
-    const caption = await get(captionUrl, label);
-    if ("error" in caption) return { ok: false, route: "youtube", text: "", meta, tried: [`${label}: ${caption.error}`] };
-    if (caption.hop.status === 429) {
-      gate.pause(caption.url.hostname);
-      return { ok: false, route: "youtube", text: "", meta, tried: [`${label}: HTTP 429, youtube.com paused for 10 min, no retry`] };
-    }
-    const transcript = caption.hop.status === 200 ? captionText(caption.hop.body.toString("utf8")) : "";
-    if (!transcript) return { ok: false, route: "youtube", text: "", meta, keep: true, tried: [`${label}: YouTube sent no caption text (HTTP ${caption.hop.status}; it can require a token plain reads don't have)`] };
-    return { ok: true, route: "youtube-captions", text: `${head}\n\nTranscript (${track.languageCode ?? "?"}${track.kind === "asr" ? ", auto-generated" : ""}):\n${transcript}`, keep: true, tried: [`${label}: ok, ${transcript.length.toLocaleString("en-US")} chars`] };
+    const fromPage = await captions(player, `${label} (watch page)`, admitted);
+    return { ...fromPage, meta: fromPage.meta || fromApi.meta, tried: [...tried, ...fromPage.tried] };
   }
 
   async function fetchPage(url: URL): Promise<Step> {

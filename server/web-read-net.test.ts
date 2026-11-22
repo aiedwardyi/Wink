@@ -4,7 +4,7 @@ import { deflateSync, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createWebReader } from "./web-read.ts";
-import { guardedLookup, nodeTransport, privateAddress, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
+import { guardedLookup, nodeTransport, POST_URLS, privateAddress, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
 import { bodyText, htmlToText, pdfToText, TEXT_CAP } from "./web-read-text.ts";
 
 // 1.5 KB of brotli that decodes to 1 GB of zeros.
@@ -12,8 +12,10 @@ const bomb = Buffer.from("y///P/gnAOKxQCD3/o///3/wTwDEYRGA7v0f////4J8AiMMCAN37P/
 
 let site: Server;
 let base = "";
+const methods: string[] = [];
 beforeAll(async () => {
   site = createServer((req, res) => {
+    methods.push(`${req.method} ${req.url}`);
     if (req.url === "/bomb") return res.writeHead(200, { "content-type": "text/plain", "content-encoding": "br" }).end(bomb);
     if (req.url === "/drip") {
       res.writeHead(200, { "content-type": "text/plain" });
@@ -63,6 +65,17 @@ describe("web_read transport against hostile servers", () => {
     expect(await get("/hop")).toMatchObject({ status: 302, headers: { location: "/latin" } });
     const hop = await get("/cookie");
     expect(hop.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("POSTs only to YouTube's player API: any other address is refused before a byte is sent", async () => {
+    expect([...POST_URLS]).toEqual(["https://www.youtube.com/youtubei/v1/player"]);
+    const before = methods.length;
+    for (const target of [base + "/latin", "https://www.youtube.com/watch?v=x", "https://youtube.com/youtubei/v1/player", "http://www.youtube.com/youtubei/v1/player"]) {
+      await expect(nodeTransport(new URL(target), { "user-agent": "test" }, AbortSignal.timeout(2000), Buffer.from("{}"))).rejects.toThrow(/only POSTs to YouTube's player API/);
+    }
+    expect(methods.slice(before)).toEqual([]);
+    await get("/latin");
+    expect(methods.at(-1)).toBe("GET /latin");
   });
 
   it("decodes the body with the charset the server or page declares", async () => {
