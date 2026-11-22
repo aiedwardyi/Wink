@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { homedir, hostname, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -47,6 +47,8 @@ const snapshotSchema = z.object({
     // tidied: the versions an idle tidy removed lines from, when that is all that changed since them
     z.object({ vv: versionsSchema, at: time, text: z.string().nullable(), by: rankSchema.optional(), tidied: versionsSchema.optional() }),
   ),
+  // the PC that PC picked to run the idle tidy
+  tidier: z.string().regex(DEVICE).optional(),
 });
 type Snapshot = z.infer<typeof snapshotSchema>;
 
@@ -169,8 +171,17 @@ type Snapshots = Snapshot[] & { partial?: true };
 
 const partialOf = (snapshots: Snapshot[], partial: boolean): Snapshots => (partial ? Object.assign(snapshots, { partial: true as const }) : snapshots);
 
+// a copy that will not read and has not changed for HANDOVER_MS is from a PC long gone, not one Drive is still delivering
+function longBroken(path: string, now: number): boolean {
+  try {
+    return statSync(path).mtimeMs < now - HANDOVER_MS;
+  } catch {
+    return false;
+  }
+}
+
 // undefined when the folder cannot be listed; a snapshot Drive has not finished delivering is skipped until it parses
-function readSnapshots(dir: string): Snapshots | undefined {
+function readSnapshots(dir: string, now: number): Snapshots | undefined {
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
@@ -185,7 +196,7 @@ function readSnapshots(dir: string): Snapshots | undefined {
       const parsed = device ? snapshotSchema.safeParse(JSON.parse(readFileSync(join(dir, name), "utf8"))) : undefined;
       return parsed?.success && parsed.data.device === device ? [parsed.data] : [];
     } catch {
-      partial ||= Boolean(device);
+      partial ||= Boolean(device) && !longBroken(join(dir, name), now);
       return [];
     }
   });
@@ -219,7 +230,7 @@ function passInputs(dirs: string[], workspace: string, local: string[], bot: Mem
   return hash(JSON.stringify([stats, bot.files, talkedAt, me, bot.tidier])) ?? undefined;
 }
 
-async function readSnapshotsAsync(dir: string): Promise<Snapshots | undefined> {
+async function readSnapshotsAsync(dir: string, now: number): Promise<Snapshots | undefined> {
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
@@ -234,7 +245,7 @@ async function readSnapshotsAsync(dir: string): Promise<Snapshots | undefined> {
       const parsed = device ? snapshotSchema.safeParse(JSON.parse(await readFile(join(dir, name), "utf8"))) : undefined;
       return parsed?.success && parsed.data.device === device ? [parsed.data] : [];
     } catch {
-      partial ||= Boolean(device);
+      partial ||= Boolean(device) && !(await stat(join(dir, name)).then((info) => info.mtimeMs < now - HANDOVER_MS, () => false));
       return [];
     }
   }));
@@ -247,7 +258,7 @@ type SnapshotsRead = Array<Snapshots | undefined> & { at?: number };
 export async function readMemorySnapshots(folder: string, botSyncId: string): Promise<SnapshotsRead> {
   const at = Date.now();
   try {
-    return Object.assign(await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId)))), { at });
+    return Object.assign(await Promise.all(syncRoots(folder, MEMORY_SYNC_DIR).map((root) => readSnapshotsAsync(join(root, botSyncId), at))), { at });
   } catch {
     return Object.assign([undefined], { at });
   }
@@ -255,11 +266,21 @@ export async function readMemorySnapshots(folder: string, botSyncId: string): Pr
 
 // a PC whose user has not messaged the bot for this long while they did on another PC is gone, and its tidy moves on
 const HANDOVER_MS = 7 * 24 * 60 * 60_000;
+// the pick moves this long before that, so a PC still in use has a day to let go before the next one tidies anyway
+const LET_GO_MS = 24 * 60 * 60_000;
 
-// every PC that reads the same copies picks the same one: the lowest device the user messaged within HANDOVER_MS of the latest message anywhere
-function pickTidier(talked: Map<string, number>): string | undefined {
-  const latest = Math.max(...talked.values());
-  return [...talked].filter(([, at]) => at >= latest - HANDOVER_MS).map(([device]) => device).sort()[0];
+// a peer's stamp further ahead of this PC's clock than this came from a clock set wrong
+const AHEAD_MS = 24 * 60 * 60_000;
+
+type Talked = Map<string, { at: number; tidier?: string }>;
+
+// every PC that reads the same copies picks the same one: the lowest device the user messaged within HANDOVER_MS - LET_GO_MS of the latest message anywhere.
+// The PC it moves to waits while another the user messaged within HANDOVER_MS still names itself, so a copy on its way delays the move rather than giving the tidy to two PCs.
+function pickTidier(talked: Talked, mine: (device: string) => boolean) {
+  const latest = Math.max(...[...talked.values()].map(({ at }) => at));
+  const pick = [...talked].filter(([, { at }]) => at >= latest - HANDOVER_MS + LET_GO_MS).map(([device]) => device).sort()[0];
+  const holder = pick && mine(pick) ? [...talked].find(([device, { at, tidier }]) => tidier === device && !mine(device) && at >= latest - HANDOVER_MS)?.[0] : undefined;
+  return { pick, tidier: holder ?? pick };
 }
 
 /** Background jobs run on the PC the last full sync pass picked; a renamed PC keeps them. */
@@ -452,16 +473,24 @@ export function syncBotMemory(
   const talkedAt = ledger.talked?.[botSyncId] ?? 0;
   const known = ledger.bots[botSyncId];
   if (!read && known?.seen && known.seen === passInputs(dirs, workspace, localFiles, known, talkedAt, me, now)) return {};
-  const groups = read ?? dirs.map(readSnapshots);
+  const groups = read ?? dirs.map((path) => readSnapshots(path, now));
   if (groups.some((group) => !group)) return {};
   const snapshots = groups.flatMap((group) => group ?? []);
   const firstSync = !ledger.bots[botSyncId];
   const bot = (ledger.bots[botSyncId] ??= { files: {} });
-  // a read that missed a copy keeps the last pick, so a PC it hid cannot leave two PCs tidying
-  if (!groups.some((group) => group?.partial)) {
-    const talked = new Map([[me, talkedAt]]);
-    for (const snapshot of snapshots) if (snapshot.device !== me) talked.set(snapshot.device, Math.max(snapshot.talkedAt, talked.get(snapshot.device) ?? 0));
-    bot.tidier = pickTidier(talked);
+  const partial = groups.some((group) => group?.partial);
+  let pick = bot.tidier;
+  // a read that missed a copy keeps the last pick, so a PC it hid cannot leave two PCs tidying; with none yet, the copies it read pick one
+  if (!partial || !bot.tidier) {
+    const talked: Talked = new Map([[me, { at: talkedAt }]]);
+    for (const snapshot of snapshots) {
+      if (snapshot.device === me || snapshot.talkedAt > now + AHEAD_MS) continue;
+      const prior = talked.get(snapshot.device);
+      talked.set(snapshot.device, { at: Math.max(snapshot.talkedAt, prior?.at ?? 0), tidier: prior?.tidier === snapshot.device ? prior.tidier : snapshot.tidier });
+    }
+    const picked = pickTidier(talked, (device) => device === me || Boolean(ledger.renamed?.includes(device)));
+    pick = picked.pick;
+    bot.tidier = picked.tidier;
   }
   // a wiped or never-created workspace has nothing to publish; forgetting it pulls instead of deleting everywhere, from this PC's own snapshot too
   const restore = !existsSync(workspace);
@@ -601,7 +630,7 @@ export function syncBotMemory(
     const entry = text === undefined ? own?.files[file] : { vv: state.vv, at: state.at, text, by: state.by, tidied: state.tidied };
     if (entry) published[file] = entry;
   }
-  const body = `${JSON.stringify({ format: FORMAT, version: 1, device: me, talkedAt, files: published })}\n`;
+  const body = `${JSON.stringify({ format: FORMAT, version: 1, device: me, talkedAt, files: published, tidier: pick })}\n`;
   const path = join(dir, `${me}.json`);
   // a replayed, half-written or placeholder copy of this PC's snapshot is rewritten, not trusted
   if (readRaw(path) !== body) {
@@ -610,7 +639,7 @@ export function syncBotMemory(
   }
   const after = memoryFiles(workspace);
   // a skipped file or snapshot is retried by the next poll, so the pass is not recorded as seen
-  const complete = !groups.some((group) => group?.partial) && !Object.values(results).includes("skipped");
+  const complete = !partial && !Object.values(results).includes("skipped");
   // a file written after the snapshots were read may not be what was read, so the racy window starts at the read
   bot.seen = complete && after ? passInputs(dirs, workspace, after, { files: bot.files, tidier: bot.tidier }, talkedAt, me, Math.min(now, read?.at ?? now)) : undefined;
   return results;

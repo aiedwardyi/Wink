@@ -192,6 +192,142 @@ describe("memory sync", () => {
     expect(tidying(a, b)).toEqual([true, false]);
   });
 
+  it("picks from the copies it can read when a broken copy hides one and there is no pick yet, and counts a copy broken for a week as gone", () => {
+    const [b] = devices("bbbbbbbbbbbb");
+    const broken = join(memorySyncDir(b.folder, "bot-1"), "aaaaaaaaaaaa.json");
+    mkdirSync(memorySyncDir(b.folder, "bot-1"), { recursive: true });
+    writeFileSync(broken, "{");
+    seed(MEMORY_SEED, b);
+    talk(b, T0);
+    expect(tidying(b)).toEqual([true]);
+    // a pick made while that copy still read: the PC behind it is gone, so the pick moves once the copy has been broken a week
+    const [a, c] = devices("aaaaaaaaaaaa", "cccccccccccc");
+    seed(MEMORY_SEED, a, c);
+    talk(a, T0);
+    talk(c, T0);
+    swap(a, c);
+    writeFileSync(join(memorySyncDir(c.folder, "bot-1"), "aaaaaaaaaaaa.json"), "{");
+    talk(c, T0 + 8 * DAY);
+    expect(tidying(c)).toEqual([false]);
+    const old = (Date.now() - 8 * DAY) / 1000;
+    utimesSync(join(memorySyncDir(c.folder, "bot-1"), "aaaaaaaaaaaa.json"), old, old);
+    sync(c);
+    expect(tidying(c)).toEqual([true]);
+  });
+
+  it("leaves out a stamp from a clock more than a day ahead, so a retired PC's clock cannot hold the tidy", () => {
+    const [a, b] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
+    seed(MEMORY_SEED, a, b);
+    const now = Date.now();
+    talk(a, now + 30 * DAY);
+    talk(b, now);
+    swap(a, b);
+    expect(tidying(b)).toEqual([true]);
+    // within a day ahead is a clock a little off, and still counts
+    talk(a, now + 60 * 60_000);
+    swap(a, b);
+    expect(tidying(a, b)).toEqual([true, false]);
+  });
+
+  it("does not give the tidy to a renamed or copied PC's new device before the others have its copy", () => {
+    const here = thisHost();
+    const [p, r] = devices("eeeeeeeeeeee", "ffffffffffff");
+    Object.assign(r.ledger, { host: "old-name", jobDevice: "f1f1f1f1f1f1" });
+    r.host = "old-name";
+    seed("# Memory\n\n- Lives in Seoul\n", p, r);
+    talk(p, T0);
+    talk(r, T0);
+    swap(p, r);
+    expect(tidying(p, r)).toEqual([true, false]);
+    // same machine, new hostname; its new device sorts first
+    ensureMemorySyncDevice(r.ledger, "f1f1f1f1f1f1");
+    r.ledger.device = "000000000001";
+    r.host = here;
+    sync(r);
+    talk(r, T0 + 60_000);
+    expect(tidying(p, r)).toEqual([true, false]);
+    // p lets go once it has the new device's copy, and r takes the tidy once it has p's copy saying so
+    const renamed: boolean[][] = [];
+    for (const step of [() => receive(r, p), () => sync(p), () => talk(p, T0 + 2 * 60_000), () => receive(p, r), () => sync(r)]) {
+      step();
+      renamed.push(tidying(p, r));
+    }
+    expect(renamed.every((now) => now.filter(Boolean).length <= 1)).toBe(true);
+    expect(renamed.at(-1)).toEqual([false, true]);
+    talk(p, T0 + 8 * DAY);
+    talk(r, T0 + 8 * DAY);
+    swap(p, r);
+    expect(tidying(p, r)).toEqual([false, true]);
+    // its data folder copied to another machine, with both in use; the copy's new device sorts first
+    const [n] = pcs(1);
+    Object.assign(n.ledger, structuredClone(r.ledger), { host: "source-pc" });
+    ensureMemorySyncDevice(n.ledger, "c1c1c1c1c1c1");
+    n.ledger.device = "000000000000";
+    n.host = here;
+    cpSync(r.folder, n.folder, { recursive: true });
+    cpSync(r.workspace, n.workspace, { recursive: true });
+    const seen: boolean[][] = [];
+    for (const step of [() => sync(n), () => talk(n, T0 + 8 * DAY + 60_000), () => receive(n, r), () => sync(r), () => receive(n, p), () => sync(p), () => receive(r, n), () => receive(p, n), () => sync(n), () => swap(p, r, n)]) {
+      step();
+      seen.push(tidying(p, r, n));
+    }
+    expect(seen.every((now) => now.filter(Boolean).length <= 1)).toBe(true);
+    expect(seen.at(-1)).toEqual([false, false, true]);
+  });
+
+  it("hands the tidy on only once the PC that has it lets go, or has gone a week without a message", () => {
+    const [b, c] = devices("bbbbbbbbbbbb", "cccccccccccc");
+    seed(MEMORY_SEED, b, c);
+    talk(b, T0);
+    talk(c, T0);
+    swap(b, c);
+    expect(tidying(b, c)).toEqual([true, false]);
+    // b goes six days without a message: c takes the tidy once b's copy says b let go
+    talk(c, T0 + 6 * DAY + 1);
+    expect(tidying(b, c)).toEqual([true, false]);
+    receive(c, b);
+    sync(b);
+    expect(tidying(b, c)).toEqual([false, false]);
+    receive(b, c);
+    sync(c);
+    expect(tidying(b, c)).toEqual([false, true]);
+    // the user goes back to b: b waits for c to let go
+    talk(b, T0 + 7 * DAY);
+    expect(tidying(b, c)).toEqual([false, true]);
+    receive(b, c);
+    sync(c);
+    receive(c, b);
+    sync(b);
+    expect(tidying(b, c)).toEqual([true, false]);
+    // a PC that never lets go (retired) holds it a week
+    talk(c, T0 + 13 * DAY + 1);
+    expect(tidying(c)).toEqual([false]);
+    talk(c, T0 + 14 * DAY + 1);
+    expect(tidying(c)).toEqual([true]);
+  });
+
+  // known case: Drive replays a PC's copy from before the user went back to it. The other PC takes the tidy again until the real copy
+  // lands; both may tidy meanwhile, the later tidy wins and the other is set aside, so no line is lost.
+  it("gives two PCs the tidy while Drive replays an old copy, until the real one lands", () => {
+    const [b, c] = devices("bbbbbbbbbbbb", "cccccccccccc");
+    seed(MEMORY_SEED, b, c);
+    talk(b, T0);
+    talk(c, T0);
+    swap(b, c);
+    const stale = capture(b);
+    talk(c, T0 + 8 * DAY);
+    swap(b, c);
+    talk(b, T0 + 9 * DAY);
+    swap(b, c);
+    expect(tidying(b, c)).toEqual([true, false]);
+    receive(b, c, stale);
+    sync(c);
+    expect(tidying(b, c)).toEqual([true, true]);
+    receive(b, c);
+    sync(c);
+    expect(tidying(b, c)).toEqual([true, false]);
+  });
+
   it("recovers a timeline parked by an older build without asking the bot to edit it", () => {
     const [a] = pcs();
     const at = new Date(2026, 10, 17, 10).getTime();
