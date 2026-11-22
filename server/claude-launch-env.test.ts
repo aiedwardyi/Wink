@@ -15,6 +15,7 @@ const SITES = {
   "server/drivers/claude.ts": { launches: 2 },
   "server/drivers/claude-fork.ts": { launches: 1 },
   "server/drivers/antigravity-auth-cli.ts": { launches: 1 },
+  "server/drivers/os-keyring.ts": { launches: 1 },
   // Control requests only, never a model turn.
   "server/claude-usage-probe.ts": { launches: 1 },
   "companion/src/listener.ts": { launches: 1 },

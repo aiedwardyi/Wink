@@ -29,8 +29,8 @@ process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
 
 // The OS credential store (Windows Credential Manager, macOS keychain) is the user's real one whatever HOME
 // says: no test runs its tool. Here it is a store that refuses everything; a test that needs one injects its own.
-replaceKeyringTool((_file, _args, _options, done) => {
-  done(Object.assign(new Error("tests never run the OS keyring tool"), { code: "EACCES" }), "");
+replaceKeyringTool((file, args, _options, done) => {
+  done(Object.assign(new Error("tests never run the OS keyring tool"), { cmd: [file, ...args].join(" ") }), "");
 });
 
 // SQLite keeps the database file open for the lifetime of its handle.

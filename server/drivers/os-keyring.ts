@@ -10,7 +10,7 @@ export type KeyringExec = (
 ) => void;
 
 const osKeyringTool: KeyringExec = (file, args, options, done) => {
-  execFile(file, args, options, (error, stdout) => done(error, stdout));
+  execFile(file, args, { ...options, windowsHide: true }, (error, stdout) => done(error, stdout));
 };
 
 let keyringTool = osKeyringTool;
