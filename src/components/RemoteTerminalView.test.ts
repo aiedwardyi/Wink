@@ -62,8 +62,8 @@ async function pickMain(host: HTMLElement) {
   await openList(host);
   await act(async () => click(host.querySelector("[data-worker-terminal]")!));
 }
-// Terminal reads skip the browser cache, so a hung read never holds the next one.
-const READ = expect.objectContaining({ cache: "no-store" });
+// Terminal reads skip the browser cache, so a hung read never holds the next one, and say when their answer begins.
+const READ = [expect.objectContaining({ cache: "no-store" }), expect.any(Function)];
 const composer = (host: HTMLElement) => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Type a command"]');
 const sends = () => store.api.mock.calls.filter(([path]) => String(path).endsWith("/send"));
 // submittedAgo is elapsed wall time, so only its presence is pinned.
@@ -140,7 +140,7 @@ describe("RemoteTerminalView", () => {
   it("renders recent text then the live screen with the cwd", async () => {
     store.api.mockResolvedValue({ screenText: "$ ls", recentText: "done", cwd: "C:\work", exited: false });
     const { host, root } = await renderView();
-    expect(store.api).toHaveBeenCalledWith("/api/bots/bot-1/terminal", READ);
+    expect(store.api).toHaveBeenCalledWith("/api/bots/bot-1/terminal", ...READ);
     expect(host.querySelector("pre")?.textContent).toBe("done\n\n$ ls");
     expect(host.textContent).toContain("C:\work");
     await act(async () => root.unmount());
@@ -410,7 +410,7 @@ describe("RemoteTerminalView", () => {
     expect(host.querySelector("pre")?.textContent).toBe("$ ls");
     expect(title(host)).toBe("Terminal / Ada");
     await pickPane(host, "build");
-    expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=worker", READ);
+    expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=worker", ...READ);
     expect(host.querySelector("pre")?.textContent).toBe("$ npm run build");
     expect(title(host)).toBe("Terminal / build");
     await act(async () => root.unmount());
@@ -497,7 +497,7 @@ describe("RemoteTerminalView", () => {
       expect(signals[0]?.aborted).toBe(false);
       await act(async () => vi.advanceTimersByTimeAsync(1_000));
       expect(store.api).toHaveBeenCalledTimes(2);
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", ...READ);
       expect(host.querySelector("pre")?.textContent).toBe("next read");
       expect(host.querySelector('[role="alert"]')).toBeNull();
       expect(signals[0]?.aborted).toBe(true);
@@ -573,6 +573,50 @@ describe("RemoteTerminalView", () => {
     }
   });
 
+  it("keeps Refresh taps on a link that answers nothing to two open reads, and cancels them once a read answers", async () => {
+    vi.useFakeTimers();
+    const signals: (AbortSignal | undefined)[] = [];
+    store.api.mockResolvedValueOnce({ screenText: "P12 first", sessionId: "s1", generation: 1 }).mockImplementation(hung(signals));
+    const { host, root } = await renderView();
+    try {
+      const open = () => signals.filter((signal) => !signal?.aborted).length;
+      const peak: number[] = [];
+      for (let tap = 0; tap < 5; tap++) {
+        await act(async () => click(button(host, "Refresh")));
+        await act(async () => vi.advanceTimersByTimeAsync(5_100));
+        peak.push(open());
+      }
+      expect(Math.max(...peak)).toBeLessThanOrEqual(2);
+      expect(host.querySelector("pre")?.textContent).toBe("P12 first");
+      store.api.mockResolvedValue({ screenText: "P12 back", sessionId: "s1", generation: 1 });
+      await act(async () => vi.advanceTimersByTimeAsync(6_000));
+      expect(host.querySelector("pre")?.textContent).toBe("P12 back");
+      expect(open()).toBe(0);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  // An answer on its way: its headers are in and its body keeps arriving until ms.
+  const streaming = (ms: number, frame: object) => (path: string, init?: RequestInit, onResponse?: () => void) => {
+    onResponse?.();
+    return arriving(ms, frame)(path, init);
+  };
+
+  it("paints a read that keeps arriving however long it takes", async () => {
+    vi.useFakeTimers();
+    store.api.mockImplementation(streaming(14_000, { screenText: "P12 slow", sessionId: "s1", generation: 1 }));
+    const { host, root } = await renderView();
+    try {
+      await act(async () => vi.advanceTimersByTimeAsync(13_900));
+      expect(host.querySelector("pre")?.textContent).toBe("");
+      await act(async () => vi.advanceTimersByTimeAsync(100));
+      expect(host.querySelector("pre")?.textContent).toBe("P12 slow");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("waits for a slow poll before the next read and renders it", async () => {
     vi.useFakeTimers();
     let resolve!: (value: { screenText: string }) => void;
@@ -635,7 +679,7 @@ describe("RemoteTerminalView", () => {
       const [row] = await openList(host);
       expect(stateOf(row)).toBe("ended");
       await pickPane(host, "CAPTION-FIX");
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=done", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=done", ...READ);
       expect(host.querySelector("pre")?.textContent).toBe("last words");
       expect(title(host)).toBe("Terminal / CAPTION-FIX");
       expect(composer(host)).toBeNull();
@@ -662,7 +706,7 @@ describe("RemoteTerminalView", () => {
       expect(listed[1].querySelector(".lucide-scroll-text")).not.toBeNull();
       expect(listed[0].querySelector(".lucide-scroll-text")).toBeNull();
       await pickPane(host, "CI-WAIT");
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=ci-wait", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=ci-wait", ...READ);
       expect(title(host)).toBe("Terminal / CI-WAIT");
     } finally {
       await act(async () => root.unmount());
@@ -696,7 +740,7 @@ describe("RemoteTerminalView", () => {
       expect(host.querySelector("pre")?.textContent).toBe("$ worker");
       await pickMain(host);
       expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", ...READ);
       expect(host.querySelector("pre")?.textContent).toBe("$ main");
       expect(title(host)).toBe("Terminal / Ada");
     } finally {
@@ -725,7 +769,7 @@ describe("RemoteTerminalView", () => {
     store.api.mockResolvedValue({ screenText: "$ ls", panes });
     const { host, root } = await renderView();
     expect(title(host)).toBe("Terminal / one");
-    expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=one", READ);
+    expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=one", ...READ);
     await act(async () => root.unmount());
   });
 
@@ -940,7 +984,7 @@ describe("RemoteTerminalView", () => {
       expect(host.querySelector("pre")?.textContent).toBe("$ one");
       server.panes = [{ sessionId: "two", main: false }];
       await act(async () => vi.advanceTimersByTime(1_000));
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=two", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=two", ...READ);
       expect(host.querySelector("pre")?.textContent).toBe("$ two");
       expect(host.querySelector('[role="alert"]')).toBeNull();
     } finally {
@@ -960,7 +1004,7 @@ describe("RemoteTerminalView", () => {
       expect(host.querySelector("pre")).toBeNull();
       expect(host.querySelector('[role="alert"]')).toBeNull();
       await act(async () => vi.advanceTimersByTime(1_000));
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", ...READ);
     } finally {
       await act(async () => root.unmount());
     }
@@ -976,7 +1020,7 @@ describe("RemoteTerminalView", () => {
       expect(host.textContent).toContain("No active terminal");
       server.panes = [{ sessionId: "main", main: true }];
       await act(async () => vi.advanceTimersByTime(1_000));
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", ...READ);
       expect(host.querySelector("pre")?.textContent).toBe("$ main");
       expect(host.querySelector('[role="alert"]')).toBeNull();
     } finally {
@@ -998,7 +1042,7 @@ describe("RemoteTerminalView", () => {
     const { host, root } = await renderView();
     await pickPane(host, "build");
     await act(async () => {});
-    expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", READ);
+    expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", ...READ);
     await act(async () => root.unmount());
   });
 
@@ -1068,7 +1112,7 @@ describe("RemoteTerminalView", () => {
     });
     lastViewedPanes.set("bot-1", "worker");
     const first = await renderView();
-    expect(store.api).toHaveBeenCalledWith("/api/bots/bot-1/terminal?sessionId=worker", READ);
+    expect(store.api).toHaveBeenCalledWith("/api/bots/bot-1/terminal?sessionId=worker", ...READ);
     expect(title(first.host)).toBe("Terminal / build");
     panes = panes.slice(0, 1);
     await act(async () => click(button(first.host, "Refresh")));
@@ -1307,7 +1351,7 @@ describe("RemoteTerminalView", () => {
       await act(async () => typeLine(composer(host)!, "pwd"));
       await act(async () => composer(host)!.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
       expect(store.api.mock.calls.filter(([path]) => String(path).endsWith("/send"))).toHaveLength(1);
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", ...READ);
       expect(host.querySelector("pre")?.textContent).toBe("$ gen 3");
       expect(host.querySelector('[role="status"]')?.textContent).toBe("Not sent: Terminal session is stale; take a fresh snapshot");
       expect(host.querySelector('[role="alert"]')).toBeNull();
@@ -1330,7 +1374,7 @@ describe("RemoteTerminalView", () => {
       await act(async () => typeLine(composer(host)!, "make deploy"));
       await act(async () => click(button(host, "Send")));
       expect(store.api.mock.calls.filter(([path]) => String(path).endsWith("/send"))).toHaveLength(1);
-      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", READ);
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", ...READ);
       expect(host.querySelector("pre")?.textContent).toBe("$ make deploy");
       expect(host.querySelector('[role="status"]')?.textContent).toBe("Send may have run. Check the screen before resending.");
       expect(composer(host)!.value).toBe("make deploy");

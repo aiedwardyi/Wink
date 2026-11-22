@@ -1133,9 +1133,9 @@ export const initialState: AppState = {
  * smaller page can leave a first screen with only a handful of bubbles. */
 export const MESSAGE_PAGE = 200;
 
-export function api(path: string, init?: RequestInit): Promise<any> {
-  const call = request(path, init);
-  const method = init?.method?.toUpperCase() ?? "GET";
+export function api(...args: Parameters<typeof request>): Promise<any> {
+  const call = request(...args);
+  const method = args[1]?.method?.toUpperCase() ?? "GET";
   return method === "GET" || method === "HEAD" ? call : holdReload(call);
 }
 

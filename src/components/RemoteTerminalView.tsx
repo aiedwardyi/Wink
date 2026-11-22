@@ -122,6 +122,8 @@ export function RemoteTerminalView({
   const [starting, setStarting] = useState(false);
   const requestRef = useRef(0);
   const appliedRequestRef = useRef(0);
+  // Reads in flight, oldest first, from the poll and the Refresh button alike. Closing or switching panes cancels them, since nothing can show them.
+  const readsRef = useRef<{ read: AbortController; answering: boolean }[]>([]);
   const outputRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true);
@@ -145,13 +147,21 @@ export function RemoteTerminalView({
   const onMainTab = picked === MAIN_TAB;
   const activePaneId = picked ?? mainPane?.sessionId ?? fallbackPane;
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
+  const refresh = useCallback(async () => {
     const request = ++requestRef.current;
+    const reads = readsRef.current;
+    const entry = { read: new AbortController(), answering: false };
+    reads.push(entry);
+    // A link that answers nothing holds at most two of the phone's few sockets: a third read cancels the oldest still waiting.
+    // A read whose answer has begun is never dropped for this, however long its body takes.
+    const waiting = reads.filter((open) => !open.answering);
+    if (waiting.length > 2) reads.splice(reads.indexOf(waiting[0]), 1)[0].read.abort();
+    const { signal } = entry.read;
     const path = `/api/bots/${encodeURIComponent(bot.id)}/terminal`;
     const targetPane = onMainTab ? undefined : picked ?? fallbackPane;
     try {
       const qs = targetPane ? `?sessionId=${encodeURIComponent(targetPane)}` : "";
-      const next = await api(`${path}${qs}`, { ...READ, signal });
+      const next = await api(`${path}${qs}`, { ...READ, signal }, () => { entry.answering = true; });
       if (request < appliedRequestRef.current) return;
       // A body cut off mid-read decodes to {}: it holds no frame, so the last one stays.
       if (!Object.keys(next ?? {}).length) return;
@@ -186,6 +196,10 @@ export function RemoteTerminalView({
         return;
       }
       setError(message);
+    } finally {
+      // Older reads can only be discarded after this answer, so they free their sockets now.
+      const index = reads.indexOf(entry);
+      if (index >= 0) for (const older of reads.splice(0, index + 1)) if (older !== entry) older.read.abort();
     }
   }, [bot.id, picked, onMainTab, fallbackPane]);
 
@@ -228,19 +242,10 @@ export function RemoteTerminalView({
     if (!visible) return;
     let timer = 0;
     let live = true;
-    // Reads in flight, oldest first. Closing or switching panes cancels them, since nothing can show them.
-    const reads: AbortController[] = [];
     // The next tick waits for this read, so a slow link never stacks them; a dropped one holds the poll only until the timeout.
     // A read still arriving then runs on and paints: cancelling it would drop a frame that is on its way.
     const tick = async () => {
-      const read = new AbortController();
-      // A link that answers nothing holds at most two of the phone's few sockets: a third read cancels the oldest.
-      if (reads.push(read) > 2) reads.shift()?.abort();
-      const answered = refresh(read.signal).then(() => {
-        // Older reads can only be discarded after this answer, so they free their sockets now.
-        for (const older of reads.splice(0, reads.indexOf(read) + 1)) if (older !== read) older.abort();
-      });
-      await Promise.race([answered, new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
+      await Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
       if (live) timer = window.setTimeout(tick, REFRESH_MS);
     };
     void tick();
@@ -248,7 +253,7 @@ export function RemoteTerminalView({
       live = false;
       window.clearTimeout(timer);
       appliedRequestRef.current = ++requestRef.current;
-      for (const read of reads.splice(0)) read.abort();
+      for (const { read } of readsRef.current.splice(0)) read.abort();
     };
   }, [visible, refresh]);
 
