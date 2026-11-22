@@ -12,6 +12,7 @@ const bomb = Buffer.from("y///P/gnAOKxQCD3/o///3/wTwDEYRGA7v0f////4J8AiMMCAN37P/
 
 // About 200 KB of gzip that decodes to 200 MB of zeros.
 const gzBomb = gzipSync(Buffer.alloc(200_000_000), { level: 9 });
+// The one listed sleep (scripts/test-sleeps.json): a fixed window is the measurement itself, CPU spent after the read returned.
 const cpuAfter = async (ms: number) => {
   const before = process.cpuUsage();
   await new Promise((resolve) => setTimeout(resolve, ms));
