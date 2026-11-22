@@ -17,6 +17,9 @@ vi.mock("@/components/RemoteTerminalView", async (importActual) => {
   return importActual();
 });
 
+// SAFETY: the page itself posts these bodies, so they hold the fields read below.
+const posted = (init?: RequestInit) => JSON.parse(String(init?.body)) as { label: string; terminal?: { tap: number; fetchStart?: number; paint?: number } };
+
 const PANES = ["aaaaaaaa-pane", "bbbbbbbb-pane"];
 
 /** A phone page on the web: no desktop terminal bridge, so the remote terminal view opens. */
@@ -70,8 +73,7 @@ const mount = async () => {
     }),
     records: () => fetched.mock.calls
       .filter(([url]) => url === COLD_OPEN_PATH)
-      // SAFETY: the page itself posts these bodies, so they hold the fields read below.
-      .map(([, init]) => JSON.parse(String(init?.body)) as { label: string; terminal?: { tap: number; fetchStart?: number; paint?: number } })
+      .map(([, init]) => posted(init))
       .filter((record) => record.label === "terminal"),
     unmount: async () => {
       await act(async () => root.unmount());
