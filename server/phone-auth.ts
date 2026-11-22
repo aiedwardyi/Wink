@@ -16,6 +16,8 @@ const LOCAL_ONLY_EXACT = new Set(["/api/mailbox", "/remote", "/api/remote-link"]
 const LOCAL_ONLY_PREFIXES = ["/api/internal/", "/api/phone-relay/", "/api/phone/"];
 /** Pre-auth phone routes under /api/phone/. */
 const PHONE_PUBLIC = new Set(["/api/phone/pair", "/api/phone/google/start", "/api/phone/google"]);
+/** A relay browser signing itself out. */
+const SIGN_OUT_PATH = "/api/phone/sign-out";
 /** Whether a short code is still this PC's, for the sign-in page. */
 export const OPEN_CODE_PATH = "/api/phone/open-code";
 
@@ -34,6 +36,7 @@ export type RelayVerdict =
   | { kind: "google" }
   | { kind: "room" }
   | { kind: "open-code" }
+  | { kind: "sign-out" }
   | { kind: "app" };
 
 function headerValues(rawHeaders: string[], name: string): string[] {
@@ -46,7 +49,7 @@ function headerValues(rawHeaders: string[], name: string): string[] {
 
 function localOnly(path: string): boolean {
   if (LOCAL_ONLY_EXACT.has(path) || path === "/api/internal" || path === "/api/phone-relay") return true;
-  return !PHONE_PUBLIC.has(path) && LOCAL_ONLY_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return !PHONE_PUBLIC.has(path) && path !== SIGN_OUT_PATH && LOCAL_ONLY_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 /** Host, Origin and route decision for one relay request, before any session check. */
@@ -74,6 +77,7 @@ export function relayVerdict(req: RelayRequestLine, relayHost: string): RelayVer
   if (path === "/api/phone/pair") return method === "POST" ? { kind: "pair" } : { kind: "deny", status: 404, error: "not found" };
   if (path === "/api/phone/google/start") return read ? { kind: "google-start" } : { kind: "deny", status: 404, error: "not found" };
   if (path === "/api/phone/google") return method === "POST" ? { kind: "google" } : { kind: "deny", status: 404, error: "not found" };
+  if (path === SIGN_OUT_PATH) return method === "POST" ? { kind: "sign-out" } : { kind: "deny", status: 404, error: "not found" };
   return { kind: "app" };
 }
 
@@ -90,6 +94,8 @@ export function shellNavigation(method: string, path: string): boolean {
 export function phoneSetCookie(token: string): string {
   return `${PHONE_COOKIE}=${token}; Path=/; Max-Age=${PHONE_COOKIE_MAX_AGE_S}; HttpOnly; Secure; SameSite=Lax`;
 }
+
+export const PHONE_CLEAR_COOKIE = `${PHONE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 
 /** The cookie's value, or null when absent, empty or sent more than once. */
 export function singleCookie(cookieHeader: string | undefined, name: string): string | null {

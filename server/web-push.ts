@@ -203,6 +203,14 @@ export function removePushSubscription(dataDir: string, endpoint: string): void 
   if (rest.length !== all.length) savePushSubscriptions(dataDir, rest);
 }
 
+/** Drops every phone's subscription once `signedIn` no longer knows it (removed, or idle past the cutoff). */
+export function removeSignedOutPushSubscriptions(dataDir: string, signedIn: (phone: string) => boolean): PushSubscriptionRecord[] {
+  const all = loadPushSubscriptions(dataDir);
+  const held = all.filter((sub) => !sub.phone || signedIn(sub.phone));
+  if (held.length !== all.length) savePushSubscriptions(dataDir, held);
+  return held;
+}
+
 /**
  * Sends to one device (by endpoint) or all; drops every subscription the push service says is gone,
  * and every phone's once `signedIn` no longer knows it (removed, or idle past the cutoff).
@@ -216,9 +224,7 @@ export async function sendWebPushToDevices(
   fetchImpl: typeof fetch = fetch,
   warn?: (line: string) => void,
 ): Promise<WebPushResult[]> {
-  const all = loadPushSubscriptions(dataDir);
-  const held = all.filter((sub) => !sub.phone || signedIn(sub.phone));
-  if (held.length !== all.length) savePushSubscriptions(dataDir, held);
+  const held = removeSignedOutPushSubscriptions(dataDir, signedIn);
   const subscriptions = held.filter((sub) => (only === undefined || sub.endpoint === only) && !(payload.chat && sub.off?.includes(payload.chat)));
   if (!subscriptions.length) return [];
   const keys = loadOrCreateVapidKeys(dataDir);

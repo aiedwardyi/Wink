@@ -15,6 +15,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import type { HarnessHandler } from "./early-listen.ts";
 import { linkedFileGrant } from "./linked-files.ts";
 import {
+  PHONE_CLEAR_COOKIE,
   RateLimiter,
   enrollError,
   phoneCookieToken,
@@ -36,7 +37,7 @@ import { frontDoorHost, relayMode } from "./phone-relay/mode.ts";
 import { relayDir } from "./phone-relay/store.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import { parseJson } from "./schema.ts";
-import { removePhonePushSubscriptions } from "./web-push.ts";
+import { removePhonePushSubscriptions, removeSignedOutPushSubscriptions } from "./web-push.ts";
 
 const MINUTE_MS = 60_000;
 /** A held short code with less than a day left is swapped for a fresh one. */
@@ -448,6 +449,9 @@ export class PhoneAccess {
       case "open-code":
         this.checkOpenCode(req, res, host, own);
         return HANDLED;
+      case "sign-out":
+        this.signOut(req, res);
+        return HANDLED;
       case "room":
         if (this.options.room) await this.options.room(req, res, { host, peer: this.client?.peer(req) ?? null });
         else send(res, 404, { error: "not found" });
@@ -458,7 +462,7 @@ export class PhoneAccess {
     const path = new URL(req.url ?? "/", "https://relay.invalid").pathname;
     if (linkedFileGrant(req.method, path, (holder) => this.phones.paired(holder))) return { handled: false, phone: null };
     if (path.startsWith("/api/")) {
-      send(res, 401, { error: "unauthorized" });
+      send(res, 401, { error: "unauthorized", code: "SIGNED_OUT" });
       return HANDLED;
     }
     if (shellNavigation(req.method ?? "GET", path)) {
@@ -487,6 +491,42 @@ export class PhoneAccess {
     this.track(auth.phone.id, req.socket);
     if (auth.refreshCookie) res.setHeader("set-cookie", phoneSetCookie(token));
     return auth.phone;
+  }
+
+  /** A browser's own Sign Out: it stays signed in until the file drops it, then loses this site's cookie, storage and cache. */
+  private signOut(req: IncomingMessage, res: ServerResponse): void {
+    let id: string | null;
+    try {
+      id = this.phones.signOut(phoneCookieToken(req.headers.cookie));
+    } catch {
+      return send(res, 500, { error: "save-failed" });
+    }
+    try {
+      if (id) this.cut(id, req.socket);
+      // Push records follow the file, so the next sign-out or push send drops what a failed push write left.
+      removeSignedOutPushSubscriptions(this.options.dataDir, (phone) => this.phones.paired(phone));
+    } catch {
+      // The file already dropped this browser, so it still gets its clearing reply.
+    }
+    // "cookies" would clear every PC host under the shared base, not just this one.
+    send(res, 200, { ok: true }, { "set-cookie": PHONE_CLEAR_COOKIE, "clear-site-data": '"cache", "storage"', connection: "close" });
+  }
+
+  private revoke(id: string): boolean {
+    try {
+      return this.phones.revoke(id);
+    } finally {
+      // A revoke whose write failed still refuses the phone, so cut it either way.
+      this.cut(id);
+    }
+  }
+
+  /** Ends a phone everywhere it is open. `answering` is the socket still owed a reply. */
+  private cut(id: string, answering?: Duplex): void {
+    this.google?.dropPhone(id);
+    for (const socket of this.sockets.get(id) ?? []) if (socket !== answering) socket.destroy();
+    this.sockets.delete(id);
+    removePhonePushSubscriptions(this.options.dataDir, id);
   }
 
   /** Remembers which sockets a phone used, so revoking it can cut them. */
@@ -710,19 +750,7 @@ export class PhoneAccess {
       return reply(200, { url: `https://${status.host}/pair#k=${window.token}`, code: window.code, expiresAt: window.expiresAt });
     }
     if (method === "GET" && path === "/api/phone/devices") return reply(200, { phones: this.describe().enabled ? this.phones.list() : [] });
-    if (method === "DELETE" && device) {
-      const id = device[1]!;
-      try {
-        if (!this.phones.revoke(id)) return reply(404, { error: "no such phone" });
-      } finally {
-        // A revoke whose write failed still refuses the phone, so cut it either way.
-        this.google?.dropPhone(id);
-        for (const socket of this.sockets.get(id) ?? []) socket.destroy();
-        this.sockets.delete(id);
-        removePhonePushSubscriptions(this.options.dataDir, id);
-      }
-      return reply(200, { ok: true });
-    }
+    if (method === "DELETE" && device) return this.revoke(device[1]!) ? reply(200, { ok: true }) : reply(404, { error: "no such phone" });
     return reply(405, { error: "method not allowed" });
   }
 }

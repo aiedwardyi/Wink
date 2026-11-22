@@ -913,6 +913,8 @@ export const en = {
   "chrome.sectionCollapsed": "{name}, {count} hidden",
   "chrome.sectionCollapsedUnread": "{name}, {count} hidden, {unread} unread",
   "chrome.you": "You",
+  "chrome.signOut": "Sign Out",
+  "chrome.signOutFailed": "Couldn't sign out. Check your connection and try again.",
 
   "chat.today": "Today",
   "chat.yesterday": "Yesterday",
@@ -2920,6 +2922,8 @@ export const ko = {
   "chrome.sectionCollapsed": "{name}, {count}개 숨김",
   "chrome.sectionCollapsedUnread": "{name}, {count}개 숨김, 읽지 않음 {unread}개",
   "chrome.you": "나",
+  "chrome.signOut": "로그아웃",
+  "chrome.signOutFailed": "로그아웃하지 못했습니다. 연결을 확인하고 다시 시도하세요.",
 
   "chat.today": "오늘",
   "chat.yesterday": "어제",
