@@ -2,7 +2,7 @@
 // own memory and notes ride in the turn text. Off unless the bot is listed in
 // lookup-bots.json, or Import Memory holds more than every prompt carries; then
 // every bot looks up those extra lines, and a bot looks up its own import's the
-// same way. The index is rebuilt after a reply settles, never at send.
+// same way. The index is rebuilt after a reply settles or an import lands, never at send.
 import { readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";

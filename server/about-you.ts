@@ -318,11 +318,14 @@ export const aboutYouRoutes = {
     declineImport();
     return json(res, 200, { declined: true });
   },
-  async add(req: IncomingMessage, res: ServerResponse, now = Date.now) {
+  async add(req: IncomingMessage, res: ServerResponse, now = Date.now, saved: () => Promise<void> = async () => {}) {
     const asked = await readImportRequest(req);
     if (!asked) return json(res, 400, { error: "text must be a string" });
     const result = addToAboutYou(asked, day(now()));
-    if (!("error" in result)) return json(res, 200, { ...result, sources: aboutYouSources() });
+    if (!("error" in result)) {
+      await saved();
+      return json(res, 200, { ...result, sources: aboutYouSources() });
+    }
     if (result.error === "too-large") return json(res, 413, { error: result.error, maxBytes: ABOUT_YOU_MAX_PASTE });
     return json(res, result.error === "empty" ? 400 : 500, { error: result.error });
   },
