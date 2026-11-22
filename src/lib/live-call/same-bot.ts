@@ -4,11 +4,10 @@ import { callPace, isVoiceLine, spokenText, type CallPrefs } from "../../../shar
 import { activeLocale } from "@/lib/i18n";
 import { isShownMessage } from "@/lib/shown-message";
 import type { Message } from "@/state/store-types";
-import { MIC_ERRORS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
+import { MAX_RECONNECTS, MIC_ERRORS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
 
 const QUOTA = /quota|resource.?exhausted/i;
-const MAX_RECONNECTS = 3;
 const READ = "[READ]\n";
 // A mutter is not a message to the bot; a yes or a no is.
 const MUTTER = /^(?:h?m+|mhm|u[hm]+|uh-?huh|er+|음+|어+)[.!?,\s]*$/i;

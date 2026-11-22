@@ -92,7 +92,7 @@ type Held = { text: string; valid?: () => boolean; kept?: string; played?: () =>
 
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
-const MAX_RECONNECTS = 3;
+export const MAX_RECONNECTS = 3;
 const QUOTA = /quota|resource.?exhausted/i;
 const VOICE_OUT_LINE = { en: "I'm out of voice for today. Keep typing, I'm still on it.", ko: "오늘 음성은 여기까지야. 채팅으로 계속해 줘, 작업은 계속할게." };
 const MAX_NUDGES = 3;
