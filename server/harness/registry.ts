@@ -101,7 +101,8 @@ function cliOfRaw(raw: unknown): string | undefined {
 
 export class ProviderRegistry {
   readonly logins = new EngineLogin();
-  private signingOut = new Set<string>();
+  // The sign-out in flight per instance; a press while one runs gets its answer.
+  private signingOut = new Map<string, Promise<boolean>>();
   private accounts = new Map<string, AccountContext>();
   private blockedAccounts = new Set<string>();
   private checkingAccounts = new Set<string>();
@@ -416,12 +417,23 @@ export class ProviderRegistry {
   async signOut(instanceId: InstanceId) {
     const config = this.loginConfig(instanceId);
     if (!config?.install?.logout) return null;
-    if (this.signingOut.has(instanceId)) return false;
-    this.signingOut.add(instanceId);
+    // A second press (another client, the phone, a reload, a retry) waits for the running sign-out and gets its answer.
+    const running = this.signingOut.get(instanceId);
+    if (running) return running;
+    let join!: (out: Promise<boolean>) => void;
+    const shared = new Promise<boolean>((resolve) => { join = resolve; });
+    shared.catch(() => undefined);
+    this.signingOut.set(instanceId, shared);
+    const out = this.signOutOnce(instanceId, config, config.install.logout);
+    join(out);
+    return out;
+  }
+
+  private async signOutOnce(instanceId: InstanceId, config: NonNullable<ReturnType<ProviderRegistry["loginConfig"]>>, logout: string[]) {
     const since = this.holdIdentity(instanceId, "sign-out");
     try {
       await this.logins.cancel(instanceId);
-      await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
+      await this.logins.start(instanceId, config.cli, logout, config.env, [], { scope: config.engine, account: config.account });
       await this.logins.wait(instanceId);
       let success = this.logins.state(instanceId) === "complete";
       const signingOut = this.get(instanceId);

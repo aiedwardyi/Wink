@@ -1767,6 +1767,39 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     }
   });
 
+  // Gate 2120I: a second press while Sign out waited on a reply said "Didn't finish" though the first press landed.
+  it.each([
+    ["lands", false, true],
+    ["is refused", true, false],
+  ] as const)("gives a second Sign out press while the first waits on a reply that sign-out's answer when the delete %s", async (_case, refuse, landed) => {
+    const fixture = heldGeminiFixture("omb-agy-second-press-");
+    const store = { refuse, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let registry: ProviderRegistry | undefined;
+    try {
+      ({ registry } = await freshGeminiRun(fixture.cli, fixture.entry, store));
+      const held = geminiTurn(registry, "one", "t-held");
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const first = registry.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      const second = registry.signOut("one");
+      expect(await Promise.race([second.then(() => "answered"), new Promise((resolve) => setImmediate(resolve, "waiting"))])).toBe("waiting");
+      expect(store.deletes).toBe(0);
+      writeFileSync(fixture.hold, "");
+      expect(await held).toMatchObject({ ok: true, reply: true });
+      expect([await first, await second]).toEqual([landed, landed]);
+      expect(store.deletes).toBe(1);
+      expect(existsSync(fixture.entry)).toBe(!landed);
+      expect(await geminiShown(registry, "one")).toBe(!landed);
+    } finally {
+      writeFileSync(fixture.hold, "");
+      await registry?.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
   // Gate 2120F: the second instance's Sign out found the saved sign-in already deleted and said "Didn't finish".
   it("signs two Gemini instances out one after the other with one delete, both done", async () => {
     const fixture = heldGeminiFixture("omb-agy-two-out-");
