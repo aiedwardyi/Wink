@@ -1,6 +1,9 @@
 // What the Forum loop reads from a shell call, whether or not toolDetailCapture is on: a digest of the whole command,
 // and when it failed, the line that names the error (not "Exit code 1" or a runner banner) and its signature.
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, posix, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
 import type { ToolRun } from "./contracts.ts";
@@ -53,6 +56,12 @@ const BARE_PATH = /[^\s'"`‘’“”]*[\\/][^\s'"`‘’“”]*/g;
 const LINE_CHARS = 240;
 const SHOWN_CHARS = 120;
 
+// folders of code the bot did not write: a frame there says where a library failed, not which call of the bot's
+const VENDOR = /(?:^|\/)(?:node_modules|site-packages|dist-packages)(?:\/|$)/;
+// a step that moves the shell, and a cd anywhere else in a step
+const CD_STEP = /^(?:cd|pushd|popd|set-location|sl|chdir)(?:\s+(?:\/d\s+|-(?:literal)?path\s+)?(.+?))?\s*$/i;
+const ANY_CD = /(?:^|[\s;&|(`"'])(?:cd|pushd|popd|set-location|chdir)(?:\s|$)/i;
+
 const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
@@ -64,25 +73,120 @@ export function errorLine(output: string): string {
   return (traceback ? strong.at(-1) : strong[0]) ?? lines.find((line) => WEAK.test(line)) ?? "";
 }
 
-/** The first failing test a runner names, with its file without folders, which differ per checkout; "" when no file is named. */
-export function failingTest(output: string): string {
+/** Where a shell call ran: the repo it ran in and the folder inside it. */
+export type ShellPlace = { root: string; cwd: string };
+
+const roots = new Map<string, string>();
+/** The folder holding .git above this one, else the folder itself. */
+export function repoRoot(folder: string): string {
+  const held = roots.get(folder);
+  if (held !== undefined) return held;
+  let root = folder;
+  for (let dir = folder; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, ".git"))) {
+      root = dir;
+      break;
+    }
+    if (dirname(dir) === dir) break;
+  }
+  if (roots.size >= 256) roots.delete(roots.keys().next().value!);
+  roots.set(folder, root);
+  return root;
+}
+
+// a command's steps: split at ;, newlines, && and || outside quotes
+const steps = (command: string) => {
+  const found: string[] = [];
+  let quote = "";
+  let step = "";
+  for (let at = 0; at < command.length; at++) {
+    const char = command[at]!;
+    if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === "\"" || char === "'") {
+      quote = char;
+    } else if (char === ";" || char === "\n" || ((char === "&" || char === "|") && command[at + 1] === char)) {
+      found.push(step);
+      step = "";
+      if (char !== ";" && char !== "\n") at++;
+      continue;
+    }
+    step += char;
+  }
+  return [...found, step].map((text) => text.trim()).filter(Boolean);
+};
+
+/**
+ * Where a command's work ran and where it left the shell: its cd steps applied in order to the folder the shell stood in.
+ * runs is undefined when that is not one known folder: a cd target with a variable, popd, a cd inside a step (a subshell or a
+ * wrapped shell), or work done in two folders.
+ */
+export type ShellFolders = { runs?: string; after?: string };
+
+export function shellFolders(command: string, folder: string | undefined): ShellFolders {
+  let at = folder;
+  const works: Array<string | undefined> = [];
+  for (const step of steps(command)) {
+    const cd = CD_STEP.exec(step);
+    if (!cd) {
+      works.push(ANY_CD.test(step) ? undefined : at);
+      continue;
+    }
+    const target = (cd[1] ?? "~").replace(/^(["'])(.*)\1$/, "$2");
+    const next = /[$%`]|^-$/.test(target) || /^popd$/i.test(step) ? undefined
+      : target === "~" || /^~[\\/]/.test(target) ? join(homedir(), target.slice(1))
+      : isAbsolute(target) ? resolve(target) : at === undefined ? undefined : resolve(at, target);
+    // a cd that fails leaves the shell where it was
+    if (next === undefined || existsSync(next)) at = next;
+  }
+  const runs = works.length ? works.every((work) => work === works[0]) ? works[0] : undefined : at;
+  return { runs, after: at };
+}
+
+export const placeAt = (folder: string | undefined): ShellPlace | undefined => (folder === undefined ? undefined : { root: repoRoot(folder), cwd: folder });
+
+/** Where a command ran, from the folder the shell stood in. */
+export const shellPlace = (command: string, folder: string | undefined) => placeAt(shellFolders(command, folder).runs);
+
+const slashed = (path: string) => path.replace(/\\/g, "/").toLowerCase().replace(/(?<=.)\/+$/, "");
+/** A path as this place names it: repo-relative inside the repo, absolute outside it, so one file in two checkouts is one name. */
+const placed = (place: ShellPlace) => {
+  const root = slashed(place.root);
+  const cwd = slashed(place.cwd);
+  const inside = (path: string) => path === root || path.startsWith(`${root}/`);
+  return (raw: string) => {
+    const path = slashed(raw);
+    const full = posix.normalize(/^(?:[a-z]:)?\/|^~/.test(path) ? path : posix.join(cwd, path));
+    return { name: full === root ? "." : inside(full) ? full.slice(root.length + 1) : full, inside: inside(full) };
+  };
+};
+
+/** The first failing test a runner names, with its file as the place names it (as printed with no place); "" when no file is named. */
+export function failingTest(output: string, place?: ShellPlace): string {
   const lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
   for (const [at, line] of lines.entries()) {
     const [, first, name] = TEST_NAME.map((rule) => rule.exec(line)).find(Boolean) ?? [];
     if (!first) continue;
     const named = (rule: RegExp) => (text: string) => rule.exec(text)?.[1];
     const file = name === undefined ? lines.slice(0, at).reverse().map(named(TEST_FILE[0])).find(Boolean) ?? lines.slice(at).map(named(TEST_FILE[1])).find(Boolean) : first;
-    return file ? `${file.replace(/^.*[\\/]/, "")} > ${name ?? first}`.toLowerCase().replace(/\s+/g, " ") : "";
+    return file ? `${place ? placed(place)(file).name : slashed(file)} > ${name ?? first}`.toLowerCase().replace(/\s+/g, " ") : "";
   }
   return "";
 }
 
-/** Where the error was raised, as file:line, when the output shows it; the last Python frame, else the first. */
-export function errorFrame(output: string): string {
+/**
+ * Where the bot's own code raised the error, as repo path:line: the last Python frame in the repo, else the first. A frame
+ * outside the repo (the standard library, the runtime) or under node_modules or site-packages never counts. "" with no place.
+ */
+export function errorFrame(output: string, place?: ShellPlace): string {
+  if (!place) return "";
+  const at = placed(place);
   const lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
   const found = lines.flatMap((line) => {
     const [, path, row] = FRAME.map((rule) => rule.exec(line)).find(Boolean) ?? [];
-    return path ? [`${path.replace(/^.*[\\/]/, "")}:${row}`.toLowerCase()] : [];
+    if (!path || path.includes("<")) return [];
+    const { name, inside } = at(path);
+    return inside && !VENDOR.test(name) ? [`${name}:${row}`] : [];
   });
   return (/traceback \(most recent call last\)/i.test(output) ? found.at(-1) : found[0]) ?? "";
 }
@@ -103,12 +207,15 @@ const words = (text: string) => text
   .split(/\s+/).filter(Boolean);
 
 /**
- * A failure's signature: what failed (the test, else the paths the line names, else the frame it was raised at) and the
- * line's words. A path keeps its last part, so one file in two checkouts signs alike, with its line when it is a code
- * location; ids and other numbers drop out, error codes stay, so TS2304 and TS2322 sign apart. "" when nothing says
- * which failure this is. Its own hash, so no post's text-made error_sig can match it.
+ * A failure's signature: where it happened (the folder the command ran in, and the command's words) and what failed there (the test,
+ * else the paths the line names, else the frame it was raised at) with the line's words. Paths are named from the repo root,
+ * so one file in two checkouts signs alike and two files of one name in two folders sign apart; ids and other numbers drop
+ * out, error codes stay, so TS2304 and TS2322 sign apart. "" when nothing says which failure this is. Its own hash, so no
+ * post's text-made error_sig can match it.
  */
-export function runSig(line: string, test = "", frame = ""): string {
+export function runSig(line: string, where: { place: ShellPlace; command: string; test?: string; frame?: string }): string {
+  const { place, command, test = "", frame = "" } = where;
+  const at = placed(place);
   const paths: string[] = [];
   const spots: string[] = [];
   const loose: string[] = [];
@@ -118,12 +225,13 @@ export function runSig(line: string, test = "", frame = ""): string {
     // a path starts at a root, a drive, ~ or ./, or ends in a file type, or has 2 folders: "Failure/Error" and "and/or" are words
     if (!url && !/^(?:[a-z]:|~|\.{1,2})?[\\/]|\.\w+$|[\\/].*[\\/]/i.test(body)) return ` ${path} `;
     const parts = body.split(/[\\/]+/).filter((part) => part && part !== "." && part !== "..");
-    // a scoped package keeps its scope
-    const last = parts.at(-2)?.startsWith("@") ? parts.slice(-2).join("/") : parts.at(-1) ?? "";
     // a date or a ratio is not a path
-    if (!/\p{L}/u.test(last)) return " ";
-    if (parts.length < 2) loose.push(last);
-    else paths.push(paren || colon ? `${last}:${paren || colon}` : last);
+    if (!/\p{L}/u.test(parts.at(-1) ?? "")) return " ";
+    if (parts.length < 2) loose.push(parts.at(-1)!);
+    else {
+      const full = url ? body : at(body).name;
+      paths.push(paren || colon ? `${full}:${paren || colon}` : full);
+    }
     return " ";
   };
   const rest = line.toLowerCase()
@@ -139,21 +247,24 @@ export function runSig(line: string, test = "", frame = ""): string {
   if (!test) {
     const pathError = PATH_ERROR.test(line);
     const located = spots.length > 0 || paths.some((path) => /:\d+$/.test(path));
-    if ([...paths, ...spots, frame].some((place) => TEST_SOURCE.test(place))) return "";
+    if ([...paths, ...spots, frame].some((spot) => TEST_SOURCE.test(spot.replace(/^.*\//, "")))) return "";
     if ((loose.length || BARE_FILE.test(rest)) && (pathError || !located)) return "";
     if ((pathError && !paths.length) || (!paths.length && !spots.length && !frame)) return "";
   }
   const what = test || [...paths, ...spots, ...loose].join(" ") || frame;
-  return digest(`forum-loop\n${what}\n${stem}`);
+  // options say how a command runs, its other words what it runs: --project=firefox and -x leave it the same command
+  const ran = (command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []).filter((word) => !word.startsWith("-")).map((word) => slashed(word).split(slashed(place.root)).join("<root>")).join(" ");
+  return digest(`forum-loop\n${at(place.cwd).name}\n${ran}\n${what}\n${stem}`);
 }
 
-export function toolRun(command: string, output: string | undefined, failed: boolean): ToolRun {
+/** With no place nothing says where a failure happened, so it is not signed. */
+export function toolRun(command: string, output: string | undefined, failed: boolean, place: ShellPlace | undefined): ToolRun {
   // a secret command's output is never quoted, so nothing it printed reaches a log, a steer or a post
   if (!failed || secretCommand(command)) return { cmd: digest(command) };
   const line = redactSecretsInText(errorLine(output ?? ""));
   const run: ToolRun = { cmd: digest(command), shown: cut(redactSecretsInText(command.replace(/\s+/g, " ").trim()), SHOWN_CHARS) };
-  const test = failingTest(output ?? "");
-  const sig = line && (test || !testRun(output ?? "")) ? runSig(line, test, test ? "" : errorFrame(output ?? "")) : "";
+  const test = place ? failingTest(output ?? "", place) : "";
+  const sig = place && line && (test || !testRun(output ?? "")) ? runSig(line, { place, command, test, frame: test ? "" : errorFrame(output ?? "", place) }) : "";
   if (sig) {
     run.sig = sig;
     run.error = cut(line, LINE_CHARS);

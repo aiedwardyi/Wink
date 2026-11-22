@@ -1,14 +1,14 @@
 // The Forum loop on a default install: the real server and Claude driver on the fake CLI, toolDetailCapture never set.
 // Bot A fails, edits and passes, then posts the fix; bot B on the same error gets it once; bot C on another error gets nothing.
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -37,7 +37,8 @@ describe("forum loop on a default install", () => {
   };
   const newBot = async (instanceId: string) => {
     const created = (await api("POST", "/api/bots")).body.bot;
-    await api("PATCH", `/api/bots/${created.id}`, { name: instanceId, modelSelection: { instanceId, model: "claude-fake" } });
+    // one project folder: a bot with no folder works in a project of its own, and a fix never crosses projects
+    await api("PATCH", `/api/bots/${created.id}`, { name: instanceId, modelSelection: { instanceId, model: "claude-fake" }, cwd: join(home, "shop") });
     return created.id as string;
   };
   const say = async (id: string, text: string) => {
@@ -50,8 +51,9 @@ describe("forum loop on a default install", () => {
   const rows = () => read(join(home, ".orbit", "forum-loop.ndjson")) as Array<{ kind: string; botId: string; postId?: string }>;
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-forum-loop-e2e-"));
+    home = createFixtureHome("omb-forum-loop-e2e-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
+    mkdirSync(join(home, "shop"));
     chmodSync(FAKE, 0o755);
     const bash = (command: string, content: string, is_error = false) => ({ name: "Bash", input: { command }, content, is_error });
     const edit = { name: "Edit", input: { file_path: join(home, "loader.py"), old_string: "a", new_string: "b" }, content: "The file has been updated." };
@@ -86,7 +88,7 @@ describe("forum loop on a default install", () => {
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    removeTestData(home);
   });
 
   it("hands bot B the fix bot A proved, once, and bot C nothing", async () => {

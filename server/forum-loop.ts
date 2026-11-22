@@ -39,9 +39,6 @@ const quotes = (error: readonly string[], text: readonly string[]) => {
   return best >= Math.min(3, error.length);
 };
 
-/** Before the loop, bots were told to post any fix that took 2+ tries; the loop asks only after a proven one. */
-export const forumPostRule = (loop: boolean) => (loop ? "" : "After something took 2+ tries, board_post kind fix: the error and the line that fixed it. ");
-
 export interface ForumLoopDeps {
   board: Board;
   botOf(threadId: string): string | undefined;
@@ -93,12 +90,10 @@ export function createForumLoop(deps: ForumLoopDeps) {
     if (!steer) return later(threadId, text);
     deps.steer(threadId, text).then((taken) => taken || later(threadId, text), () => later(threadId, text));
   };
-  /** A proven fix another bot posted for this signature, this project's first. Only a proven post carries a loop signature. */
-  const knownFix = (sig: string, project: string, botId?: string): BoardPost | undefined => {
-    const fixes = deps.board.list().filter((post) => post.error_sig === sig && post.kind === "fix" && !post.parent_id && post.status === "solved" && post.fix
-      && !post.lesson && !fromRoom(post) && post.author_bot_id !== BOARD_USER && post.author_bot_id !== botId);
-    return fixes.find((post) => post.project_id === project) ?? fixes[0];
-  };
+  /** A proven fix another bot posted for this signature in this project; never another project's. Only a proven post carries a loop signature. */
+  const knownFix = (sig: string, project: string, botId?: string): BoardPost | undefined => deps.board.list().find((post) => post.error_sig === sig
+    && post.project_id === project && post.kind === "fix" && !post.parent_id && post.status === "solved" && post.fix
+    && !post.lesson && !fromRoom(post) && post.author_bot_id !== BOARD_USER && post.author_bot_id !== botId);
 
   const failed = (threadId: string, botId: string, run: ToolRun, sig: string) => {
     const turn = turnOf(threadId);

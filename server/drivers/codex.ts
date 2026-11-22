@@ -22,7 +22,7 @@ import { guardInput } from "../auto-approve.ts";
 import { describeSpawnFailure, execCli, spawnCli } from "../procs.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { captureToolDetail } from "../tool-detail.ts";
-import { toolRun } from "../tool-run.ts";
+import { shellPlace, toolRun } from "../tool-run.ts";
 import { startTurnTrace, traceHelperCall, traceRuntimeEvent } from "../turn-timing.ts";
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 import { askPreallowedOps, type BuiltinServer } from "./builtin-ops.ts";
@@ -71,6 +71,7 @@ const toolItemSchema = z.object({
   type: z.enum(["commandExecution", "fileChange", "mcpToolCall", "webSearch"]),
   status: z.string().optional(),
   command: z.string().nullish(),
+  cwd: z.string().nullish(),
   aggregatedOutput: z.string().nullish(),
   exitCode: z.number().nullish(),
   changes: z.array(z.object({ path: z.string(), kind: z.object({ type: z.enum(["add", "delete", "update"]) }), diff: z.string() })).optional(),
@@ -780,7 +781,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               };
               const detail = parsed.success ? codexToolDetail(parsed.data, !ok) : undefined;
               if (detail) event.detail = detail;
-              if (parsed.success && parsed.data.type === "commandExecution" && parsed.data.command) event.run = toolRun(parsed.data.command, parsed.data.aggregatedOutput ?? undefined, !ok);
+              if (parsed.success && parsed.data.type === "commandExecution" && parsed.data.command) event.run = toolRun(parsed.data.command, parsed.data.aggregatedOutput ?? undefined, !ok, shellPlace(parsed.data.command, parsed.data.cwd ?? turn.cwd ?? homedir()));
               if (ok && parsed.success && parsed.data.type === "fileChange") event.writes = parsed.data.changes?.filter(change => change.kind.type !== "delete").map(change => change.path).slice(0, 32);
               emit(event);
             } else if (item.type === "reasoning") {

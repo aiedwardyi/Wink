@@ -134,7 +134,7 @@ import { createBotCalls } from "./bot-call.ts";
 import { BOARD_DIR, createBoard, projectIdOf } from "./board.ts";
 import { createForumLessons } from "./forum-lessons.ts";
 import { createBoardCalls, FORUM_HOLDS_FILE } from "./board-calls.ts";
-import { createForumLoop, FORUM_LOOP_FILE, forumPostRule } from "./forum-loop.ts";
+import { createForumLoop, FORUM_LOOP_FILE } from "./forum-loop.ts";
 import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -5153,7 +5153,7 @@ const PLAIN_WORDS_INSTRUCTIONS =
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
-  ` ${forumPostRule(forumLoopOn)}Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
+  ` After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
 const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
 

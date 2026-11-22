@@ -25,7 +25,7 @@ import { shareUserSetup } from "../../account-shared-setup.ts";
 import { baseAccount } from "../../worker-resume.ts";
 import { describeSpawnFailure, execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { captureToolDetail } from "../../tool-detail.ts";
-import { toolRun } from "../../tool-run.ts";
+import { shellPlace, toolRun } from "../../tool-run.ts";
 import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
@@ -83,12 +83,12 @@ function acpToolDetail(call: z.infer<typeof toolCallSchema>) {
 
 const commandInput = z.object({ command: z.string() });
 
-function acpToolRun(call: z.infer<typeof toolCallSchema>, ok: boolean) {
+function acpToolRun(call: z.infer<typeof toolCallSchema>, ok: boolean, folder: string) {
   if (call.kind !== "execute") return undefined;
   const command = z.string().safeParse(call.rawInput).data ?? commandInput.safeParse(call.rawInput).data?.command ?? call.title;
   if (!command) return undefined;
   const text = (call.content ?? []).flatMap((block) => block.type === "content" && block.content.type === "text" ? [block.content.text ?? ""] : []).join("\n");
-  return toolRun(command, text || z.string().safeParse(call.rawOutput).data, !ok);
+  return toolRun(command, text || z.string().safeParse(call.rawOutput).data, !ok, shellPlace(command, folder));
 }
 
 /**
@@ -1222,7 +1222,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             ok,
           };
           if (detail) event.detail = detail;
-          const run = call ? acpToolRun(call, ok) : undefined;
+          const run = call ? acpToolRun(call, ok, cwd) : undefined;
           if (run) event.run = run;
           if (ok && call?.kind === "edit") {
             const args = toolInputSchema.safeParse(call.rawInput);

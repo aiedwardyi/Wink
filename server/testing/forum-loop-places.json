@@ -1,0 +1,260 @@
+{
+ "note": "Gate E (PR 2113) wrong handoffs: two different failures that signed alike when a signature kept only a path's last part or a standard library frame. Real tool output except playwright (hand-written). root and cwd: where the command ran; again: the same command from a second checkout.",
+ "cases": [
+  {
+   "label": "py json.load empty users.json",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "py",
+   "command": "python load_users.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\load_users.py\", line 4, in <module>\n    users = json.load(f)\n            ^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\__init__.py\", line 293, in load\n    return loads(fp.read(),\n           ^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\decoder.py\", line 338, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\decoder.py\", line 356, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\py\\load_users.py\", line 4, in <module>\n    users = json.load(f)\n            ^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\__init__.py\", line 293, in load\n    return loads(fp.read(),\n           ^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\decoder.py\", line 338, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\decoder.py\", line 356, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)"
+   }
+  },
+  {
+   "label": "py json.loads html body",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "py",
+   "command": "python sync_prices.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\sync_prices.py\", line 4, in <module>\n    prices = json.loads(body)\n             ^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\decoder.py\", line 338, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\decoder.py\", line 356, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\py\\sync_prices.py\", line 4, in <module>\n    prices = json.loads(body)\n             ^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\decoder.py\", line 338, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\json\\decoder.py\", line 356, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)"
+   }
+  },
+  {
+   "label": "py urlopen orders refused",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "py",
+   "command": "python fetch_orders.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1344, in do_open\n    h.request(req.get_method(), req.selector, req.data, headers,\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1338, in request\n    self._send_request(method, url, body, headers, encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1384, in _send_request\n    self.endheaders(body, encode_chunked=encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1333, in endheaders\n    self._send_output(message_body, encode_chunked=encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1093, in _send_output\n    self.send(msg)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1037, in send\n    self.connect()\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1003, in connect\n    self.sock = self._create_connection(\n                ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\socket.py\", line 865, in create_connection\n    raise exceptions[0]\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\socket.py\", line 850, in create_connection\n    sock.connect(sa)\nConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\fetch_orders.py\", line 3, in <module>\n    data = urllib.request.urlopen('http://127.0.0.1:47811/orders', timeout=5).read()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 215, in urlopen\n    return opener.open(url, data, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 515, in open\n    response = self._open(req, data)\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 532, in _open\n    result = self._call_chain(self.handle_open, protocol, protocol +\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 492, in _call_chain\n    result = func(*args)\n             ^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1373, in http_open\n    return self.do_open(http.client.HTTPConnection, req)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1347, in do_open\n    raise URLError(err)\nurllib.error.URLError: <urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1344, in do_open\n    h.request(req.get_method(), req.selector, req.data, headers,\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1338, in request\n    self._send_request(method, url, body, headers, encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1384, in _send_request\n    self.endheaders(body, encode_chunked=encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1333, in endheaders\n    self._send_output(message_body, encode_chunked=encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1093, in _send_output\n    self.send(msg)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1037, in send\n    self.connect()\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1003, in connect\n    self.sock = self._create_connection(\n                ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\socket.py\", line 865, in create_connection\n    raise exceptions[0]\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\socket.py\", line 850, in create_connection\n    sock.connect(sa)\nConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\py\\fetch_orders.py\", line 3, in <module>\n    data = urllib.request.urlopen('http://127.0.0.1:47811/orders', timeout=5).read()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 215, in urlopen\n    return opener.open(url, data, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 515, in open\n    response = self._open(req, data)\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 532, in _open\n    result = self._call_chain(self.handle_open, protocol, protocol +\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 492, in _call_chain\n    result = func(*args)\n             ^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1373, in http_open\n    return self.do_open(http.client.HTTPConnection, req)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1347, in do_open\n    raise URLError(err)\nurllib.error.URLError: <urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>"
+   }
+  },
+  {
+   "label": "py urlopen license refused",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "py",
+   "command": "python check_license.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1344, in do_open\n    h.request(req.get_method(), req.selector, req.data, headers,\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1338, in request\n    self._send_request(method, url, body, headers, encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1384, in _send_request\n    self.endheaders(body, encode_chunked=encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1333, in endheaders\n    self._send_output(message_body, encode_chunked=encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1093, in _send_output\n    self.send(msg)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1037, in send\n    self.connect()\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1003, in connect\n    self.sock = self._create_connection(\n                ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\socket.py\", line 865, in create_connection\n    raise exceptions[0]\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\socket.py\", line 850, in create_connection\n    sock.connect(sa)\nConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\check_license.py\", line 3, in <module>\n    data = urllib.request.urlopen('http://127.0.0.1:47812/license', timeout=5).read()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 215, in urlopen\n    return opener.open(url, data, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 515, in open\n    response = self._open(req, data)\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 532, in _open\n    result = self._call_chain(self.handle_open, protocol, protocol +\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 492, in _call_chain\n    result = func(*args)\n             ^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1373, in http_open\n    return self.do_open(http.client.HTTPConnection, req)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1347, in do_open\n    raise URLError(err)\nurllib.error.URLError: <urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1344, in do_open\n    h.request(req.get_method(), req.selector, req.data, headers,\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1338, in request\n    self._send_request(method, url, body, headers, encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1384, in _send_request\n    self.endheaders(body, encode_chunked=encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1333, in endheaders\n    self._send_output(message_body, encode_chunked=encode_chunked)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1093, in _send_output\n    self.send(msg)\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1037, in send\n    self.connect()\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\http\\client.py\", line 1003, in connect\n    self.sock = self._create_connection(\n                ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\socket.py\", line 865, in create_connection\n    raise exceptions[0]\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\socket.py\", line 850, in create_connection\n    sock.connect(sa)\nConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\py\\check_license.py\", line 3, in <module>\n    data = urllib.request.urlopen('http://127.0.0.1:47812/license', timeout=5).read()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 215, in urlopen\n    return opener.open(url, data, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 515, in open\n    response = self._open(req, data)\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 532, in _open\n    result = self._call_chain(self.handle_open, protocol, protocol +\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 492, in _call_chain\n    result = func(*args)\n             ^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1373, in http_open\n    return self.do_open(http.client.HTTPConnection, req)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\dev\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\urllib\\request.py\", line 1347, in do_open\n    raise URLError(err)\nurllib.error.URLError: <urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>"
+   }
+  },
+  {
+   "label": "py open apps/web/.env",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "py",
+   "command": "python env_web.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\env_web.py\", line 1, in <module>\n    env = open('apps/web/.env').read()\n          ^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: 'apps/web/.env'",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\py\\env_web.py\", line 1, in <module>\n    env = open('apps/web/.env').read()\n          ^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: 'apps/web/.env'"
+   }
+  },
+  {
+   "label": "py open apps/api/.env",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "py",
+   "command": "python env_api.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\env_api.py\", line 1, in <module>\n    env = open('apps/api/.env').read()\n          ^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: 'apps/api/.env'",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\py\\env_api.py\", line 1, in <module>\n    env = open('apps/api/.env').read()\n          ^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: 'apps/api/.env'"
+   }
+  },
+  {
+   "label": "node ENOENT apps/web/.env",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "node",
+   "command": "node env_web.cjs",
+   "output": "Exit code 1\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: ENOENT: no such file or directory, open 'C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\node\\apps\\web\\.env'\n    at Object.readFileSync (node:fs:440:20)\n    at Object.<anonymous> (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\node\\env_web.cjs:3:16)\n    at Module._compile (node:internal/modules/cjs/loader:1812:14)\n    at Object..js (node:internal/modules/cjs/loader:1943:10)\n    at Module.load (node:internal/modules/cjs/loader:1533:32)\n    at Module._load (node:internal/modules/cjs/loader:1335:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47 {\n  errno: -4058,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: 'C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\Temp\\\\runner\\\\runners\\\\node\\\\apps\\\\web\\\\.env'\n}\n\nNode.js v24.14.1",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: ENOENT: no such file or directory, open 'C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\node\\apps\\web\\.env'\n    at Object.readFileSync (node:fs:440:20)\n    at Object.<anonymous> (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\node\\env_web.cjs:3:16)\n    at Module._compile (node:internal/modules/cjs/loader:1812:14)\n    at Object..js (node:internal/modules/cjs/loader:1943:10)\n    at Module.load (node:internal/modules/cjs/loader:1533:32)\n    at Module._load (node:internal/modules/cjs/loader:1335:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47 {\n  errno: -4058,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: 'C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\Temp\\\\runner\\\\co2\\\\shop\\\\node\\\\apps\\\\web\\\\.env'\n}\n\nNode.js v24.14.1"
+   }
+  },
+  {
+   "label": "node ENOENT apps/api/.env",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "node",
+   "command": "node env_api.cjs",
+   "output": "Exit code 1\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: ENOENT: no such file or directory, open 'C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\node\\apps\\api\\.env'\n    at Object.readFileSync (node:fs:440:20)\n    at Object.<anonymous> (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\node\\env_api.cjs:3:16)\n    at Module._compile (node:internal/modules/cjs/loader:1812:14)\n    at Object..js (node:internal/modules/cjs/loader:1943:10)\n    at Module.load (node:internal/modules/cjs/loader:1533:32)\n    at Module._load (node:internal/modules/cjs/loader:1335:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47 {\n  errno: -4058,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: 'C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\Temp\\\\runner\\\\runners\\\\node\\\\apps\\\\api\\\\.env'\n}\n\nNode.js v24.14.1",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: ENOENT: no such file or directory, open 'C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\node\\apps\\api\\.env'\n    at Object.readFileSync (node:fs:440:20)\n    at Object.<anonymous> (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop\\node\\env_api.cjs:3:16)\n    at Module._compile (node:internal/modules/cjs/loader:1812:14)\n    at Object..js (node:internal/modules/cjs/loader:1943:10)\n    at Module.load (node:internal/modules/cjs/loader:1533:32)\n    at Module._load (node:internal/modules/cjs/loader:1335:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47 {\n  errno: -4058,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: 'C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\Temp\\\\runner\\\\co2\\\\shop\\\\node\\\\apps\\\\api\\\\.env'\n}\n\nNode.js v24.14.1"
+   }
+  },
+  {
+   "label": "vitest formats the label, apps/web (inside the app)",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "vt/apps/web",
+   "command": "pnpm vitest run src/format.test.ts",
+   "output": "Exit code 1\n\n RUN  v4.1.10 C:/Users/dev/AppData/Local/Temp/runner/runners/vt/apps/web\n\n ❯ src/format.test.ts (1 test | 1 failed) 7ms\n   × formats the label 6ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/format.test.ts > formats the label\nAssertionError: expected '5' to be '5 items' // Object.is equality\n\nExpected: \"5 items\"\nReceived: \"5\"\n\n ❯ src/format.test.ts:6:20\n      4|\n      5| test('formats the label', () => {\n      6|   expect(label(5)).toBe('5 items');\n       |                    ^\n      7| });\n      8|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n   Start at  17:09:38\n   Duration  717ms (transform 145ms, setup 0ms, import 177ms, tests 7ms, environment 0ms)",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\n\n RUN  v4.1.10 C:/Users/dev/AppData/Local/Temp/runner/co2/shop/vt/apps/web\n\n ❯ src/format.test.ts (1 test | 1 failed) 11ms\n   × formats the label 9ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/format.test.ts > formats the label\nAssertionError: expected '5' to be '5 items' // Object.is equality\n\nExpected: \"5 items\"\nReceived: \"5\"\n\n ❯ src/format.test.ts:6:20\n      4|\n      5| test('formats the label', () => {\n      6|   expect(label(5)).toBe('5 items');\n       |                    ^\n      7| });\n      8|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n   Start at  17:11:02\n   Duration  494ms (transform 53ms, setup 0ms, import 95ms, tests 11ms, environment 0ms)"
+   }
+  },
+  {
+   "label": "vitest formats the label, apps/admin (inside the app)",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "vt/apps/admin",
+   "command": "pnpm vitest run src/format.test.ts",
+   "output": "Exit code 1\n\n RUN  v4.1.10 C:/Users/dev/AppData/Local/Temp/runner/runners/vt/apps/admin\n\n ❯ src/format.test.ts (1 test | 1 failed) 8ms\n   × formats the label 6ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/format.test.ts > formats the label\nAssertionError: expected '5' to be '5 items' // Object.is equality\n\nExpected: \"5 items\"\nReceived: \"5\"\n\n ❯ src/format.test.ts:6:20\n      4|\n      5| test('formats the label', () => {\n      6|   expect(label(5)).toBe('5 items');\n       |                    ^\n      7| });\n      8|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n   Start at  17:09:38\n   Duration  716ms (transform 146ms, setup 0ms, import 179ms, tests 8ms, environment 0ms)",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\n\n RUN  v4.1.10 C:/Users/dev/AppData/Local/Temp/runner/co2/shop/vt/apps/admin\n\n ❯ src/format.test.ts (1 test | 1 failed) 10ms\n   × formats the label 8ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/format.test.ts > formats the label\nAssertionError: expected '5' to be '5 items' // Object.is equality\n\nExpected: \"5 items\"\nReceived: \"5\"\n\n ❯ src/format.test.ts:6:20\n      4|\n      5| test('formats the label', () => {\n      6|   expect(label(5)).toBe('5 items');\n       |                    ^\n      7| });\n      8|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n   Start at  17:11:02\n   Duration  515ms (transform 59ms, setup 0ms, import 106ms, tests 10ms, environment 0ms)"
+   }
+  },
+  {
+   "label": "jest handles empty input, packages/web (inside the package)",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "js/packages/web",
+   "command": "npx jest",
+   "output": "Exit code 1\nFAIL src/index.test.js\n  × handles empty input (1 ms)\n\n  ● handles empty input\n\n    TypeError: Cannot read properties of undefined (reading 'items')\n\n    \u001b[0m\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 1 |\u001b[39m exports\u001b[33m.\u001b[39mcount \u001b[33m=\u001b[39m (cart) \u001b[33m=>\u001b[39m cart\u001b[33m.\u001b[39mitems\u001b[33m.\u001b[39mlength\u001b[33m;\u001b[39m\n     \u001b[90m   |\u001b[39m                                            \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 2 |\u001b[39m\u001b[0m\n\n      at Object.<anonymous>.exports.count (src/index.js:1:44)\n      at Object.count (src/index.test.js:4:10)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 total\nSnapshots:   0 total\nTime:        0.758 s\nRan all test suites.",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nFAIL src/index.test.js\n  × handles empty input (2 ms)\n\n  ● handles empty input\n\n    TypeError: Cannot read properties of undefined (reading 'items')\n\n    \u001b[0m\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 1 |\u001b[39m exports\u001b[33m.\u001b[39mcount \u001b[33m=\u001b[39m (cart) \u001b[33m=>\u001b[39m cart\u001b[33m.\u001b[39mitems\u001b[33m.\u001b[39mlength\u001b[33m;\u001b[39m\n     \u001b[90m   |\u001b[39m                                            \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 2 |\u001b[39m\u001b[0m\n\n      at Object.<anonymous>.exports.count (src/index.js:1:44)\n      at Object.count (src/index.test.js:4:10)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 total\nSnapshots:   0 total\nTime:        0.708 s\nRan all test suites."
+   }
+  },
+  {
+   "label": "jest handles empty input, packages/api (inside the package)",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "js/packages/api",
+   "command": "npx jest",
+   "output": "Exit code 1\nFAIL src/index.test.js\n  × handles empty input (1 ms)\n\n  ● handles empty input\n\n    TypeError: Cannot read properties of undefined (reading 'items')\n\n    \u001b[0m\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 1 |\u001b[39m exports\u001b[33m.\u001b[39mtotal \u001b[33m=\u001b[39m (order) \u001b[33m=>\u001b[39m order\u001b[33m.\u001b[39mitems\u001b[33m.\u001b[39mreduce((sum\u001b[33m,\u001b[39m item) \u001b[33m=>\u001b[39m sum \u001b[33m+\u001b[39m item\u001b[33m.\u001b[39mprice\u001b[33m,\u001b[39m \u001b[35m0\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m   |\u001b[39m                                                                                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 2 |\u001b[39m\u001b[0m\n\n      at Object.<anonymous>.exports.total (src/index.js:1:82)\n      at Object.total (src/index.test.js:4:10)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 total\nSnapshots:   0 total\nTime:        0.54 s, estimated 1 s\nRan all test suites.",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 1\nFAIL src/index.test.js\n  × handles empty input (2 ms)\n\n  ● handles empty input\n\n    TypeError: Cannot read properties of undefined (reading 'items')\n\n    \u001b[0m\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 1 |\u001b[39m exports\u001b[33m.\u001b[39mtotal \u001b[33m=\u001b[39m (order) \u001b[33m=>\u001b[39m order\u001b[33m.\u001b[39mitems\u001b[33m.\u001b[39mreduce((sum\u001b[33m,\u001b[39m item) \u001b[33m=>\u001b[39m sum \u001b[33m+\u001b[39m item\u001b[33m.\u001b[39mprice\u001b[33m,\u001b[39m \u001b[35m0\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m   |\u001b[39m                                                                                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 2 |\u001b[39m\u001b[0m\n\n      at Object.<anonymous>.exports.total (src/index.js:1:82)\n      at Object.total (src/index.test.js:4:10)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 total\nSnapshots:   0 total\nTime:        0.732 s\nRan all test suites."
+   }
+  },
+  {
+   "label": "playwright login works, apps/web (inside the app)",
+   "kind": "hand",
+   "root": "/home/u/shop",
+   "cwd": "apps/web",
+   "command": "npx playwright test",
+   "output": "Exit code 1\n\nRunning 1 test using 1 worker\n\n  ✘  1 [chromium] › e2e/login.spec.ts:5:1 › login works (5.4s)\n\n\n  1) [chromium] › e2e/login.spec.ts:5:1 › login works ──────────────────────────────────────────────\n\n    Error: expect(locator).toBeVisible() failed\n\n    Locator: getByRole('heading', { name: 'Dashboard' })\n    Expected: visible\n    Timeout: 5000ms\n    Error: element(s) not found\n\n    Call log:\n      - Expect \"toBeVisible\" with timeout 5000ms\n      - waiting for getByRole('heading', { name: 'Dashboard' })\n\n\n      8 |\n    > 9 |   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();\n         |   ^\n      10 | });\n        at /home/u/shop/apps/web/e2e/login.spec.ts:9:66\n\n  1 failed\n    [chromium] › e2e/login.spec.ts:5:1 › login works ───────────────────────────────────────────────"
+  },
+  {
+   "label": "playwright login works, apps/admin (inside the app)",
+   "kind": "hand",
+   "root": "/home/u/shop",
+   "cwd": "apps/admin",
+   "command": "npx playwright test",
+   "output": "Exit code 1\n\nRunning 1 test using 1 worker\n\n  ✘  1 [chromium] › e2e/login.spec.ts:5:1 › login works (5.4s)\n\n\n  1) [chromium] › e2e/login.spec.ts:5:1 › login works ──────────────────────────────────────────────\n\n    Error: expect(locator).toBeVisible() failed\n\n    Locator: getByText('Signed in as admin')\n    Expected: visible\n    Timeout: 5000ms\n    Error: element(s) not found\n\n    Call log:\n      - Expect \"toBeVisible\" with timeout 5000ms\n      - waiting for getByText('Signed in as admin')\n\n\n      8 |\n    > 9 |   await expect(page.getByText('Signed in as admin')).toBeVisible();\n         |   ^\n      10 | });\n        at /home/u/shop/apps/admin/e2e/login.spec.ts:9:52\n\n  1 failed\n    [chromium] › e2e/login.spec.ts:5:1 › login works ───────────────────────────────────────────────"
+  },
+  {
+   "label": "tsc TS2322 src/index.ts in packages/web",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "ts/mono/packages/web",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 2\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."
+   }
+  },
+  {
+   "label": "tsc TS2322 src/index.ts in packages/api",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "ts/mono/packages/api",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 2\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."
+   }
+  },
+  {
+   "label": "cargo run -- config.toml (unwrap NotFound)",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "rs",
+   "command": "cargo run -- config.toml",
+   "output": "Exit code 101\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s\n     Running `C:/Users/dev/AppData/Local/Temp/runner/rs-target\\debug\\shop.exe config.toml`\n\nthread 'main' (21288) panicked at src\\main.rs:6:41:\ncalled `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: \"The system cannot find the file specified.\" }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nerror: process didn't exit successfully: `C:/Users/dev/AppData/Local/Temp/runner/rs-target\\debug\\shop.exe config.toml` (exit code: 101)",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 101\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s\n     Running `C:/Users/dev/AppData/Local/Temp/runner/rs-target\\debug\\shop.exe config.toml`\n\nthread 'main' (22848) panicked at src\\main.rs:6:41:\ncalled `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: \"The system cannot find the file specified.\" }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nerror: process didn't exit successfully: `C:/Users/dev/AppData/Local/Temp/runner/rs-target\\debug\\shop.exe config.toml` (exit code: 101)"
+   }
+  },
+  {
+   "label": "cargo run -- users.csv (unwrap NotFound)",
+   "kind": "real",
+   "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners",
+   "cwd": "rs",
+   "command": "cargo run -- users.csv",
+   "output": "Exit code 101\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s\n     Running `C:/Users/dev/AppData/Local/Temp/runner/rs-target\\debug\\shop.exe users.csv`\n\nthread 'main' (28244) panicked at src\\main.rs:6:41:\ncalled `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: \"The system cannot find the file specified.\" }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nerror: process didn't exit successfully: `C:/Users/dev/AppData/Local/Temp/runner/rs-target\\debug\\shop.exe users.csv` (exit code: 101)",
+   "again": {
+    "root": "C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\co2\\shop",
+    "output": "Exit code 101\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s\n     Running `C:/Users/dev/AppData/Local/Temp/runner/rs-target\\debug\\shop.exe users.csv`\n\nthread 'main' (26828) panicked at src\\main.rs:6:41:\ncalled `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: \"The system cannot find the file specified.\" }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nerror: process didn't exit successfully: `C:/Users/dev/AppData/Local/Temp/runner/rs-target\\debug\\shop.exe users.csv` (exit code: 101)"
+   }
+  }
+ ],
+ "pairs": [
+  [
+   "py JSONDecodeError from two scripts",
+   "py json.load empty users.json",
+   "py json.loads html body"
+  ],
+  [
+   "py urlopen refused, two services",
+   "py urlopen orders refused",
+   "py urlopen license refused"
+  ],
+  [
+   "py open apps/web/.env vs apps/api/.env",
+   "py open apps/web/.env",
+   "py open apps/api/.env"
+  ],
+  [
+   "node ENOENT apps/web/.env vs apps/api/.env",
+   "node ENOENT apps/web/.env",
+   "node ENOENT apps/api/.env"
+  ],
+  [
+   "vitest same file and title in two apps",
+   "vitest formats the label, apps/web (inside the app)",
+   "vitest formats the label, apps/admin (inside the app)"
+  ],
+  [
+   "jest same file and title in two packages",
+   "jest handles empty input, packages/web (inside the package)",
+   "jest handles empty input, packages/api (inside the package)"
+  ],
+  [
+   "playwright same spec and title in two apps",
+   "playwright login works, apps/web (inside the app)",
+   "playwright login works, apps/admin (inside the app)"
+  ],
+  [
+   "tsc same line of src/index.ts in two packages",
+   "tsc TS2322 src/index.ts in packages/web",
+   "tsc TS2322 src/index.ts in packages/api"
+  ],
+  [
+   "cargo run with two missing files",
+   "cargo run -- config.toml (unwrap NotFound)",
+   "cargo run -- users.csv (unwrap NotFound)"
+  ]
+ ]
+}

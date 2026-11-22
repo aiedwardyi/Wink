@@ -33,7 +33,7 @@ import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, typ
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 import { askPreallowedOps, BUILTIN_SERVERS, claudeAskRules, type BuiltinServer } from "./builtin-ops.ts";
 import { captureToolDetail } from "../tool-detail.ts";
-import { toolRun } from "../tool-run.ts";
+import { placeAt, shellFolders, toolRun } from "../tool-run.ts";
 
 import type {
   DriverCreateInput,
@@ -76,6 +76,7 @@ import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../a
 import { baseAccount } from "../worker-resume.ts";
 import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
 
+const bashInput = z.object({ command: z.string() });
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 // Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
 const authChecks = new Map<string, Promise<string>>();
@@ -1679,6 +1680,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       };
       const currentTurnId = () => session.turn?.turnId ?? turnId;
       const toolCalls = new Map<string, { at: number; name: string; input: unknown; summary?: string }>();
+      // the CLI's shell stays in the folder a cd left it in, from one call to the next
+      let shellAt: string | undefined = cwd;
       let droppedLate = false;
 
       const handleLine = (line: string) => {
@@ -1927,7 +1930,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                   : undefined;
                 const input = call?.input && typeof call.input === "object" ? call.input as Record<string, unknown> : {};
                 const path = input.file_path ?? input.notebook_path;
-                const run = call?.name === "Bash" && typeof input.command === "string" ? toolRun(input.command, firstText(b.content), Boolean(b.is_error)) : undefined;
+                const shell = call?.name === "Bash" ? bashInput.safeParse(input) : undefined;
+                const folders = shell?.success ? shellFolders(shell.data.command, shellAt) : undefined;
+                if (folders) shellAt = folders.after;
+                const run = shell?.success && folders ? toolRun(shell.data.command, firstText(b.content), Boolean(b.is_error), placeAt(folders.runs)) : undefined;
                 emit({
                   ...base(threadId, currentTurnId()),
                   type: "item.completed",

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,12 +8,18 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { BOARD_USER, createBoard, REPLY_REF } from "./board.ts";
 import { createBoardRoutes } from "./board-routes.ts";
 import type { RuntimeEvent } from "./contracts.ts";
-import { createForumLoop, forumPostRule, type ForumLoopRow } from "./forum-loop.ts";
+import { createForumLoop, type ForumLoopRow } from "./forum-loop.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
-import { errorLine, runSig, toolRun } from "./tool-run.ts";
+import { errorLine, runSig, shellFolders, toolRun as runAt, type ShellPlace } from "./tool-run.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
+
+// one repo, one folder: what most of these tests vary is the output
+const HERE: ShellPlace = { root: "D:/proj", cwd: "D:/proj" };
+// another checkout of the same repo
+const THERE: ShellPlace = { root: "E:/wt", cwd: "E:/wt" };
+const toolRun = (command: string, output: string, failed: boolean, place: ShellPlace = HERE) => runAt(command, output, failed, place);
 
 // what each engine hands back for a failing shell call: Claude prefixes "Exit code N", Codex sends the raw output
 const CLAUDE = {
@@ -42,23 +48,24 @@ const AUTH = ["pnpm vitest run src/auth.test.ts", vitest("src/auth.test.ts", "au
 
 let item = 0;
 const call = (threadId: string, ok: boolean, extra: object) => ({ threadId, turnId: "u1", createdAt: "", type: "item.completed", itemType: "tool", itemId: `i${++item}`, ok, ...extra }) as unknown as RuntimeEvent;
-const bash = (threadId: string, command: string, output: string, failed = true) => call(threadId, !failed, { run: toolRun(command, output, failed) });
+const bash = (threadId: string, command: string, output: string, failed = true, place = HERE) => call(threadId, !failed, { run: toolRun(command, output, failed, place) });
 const edit = (threadId: string, path = "src/loader.py") => call(threadId, true, { writes: [path] });
 const shell = (threadId: string) => ({ threadId, turnId: "u1", createdAt: "", type: "item.started", itemType: "tool", itemId: `i${++item}`, title: "Bash" }) as unknown as RuntimeEvent;
 const done = (threadId: string) => ({ threadId, turnId: "u1", createdAt: "", type: "turn.completed" }) as unknown as RuntimeEvent;
 const BOTS: Record<string, string> = { ta: "astra", tb: "nova", tc: "sol" };
 
-function setup(options: { taken?: boolean; room?: boolean; enabled?: boolean } = {}) {
+function setup(options: { taken?: boolean; room?: boolean; enabled?: boolean; project?: (threadId: string) => string } = {}) {
+  const projectOf = options.project ?? (() => "wink");
   let clock = 1_800_000_000_000;
   const board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-forum-loop-")), "board"), pcId: () => "home", now: () => (clock += 1000) });
   const steer = vi.fn(async (_threadId: string, _text: string) => options.taken ?? true);
   const rows: ForumLoopRow[] = [];
   const botOf = vi.fn((threadId: string) => BOTS[threadId]);
   const room = vi.fn(() => options.room ?? false);
-  const loop = createForumLoop({ board, botOf, projectOf: () => "wink", room, steer, log: (row) => rows.push(row), enabled: options.enabled, now: () => clock });
+  const loop = createForumLoop({ board, botOf, projectOf, room, steer, log: (row) => rows.push(row), enabled: options.enabled, now: () => clock });
   // the index.ts wiring
   const routes = (threadId: string) => createBoardRoutes({
-    board, caller: () => ({ botId: BOTS[threadId]!, threadId }), known: () => true, projectOf: () => "wink", roomTurn: () => null,
+    board, caller: () => ({ botId: BOTS[threadId]!, threadId }), known: () => true, projectOf, roomTurn: () => null,
     proven: (id, text) => loop.claim(id, text),
     fixFor: (sig, projectId) => {
       const post = loop.knownFix(sig, projectId);
@@ -76,10 +83,10 @@ function setup(options: { taken?: boolean; room?: boolean; enabled?: boolean } =
     await pending;
     return JSON.parse(reply) as { id: string; text: string };
   };
-  const prove = async (threadId: string, [command, output]: readonly [string, string, ...string[]], title: string, fix: string) => {
-    loop.event(bash(threadId, command, output));
+  const prove = async (threadId: string, [command, output]: readonly [string, string, ...string[]], title: string, fix: string, place = HERE) => {
+    loop.event(bash(threadId, command, output, true, place));
     loop.event(edit(threadId));
-    loop.event(bash(threadId, command, "ok", false));
+    loop.event(bash(threadId, command, "ok", false, place));
     const posted = await post(threadId, { kind: "fix", title, body: fix });
     loop.event(done(threadId));
     return posted;
@@ -100,27 +107,30 @@ describe("forum loop error signatures", () => {
     const sigs = Object.values(CLAUDE).map(([command, output]) => toolRun(command, output, true).sig);
     expect(sigs.every(Boolean)).toBe(true);
     expect(new Set(sigs).size).toBe(6);
-    expect(runSig("KeyError: 'email'", "", "loader.py:12")).not.toBe(runSig("KeyError: 'name'", "", "loader.py:12"));
-    expect(runSig("src/app.ts(3,1): error TS2307: Cannot find name 'foo'.")).not.toBe(runSig(CLAUDE.ts2304[2]));
+    expect(runSig("KeyError: 'email'", { place: HERE, command: "", frame: "loader.py:12" })).not.toBe(runSig("KeyError: 'name'", { place: HERE, command: "", frame: "loader.py:12" }));
+    expect(runSig("src/app.ts(3,1): error TS2307: Cannot find name 'foo'.", { place: HERE, command: "" })).not.toBe(runSig(CLAUDE.ts2304[2], { place: HERE, command: "" }));
   });
 
-  it("sign Codex output by its error and failing test, whatever the path", () => {
+  it("sign Codex output by its error, its failing test and where it ran", () => {
     const sig = (key: keyof typeof CODEX) => toolRun(CODEX[key][0], CODEX[key][1], true).sig;
     // fail closed: one message raised in another file is another failure
     expect(sig("tsShort")).not.toBe(sig("tsLong"));
     expect(sig("vitestA")).not.toBe(sig("vitestB"));
     expect(sig("connRefused")).not.toBe(toolRun(...CLAUDE.keyError.slice(0, 2) as [string, string], true).sig);
-    expect(sig("vitestAElsewhere")).toBe(sig("vitestA"));
+    expect(sig("vitestAElsewhere")).not.toBe(sig("vitestA"));
+    expect(toolRun(CODEX.vitestA[0], CODEX.vitestA[1].replace("D:/proj", "E:/wt"), true, THERE).sig).toBe(sig("vitestA"));
     expect(sig("lifecycle")).toBeUndefined();
   });
 
-  it("sign two tests failing on one assertion line apart, and the same test in another checkout alike", () => {
-    const sig = (command: string, output: string) => toolRun(command, output, true).sig;
+  it("sign two tests failing on one assertion line apart, one test file name in two folders apart, and the same test in another checkout alike", () => {
+    const sig = (command: string, output: string, place = HERE) => toolRun(command, output, true, place).sig;
     expect(errorLine(CART[1])).toBe(errorLine(AUTH[1]));
     expect(sig(...CART)).not.toBe(sig(...AUTH));
-    expect(sig("pnpm vitest run", vitest("packages/web/src/cart.test.ts", "cart > applies a coupon"))).toBe(sig(...CART));
+    expect(sig("pnpm vitest run", vitest("packages/web/src/cart.test.ts", "cart > applies a coupon"))).not.toBe(sig("pnpm vitest run", vitest("src/cart.test.ts", "cart > applies a coupon")));
+    expect(sig(...CART, THERE)).toBe(sig(...CART));
     expect(sig("pytest", pytest("tests/test_auth.py", "test_expired_token"))).not.toBe(sig("pytest", pytest("tests/test_billing.py", "test_charge_card")));
-    expect(sig("pytest", pytest("api/tests/test_auth.py", "test_expired_token"))).toBe(sig("pytest", pytest("tests/test_auth.py", "test_expired_token")));
+    expect(sig("pytest", pytest("api/tests/test_auth.py", "test_expired_token"))).not.toBe(sig("pytest", pytest("tests/test_auth.py", "test_expired_token")));
+    expect(sig("pytest", pytest("tests/test_auth.py", "test_expired_token"), THERE)).toBe(sig("pytest", pytest("tests/test_auth.py", "test_expired_token")));
     expect(sig("cargo test", cargo("adds"))).not.toBe(sig("cargo test", cargo("parses")));
   });
 
@@ -387,7 +397,7 @@ describe("one assertion line, two tests", () => {
   it("a real repeat of the same failing test still gets the fix", async () => {
     const w = setup();
     const cart = await w.prove("ta", CART, "expected false to be true in cart coupon test", "Uppercase the coupon code before the lookup.");
-    w.loop.event(bash("tb", "pnpm vitest run", vitest("web/src/cart.test.ts", "cart > applies a coupon")));
+    w.loop.event(bash("tb", ...CART, true, THERE));
     w.loop.event(shell("tb"));
     await vi.waitFor(() => expect(w.handed()).toHaveLength(1));
     expect(w.handed()[0]![1]).toContain(cart.id);
@@ -440,12 +450,14 @@ describe("errors that differ only by a test name or a path", () => {
     expect(toolRun("pnpm vitest run", "Exit code 1\nAssertionError: expected false to be true\n\n Test Files  1 failed (1)", true).sig).toBeUndefined();
   });
 
-  it("the same error still signs alike: same file in another folder, same test in another checkout", () => {
-    const sig = (command: string, output: string) => toolRun(command, output, true).sig;
-    expect(sig("node a.mjs", nodeErr("Error: ENOENT: no such file or directory, open 'C:\\work\\config\\settings.json'"))).toBe(sig("node b.mjs", nodeErr("Error: ENOENT: no such file or directory, open '/home/u/proj/config/settings.json'")));
-    expect(sig("python a.py", pyErr("data/a.csv"))).toBe(sig("python b.py", pyErr("D:\\other\\data\\a.csv")));
-    expect(sig("npx playwright test", pwProject("save.spec.ts", "saves the form", "x"))).toBe(sig("npx playwright test", pwProject("e2e/save.spec.ts", "saves the form", "y")));
-    expect(sig("pnpm vitest run", vitest("|unit| src/cart.test.ts", "applies a coupon"))).toBe(sig("pnpm vitest run", vitest("|unit| web/src/cart.test.ts", "applies a coupon")));
+  it("the same error in another checkout signs alike; the same file name in another folder signs apart", () => {
+    const sig = (command: string, output: string, place = HERE) => toolRun(command, output, true, place).sig;
+    expect(sig("node a.mjs", nodeErr("Error: ENOENT: no such file or directory, open 'C:\\work\\config\\settings.json'"), { root: "C:\\work", cwd: "C:\\work" })).toBe(sig("node a.mjs", nodeErr("Error: ENOENT: no such file or directory, open '/home/u/proj/config/settings.json'"), { root: "/home/u/proj", cwd: "/home/u/proj" }));
+    expect(sig("python a.py", pyErr("data/a.csv"))).toBe(sig("python a.py", pyErr("D:\\other\\data\\a.csv"), { root: "D:\\other", cwd: "D:\\other" }));
+    expect(sig("npx playwright test", pwProject("e2e/save.spec.ts", "saves the form", "x"))).toBe(sig("npx playwright test", pwProject("e2e/save.spec.ts", "saves the form", "y"), THERE));
+    expect(sig("npx playwright test", pwProject("save.spec.ts", "saves the form", "x"))).not.toBe(sig("npx playwright test", pwProject("e2e/save.spec.ts", "saves the form", "x")));
+    expect(sig("pnpm vitest run", vitest("|unit| src/cart.test.ts", "applies a coupon"))).toBe(sig("pnpm vitest run", vitest("|unit| src/cart.test.ts", "applies a coupon"), THERE));
+    expect(sig("pnpm vitest run", vitest("|unit| src/cart.test.ts", "applies a coupon"))).not.toBe(sig("pnpm vitest run", vitest("|unit| web/src/cart.test.ts", "applies a coupon")));
   });
 
   it.each(COLLIDED.filter(([, a, b]) => toolRun(...a, true).sig && toolRun(...b, true).sig))("%s: bot B never gets A's fix, and each proven fix gets its own post", async (_name, a, b) => {
@@ -535,8 +547,6 @@ describe("forum loop off", () => {
     expect(second.id).not.toBe(first.id);
     expect(w.board.get(first.id)?.error_sig).not.toBe(toolRun(CLAUDE.keyError[0], CLAUDE.keyError[1], true).sig);
     expect(w.rows.every((row) => row.shadow)).toBe(true);
-    expect(forumPostRule(false)).toBe("After something took 2+ tries, board_post kind fix: the error and the line that fixed it. ");
-    expect(forumPostRule(true)).toBe("");
   });
 });
 
@@ -546,8 +556,8 @@ type ReviewedFailure = { round: string; label: string; group: string; command: s
 // SAFETY: forum-loop-failures.json is the checked-in fixture written with exactly this layout.
 const REVIEWED = JSON.parse(readFileSync(join(import.meta.dirname, "testing", "forum-loop-failures.json"), "utf8")) as { cases: ReviewedFailure[]; pairs: Array<[string, string, string]> };
 const failure = (label: string) => REVIEWED.cases.find((entry) => entry.label === label)!;
-const sigOf = (entry: { command: string; output: string }) => toolRun(entry.command, entry.output, true).sig;
-const sigOfRun = ([command, output]: [string, string]) => toolRun(command, output, true).sig;
+const sigOf = (entry: { command: string; output: string }, place = HERE) => toolRun(entry.command, entry.output, true, place).sig;
+const sigOfRun = ([command, output]: [string, string], place = HERE) => toolRun(command, output, true, place).sig;
 // a small seeded generator, so a failure names the case that broke the rule
 const pick = (seed: number) => <T>(items: readonly T[]) => items[(seed = (seed * 1103515245 + 12345) % 2147483648) % items.length]!;
 const FILES = ["cart", "auth", "orders", "billing", "profile", "search", "token", "invoice"];
@@ -615,7 +625,7 @@ describe("fail closed: a fix is handed only when the signature says which failur
     expect(sigA === undefined || sigA !== sigOf(b)).toBe(true);
   });
 
-  it("known runners: two tests on one assertion line sign apart, one test in another checkout alike", () => {
+  it("known runners: two tests on one assertion line sign apart, one test in another checkout alike, in another folder apart", () => {
     const signedBy = new Set<string>();
     for (let seed = 1; seed <= 200; seed++) {
       const any = pick(seed);
@@ -626,11 +636,13 @@ describe("fail closed: a fix is handed only when the signature says which failur
       const [testA, testB] = [any(TESTS), any(TESTS)];
       const assertion = any(ASSERTIONS);
       const sigA = sigOfRun(runner("src", fileA, testA, assertion));
-      const sigB = sigOfRun(runner("packages/web/lib", fileB, testB, assertion));
+      const sigB = sigOfRun(runner("src", fileB, testB, assertion), THERE);
+      const elsewhere = sigOfRun(runner("packages/web/src", fileA, testA, assertion));
       const label = `seed ${seed} ${known}: ${fileA}/${testA} vs ${fileB}/${testB}`;
       if (sigA) signedBy.add(known);
       if (fileA === fileB && testA === testB) expect.soft(sigA, label).toBe(sigB);
       else expect.soft(sigA === undefined || sigA !== sigB, label).toBe(true);
+      expect.soft(sigA === undefined || sigA !== elsewhere, `${label} in packages/web`).toBe(true);
     }
     expect(signedBy).toEqual(new Set(Object.keys(KNOWN)));
   });
@@ -650,19 +662,102 @@ describe("fail closed: a fix is handed only when the signature says which failur
     const missing = (path: string) => ({ command: "node index.mjs", output: `Exit code 1\nError: ENOENT: no such file or directory, open '${path}'` });
     expect(sigOf(missing("config/settings.json"))).toBeTruthy();
     expect(sigOf(missing("config/settings.json"))).not.toBe(sigOf(missing("config/users.csv")));
-    expect(sigOf(missing("C:\\wt\\a\\config\\settings.json"))).toBe(sigOf(missing("/home/u/wt-b/config/settings.json")));
+    expect(sigOf(missing("C:\\wt\\a\\config\\settings.json"), { root: "C:\\wt\\a", cwd: "C:\\wt\\a" })).toBe(sigOf(missing("/home/u/wt-b/config/settings.json"), { root: "/home/u/wt-b", cwd: "/home/u/wt-b" }));
+    expect(sigOf(missing("apps/web/.env"))).not.toBe(sigOf(missing("apps/api/.env")));
   });
 
   it("a real repeat still signs alike: pytest from another checkout, cargo with another thread id and path, a KeyError", () => {
     const pytestAuth = failure("pytest auth (real)");
-    const otherCheckout = pytestAuth.output.split("tests\\test_auth.py").join("services\\api\\tests\\test_auth.py").split("tests/test_auth.py").join("services/api/tests/test_auth.py");
+    const otherCheckout = pytestAuth.output.replace("C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners", "E:\\wt");
     expect(otherCheckout).not.toBe(pytestAuth.output);
-    expect(sigOf({ ...pytestAuth, output: otherCheckout })).toBe(sigOf(pytestAuth));
+    expect(sigOf({ ...pytestAuth, output: otherCheckout }, THERE)).toBe(sigOf(pytestAuth));
     const coupon = failure("cargo test coupon (real)");
     const otherPath = coupon.output.replace(/\(\d+\) panicked at src\\lib\.rs/, "(2231) panicked at src/lib.rs");
     expect(otherPath).not.toBe(coupon.output);
     expect(sigOf({ ...coupon, output: otherPath })).toBe(sigOf(coupon));
     expect(sigOf(failure("claude: KeyError"))).toBe(sigOf(failure("codex: KeyError")));
     expect(sigOf(failure("claude: KeyError"))).toBeTruthy();
+  });
+});
+
+// Gate E: two failures in two folders of one repo signed alike when a signature kept a path's last part or a standard library frame.
+type PlacedFailure = { label: string; root: string; cwd: string; command: string; output: string; again?: { root: string; output: string } };
+// SAFETY: forum-loop-places.json is the checked-in fixture written with exactly this layout.
+const PLACES = JSON.parse(readFileSync(join(import.meta.dirname, "testing", "forum-loop-places.json"), "utf8")) as { cases: PlacedFailure[]; pairs: Array<[string, string, string]> };
+const placed = (label: string) => PLACES.cases.find((entry) => entry.label === label)!;
+const placeOf = (root: string, cwd: string): ShellPlace => ({ root, cwd: join(root, cwd) });
+
+describe("a signature names where the failure happened", () => {
+  it.each(PLACES.pairs)("gate E %s: bot B is never handed bot A's fix", async (_name, labelA, labelB) => {
+    const [a, b] = [placed(labelA), placed(labelB)];
+    const [atA, atB] = [placeOf(a.root, a.cwd), placeOf(b.root, b.cwd)];
+    const w = setup();
+    await w.prove("ta", [a.command, a.output], toolRun(a.command, a.output, true, atA).error ?? "the error", "Fix for A.", atA);
+    w.loop.event(bash("tb", b.command, b.output, true, atB));
+    w.loop.event(shell("tb"));
+    w.loop.event(done("tb"));
+    expect(w.handed()).toEqual([]);
+    expect(w.loop.next("tb")).not.toContain("<forum-note>");
+    const [sigA, sigB] = [toolRun(a.command, a.output, true, atA).sig, toolRun(b.command, b.output, true, atB).sig];
+    expect(sigA === undefined || sigA !== sigB).toBe(true);
+  });
+
+  it("the same failure from a second checkout of the repo still gets the fix", async () => {
+    const delivered: string[] = [];
+    for (const a of PLACES.cases.filter((entry) => entry.again)) {
+      const atA = placeOf(a.root, a.cwd);
+      const run = toolRun(a.command, a.output, true, atA);
+      if (!run.sig) continue;
+      const w = setup();
+      const posted = await w.prove("ta", [a.command, a.output], run.error!, "Fix for A.", atA);
+      w.loop.event(bash("tb", a.command, a.again!.output, true, placeOf(a.again!.root, a.cwd)));
+      w.loop.event(shell("tb"));
+      await vi.waitFor(() => expect(w.handed(), a.label).toHaveLength(1));
+      expect(w.handed()[0]![1]).toContain(posted.id);
+      delivered.push(a.label);
+    }
+    expect(delivered.length).toBeGreaterThanOrEqual(12);
+  });
+
+  it("a frame in the standard library or a vendor folder never signs; with no frame of the repo's own the failure is silent", () => {
+    const root = "C:/work/shop";
+    const at = { root, cwd: root };
+    const traceback = (...frames: string[]) => `Exit code 1\nTraceback (most recent call last):\n${frames.map((path) => `  File "${path}", line 9, in run`).join("\n")}\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)`;
+    expect(toolRun("python run.py", traceback("C:\\Python312\\Lib\\json\\decoder.py"), true, at).sig).toBeUndefined();
+    expect(toolRun("python run.py", traceback("C:\\work\\shop\\.venv\\Lib\\site-packages\\requests\\models.py"), true, at).sig).toBeUndefined();
+    expect(toolRun("python run.py", traceback("<frozen runpy>"), true, at).sig).toBeUndefined();
+    const own = toolRun("python run.py", traceback("C:\\work\\shop\\run.py", "C:\\Python312\\Lib\\json\\decoder.py"), true, at).sig;
+    expect(own).toBeTruthy();
+    expect(toolRun("python run.py", traceback("C:\\work\\shop\\sync.py", "C:\\Python312\\Lib\\json\\decoder.py"), true, at).sig).not.toBe(own);
+    expect(toolRun("node run.mjs", "Exit code 1\nC:\\work\\shop\\node_modules\\pg\\lib\\client.js:9\nError: connect ECONNREFUSED 127.0.0.1:5432", true, at).sig).toBeUndefined();
+    expect(runAt("pnpm vitest run", vitest("src/cart.test.ts", "cart > applies a coupon"), true, undefined).sig).toBeUndefined();
+  });
+
+  it("never hands a fix proven in another project", async () => {
+    const w = setup({ project: (threadId) => (threadId === "tb" ? "other" : "wink") });
+    await w.prove("ta", CART, "expected false to be true in cart coupon test", "Uppercase the coupon code.");
+    w.loop.event(bash("tb", ...CART));
+    w.loop.event(shell("tb"));
+    w.loop.event(done("tb"));
+    expect(w.handed()).toEqual([]);
+    expect(w.loop.next("tb")).toBe("");
+  });
+
+  it("follows the shell's folder through cd steps, and gives up when a step's folder is unknown", () => {
+    const root = temps.make(join(tmpdir(), "orbit-forum-place-"));
+    for (const dir of ["apps/web", "apps/admin"]) mkdirSync(join(root, dir), { recursive: true });
+    const web = join(root, "apps", "web");
+    expect(shellFolders("pnpm vitest run", root)).toEqual({ runs: root, after: root });
+    expect(shellFolders("cd apps/web && pnpm vitest run", root)).toEqual({ runs: web, after: web });
+    expect(shellFolders('cd "apps/web"; pnpm test', root).runs).toBe(web);
+    expect(shellFolders("cd ../admin && pnpm test", web).runs).toBe(join(root, "apps", "admin"));
+    expect(shellFolders("cd", web).after).not.toBe(web);
+    expect(shellFolders("cd missing && pnpm test", root)).toEqual({ runs: root, after: root });
+    expect(shellFolders("pnpm build && cd apps/web && pnpm test", root).runs).toBeUndefined();
+    expect(shellFolders("cd $APP && pnpm test", root).runs).toBeUndefined();
+    expect(shellFolders("(cd apps/web && pnpm test)", root).runs).toBeUndefined();
+    expect(shellFolders("bash -lc 'cd apps/web && pnpm test'", root).runs).toBeUndefined();
+    expect(shellFolders('git commit -m "fix: x"', root).runs).toBe(root);
+    expect(shellFolders("pnpm test", undefined).runs).toBeUndefined();
   });
 });

@@ -361,7 +361,7 @@ describe("summary grace dispatch", () => {
       onSummaryWait: () => {}, logSummaryWait: () => {}, latencySendId: "send", isSendCancelled: () => false,
       systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
       pendingInterruptThreads: { started: () => {} }, model: "gpt-6.2-sol", effort: undefined,
-      leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
+      leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false, forumOffer: undefined, forumLoop: { next: () => "" },
     };
     await runDispatch(scope);
     expect(summaryBuild.settle).toHaveBeenCalledOnce();

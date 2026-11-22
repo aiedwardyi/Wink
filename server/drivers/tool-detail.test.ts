@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ import type { ProviderInstance } from "../contracts.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { redactToolMessage } from "../tool-detail.ts";
-import { runSig } from "../tool-run.ts";
+import { runSig, shellPlace } from "../tool-run.ts";
 import { GrokAgentDriver } from "./acp/grok.ts";
 import { MuseAgentDriver } from "./acp/muse.ts";
 import { ClaudeDriver } from "./claude.ts";
@@ -232,7 +232,7 @@ describe.each(engines)("$name tool detail", ({ name, driver, cli, fixtureEnv }) 
     ]);
     await create();
     const [fail, pass] = await run();
-    expect(fail).toMatchObject({ ok: false, run: { shown: "python -m pytest tests/test_loader.py", error: "KeyError: 'name'", sig: runSig("KeyError: 'name'", "", "loader.py:12") } });
+    expect(fail).toMatchObject({ ok: false, run: { shown: "python -m pytest tests/test_loader.py", error: "KeyError: 'name'", sig: runSig("KeyError: 'name'", { place: shellPlace("python -m pytest tests/test_loader.py", scratch)!, command: "python -m pytest tests/test_loader.py", frame: "loader.py:12" }) } });
     expect(pass).toMatchObject({ ok: true, run: { cmd: (fail as { run: { cmd: string } }).run.cmd } });
     expect(pass).not.toHaveProperty("run.sig");
     expect(recorder.events.some((event) => "detail" in event)).toBe(false);
@@ -447,7 +447,7 @@ describe("Claude tool run", () => {
       const tools = recorder.events.filter((event) => event.type === "item.completed" && event.itemType === "tool");
       const line = "src/app.ts(3,1): error TS2304: Cannot find name 'foo'.";
       expect(tools).toMatchObject([
-        { ok: false, run: { shown: command, error: line, sig: runSig(line) } },
+        { ok: false, run: { shown: command, error: line, sig: runSig(line, { place: shellPlace(command, homedir())!, command }) } },
         { ok: true, writes: [join(scratch, "app.ts")] },
         { ok: true, run: { cmd: (tools[0] as { run: { cmd: string } }).run.cmd } },
       ]);
