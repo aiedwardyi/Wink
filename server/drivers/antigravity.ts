@@ -65,6 +65,11 @@ const AGY_ACCOUNT_ERROR =
 const AGY_NOT_ACCOUNT_ERROR = /\brate[\s-]?limit\b|(?<![\w-])429(?![\w-])|\berror-code-(?:429|5\d\d)\b|\btoo many requests\b|resource[ _]exhausted|quota exceeded|exceeded[^.\n]{0,40}\bquota\b|(?<![\w-])5\d\d(?![\w-])|\b5xx\b/i;
 const AGY_TIMEOUT_ERROR = /\b(?:watchdog timeout|timed out|time-out|timeout)\b/i;
 const AGY_TEXT_MODEL = "gemini-3.8-flash-low";
+// agy keeps one conversation store for every account and backend (a Vertex
+// project, a consumer sign-in), but the API only takes back the thought
+// signatures it minted itself. After a sign-in change, every model refuses
+// the older conversation's history with a 400 and never will take it.
+const AGY_SIGNATURES_REFUSED = /\bthought[_ ]signature\b/i;
 const AGY_MODEL_DENIED = /\bpermission\b[^\n]{0,80}\bdenied\b[^\n]{0,200}\bmodels\/|\bmodels\/[^\n]{0,200}\b(?:permission[_ ]denied|not[_ ]found|(?:may|does) not exist)\b/i;
 
 /** Account or permission failure. Rate limits, 5xx, and timeout-only lines are not. */
@@ -652,6 +657,35 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // Assigned once the child exists. A child can emit `result` and then
       // hang, so settling must still arrange for process and MCP cleanup.
       let armPostSettleCleanup = () => {};
+      // A conversation agy cannot continue: the same logical turn starts a new
+      // one seeded with the harness's transcript fallback.
+      const relaunchFresh = (abandoned: string | null) => {
+        settled = true;
+        clearTimeout(watchdog);
+        if (abandoned) systemHeld.forget(abandoned);
+        armPostSettleCleanup();
+        active.delete(threadId);
+        emit({ ...base(threadId, turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
+        void sendTurn({
+          ...turn,
+          text: turn.resumeFallback!.text,
+          resumeCursor: undefined,
+          resumeFallback: undefined,
+        }, turnId).catch((error) => {
+          emit({
+            ...base(threadId, turnId),
+            type: "runtime.error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          emit({
+            ...base(threadId, turnId),
+            type: "turn.completed",
+            ok: false,
+            stopReason: "resume_fallback_failed",
+            cost: null,
+          });
+        });
+      };
       const endAttempt = () => {
         if (settled) return false;
         settled = true;
@@ -877,6 +911,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       };
 
       let cancelledTool = false;
+      let toolRan = false;
       let lastStepType: string | undefined;
       let lastStepState: string | undefined;
       // every text_delta so far, and the shown text already streamed from it
@@ -956,6 +991,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             lastStepState = payload.state;
             if (payload.step_type === "checkpoint") checkpointed = true;
             if (payload.step_type === "tool") {
+              toolRan = true;
               cancelledTool ||= isCancelledTool(payload);
               const itemId = `${conversationId ?? o.conversation_id ?? "conv"}:${payload.step_index}`;
               if (payload.state === "ACTIVE") {
@@ -988,6 +1024,13 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               agyResultError && !cancelledTool && !interrupted && !isAgyAccountError(agyError)
                 ? busyResumeReason(agyError)
                 : null;
+            if (
+              agyResultError && !realResponse && !toolRan && !interrupted &&
+              resumeCursor && turn.resumeFallback && AGY_SIGNATURES_REFUSED.test(agyError)
+            ) {
+              relaunchFresh(conversationId ?? resumeCursor);
+              break;
+            }
             const recoveredTransient = agyResultError && realResponse && lastStepType === "agent_response" && lastStepState === "DONE"
               && (busyReason !== null || AGY_NOT_ACCOUNT_ERROR.test(agyError) || (AGY_TIMEOUT_ERROR.test(agyError) && !AGY_ACCOUNT_ERROR.test(agyError)));
             if (realResponse && !shownResponses.has(response)) {
@@ -1082,29 +1125,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             isResumeCursorRejected(stderr),
           );
           if (resumeRejected) {
-            settled = true;
-            clearTimeout(watchdog);
-            active.delete(threadId);
-            emit({ ...base(threadId, turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
-            void sendTurn({
-              ...turn,
-              text: turn.resumeFallback!.text,
-              resumeCursor: undefined,
-              resumeFallback: undefined,
-            }, turnId).catch((error) => {
-              emit({
-                ...base(threadId, turnId),
-                type: "runtime.error",
-                message: error instanceof Error ? error.message : String(error),
-              });
-              emit({
-                ...base(threadId, turnId),
-                type: "turn.completed",
-                ok: false,
-                stopReason: "resume_fallback_failed",
-                cost: null,
-              });
-            });
+            relaunchFresh(resumeCursor);
             return;
           }
           emit({

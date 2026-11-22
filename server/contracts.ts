@@ -208,6 +208,8 @@ export interface SendTurnInput {
   resumeCursor?: unknown;
   /** Portable prompt used only when a remembered provider session cannot load. */
   resumeFallback?: { text: string };
+  /** Prefix also carried in text for Codex app-servers without native injection. */
+  nativeReplayPrefix?: string;
   /** A team room ask: its native session ends with the turn. */
   hosted?: true;
   /** Prior turns for transcript-replay providers (API-backed drivers). */

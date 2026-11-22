@@ -76,7 +76,7 @@ function summarizedChat() {
       currentTurnEpoch: () => 0, epoch: 1,
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
       opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null }) }, modelContextWindow: 200_000,
-      taskRecord: undefined, durableTaskRecordText: RECORD, commsDepth: 0,
+      taskRecord: undefined, durableTaskRecordText: RECORD, commsDepth: 0, codexHistory: false,
     });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "ok" });
     return turn;

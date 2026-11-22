@@ -538,6 +538,92 @@ describe("Antigravity turns (fake CLI)", () => {
     }
   });
 
+  // 11-22: the Python chat's conversation was built on 3.8 Flash and Hydrogen
+  // under one Gemini sign-in (Vertex); after signing in with another account,
+  // switching to Neon (then Hydrogen) got "Corrupted thought signature."
+  it.each(["gemini-4-neon-low", "gemini-4-carbon-high", "gemini-4-argon-medium", "gemini-4-hydrogen-low"])(
+    "a chat switched to %s after a Gemini sign-in change answers from its transcript, and switches back",
+    async (model) => {
+      const scratch = mkdtempSync(join(tmpdir(), "omb-agy-signature-"));
+      const dump = join(scratch, "dump.json");
+      const accountFile = join(scratch, "account");
+      writeFileSync(accountFile, "vertex-project");
+      process.env.FAKE_AGY_CONVERSATIONS_DIR = join(scratch, "conversations");
+      process.env.FAKE_AGY_ACCOUNT_FILE = accountFile;
+      process.env.FAKE_AGY_DUMP = dump;
+      const threadId = `t-signature-${model}`;
+      const turn = async (input: Omit<Parameters<typeof instance.adapter.sendTurn>[0], "threadId">) => {
+        const from = recorder.events.length;
+        const { turnId } = await instance.adapter.sendTurn({ threadId, ...input });
+        await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId && recorder.events.indexOf(event) >= from);
+        const events = recorder.events.slice(from);
+        const sessions = events.filter((event) => event.type === "session.started") as Array<{ sessionId: string | null }>;
+        return { events, cursor: sessions.at(-1)?.sessionId ?? undefined, argv: JSON.parse(readFileSync(dump, "utf8")).argv as string[], prompt: JSON.parse(readFileSync(dump, "utf8")).prompt as string };
+      };
+      try {
+        await create();
+        const earlier = await turn({ text: "my favorite loop is enumerate", model: "gemini-3.8-flash-low" });
+        expect(earlier.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+
+        writeFileSync(accountFile, "consumer-account");
+        const fallback = "Earlier in this chat:\nUser: my favorite loop is enumerate\n\nhi neon";
+        const switched = await turn({ text: "hi neon", model, resumeCursor: earlier.cursor, resumeFallback: { text: fallback } });
+        expect(switched.events.filter((event) => event.type === "runtime.error")).toEqual([]);
+        expect(switched.events.some((event) => event.type === "turn.retrying" && event.reason === "resume_cursor")).toBe(true);
+        expect(switched.events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
+        expect(switched.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        expect(switched.events.find((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toMatchObject({ text: "done from fake agy" });
+        // a new conversation under the current sign-in, holding the earlier talk
+        expect(switched.cursor).not.toBe(earlier.cursor);
+        expect(switched.argv).not.toContain("--conversation");
+        expect(switched.argv[switched.argv.indexOf("--model") + 1]).toBe(model);
+        expect(switched.prompt).toBe(fallback);
+
+        const back = await turn({ text: "back on flash", model: "gemini-3.8-flash-low", resumeCursor: switched.cursor, resumeFallback: { text: "unused" } });
+        expect(back.events.some((event) => event.type === "turn.retrying")).toBe(false);
+        expect(back.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        expect(back.argv[back.argv.indexOf("--conversation") + 1]).toBe(switched.cursor);
+        expect(back.prompt).toBe("back on flash");
+      } finally {
+        delete process.env.FAKE_AGY_CONVERSATIONS_DIR;
+        delete process.env.FAKE_AGY_ACCOUNT_FILE;
+        delete process.env.FAKE_AGY_DUMP;
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("switching Gemini models inside one sign-in keeps the same conversation", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-agy-same-account-"));
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_AGY_CONVERSATIONS_DIR = join(scratch, "conversations");
+    process.env.FAKE_AGY_DUMP = dump;
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-same-account", text: "one", model: "gemini-4-hydrogen-low" });
+      const first = await recorder.until((event) => event.type === "session.started") as { sessionId: string };
+      await recorder.until((event) => event.type === "turn.completed");
+      const from = recorder.events.length;
+      const { turnId } = await instance.adapter.sendTurn({
+        threadId: "t-same-account",
+        text: "two",
+        model: "gemini-4-neon-low",
+        resumeCursor: first.sessionId,
+        resumeFallback: { text: "unused" },
+      });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId && recorder.events.indexOf(event) >= from);
+      const events = recorder.events.slice(from);
+      expect(events.some((event) => event.type === "turn.retrying")).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      const argv = JSON.parse(readFileSync(dump, "utf8")).argv as string[];
+      expect(argv[argv.indexOf("--conversation") + 1]).toBe(first.sessionId);
+    } finally {
+      delete process.env.FAKE_AGY_CONVERSATIONS_DIR;
+      delete process.env.FAKE_AGY_DUMP;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it("turns off agy's self-updater on Windows so it cannot open a console", async () => {
     const scratch = mkdtempSync(join(tmpdir(), "omb-agy-updater-"));
     const dump = join(scratch, "dump.json");

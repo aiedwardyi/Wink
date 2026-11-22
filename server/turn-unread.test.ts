@@ -67,6 +67,7 @@ function rig(target: "bot" | "group") {
     runtimeErrorTool, accounts: new Map(), refreshCodexPromo: () => {}, usageBoard: { touch() {} },
     reportServerFailure: () => {}, terminalBridgeAccess: null, INCOMPLETE_LOG_MESSAGE: "internal log failure",
     ...turnReply, store, bot: { id: "bot-1" }, group: { id: "group-1" },
+    askTexts: { started() {}, text() {} },
     routineReportGroup: undefined, turnSummary: turnReply.turnSummaries(), limitWaits: { bind: () => {} },
     turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(), turnOwnerId: "bot-1",
     memoryPass, memorySleep: { onTurn() {} }, ownNoteEngine: () => true,
