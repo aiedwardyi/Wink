@@ -91,10 +91,12 @@ export function createForumLoop(deps: ForumLoopDeps) {
     if (!steer) return later(threadId, text);
     deps.steer(threadId, text).then((taken) => taken || later(threadId, text), () => later(threadId, text));
   };
-  /** A proven fix another bot posted for this signature in this project; never another project's. Only a proven post carries a loop signature. */
-  const knownFix = (sig: string, project: string, botId?: string): BoardPost | undefined => deps.board.list().find((post) => post.error_sig === sig
+  /** The proven fixes posted for this signature in this project; never another project's. Only a proven post carries a loop signature. */
+  const fixesFor = (sig: string, project: string): BoardPost[] => deps.board.list().filter((post) => post.error_sig === sig
     && (isProjectRunSig(sig) || post.project_id === project) && post.kind === "fix" && !post.parent_id && post.status === "solved" && post.fix
-    && !post.lesson && !fromRoom(post) && post.author_bot_id !== BOARD_USER && post.author_bot_id !== botId);
+    && !post.lesson && !fromRoom(post) && post.author_bot_id !== BOARD_USER);
+  /** A proven fix another bot posted for this signature in this project. */
+  const knownFix = (sig: string, project: string, botId?: string): BoardPost | undefined => fixesFor(sig, project).find((post) => post.author_bot_id !== botId);
 
   const failed = (threadId: string, botId: string, run: ToolRun, sig: string) => {
     const turn = turnOf(threadId);
@@ -106,8 +108,9 @@ export function createForumLoop(deps: ForumLoopDeps) {
       turn.offered.set(sig, offered);
       return void log({ kind: "again", botId, threadId, sig, postId: offered });
     }
-    const post = knownFix(sig, deps.projectOf(threadId), botId);
-    if (!post) return;
+    // two different proven fixes for one signature: it does not say which cause this is, and a wrong fix is worse than none
+    const [post, other] = fixesFor(sig, deps.projectOf(threadId));
+    if (!post || other || post.author_bot_id === botId) return;
     turn.offered.set(sig, post.id);
     bounded(given, key, post.id, MAX_GIVEN);
     log({ kind: "repeat", botId, threadId, sig, postId: post.id });

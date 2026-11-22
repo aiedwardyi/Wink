@@ -2,7 +2,7 @@
 // and when it failed, the line that names the error (not "Exit code 1" or a runner banner) and its signature.
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
@@ -21,12 +21,16 @@ const BOILERPLATE = [
   /^>\s/,
   /^(?:RUN|FAIL|PASS|SKIP|✓|×|❯)\s/,
   /^(?:test files|tests|test suites|duration|start at|ran \d+ tests?)\b/i,
-  /command failed with exit code|exited with (?:code|status)|process didn't exit successfully|could not compile|ELIFECYCLE|ERR_PNPM_RECURSIVE_|^error: aborting due to/i,
+  /command failed with exit code|exited with (?:code|status)|returned non-zero exit status|process didn't exit successfully|could not compile|ELIFECYCLE|ERR_PNPM_RECURSIVE_|^error: aborting due to/i,
   /^npm (?:error|ERR!) (?:code|errno|path|command|signal|syscall|a complete log|lifecycle)\b/i,
   /^found \d+ errors?\b|^\d+ (?:errors?|failed|failing)\b/i,
   /^make(?:\[\d+\])?: \*\*\*/,
 ];
 const STRONG = /^(?:[\w.$]*(?:Error|Exception)\b.*:|(?:error|fatal|panic)\b|npm (?:error|ERR!)|E {2,}\S)|\berror(?:\[\w+\]| [A-Z]+\d+)?:/i;
+// a header whose detail is on the next line: pydantic names the field under "1 validation error for Settings"
+const HEADER = /\b\d+ validation errors? for \S+$/i;
+// a timeout says that something did not happen in time, not why: two different failures print the same line
+const TIMEOUT = /\btimeout (?:of )?\d+ ?ms exceeded|\bexceeded timeout of \d+ ?ms|\btimed out (?:in|after) \d+ ?m?s\b/i;
 const WEAK = /\b(?:error|failed|failure|cannot|can't|could not|unable|not found|no such|denied|refused|hang up|timed? ?out|undefined|invalid|unexpected|missing)\b/i;
 // Fail closed: a failure is signed only when it says which failure it is, since a missed handoff costs nothing and a wrong one
 // teaches a bot the wrong fix. That is a failing test with its file, from a runner read below, or an error naming a path with a
@@ -61,18 +65,27 @@ const SHOWN_CHARS = 120;
 // folders of code the bot did not write: a frame there says where a library failed, not which call of the bot's
 const VENDOR = /(?:^|\/)(?:node_modules|site-packages|dist-packages)(?:\/|$)/;
 // a step that moves the shell, and a cd anywhere else in a step
-const CD_STEP = /^(?:cd|pushd|popd|set-location|sl|chdir)(?:\s+(?:\/d\s+|-(?:literal)?path\s+)?(.+?))?\s*$/i;
+const CD_STEP = /^(?:cd|pushd|popd|set-location|sl|chdir)(?:\s+(?:\/d\s+|-(?:literal)?path\s+|(?:-[lpe@]+\s+)*(?:--\s+)?)(.+?))?\s*$/i;
 const ANY_CD = /(?:^|[\s;&|(`"'])(?:cd|pushd|popd|set-location|chdir)(?:\s|$)/i;
 
 const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
-/** The line a person would quote: a Python traceback's last exception, else the first error-shaped line. */
+/**
+ * The line a person would quote: a Python traceback's last exception, else the first error-shaped line, with a header's detail.
+ * Not what jest printed under "● Console" for a passing test, and not a wrapper saying a child command failed.
+ */
 export function errorLine(output: string): string {
-  const lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !BOILERPLATE.some((rule) => rule.test(line)));
+  let logged = false;
+  const lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim())
+    .filter((line) => !(logged = line.startsWith("● ") ? line === "● Console" : logged))
+    .filter((line) => line && !BOILERPLATE.some((rule) => rule.test(line)));
   const traceback = /traceback \(most recent call last\)/i.test(output);
-  const strong = lines.filter((line) => STRONG.test(line));
-  return (traceback ? strong.at(-1) : strong[0]) ?? lines.find((line) => WEAK.test(line)) ?? "";
+  const strong = lines.flatMap((line, at) => (STRONG.test(line) ? [at] : []));
+  const at = (traceback ? strong.at(-1) : strong[0]) ?? lines.findIndex((line) => WEAK.test(line));
+  const line = lines[at] ?? "";
+  // a header with no detail under it says nothing about which failure this is
+  return HEADER.test(line) ? (lines[at + 1] ? `${line} ${lines[at + 1]}` : "") : line;
 }
 
 /** Where a shell call ran: the repo it ran in and the folder inside it. */
@@ -135,7 +148,7 @@ export function shellFolders(command: string, folder: string | undefined): Shell
       continue;
     }
     const raw = (cd[1] ?? "~").replace(/^(["'])(.*)\1$/, "$2");
-    const target = process.platform === "win32" ? raw.replace(/^\/([a-z])(?:\/|$)/i, (_, drive: string) => drive.toUpperCase() + ":/") : raw;
+    const target = process.platform === "win32" ? raw.replace(/^\/(?:mnt\/)?([a-z])(?:\/|$)/i, (_, drive: string) => drive.toUpperCase() + ":/") : raw;
     const next = /[$%`]|^-$/.test(target) || /^popd$/i.test(step) ? undefined
       : target === "~" || /^~[\\/]/.test(target) ? join(homedir(), target.slice(1))
       : isAbsolute(target) ? resolve(target) : at === undefined ? undefined : resolve(at, target);
@@ -195,7 +208,10 @@ export function failingTest(output: string, place?: ShellPlace): string {
     if (!first) continue;
     const named = (rule: RegExp) => (text: string) => rule.exec(text)?.[1];
     const file = name === undefined ? lines.slice(0, at).reverse().map(named(TEST_FILE[0])).find(Boolean) ?? lines.slice(at).map(named(TEST_FILE[1])).find(Boolean) : first;
-    return file ? `${place ? placed(place)(file).name : slashed(file)} > ${name ?? first}`.toLowerCase().replace(/\s+/g, " ") : "";
+    // the project or browser a runner names ("FAIL |unit| ...", "1) [webkit] › ..."): one test can fail apart in each
+    const [, project = "", browser = ""] = /^(?:FAIL\s+\|([^|]+)\||\d+\)\s+\[([^\]]+)\])/.exec(line) ?? [];
+    const scope = project.trim() || browser ? `[${project.trim() || browser}] ` : "";
+    return file ? `${scope}${place ? placed(place)(file).name : slashed(file)} > ${name ?? first}`.toLowerCase().replace(/\s+/g, " ") : "";
   }
   return "";
 }
@@ -225,12 +241,11 @@ const decoded = (text: string) => {
     return text;
   }
 };
-const words = (text: string) => text
-  .replace(/\b([a-z]{1,4})(\d{3,5})\b/g, (_match, code: string, digits: string) => code + [...digits].map((digit) => "abcdefghij"[Number(digit)]).join(""))
-  .replace(/\b[0-9a-f]{6,}\b/g, " ")
-  .replace(/\d+/g, " ")
-  .replace(/[^\p{L}\s]+/gu, " ")
-  .split(/\s+/).filter(Boolean);
+// Numbers that tell two runs of one failure apart, not two failures: a uuid, a date or clock time, a duration, a pid, a memory
+// address, a hex id or a long number id. Every other number stays: a port, a version, an error code, a count.
+const VOLATILE = /\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\b\d{4}-\d\d-\d\d(?:t[\d:.]+z?)?\b|\b\d{1,2}:\d\d:\d\d(?:[.,]\d+)?\b|\b\d+(?:\.\d+)?\s?(?:ms|s|secs?|seconds?|mins?|minutes?|h|hours?|µs|us|ns)\b|\bpid\W{0,2}\d+|\b0x[0-9a-f]{9,}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,}\b|\b\d{9,}\b/g;
+const words = (text: string) => text.replace(VOLATILE, " ").replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter(Boolean);
+const TEMP = slashed(tmpdir());
 
 /**
  * A failure's signature: where it happened (the folder the command ran in, and the command's words) and what failed there (the test,
@@ -255,7 +270,9 @@ export function runSig(line: string, where: { place: ShellPlace; command: string
     if (!/\p{L}/u.test(parts.at(-1) ?? "")) return " ";
     if (parts.length < 2) loose.push(parts.at(-1)!);
     else {
-      const full = url ? body : at(body).name;
+      const named = url ? body : at(body).name;
+      // a temp folder is named anew each run: only the file in it says which
+      const full = !url && (named.startsWith(`${TEMP}/`) || named.startsWith("/tmp/")) ? `<tmp>/${parts.at(-1)}` : named;
       paths.push(paren || colon ? `${full}:${paren || colon}` : full);
     }
     return " ";
@@ -292,7 +309,7 @@ export function toolRun(command: string, output: string | undefined, failed: boo
   const line = redactSecretsInText(errorLine(output ?? ""));
   const run: ToolRun = { cmd: digest(command), shown: cut(redactSecretsInText(command.replace(/\s+/g, " ").trim()), SHOWN_CHARS) };
   const test = place ? failingTest(output ?? "", place) : "";
-  const sig = place && line && (test || !testRun(output ?? "")) ? runSig(line, { place, command, test, frame: test ? "" : errorFrame(output ?? "", place) }) : "";
+  const sig = place && line && !TIMEOUT.test(line) && (test || !testRun(output ?? "")) ? runSig(line, { place, command, test, frame: test ? "" : errorFrame(output ?? "", place) }) : "";
   if (sig) {
     run.sig = sig;
     run.error = cut(line, LINE_CHARS);

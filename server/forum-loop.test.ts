@@ -824,3 +824,112 @@ describe("a signature names where the failure happened", () => {
     expect(shellFolders("pnpm test", undefined).runs).toBeUndefined();
   });
 });
+
+describe("what tells two failures apart, and what only tells two runs apart", () => {
+  const ORDERS = "pnpm exec vitest run tests/integration/orders.test.ts";
+  const orders = (port: number, at = "14:02:11", took = "1.12s") => `\n RUN  v3.2.4 D:/proj\n\n FAIL  tests/integration/orders.test.ts > orders api > creates an order\nError: connect ECONNREFUSED 127.0.0.1:${port}\n ❯ TCPConnectWrap.afterConnect [as oncomplete] node:net:1637:16\n\n Test Files  1 failed (1)\n   Start at  ${at}\n   Duration  ${took}\n`;
+  const missing = (module: string, root = "D:\\proj") => `Traceback (most recent call last):\n  File "${root}\\app\\db.py", line 1, in <module>\n    import ${module}\nModuleNotFoundError: No module named '${module}'`;
+  const sig = (command: string, output: string, place = HERE) => toolRun(command, output, true, place).sig;
+
+  it("keeps the digits and versions that name the failure: a port, a module's version", () => {
+    expect(sig(ORDERS, orders(5432))).toBeTruthy();
+    expect(sig(ORDERS, orders(5432))).not.toBe(sig(ORDERS, orders(6379)));
+    expect(sig("python -m app.main", missing("psycopg2"))).toBeTruthy();
+    expect(sig("python -m app.main", missing("psycopg2"))).not.toBe(sig("python -m app.main", missing("psycopg")));
+  });
+
+  it("drops what differs between two runs of one failure: clock times, durations, pids, ids, temp folders", () => {
+    expect(sig(ORDERS, orders(5432, "14:02:11", "1.12s"))).toBe(sig(ORDERS, orders(5432, "09:41:57", "3.40s")));
+    const worker = (stamp: string, pid: number, ms: number, id: string) => `Traceback (most recent call last):\n  File "D:\\proj\\app\\jobs.py", line 7, in run\nRuntimeError: ${stamp} worker pid ${pid} gave up after ${ms}ms on job ${id}`;
+    const first = sig("python -m app.jobs", worker("2026-11-22T14:02:11Z", 4123, 1532, "3f9a2c1e7b"));
+    expect(first).toBeTruthy();
+    expect(sig("python -m app.jobs", worker("2026-11-23T01:10:42Z", 9981, 1210, "a81c03d4e5"))).toBe(first);
+    const cache = (folder: string) => `Traceback (most recent call last):\n  File "D:\\proj\\app\\cache.py", line 4, in open\nFileNotFoundError: [Errno 2] No such file or directory: '${join(tmpdir(), folder, "cache.db")}'`;
+    expect(sig("python -m app.cache", cache("tmpab12cd"))).toBeTruthy();
+    expect(sig("python -m app.cache", cache("tmpab12cd"))).toBe(sig("python -m app.cache", cache("tmpzz98xq")));
+  });
+
+  it("reads the failure under a wrapper and the detail under a header", () => {
+    const release = (error: string) => `\n> shop@2.3.0 build\n> tsc -p tsconfig.build.json\n\n${error}\nTraceback (most recent call last):\n  File "D:\\proj\\scripts\\release.py", line 6, in run\n    subprocess.run(cmd, shell=True, check=True)\n  File "C:\\Python312\\Lib\\subprocess.py", line 573, in run\n    raise CalledProcessError(retcode, process.args,\nsubprocess.CalledProcessError: Command 'npm run build' returned non-zero exit status 2.`;
+    const total = release("src/cart/total.ts(14,7): error TS2322: Type 'string' is not assignable to type 'number'.");
+    expect(errorLine(total)).toMatch(/TS2322/);
+    expect(sig("python scripts/release.py", total)).toBeTruthy();
+    expect(sig("python scripts/release.py", total)).not.toBe(sig("python scripts/release.py", release("src/orders/export.ts(88,21): error TS2554: Expected 2 arguments, but got 1.")));
+    const settings = (field: string) => `Traceback (most recent call last):\n  File "D:\\proj\\app\\worker.py", line 13, in <module>\n    settings = Settings()\npydantic_core._pydantic_core.ValidationError: 1 validation error for Settings\n${field}\n  Field required [type=missing, input_value={}, input_type=dict]`;
+    expect(sig("python -m app.worker", settings("smtp_password"))).toBeTruthy();
+    expect(sig("python -m app.worker", settings("smtp_password"))).not.toBe(sig("python -m app.worker", settings("sms_api_key")));
+  });
+
+  it("signs no bare timeout, and keeps a test's browser or project", () => {
+    const playwright = (browser: string, error: string) => `Running 3 tests using 3 workers\n\n  1) [${browser}] › tests\\checkout.spec.ts:12:5 › checkout › pays with card ──────────\n\n    ${error}\n\n        at D:\\proj\\tests\\checkout.spec.ts:16:58\n\n  1 failed\n  2 passed (33.6s)`;
+    const PW = "npx playwright test tests/checkout.spec.ts";
+    expect(sig(PW, playwright("chromium", "TimeoutError: locator.click: Timeout 30000ms exceeded."))).toBeUndefined();
+    expect(sig("npx vitest run", " RUN  v4.1.10 D:/proj\n\n FAIL  src/a.test.ts > waits\nError: Test timed out in 5000ms.")).toBeUndefined();
+    const assertion = "Error: expect(received).toBe(expected) // Object.is equality";
+    expect(sig(PW, playwright("chromium", assertion))).toBeTruthy();
+    expect(sig(PW, playwright("chromium", assertion))).not.toBe(sig(PW, playwright("webkit", assertion)));
+    const vitestProject = (project: string) => ` RUN  v4.1.10 D:/proj\n\n FAIL  |${project}| src/a.test.ts > adds\nAssertionError: expected 1 to be 2`;
+    expect(sig("npx vitest run", vitestProject("unit"))).toBeTruthy();
+    expect(sig("npx vitest run", vitestProject("unit"))).not.toBe(sig("npx vitest run", vitestProject("browser")));
+  });
+
+  it("skips what a passing test logged before the failure", () => {
+    const jest = (failure: string) => ` FAIL  src/components/CartSummary.test.tsx\n  CartSummary\n    ✕ shows the order total (18 ms)\n\n  ● Console\n\n    console.error\n      Error: Network request failed\n          at fetchPromos (D:\\proj\\src\\api\\promos.ts:9:11)\n\n  ● CartSummary › shows the order total\n\n    ${failure}\n\n      at lineTotal (src/cart/total.ts:12:23)\n\nTest Suites: 1 failed, 1 total`;
+    const typeError = jest("TypeError: Cannot read properties of undefined (reading 'price')");
+    expect(errorLine(typeError)).toMatch(/^TypeError/);
+    const JEST = "npx jest src/components/CartSummary.test.tsx";
+    const a = sig(JEST, typeError);
+    expect(a).toBeTruthy();
+    expect(sig(JEST, jest("expect(element).toHaveTextContent()"))).not.toBe(a);
+  });
+
+  it("hands nothing when two different proven fixes share one signature", async () => {
+    const w = setup();
+    const proveOnly = (threadId: string) => {
+      w.loop.event(bash(threadId, CLAUDE.keyError[0], CLAUDE.keyError[1]));
+      w.loop.event(edit(threadId));
+      w.loop.event(bash(threadId, CLAUDE.keyError[0], "ok", false));
+    };
+    proveOnly("tb");
+    await w.prove("ta", CLAUDE.keyError, "KeyError 'name' in loader", "Add name to config/staging.toml.");
+    await w.post("tb", { kind: "fix", title: "KeyError 'name' in loader", body: "Add name to config/production.toml." });
+    w.loop.event(done("tb"));
+    expect(w.board.list().filter((post) => post.error_sig === sig(CLAUDE.keyError[0], CLAUDE.keyError[1]))).toHaveLength(2);
+    w.loop.event(bash("tc", CLAUDE.keyError[0], CLAUDE.keyError[1]));
+    w.loop.event(shell("tc"));
+    w.loop.event(done("tc"));
+    expect(w.handed()).toEqual([]);
+    expect(w.loop.next("tc")).toBe("");
+  });
+
+  it("two worktrees of one repo never swap fixes for different failures; the same failure still gets the fix", async () => {
+    const root = temps.make(join(tmpdir(), "orbit-forum-worktrees-"));
+    const repo = join(root, "api");
+    const linked = join(root, "api-pg3");
+    const gitdir = join(repo, ".git", "worktrees", "api-pg3");
+    for (const dir of [gitdir, linked]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(linked, ".git"), `gitdir: ${gitdir}\n`);
+    writeFileSync(join(gitdir, "commondir"), "../..\n");
+    const RUN = "python -m app.main";
+    const w = setup({ project: (threadId) => (threadId === "ta" ? "api" : "api-pg3") });
+    await w.prove("ta", [RUN, missing("psycopg2", repo)], "ModuleNotFoundError: No module named 'psycopg2'", "pip install psycopg2-binary.", shellPlace(RUN, repo));
+    w.loop.event(bash("tb", RUN, missing("psycopg", linked), true, shellPlace(RUN, linked)));
+    w.loop.event(done("tb"));
+    expect(w.loop.next("tb")).toBe("");
+    w.loop.event(bash("tc", RUN, missing("psycopg2", linked), true, shellPlace(RUN, linked)));
+    w.loop.event(done("tc"));
+    expect(w.loop.next("tc")).toContain("pip install psycopg2-binary.");
+  });
+
+  it("follows cd -P, cd -L and a WSL /mnt/<drive> path", () => {
+    const root = temps.make(join(tmpdir(), "orbit-forum-cd-"));
+    const auth = join(root, "services", "auth");
+    mkdirSync(auth, { recursive: true });
+    expect(shellFolders("cd -P services/auth && pytest", root).runs).toBe(auth);
+    expect(shellFolders("cd -L -- services/auth; pytest", root).runs).toBe(auth);
+    if (process.platform === "win32") {
+      const wsl = `/mnt/${auth[0]!.toLowerCase()}${auth.slice(2).replaceAll("\\", "/")}`;
+      expect(shellFolders(`cd ${wsl} && pytest`, root).runs).toBe(auth);
+    }
+  });
+});
