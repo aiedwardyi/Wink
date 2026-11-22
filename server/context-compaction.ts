@@ -216,7 +216,7 @@ export function codexResumeReplayRoom(
   const { resumeSeed: seed, nativePrompt: prompt } = task;
   if (cursor === undefined || !seed?.nativeReplay || seed.instanceId !== instanceId || seed.cursor !== cursor ||
       prompt?.cursor !== cursor || prompt.window?.model !== model) return 0;
-  return nativeReplayBudget(prompt.window.tokens) - prompt.last - Math.max(0, prompt.growth ?? 0);
+  return Math.max(0, nativeReplayBudget(prompt.window.tokens) - prompt.last - Math.max(0, prompt.growth ?? 0));
 }
 
 /** Longest prefix that fits, ending at a line end, else at whitespace, else anywhere. */

@@ -226,6 +226,7 @@ describe("native compaction plan", () => {
     expect(codexResumeReplayRoom(task, "codex", "gpt-6.2-sol")).toBe(6_000);
     expect(codexResumeReplayRoom(task, "codex", "gpt-6.2-astra")).toBe(0);
     expect(codexResumeReplayRoom({ ...task, resumeCursors: { codex: "s2" } }, "codex", "gpt-6.2-sol")).toBe(0);
+    expect(codexResumeReplayRoom({ ...task, nativePrompt: { ...task.nativePrompt, last: 100_000 } }, "codex", "gpt-6.2-sol")).toBe(0);
   });
 
   it("skips compaction planning when the same native replay session still fits", async () => {
