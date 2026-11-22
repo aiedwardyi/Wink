@@ -2403,6 +2403,8 @@ it("never shows Main or sends it a key while a clicked worker waits on the pane 
   const lives: string[] = [];
   let release!: () => void;
   const listed = new Promise<void>((resolve) => { release = resolve; });
+  let asked!: () => void;
+  const rosterAsked = new Promise<void>((resolve) => { asked = resolve; });
   const roster = [{ sessionId: "main", label: "Main", generation: 1, main: true }, { sessionId: "worker", label: "Worker", generation: 1, main: false }];
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(String(input), "http://127.0.0.1");
@@ -2421,6 +2423,7 @@ it("never shows Main or sends it a key while a clicked worker waits on the pane 
       return Response.json({ ok: true });
     }
     if (url.pathname.endsWith("/terminal")) {
+      asked();
       await listed;
       return Response.json({ panes: roster });
     }
@@ -2431,18 +2434,18 @@ it("never shows Main or sends it a key while a clicked worker waits on the pane 
   document.body.append(host);
   root = createRoot(host);
   const painted = terminal.write.mock.calls.length;
-  const settle = () => new Promise((done) => setTimeout(done, 35));
   try {
     await act(async () => root.render(createElement(TerminalWorkspace, { bot: { id: "bot-web", name: "Web" }, visible: true, focusBlocked: false, onClose: vi.fn(), paneFocus: { sessionId: "worker" }, webBridge })));
-    await act(settle);
-    await act(async () => { terminal.__emitData("q"); await settle(); });
+    await act(async () => { await rosterAsked; });
+    await act(async () => { terminal.__emitData("q"); });
     expect(lives).toEqual([]);
     expect(terminal.write.mock.calls.slice(painted).map(([text]) => text)).not.toContain("main scrollback");
     expect(writes).toEqual([]);
-    await act(async () => { release(); await settle(); });
-    await vi.waitFor(() => expect(lives.at(-1)).toBe("worker"));
-    await act(async () => { terminal.__emitData("z"); await settle(); });
-    expect(writes).toEqual([expect.objectContaining({ sessionId: "worker", data: "z" })]);
+    await act(async () => { release(); });
+    await vi.waitFor(() => expect(terminal.write.mock.calls.slice(painted).map(([text]) => text)).toContain("worker scrollback"));
+    expect(lives.at(-1)).toBe("worker");
+    await act(async () => { terminal.__emitData("z"); });
+    await vi.waitFor(() => expect(writes).toEqual([expect.objectContaining({ sessionId: "worker", data: "z" })]));
   } finally {
     release();
     await webBridge.cancelOpen?.("bot-web");
