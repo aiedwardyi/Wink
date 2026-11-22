@@ -38,7 +38,7 @@ describe("About You save", () => {
   it("saves each fact once to the shared file with its source, by code alone", () => {
     const fetch = vi.spyOn(globalThis, "fetch");
     const result = addToAboutYou(paste, "2026-11-16");
-    expect(result).toEqual({ source: "ChatGPT", found: 4, added: 4, duplicates: 0, hidden: 1 });
+    expect(result).toEqual({ source: "ChatGPT", found: 4, added: 4, duplicates: 0, hidden: 0, flagged: ["My password is hunter2-very-secret"] });
     expect(readFileSync(file, "utf8")).toBe([
       "- The user is Dana Park; call her Dana. (from ChatGPT, 2026-11-16)",
       "- Speaks Korean and English. (from ChatGPT, 2026-11-16)",
@@ -66,10 +66,10 @@ describe("About You save", () => {
     expect(facts.every((fact) => Buffer.byteLength(fact) <= 236)).toBe(true);
   });
 
-  it("leaves out a whole long line whose secret would land in a later piece", () => {
+  it("holds back a whole long line whose secret would land in a later piece", () => {
     const head = `Note${" w".repeat(110)} password is`;
     expect(Buffer.byteLength(head)).toBe(236);
-    expect(factsOf(`- ${head} violet-meadow-finch`)).toEqual({ facts: [], hidden: 1 });
+    expect(factsOf(`- ${head} violet-meadow-finch`)).toEqual({ facts: [], hidden: 0, flagged: [`${head} violet-meadow-finch`] });
   });
 
   it("keeps every byte of a word longer than a memory line", () => {

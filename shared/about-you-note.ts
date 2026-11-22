@@ -1,6 +1,6 @@
 import type { MessageKey } from "../src/lib/i18n-catalog.ts";
 
-export type AboutYouCounts = { added: number; found: number; hidden: number };
+export type AboutYouCounts = { added: number; found: number; hidden: number; flagged?: readonly string[] };
 
 /** The source name saved when a paste has no "Source:" line. */
 export const UNNAMED_SOURCE = "another AI";
@@ -8,7 +8,8 @@ export const UNNAMED_SOURCE = "another AI";
 /** What Import Memory says after a paste, in Settings and in a bot's chat alike. */
 export function aboutYouNote(body: AboutYouCounts, t: (key: MessageKey, vars?: { count: number }) => string): string {
   return [
-    body.added ? t("aboutYou.added", { count: body.added }) : body.found ? t("aboutYou.nothingNew") : t("aboutYou.noFacts"),
+    // every line held back for Keep still says so beside the note, so "no facts found" would be wrong
+    body.added ? t("aboutYou.added", { count: body.added }) : body.found ? t("aboutYou.nothingNew") : body.flagged?.length ? "" : t("aboutYou.noFacts"),
     body.hidden ? t("aboutYou.hidden", { count: body.hidden }) : "",
   ].filter(Boolean).join(" ");
 }

@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { BOT_AVATAR_PICKER_ORDER, botAvatarChoiceSchema, botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
-import { ABOUT_YOU_MAX_PASTE, addToBotMemory, day } from "./about-you.ts";
+import { ABOUT_YOU_MAX_PASTE, addToBotMemory, day, readImportRequest } from "./about-you.ts";
 import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -515,10 +515,9 @@ export function createBotRoutes(deps: BotRouteDeps) {
     },
     importMemory: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
-      // JSON escaping can double a paste, so the body gets room past the paste's own cap
-      const parsed = z.object({ text: z.string() }).safeParse(await readBody(req, ABOUT_YOU_MAX_PASTE * 2 + 64 * 1024));
-      if (!parsed.success) return json(res, 400, { error: "text must be a string" });
-      const result = addToBotMemory(m[1], parsed.data.text, day(Date.now()));
+      const asked = await readImportRequest(req);
+      if (!asked) return json(res, 400, { error: "text must be a string" });
+      const result = addToBotMemory(m[1], asked, day(Date.now()));
       if ("error" in result) {
         if (result.error === "too-large") return json(res, 413, { error: result.error, maxBytes: ABOUT_YOU_MAX_PASTE });
         return json(res, result.error === "empty" ? 400 : 500, { error: result.error });
