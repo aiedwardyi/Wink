@@ -53,6 +53,7 @@ jobs:
       - run: pnpm check:ko-keys
       - run: pnpm check:fixture-dates
       - run: pnpm check:test-sleeps
+      - run: pnpm check:gemini-links
       - run: node scripts/check-test-profile-paths.mjs
       - run: pnpm check:ui-kit
       - run: pnpm build

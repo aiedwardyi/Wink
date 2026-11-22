@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { runtimeErrorTool } from "./chat-error.ts";
 import type { Message } from "./store.ts";
@@ -62,12 +62,14 @@ function rig(target: "bot" | "group") {
     && node.declarationList.declarations.some((declaration) => declaration.name.getText(parsed) === "messagesAtStart"));
   const roomFallback = find(roomTurn, (node) => ts.isIfStatement(node)
     && node.expression.getText(parsed) === "store.group(group.id)?.busyBotId === bot.id")!;
+  const memoryPass = { onTurn: vi.fn() };
   const deps: Record<string, unknown> = {
     runtimeErrorTool, accounts: new Map(), refreshCodexPromo: () => {}, usageBoard: { touch() {} },
     reportServerFailure: () => {}, terminalBridgeAccess: null, INCOMPLETE_LOG_MESSAGE: "internal log failure",
     ...turnReply, store, bot: { id: "bot-1" }, group: { id: "group-1" },
     routineReportGroup: undefined, turnSummary: turnReply.turnSummaries(), limitWaits: { bind: () => {} },
-    turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(), turnOwnerId: "bot-1", memorySleep: { onTurn() {} },
+    turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(), turnOwnerId: "bot-1",
+    memoryPass, memorySleep: { onTurn() {} }, ownNoteEngine: () => true,
     threadId: "thread-1", stopScreenPoller: () => {}, activeVpsThreads: new Map(), groupSpeakers: new Map(),
     roomLanes: { thread: () => undefined }, lane: false,
     pushMessage: (message: Omit<Message, "id" | "at">) => messages.push({ id: `message-${messages.length}`, at: 1, ...message }),
@@ -83,7 +85,11 @@ function rig(target: "bot" | "group") {
       deps.event = { threadId: "thread-1", turnId: `turn-${++turn}` };
       state.busyBotId = "bot-1";
       if (roomStart) deps.messagesAtStart = compile(`${roomStart.getText(parsed)}\nreturn messagesAtStart;`, deps);
-      if (runtime && started) compile(started.statements.filter((node) => !ts.isBreakStatement(node)).map((node) => node.getText(parsed)).join("\n"), deps);
+      if (runtime && started) {
+        memoryPass.onTurn.mockClear();
+        compile(started.statements.filter((node) => !ts.isBreakStatement(node)).map((node) => node.getText(parsed)).join("\n"), deps);
+        expect(memoryPass.onTurn).toHaveBeenCalledExactlyOnceWith("bot-1");
+      }
     },
     append(message: Omit<Message, "id" | "at">) {
       const full = { id: `message-${messages.length}`, at: 1, ...message };

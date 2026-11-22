@@ -325,9 +325,10 @@ export class ProviderRegistry {
     const entry = this.byId.get(id);
     if (entry?.live?.account) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
   }
-  accountAvailable(id: string) {
+  accountAvailable(id: string, confirmed = false) {
     const snapshot = this.probed.get(id)?.snapshot;
-    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
+    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" &&
+      (confirmed ? snapshot?.authenticated === true : snapshot?.authenticated !== false);
   }
   accountBusy(id: string) { return this.probing.has(id) || this.modelRefreshInFlight.has(id) || this.helperWork.has(id) || this.logins.state(id) === "pending" || this.get(id)?.accountBusy?.() === true; }
   invalidateAccount(id: string) { this.holdIdentity(id, "account"); this.get(id)?.invalidateAccount?.(); this.forget(id); }

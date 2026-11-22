@@ -11,12 +11,14 @@
 // FAKE_AGY_RESULT_ERROR, when set, is the result.error of a status ERROR turn.
 // FAKE_AGY_RESULT_RESPONSE, with it, is that turn's result.response (else "").
 // While FAKE_AGY_RESULT_ERROR_FILE exists, its text is that result.error.
+// FAKE_AGY_DENIED_MODEL, when set, is a --model whose turns fail with Vertex's permission denial.
 // FAKE_AGY_USAGE, when set, is the JSON usage on the response step and the result.
 // FAKE_AGY_STREAM=1 streams result.response as two text_delta steps first.
+// FAKE_AGY_WRITE_HOME=1 writes what real agy writes under HOME/.gemini on a turn.
 // Deterministic, no network.
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const argv = process.argv.slice(2);
@@ -101,8 +103,8 @@ if (Number.isFinite(delayMs) && delayMs > 0) {
 while (process.env.FAKE_AGY_HOLD_FILE && !existsSync(process.env.FAKE_AGY_HOLD_FILE)) {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
+const home = process.env.HOME || process.env.USERPROFILE || "";
 if (process.env.FAKE_AGY_MCP_DUMP) {
-  const home = process.env.HOME || process.env.USERPROFILE || "";
   let config = "null";
   try {
     config = readFileSync(join(home, ".gemini", "config", "mcp_config.json"), "utf8");
@@ -110,12 +112,31 @@ if (process.env.FAKE_AGY_MCP_DUMP) {
   writeFileSync(process.env.FAKE_AGY_MCP_DUMP, config);
 }
 
+if (process.env.FAKE_AGY_WRITE_HOME === "1" && prompt) {
+  const gemini = join(home, ".gemini");
+  const cli = join(gemini, "antigravity-cli");
+  const id = `helper-${process.pid}`;
+  for (const dir of ["conversations", "log", `brain/${id}`, "cache", "presence"]) mkdirSync(join(cli, dir), { recursive: true });
+  writeFileSync(join(cli, "conversations", `${id}.db`), "conversation");
+  writeFileSync(join(cli, "brain", id, "note.md"), "brain");
+  writeFileSync(join(cli, "presence", `${id}.lock`), "lock");
+  appendFileSync(join(cli, "log", `cli-${id}.log`), "helper log\n");
+  writeFileSync(join(cli, "cache", "last_conversations.json"), JSON.stringify({ [process.cwd()]: id }));
+  writeFileSync(join(cli, "settings.json"), JSON.stringify({ trustedFolders: [process.cwd()] }));
+  writeFileSync(join(gemini, "state.json"), JSON.stringify({ last: id }));
+  appendFileSync(join(gemini, "trustedFolders.json"), `${process.cwd()}\n`);
+}
+
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 const CONV = "conv-fake-123";
 const systemNotice = "The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n<SYSTEM_MESSAGE>internal notice</SYSTEM_MESSAGE>";
 const cancelledTool = process.env.FAKE_AGY_CANCELLED_TOOL === "1";
 const errorFile = process.env.FAKE_AGY_RESULT_ERROR_FILE;
-const resultError = process.env.FAKE_AGY_RESULT_ERROR || (errorFile && existsSync(errorFile) ? readFileSync(errorFile, "utf8") : undefined);
+const model = argv.includes("--model") ? argv[argv.indexOf("--model") + 1] : undefined;
+const deniedModel = process.env.FAKE_AGY_DENIED_MODEL && model === process.env.FAKE_AGY_DENIED_MODEL
+  ? `Permission 'aiplatform.endpoints.predict' denied on resource '/publishers/google/models/${model.replace(/-low$/, "")}' (or it may not exist).`
+  : undefined;
+const resultError = deniedModel || process.env.FAKE_AGY_RESULT_ERROR || (errorFile && existsSync(errorFile) ? readFileSync(errorFile, "utf8") : undefined);
 
 // stream-json / --print with no prompt yields no turn (mirrors real CLI).
 if (!prompt) process.exit(0);

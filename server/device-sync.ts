@@ -135,7 +135,7 @@ function samePc(a: DeviceRecord, b: DeviceRecord): boolean {
   return a.host !== a.relayHost && a.host === b.host;
 }
 
-function readOsMachineId(): string | undefined {
+export function readOsMachineId(): string | undefined {
   const options = { encoding: "utf8", stdio: "pipe", timeout: 1_000 } as const;
   let value: string | undefined;
   try {
