@@ -70,6 +70,7 @@ const mount = async () => {
     }),
     records: () => fetched.mock.calls
       .filter(([url]) => url === COLD_OPEN_PATH)
+      // SAFETY: the page itself posts these bodies, so they hold the fields read below.
       .map(([, init]) => JSON.parse(String(init?.body)) as { label: string; terminal?: { tap: number; fetchStart?: number; paint?: number } })
       .filter((record) => record.label === "terminal"),
     unmount: async () => {
