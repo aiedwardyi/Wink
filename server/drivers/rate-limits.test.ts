@@ -315,10 +315,10 @@ describe("antigravityRateLimitWindows", () => {
   });
 
   it("leaves a window spent in every pool unmarked", () => {
-    const now = Date.parse("2026-09-14T12:00:00Z");
-    const spent = (id: string) => ({ id, name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: 0, reset_time: "2026-09-21T12:00:00Z" });
+    const reset = now + 7 * 86_400_000;
+    const spent = (id: string) => ({ id, name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: 0, reset_time: new Date(reset).toISOString() });
     expect(antigravityRateLimitWindows({ groups: [{ buckets: [spent("gemini-weekly")] }, { buckets: [spent("3p-weekly")] }] }, now)).toEqual([
-      { id: "seven_day", usedPercent: 100, resetsAt: Date.parse("2026-09-21T12:00:00Z"), windowMinutes: 10_080 },
+      { id: "seven_day", usedPercent: 100, resetsAt: reset, windowMinutes: 10_080 },
     ]);
   });
 
