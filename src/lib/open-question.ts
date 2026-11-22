@@ -63,6 +63,23 @@ export function chatMovedOn(messages: readonly Message[], question: Message): bo
       : isSentByPerson(message) && !message.queueId);
 }
 
+/** Where a tap on the open question lands: its own record once the pin no longer hides it, else the asker's nearest shown text from the same turn (before the card, then after). */
+export function questionJumpId(messages: readonly Message[], question: Message, pinned: Message | null): string | null {
+  if (question.id !== pinned?.id) return question.id;
+  const at = messages.indexOf(question);
+  if (at < 0) return null;
+  const turn = (step: 1 | -1) => {
+    for (let i = at + step; i >= 0 && i < messages.length; i += step) {
+      const message = messages[i];
+      if (isSentByPerson(message) || (isAskUserCard(message) && message.from?.botId === question.from?.botId)) return null;
+      if (message.role === "bot" && message.kind === "text" && message.from?.botId === question.from?.botId
+        && isShownMessage(message) && message.text?.trim() && !message.quick && !message.call && !message.placeholder) return message.id;
+    }
+    return null;
+  };
+  return turn(-1) ?? turn(1);
+}
+
 /** True when a sidebar row for this chat should glow. */
 export function chatNeedsYou(messages: readonly Message[]): boolean {
   const state = needsYou(messages);

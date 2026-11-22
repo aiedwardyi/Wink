@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { anyChatNeedsYou, askUserStatus, chatMovedOn, chatNeedsYou, needsYou, openQuestion, pinnedQuestion } from "./open-question";
+import { anyChatNeedsYou, askUserStatus, chatMovedOn, chatNeedsYou, needsYou, openQuestion, pinnedQuestion, questionJumpId } from "./open-question";
 import type { Message } from "@/state/store";
 
 let at = 0;
@@ -172,3 +172,47 @@ describe("the chat moving on from a question", () => {
   });
 });
 
+describe("questionJumpId", () => {
+  const by = (botId: string, message: Message): Message => ({ ...message, from: { botId, name: botId, color: "blue" } });
+  const jump = (messages: Message[], question: Message) => questionJumpId(messages, question, pinnedQuestion(messages));
+
+  it("lands on the asker's text just before the pinned card, skipping tool rows", () => {
+    const question = ask("q1");
+    expect(jump([typed("u0"), botText("b1"), activity("a1"), question], question)).toBe("b1");
+  });
+
+  it("takes the nearest text before the card, and the first one after when none came before", () => {
+    const question = ask("q1");
+    expect(jump([typed("u0"), botText("b0"), activity("a0"), botText("b1"), question], question)).toBe("b1");
+    expect(jump([typed("u0"), activity("a0"), question, activity("a1"), botText("b2"), botText("b3")], question)).toBe("b2");
+  });
+
+  it("does nothing for a question with no text of its own turn", () => {
+    const question = ask("q1");
+    expect(jump([botText("b0"), typed("u0"), activity("a0"), question], question)).toBeNull();
+    expect(jump([question, activity("a1"), paneNote("n1")], question)).toBeNull();
+    expect(jump([question], question)).toBeNull();
+  });
+
+  it("stays within the asker's turn: no earlier asked card, no hidden or quick lines, no other bot", () => {
+    const question = ask("q2");
+    expect(jump([botText("b0"), ask("q1", { staysOpen: true }), question], question)).toBeNull();
+    expect(jump([typed("u0"), { ...botText("echo"), roomEcho: { groupId: "g" } }, { ...botText("quick"), quick: { state: "answer" } }, { ...botText("empty"), text: " " }, question], question)).toBeNull();
+    const room = by("ada", ask("q3"));
+    expect(jump([typed("u0"), by("max", botText("b-max")), by("ada", botText("b-ada")), room], room)).toBe("b-ada");
+    expect(jump([typed("u0"), by("max", botText("b-max")), room], room)).toBeNull();
+  });
+
+  it("keeps an older question's own record as the target", () => {
+    const old = ask("q1", { staysOpen: true });
+    const newest = ask("q2", { staysOpen: true });
+    const messages = [typed("u0"), botText("b1"), old, newest];
+    expect(questionJumpId(messages, old, pinnedQuestion(messages))).toBe("q1");
+    expect(questionJumpId(messages, newest, pinnedQuestion(messages))).toBeNull();
+  });
+
+  it("finds nothing for a question that is not in the shown messages", () => {
+    const question = ask("q1");
+    expect(questionJumpId([botText("b1")], question, question)).toBeNull();
+  });
+});

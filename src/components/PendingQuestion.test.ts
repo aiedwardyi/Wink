@@ -14,15 +14,16 @@ let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement;
 const onPick = vi.fn();
 const onDismiss = vi.fn();
+const onJump = vi.fn();
 const message = (id: string, options = ["Analytics", "Models"]): Message => ({ id, at: 1, role: "bot", kind: "options",
   card: { title: "Question", subtitle: "Which design should we review first?", options, askUser: true, staysOpen: true } });
 
-async function render(id: string, options?: string[]) {
+async function render(id: string, options?: string[], jump?: () => void) {
   if (!root) {
     host = document.body.appendChild(document.createElement("div"));
     root = createRoot(host);
   }
-  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id, options), askerName: "Wink", count: 1, onPick, onDismiss })));
+  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id, options), askerName: "Wink", count: 1, onPick, onDismiss, onJump: jump })));
 }
 
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
@@ -64,6 +65,7 @@ afterEach(async () => {
   root = undefined;
   onPick.mockClear();
   onDismiss.mockClear();
+  onJump.mockClear();
   applyLocale("en");
 });
 
@@ -280,5 +282,38 @@ describe("question folding", () => {
     await press(pill()!, 0);
     await settle();
     expect(document.activeElement).toBe(button("Fold question"));
+  });
+});
+
+describe("jumping to the question's message", () => {
+  const body = () => host.querySelector<HTMLElement>("[data-question-body]")!;
+
+  it("jumps on a tap of the question text and nowhere else", async () => {
+    await render("jump-tap", undefined, onJump);
+    expect(body().className).toContain("cursor-pointer");
+    await press(body(), 1);
+    expect(onJump).toHaveBeenCalledTimes(1);
+    await press(button("Fold question"), 1);
+    await settle();
+    await press(host.querySelector("[data-question-row] button[aria-expanded]")!, 1);
+    await settle();
+    await press(host.querySelector("[data-term-choices] button")!, 1);
+    await press(button("Dismiss question"), 1);
+    expect(onJump).toHaveBeenCalledTimes(1);
+    expect(onPick).toHaveBeenCalledWith("Analytics");
+  });
+
+  it("does not jump while the person is selecting the question text", async () => {
+    await render("jump-select", undefined, onJump);
+    window.getSelection()!.selectAllChildren(body());
+    await press(body(), 1);
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  it("is plain text when there is no message to jump to", async () => {
+    await render("jump-none");
+    expect(body().className).not.toContain("cursor-pointer");
+    await press(body(), 1);
+    expect(onJump).not.toHaveBeenCalled();
   });
 });
