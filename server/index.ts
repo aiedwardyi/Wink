@@ -8238,7 +8238,7 @@ const webRead = webReadRoute(createWebReader({
     const ready = snapshot?.state === "available" && snapshot.authenticated !== false;
     return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy) };
   }),
-}), (header) => commsCallers.resolve(header));
+}), (header) => commsCallers.resolve(header), readOnlyRoomTurn);
 const verifySite = createVerifySite({
   store,
   resolveCommsCaller: (header) => commsCallers.resolve(header),

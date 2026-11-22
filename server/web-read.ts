@@ -3,9 +3,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 
-import { WEB_READ_OWN_TOOL, WEB_READ_SEARCH_ONLY, WEB_READ_STOP, type WebReadReader, type WebReadResult } from "../shared/web-read.ts";
+import { markPage, WEB_READ_OWN_TOOL, WEB_READ_SEARCH_ONLY, WEB_READ_STOP, type WebReadReader, type WebReadResult } from "../shared/web-read.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { nodeTransport, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
+import { parseRobots, robotsAllows, type RobotsRule } from "./web-read-robots.ts";
 import { bodyText, capText, challengeReason, htmlToText, pdfToText } from "./web-read-text.ts";
 
 export const BROWSER_HEADERS: Readonly<Record<string, string>> = {
@@ -19,13 +20,18 @@ export const SITE_BUDGET = 3;
 export const SITE_WINDOW_MS = 60_000;
 export const PAUSE_429_MS = 10 * 60_000;
 const HOP_MS = 10_000;
+/** One deadline for all of Wink's own requests in a read: robots.txt, YouTube, the page and every redirect. */
+export const READ_DEADLINE_MS = 30_000;
+// RFC 9309: a cached robots.txt is good for a day.
+const ROBOTS_CACHE_MS = 24 * 60 * 60_000;
+export const ROBOTS_ROWS = 300;
 const MAX_HOPS = 5;
 const CACHE_ROWS = 300;
 // Provider-side readers that got through where Wink's own fetch could not (RESULT.md: Grok 6/6, Codex 5/6).
 export const READER_ENGINES: readonly string[] = ["grokAgent", "codex"];
 
 export function siteKey(hostname: string): string {
-  const host = hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  const host = hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
   if (isIP(host)) return host;
   const labels = host.split(".");
   const second = labels.at(-2) ?? "";
@@ -64,8 +70,9 @@ export class SiteGate {
   }
 }
 
-type Step = { ok: boolean; route: string; text: string; tried: string[]; final?: boolean; keep?: boolean };
-type Got = { hop: Hop; url: URL } | { error: string; final?: boolean; gated?: boolean };
+type Step = { ok: boolean; route: string; text: string; tried: string[]; final?: boolean; keep?: boolean; searchOnly?: boolean };
+type Got = { hop: Hop; url: URL } | { error: string; final?: boolean; gated?: boolean; searchOnly?: boolean };
+type GetOpts = { admitted?: Set<string>; body?: Buffer; deadline?: AbortSignal; robots?: boolean };
 
 export function youtubeId(url: URL): string | null {
   const host = url.hostname.toLowerCase().replace(/^(www|m|music)\./, "");
@@ -94,6 +101,8 @@ type PlayerResponse = { videoDetails?: { title?: string; author?: string; shortD
 export interface WebReaderDeps {
   transport?: Transport;
   now?: () => number;
+  /** Defaults to READ_DEADLINE_MS. */
+  deadlineMs?: number;
   /** Bots this caller could borrow for step 4. */
   readers?: () => Array<WebReadReader & { busy: boolean }>;
 }
@@ -104,9 +113,12 @@ export function createWebReader(deps: WebReaderDeps = {}) {
   const gate = new SiteGate(now);
   const cache = new Map<string, { step: Step; at: number }>();
   const inflight = new Map<string, Promise<Step>>();
+  const robotsCache = new Map<string, { rules: RobotsRule[]; at: number }>();
+  const deadlineMs = deps.deadlineMs ?? READ_DEADLINE_MS;
+  const overDeadline = `stopped: one read gets ${deadlineMs / 1000} s in all`;
 
   /** GET with redirects checked hop by hop; with `body`, one POST that is never redirected. */
-  async function get(start: URL, label: string, opts: { admitted?: Set<string>; body?: Buffer } = {}): Promise<Got> {
+  async function get(start: URL, label: string, opts: GetOpts = {}): Promise<Got> {
     let current = start;
     const seen = new Set<string>();
     // One read spends one unit of a site's budget; its redirects within that site are free.
@@ -114,7 +126,8 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     for (let hop = 0; hop <= MAX_HOPS; hop++) {
       const refused = refusedTarget(current);
       if (refused) return { error: `redirected to ${refused}, not followed`, final: true };
-      if (isLinkedIn(current.hostname)) return { error: "redirected to linkedin.com, which Wink never fetches" };
+      if (isLinkedIn(current.hostname)) return { error: "redirected to linkedin.com, which Wink never fetches (search results only)", searchOnly: true };
+      if (opts.deadline?.aborted) return { error: overDeadline };
       if (seen.has(current.href)) return { error: "redirect loop" };
       seen.add(current.href);
       if (!admitted.has(siteKey(current.hostname))) {
@@ -122,14 +135,20 @@ export function createWebReader(deps: WebReaderDeps = {}) {
         if (held) return { error: held, gated: true };
         admitted.add(siteKey(current.hostname));
       }
+      if (opts.robots) {
+        const closed = await robotsVerdict(current, admitted, opts.deadline);
+        if (closed) return { error: closed };
+      }
+      const signal = opts.deadline ? AbortSignal.any([AbortSignal.timeout(HOP_MS), opts.deadline]) : AbortSignal.timeout(HOP_MS);
       let got: Hop;
       try {
         got = opts.body
-          ? await transport(current, { ...BROWSER_HEADERS, "content-type": "application/json" }, AbortSignal.timeout(HOP_MS), opts.body)
-          : await transport(current, { ...BROWSER_HEADERS }, AbortSignal.timeout(HOP_MS));
+          ? await transport(current, { ...BROWSER_HEADERS, "content-type": "application/json" }, signal, opts.body)
+          : await transport(current, { ...BROWSER_HEADERS }, signal);
       } catch (error) {
         const code = (error as { code?: string }).code;
         if (code === "EPRIVATE") return { error: "the site name points to a private address, not read", final: true };
+        if (opts.deadline?.aborted) return { error: overDeadline };
         if ((error as Error).name === "TimeoutError" || (error as Error).name === "AbortError") return { error: `no answer in ${HOP_MS / 1000} s` };
         return { error: `network error (${code ?? (error as Error).message})` };
       }
@@ -145,8 +164,30 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     return { error: `more than ${MAX_HOPS} redirects` };
   }
 
+  /** Why robots.txt closes this path to Wink, or null. One fetch per origin, cached a day; a 5xx or unreachable file counts as closed (RFC 9309). */
+  async function robotsVerdict(url: URL, admitted: Set<string>, deadline?: AbortSignal): Promise<string | null> {
+    const label = "robots.txt";
+    let hit = robotsCache.get(url.origin);
+    if (!hit || now() - hit.at >= ROBOTS_CACHE_MS) {
+      const got = await get(new URL("/robots.txt", url.origin), label, { admitted, deadline });
+      if ("error" in got) return `${label}: ${got.error}${got.gated ? "" : ", so the site counts as closed to automated reads"}`;
+      const { status } = got.hop;
+      if (status === 429) {
+        gate.pause(got.url.hostname);
+        return `${label}: HTTP 429, ${siteKey(got.url.hostname)} paused for 10 min, no retry`;
+      }
+      if (status >= 500) return `${label}: HTTP ${status}, so the site counts as closed to automated reads`;
+      // A missing or refused robots.txt (4xx) sets no rules.
+      hit = { rules: status >= 200 && status < 300 ? parseRobots(got.hop.body.toString("utf8")) : [], at: now() };
+      robotsCache.delete(url.origin);
+      robotsCache.set(url.origin, hit);
+      if (robotsCache.size > ROBOTS_ROWS) robotsCache.delete(robotsCache.keys().next().value!);
+    }
+    return robotsAllows(hit.rules, url.pathname + url.search) ? null : `${label}: ${url.hostname} asks automated readers not to open ${url.pathname}`;
+  }
+
   /** Caption text for a player response, read from the caption link it carries; `stop` means the next path would not help. */
-  async function captions(player: PlayerResponse, label: string, admitted: Set<string>): Promise<Step & { meta?: string; stop?: boolean }> {
+  async function captions(player: PlayerResponse, label: string, admitted: Set<string>, deadline: AbortSignal): Promise<Step & { meta?: string; stop?: boolean }> {
     const details = player.videoDetails ?? {};
     const head = [details.title ? `# ${details.title}` : "", details.author ? `Channel: ${details.author}` : ""].filter(Boolean).join("\n");
     const meta = [head, details.shortDescription ? `Description:\n${details.shortDescription}` : ""].filter(Boolean).join("\n\n");
@@ -161,7 +202,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     }
     if (siteKey(captionUrl.hostname) !== "youtube.com") return { ok: false, route: "youtube", text: "", meta, tried: [`${label}: caption link points off youtube.com, not followed`] };
     captionUrl.searchParams.set("fmt", "json3");
-    const caption = await get(captionUrl, label, { admitted });
+    const caption = await get(captionUrl, label, { admitted, deadline });
     if ("error" in caption) return { ok: false, route: "youtube", text: "", meta, stop: caption.gated || caption.final, tried: [`${label}: ${caption.error}`] };
     if (caption.hop.status === 429) {
       gate.pause(caption.url.hostname);
@@ -172,17 +213,24 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     return { ok: true, route: "youtube-captions", text: `${head}\n\nTranscript (${track.languageCode ?? "?"}${track.kind === "asr" ? ", auto-generated" : ""}):\n${transcript}`, keep: true, tried: [`${label}: ok, ${transcript.length.toLocaleString("en-US")} chars`] };
   }
 
-  async function youtube(id: string): Promise<Step & { meta?: string }> {
+  async function youtube(id: string, deadline: AbortSignal): Promise<Step & { meta?: string }> {
     const label = "step 1 YouTube captions";
     // However many of these requests run, one read spends one unit of youtube.com's budget.
     const admitted = new Set<string>();
+    const watch = new URL(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}&hl=en`);
+    // robots.txt is checked for the video's own page; the player API and caption links under it are the reads Edward approved (11-22).
+    const held = gate.admit(watch.hostname);
+    if (held) return { ok: false, route: "youtube", text: "", tried: [`${label}: ${held}`] };
+    admitted.add(siteKey(watch.hostname));
+    const closed = await robotsVerdict(watch, admitted, deadline);
+    if (closed) return { ok: false, route: "youtube", text: "", tried: [`${label}: ${closed}`] };
     const paused = (url: URL) => {
       gate.pause(url.hostname);
       return { ok: false, route: "youtube", text: "", tried: [`${label}: HTTP 429, youtube.com paused for 10 min, no retry`] };
     };
 
     // First YouTube's own player API: its caption links work without the token the watch page's links now need.
-    const api = await get(new URL(`${YT_PLAYER_URL}?prettyPrint=false`), `${label} (player API)`, { admitted, body: Buffer.from(JSON.stringify({ context: { client: YT_CLIENT }, videoId: id })) });
+    const api = await get(new URL(`${YT_PLAYER_URL}?prettyPrint=false`), `${label} (player API)`, { admitted, deadline, body: Buffer.from(JSON.stringify({ context: { client: YT_CLIENT }, videoId: id })) });
     const tried: string[] = [];
     let fromApi: Step & { meta?: string; stop?: boolean } = { ok: false, route: "youtube", text: "", tried: [] };
     if ("error" in api) {
@@ -197,13 +245,13 @@ export function createWebReader(deps: WebReaderDeps = {}) {
       try {
         player = JSON.parse(api.hop.body.toString("utf8")) as PlayerResponse;
       } catch {}
-      fromApi = await captions(player, `${label} (player API)`, admitted);
+      fromApi = await captions(player, `${label} (player API)`, admitted, deadline);
       if (fromApi.ok || fromApi.stop) return fromApi;
       tried.push(...fromApi.tried);
     }
 
     // Fallback, GET only: the watch page and the caption link it carries.
-    const page = await get(new URL(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}&hl=en`), `${label} (watch page)`, { admitted });
+    const page = await get(watch, `${label} (watch page)`, { admitted, deadline });
     if ("error" in page) return { ok: false, route: "youtube", text: "", meta: fromApi.meta, tried: [...tried, `${label} (watch page): ${page.error}`] };
     if (page.hop.status === 429) {
       const stop = paused(page.url);
@@ -214,18 +262,20 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     try {
       player = JSON.parse(html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});\s*(?:var\s|<\/script)/s)?.[1] ?? "{}") as PlayerResponse;
     } catch {}
-    const fromPage = await captions(player, `${label} (watch page)`, admitted);
+    const fromPage = await captions(player, `${label} (watch page)`, admitted, deadline);
     return { ...fromPage, meta: fromPage.meta || fromApi.meta, tried: [...tried, ...fromPage.tried] };
   }
 
-  async function fetchPage(url: URL): Promise<Step> {
+  async function fetchPage(url: URL, deadline: AbortSignal): Promise<Step> {
     const label = "step 2 fetch";
-    const got = await get(url, label);
-    if ("error" in got) return { ok: false, route: "fetch", text: "", tried: [`${label}: ${got.error}`], final: got.final };
+    const got = await get(url, label, { robots: true, deadline });
+    if ("error" in got) return { ok: false, route: "fetch", text: "", tried: [`${label}: ${got.error}`], final: got.final, searchOnly: got.searchOnly };
     const { hop, url: landed } = got;
     const type = (hop.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
     const sniff = hop.body.subarray(0, 512).toString("latin1");
     const html = type.includes("html") || (!type && /^\s*<(!doctype|html|head|body)/i.test(sniff));
+    // The server writes Content-Type, so only a plain media type is ever shown to the bot.
+    const shownType = /^[a-z0-9][a-z0-9.+-]{0,39}\/[a-z0-9][a-z0-9.+-]{0,79}$/.test(type) ? type : "unknown type";
     const tried = (note: string) => [`${label}: ${note}${hop.truncated ? " (page over 2 MB, read the first 2 MB)" : ""}`];
     if (hop.status === 429) {
       gate.pause(landed.hostname);
@@ -234,7 +284,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     if (hop.status === 404 || hop.status === 410) return { ok: false, route: "fetch", text: `The page does not exist (HTTP ${hop.status}).`, tried: tried(`HTTP ${hop.status}, page not found`), final: true, keep: true };
     const body = bodyText(hop.body, hop.headers["content-type"]);
     const page = html ? htmlToText(body) : null;
-    const challenge = html && page ? challengeReason(body, landed, page.text) : null;
+    const challenge = html && page ? challengeReason(body, landed, page.text, url) : null;
     if (challenge) return { ok: false, route: "fetch", text: "", tried: tried(`${challenge} (HTTP ${hop.status})`), keep: true };
     if (hop.status < 200 || hop.status >= 300) return { ok: false, route: "fetch", text: "", tried: tried(`HTTP ${hop.status}`), keep: hop.status < 500 };
     if (page) {
@@ -246,23 +296,24 @@ export function createWebReader(deps: WebReaderDeps = {}) {
       return { ok: false, route: "fetch", text: "", tried: tried("empty JavaScript page (no readable text without a browser)"), keep: true };
     }
     if (type === "application/pdf" || sniff.startsWith("%PDF")) {
-      const text = pdfToText(hop.body);
+      const text = await pdfToText(hop.body);
       return text
         ? { ok: true, route: "fetch:pdf", text, tried: tried(`PDF, ${text.length.toLocaleString("en-US")} chars`), keep: true }
         : { ok: false, route: "fetch:pdf", text: "", tried: tried("PDF with no extractable text (scanned or unusual fonts)"), keep: true };
     }
     if (/^text\/|json|xml|javascript|csv|yaml|markdown/.test(type)) {
-      return { ok: true, route: "fetch", text: body, tried: tried(`ok, ${type}`), keep: true };
+      return { ok: true, route: "fetch", text: body, tried: tried(`ok, ${shownType}`), keep: true };
     }
-    return { ok: false, route: "fetch", text: `Not a text page (${type || "unknown type"}).`, tried: tried(`not a text page (${type || "unknown type"}, ${Math.round(hop.body.length / 1024)} KB)`), final: true, keep: true };
+    return { ok: false, route: "fetch", text: `Not a text page (${shownType}).`, tried: tried(`not a text page (${shownType}, ${Math.round(hop.body.length / 1024)} KB)`), final: true, keep: true };
   }
 
   async function ladder(url: URL): Promise<Step> {
+    const deadline = AbortSignal.timeout(deadlineMs);
     const id = youtubeId(url);
-    if (!id) return fetchPage(url);
-    const video = await youtube(id);
+    if (!id) return fetchPage(url, deadline);
+    const video = await youtube(id, deadline);
     if (video.ok) return video;
-    const partial = video.meta ? `[Partial: no transcript, only the video's title and description.]\n\n${video.meta}` : "";
+    const partial = video.meta ? `[Partial: no transcript, only the video's title and description.]\n\n${markPage(video.meta)}` : "";
     return { ok: false, route: "youtube", text: partial, keep: video.keep, tried: [...video.tried, "step 2 fetch: skipped, the YouTube page itself has no transcript"] };
   }
 
@@ -286,9 +337,9 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     if (refused) return { status: "blocked", url: url.href, route: "refused", text: `Not read: ${refused}. web_read reads public http(s) pages only.`, tried: [`refused: ${refused}`] };
     url.hash = "";
     const key = url.href;
-    const searchOnly = isLinkedIn(url.hostname);
+    const linkedIn = isLinkedIn(url.hostname);
     let step: Step;
-    if (searchOnly) {
+    if (linkedIn) {
       step = { ok: false, route: "search-only", text: "", tried: ["steps 1-2: skipped, Wink never fetches linkedin.com pages (search results only)"] };
     } else {
       const hit = cache.get(key);
@@ -307,7 +358,9 @@ export function createWebReader(deps: WebReaderDeps = {}) {
         }
       }
     }
-    if (step.ok) return { status: "ok", url: key, route: step.route, text: capText(step.text), tried: step.tried };
+    // A redirect that lands on a never-fetch host makes the read search-only too.
+    const searchOnly = linkedIn || step.searchOnly === true;
+    if (step.ok) return { status: "ok", url: key, route: step.route, text: capText(markPage(step.text)), tried: step.tried };
     const tried = [...step.tried];
     const text = capText(step.text);
     if (step.final) return { status: "blocked", url: key, route: step.route, text, tried };
@@ -341,16 +394,51 @@ export function createWebReader(deps: WebReaderDeps = {}) {
 
 export type WebReader = ReturnType<typeof createWebReader>;
 
-export function webReadRoute(reader: WebReader, caller: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined) {
+/** Reads one room's guest turns may start per minute, all bots in the room together. */
+export const GUEST_READS_PER_MINUTE = 6;
+const GUEST_ROOMS = 300;
+
+/**
+ * The route the agents proxy calls. A guest turn (another person's text drives a room turn) is decided here from the
+ * caller's own turn, not from the request body: it gets the same SSRF and site budgets, no step 4, no cache writes,
+ * and a per-room read budget so a guest can't keep the host's PC fetching and parsing.
+ */
+export function webReadRoute(
+  reader: WebReader,
+  caller: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined,
+  guestTurn: (botId: string, threadId: string) => boolean = () => false,
+  now: () => number = Date.now,
+) {
+  const roomReads = new Map<string, number[]>();
   return async (req: IncomingMessage, res: ServerResponse) => {
     const source = caller(req.headers.authorization);
     if (!source) return json(res, 403, { error: "unknown sender" });
     const body = ((await readBody(req)) ?? {}) as { url?: unknown; own_tool_failed?: unknown; no_reader?: unknown; remember?: { route?: unknown; text?: unknown } };
     const url = typeof body.url === "string" ? body.url : "";
+    const guest = guestTurn(source.botId, source.threadId);
     if (body.remember && typeof body.remember.text === "string") {
+      if (guest) return json(res, 403, { error: "a guest turn can't add pages to the shared cache" });
       reader.remember(url, String(body.remember.route ?? "reader"), body.remember.text);
       return json(res, 200, { ok: true });
     }
-    return json(res, 200, await reader.read(url, { ownToolFailed: body.own_tool_failed === true, callerBotId: source.botId, noReader: body.no_reader === true }));
+    if (guest) {
+      const at = now();
+      const recent = (roomReads.get(source.threadId) ?? []).filter((t) => at - t < 60_000);
+      if (recent.length >= GUEST_READS_PER_MINUTE) {
+        const result: WebReadResult = {
+          status: "blocked",
+          url,
+          route: "none",
+          text: `This room's guest turns already started ${GUEST_READS_PER_MINUTE} page reads in the last minute; try again in a minute.`,
+          tried: [`room budget: ${GUEST_READS_PER_MINUTE} reads a minute for guest turns, used up`],
+        };
+        return json(res, 200, result);
+      }
+      recent.push(at);
+      roomReads.delete(source.threadId);
+      roomReads.set(source.threadId, recent);
+      if (roomReads.size > GUEST_ROOMS) roomReads.delete(roomReads.keys().next().value!);
+    }
+    return json(res, 200, await reader.read(url, { ownToolFailed: body.own_tool_failed === true, callerBotId: source.botId, noReader: guest || body.no_reader === true }));
   };
 }
