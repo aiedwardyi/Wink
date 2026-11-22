@@ -25,7 +25,7 @@ let stub: Server;
 let stubPort = 0;
 let lastAuth: string | undefined;
 let lastAskBody: any = null;
-interface AskBotResponse { botName?: string; text?: string; shown?: boolean; busy?: boolean; error?: string; limit?: string; taskId?: string }
+interface AskBotResponse { botName?: string; text?: string; replied?: boolean; shown?: boolean; busy?: boolean; error?: string; limit?: string; taskId?: string }
 let askResponse: AskBotResponse = { botName: "Helper", text: "hi from helper" };
 let lastDelegateBody: any = null;
 let lastDelegationUrl: string | null = null;
