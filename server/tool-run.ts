@@ -10,6 +10,7 @@ import type { ToolRun } from "./contracts.ts";
 import { linkedGitDirs } from "./git-worktree.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { secretCommand } from "./tool-detail.ts";
+import { WORKSPACES_DIR } from "./workspace.ts";
 
 const BOILERPLATE = [
   /^exit (?:code|status):? -?\d+$/i,
@@ -163,7 +164,9 @@ export function placeAt(folder: string | undefined, projectFolder?: string): She
   const start = projectFolder ?? folder;
   const fromStart = relative(start, folder);
   const root = repoRoot(folder, isAbsolute(fromStart) || fromStart.split(sep, 1)[0] === ".." ? folder : start);
-  return { root, cwd: folder, project: projectAt(root) };
+  // The app gives every folderless bot its own desk, with no project selected.
+  const defaultDesk = !relative(root, folder) && !relative(WORKSPACES_DIR, dirname(root)) && !existsSync(join(root, ".git"));
+  return { root, cwd: folder, project: projectAt(defaultDesk ? WORKSPACES_DIR : root) };
 }
 
 /** Where a command ran, from the folder the shell stood in. */
