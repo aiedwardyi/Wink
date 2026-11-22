@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 
 import { fetchResponse, responseBody } from "./api-request";
-import { openLiveEvents } from "./live-events";
 import { useChatPreview } from "./chat-preview";
 import type { JoinedEntry, JoinedView } from "./team-rooms";
 
@@ -12,28 +11,17 @@ let lastDetail: { roomId: string; detail: JoinedRoomDetail | null } | undefined;
 type Listener = (roomId: string | null) => void;
 
 const listeners = new Set<Listener>();
-let stopLive: (() => void) | null = null;
+let listMounts = 0;
 
 function follow(listener: Listener): () => void {
   listeners.add(listener);
-  stopLive ??= openLiveEvents({
-    screens: false,
-    onFrame: (frame) => {
-      if (frame.kind !== "joined") return;
-      const roomId = (frame as { roomId?: unknown }).roomId;
-      for (const each of [...listeners]) each(typeof roomId === "string" ? roomId : null);
-    },
-    onSnapshotRequired: async () => {
-      for (const each of [...listeners]) each(null);
-      return true;
-    },
-  });
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size) return;
-    stopLive?.();
-    stopLive = null;
-  };
+  return () => void listeners.delete(listener);
+}
+
+/** The store's live stream feeds this, so a page holds one stream: a room id names the room that changed, null reloads them all. */
+export function noteJoinedFrame(roomId: string | null) {
+  if (listMounts) void loadRooms();
+  for (const each of [...listeners]) each(roomId);
 }
 
 async function read(path: string): Promise<{ status: number; body: any }> {
@@ -83,8 +71,8 @@ const watch = (watcher: () => void) => {
 
 export function useJoinedRooms(): JoinedView[] {
   useEffect(() => {
-    void loadRooms();
-    return follow(() => void loadRooms());
+    if (listMounts++ === 0) void loadRooms();
+    return () => void listMounts--;
   }, []);
   return useLoadedJoinedRooms();
 }

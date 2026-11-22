@@ -2718,7 +2718,7 @@ interface SseClient {
 }
 const sseClients = new Set<SseClient>();
 
-/** Every frame is numbered, and the last few hundred are kept, so a client
+/** Every frame is numbered, and the last thousand are kept, so a client
  * whose connection dropped can ask for what it missed instead of
  * re-downloading every transcript. The desktop reconnects in milliseconds
  * and barely needs this; a phone reconnects every time it unlocks.
@@ -2729,14 +2729,16 @@ const sseClients = new Set<SseClient>();
  * inside the SSE `id:` field, which means a browser EventSource resumes
  * correctly through its own Last-Event-ID with no client code at all. */
 const STREAM_ID = randomUUID().slice(0, 8);
-const REPLAY_MAX = 500;
+const REPLAY_MAX = 1000;
 const configuredSseHeartbeatMs = Number(process.env.OMB_SSE_HEARTBEAT_MS);
 const SSE_HEARTBEAT_MS =
   Number.isFinite(configuredSseHeartbeatMs) && configuredSseHeartbeatMs > 0
     ? configuredSseHeartbeatMs
     : 15_000;
 let lastSeq = 0;
-const replayBuffer: Array<{ seq: number; kind: string; frame: string | null }> = [];
+const replayBuffer: Array<{ seq: number; kind: string; frame: string | null; key?: string; payload?: Record<string, unknown> }> = [];
+/** The newest seq that fell off the ring; a cursor at or past it can still resume. */
+let replayFloor = 0;
 
 /** Screen frames are the only kind a client can decline. */
 const wants = (client: SseClient, kind: string) => kind !== "screen" || client.screens;
@@ -2797,6 +2799,33 @@ function broadcast(payload: Record<string, unknown>) {
   writeBroadcastFrame(payload);
 }
 
+/** A bot frame is the whole bot but its transcript, and a task.packet the whole strip, so a replay
+ * needs only the first and newest of each: the slots between leave and the ring reaches further back.
+ * A busy:true bot frame stays until a newer one is busy too, since the client clears its
+ * optimistic thinking state only on busy:true. */
+function replaySlot(seq: number, kind: string, safe: Record<string, unknown>, frame: string): (typeof replayBuffer)[number] {
+  if (kind === "screen") return { seq, kind, frame: null };
+  const bot = kind === "bot" ? safe.bot as Record<string, unknown> | undefined : undefined;
+  const key = kind === "task.packet" && typeof safe.threadId === "string" ? `packet:${safe.threadId}`
+    : bot && typeof bot.id === "string" ? `bot:${bot.id}` : undefined;
+  if (!key) return { seq, kind, frame };
+  // a frame carrying the transcript is a thread switch: it neither absorbs nor is absorbed
+  if (bot && "messages" in bot) return { seq, kind, frame, key };
+  let payload = safe;
+  for (let at = replayBuffer.length - 1; at >= 0; at--) {
+    if (replayBuffer[at].key !== key) continue;
+    const older = replayBuffer[at].payload?.bot as Record<string, unknown> | undefined;
+    if (bot && (!older || older.threadId !== bot.threadId || (older.busy === true && bot.busy !== true))) break;
+    // the oldest slot may announce a new bot ahead of the frames in its chat
+    if (!replayBuffer.some((slot, index) => index < at && slot.key === key)) break;
+    replayBuffer.splice(at, 1);
+    // older fields this frame omits still reach a client that replays both
+    if (bot && older) payload = { ...payload, bot: { ...older, ...(payload.bot as Record<string, unknown>) } };
+  }
+  const merged = payload === safe ? frame : `id: ${STREAM_ID}:${seq}\ndata: ${JSON.stringify({ ...payload, seq })}\n\n`;
+  return { seq, kind, frame: merged, key, payload };
+}
+
 function writeBroadcastFrame(payload: Record<string, unknown>, alreadyMasked = false) {
   const seq = ++lastSeq;
   const kind = String(payload.kind ?? "");
@@ -2808,8 +2837,8 @@ function writeBroadcastFrame(payload: Record<string, unknown>, alreadyMasked = f
   // Live desktop captures can each be hundreds of kilobytes and become stale
   // as soon as the next one arrives. Keep their sequence slots so resume-gap
   // detection stays honest, but never retain their base64 payloads.
-  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame });
-  if (replayBuffer.length > REPLAY_MAX) replayBuffer.shift();
+  replayBuffer.push(replaySlot(seq, kind, safe, frame));
+  if (replayBuffer.length > REPLAY_MAX) replayFloor = replayBuffer.shift()!.seq;
   for (const client of [...sseClients]) {
     if (!wants(client, kind)) continue;
     try {
@@ -8657,10 +8686,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The buffer only reaches so far back. If the client's cursor fell off
       // the end, saying so is the only honest answer — a partial replay
       // would leave a permanent hole in its state.
-      const resumed =
-        since !== null &&
-        since <= lastSeq &&
-        (replayBuffer.length === 0 ? since === lastSeq : replayBuffer[0].seq <= since + 1);
+      const resumed = since !== null && since <= lastSeq && since >= replayFloor;
       res.write(
         `data: ${JSON.stringify({
           kind: "hello",
