@@ -212,6 +212,33 @@ export function reasks(said: string, asked: readonly string[], whole = false): "
   return covered(first, asked) ? "yes" : "no";
 }
 
+// A question about the work: a fact the record gives, not an idea or how something works.
+const FACT_ASK = /\?\s*$|^(?:(?:so|and|okay|ok|hey|wait)[,\s]+)?(?:what|when|which|who|whose|where|how many|how much|how long|how big|did|has|have|is|are|was|were|does|do)\b|언제|몇|뭐|어떻게 됐|했어|됐어/i;
+const PROJECT = /\b(?:releases?|versions?|prs?|pull requests?|merged?|ship(?:ped)?|builds?|installers?|tests?|ci|workers?|bugs?|crash(?:es)?|downloads?|beta|commits?|branch(?:es)?|deploy(?:ed)?|evals?|fix(?:ed)?|users?|reports?|calls?|voices?|volume|features?|launch(?:ed)?|plan(?:ned)?|asks?|tasks?|issues?|found|find)\b|\p{N}|릴리[스즈]|버전|머지|빌드|테스트|버그|배포/iu;
+const IDEA = /\bhow (?:do|does|would|could|can|should|to)\b|\bwhy (?:do|does|would|should)\b|\b(?:possible|ideas?|think|recommend|suggest)\b/i;
+
+/** What the voice was given, as units it answers from: each line with the one before, so a chat answer keeps its question. */
+export function knownUnits(text: string): string[] {
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.map((line, i) => i ? `${lines[i - 1]} ${line}` : line);
+}
+
+/** His question about the work: "known" when what the voice was given covers it, "open" when its answer needs checking. */
+export function asksFact(heard: string, known: readonly string[]): "known" | "open" | undefined {
+  if (!known.length || !FACT_ASK.test(heard.trim()) || !PROJECT.test(heard) || IDEA.test(heard)) return undefined;
+  return covered(heard, known) ? "known" : "open";
+}
+
+/** The first plain statement answering his question that nothing the voice was given says: a guess. */
+export function unbacked(said: string, heard: string, known: readonly string[]): string | undefined {
+  for (const sentence of sentences(said)) {
+    if (HYPOTHETICAL.test(sentence) || CLARIFY.test(sentence) || FILLER_ONLY.test(sentence) || claimOf(sentence)) continue;
+    const line = `${heard} ${sentence}`;
+    if (contentWords(line).length >= 2 && !covered(line, known)) return sentence;
+  }
+  return undefined;
+}
+
 /** A promise the questions sent this turn stand behind: "Let me check whether you finished it", not "your watch history". */
 export function backs(promise: string, sent: readonly string[]): boolean {
   return !contentWords(promise).length || covered(promise, sent);

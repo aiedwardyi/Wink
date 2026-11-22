@@ -84,7 +84,7 @@ export const LIVE_TOOLS = [
   },
   {
     name: "ask",
-    description: "Ask the bot to check facts you cannot verify, including incomplete task context. No yes needed; the result says sent, queued or not sent, and the answer comes back as a [Wink] line. Anything that changes something is propose_work, even phrased as a question (\"Can you restart it?\").",
+    description: "Ask the bot any fact about their projects, work or what happened that YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD or a [Wink] line does not say, including incomplete task context. Say \"Let me check\" first, then call it; never guess. No yes needed; the result says sent, queued or not sent, and the answer comes back as a [Wink] line. Anything that changes something is propose_work, even phrased as a question (\"Can you restart it?\").",
     parameters: {
       type: "OBJECT",
       properties: { question: { type: "STRING", description: "The question in the person's words and language, e.g. \"When do the eval loops finish?\"" } },

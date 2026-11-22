@@ -32,6 +32,8 @@ export function callTaskContext(bot: Pick<BotRecord, "threadId" | "tasks">, read
   const selected = records.find((record) => record.threadId === bot.threadId);
   const blockers = selected?.blockers ?? [];
   const next = selected?.nextAction.trim();
+  const goal = selected?.goal.trim();
+  const plan = selected?.plan.filter((step) => step.status === "active" || step.status === "pending") ?? [];
   const asks = latestTaskAsks(records, (ask) => ask.ask).filter(isOpenAsk);
   const waiting = asks.filter((ask) => ask.status === "waiting-for-user").length;
   const questions = asks.filter((ask) => ask.kind === "question").length;
@@ -44,7 +46,9 @@ export function callTaskContext(bot: Pick<BotRecord, "threadId" | "tasks">, read
   const blockersSummary = selected ? `${blockers.length} blockers` : "selected task record unavailable";
   return [
     `TASK RECORD: ${counts}, ${blockersSummary}.`,
-    ...cappedLines(ordered, 900, "asks", (ask) => {
+    ...(goal ? [`Goal: ${recordText(goal)}`] : []),
+    ...cappedLines(plan, 600, "plan steps", (step) => `- plan ${step.status}: ${recordText(step.step)}`),
+    ...cappedLines(ordered, 2_000, "asks", (ask) => {
       const question = ask.kind === "question" ? " question" : "";
       const choices = ask.choices ? ` (choices: ${recordText(ask.choices)})` : "";
       return `- ${ask.status}${question}: ${recordText(ask.ask)}${choices}`;

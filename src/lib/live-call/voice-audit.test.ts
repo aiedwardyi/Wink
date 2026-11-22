@@ -30,14 +30,15 @@ class FakeEngine implements LiveEngine {
   close() {}
 }
 
-function fakeAudio(): CallAudioPort & { hiss(): void } {
+function fakeAudio(): CallAudioPort & { hiss(): void; plays: number } {
   let frame: (pcm: ArrayBuffer) => void = () => {};
   return {
+    plays: 0,
     playing: false,
     async capture(onFrame) { frame = onFrame; },
     async heal() { return true; },
     stopMic() {},
-    play() {},
+    play() { this.plays += 1; },
     endTurn() {},
     tune() {},
     flush() {},
@@ -54,7 +55,7 @@ function fakeAudio(): CallAudioPort & { hiss(): void } {
 const ACCEPTED: Posted = { status: 202, data: { ok: true } };
 
 /** Live past its greeting, with the mic quiet. `early` lands in chat before the hello. */
-async function live(early?: unknown[]) {
+async function live(early?: unknown[], known?: string) {
   let t = 0;
   const audio = fakeAudio();
   const engines: FakeEngine[] = [];
@@ -69,7 +70,7 @@ async function live(early?: unknown[]) {
     post: async (path, body) => {
       posts.push({ path, body });
       if (path.endsWith("/messages")) return ACCEPTED;
-      if (path.endsWith("/call/token")) return { status: 200, data: { callId: CALL, url: "wss://x", token: "t", model: "m", voice: "Aoede" } };
+      if (path.endsWith("/call/token")) return { status: 200, data: { callId: CALL, url: "wss://x", token: "t", model: "m", voice: "Aoede", ...(known ? { known } : {}) } };
       return { status: 200, data: {} };
     },
   });
@@ -92,7 +93,7 @@ async function live(early?: unknown[]) {
   }
   engines[0]!.events.turnDone();
   await wait(5_000);
-  return { call, engines, engine: () => engines.at(-1)!, posts, tick, wait };
+  return { call, engines, engine: () => engines.at(-1)!, posts, tick, wait, audio };
 }
 
 const sent = (posts: Array<{ path: string; body: any }>) => posts.filter((p) => p.path === "/api/bots/b1/messages").map((p) => p.body.text);
@@ -201,6 +202,61 @@ describe("T1 an answer that missed a reply is corrected once", () => {
     expect(work.filter((line) => !asksAboutWork(line, "Nova"))).toEqual([]);
     const other = ["Hey, what's a good name for a cat?", "Tell me a joke.", "Thanks.", "오늘 날씨 어때?"];
     expect(other.filter((line) => asksAboutWork(line, "Nova"))).toEqual([]);
+  });
+});
+
+const BRIEF = [
+  "YOUR NOTES:",
+  "- Release 0.9.4 shipped 2026-11-18: Korean import links (PR 2116), phone resume (PR 2115).",
+  "RECENT CHAT:",
+  "Edward: where are we on the phone resume?",
+  "You: PR 2115 (phone resume from the replay ring) merged this morning; CI was green.",
+].join("\n");
+const asks = (posts: Array<{ path: string; body: any }>) => posts.filter((p) => p.path === "/api/bots/b1/messages" && p.body.call?.ask).map((p) => p.body.text);
+
+describe("F1 a fact the voice was not given is checked, never guessed", () => {
+  it("a guess at a fact outside the brief never plays: the question goes out as an ask and the voice says only let me check", async () => {
+    const { engine, posts, wait, audio } = await live(undefined, BRIEF);
+    engine().events.heard("Did PR 2121 merge?");
+    engine().events.answering();
+    engine().events.audio(new Int16Array(480));
+    engine().events.said("Yeah, it merged this morning.");
+    engine().events.turnDone();
+    await wait(3_000);
+    expect(asks(posts)).toEqual(["Did PR 2121 merge?"]);
+    expect(audio.plays).toBe(0);
+    expect(lines(posts).join("\n")).not.toContain("merged");
+    expect(engine().texts.at(-1)).toContain("Let me check");
+  });
+
+  it("a fact the brief holds is answered straight, with no ask and no extra turn", async () => {
+    const { engine, posts, wait, audio } = await live(undefined, BRIEF);
+    const texts = engine().texts.length;
+    engine().events.heard("Did the phone resume PR merge?");
+    engine().events.answering();
+    engine().events.audio(new Int16Array(480));
+    engine().events.said("Yeah, it merged this morning.");
+    engine().events.turnDone();
+    await wait(3_000);
+    expect(asks(posts)).toEqual([]);
+    expect(audio.plays).toBe(1);
+    expect(lines(posts)).toContain("Yeah, it merged this morning.");
+    expect(engine().texts).toHaveLength(texts);
+  });
+
+  it("let me check then ask goes out once, with no nudge", async () => {
+    const { engine, posts, tick, wait } = await live(undefined, BRIEF);
+    const texts = engine().texts.length;
+    engine().events.heard("When did 0.9.3 ship?");
+    engine().events.answering();
+    engine().events.said("Let me check.");
+    engine().events.toolCall([{ id: "a1", name: "ask", args: { question: "When did 0.9.3 ship?" } }]);
+    await tick(10);
+    engine().events.turnDone();
+    await wait(3_000);
+    expect(asks(posts)).toEqual(["When did 0.9.3 ship?"]);
+    expect(lines(posts)).toContain("Let me check.");
+    expect(engine().texts).toHaveLength(texts);
   });
 });
 

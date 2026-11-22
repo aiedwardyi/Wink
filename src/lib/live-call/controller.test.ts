@@ -2089,7 +2089,7 @@ describe("VOICE-KNOWS: answers and stats", () => {
     engine().events.closed(1000, "");
     await flush();
     const stats = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
-    expect(stats.guard).toEqual({ nudges: 3, failLines: 0, promise: 1, cant: 1, unsure: 1 });
+    expect(stats.guard).toEqual({ nudges: 3, failLines: 0, promise: 1, cant: 1, unsure: 1, unbacked: 0 });
     expect(stats.ttfaMs).toEqual({ p50: 0, p90: 0 });
     expect(stats.ackMs).toEqual({ p50: 0, p90: 0 });
   });

@@ -76,6 +76,23 @@ describe("call token", () => {
     expect(brief).toContain('never say "nothing needs you" while any are waiting');
   });
 
+  it("hands the call the brief's facts, not its rules, and the open plan with every cut counted", async () => {
+    const h = harness();
+    const now = Date.now();
+    const instruction = h.store.activePath(h.bot.threadId)[0]!;
+    const packet = seedTaskResumePacket({ botId: h.bot.id, threadId: h.bot.threadId, text: instruction.text!, messageId: instruction.id, now, turnsAtWrite: 0 });
+    const plan = Array.from({ length: 12 }, (_, i) => ({ step: `Step ${i} ${"x".repeat(60)}`, status: i ? "pending" as const : "done" as const }));
+    expect(h.store.writeTaskPacket({ ...packet, goal: "Ship 0.9.5", plan })).toBeTruthy();
+    const { data } = await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(data.known).toContain("RECENT CHAT:");
+    expect(data.known).toContain('Goal: "Ship 0.9.5"');
+    expect(data.known).not.toContain("DUTIES:");
+    expect(brief).toContain('- plan pending: "Step 1');
+    expect(brief).not.toContain("Step 0");
+    expect(brief).toMatch(/\+\d+ more plan steps omitted/);
+  });
+
   it("reads pending task changes through the same source on refresh and resume", async () => {
     let pending: TaskResumePacket | null = null;
     const read = vi.fn(() => pending);
@@ -109,7 +126,7 @@ describe("call token", () => {
     expect(taskContext).toContain('Next action: "Rerun tests after sign-in"');
     expect(taskContext).toMatch(/\+\d+ more asks omitted/);
     expect(taskContext).not.toMatch(/Already shipped|�/);
-    expect(Buffer.byteLength(taskContext, "utf8")).toBeLessThan(1_700);
+    expect(Buffer.byteLength(taskContext, "utf8")).toBeLessThan(3_400);
 
     await h.post("token", { callId: first.data.callId, resume: true });
     expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain(taskContext);
@@ -364,7 +381,7 @@ describe("call token", () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");
     expect(status).toBe(200);
-    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Aoede", locale: "en", style: "normal" });
+    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Aoede", locale: "en", style: "normal", known: expect.stringContaining("RECENT CHAT:") });
     expect(raw).not.toContain(KEY);
     const [url, init] = h.fetch.mock.calls[0]!;
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/auth_tokens");
@@ -499,7 +516,7 @@ describe("call token", () => {
     expect(brief).toContain("Ideas, general knowledge, is it possible, how would it work: answer from what you know.");
     expect(brief).toContain("WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic");
     expect(brief).toContain("Told you're not answering or repeating: answer it now, never restate your last line.");
-    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD and [Wink] lines; else call ask.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD and [Wink] lines; anything else: say \"Let me check\" and call ask in the same turn");
   });
 
   it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
@@ -670,7 +687,7 @@ describe("brief STATUS", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).not.toContain("NOW:");
-    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD and [Wink] lines; else call ask.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD and [Wink] lines; anything else: say \"Let me check\" and call ask in the same turn");
     expect(brief).toContain("Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.");
     expect(brief).toContain("Asked what happened: tell it, never offer to show it.");
     expect(statusOf(brief)).toBe([
