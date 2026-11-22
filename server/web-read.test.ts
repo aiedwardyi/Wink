@@ -827,7 +827,7 @@ describe("web_read gate follow-up (2123E)", () => {
       const remembered: string[] = [];
       const api = async (_path: string, init?: RequestInit) => {
         const body = JSON.parse(String(init?.body));
-        if (body.remember) remembered.push(body.remember.text);
+        if (body.remember) remembered.push(body.remember.first);
         return (body.remember ? {} : await reader.read(body.url, { ownToolFailed: body.own_tool_failed, callerBotId: "me" })) as unknown as Record<string, unknown>;
       };
       const askBot = async () => ({ text: reply });
@@ -843,6 +843,29 @@ describe("web_read gate follow-up (2123E)", () => {
       expect(firstRead).toContain(gate);
       expect(remembered).toHaveLength(1);
       expect(remembered[0]).toContain(hours);
+    });
+
+    it.each([
+      ["a 6,000-char reply and a 2,961-char description", 6000, 2961],
+      ["a 9,000-char reply", 9000, 200],
+    ])("keeps the first read whole on a later read from the cache, with %s", async (_name, replyChars, descriptionChars) => {
+      const lastFact = "The loading dock closes at 17:45.";
+      const description = `${"Opening notes for the ferry terminal. ".repeat(80).slice(0, descriptionChars - lastFact.length - 1)} ${lastFact}`;
+      const page = { "https://terminal.example/long": { html: `<title>Ferry terminal</title><meta name="description" content="${description}"><script defer src="/dashboard.js"></script>` } };
+      const reader = createWebReader({ transport: fake(page).transport, readers: () => [{ botId: "c1", name: "Coder", engine: "codex", busy: false }] });
+      const api = async (_path: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        if (body.remember) reader.remember(body.url, body.remember.route, body.remember.text, body.remember.first);
+        return (body.remember ? {} : await reader.read(body.url, { ownToolFailed: body.own_tool_failed, callerBotId: "me" })) as unknown as Record<string, unknown>;
+      };
+      const askBot = async () => ({ text: "Ferry timetable. ".repeat(Math.ceil(replyChars / 17)).slice(0, replyChars) });
+      await webRead({ url: "https://terminal.example/long" }, api, askBot);
+      const live = JSON.parse((await webRead({ url: "https://terminal.example/long", own_tool_failed: true }, api, askBot)).text);
+      expect(live.text).toContain(lastFact);
+      const later = await reader.read("https://terminal.example/long");
+      expect(later.text).toContain(lastFact);
+      expect(later.text).toContain("[Also found by Wink's own first read:]\n[Partial: ");
+      expect(later.text).toBe(live.text);
     });
   });
 });

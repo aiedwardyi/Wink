@@ -70,7 +70,7 @@ export class SiteGate {
   }
 }
 
-type Step = { ok: boolean; route: string; text: string; tried: string[]; final?: boolean; keep?: boolean; searchOnly?: boolean };
+type Step = { ok: boolean; route: string; text: string; tried: string[]; final?: boolean; keep?: boolean; searchOnly?: boolean; first?: string };
 type Got = { hop: Hop; url: URL } | { error: string; final?: boolean; gated?: boolean; searchOnly?: boolean };
 type GetOpts = { admitted?: Set<string>; body?: Buffer; deadline?: AbortSignal; robots?: boolean };
 
@@ -369,7 +369,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     }
     // A redirect that lands on a never-fetch host makes the read search-only too.
     const searchOnly = linkedIn || step.searchOnly === true;
-    if (step.ok) return { status: "ok", url: key, route: step.route, text: capText(markPage(step.text)), tried: step.tried };
+    if (step.ok) return { status: "ok", url: key, route: step.route, text: capText(markPage(step.text)) + (step.first ?? ""), tried: step.tried };
     const tried = [...step.tried];
     const text = capText(step.text);
     if (step.final) return { status: "blocked", url: key, route: step.route, text, tried };
@@ -386,7 +386,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
   }
 
   /** Step 4's answer, so the same URL is not read twice within the cache window. */
-  function remember(raw: string, route: string, text: string): void {
+  function remember(raw: string, route: string, text: string, first?: string): void {
     let url: URL;
     try {
       url = new URL(raw);
@@ -395,7 +395,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     }
     if (refusedTarget(url) || isLinkedIn(url.hostname) || !text.trim()) return;
     url.hash = "";
-    cache.set(url.href, { step: { ok: true, route, text, tried: [`${route}: read earlier`], keep: true }, at: now() });
+    cache.set(url.href, { step: { ok: true, route, text, tried: [`${route}: read earlier`], keep: true, ...(first ? { first } : {}) }, at: now() });
   }
 
   return { read, remember, gate };
@@ -422,12 +422,12 @@ export function webReadRoute(
   return async (req: IncomingMessage, res: ServerResponse) => {
     const source = caller(req.headers.authorization);
     if (!source) return json(res, 403, { error: "unknown sender" });
-    const body = ((await readBody(req)) ?? {}) as { url?: unknown; own_tool_failed?: unknown; no_reader?: unknown; remember?: { route?: unknown; text?: unknown } };
+    const body = ((await readBody(req)) ?? {}) as { url?: unknown; own_tool_failed?: unknown; no_reader?: unknown; remember?: { route?: unknown; text?: unknown; first?: unknown } };
     const url = typeof body.url === "string" ? body.url : "";
     const guest = guestTurn(source.botId, source.threadId);
     if (body.remember && typeof body.remember.text === "string") {
       if (guest) return json(res, 403, { error: "a guest turn can't add pages to the shared cache" });
-      reader.remember(url, String(body.remember.route ?? "reader"), body.remember.text);
+      reader.remember(url, String(body.remember.route ?? "reader"), body.remember.text, typeof body.remember.first === "string" ? body.remember.first : undefined);
       return json(res, 200, { ok: true });
     }
     if (guest) {
