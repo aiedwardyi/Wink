@@ -9,35 +9,19 @@ import { Fold } from "./Fold";
 import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 
 type Source = { source: string; facts: string[] };
-type Added = { added: number; found: number; hidden: number; full: number };
+type Added = { added: number; found: number; hidden: number };
 
 const STEP = "flex items-center justify-between gap-4";
 const STEP_TITLE = "text-[13px] font-medium text-ink";
 
-/** Settings > About You: what the user's other AI knew about them, read by every bot. */
-export function AboutYouCard() {
+/** The import prompt with its copy button, the same in Settings and a new chat's import card. */
+export function ImportPromptBox({ className }: { className?: string }) {
   const { t } = useI18n();
-  const [sources, setSources] = useState<Source[] | null>(null);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [more, setMore] = useState(false);
-  const [open, setOpen] = useState<string | null>(null);
-  const [note, setNote] = useState("");
   const copiedTimer = useRef<number | null>(null);
-  // only the newest request's list lands: an older answer would undo a newer change
-  const listSeq = useRef(0);
 
-  useEffect(() => {
-    let gone = false;
-    const seq = ++listSeq.current;
-    void api("/api/about-you").then((body) => {
-      if (!gone && seq === listSeq.current && Array.isArray(body?.sources)) setSources(body.sources);
-    }).catch(() => {});
-    return () => {
-      gone = true;
-      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
-    };
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
   }, []);
 
   const copy = async () => {
@@ -50,6 +34,45 @@ export function AboutYouCard() {
       /* clipboard permission can be denied; leave the button unchanged */
     }
   };
+
+  return (
+    <div className={cn("flex items-start gap-1 rounded-lg border border-hairline/40 bg-raised p-1.5", className)}>
+      <div tabIndex={0} className="max-h-[129px] min-w-0 flex-1 overflow-hidden whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+        {t("aboutYou.prompt")}
+      </div>
+      <button
+        onClick={() => void copy()}
+        aria-label={copied ? t("aboutYou.copied") : t("aboutYou.copy")}
+        className="relative shrink-0 rounded p-1.5 text-ink-secondary hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-1 [@media(pointer:coarse)]:after:content-['']"
+      >
+        {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+      </button>
+    </div>
+  );
+}
+
+/** Settings > About You: what the user's other AI knew about them, read by every bot. */
+export function AboutYouCard() {
+  const { t } = useI18n();
+  const [sources, setSources] = useState<Source[] | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [more, setMore] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  // only the newest request's list lands: an older answer would undo a newer change
+  const listSeq = useRef(0);
+
+  useEffect(() => {
+    let gone = false;
+    const seq = ++listSeq.current;
+    void api("/api/about-you").then((body) => {
+      if (!gone && seq === listSeq.current && Array.isArray(body?.sources)) setSources(body.sources);
+    }).catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, []);
 
   const add = async () => {
     if (busy || !text.trim()) return;
@@ -84,18 +107,7 @@ export function AboutYouCard() {
     <div className="flex flex-col gap-6">
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step1")}</div>
-        <div className="mt-2 flex items-start gap-1 rounded-lg border border-hairline/40 bg-raised p-1.5">
-          <div tabIndex={0} className="max-h-[129px] min-w-0 flex-1 overflow-hidden whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
-            {t("aboutYou.prompt")}
-          </div>
-          <button
-            onClick={() => void copy()}
-            aria-label={copied ? t("aboutYou.copied") : t("aboutYou.copy")}
-            className="relative shrink-0 rounded p-1.5 text-ink-secondary hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-1 [@media(pointer:coarse)]:after:content-['']"
-          >
-            {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-          </button>
-        </div>
+        <ImportPromptBox className="mt-2" />
       </div>
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step2")}</div>

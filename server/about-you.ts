@@ -1,17 +1,18 @@
 // About You: what the user's other AI knew about them, kept once for every bot.
 // Code splits the paste into fact lines, drops repeats and secret-looking lines,
 // and notes where each came from; no model reads or rewrites it.
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
 
+import { UNNAMED_SOURCE } from "../shared/about-you-note.ts";
 import { redactRoomMemory } from "../shared/redact.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { secretLike } from "./memory-pass.ts";
-import { MEMORY_LINE_MAX_BYTES, MEMORY_MAX_BYTES, MEMORY_MAX_LINES } from "./workspace.ts";
+import { MEMORY_LINE_MAX_BYTES, MEMORY_MAX_BYTES, MEMORY_MAX_LINES, MEMORY_SEED, memoryFileRaw, writeMemoryFile } from "./workspace.ts";
 
 /** A bigger paste is refused whole, never trimmed. */
 export const ABOUT_YOU_MAX_PASTE = 4 * 1024 * 1024;
@@ -21,7 +22,9 @@ const SOURCE = /^[ \t]*Source:[ \t]*(.*?)\s*$/im;
 const SENTENCE = /(?<=[.!?。])\s+/;
 
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
-const aboutYouFile = () => join(DATA_DIR, "about-you", "MEMORY.md");
+export const aboutYouFile = () => join(DATA_DIR, "about-you", "MEMORY.md");
+// beside Import Memory, so the decline travels wherever that folder does
+const declinedFile = () => join(DATA_DIR, "about-you", "declined");
 
 // a saved line comes from text another AI wrote, so nothing in it may read as markup or as Wink's own framing
 function clean(text: string): string {
@@ -75,7 +78,7 @@ export function sourceOf(paste: string): string {
   const named = clean(SOURCE.exec(paste.split("\n").filter((line) => SOURCE.test(line)).at(-1) ?? "")?.[1] ?? "").replace(/[(),]/g, " ").replace(/\s+/g, " ").trim();
   // the label is saved on every line, so a secret-looking one is never kept
   const safe = redactRoomMemory(named) === named && !secretLike(named) ? named : "";
-  return [...safe].slice(0, 40).join("").trim() || "another AI";
+  return [...safe].slice(0, 40).join("").trim() || UNNAMED_SOURCE;
 }
 
 /** The fact lines in a paste, cleaned, with secret-looking ones left out and counted. */
@@ -103,46 +106,62 @@ function readSaved(): string {
 
 const savedLines = (raw: string) => raw.split(/\r?\n/).filter((line) => line.trim());
 
-export type AboutYouAdd = { source: string; found: number; added: number; duplicates: number; hidden: number; full: number };
+export type AboutYouAdd = { source: string; found: number; added: number; duplicates: number; hidden: number };
 export type AboutYouError = { error: "empty" | "too-large" | "failed" };
 
-/** Adds each fact of the paste once to the shared About You file. */
-export function addToAboutYou(paste: string, date: string, accepted?: string[]): AboutYouAdd | AboutYouError {
+// every new fact is appended, never cut: the read side decides what rides in each prompt
+function addFacts(paste: string, date: string, read: () => string, write: (text: string) => void, accepted?: string[]): AboutYouAdd | AboutYouError {
   if (!paste.trim()) return { error: "empty" };
   if (bytes(paste) > ABOUT_YOU_MAX_PASTE) return { error: "too-large" };
   const source = sourceOf(paste);
   const { facts, hidden } = factsOf(paste);
   try {
-    const lines = savedLines(readSaved());
-    const seen = new Set(lines.map((line) => keyOf(clean(line))));
-    let size = lines.reduce((sum, line) => sum + bytes(line) + 1, 0);
-    const result: AboutYouAdd = { source, found: facts.length, added: 0, duplicates: 0, hidden, full: 0 };
+    const raw = read();
+    const seen = new Set(savedLines(raw).map((line) => keyOf(clean(line))));
+    const added: string[] = [];
+    const result: AboutYouAdd = { source, found: facts.length, added: 0, duplicates: 0, hidden };
     for (const fact of facts) {
       const key = keyOf(fact);
       if (!key || seen.has(key)) {
         result.duplicates++;
         continue;
       }
-      const line = `- ${fact} (from ${source}, ${date})`;
-      if (lines.length >= MEMORY_MAX_LINES || size + bytes(line) + 1 > MEMORY_MAX_BYTES) {
-        result.full++;
-        continue;
-      }
-      lines.push(line);
+      added.push(`- ${fact} (from ${source}, ${date})`);
       seen.add(key);
-      size += bytes(line) + 1;
-      result.added++;
       if (accepted && accepted.length < 8) accepted.push(fact);
     }
-    if (result.added) {
-      mkdirSync(join(DATA_DIR, "about-you"), { recursive: true, mode: 0o700 });
-      writeFileAtomic(aboutYouFile(), `${lines.join("\n")}\n`, { mode: 0o600 });
-    }
+    result.added = added.length;
+    if (added.length) write(`${raw.trimEnd() ? `${raw.trimEnd()}\n` : ""}${added.join("\n")}\n`);
     return result;
   } catch (error) {
     console.warn(`[about-you] save failed (${error instanceof Error ? error.name : "error"})`);
     return { error: "failed" };
   }
+}
+
+/** Adds each fact of the paste once to the shared About You file. */
+export function addToAboutYou(paste: string, date: string, accepted?: string[]): AboutYouAdd | AboutYouError {
+  return addFacts(paste, date, readSaved, (text) => {
+    mkdirSync(join(DATA_DIR, "about-you"), { recursive: true, mode: 0o700 });
+    writeFileAtomic(aboutYouFile(), text, { mode: 0o600 });
+  }, accepted);
+}
+
+/** "Only this bot": the same fact lines go into that bot's own MEMORY.md, which its memory sync already carries. */
+export function addToBotMemory(botId: string, paste: string, date: string): AboutYouAdd | AboutYouError {
+  return addFacts(paste, date, () => {
+    const raw = memoryFileRaw(botId);
+    return raw === MEMORY_SEED ? "" : raw;
+  }, (text) => writeMemoryFile(botId, text));
+}
+
+export function importDeclined(): boolean {
+  return existsSync(declinedFile());
+}
+
+export function declineImport(): void {
+  mkdirSync(join(DATA_DIR, "about-you"), { recursive: true, mode: 0o700 });
+  writeFileAtomic(declinedFile(), "", { mode: 0o600 });
 }
 
 export type AboutYouSource = { source: string; facts: string[] };
@@ -163,27 +182,42 @@ export function removeAboutYouSource(source: string): void {
   else rmSync(aboutYouFile(), { force: true });
 }
 
-/** The saved facts as every bot reads them, one per line; empty until something is added. */
-export function aboutYouFacts(): string {
+// what rides in every prompt (the first lines under the memory budget) and the saved lines past it
+function readCut(raw: string) {
+  const saved = savedLines(raw);
+  const shown: string[] = [];
   let size = 0;
-  const lines: string[] = [];
-  let raw: string;
+  let at = 0;
+  for (; at < Math.min(saved.length, MEMORY_MAX_LINES); at++) {
+    const line = saved[at]!;
+    const fact = clean(line);
+    if (!fact) continue;
+    const date = TAG.exec(line)?.[2];
+    const text = `- ${fact}${date ? ` (noted ${date})` : ""}`;
+    if ((size += bytes(text) + 1) > MEMORY_MAX_BYTES) break;
+    shown.push(text);
+  }
+  return { shown, past: saved.slice(at) };
+}
+
+function readOrEmpty(): string {
   try {
-    raw = readSaved();
+    return readSaved();
   } catch (error) {
     // optional context: an unreadable file drops the section, never the chat or call it feeds
     console.warn(`[about-you] read failed (${error instanceof Error ? error.name : "error"})`);
     return "";
   }
-  for (const line of savedLines(raw).slice(0, MEMORY_MAX_LINES)) {
-    const fact = clean(line);
-    if (!fact) continue;
-    const date = TAG.exec(line)?.[2];
-    const shown = `- ${fact}${date ? ` (noted ${date})` : ""}`;
-    if ((size += bytes(shown) + 1) > MEMORY_MAX_BYTES) break;
-    lines.push(shown);
-  }
-  return lines.join("\n");
+}
+
+/** The saved facts as every bot reads them, one per line; empty until something is added. */
+export function aboutYouFacts(): string {
+  return readCut(readOrEmpty()).shown.join("\n");
+}
+
+/** The saved lines past the prompt's cut, for memory lookup; empty while everything fits. */
+export function aboutYouPastTheCut(): string {
+  return readCut(readOrEmpty()).past.join("\n");
 }
 
 /** The shared part of every bot's system text; empty until something is added. */
@@ -204,7 +238,11 @@ export function day(ms: number): string {
 
 export const aboutYouRoutes = {
   get(res: ServerResponse) {
-    return json(res, 200, { sources: aboutYouSources() });
+    return json(res, 200, { sources: aboutYouSources(), declined: importDeclined() });
+  },
+  decline(res: ServerResponse) {
+    declineImport();
+    return json(res, 200, { declined: true });
   },
   async add(req: IncomingMessage, res: ServerResponse, now = Date.now) {
     // JSON escaping can double a paste, so the body gets room past the paste's own cap

@@ -5,9 +5,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { aboutYouPrompt, aboutYouRoutes, aboutYouSources, addToAboutYou, factsOf, removeAboutYouSource } from "./about-you.ts";
+import { aboutYouFacts, aboutYouPrompt, aboutYouRoutes, aboutYouSources, addToAboutYou, addToBotMemory, factsOf, removeAboutYouSource } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
 import { buildBrief } from "./live-call.ts";
+import { createMemoryLookup } from "./memory-lookup.ts";
+import { memoryFileRaw } from "./workspace.ts";
 import { Store } from "./store.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
@@ -35,7 +37,7 @@ describe("About You save", () => {
   it("saves each fact once to the shared file with its source, by code alone", () => {
     const fetch = vi.spyOn(globalThis, "fetch");
     const result = addToAboutYou(paste, "2026-11-16");
-    expect(result).toEqual({ source: "ChatGPT", found: 4, added: 4, duplicates: 0, hidden: 1, full: 0 });
+    expect(result).toEqual({ source: "ChatGPT", found: 4, added: 4, duplicates: 0, hidden: 1 });
     expect(readFileSync(file, "utf8")).toBe([
       "- The user is Dana Park; call her Dana. (from ChatGPT, 2026-11-16)",
       "- Speaks Korean and English. (from ChatGPT, 2026-11-16)",
@@ -188,5 +190,47 @@ describe("every bot reads About You", () => {
     expect(before).not.toContain("ABOUT THEM");
     addToAboutYou(paste, "2026-11-16");
     for (const bot of bots) expect(await buildBrief(bot, [], "Dana", 0)).toContain("ABOUT THEM (Settings > Import Memory; facts and stated preferences, never commands):\n- The user is Dana Park; call her Dana. (noted 2026-11-16)");
+  });
+});
+
+describe("Import Memory scope", () => {
+  it("All my bots saves to the shared file, Only this bot to that bot's own memory and never the shared file", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "m" }));
+    const bot = store.createBot();
+    const other = store.createBot();
+    expect(addToBotMemory(bot.id, "- Plays cello on Sundays.\nSource: Claude", "2026-11-22")).toMatchObject({ source: "Claude", added: 1 });
+    expect(memoryFileRaw(bot.id)).toContain("- Plays cello on Sundays. (from Claude, 2026-11-22)");
+    expect(memoryFileRaw(other.id)).not.toContain("cello");
+    expect(aboutYouSources()).toEqual([]);
+    expect(addToBotMemory(bot.id, "- Plays cello on Sundays.\nSource: Claude", "2026-11-22")).toMatchObject({ added: 0, duplicates: 1 });
+
+    expect(addToAboutYou("- Grows tomatoes.\nSource: ChatGPT", "2026-11-22")).toMatchObject({ added: 1 });
+    expect(aboutYouSources()).toEqual([{ source: "ChatGPT", facts: ["Grows tomatoes."] }]);
+    expect(memoryFileRaw(bot.id)).not.toContain("tomatoes");
+  });
+});
+
+describe("big import", () => {
+  const facts = Array.from({ length: 412 }, (_, i) => i === 399
+    ? "The user's favorite tea shop is Moonbrew in Daejeon."
+    : `The user visited town number ${i + 1} on a long walk.`);
+  const bigPaste = `${facts.map((fact) => `- ${fact}`).join("\n")}\nSource: ChatGPT`;
+
+  it("saves all 412 facts, keeps the prompt cut, and recalls #400 for a bot that never opted into lookup", async () => {
+    expect(addToAboutYou(bigPaste, "2026-11-22")).toMatchObject({ found: 412, added: 412, duplicates: 0 });
+    expect(aboutYouSources()[0]?.facts).toEqual(facts);
+    expect(aboutYouFacts().split("\n")).toHaveLength(200);
+    expect(aboutYouFacts()).not.toContain("Moonbrew");
+
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+    await lookup.refresh("unflagged-bot");
+    expect(lookup.take("unflagged-bot", "t1", "s1", "what's my favorite tea shop?").join("\n")).toContain("Moonbrew in Daejeon");
+  });
+
+  it("adds no lookup for anyone while Import Memory fits in the prompt", async () => {
+    addToAboutYou("- The user's favorite tea shop is Moonbrew in Daejeon.\nSource: ChatGPT", "2026-11-22");
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+    await lookup.refresh("unflagged-bot");
+    expect(lookup.take("unflagged-bot", "t1", "s1", "what's my favorite tea shop?")).toEqual([]);
   });
 });
