@@ -11,6 +11,8 @@
   const LAST_PC = "wink-signin-pc";
   const ACCOUNT = "wink-signin-account";
   const OPENING = "wink-signin-opening";
+  // The PC a typed code reached in this browser: its return leg offers that PC's own code form.
+  const TYPED = "wink-signin-typed";
   const EMPTY = "Sign in with Google in Wink on your PC first: Settings, Devices.";
   const OFFLINE = "Could not reach your PC. Check your connection and try again.";
   const BAD_LINK = "That PC link is not valid.";
@@ -26,8 +28,6 @@
   let listed = [];
   let account = "";
   let showBoxes = () => {};
-  // On the return leg: the PC's own page, whose code form needs no Google.
-  let pairPage = "";
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
@@ -131,14 +131,15 @@
     return spin;
   }
 
-  // A return leg that cannot open the PC with Google, such as in a browser where Google sign-in cannot finish, still has the PC's code.
-  function offerCode() {
-    if (pairPage) $("code").hidden = false;
-  }
-
-  function pairPageFor(pc) {
-    pairPage = `https://${pc}.${config.base}/pair`;
-    $("usecode").addEventListener("click", () => location.assign(pairPage));
+  // A browser where Google cannot finish (Meta's glasses web view) still gets in with the PC's own code form, so a PC a typed code reached offers it from the start: no Google outcome is waited for.
+  function offerCode(pc) {
+    try {
+      if (localStorage.getItem(TYPED) !== pc) return;
+    } catch {
+      return;
+    }
+    $("usecode").addEventListener("click", () => location.assign(`https://${pc}.${config.base}/pair`));
+    $("code").hidden = false;
   }
 
   function opening(name) {
@@ -346,6 +347,9 @@
       // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
       if (LABEL_RE.test(label)) {
         holdAccount(label);
+        try {
+          localStorage.setItem(TYPED, label);
+        } catch {}
         typed = true;
         location.assign(`https://${label}.${config.base}/pair?g=1`);
         return;
@@ -496,7 +500,6 @@
         buttonShown = true;
         $("title").textContent = "Sign in";
         slot.hidden = false;
-        offerCode();
         slot.classList.remove("ready");
         slot.classList.toggle("last", LABEL_RE.test(remembered()));
         slot.replaceChildren();
@@ -564,6 +567,9 @@
     codeLink();
     // From a PC the account is usually known to Google, so try its quiet sign-in before drawing the button.
     if (pick) $("title").textContent = "Choose a PC";
+    if (!gis) gis = await google;
+    // Google would otherwise sign the browser straight back in on the PC's return leg.
+    if (signedOut) gis.disableAutoSelect();
     const token = await requestToken(randomNonce(), pick);
     account = subject(token);
     const listed = await loadPcs(token);
@@ -584,12 +590,10 @@
     const listed = await loadPcs(pcToken);
     if (!listed) {
       say(OFFLINE, "error");
-      offerCode();
       return;
     }
     if (!listed.some((row) => row.label === pc) || (held && subject(pcToken) !== held)) {
       say(NOT_YOURS, "error");
-      offerCode();
       return;
     }
     go(pc, `#g=${encodeURIComponent(pcToken)}`, name);
@@ -633,8 +637,6 @@
     if (pc === null && m === null) {
       showCode();
       const signedOut = params.get("signedout") === "1";
-      // Google would otherwise sign the browser straight back in on the PC's return leg.
-      if (signedOut) gis.disableAutoSelect();
       addEventListener("hashchange", codeLink);
       void coldStart(params.get("pick") === "1", signedOut).catch(() => {
         say(GOOGLE_DOWN, "error");
@@ -648,33 +650,25 @@
       say(BAD_LINK, "error");
       return;
     }
-    pairPageFor(pc);
-    void returnLeg(pc, m).catch(() => {
-      say(GOOGLE_DOWN, "error");
-      offerCode();
-    });
+    void returnLeg(pc, m).catch(() => say(GOOGLE_DOWN, "error"));
   }
 
   if (PHONE_RE.test(navigator.userAgent)) $("subtitle").textContent = "Reach Wink on your PC from this phone.";
   const leg = new URLSearchParams(location.search);
-  if (LABEL_RE.test(leg.get("pc") || "") && M_RE.test(leg.get("m") || "")) opening(heldName(leg.get("pc")));
+  config = readConfig();
+  if (LABEL_RE.test(leg.get("pc") || "") && M_RE.test(leg.get("m") || "")) {
+    opening(heldName(leg.get("pc")));
+    if (config) offerCode(leg.get("pc"));
+  }
   // Back from a PC restores this page from bfcache with the PC buttons still opening.
   addEventListener("pageshow", (event) => {
     if (event.persisted && !$("list").hidden) showList(listed);
   });
 
   const ready = googleId();
-  if (ready) run(ready);
-  else
-    void whenGoogle()
-      .then(run)
-      .catch(() => {
-        say(GOOGLE_DOWN, "error");
-        // The PC's code form needs no Google, so a return leg still has it.
-        config = readConfig();
-        if (config && LABEL_RE.test(leg.get("pc") || "") && M_RE.test(leg.get("m") || "")) {
-          pairPageFor(leg.get("pc"));
-          offerCode();
-        }
-      });
+  const google = ready ? Promise.resolve(ready) : whenGoogle();
+  google.catch(() => {});
+  // Typing a PC's code needs no Google, so the front page does not wait for its script; only its Google sign-in does.
+  if (ready || (!leg.has("pc") && !leg.has("m"))) run(ready);
+  else void google.then(run).catch(() => say(GOOGLE_DOWN, "error"));
 })();
