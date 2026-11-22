@@ -31,6 +31,8 @@ const CACHE_ROWS = 300;
 const FIRST_READ_MAX = WEB_READ_FIRST_MARK.length + capText("x".repeat(1_000_000)).length;
 // Provider-side readers that got through where Wink's own fetch could not (RESULT.md: Grok 6/6, Codex 5/6).
 export const READER_ENGINES: readonly string[] = ["grokAgent", "codex"];
+/** The only routes the tool path remembers: `reader:<engine>` or `search:<engine>`. */
+const REMEMBER_ROUTE = new RegExp(`^(reader|search):(${READER_ENGINES.join("|")})$`);
 
 export function siteKey(hostname: string): string {
   const host = hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
@@ -429,7 +431,8 @@ export function webReadRoute(
     const guest = guestTurn(source.botId, source.threadId);
     if (body.remember && typeof body.remember.text === "string") {
       if (guest) return json(res, 403, { error: "a guest turn can't add pages to the shared cache" });
-      reader.remember(url, String(body.remember.route ?? "reader"), body.remember.text, typeof body.remember.first === "string" ? body.remember.first : undefined);
+      const route = typeof body.remember.route === "string" && REMEMBER_ROUTE.test(body.remember.route) ? body.remember.route : "reader";
+      reader.remember(url, route, body.remember.text, typeof body.remember.first === "string" ? body.remember.first : undefined);
       return json(res, 200, { ok: true });
     }
     if (guest) {

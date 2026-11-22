@@ -764,6 +764,18 @@ describe("web_read gate follow-up (Fable 2123)", () => {
       expect(text).toMatch(/\[truncated: showing [\d,]+ of 999,\d{3} chars\]$/);
     });
 
+    it("remember keeps only a route the tool path sends, so a huge route can't ride a cache hit", async () => {
+      const own = await serve(false);
+      expect((await own.call({ url: "https://site.example/big", remember: { route: "reader:codex".padEnd(900_000, "x"), text: "Reader answer." } })).ok).toBe(true);
+      expect((await own.call({ url: "https://site.example/kept", remember: { route: "search:grokAgent", text: "Search answer." } })).ok).toBe(true);
+      const big = await own.call({ url: "https://site.example/big" });
+      const kept = await own.call({ url: "https://site.example/kept" });
+      await own.close();
+      expect(JSON.stringify(big).length).toBeLessThan(2_000);
+      expect(big.route).toBe("reader");
+      expect(kept.route).toBe("search:grokAgent");
+    });
+
     it("a guest turn can't write the shared cache; an own turn can and has no room cap", async () => {
       const guest = await serve(true);
       expect((await guest.call({ url: "https://site.example/a", remember: { route: "reader", text: "planted" } })).error).toBeTruthy();
