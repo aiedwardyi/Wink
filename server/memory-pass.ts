@@ -896,11 +896,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         // from its first row gone on, so a later line of the batch still lands after an earlier one written again
         const gone = overflow.findIndex(({ line }) => ![...wrote, ...seen].some((row) => row.line === line));
         const due = gone < 0 ? [] : overflow.slice(gone);
+        // written again on the day it was first noted, so it never outranks a row said after it
+        const first = (line: string) => batch.wrote?.find((row) => row.line === line)?.date ?? stamp;
+        // a row in its words counts as there only when it is as new as the note or no later-dated row of its label outdates it
+        const present = (line: string | undefined) => line !== undefined && shown({ line, date: first(line) });
         // a restart can replay a batch whose notes already landed in order
         let ends = due.length;
-        while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line)) ends -= 1;
+        while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line || !present(line))) ends -= 1;
         // a line said again lands unless it is already the newest row, so the newest row is what was said last
-        let newest = rows.at(-1);
+        let newest = present(rows.at(-1)) ? rows.at(-1) : undefined;
         const fresh = due.slice(ends).filter(({ line }) => {
           if (line === newest) return false;
           newest = line;
@@ -908,8 +912,6 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         });
         seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => ({ line, date: dates[rows.lastIndexOf(line)] ?? "" }))];
         if (fresh.length) {
-          // written again on the day it was first noted, so it never outranks a row said after it
-          const first = (line: string) => batch.wrote?.find((row) => row.line === line)?.date ?? stamp;
           const added = fresh.map(({ line }) => `- ${line} (noted ${first(line)})\n`).join("");
           appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
           const prior = overflowed.get(botId);

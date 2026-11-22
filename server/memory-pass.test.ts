@@ -1455,6 +1455,8 @@ describe("memory pass", () => {
   const restores: Array<[string, string, string]> = [
     ["dates it above two later rows", "- Has a cat (noted 2026-10-02)\n", "- Research station: Cobalt Acme (noted 2026-10-01)\n- Plays chess (noted 2026-10-03)\n- Research station: Indigo Globex (noted 2026-10-15)\n"],
     ["keeps only an older copy", "- Research station: Cobalt Acme (noted 2026-10-14)\n- Research station: Indigo Globex (noted 2026-10-15)\n", "- Research station: Cobalt Acme (noted 2026-10-14)\n- Research station: Indigo Globex (noted 2026-10-15)\n"],
+    ["moves an older copy to the end", "- Has a cat (noted 2026-10-02)\n", "- Research station: Indigo Globex (noted 2026-10-15)\n- Plays chess (noted 2026-10-03)\n- Research station: Cobalt Acme (noted 2026-10-01)\n"],
+    ["has an older copy above and at the end", "- Has a cat (noted 2026-10-02)\n", "- Research station: Cobalt Acme (noted 2026-10-01)\n- Research station: Indigo Globex (noted 2026-10-15)\n- Plays chess (noted 2026-10-03)\n- Research station: Cobalt Acme (noted 2026-10-01)\n"],
   ];
   it.each(restores.flatMap(([kind, before, restored]) => [[kind, "retry", before, restored], [kind, "restart", before, restored]] as const))("keeps a held return in recall and in its chip when a restored older file %s, then a %s", async (_kind, how, before, restored) => {
     writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
