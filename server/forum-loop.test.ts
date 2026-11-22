@@ -966,6 +966,54 @@ describe("what tells two failures apart, and what only tells two runs apart", ()
     expect(w.loop.next("tc")).toContain("pip install psycopg2-binary.");
   });
 
+  it("reads a failed Docker build step through BuildKit's prefix, never signs its wrapper line, and signs nothing when the step says nothing strong", () => {
+    // BuildKit's plain progress: the step's own log under "#7 <seconds> ", then the wrapper lines naming only the step
+    const buildkit = (run: string, printed: string[], at = 0.5) => {
+      const timed = printed.map((line, i) => [(at + i * 0.11).toFixed(3), line] as const);
+      return [
+        "#0 building with \"default\" instance using docker driver", "", "#1 [internal] load build definition from Dockerfile", "#1 DONE 0.0s", "",
+        `#7 [builder 4/7] RUN ${run}`, ...timed.map(([s, line]) => `#7 ${s} ${line}`),
+        `#7 ERROR: process "/bin/sh -c ${run}" did not complete successfully: exit code: 1`,
+        "------", ` > [builder 4/7] RUN ${run}:`, ...timed.map(([s, line]) => `${s} ${line}`), "------",
+        "Dockerfile:9", "--------------------", "   9 | >>> RUN " + run, "  10 |     COPY . .", "--------------------",
+        `ERROR: failed to solve: process "/bin/sh -c ${run}" did not complete successfully: exit code: 1`,
+      ].join("\n");
+    };
+    const log = (stamp: string) => `npm error A complete log of this run can be found in: /root/.npm/_logs/${stamp}-debug-0.log`;
+    const lockfile = (stamp: string) => ["npm error code EUSAGE", "npm error", "npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.", "npm error", "npm error Missing: zod@4.1.12 from lock file", log(stamp)];
+    const CAUSES: Record<string, [string, string[]]> = {
+      lockfile: ["npm ci", lockfile("2026-11-20T08_14_22_771Z")],
+      e401: ["npm ci", ["npm error code E401", "npm error Incorrect or missing password.", "npm error If you were trying to login, change your password, create an", log("2026-11-21T08_41_55_090Z")]],
+      e401Url: ["npm ci", ["npm error code E401", "npm error 401 Unauthorized - GET https://npm.pkg.github.com/download/@acme/ui-kit/2.3.1/8f1c2a7d0b3e4c5f9a6b7c8d9e0f1a2b3c4d5e6f - unauthenticated: User cannot be authenticated with the token provided.", log("2026-11-20T09_33_10_052Z")]],
+      reset: ["npm ci", ["npm error code ECONNRESET", "npm error network aborted", "npm error network This is a problem related to network connectivity.", log("2026-11-21T09_12_01_733Z")]],
+      eresolve: ["npm ci", ["npm error code ERESOLVE", "npm error ERESOLVE could not resolve", "npm error", "npm error While resolving: react-dom@19.0.0", "npm error Found: react@18.3.1", log("2026-11-21T09_30_44_120Z")]],
+      pnpmLock: ["pnpm install --frozen-lockfile", [" ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\" because pnpm-lock.yaml is not up to date with package.json"]],
+      pnpm401: ["pnpm install --frozen-lockfile", [" ERR_PNPM_FETCH_401  GET https://npm.pkg.github.com/download/@acme/ui/2.1.0/4be1: Unauthorized - 401", "", "No authorization header was set for the request."]],
+      yarnLock: ["yarn install --frozen-lockfile", ["yarn install v1.22.22", "[1/4] Resolving packages...", "error Your lockfile needs to be updated, but yarn was run with `--frozen-lockfile`."]],
+      yarnNet: ["yarn install --frozen-lockfile", ["yarn install v1.22.22", "[2/4] Fetching packages...", "error An unexpected error occurred: \"https://registry.yarnpkg.com/sharp/-/sharp-0.33.5.tgz: ESOCKETTIMEDOUT\"."]],
+      aptMissing: ["apt-get install -y libvips42", ["Reading package lists...", "E: Unable to locate package libvips42"]],
+      aptFetch: ["apt-get install -y libvips42", ["Err:1 http://deb.debian.org/debian bookworm/main amd64 libvips42 amd64 8.14.1-3", "  Temporary failure resolving 'deb.debian.org'", "E: Failed to fetch http://deb.debian.org/debian/pool/main/v/vips/libvips42_8.14.1-3_amd64.deb  Temporary failure resolving 'deb.debian.org'"]],
+      goUndefined: ["go build ./...", ["# acme/api/internal/store", "internal/store/pg.go:41:9: undefined: pgx.ConnPool"]],
+      goSum: ["go build ./...", ["internal/store/pg.go:8:2: missing go.sum entry for module providing package github.com/jackc/pgx/v5 (imported by acme/api/internal/store); to add:", "\tgo get acme/api/internal/store"]],
+    };
+    const PAIRS = [["lockfile", "e401"], ["lockfile", "e401Url"], ["lockfile", "reset"], ["e401", "eresolve"], ["pnpmLock", "pnpm401"], ["yarnLock", "yarnNet"], ["aptMissing", "aptFetch"], ["goUndefined", "goSum"]];
+    const shared = ["docker build -t acme/api .", "docker compose build api"].flatMap((command) => PAIRS.flatMap(([a, b]) => {
+      const [sigA, sigB] = [a!, b!].map((cause) => sig(command, buildkit(...CAUSES[cause]!)));
+      return sigA && sigA === sigB ? [`${command}: ${a} vs ${b}`] : [];
+    }));
+    expect(shared).toEqual([]);
+    for (const [run, printed] of Object.values(CAUSES)) expect(errorLine(buildkit(run, printed))).not.toMatch(/did not complete successfully|failed to solve/);
+    expect(errorLine(buildkit(...CAUSES.lockfile!))).toMatch(/^npm error `npm ci` can only install packages/);
+    // the same step failing for the same reason, with other timings and another npm log stamp, is a real repeat
+    const again = sig("docker build -t acme/api .", buildkit("npm ci", lockfile("2026-11-21T02_45_51_306Z"), 2.377));
+    expect(again).toBeTruthy();
+    expect(again).toBe(sig("docker build -t acme/api .", buildkit(...CAUSES.lockfile!)));
+    // with no summary under the step, the step's own header still says which
+    const pnpm = (s: string) => `#8 [builder 4/5] RUN pnpm install --frozen-lockfile\n#8 ${s} ERR_PNPM_OUTDATED_LOCKFILE Cannot install with "frozen-lockfile" because pnpm-lock.yaml is not up to date\nERROR: failed to solve: process "/bin/sh -c pnpm install --frozen-lockfile" did not complete successfully: exit code: 1`;
+    expect(sig("docker build -f Dockerfile.api .", pnpm("1.930"))).toBeTruthy();
+    expect(sig("docker build -f Dockerfile.api .", pnpm("1.930"))).toBe(sig("docker build -f Dockerfile.api .", pnpm("2.114")));
+  });
+
   it("follows cd -P, cd -L and a WSL /mnt/<drive> path", () => {
     const root = temps.make(join(tmpdir(), "orbit-forum-cd-"));
     const auth = join(root, "services", "auth");

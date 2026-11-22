@@ -22,11 +22,13 @@ const BOILERPLATE = [
   /^(?:RUN|FAIL|PASS|SKIP|✓|×|❯)\s/,
   /^(?:test files|tests|test suites|duration|start at|ran \d+ tests?)\b/i,
   /command failed with exit code|exited with (?:code|status)|returned non-zero exit status|process didn't exit successfully|could not compile|ELIFECYCLE|ERR_PNPM_RECURSIVE_|^error: aborting due to/i,
-  /^npm (?:error|ERR!) (?:code|errno|path|command|signal|syscall|a complete log|lifecycle)\b/i,
+  /^npm (?:error|ERR!)(?: (?:code|errno|path|command|signal|syscall|a complete log|lifecycle)\b|$)/i,
+  // a Docker build's wrapper: it names the step that failed, not why (BuildKit, its older executor, compose v1)
+  /\bdid not complete successfully: exit code\b|\bexecutor failed running \[|^(?:error: )?service '[^']*' failed to build\b/i,
   /^found \d+ errors?\b|^\d+ (?:errors?|failed|failing)\b/i,
   /^make(?:\[\d+\])?: \*\*\*/,
 ];
-const STRONG = /^(?:[\w.$]*(?:Error|Exception)\b.*:|(?:error|fatal|panic)\b|npm (?:error|ERR!)|E {2,}\S)|\berror(?:\[\w+\]| [A-Z]+\d+)?:/i;
+const STRONG = /^(?:[\w.$]*(?:Error|Exception)\b.*:|(?:error|fatal|panic)\b|npm (?:error|ERR!)|ERR_PNPM_\w+|E {2,}\S)|\berror(?:\[\w+\]| [A-Z]+\d+)?:/i;
 // a header whose detail is on the next line: pydantic names the field under "1 validation error for Settings"
 const HEADER = /\b\d+ validation errors? for \S+$/i;
 // a timeout says that something did not happen in time, not why: two different failures print the same line
@@ -41,6 +43,8 @@ const RUNNER = /^(?:● |[-=_⎯]{3,}|(?:FAIL|PASS|RUN)\s|[✓√×❯↓]\s|Tes
 const FAILURES = /^(?:⎯+ (?:failed (?:tests|suites) \d+|unhandled (?:errors?|rejections?)) ⎯+|=+ (?:failures|errors) =+)$/i;
 // Python prints a chain's root cause first: what follows was raised while handling it or wraps it, so two causes share it
 const CHAINED = /^(?:during handling of the above exception, another exception occurred|the above exception was the direct cause of the following exception):$/i;
+// BuildKit's plain progress puts "#<step> <seconds> " before each line a build step printed
+const BUILDKIT = /^#\d+ (?:\d+\.\d+ )?/;
 const WEAK = /\b(?:error|failed|failure|cannot|can't|could not|unable|not found|no such|denied|refused|hang up|timed? ?out|undefined|invalid|unexpected|missing)\b/i;
 // Fail closed: a failure is signed only when it says which failure it is, since a missed handoff costs nothing and a wrong one
 // teaches a bot the wrong fix. That is a failing test with its file, from a runner read below, or an error naming a path with a
@@ -87,7 +91,10 @@ const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0,
  */
 export function errorLine(output: string): string {
   let logged = false;
-  const printed = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
+  const raw = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
+  // a Docker build: the error is a line its step printed, and a step whose lines say nothing strong is not signed
+  const built = raw.some((line) => BUILDKIT.test(line));
+  const printed = built ? raw.map((line) => line.replace(BUILDKIT, "").trim()) : raw;
   const all = printed.slice(Math.max(0, printed.findIndex((line) => FAILURES.test(line))))
     .filter((line) => !(logged = CAPTURED.test(line) || (logged && !RUNNER.test(line))))
     .filter((line) => line && !BOILERPLATE.some((rule) => rule.test(line)));
@@ -95,7 +102,7 @@ export function errorLine(output: string): string {
   const chained = traceback ? all.findIndex((line) => CHAINED.test(line)) : -1;
   const lines = chained < 0 ? all : all.slice(0, chained);
   const strong = lines.flatMap((line, at) => (STRONG.test(line) ? [at] : []));
-  const at = (traceback ? strong.at(-1) : strong[0]) ?? lines.findIndex((line) => WEAK.test(line));
+  const at = (traceback ? strong.at(-1) : strong[0]) ?? (built ? -1 : lines.findIndex((line) => WEAK.test(line)));
   const line = lines[at] ?? "";
   // a header with no detail under it says nothing about which failure this is
   return HEADER.test(line) ? (lines[at + 1] ? `${line} ${lines[at + 1]}` : "") : line;
@@ -274,8 +281,8 @@ const TEMP = slashed(tmpdir());
  * out, error codes stay, so TS2304 and TS2322 sign apart. "" when nothing says which failure this is. Its own hash, so no
  * post's text-made error_sig can match it.
  */
-export function runSig(line: string, where: { place: ShellPlace; command: string; test?: string; frame?: string }): string {
-  const { place, command, test = "", frame = "" } = where;
+export function runSig(line: string, where: { place: ShellPlace; command: string; test?: string; frame?: string; step?: string }): string {
+  const { place, command, test = "", frame = "", step = "" } = where;
   const at = placed(place);
   const paths: string[] = [];
   const spots: string[] = [];
@@ -309,12 +316,14 @@ export function runSig(line: string, where: { place: ShellPlace; command: string
   const stem = words(rest).slice(0, 24).join(" ");
   if (!test) {
     const pathError = PATH_ERROR.test(line);
-    const located = spots.length > 0 || paths.some((path) => /:\d+$/.test(path));
+    // a file named in a build step is the one that step sees, so the step says which
+    const named = Boolean(step) && BARE_FILE.test(rest);
+    const located = named || spots.length > 0 || paths.some((path) => /:\d+$/.test(path));
     if ([...paths, ...spots, frame].some((spot) => TEST_SOURCE.test(spot.replace(/^.*\//, "")))) return "";
     if ((loose.length || BARE_FILE.test(rest)) && (pathError || !located)) return "";
-    if ((pathError && !paths.length) || (!paths.length && !spots.length && !frame)) return "";
+    if ((pathError && !paths.length) || (!paths.length && !spots.length && !frame && !named)) return "";
   }
-  const what = test || [...paths, ...spots, ...loose].join(" ") || frame;
+  const what = test || [step, ...paths, ...spots, ...loose].filter(Boolean).join(" ") || frame;
   const root = place.root.replace(/(?<=.)[\\/]+$/, "").split(/[\\/]/).map((part) => part.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&")).join("[\\\\/]");
   const checkoutPath = new RegExp("(^|[\\s=\"'])" + root + "(?=[\\s\\\\/\"']|$)", /^[a-z]:/i.test(place.root) ? "gi" : "g");
   const ran = command.replace(checkoutPath, "$1<root>");
@@ -322,14 +331,26 @@ export function runSig(line: string, where: { place: ShellPlace; command: string
   return place.project === undefined ? id : PROJECT_SIG + id;
 }
 
+/**
+ * The Docker build step that printed this line, as BuildKit heads it ("[builder 4/7] run npm ci"); "" outside a build. In a build
+ * the step, not where the bot stood, says which file the line means.
+ */
+function buildStep(output: string, line: string): string {
+  const printed = stripVTControlCharacters(output).split(/\r?\n/).map((text) => text.trim());
+  const step = line ? printed.find((text) => BUILDKIT.test(text) && text.replace(BUILDKIT, "").trim() === line)?.split(" ", 1)[0] : undefined;
+  return step ? printed.find((text) => text.startsWith(`${step} [`))?.slice(step.length + 1).toLowerCase() ?? "" : "";
+}
+
 /** With no place nothing says where a failure happened, so it is not signed. */
 export function toolRun(command: string, output: string | undefined, failed: boolean, place: ShellPlace | undefined): ToolRun {
   // a secret command's output is never quoted, so nothing it printed reaches a log, a steer or a post
   if (!failed || secretCommand(command)) return { cmd: digest(command) };
-  const line = redactSecretsInText(errorLine(output ?? ""));
+  const found = errorLine(output ?? "");
+  const line = redactSecretsInText(found);
   const run: ToolRun = { cmd: digest(command), shown: cut(redactSecretsInText(command.replace(/\s+/g, " ").trim()), SHOWN_CHARS) };
   const test = place ? failingTest(output ?? "", place) : "";
-  const sig = place && line && !TIMEOUT.test(line) && (test || !testRun(output ?? "")) ? runSig(line, { place, command, test, frame: test ? "" : errorFrame(output ?? "", place) }) : "";
+  const step = buildStep(output ?? "", found);
+  const sig = place && line && !TIMEOUT.test(line) && (test || !testRun(output ?? "")) ? runSig(line, { place, command, test, step, frame: test ? "" : errorFrame(output ?? "", place) }) : "";
   if (sig) {
     run.sig = sig;
     run.error = cut(line, LINE_CHARS);
