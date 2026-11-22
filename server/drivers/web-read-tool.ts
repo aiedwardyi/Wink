@@ -66,5 +66,6 @@ export async function webRead(args: Json, api: Api, askBot: AskBot, guestTurn = 
   }
   const why = failed ? String(failed) : answer.replace(/^BLOCKED:?\s*/i, "").split("\n")[0] || "no reply";
   tried.push(`step 4-5 ${who}: ${why}`);
-  return { text: shown({ status: "blocked", route: "stop", tried, text: WEB_READ_STOP }) };
+  // The partial text Wink's own read found stays in the final answer.
+  return { text: shown({ status: "blocked", route: "stop", tried, text: r.text ? `${r.text}\n\n${WEB_READ_STOP}` : WEB_READ_STOP }) };
 }

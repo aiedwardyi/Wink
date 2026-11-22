@@ -6,6 +6,7 @@ import { createWebReader, GUEST_READS_PER_MINUTE, PAUSE_429_MS, READ_DEADLINE_MS
 import { parseRobots, robotsAllows } from "./web-read-robots.ts";
 import { guardedLookup, POST_URLS, privateAddress, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
 import { challengeReason, htmlToText, pdfToText, TEXT_CAP } from "./web-read-text.ts";
+import { webRead } from "./drivers/web-read-tool.ts";
 
 type Fixture = { status?: number; type?: string; html?: string; body?: string | Buffer; location?: string; error?: Error; truncated?: boolean };
 type Routes = Record<string, Fixture>;
@@ -74,9 +75,14 @@ const CASES: Case[] = [
   { name: "plain text", url: "https://example.org/notes.txt", routes: { "https://example.org/notes.txt": { type: "text/plain", body: "Line one of the notes.\nLine two." } }, status: "ok", route: "fetch", text: /Line two/ },
   { name: "JSON API", url: "https://api.example.org/v1/item/7", routes: { "https://api.example.org/v1/item/7": { type: "application/json", body: '{"id":7,"name":"seven"}' } }, status: "ok", route: "fetch", text: /"seven"/ },
   { name: "RSS feed", url: "https://example.org/feed.xml", routes: { "https://example.org/feed.xml": { type: "application/rss+xml", body: "<rss><channel><title>Feed</title></channel></rss>" } }, status: "ok", route: "fetch", text: /<title>Feed/ },
-  { name: "SPA shell", url: "https://app.example.io/dashboard", routes: { "https://app.example.io/dashboard": { html: page("App", '<div id="root"></div><script src="/main.js"></script>') } }, status: "blocked", route: "fetch", tried: /empty JavaScript page/, next: true },
+  { name: "SPA shell", url: "https://app.example.io/dashboard", routes: { "https://app.example.io/dashboard": { html: page("App", '<div id="root"></div><script src="/main.js"></script>') } }, status: "blocked", route: "fetch:meta", tried: /title only/, text: /^\[Partial: only the page's title was readable\.\]\n\n\[Page text below[^\n]*\n# App$/, next: true },
+  { name: "SPA shell with no title", url: "https://app.example.io/bare", routes: { "https://app.example.io/bare": { html: '<html><body><div id="root"></div><script src="/main.js"></script></body></html>' } }, status: "blocked", route: "fetch", tried: /empty JavaScript page/, next: true },
   { name: "X post (og meta)", url: "https://x.com/jack/status/20", routes: { "https://x.com/jack/status/20": { html: page("X", '<div id="react-root"></div>', '<meta property="og:description" content="just setting up my twttr and saying hello to everyone here">') } }, status: "blocked", route: "fetch:meta", text: /^\[Partial: only the page's title and summary were readable\.\]\n\n\[Page text below[^\n]*\n# X\n\njust setting up my twttr/, next: true },
   { name: "thread with only the site's summary", url: "https://forum.example.org/thread/8", routes: { "https://forum.example.org/thread/8": { html: page("Forum", '<div id="app"></div><script src="/app.js"></script>', '<meta name="description" content="An independent discussion forum for open source software and documentation.">') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*independent discussion forum/, next: true },
+  { name: "short page summary", url: "https://market.example.org/hours", routes: { "https://market.example.org/hours": { html: page("Market hours", "", '<meta name="description" content="The market opens at 8 on Sundays.">') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*# Market hours\n\nThe market opens at 8 on Sundays\./, next: true },
+  { name: "short text on a scripted page", url: "https://ferry.example.org/times", routes: { "https://ferry.example.org/times": { html: page("Ferry timetable", '<p>Last ferry at 18:15.</p><script defer src="/visits.js"></script>', '<meta name="description" content="Ferries across the bay, every day of the year.">') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*Last ferry at 18:15\.[\s\S]*Ferries across the bay/, next: true },
+  { name: "loading placeholder with no script", url: "https://bridge.example.org/", routes: { "https://bridge.example.org/": { html: page("Bridge bulletin", '<div id="root">Loading…</div>') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*# Bridge bulletin$/, next: true },
+  { name: "JavaScript notice only", url: "https://notice.example.org/", routes: { "https://notice.example.org/": { html: "<html><body><p>Please enable JavaScript.</p><p>Loading...</p></body></html>" } }, status: "blocked", route: "fetch", tried: /only a loading message/, next: true },
   { name: "short static post", url: "https://library.example.org/meeting", routes: { "https://library.example.org/meeting": { html: page("Hours", "<article>Library hours change on Saturday. Doors open at nine and close at noon.</article>") } }, status: "ok", route: "fetch", text: /Doors open at nine and close at noon/ },
   { name: "quoted > in an attribute", url: "https://grammar.example.org/compare", routes: { "https://grammar.example.org/compare": { html: page("Compare", `<p title="upper > lower">Opening paragraph.</p>${paras(5, "Grammar")}`) } }, status: "ok", route: "fetch", text: /\n# Compare\n\nOpening paragraph\./ },
   { name: "article quoting a bot check's words", url: "https://access.example.org/buttons", routes: { "https://access.example.org/buttons": { html: page("Accessible buttons", `<main>${paras(24, "Access")} The sign tells visitors to press &amp; hold the button.</main>`) } }, status: "ok", route: "fetch", text: /press & hold the button/ },
@@ -755,5 +761,39 @@ describe("web_read gate follow-up (Fable 2123)", () => {
       for (let n = 0; n <= GUEST_READS_PER_MINUTE + 2; n++) expect((await own.call({ url: "https://site.example/" })).status).toBe("ok");
       await own.close();
     });
+  });
+});
+
+describe("web_read gate follow-up (2123D)", () => {
+  const fact = "The community pool opens at seven on weekdays and closes at six on Sundays.";
+  const routes = { "https://bulletin.example/pool": { html: page("Community pool hours", "", `<meta name="description" content="${fact}">`) } };
+
+  it("keeps the partial text in the final answer when the borrowed reader fails too", async () => {
+    const reader = createWebReader({ transport: fake(routes).transport, readers: () => [{ botId: "c1", name: "Coder", engine: "codex", busy: false }] });
+    const api = async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      return (body.remember ? {} : await reader.read(body.url, { ownToolFailed: body.own_tool_failed, callerBotId: "me" })) as unknown as Record<string, unknown>;
+    };
+    let asks = 0;
+    const askBot = async () => {
+      asks++;
+      return { error: "offline test peer unavailable" };
+    };
+    const first = JSON.parse((await webRead({ url: "https://bulletin.example/pool" }, api, askBot)).text);
+    expect(first).toMatchObject({ status: "blocked", next: WEB_READ_OWN_TOOL });
+    expect(first.text).toContain(fact);
+    const last = JSON.parse((await webRead({ url: "https://bulletin.example/pool", own_tool_failed: true }, api, askBot)).text);
+    expect(asks).toBe(1);
+    expect(last.status).toBe("blocked");
+    expect(last.next).toBeUndefined();
+    expect(last.text).toMatch(/^\[Partial: only the page's title and summary were readable\.\]/);
+    expect(last.text).toContain(fact);
+    expect(last.text.endsWith(WEB_READ_STOP)).toBe(true);
+    expect(last.tried.at(-1)).toMatch(/step 4-5 @Coder \(codex\): offline test peer unavailable/);
+  });
+
+  it("a placeholder is judged on what it says: a short real line on a page with no script is still the page", async () => {
+    const reader = createWebReader({ transport: fake({ "https://dock.example.org/": { html: page("Dock", "<p>Loading dock opens at 6.</p>") } }).transport });
+    expect(await reader.read("https://dock.example.org/")).toMatchObject({ status: "ok", text: expect.stringContaining("Loading dock opens at 6.") });
   });
 });
