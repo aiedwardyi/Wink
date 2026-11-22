@@ -38,7 +38,7 @@ if (argv.includes("--version")) {
 // accounts without a restart. plan = FAKE_AGY_USAGE_FIXTURE's stream-json lines; apikey = agy's own refusal
 // (exit 2); adc = what agy 1.5.12 printed for Cloud ADC with unusable credentials (exit 1, "authentication required");
 // transient = any other plain failure (exit 1); signedout = empty groups, exit 0.
-if (argv[argv.indexOf("-p") + 1] === "/usage") {
+if (argv.includes("-p") && argv[argv.indexOf("-p") + 1] === "/usage") {
   const mode = process.env.FAKE_AGY_USAGE_MODE_FILE && existsSync(process.env.FAKE_AGY_USAGE_MODE_FILE)
     ? readFileSync(process.env.FAKE_AGY_USAGE_MODE_FILE, "utf8").trim() : "plan";
   if (mode === "plan" && process.env.FAKE_AGY_USAGE_FIXTURE) {

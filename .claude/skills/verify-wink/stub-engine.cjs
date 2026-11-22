@@ -66,7 +66,7 @@ note("spawn", { args });
 // `agy -p /usage`, only while the scratch root holds agy-usage.jsonl (a captured plan answer): a plan login prints it,
 // "apikey" in agy-usage-mode is agy's own refusal (exit 2). Without the file the stub answers as before.
 const usageFile = process.env.USERPROFILE ? join(dirname(process.env.USERPROFILE), "agy-usage.jsonl") : "";
-if (engine === "antigravity" && args[args.indexOf("-p") + 1] === "/usage" && existsSync(usageFile)) {
+if (engine === "antigravity" && flag("-p") === "/usage" && existsSync(usageFile)) {
   const modeFile = join(dirname(usageFile), "agy-usage-mode");
   if (existsSync(modeFile) && readFileSync(modeFile, "utf8").trim() === "apikey") {
     process.stderr.write("/usage is not available with a Gemini API key\n");

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { testHome } from "./testing/test-home.ts";
+import { createFixtureHome, removeTestData, testHome } from "./testing/test-home.ts";
 
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -867,6 +868,23 @@ describe("antigravity /usage: not a plan versus transient failure", () => {
     mode = "plan";
     const third = await refresh("antigravityAgent", { instanceId: "agy", fresh: true }, undefined);
     expect(third.report?.windows).toHaveLength(2);
+  });
+
+  it("answers /usage in both fake agys only when it follows -p", () => {
+    const home = createFixtureHome("omb-agy-usage-flag-");
+    try {
+      writeFileSync(join(home, "agy-usage-mode"), "apikey");
+      writeFileSync(join(home, "agy-usage.jsonl"), live);
+      const env = { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "", USERPROFILE: join(home, "profile"), FAKE_AGY_USAGE_MODE_FILE: join(home, "agy-usage-mode") };
+      const exit = (args: string[]) => spawnSync(process.execPath, args, { input: "", env, encoding: "utf8", timeout: 10_000, windowsHide: true }).status;
+      const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+      const fake = join(root, "server", "testing", "fake-agy-cli.ts");
+      const stub = join(root, ".claude", "skills", "verify-wink", "stub-engine.cjs");
+      expect([exit([fake, "-p", "/usage"]), exit([fake, "/usage"])]).toEqual([2, 0]);
+      expect([exit([stub, "antigravity", "-p", "/usage"]), exit([stub, "antigravity", "/usage"])]).toEqual([2, 0]);
+    } finally {
+      removeTestData(home);
+    }
   });
 
   it("asks the language-server leg nothing once agy has said it is not a plan", async () => {
