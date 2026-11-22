@@ -12,6 +12,7 @@ const OPS = {
     board_search: "read",
     search_my_chats: "read",
     verify_site: "read",
+    web_read: "read",
     find_wink_tool: "read",
     ask_user: "chat",
     react: "chat",

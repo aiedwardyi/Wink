@@ -433,7 +433,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true, engine: reply.engine }, reply.replied, reply.text, reply.text);
       if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId, requestingTurn);
-      return json(res, 200, { botName: currentTarget.name, text: reply.text, shown });
+      return json(res, 200, { botName: currentTarget.name, text: reply.text, replied: reply.replied, shown });
     },
     react: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
