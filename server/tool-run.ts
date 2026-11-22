@@ -25,6 +25,8 @@ const BOILERPLATE = [
   /^npm (?:error|ERR!)(?: (?:code|errno|path|command|signal|syscall|a complete log|lifecycle)\b|$)/i,
   // a Docker build's wrapper: it names the step that failed, not why (BuildKit, its older executor, compose v1)
   /\bdid not complete successfully: exit code\b|\bexecutor failed running \[|^(?:error: )?service '[^']*' failed to build\b/i,
+  // a CI runner's or task runner's footer: it names the job, the build step's image or the target that failed, not why
+  /^process completed with exit code\b|^(?:error: )?build step \d+ "[^"]*" failed\b|^nx\s+running targets? .*\bfailed\b|^failed tasks:$/i,
   /^found \d+ errors?\b|^\d+ (?:errors?|failed|failing)\b/i,
   /^make(?:\[\d+\])?: \*\*\*/,
 ];
@@ -45,6 +47,11 @@ const FAILURES = /^(?:⎯+ (?:failed (?:tests|suites) \d+|unhandled (?:errors?|r
 const CHAINED = /^(?:during handling of the above exception, another exception occurred|the above exception was the direct cause of the following exception):$/i;
 // BuildKit's plain progress puts "#<step> <seconds> " before each line a build step printed
 const BUILDKIT = /^#\d+ (?:\d+\.\d+ )?/;
+// a CI runner's mark before a line it relays: Cloud Build's 'Step #1 - "build": ', GitHub Actions' "##[error]" and "##[group]"
+const CI_PREFIX = /^(?:Step #\d+(?: - "[^"]*")?: ?|##\[[a-z]+\])/i;
+// what a jest assertion expected and received: two failures of one test differ there, and only there
+const ASSERTED = /^(?:expected|received)\b[\w ]*:\s*\S/i;
+const MATCHER = /\bexpect\(received\)/;
 const WEAK = /\b(?:error|failed|failure|cannot|can't|could not|unable|not found|no such|denied|refused|hang up|timed? ?out|undefined|invalid|unexpected|missing)\b/i;
 // Fail closed: a failure is signed only when it says which failure it is, since a missed handoff costs nothing and a wrong one
 // teaches a bot the wrong fix. That is a failing test with its file, from a runner read below, or an error naming a path with a
@@ -82,6 +89,8 @@ const VENDOR = /(?:^|\/)(?:node_modules|site-packages|dist-packages)(?:\/|$)/;
 const CD_STEP = /^(?:cd|pushd|popd|set-location|sl|chdir)(?:\s+(?:\/d\s+|-(?:literal)?path\s+|(?:-[lpe@]+\s+)*(?:--\s+)?)(.+?))?\s*$/i;
 const ANY_CD = /(?:^|[\s;&|(`"'])(?:cd|pushd|popd|set-location|chdir)(?:\s|$)/i;
 
+/** Each line as the tool printed it: no color, no CI runner's mark before it. */
+const printedLines = (output: string) => stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim().replace(CI_PREFIX, "").trim());
 const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
@@ -91,7 +100,7 @@ const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0,
  */
 export function errorLine(output: string): string {
   let logged = false;
-  const raw = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
+  const raw = printedLines(output);
   // a Docker build: the error is a line its step printed, and a step whose lines say nothing strong is not signed
   const built = raw.some((line) => BUILDKIT.test(line));
   const printed = built ? raw.map((line) => line.replace(BUILDKIT, "").trim()) : raw;
@@ -102,10 +111,17 @@ export function errorLine(output: string): string {
   const chained = traceback ? all.findIndex((line) => CHAINED.test(line)) : -1;
   const lines = chained < 0 ? all : all.slice(0, chained);
   const strong = lines.flatMap((line, at) => (STRONG.test(line) ? [at] : []));
-  const at = (traceback ? strong.at(-1) : strong[0]) ?? (built ? -1 : lines.findIndex((line) => WEAK.test(line)));
+  const asserted = lines.findIndex((line) => ASSERTED.test(line));
+  const at = (traceback ? strong.at(-1) : strong[0]) ?? (asserted >= 0 ? asserted : built ? -1 : lines.findIndex((line) => WEAK.test(line)));
   const line = lines[at] ?? "";
   // a header with no detail under it says nothing about which failure this is
-  return HEADER.test(line) ? (lines[at + 1] ? `${line} ${lines[at + 1]}` : "") : line;
+  if (HEADER.test(line)) return lines[at + 1] ? `${line} ${lines[at + 1]}` : "";
+  // nor does a jest assertion without the values it expected and received
+  let end = at + 1;
+  while (end < lines.length && ASSERTED.test(lines[end]!)) end++;
+  const values = lines.slice(at === asserted ? at : at + 1, end).filter((text) => ASSERTED.test(text));
+  if (at === asserted) return values.join(" ");
+  return MATCHER.test(line) ? (values.length ? `${line} ${values.join(" ")}` : "") : line;
 }
 
 /** Where a shell call ran: the repo it ran in and the folder inside it. */
@@ -222,7 +238,7 @@ const placed = (place: ShellPlace) => {
 
 /** The first failing test a runner names, with its file as the place names it (as printed with no place); "" when no file is named. */
 export function failingTest(output: string, place?: ShellPlace): string {
-  const lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
+  const lines = printedLines(output);
   for (const [at, line] of lines.entries()) {
     const [, first, name] = TEST_NAME.map((rule) => rule.exec(line)).find(Boolean) ?? [];
     if (!first) continue;
@@ -243,7 +259,7 @@ export function failingTest(output: string, place?: ShellPlace): string {
 export function errorFrame(output: string, place?: ShellPlace): string {
   if (!place) return "";
   const at = placed(place);
-  const lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
+  const lines = printedLines(output);
   const traceback = /traceback \(most recent call last\)/i.test(output);
   // a chain's root cause, else where the bot's code was when it was handled or wrapped (a root raised in the standard library)
   const chained = lines.findIndex((line) => CHAINED.test(line));
@@ -260,7 +276,7 @@ export function errorFrame(output: string, place?: ShellPlace): string {
   return "";
 }
 
-const testRun = (output: string) => stripVTControlCharacters(output).split(/\r?\n/).some((line) => TEST_RUN.some((rule) => rule.test(line.trim())));
+const testRun = (output: string) => printedLines(output).some((line) => TEST_RUN.some((rule) => rule.test(line)));
 const decoded = (text: string) => {
   try {
     return decodeURIComponent(text);
@@ -336,7 +352,7 @@ export function runSig(line: string, where: { place: ShellPlace; command: string
  * the step, not where the bot stood, says which file the line means.
  */
 function buildStep(output: string, line: string): string {
-  const printed = stripVTControlCharacters(output).split(/\r?\n/).map((text) => text.trim());
+  const printed = printedLines(output);
   const step = line ? printed.find((text) => BUILDKIT.test(text) && text.replace(BUILDKIT, "").trim() === line)?.split(" ", 1)[0] : undefined;
   return step ? printed.find((text) => text.startsWith(`${step} [`))?.slice(step.length + 1).toLowerCase() ?? "" : "";
 }

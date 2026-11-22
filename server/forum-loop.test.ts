@@ -865,7 +865,7 @@ describe("what tells two failures apart, and what only tells two runs apart", ()
     const PW = "npx playwright test tests/checkout.spec.ts";
     expect(sig(PW, playwright("chromium", "TimeoutError: locator.click: Timeout 30000ms exceeded."))).toBeUndefined();
     expect(sig("npx vitest run", " RUN  v4.1.10 D:/proj\n\n FAIL  src/a.test.ts > waits\nError: Test timed out in 5000ms.")).toBeUndefined();
-    const assertion = "Error: expect(received).toBe(expected) // Object.is equality";
+    const assertion = "Error: expect(received).toBe(expected) // Object.is equality\n\n    Expected: 2\n    Received: 1";
     expect(sig(PW, playwright("chromium", assertion))).toBeTruthy();
     expect(sig(PW, playwright("chromium", assertion))).not.toBe(sig(PW, playwright("webkit", assertion)));
     const vitestProject = (project: string) => ` RUN  v4.1.10 D:/proj\n\n FAIL  |${project}| src/a.test.ts > adds\nAssertionError: expected 1 to be 2`;
@@ -1012,6 +1012,34 @@ describe("what tells two failures apart, and what only tells two runs apart", ()
     const pnpm = (s: string) => `#8 [builder 4/5] RUN pnpm install --frozen-lockfile\n#8 ${s} ERR_PNPM_OUTDATED_LOCKFILE Cannot install with "frozen-lockfile" because pnpm-lock.yaml is not up to date\nERROR: failed to solve: process "/bin/sh -c pnpm install --frozen-lockfile" did not complete successfully: exit code: 1`;
     expect(sig("docker build -f Dockerfile.api .", pnpm("1.930"))).toBeTruthy();
     expect(sig("docker build -f Dockerfile.api .", pnpm("1.930"))).toBe(sig("docker build -f Dockerfile.api .", pnpm("2.114")));
+  });
+
+  it("reads a CI runner's step lines through its prefix, never signs a runner's footer, and signs a jest assertion only by what it expected and received", () => {
+    // Cloud Build heads each line of a step with 'Step #N - "id": ', and its closing line names only the builder image
+    const cloudBuild = (printed: string[], stamp: string) => [
+      "#7 [builder 4/7] RUN npm ci", ...printed.map((line, i) => `#7 0.${5 + i}00 ${line}`),
+      `#7 0.900 npm error A complete log of this run can be found in: /root/.npm/_logs/${stamp}-debug-0.log`,
+      "#7 ERROR: process \"/bin/sh -c npm ci\" did not complete successfully: exit code: 1",
+    ].map((line) => `Step #1 - "build": ${line}`).concat("Finished Step #1 - \"build\"", "ERROR: build step 1 \"gcr.io/cloud-builders/docker\" failed: step exited with non-zero status: 1").join("\n");
+    const lockfile = ["npm error code EUSAGE", "npm error", "npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.", "npm error Missing: left-pad@1.3.0 from lock file"];
+    const e401 = ["npm error code E401", "npm error 401 Unauthorized - GET https://npm.pkg.github.com/download/@acme/ui-kit/3.2.0/aaaabbbbcccc"];
+    const DOCKER = "docker build -t acme/api .";
+    expect(sig(DOCKER, cloudBuild(lockfile, "2026-11-22T04_12_09_100Z"))).toBeTruthy();
+    expect(sig(DOCKER, cloudBuild(lockfile, "2026-11-22T04_12_09_100Z"))).not.toBe(sig(DOCKER, cloudBuild(e401, "2026-11-22T04_18_44_220Z")));
+    expect(sig(DOCKER, cloudBuild(lockfile, "2026-11-23T09_40_51_306Z"))).toBe(sig(DOCKER, cloudBuild(lockfile, "2026-11-22T04_12_09_100Z")));
+    expect(errorLine(cloudBuild(["npm error code E401"], "2026-11-22T04_18_44_220Z"))).toBe("");
+    // jest under GitHub Actions and under Nx: one test, the same header and footer, other values
+    const jest = (expected: number, received = 100) => ["FAIL src/tax.test.ts", "  ● invoice tax", `    Expected: ${expected}`, `    Received: ${received}`];
+    const actions = (expected: number) => ["##[group]Run npm test", "npm test", "shell: /usr/bin/bash -e {0}", "##[endgroup]", ...jest(expected), "##[error]Process completed with exit code 1."].join("\n");
+    const nx = (expected: number, took: string) => ["> nx run web:test", "", ...jest(expected), "", " NX   Running target test for project web failed", "", "Failed tasks:", "", "- web:test", "", `Hint: run the command with --verbose for more details. Time: ${took}`].join("\n");
+    expect(sig("npm test", actions(108))).toBeTruthy();
+    expect(sig("npm test", actions(108))).not.toBe(sig("npm test", actions(119)));
+    expect(sig("pnpm nx test web", nx(108, "1.9s"))).toBeTruthy();
+    expect(sig("pnpm nx test web", nx(108, "1.9s"))).not.toBe(sig("pnpm nx test web", nx(119, "2.4s")));
+    expect(sig("pnpm nx test web", nx(108, "2.4s"))).toBe(sig("pnpm nx test web", nx(108, "1.9s")));
+    for (const output of [actions(108), nx(108, "1.9s")]) expect(errorLine(output)).toBe("Expected: 108 Received: 100");
+    // a matcher line with no values under it says only which matcher failed
+    expect(sig("npx jest", "FAIL src/tax.test.ts\n  ● invoice tax\n    Error: expect(received).toBe(expected) // Object.is equality")).toBeUndefined();
   });
 
   it("follows cd -P, cd -L and a WSL /mnt/<drive> path", () => {
