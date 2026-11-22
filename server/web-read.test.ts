@@ -752,6 +752,18 @@ describe("web_read gate follow-up (Fable 2123)", () => {
       await room.close();
     });
 
+    it("remember bounds a huge first read to what the tool path keeps, so a cache hit stays small", async () => {
+      const own = await serve(false);
+      const huge = "x".repeat(999_000);
+      expect((await own.call({ url: "https://site.example/big", remember: { route: "reader:codex", text: "Reader answer.", first: huge } })).ok).toBe(true);
+      const hit = await own.call({ url: "https://site.example/big" });
+      await own.close();
+      const text = hit.text as string;      // The reader's capped text plus a first read no longer than the tool path sends (its label and a capped read).
+      expect(text.length).toBeLessThan(2 * TEXT_CAP + 300);
+      expect(text).toContain("Reader answer.");
+      expect(text).toMatch(/\[truncated: showing [\d,]+ of 999,\d{3} chars\]$/);
+    });
+
     it("a guest turn can't write the shared cache; an own turn can and has no room cap", async () => {
       const guest = await serve(true);
       expect((await guest.call({ url: "https://site.example/a", remember: { route: "reader", text: "planted" } })).error).toBeTruthy();

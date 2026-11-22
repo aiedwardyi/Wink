@@ -3,7 +3,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 
-import { markPage, WEB_READ_OWN_TOOL, WEB_READ_SEARCH_ONLY, WEB_READ_STOP, type WebReadReader, type WebReadResult } from "../shared/web-read.ts";
+import { markPage, WEB_READ_FIRST_MARK, WEB_READ_OWN_TOOL, WEB_READ_SEARCH_ONLY, WEB_READ_STOP, type WebReadReader, type WebReadResult } from "../shared/web-read.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { nodeTransport, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
 import { parseRobots, robotsAllows, type RobotsRule } from "./web-read-robots.ts";
@@ -27,6 +27,8 @@ const ROBOTS_CACHE_MS = 24 * 60 * 60_000;
 export const ROBOTS_ROWS = 300;
 const MAX_HOPS = 5;
 const CACHE_ROWS = 300;
+/** The longest first read the tool path sends: its label and the longest capped read a request body can carry (1 MB). */
+const FIRST_READ_MAX = WEB_READ_FIRST_MARK.length + capText("x".repeat(1_000_000)).length;
 // Provider-side readers that got through where Wink's own fetch could not (RESULT.md: Grok 6/6, Codex 5/6).
 export const READER_ENGINES: readonly string[] = ["grokAgent", "codex"];
 
@@ -395,7 +397,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     }
     if (refusedTarget(url) || isLinkedIn(url.hostname) || !text.trim()) return;
     url.hash = "";
-    cache.set(url.href, { step: { ok: true, route, text, tried: [`${route}: read earlier`], keep: true, ...(first ? { first } : {}) }, at: now() });
+    cache.set(url.href, { step: { ok: true, route, text, tried: [`${route}: read earlier`], keep: true, ...(first ? { first: capText(first, FIRST_READ_MAX) } : {}) }, at: now() });
   }
 
   return { read, remember, gate };

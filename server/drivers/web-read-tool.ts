@@ -1,6 +1,6 @@
 // The web_read tool inside the agents proxy: the harness runs steps 0-2; step 4
 // borrows a Codex or Grok bot through the same ask_bot call a bot makes itself.
-import { markPage, WEB_READ_ROUTE, WEB_READ_STOP, WEB_READ_TOOL_NAME, type WebReadResult } from "../../shared/web-read.ts";
+import { markPage, WEB_READ_FIRST_MARK, WEB_READ_ROUTE, WEB_READ_STOP, WEB_READ_TOOL_NAME, type WebReadResult } from "../../shared/web-read.ts";
 import { capText } from "../web-read-text.ts";
 
 type Json = Record<string, unknown>;
@@ -60,7 +60,7 @@ export async function webRead(args: Json, api: Api, askBot: AskBot, guestTurn = 
     const route = `${search ? "search" : "reader"}:${reader.engine}`;
     const text = search ? `From search results, not the page:\n${answer.replace(/^SEARCH:\s*/i, "")}` : answer;
     // The partial text Wink's own read found stays too: the reader's answer may leave it out.
-    const first = r.text ? `\n\n[Also found by Wink's own first read:]\n${r.text}` : "";
+    const first = r.text ? `${WEB_READ_FIRST_MARK}${r.text}` : "";
     if (search) tried.push(`step 4 ${who}: could not open the page`, `step 5 search snippets via ${who}: ok`);
     else tried.push(`step 4 ${who}: ok`);
     await within(api(WEB_READ_ROUTE, { method: "POST", signal: deadline, body: JSON.stringify({ url: r.url, remember: { route, text, ...(first ? { first } : {}) } }) }).catch(() => undefined));
