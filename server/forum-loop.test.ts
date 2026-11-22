@@ -815,7 +815,7 @@ describe("a signature names where the failure happened", () => {
     expect(shellFolders('cd "apps/web"; pnpm test', root).runs).toBe(web);
     expect(shellFolders("cd ../admin && pnpm test", web).runs).toBe(join(root, "apps", "admin"));
     expect(shellFolders("cd", web).after).not.toBe(web);
-    expect(shellFolders("cd missing && pnpm test", root)).toEqual({ runs: root, after: root });
+    expect(shellFolders("cd missing && pnpm test", root)).toEqual({ runs: undefined, after: undefined });
     expect(shellFolders("pnpm build && cd apps/web && pnpm test", root).runs).toBeUndefined();
     expect(shellFolders("cd $APP && pnpm test", root).runs).toBeUndefined();
     expect(shellFolders("(cd apps/web && pnpm test)", root).runs).toBeUndefined();
@@ -881,6 +881,51 @@ describe("what tells two failures apart, and what only tells two runs apart", ()
     const a = sig(JEST, typeError);
     expect(a).toBeTruthy();
     expect(sig(JEST, jest("expect(element).toHaveTextContent()"))).not.toBe(a);
+  });
+
+  it("skips what any runner shows a test printed while it ran: vitest stderr |, pytest live log and captured log", () => {
+    const VITEST = "pnpm exec vitest run src/editor.test.ts";
+    const vitest = (failure: string) => ` RUN  v4.1.10 D:/proj\n\n ❯ src/editor.test.ts (2 tests | 1 failed) 6ms\n\nstderr | src/editor.test.ts > editor > boots offline\nError: Telemetry endpoint unreachable; continuing offline\n    at D:/proj/src/editor.test.ts:5:19\n\nAggregateError:\n    at internalConnectMultiple (node:net:1492:18)\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/editor.test.ts > editor > saves draft\n${failure}\n ❯ src/editor.test.ts:19:11\n\n Test Files  1 failed (1)\n`;
+    const storage = vitest("ReferenceError: localStorage is not defined");
+    expect(errorLine(storage)).toBe("ReferenceError: localStorage is not defined");
+    expect(sig(VITEST, storage)).toBeTruthy();
+    expect(sig(VITEST, storage)).not.toBe(sig(VITEST, vitest("AssertionError: expected 'draft' to be 'published'")));
+    expect(sig(VITEST, vitest("Error: Test timed out in 20000ms."))).toBeUndefined();
+    // a long output cut before the header: the runner's failure report still says which error failed the test
+    expect(errorLine(storage.slice(storage.indexOf("Error: Telemetry")))).toBe("ReferenceError: localStorage is not defined");
+    const PYTEST = "pytest -o log_cli=true tests/test_checkout.py";
+    const liveLog = (error: string) => `collected 2 items\n\ntests/test_checkout.py::test_pass_logs_error\n-------------------------------- live log call --------------------------------\nERROR    app.gateway:test_checkout.py:5 Connection reset by peer (retrying)\nPASSED                                                                   [ 50%]\ntests/test_checkout.py::test_apply_discount FAILED                       [100%]\n\n================================== FAILURES ===================================\n_____________________________ test_apply_discount _____________________________\n\n    def test_apply_discount():\n>       raise ${error}\nE       ${error}\n\ntests/test_checkout.py:7: ${error.replace(/\(.*/, "")}\n=========================== short test summary info ===========================\nFAILED tests/test_checkout.py::test_apply_discount - ${error}\n========================= 1 failed, 1 passed in 0.05s =========================`;
+    expect(errorLine(liveLog("KeyError('currency')"))).toBe("E       KeyError('currency')");
+    expect(sig(PYTEST, liveLog("KeyError('currency')"))).not.toBe(sig(PYTEST, liveLog("ValueError('coupon expired')")));
+    const captured = `tests/test_checkout.py F\n\n=== FAILURES ===\n___ test_apply_discount ___\n------------------------------ Captured log call ------------------------------\nERROR    app.gateway:client.py:19 Connection reset by peer (retrying)\n=========================== short test summary info ===========================\nFAILED tests/test_checkout.py::test_apply_discount - KeyError: 'currency'`;
+    expect(errorLine(captured)).toBe("FAILED tests/test_checkout.py::test_apply_discount - KeyError: 'currency'");
+  });
+
+  it("signs a chained Python exception by its root cause, not the exception raised while handling it", () => {
+    const chained = (root: string) => `Traceback (most recent call last):\n  File "D:\\proj\\app\\tls.py", line 18, in load\n    with open(path, "rb") as fh:\n${root}\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File "D:\\proj\\app\\serve.py", line 55, in main\n    transport.close()\n  File "D:\\proj\\app\\transport.py", line 91, in close\n    raise RuntimeError("failed to close transport cleanly")\nRuntimeError: failed to close transport cleanly`;
+    const cert = chained("FileNotFoundError: [Errno 2] No such file or directory: 'certs/server.pem'");
+    expect(errorLine(cert)).toBe("FileNotFoundError: [Errno 2] No such file or directory: 'certs/server.pem'");
+    expect(sig("python -m app.serve", cert)).toBeTruthy();
+    expect(sig("python -m app.serve", cert)).not.toBe(sig("python -m app.serve", chained("PermissionError: [Errno 13] Permission denied: '/var/run/daemon.sock'")));
+    const wrapped = (root: string) => chained(root).replace("During handling of the above exception, another exception occurred:", "The above exception was the direct cause of the following exception:");
+    expect(errorLine(wrapped("KeyError: 'tls_key'"))).toBe("KeyError: 'tls_key'");
+    // the root raised in the standard library: where the bot's code called it is in the traceback that follows
+    const refused = (script: string) => `Traceback (most recent call last):\n  File "C:\\Python312\\Lib\\socket.py", line 850, in create_connection\n    sock.connect(sa)\nConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File "D:\\proj\\py\\${script}", line 3, in <module>\n    data = urllib.request.urlopen(url).read()\n  File "C:\\Python312\\Lib\\urllib\\request.py", line 1347, in do_open\n    raise URLError(err)\nurllib.error.URLError: <urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>`;
+    expect(sig("python py/check_license.py", refused("check_license.py"))).toBeTruthy();
+    expect(sig("python py/check_license.py", refused("check_license.py"))).not.toBe(sig("python py/check_license.py", refused("check_orders.py")));
+  });
+
+  it("leaves no folder after a cd it cannot follow, and follows a Cygwin /cygdrive path", () => {
+    const root = temps.make(join(tmpdir(), "orbit-forum-cd-"));
+    const auth = join(root, "services", "auth");
+    mkdirSync(auth, { recursive: true });
+    expect(shellFolders("cd services/missing && pytest", root)).toEqual({ runs: undefined, after: undefined });
+    expect(shellFolders("cd /home/dev/services/billing; pytest", root).runs).toBeUndefined();
+    expect(shellFolders("cd services/auth && pytest", root).runs).toBe(auth);
+    if (process.platform === "win32") {
+      const cygwin = `/cygdrive/${auth[0]!.toLowerCase()}${auth.slice(2).replaceAll("\\", "/")}`;
+      expect(shellFolders(`cd ${cygwin} && pytest`, root).runs).toBe(auth);
+    }
   });
 
   it("hands nothing when two different proven fixes share one signature", async () => {

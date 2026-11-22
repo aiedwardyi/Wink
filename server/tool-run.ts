@@ -31,6 +31,16 @@ const STRONG = /^(?:[\w.$]*(?:Error|Exception)\b.*:|(?:error|fatal|panic)\b|npm 
 const HEADER = /\b\d+ validation errors? for \S+$/i;
 // a timeout says that something did not happen in time, not why: two different failures print the same line
 const TIMEOUT = /\btimeout (?:of )?\d+ ?ms exceeded|\bexceeded timeout of \d+ ?ms|\btimed out (?:in|after) \d+ ?m?s\b/i;
+// What a test printed while it ran, under its runner's header: jest "● Console", vitest "stdout | <test>" and "stderr | <test>",
+// pytest "Captured stdout/stderr/log <phase>" and "live log <phase>". It says what the code logged, not how a test failed, and it
+// runs to the runner's next own line: a header, a rule, a test's result or progress mark, the summary.
+const CAPTURED = /^(?:● Console|(?:stdout|stderr) \| .+|[-=]+ (?:captured (?:stdout|stderr|log)|live log) .*)$/i;
+const RUNNER = /^(?:● |[-=_⎯]{3,}|(?:FAIL|PASS|RUN)\s|[✓√×❯↓]\s|Test (?:Files|Suites:)\s)|\[\s*\d+%\]$/;
+// where a runner reports its failures (vitest "⎯ Failed Tests N ⎯", pytest "= FAILURES ="): the error that failed a test is there,
+// even when a long output was cut before the header of what a test printed above it
+const FAILURES = /^(?:⎯+ (?:failed (?:tests|suites) \d+|unhandled (?:errors?|rejections?)) ⎯+|=+ (?:failures|errors) =+)$/i;
+// Python prints a chain's root cause first: what follows was raised while handling it or wraps it, so two causes share it
+const CHAINED = /^(?:during handling of the above exception, another exception occurred|the above exception was the direct cause of the following exception):$/i;
 const WEAK = /\b(?:error|failed|failure|cannot|can't|could not|unable|not found|no such|denied|refused|hang up|timed? ?out|undefined|invalid|unexpected|missing)\b/i;
 // Fail closed: a failure is signed only when it says which failure it is, since a missed handoff costs nothing and a wrong one
 // teaches a bot the wrong fix. That is a failing test with its file, from a runner read below, or an error naming a path with a
@@ -72,15 +82,18 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 /**
- * The line a person would quote: a Python traceback's last exception, else the first error-shaped line, with a header's detail.
- * Not what jest printed under "● Console" for a passing test, and not a wrapper saying a child command failed.
+ * The line a person would quote: a Python traceback's last exception (of the chain's root cause), else the first error-shaped line,
+ * with a header's detail. Not what a test printed while it ran, and not a wrapper saying a child command failed.
  */
 export function errorLine(output: string): string {
   let logged = false;
-  const lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim())
-    .filter((line) => !(logged = line.startsWith("● ") ? line === "● Console" : logged))
+  const printed = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
+  const all = printed.slice(Math.max(0, printed.findIndex((line) => FAILURES.test(line))))
+    .filter((line) => !(logged = CAPTURED.test(line) || (logged && !RUNNER.test(line))))
     .filter((line) => line && !BOILERPLATE.some((rule) => rule.test(line)));
   const traceback = /traceback \(most recent call last\)/i.test(output);
+  const chained = traceback ? all.findIndex((line) => CHAINED.test(line)) : -1;
+  const lines = chained < 0 ? all : all.slice(0, chained);
   const strong = lines.flatMap((line, at) => (STRONG.test(line) ? [at] : []));
   const at = (traceback ? strong.at(-1) : strong[0]) ?? lines.findIndex((line) => WEAK.test(line));
   const line = lines[at] ?? "";
@@ -148,12 +161,12 @@ export function shellFolders(command: string, folder: string | undefined): Shell
       continue;
     }
     const raw = (cd[1] ?? "~").replace(/^(["'])(.*)\1$/, "$2");
-    const target = process.platform === "win32" ? raw.replace(/^\/(?:mnt\/)?([a-z])(?:\/|$)/i, (_, drive: string) => drive.toUpperCase() + ":/") : raw;
+    const target = process.platform === "win32" ? raw.replace(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/|$)/i, (_, drive: string) => drive.toUpperCase() + ":/") : raw;
     const next = /[$%`]|^-$/.test(target) || /^popd$/i.test(step) ? undefined
       : target === "~" || /^~[\\/]/.test(target) ? join(homedir(), target.slice(1))
       : isAbsolute(target) ? resolve(target) : at === undefined ? undefined : resolve(at, target);
-    // a cd that fails leaves the shell where it was
-    if (next === undefined || existsSync(next)) at = next;
+    // a cd to a folder not found here failed or names it in a form this does not read: either way the folder is not known
+    at = next !== undefined && existsSync(next) ? next : undefined;
   }
   const runs = works.length ? works.every((work) => work === works[0]) ? works[0] : undefined : at;
   return { runs, after: at };
@@ -224,13 +237,20 @@ export function errorFrame(output: string, place?: ShellPlace): string {
   if (!place) return "";
   const at = placed(place);
   const lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
-  const found = lines.flatMap((line) => {
-    const [, path, row] = FRAME.map((rule) => rule.exec(line)).find(Boolean) ?? [];
-    if (!path || path.includes("<")) return [];
-    const { name, inside } = at(path);
-    return inside && !VENDOR.test(name) ? [`${name}:${row}`] : [];
-  });
-  return (/traceback \(most recent call last\)/i.test(output) ? found.at(-1) : found[0]) ?? "";
+  const traceback = /traceback \(most recent call last\)/i.test(output);
+  // a chain's root cause, else where the bot's code was when it was handled or wrapped (a root raised in the standard library)
+  const chained = lines.findIndex((line) => CHAINED.test(line));
+  for (const part of chained < 0 ? [lines] : [lines.slice(0, chained), lines.slice(chained)]) {
+    const found = part.flatMap((line) => {
+      const [, path, row] = FRAME.map((rule) => rule.exec(line)).find(Boolean) ?? [];
+      if (!path || path.includes("<")) return [];
+      const { name, inside } = at(path);
+      return inside && !VENDOR.test(name) ? [`${name}:${row}`] : [];
+    });
+    const frame = traceback ? found.at(-1) : found[0];
+    if (frame) return frame;
+  }
+  return "";
 }
 
 const testRun = (output: string) => stripVTControlCharacters(output).split(/\r?\n/).some((line) => TEST_RUN.some((rule) => rule.test(line.trim())));
