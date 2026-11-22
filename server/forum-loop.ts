@@ -16,6 +16,7 @@ const MAX_CLAIMS = 64;
 const MAX_THREAD_CLAIMS = 4;
 const MAX_GIVEN = 1024;
 const MAX_PENDING = 64;
+const MAX_ARMED = 4;
 const CLAIM_MS = 30 * 60_000;
 // words every error shares, so a post naming only these is not about this error
 const GENERIC = new Set("error errors failed failure fatal exception cannot could unable found missing invalid unexpected undefined denied refused exit code line file".split(" "));
@@ -23,8 +24,10 @@ const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0,
 // another bot's words ride in one fenced line: no newline can start a forged "Wink:" line, no quote or bracket can close the fence
 const flat = (text: string, max: number) => cut(text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").replace(/[<>"`]/g, "'").replace(/\s+/g, " ").trim(), max);
 const errorWords = (line: string) => boardWords(line).filter((word) => !GENERIC.has(word));
-// a post is about an error when it quotes 3 of its words in a row (all of them when it has fewer); sharing loose words is not enough
+// a post is about an error when it quotes 3 of its words in a row (both when it has 2); sharing loose words is not enough, and
+// an error with 1 distinctive word ("Authentication failed") is never claimed: any post using that word would take it
 const quotes = (error: readonly string[], text: readonly string[]) => {
+  if (error.length < 2) return false;
   let best = 0;
   for (let at = 0; at < text.length; at++) {
     for (let from = 0; from < error.length; from++) {
@@ -33,7 +36,7 @@ const quotes = (error: readonly string[], text: readonly string[]) => {
       best = Math.max(best, run);
     }
   }
-  return error.length > 0 && best >= Math.min(3, error.length);
+  return best >= Math.min(3, error.length);
 };
 
 /** Before the loop, bots were told to post any fix that took 2+ tries; the loop asks only after a proven one. */
@@ -61,7 +64,7 @@ export function createForumLoop(deps: ForumLoopDeps) {
   const pending = new Map<string, { text: string; at: number }>();
   const claims = new Map<string, Claim[]>();
   const given = new Map<string, string>();
-  const armed = new Map<string, string>();
+  const armed = new Map<string, string[]>();
 
   const turnOf = (threadId: string) => {
     let turn = turns.get(threadId);
@@ -78,13 +81,15 @@ export function createForumLoop(deps: ForumLoopDeps) {
   const later = (threadId: string, text: string) => bounded(pending, threadId, { text, at: now() }, MAX_PENDING);
   // A steer written after the turn's last model request is answered as its own query, a second reply. One written
   // while a shell call runs rides the request that carries that call's result, so the text waits for the next one.
+  // One queue per thread: shell calls sent in one model message can each hit a known error before the next call starts.
   const deliver = (threadId: string, text: string) => {
-    if (enabled) bounded(armed, threadId, text, MAX_PENDING);
+    if (enabled) bounded(armed, threadId, [...(armed.get(threadId) ?? []).slice(1 - MAX_ARMED), text], MAX_PENDING);
   };
   const release = (threadId: string, steer: boolean) => {
-    const text = armed.get(threadId);
-    if (text === undefined) return;
+    const queued = armed.get(threadId);
+    if (queued === undefined) return;
     armed.delete(threadId);
+    const text = queued.join("\n\n");
     if (!steer) return later(threadId, text);
     deps.steer(threadId, text).then((taken) => taken || later(threadId, text), () => later(threadId, text));
   };

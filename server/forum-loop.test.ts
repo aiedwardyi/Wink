@@ -291,18 +291,28 @@ describe("forum loop proven fixes", () => {
 });
 
 describe("board_post of a proven fix", () => {
-  it("carries the signature, and a second bot's proof of the same error merges into the first post", async () => {
+  it("carries the signature, and a second proof merges into the first post only when its fix reads the same", async () => {
     const w = setup();
-    // sol proves it before astra posts, so nothing was handed over
-    w.loop.event(bash("tc", CLAUDE.keyError[0], CLAUDE.keyError[1]));
-    w.loop.event(edit("tc"));
-    w.loop.event(bash("tc", CLAUDE.keyError[0], "ok", false));
+    const proveOnly = (threadId: string) => {
+      w.loop.event(bash(threadId, CLAUDE.keyError[0], CLAUDE.keyError[1]));
+      w.loop.event(edit(threadId));
+      w.loop.event(bash(threadId, CLAUDE.keyError[0], "ok", false));
+    };
+    // sol and nova prove it before astra posts, so nothing was handed over
+    proveOnly("tc");
+    proveOnly("tb");
     const first = await w.prove("ta", CLAUDE.keyError, "KeyError 'name' in loader", "Use cfg.get('name').");
-    expect(w.board.get(first.id)).toMatchObject({ error_sig: toolRun(CLAUDE.keyError[0], CLAUDE.keyError[1], true).sig, status: "solved", project_id: "wink" });
-    const second = await w.post("tc", { kind: "fix", title: "loader KeyError name", body: "cfg.get('name') with a default." });
-    expect(second.id).toBe(first.id);
+    const sig = toolRun(CLAUDE.keyError[0], CLAUDE.keyError[1], true).sig;
+    expect(w.board.get(first.id)).toMatchObject({ error_sig: sig, status: "solved", project_id: "wink" });
+    const same = await w.post("tc", { kind: "fix", title: "loader KeyError name", body: "use cfg.get('name')" });
+    expect(same.id).toBe(first.id);
     expect(w.board.list()).toHaveLength(1);
     expect(w.board.get(first.id)?.helped_bot_ids).toEqual(["sol"]);
+    const other = await w.post("tb", { kind: "fix", title: "loader KeyError name", body: "Add name to config.yml; the loader needs it." });
+    expect(other.id).not.toBe(first.id);
+    expect(other.text).not.toMatch(/already had/);
+    expect(w.board.get(other.id)).toMatchObject({ error_sig: sig, status: "solved" });
+    expect(w.board.list()).toHaveLength(2);
   });
 
   it("a different fix never merges, and an unrelated post never takes a claim", async () => {
@@ -394,6 +404,122 @@ describe("which post takes a proven fix", () => {
     const sig = toolRun("pnpm tsc --noEmit", ts, true).sig;
     expect(w.board.get(port.id)?.error_sig).not.toBe(sig);
     expect(w.board.get(real.id)?.error_sig).toBe(sig);
+  });
+});
+
+// review round C: shapes that signed alike although the error differs; each must sign apart, or not at all
+const pwProject = (spec: string, test: string, locator: string) => `Exit code 1\n  1) [chromium] › tests/${spec}:5:1 › ${test} ──────────────\n\n    Error: Timed out 5000ms waiting for expect(locator).toBeVisible()\n\n    Locator: ${locator}\n\n  1 failed\n    [chromium] › tests/${spec}:5:1 › ${test}`;
+const mocha = (suite: string, test: string, file: string) => `Exit code 1\n  ${suite}\n    1) ${test}\n\n  0 passing (9ms)\n  1 failing\n\n  1) ${suite}\n       ${test}:\n\n      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\nfalse !== true\n\n      at Context.<anonymous> (test/${file}:9:12)`;
+const nodeTest = (test: string, file: string) => `Exit code 1\n✖ ${test} (1.2ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n  false !== true\n\n      at TestContext.<anonymous> (file:///srv/app/test/${file}:6:10)\nℹ tests 1\nℹ fail 1`;
+const nodeErr = (line: string) => `Exit code 1\nnode:fs:562\n  return binding.open(\n                 ^\n\n${line}\n    at Object.openSync (node:fs:562:18)\n\nNode.js v24.14.1`;
+const pyErr = (path: string) => `Exit code 1\nTraceback (most recent call last):\n  File "load.py", line 3, in <module>\nFileNotFoundError: [Errno 2] No such file or directory: '${path}'`;
+const noMod = (name: string) => `Exit code 1\nnode:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module '${name}'\nRequire stack:\n- /srv/app/server.js`;
+const npm404 = (url: string, name: string) => `Exit code 1\nnpm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/${url} - Not found\nnpm error 404\nnpm error 404  '${name}@*' is not in this registry.`;
+const COLLIDED: Array<[string, [string, string], [string, string]]> = [
+  ["playwright with a project", ["npx playwright test", pwProject("save.spec.ts", "saves the form", "getByRole('button')")], ["npx playwright test", pwProject("login.spec.ts", "shows the login page", "getByRole('heading')")]],
+  ["vitest with a project label", ["pnpm vitest run", vitest("|unit| src/cart.test.ts", "applies a coupon")], ["pnpm vitest run", vitest("|unit| src/auth.test.ts", "rejects an expired token")]],
+  ["mocha", ["npx mocha", mocha("Cart", "applies a coupon", "cart.js")], ["npx mocha", mocha("Auth", "rejects an expired token", "auth.js")]],
+  ["node:test", ["node --test", nodeTest("applies a coupon", "cart.test.mjs")], ["node --test", nodeTest("rejects an expired token", "auth.test.mjs")]],
+  ["ENOENT", ["node index.mjs", nodeErr("Error: ENOENT: no such file or directory, open 'C:\\proj\\config\\settings.json'")], ["node import.mjs", nodeErr("Error: ENOENT: no such file or directory, open '/srv/app/data/users.csv'")]],
+  ["FileNotFoundError", ["python load.py", pyErr("data/a.csv")], ["python infer.py", pyErr("weights/model.bin")]],
+  ["Cannot find module", ["node server.js", noMod("./routes/users")], ["node worker.js", noMod("../lib/db")]],
+  ["npm 404", ["npm install left-padx", npm404("left-padx", "left-padx")], ["npm install @acme/ui", npm404("@acme%2fui", "@acme/ui")]],
+];
+
+describe("errors that differ only by a test name or a path", () => {
+  it.each(COLLIDED)("%s: two different errors never share a signature", (_name, a, b) => {
+    const [sigA, sigB] = [toolRun(...a, true).sig, toolRun(...b, true).sig];
+    expect(sigA === undefined || sigA !== sigB).toBe(true);
+  });
+
+  it("a test run that names no failing test is not signed, so nothing is handed over", () => {
+    expect(toolRun("npx mocha", mocha("Cart", "applies a coupon", "cart.js"), true).sig).toBeUndefined();
+    expect(toolRun("node --test", nodeTest("applies a coupon", "cart.test.mjs"), true).sig).toBeUndefined();
+    expect(toolRun("pnpm vitest run", "Exit code 1\nAssertionError: expected false to be true\n\n Test Files  1 failed (1)", true).sig).toBeUndefined();
+  });
+
+  it("the same error still signs alike: same file in another folder, same test in another checkout", () => {
+    const sig = (command: string, output: string) => toolRun(command, output, true).sig;
+    expect(sig("node a.mjs", nodeErr("Error: ENOENT: no such file or directory, open 'C:\\work\\config\\settings.json'"))).toBe(sig("node b.mjs", nodeErr("Error: ENOENT: no such file or directory, open '/home/u/proj/config/settings.json'")));
+    expect(sig("python a.py", pyErr("data/a.csv"))).toBe(sig("python b.py", pyErr("D:\\other\\data\\a.csv")));
+    expect(sig("npx playwright test", pwProject("save.spec.ts", "saves the form", "x"))).toBe(sig("npx playwright test", pwProject("e2e/save.spec.ts", "saves the form", "y")));
+    expect(sig("pnpm vitest run", vitest("|unit| src/cart.test.ts", "applies a coupon"))).toBe(sig("pnpm vitest run", vitest("|unit| web/src/cart.test.ts", "applies a coupon")));
+    expect(sig(CLAUDE.ts2304[0], CLAUDE.ts2304[1])).toBe(sig("pnpm tsc", "Exit code 2\npackages/web/src/deep/app.tsx(214,17): error TS2304: Cannot find name 'foo'."));
+  });
+
+  it.each(COLLIDED.filter(([, a, b]) => toolRun(...a, true).sig && toolRun(...b, true).sig))("%s: bot B never gets A's fix, and each proven fix gets its own post", async (_name, a, b) => {
+    const w = setup();
+    const first = await w.prove("ta", a, toolRun(...a, true).error!, "Fix for A.");
+    w.loop.event(bash("tb", ...b));
+    w.loop.event(shell("tb"));
+    w.loop.event(done("tb"));
+    expect(w.loop.next("tb")).not.toContain("<forum-note>");
+    expect(w.handed()).toEqual([]);
+    const second = await w.prove("ta", b, toolRun(...b, true).error!, "Fix for B.");
+    expect(second.id).not.toBe(first.id);
+    expect(second.text).not.toMatch(/already had/);
+    expect(w.board.list().filter((post) => !post.parent_id)).toHaveLength(2);
+  });
+});
+
+describe("a short error line", () => {
+  it("one distinctive word is never enough for an unrelated post to take the proven fix", async () => {
+    const w = setup();
+    const git = ["git push origin main", "Exit code 128\nfatal: Authentication failed for 'https://github.com/x/y.git/'"] as const;
+    w.loop.event(bash("ta", ...git));
+    w.loop.event(edit("ta"));
+    w.loop.event(bash("ta", git[0], "ok", false));
+    const unrelated = await w.post("ta", { kind: "fix", title: "Add authentication middleware before the router", body: "Routes ran before the session check." });
+    expect(w.board.get(unrelated.id)?.error_sig).not.toBe(toolRun(...git, true).sig);
+    w.loop.event(bash("tb", ...git));
+    w.loop.event(shell("tb"));
+    w.loop.event(done("tb"));
+    expect(w.handed()).toEqual([]);
+    expect(w.loop.next("tb")).not.toContain("<forum-note>");
+  });
+
+  it("two distinctive words must be quoted in a row", async () => {
+    const w = setup();
+    w.loop.event(bash("ta", ...CLAUDE.socket.slice(0, 2) as [string, string]));
+    w.loop.event(edit("ta"));
+    w.loop.event(bash("ta", CLAUDE.socket[0], "ok", false));
+    const loose = await w.post("ta", { kind: "fix", title: "WebSocket drops: reconnect when the socket closes", body: "Add a backoff reconnect." });
+    const real = await w.post("ta", { kind: "fix", title: "socket hang up on sync", body: "Raise the agent keepAlive timeout." });
+    const sig = toolRun(CLAUDE.socket[0], CLAUDE.socket[1], true).sig;
+    expect(w.board.get(loose.id)?.error_sig).not.toBe(sig);
+    expect(w.board.get(real.id)?.error_sig).toBe(sig);
+  });
+});
+
+describe("two known errors in one model message", () => {
+  it("both fixes are handed over", async () => {
+    const w = setup();
+    const key = await w.prove("ta", CLAUDE.keyError, "KeyError 'name' in loader", "Use cfg.get('name').");
+    const ts = await w.prove("ta", CLAUDE.ts2304, "error TS2304: Cannot find name 'foo'", "Import foo from ./foo.");
+    w.loop.event(shell("tb"));
+    w.loop.event(shell("tb"));
+    w.loop.event(bash("tb", CLAUDE.keyError[0], CLAUDE.keyError[1]));
+    w.loop.event(bash("tb", CLAUDE.ts2304[0], CLAUDE.ts2304[1]));
+    w.loop.event(shell("tb"));
+    await vi.waitFor(() => expect(w.handed()).toHaveLength(1));
+    w.loop.event(done("tb"));
+    const all = [...w.handed().map(([, text]) => text), w.loop.next("tb")].join("\n");
+    expect(all).toContain(`Forum ${key.id}`);
+    expect(all).toContain(`Forum ${ts.id}`);
+    expect(all.split("<forum-note>")).toHaveLength(3);
+  });
+
+  it("both ride the next turn when the turn ends first", async () => {
+    const w = setup();
+    const key = await w.prove("ta", CLAUDE.keyError, "KeyError 'name' in loader", "Use cfg.get('name').");
+    const ts = await w.prove("ta", CLAUDE.ts2304, "error TS2304: Cannot find name 'foo'", "Import foo from ./foo.");
+    w.loop.event(bash("tb", CLAUDE.keyError[0], CLAUDE.keyError[1]));
+    w.loop.event(bash("tb", CLAUDE.ts2304[0], CLAUDE.ts2304[1]));
+    w.loop.event(done("tb"));
+    const next = w.loop.next("tb");
+    expect(next).toContain(`Forum ${key.id}`);
+    expect(next).toContain(`Forum ${ts.id}`);
+    expect(w.steer).not.toHaveBeenCalled();
   });
 });
 

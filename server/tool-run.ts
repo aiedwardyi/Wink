@@ -24,8 +24,14 @@ const BOILERPLATE = [
 const STRONG = /^(?:[\w.$]*(?:Error|Exception)\b.*:|(?:error|fatal|panic)\b|npm (?:error|ERR!)|E {2,}\S)|\berror(?:\[\w+\]| [A-Z]+\d+)?:/i;
 const WEAK = /\b(?:error|failed|failure|cannot|can't|could not|unable|not found|no such|denied|refused|hang up|timed? ?out|undefined|invalid|unexpected|missing)\b/i;
 const SOURCE = /\b[\w.-]+\.(?:[cm]?[jt]sx?|py|rs|go|java|kt|cs|c|cc|cpp|h|hpp|rb|php|swift|vue|svelte|json|toml|ya?ml|lock)\b\S*/g;
-// the failing test, so two tests printing one assertion line sign apart: vitest, pytest, jest, cargo, go, playwright
-const TEST_NAME = [/^FAIL\s+(\S+)\s+>\s+(.+)$/, /^FAILED\s+(\S+?)::(\S+)/, /^●\s+(.+)$/, /^---- (\S+) stdout ----$/, /^--- FAIL: (\S+)/, /^\d+\)\s+(\S+?):\d+:\d+\s+›\s+(.+)$/];
+// the failing test, so two tests printing one assertion line sign apart: vitest, pytest, jest, cargo, go, playwright (each with or without a project)
+const TEST_NAME = [/^FAIL\s+(?:\|[^|]+\|\s+)?(\S+)\s+>\s+(.+)$/, /^FAILED\s+(\S+?)::(\S+)/, /^●\s+(.+)$/, /^---- (\S+) stdout ----$/, /^--- FAIL: (\S+)/, /^\d+\)\s+(?:\[[^\]]+\]\s+›\s+)?(\S+?):\d+:\d+\s+›\s+(.+?)(?:\s+─+)?$/];
+// a test runner's summary or failure line: a run that prints one but names no failing test is not signed, since any
+// two of its tests would sign alike (mocha, node:test and runners this file does not know stay silent, like jest)
+const TEST_RUN = [/^(?:test files|tests?:?|test suites:?)\s+\d|^\d+ (?:failing|failed)\b|^ℹ fail \d|^test result: failed\b|^=+ .*\bfailed\b/i, /^(?:FAIL|FAILED|--- FAIL)\b/];
+// a quoted path or a URL is what a path-only error is about (ENOENT, Cannot find module, npm 404): its last part stays in the signature
+const QUOTED_PATH = /(['"`])([^'"`\r\n]*[\\/][^'"`\r\n]*)\1/g;
+const URL_TEXT = /https?:\/\/[^\s'"`<>()]+/g;
 const LINE_CHARS = 240;
 const SHOWN_CHARS = 120;
 
@@ -49,18 +55,37 @@ export function failingTest(output: string): string {
   return "";
 }
 
-/** Paths, line numbers and ids drop out; error codes stay, so TS2304 and TS2322 sign apart. Its own hash, so no post's text-made error_sig can match it. */
+const testRun = (output: string) => stripVTControlCharacters(output).split(/\r?\n/).some((line) => TEST_RUN.some((rule) => rule.test(line.trim())));
+const decoded = (text: string) => {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+};
+// a scoped package keeps its scope; any other path keeps its last part, so one file in two checkouts signs alike
+const lastPart = (path: string) => (/^@[^\\/]+\/[^\\/]+$/.test(path) ? path : path.split(/[\\/]+/).filter(Boolean).at(-1) ?? "");
+const words = (text: string) => text
+  .replace(/\b([a-z]{1,4})(\d{3,5})\b/g, (_match, code: string, digits: string) => code + [...digits].map((digit) => "abcdefghij"[Number(digit)]).join(""))
+  .replace(/\b[0-9a-f]{6,}\b/g, " ")
+  .replace(/\d+/g, " ")
+  .replace(/[^\p{L}\s]+/gu, " ")
+  .split(/\s+/).filter(Boolean);
+
+/** Paths, line numbers and ids drop out, but a quoted path or URL keeps its last part; error codes stay, so TS2304 and TS2322 sign apart. Its own hash, so no post's text-made error_sig can match it. */
 export function runSig(line: string, test = ""): string {
-  const stem = line.toLowerCase()
+  const named: string[] = [];
+  const name = (text: string) => {
+    named.push(text);
+    return " ";
+  };
+  const rest = line.toLowerCase()
     .replace(/^e\s+/, "")
-    .replace(/https?:\/\/\S+/g, " ")
+    .replace(URL_TEXT, (url) => name(lastPart(decoded(url.replace(/^https?:\/\//, "").replace(/[?#].*$/, "")))))
+    .replace(QUOTED_PATH, (_match, _quote: string, path: string) => name(lastPart(path)))
     .replace(/\S*[\\/]\S*/g, " ")
-    .replace(SOURCE, " ")
-    .replace(/\b([a-z]{1,4})(\d{3,5})\b/g, (_match, code: string, digits: string) => code + [...digits].map((digit) => "abcdefghij"[Number(digit)]).join(""))
-    .replace(/\b[0-9a-f]{6,}\b/g, " ")
-    .replace(/\d+/g, " ")
-    .replace(/[^\p{L}\s]+/gu, " ")
-    .split(/\s+/).filter(Boolean).slice(0, 24).join(" ");
+    .replace(SOURCE, " ");
+  const stem = [...words(rest), ...words(named.join(" "))].slice(0, 24).join(" ");
   return stem ? digest(test ? `forum-loop\n${test}\n${stem}` : `forum-loop\n${stem}`) : "";
 }
 
@@ -69,7 +94,8 @@ export function toolRun(command: string, output: string | undefined, failed: boo
   if (!failed || secretCommand(command)) return { cmd: digest(command) };
   const line = redactSecretsInText(errorLine(output ?? ""));
   const run: ToolRun = { cmd: digest(command), shown: cut(redactSecretsInText(command.replace(/\s+/g, " ").trim()), SHOWN_CHARS) };
-  const sig = line ? runSig(line, failingTest(output ?? "")) : "";
+  const test = failingTest(output ?? "");
+  const sig = line && (test || !testRun(output ?? "")) ? runSig(line, test) : "";
   if (sig) {
     run.sig = sig;
     run.error = cut(line, LINE_CHARS);

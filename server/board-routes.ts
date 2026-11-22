@@ -32,6 +32,9 @@ export interface BoardRouteDeps {
   fixFor?(sig: string, projectId: string): BoardPost | undefined;
 }
 
+const fixWords = (text: string) => text.toLowerCase().normalize("NFKC").split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(" ");
+const sameFix = (held: string, text: string) => fixWords(held) === fixWords(text);
+
 export function createBoardRoutes(deps: BoardRouteDeps) {
   const source = (req: IncomingMessage) => {
     const from = deps.caller(req.headers.authorization);
@@ -60,7 +63,8 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       const sig = kind === "fix" && !parent && !room ? deps.proven?.(from.threadId, `${title}\n${text}`) : undefined;
       const project = parent?.project_id ?? deps.projectOf(from.threadId);
       const known = sig ? deps.fixFor?.(sig, project) : undefined;
-      if (known) {
+      // only the same fix merges: a different proven fix for one signature is its own post, never dropped
+      if (known && sameFix(known.fix || known.body, text)) {
         deps.board.bump(known.id, from.botId);
         return json(res, 200, { id: known.id, text: `The Board already had this fix as ${known.id}; it moved up instead of posting twice.` });
       }
