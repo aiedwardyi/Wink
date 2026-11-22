@@ -214,8 +214,14 @@ export function reasks(said: string, asked: readonly string[], whole = false): "
 
 // A question about the work: a fact the record gives, not an idea or how something works.
 const FACT_ASK = /\?\s*$|^(?:(?:so|and|okay|ok|hey|wait)[,\s]+)?(?:what|when|which|who|whose|where|how many|how much|how long|how big|did|has|have|is|are|was|were|does|do)\b|언제|몇|뭐|어떻게 됐|했어|됐어/i;
-const PROJECT = /\b(?:releases?|versions?|prs?|pull requests?|merged?|ship(?:ped)?|builds?|installers?|tests?|ci|workers?|bugs?|crash(?:es)?|downloads?|beta|commits?|branch(?:es)?|deploy(?:ed)?|evals?|fix(?:ed)?|users?|reports?|calls?|voices?|volume|features?|launch(?:ed)?|plan(?:ned)?|asks?|tasks?|issues?|found|find)\b|\p{N}|릴리[스즈]|버전|머지|빌드|테스트|버그|배포/iu;
-const IDEA = /\bhow (?:do|does|would|could|can|should|to)\b|\bwhy (?:do|does|would|should)\b|\b(?:possible|ideas?|think|recommend|suggest)\b/i;
+// Theirs: a named release or PR ("0.9.4", "PR 2121"), or work words aimed at it ("the build"), never "a pull request" or "2 hours".
+const NAMED = /\b\d+\.\d+(?:\.\d+)?\b|\b(?:prs?|pull requests?|issues?|builds?|versions?|v)\s*#?\d+|#\d+/i;
+const WORK_WORDS = /\b(?:releases?|versions?|prs?|pull requests?|merged?|ship(?:ped)?|builds?|installers?|tests?|ci|workers?|bugs?|crash(?:es)?|downloads?|beta|commits?|branch(?:es)?|deploy(?:ed)?|evals?|fix(?:ed)?|users?|reports?|calls?|voices?|volume|features?|launch(?:ed)?|plan(?:ned)?|asks?|tasks?|issues?|found|find)\b/i;
+const THEIRS = /\b(?:the|our|my|your|we|we'?ve|we'?re|us|this|that|these|those|last|yesterday|today|tonight)\b/i;
+const PROJECT_KO = /릴리[스즈]|버전|머지|빌드|테스트|버그|배포/;
+const IDEA = /\bhow (?:do|does|would|could|can|should|to)\b|\bwhy (?:do|does|would|should)\b|\b(?:possible|ideas?|think|recommend|suggest|mean|means|stand for|difference between)\b|\bwhat(?:'s| is| are) (?:a|an)\b/i;
+// A capitalized word that is no name: an opener, or a month or day (dates are numbers in the notes).
+const NOT_NAMES = new Set("it its that this there here they we he she his her their our yes yeah yep yup nope not so well sure okay still probably maybe looks seems already also both all some most none only around nothing something yesterday today tomorrow tonight last next soon then once after before since until because but and when while january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday".split(" "));
 
 /** What the voice was given, as units it answers from: each line with the one before, so a chat answer keeps its question. */
 export function knownUnits(text: string): string[] {
@@ -225,16 +231,33 @@ export function knownUnits(text: string): string[] {
 
 /** His question about the work: "known" when what the voice was given covers it, "open" when its answer needs checking. */
 export function asksFact(heard: string, known: readonly string[]): "known" | "open" | undefined {
-  if (!known.length || !FACT_ASK.test(heard.trim()) || !PROJECT.test(heard) || IDEA.test(heard)) return undefined;
+  if (!known.length || !FACT_ASK.test(heard.trim()) || !(NAMED.test(heard) || (WORK_WORDS.test(heard) && THEIRS.test(heard)) || PROJECT_KO.test(heard)) || IDEA.test(heard)) return undefined;
   return covered(heard, known) ? "known" : "open";
+}
+
+/** He told it something, not asked or ordered: what he says himself backs an answer to it. */
+export function tells(heard: string): boolean {
+  return !FACT_ASK.test(heard.trim()) && !ordersChange(heard) && !asksForChange(heard) && !looksUp(heard);
+}
+
+const answerOf = (sentence: string) => !HYPOTHETICAL.test(sentence) && !CLARIFY.test(sentence) && !FILLER_ONLY.test(sentence) && !claimOf(sentence);
+
+/** Whether the turn has said an answer yet, not only a filler, an offer or "let me check". */
+export function answers(said: string): boolean {
+  return sentences(said).some((sentence) => answerOf(sentence) && contentWords(sentence).length > 0);
 }
 
 /** The first plain statement answering his question that nothing the voice was given says: a guess. */
 export function unbacked(said: string, heard: string, known: readonly string[]): string | undefined {
+  const asked = contentWords(heard);
+  const given = known.flatMap(contentWords);
+  const named = (sentence: string) => (sentence.match(/\b\p{Lu}\p{Ll}{2,}\b/gu) ?? []).map((word) => word.toLowerCase()).filter((word) => !NOT_NAMES.has(word) && !FILLER_WORDS.has(word));
   for (const sentence of sentences(said)) {
-    if (HYPOTHETICAL.test(sentence) || CLARIFY.test(sentence) || FILLER_ONLY.test(sentence) || claimOf(sentence)) continue;
+    if (!answerOf(sentence)) continue;
     const line = `${heard} ${sentence}`;
-    if (contentWords(line).length >= 2 && !covered(line, known)) return sentence;
+    // His question's words cover a line, never a name the answer adds: "Who merged it?" "Alice."
+    const names = named(sentence).every((word) => asked.includes(word) || given.includes(word));
+    if (contentWords(line).length >= 2 && (!covered(line, known) || !names)) return sentence;
   }
   return undefined;
 }

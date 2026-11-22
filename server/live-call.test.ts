@@ -84,7 +84,7 @@ describe("call token", () => {
     const plan = Array.from({ length: 12 }, (_, i) => ({ step: `Step ${i} ${"x".repeat(60)}`, status: i ? "pending" as const : "done" as const }));
     expect(h.store.writeTaskPacket({ ...packet, goal: "Ship 0.9.5", plan })).toBeTruthy();
     const { data } = await h.post("token");
-    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text;
     expect(data.known).toContain("RECENT CHAT:");
     expect(data.known).toContain('Goal: "Ship 0.9.5"');
     expect(data.known).not.toContain("DUTIES:");
@@ -741,6 +741,16 @@ describe("T2 the voice's own words are never facts", () => {
     expect(chat).toContain("Ed: Did the deploy go out?");
     expect(chat).toContain("You: All 40 pass.");
     expect(brief).toContain("A RECENT CHAT line marked unverified was only said on a call: never proof.");
+  });
+
+  it("the call never counts them as known facts", async () => {
+    const h = harness();
+    const call = { id: "c-0123456789ab" };
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Yes, the deploy went out.", engine: "geminiAgent", call: { ...call, voice: true } });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "All 40 pass." });
+    const { data } = await h.post("token");
+    expect(data.known).toContain("All 40 pass.");
+    expect(data.known).not.toContain("deploy went out");
   });
 
   it("the bot's next turn reads them as the voice's, not its own", () => {

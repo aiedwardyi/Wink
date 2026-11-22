@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, liveVoiceNames, spokenText, STYLE_LINES, type CallLine, type CallRoom, type CallStyle, type CallTag, type LiveVoice } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, liveVoiceNames, spokenText, STYLE_LINES, VOICE_SAID, VOICE_UNHEARD, type CallLine, type CallRoom, type CallStyle, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { callPrefsSchema } from "./bot-profile.ts";
 import { CALL_TASK_RULES, callTaskContext } from "./call-context.ts";
@@ -337,7 +337,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const minted = (data as { name?: unknown } | null)?.name;
     if (typeof minted !== "string" || !minted) return json(res, 502, { error: "Google returned no call token" });
     // The brief's facts, not its rules: an answer the call checks must come from these.
-    const known = `${brief.slice(Math.max(0, brief.indexOf("YOUR NOTES:")))}\n\n${record}`;
+    const known = `${brief.slice(Math.max(0, brief.indexOf("YOUR NOTES:")))}\n\n${record}`.split("\n").filter((line) => !line.includes(VOICE_SAID) && !line.includes(VOICE_UNHEARD)).join("\n");
     return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice, locale, style, known });
   };
 

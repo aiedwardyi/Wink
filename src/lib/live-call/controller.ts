@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf, yesToPost } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksAboutWork, asksFact, asksToRepeat, backchannel, backs, claimOf, echoOf, knownUnits, looksUp, misheard, offLanguage, ON_IT, asksForLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates, unbacked } from "./guard";
+import { answers, asksAboutDone, asksAboutWork, asksFact, asksToRepeat, backchannel, backs, claimOf, echoOf, knownUnits, looksUp, misheard, offLanguage, ON_IT, asksForLanguage, ordersChange, ordersOther, readsBack, reasks, repeatsAsk, restates, tells, unbacked } from "./guard";
 import { answersCard, GAP_MS, greets } from "./manners";
 import { EarlyMic, OpenLines, takesBack } from "./quick";
 
@@ -573,7 +573,7 @@ export class LiveCall {
       return null;
     }
     this.callId = posted.data.callId;
-    if (typeof posted.data.known === "string") this.facts = knownUnits(posted.data.known);
+    this.facts = knownUnits(String(posted.data.known ?? ""));
     this.aliases = posted.data.voice ? liveVoiceNames(posted.data.voice as LiveVoice) : [];
     if (posted.data.locale === "en" || posted.data.locale === "ko") this.app = posted.data.locale;
     if (posted.data.voice) this.live = { voice: String(posted.data.voice), style: String(posted.data.style ?? "normal"), language: this.app };
@@ -681,7 +681,7 @@ export class LiveCall {
         if (offLanguage(words, this.tongue)) return this.drop(wrongTongue(this.speaking));
         const ask = this.checkAsk && !offerFirst(words) ? reasks(words, this.closed) : "no";
         if (ask === "yes") return this.drop(this.askedLine());
-        if (this.echo && words && ((!this.pending && !this.sends.size && this.req.fact !== "open") || /[.!?]\s*$/.test(words)) && ask === "no" && (!this.lastLine || !mayRepeat(this.lastLine, this.saidBuf)) && (!this.offTongue || /\s\S|[.!?…]\s*$/.test(words))) this.unhold(true);
+        if (this.echo && words && ((!this.pending && !this.sends.size && this.req.fact !== "open") || (/[.!?]\s*$/.test(words) && (this.req.fact !== "open" || answers(words)))) && ask === "no" && (!this.lastLine || !mayRepeat(this.lastLine, this.saidBuf)) && (!this.offTongue || /\s\S|[.!?…]\s*$/.test(words))) this.unhold(true);
         if (!this.echo) this.caption("voice", this.saidBuf);
         if (this.awaiting && !this.guarded && !this.doneTold && claimsDone(this.saidBuf)) {
           this.doneTold = true;
@@ -783,6 +783,11 @@ export class LiveCall {
         // A tool call can come before any audio, so what was heard is its request.
         this.flushHeard();
         for (const call of calls) this.toolEngines.set(call.id, engine);
+        // "Let me check" plays as the check goes out; what the voice says after it is held and checked again.
+        if (this.echo && this.req.fact === "open" && calls.some((call) => call.name === "ask" || call.name === "task_context")) {
+          this.unhold(true);
+          this.echo = [];
+        }
         // Two offers in one tool message are one order, answered once per id.
         const offers = calls.filter((call) => call.name === "propose_work");
         if (offers.length > 1) this.propose(offers.map((call) => String(call.args.order ?? "").trim()).filter(Boolean).join(" "), offers.map((call) => call.id));
@@ -844,7 +849,7 @@ export class LiveCall {
     const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/task-context`, {}).catch(() => null);
     if (!engine || this.ended || engine !== this.engine || this.cancelled.has(id)) return;
     const text = posted?.status === 200 ? posted.data.taskContext : undefined;
-    if (typeof text === "string") this.learn(text);
+    this.learn(String(text ?? ""));
     engine.sendToolResult([id], "task_context", typeof text === "string" ? text : "TASK RECORD: unavailable.");
   }
 
@@ -1161,7 +1166,7 @@ export class LiveCall {
   private guess(text: string, ended = false): boolean {
     const req = this.req;
     const said = ended ? text : /^.*[.!?](?=\s|$)/s.exec(text)?.[0] ?? "";
-    if (!said || !req.fact || req.accounted || req.read || req.misheard || this.guarded || this.pending || this.cardTakes) return false;
+    if (!said || !req.fact || (req.accounted && !req.asked.length) || req.read || req.misheard || this.guarded || this.pending || this.cardTakes) return false;
     if (!unbacked(said, req.text, [...this.facts, ...this.learned])) return false;
     this.stats.guard.unbacked += 1;
     this.query(req.text, [], "ask", true);
@@ -1253,6 +1258,7 @@ export class LiveCall {
     const same = !offTongue && this.awaiting > 0 && this.req.accounted && !this.pending && !card?.armed && bareYes(text) && !offered(this.lastSaid);
     const req = same ? this.req : (this.req = request(text, offTongue));
     if (!same && !unsure && this.facts.length && !ordersChange(text, [this.deps.botName, ...this.aliases])) req.fact = asksFact(text, [...this.facts, ...this.learned]);
+    if (!unsure && !req.fact && tells(text)) this.learn(text);
     // A clear answer to the card read out goes to the bot as one, quoting it so the next call sees it answered; anything else is talk.
     if (ended && !this.pending && card?.armed && (offTongue || !answersCard(text, card.options))) card.passed = true;
     else if (ended && !this.pending && card?.armed) {

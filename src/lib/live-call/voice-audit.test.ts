@@ -70,7 +70,7 @@ async function live(early?: unknown[], known?: string) {
     post: async (path, body) => {
       posts.push({ path, body });
       if (path.endsWith("/messages")) return ACCEPTED;
-      if (path.endsWith("/call/token")) return { status: 200, data: { callId: CALL, url: "wss://x", token: "t", model: "m", voice: "Aoede", ...(known ? { known } : {}) } };
+      if (path.endsWith("/call/token")) return { status: 200, data: { callId: CALL, url: "wss://x", token: "t", model: "m", voice: "Aoede", known } };
       return { status: 200, data: {} };
     },
   });
@@ -257,6 +257,82 @@ describe("F1 a fact the voice was not given is checked, never guessed", () => {
     expect(asks(posts)).toEqual(["When did 0.9.3 ship?"]);
     expect(lines(posts)).toContain("Let me check.");
     expect(engine().texts).toHaveLength(texts);
+  });
+
+  it("general knowledge is answered straight, never sent to be checked", async () => {
+    const { engine, posts, wait, audio } = await live(undefined, BRIEF);
+    for (const [heard, said] of [["How many minutes are in 2 hours?", "There are 120 minutes in 2 hours."], ["What is a pull request?", "It's a request to merge one branch into another."]]) {
+      engine().events.heard(heard);
+      engine().events.answering();
+      engine().events.audio(new Int16Array(480));
+      engine().events.said(said);
+      engine().events.turnDone();
+      await wait(3_000);
+    }
+    expect(asks(posts)).toEqual([]);
+    expect(audio.plays).toBe(2);
+  });
+
+  it("a fact he said himself on the call backs the answer", async () => {
+    const { engine, posts, wait, audio } = await live(undefined, BRIEF);
+    engine().events.heard("My build has 3 failing tests.");
+    engine().events.answering();
+    engine().events.said("Ugh, okay.");
+    engine().events.turnDone();
+    await wait(3_000);
+    engine().events.heard("How many tests are failing in my build?");
+    engine().events.answering();
+    engine().events.audio(new Int16Array(480));
+    engine().events.said("3 tests are failing.");
+    engine().events.turnDone();
+    await wait(3_000);
+    expect(asks(posts)).toEqual([]);
+    expect(audio.plays).toBe(1);
+  });
+
+  it("a filler first never lets the guess after it play", async () => {
+    const { engine, posts, wait, audio } = await live(undefined, BRIEF);
+    engine().events.heard("Did PR 2121 merge?");
+    engine().events.answering();
+    engine().events.audio(new Int16Array(480));
+    engine().events.said("Hmm.");
+    engine().events.audio(new Int16Array(480));
+    engine().events.said(" Yeah, it merged yesterday.");
+    engine().events.turnDone();
+    await wait(3_000);
+    expect(asks(posts)).toEqual(["Did PR 2121 merge?"]);
+    expect(audio.plays).toBe(0);
+  });
+
+  it("let me check plays at the ask, and a guess after the ask still never plays", async () => {
+    const { engine, posts, tick, wait, audio } = await live(undefined, BRIEF);
+    engine().events.heard("Did PR 2121 merge?");
+    engine().events.answering();
+    engine().events.audio(new Int16Array(480));
+    engine().events.said("Let me check.");
+    engine().events.toolCall([{ id: "a1", name: "ask", args: { question: "Did PR 2121 merge?" } }]);
+    await tick(10);
+    expect(audio.plays).toBe(1);
+    engine().events.answering();
+    engine().events.audio(new Int16Array(480));
+    engine().events.said(" It merged yesterday.");
+    engine().events.turnDone();
+    await wait(3_000);
+    expect(asks(posts)).toEqual(["Did PR 2121 merge?"]);
+    expect(audio.plays).toBe(1);
+    expect(lines(posts).join("\n")).not.toContain("merged yesterday");
+  });
+
+  it("his question's words never back a name the brief does not have", async () => {
+    const { engine, posts, wait } = await live(undefined, BRIEF);
+    engine().events.heard("Who merged the phone resume PR?");
+    engine().events.answering();
+    engine().events.audio(new Int16Array(480));
+    engine().events.said("Alice merged it.");
+    engine().events.turnDone();
+    await wait(3_000);
+    expect(asks(posts)).toEqual(["Who merged the phone resume PR?"]);
+    expect(lines(posts).join("\n")).not.toContain("Alice");
   });
 });
 
