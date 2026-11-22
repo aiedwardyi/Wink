@@ -28,12 +28,13 @@ if (process.argv.includes("--login")) {
 });
 `);
 
-// agy 1.3.0 has no ACP server: `agy acp` prints this (recorded from the real CLI) and exits 2.
+// agy 1.3.0 has no ACP server: it answers `agy acp` with the recorded stderr and exit code.
+const noAcp = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/acp-unsupported.json", import.meta.url), "utf8")).reply;
 const oldAgy = join(dir, "agy-1.3.0.cjs");
 writeFileSync(oldAgy, `
 const fs = require("node:fs");
 fs.appendFileSync(process.env.FAKE_AGY_CALLS, process.argv.slice(2).join(" ") + "\\n");
-process.stderr.write(fs.readFileSync(${JSON.stringify(join(import.meta.dirname, "..", "testing", "fixtures", "agy-1.3.0-acp.stderr.txt"))}, "utf8"), () => process.exit(2));
+process.stderr.write(${JSON.stringify(noAcp.stderr)}, () => process.exit(${noAcp.exitCode}));
 `);
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

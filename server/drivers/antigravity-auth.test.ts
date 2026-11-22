@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -146,14 +146,14 @@ describe("Antigravity account from agy's logs", () => {
   });
 
   it("reads the ACP server's logs, where Wink's own sign-out lands, by time and not by name", () => {
-    // agy 1.5.14's `agy acp` logout writes acp-server-<stamp>-<n>.log, not cli-*.log.
-    const logout = "I1122 16:08:37.690676      84 server_oauth.go:192] Logging out current user\n";
+    // Real agy 1.5.14: an ACP logout writes to acp-server-<stamp>-<n>.log, not cli-*.log.
+    const { logFile, logLine } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/acp-logout.json", import.meta.url), "utf8")).reply;
     expect(readAntigravityLogSignIn(home({
       "cli-20261122_155418.log": signedIn("ed@example.com", "gcp"),
-      "acp-server-20261122_160837-944.log": logout,
+      [logFile]: `${logLine}\n`,
     }))).toBe(false);
     expect(readAntigravityAccount(home({
-      "acp-server-20261122_160837-944.log": logout,
+      [logFile]: `${logLine}\n`,
       "cli-20261122_170000.log": signedIn("new@example.com", "consumer"),
     }))).toBe("new@example.com");
   });
