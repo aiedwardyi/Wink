@@ -1338,7 +1338,9 @@ describe("provider-neutral context compaction", () => {
 
     expect(estimateContextTokens([{ text: turnText }])).toBeLessThanOrEqual(window / 2);
     const history = turnText.slice(0, turnText.indexOf(REPLY_MARKER));
-    for (const sent of batch.notes) {
+    const reports = (notes: string[]) => notes.filter((sent) => !sent.endsWith("waiting, next turn]"));
+    expect(batch.notes.at(-1)).toMatch(/^\[\+\d+ worker notes waiting, next turn\]$/);
+    for (const sent of reports(batch.notes)) {
       expect(turnText.split(sent)).toHaveLength(2);
       expect(history).not.toContain(sent.split("\n")[1]!.slice(0, 7));
     }
@@ -1347,10 +1349,37 @@ describe("provider-neutral context compaction", () => {
     for (let deliveredId: string | undefined, turn = 0; turn < 7; turn++) {
       const next = paneNotesForTurn(path, new Set(), deliveredId, true, true, window);
       if (!next.notes.length) break;
-      delivered.push(...next.notes);
+      delivered.push(...reports(next.notes));
       deliveredId = next.newestId;
     }
     expect(delivered.map((sent) => sent.split("\n")[1]!.slice(0, 6))).toEqual(notes.map((_, i) => `DONE ${i}`));
+  });
+
+  it("names the worker notes it holds for the next turn", () => {
+    const note = (id: string, text: string) => message(id, `[pane 0f3c9a1e] ${text}`, { role: "bot", kind: "note" });
+    const path = [message("m1", "Run the workers"), ...Array.from({ length: 4 }, (_, i) => note(`m${i + 2}`, `DONE ${i} ${"x".repeat(3_000)}`))];
+    const batch = paneNotesForTurn(path, new Set(), undefined, true, true, 4_096);
+
+    expect(batch.ids).toEqual(["m2"]);
+    expect(batch.newestId).toBe("m2");
+    expect(batch.notes).toHaveLength(2);
+    expect(batch.notes.at(-1)).toBe("[+3 worker notes waiting, next turn]");
+
+    const all = paneNotesForTurn(path, new Set(), undefined, true, true, 200_000);
+    expect(all.notes).toHaveLength(4);
+    expect(all.notes.join("\n")).not.toContain("waiting, next turn");
+  });
+
+  it("leaves a held mail reply out of the waiting count, since mail delivers it", () => {
+    const reply = message("m3", `@Caller ${"z".repeat(30_000)}`, {
+      role: "bot", kind: "note",
+      comm: { groupId: "dm", withBotId: "p", withName: "Pokkey", withColor: "blue", peer: "reply", taskId: "task-1", mailKey: "task-1:reply:t", state: "done" },
+    });
+    const path = [message("m1", "Run the workers"), message("m2", `[pane 0f3c9a1e] DONE ${"x".repeat(3_000)}`, { role: "bot", kind: "note" }), reply];
+    const batch = paneNotesForTurn(path, new Set(), undefined, true, true, 4_096);
+
+    expect(batch.ids).toEqual(["m2"]);
+    expect(batch.notes).toHaveLength(1);
   });
 
   it("clips a lone note larger than its share of a small window", () => {
