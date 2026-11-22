@@ -1,24 +1,25 @@
 // Automatic recall: before a typed turn, up to 2 matching rows from the bot's
 // own memory and notes ride in the turn text. Off unless the bot is listed in
 // lookup-bots.json, or Import Memory holds more than every prompt carries; then
-// every bot looks up those extra lines. The index is rebuilt after a reply
-// settles, never at send.
+// every bot looks up those extra lines, and a bot looks up its own import's the
+// same way. The index is rebuilt after a reply settles, never at send.
 import { readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
-import { aboutYouFile, aboutYouPastTheCut } from "./about-you.ts";
+import { aboutYouFile, aboutYouPastTheCut, botImportFile, botImportPastTheCut } from "./about-you.ts";
 import { userTyping } from "./memory-pass.ts";
 import { currentOnly, PICKS_FILE } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { appendRotatingLog } from "./rotating-log.ts";
 import { parseJson } from "./schema.ts";
-import { listMemoryTopics, loadMemory, memoryFileRaw, PARKED_COPY, workspaceDir } from "./workspace.ts";
+import { IMPORT_FILE, listMemoryTopics, loadMemory, memoryFileRaw, PARKED_COPY, workspaceDir } from "./workspace.ts";
 
 // Its own file: bots.json and profile-sync.json are parsed strictly by older builds.
 const PICKS_SOURCE = `memory/${PICKS_FILE}`;
 const ABOUT_YOU_SOURCE = "Import Memory";
+const IMPORT_SOURCE = `memory/${IMPORT_FILE}`;
 const FLAG_FILE = "lookup-bots.json";
 const LOG_FILE = "lookup-log.jsonl";
 const LOG_MAX_BYTES = 1024 * 1024;
@@ -319,8 +320,9 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
       if (past) files.push({ source, tier, mtime, ...past });
       continue;
     }
-    if (source === ABOUT_YOU_SOURCE) {
-      const text = aboutYouPastTheCut();
+    if (source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE) {
+      // the lines before the cut already ride in every prompt
+      const text = source === IMPORT_SOURCE ? botImportPastTheCut(botId) : aboutYouPastTheCut();
       if (text) files.push({ source, tier, mtime, text });
       continue;
     }
@@ -354,10 +356,13 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     indexes.delete(botId);
   };
 
-  const sourcesOf = async (botId: string, own: boolean, overflow: boolean): Promise<Source[]> => {
+  const sourcesOf = async (botId: string, own: boolean, overflow: boolean, ownOverflow: boolean): Promise<Source[]> => {
     const memoryDir = join(workspaceDir(botId), "memory");
     const notes = deps.notesPath(botId);
-    const found = await Promise.all(!own ? [statSource(ABOUT_YOU_SOURCE, 0, aboutYouFile())] : [
+    const found = await Promise.all(!own ? [
+      ...(overflow ? [statSource(ABOUT_YOU_SOURCE, 0, aboutYouFile())] : []),
+      ...(ownOverflow ? [statSource(IMPORT_SOURCE, 0, botImportFile(botId))] : []),
+    ] : [
       statSource("MEMORY.md", 0, join(workspaceDir(botId), "MEMORY.md")),
       ...listMemoryTopics(botId)
         .filter((topic) => !PARKED_COPY.test(topic.name))
@@ -372,17 +377,18 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     try {
       await loadFlags();
       const overflow = Boolean(aboutYouPastTheCut());
-      if (!flagged.has(botId) && !overflow) {
+      const ownOverflow = Boolean(botImportPastTheCut(botId));
+      if (!flagged.has(botId) && !overflow && !ownOverflow) {
         drop(botId);
         return;
       }
       const run = (runs.get(botId) ?? 0) + 1;
       runs.set(botId, run);
-      const sources = await sourcesOf(botId, flagged.has(botId), overflow);
+      const sources = await sourcesOf(botId, flagged.has(botId), overflow, ownOverflow);
       const signature = JSON.stringify(sources);
       if (indexes.get(botId)?.signature === signature) return;
       const index = await buildRecallIndex(await readNoteFiles(botId, sources));
-      if (runs.get(botId) !== run || (!flagged.has(botId) && !overflow)) {
+      if (runs.get(botId) !== run || (!flagged.has(botId) && !overflow && !ownOverflow)) {
         index.close();
         return;
       }

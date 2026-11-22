@@ -33,6 +33,8 @@ export const MEMORY_MAX_BYTES = 24_000;
 const MEMORY_WARN_SHARE = 0.8;
 /** A copy memory sync set aside when one file changed on two PCs (memory-sync.ts park). */
 export const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
+/** An "Only this bot" import (about-you.ts), a side file so MEMORY.md stays the bot's own notes. */
+export const IMPORT_FILE = "imported.md";
 
 export const MEMORY_SEED = `# Memory
 
@@ -228,8 +230,8 @@ function namesStem(text: string, stem: string): boolean {
 /** Loaded lines over the one-rule size, and side files no loaded line names. */
 export function memoryHealthOf(text: string, names: string[]): MemoryHealth {
   const longLines = text.split("\n").filter((line) => Buffer.byteLength(line, "utf8") > MEMORY_LINE_MAX_BYTES).length;
-  // a parked copy already gets its own notice, and the timeline is named by the picks in the prompt
-  const orphans = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE && !namesStem(text, name.slice(0, -".md".length)));
+  // a parked copy already gets its own notice; the timeline and an import ride in the prompt themselves
+  const orphans = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE && name !== IMPORT_FILE && !namesStem(text, name.slice(0, -".md".length)));
   return { longLines, orphans };
 }
 
