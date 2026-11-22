@@ -32,6 +32,7 @@
 //   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
 //   board_post(kind, title, body, …)      → leave a stuck, fix, tip or handoff post on the Board
 //   hand_off()                            → a busy bot's room reply: run the asked work once it is free
+//   import_memory(decline?)               → a new chat: save the user's pasted other-AI answer to Import Memory
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -44,6 +45,7 @@ import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
+import { FORUM_STUCK_RULE } from "../../shared/forum-rule.ts";
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
@@ -251,7 +253,7 @@ export const BOARD_TOOLS = [
   },
   {
     name: "board_post",
-    description: "Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you.",
+    description: `Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you. ${FORUM_STUCK_RULE}`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -261,8 +263,15 @@ export const BOARD_TOOLS = [
   },
 ];
 
+const IMPORT_MEMORY_TOOL = {
+  name: "import_memory",
+  description: "Saves the user's latest message, the answer they pasted from their other AI, to Import Memory, which all their bots read. Wink reads the message itself and leaves out password, key and code lines, so call it even when the paste has one. Tell the user the returned result. decline: true when they say no to importing, so no bot offers again.",
+  inputSchema: { type: "object", properties: { decline: { type: "boolean" } }, additionalProperties: false },
+};
+
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
+  ...(process.env.OMB_IMPORT_MEMORY === "1" ? [IMPORT_MEMORY_TOOL] : []),
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(process.env.OMB_HAND_OFF === "1" ? [HAND_OFF_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
@@ -333,15 +342,16 @@ const TOOLS = [
         },
         asks: {
           type: "array",
-          description: "The user's asks. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
+          description: "The user's asks. Add each new ask without an id in the turn the user makes it; one that matches an open ask merges into it. Send its id with a new status to update it. Close with done or declined, never drop one; park one with until to bring it back on that date. Asks you leave out stay as they are.",
           items: {
             type: "object",
             additionalProperties: false,
             properties: {
               id: { type: "string", minLength: 1, maxLength: 12, pattern: "\\S", description: "Wink's id for the ask, like A3. Omit to add a new one." },
               ask: { type: "string", minLength: 1, maxLength: 80, pattern: "\\S", description: "The ask in a few words, at most 80 characters. Needed to add one." },
-              status: { type: "string", enum: ["open", "building", "waiting-for-user", "done", "declined"] },
+              status: { type: "string", enum: ["open", "building", "waiting-for-user", "parked", "done", "declined"] },
               ref: { type: "string", maxLength: 80, pattern: "^$|\\S", description: "The PR, card or pane it points to, at most 80 characters. Empty string clears it." },
+              until: { type: "string", maxLength: 40, pattern: "\\S", description: "Needed with parked: the date it comes back as open, like 2026-12-01." },
             },
             required: ["status"],
           },
@@ -462,6 +472,7 @@ const TOOLS = [
       properties: {
         question: { type: "string", description: "One short question, 1-2 lines on a phone. Background goes in your message, not here. When closing, repeat the exact question." },
         close: { type: "boolean", description: "Close your matching open question as answered in chat. Use when the user answered it in their own words; no new card or alert." },
+        fact: { type: "boolean", description: "Missing information, not a decision, preference or sign-off: the Forum may answer first." },
         choices: {
           type: "array",
           items: { type: "string" },
@@ -474,7 +485,7 @@ const TOOLS = [
   {
     name: "show_image",
     description:
-      "Show a local image file (PNG, JPEG, GIF, or WebP, up to 10 MiB) to the user in this chat. Use it whenever you create or find an image the user should see, instead of ending with a file path. Returns the image's URL.",
+      "Show a local image file (PNG, JPEG, GIF, or WebP, up to 10 MiB) in this chat; in a team room everyone there sees it. Use it whenever you create or find an image the user should see, instead of ending with a file path. Returns the image's URL.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -979,10 +990,11 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (!question) return { text: "ask_user needs a question.", isError: true };
     if (!THREAD_ID) return { text: "Couldn't ask: no active thread.", isError: true };
     // the harness trims, dedupes and caps the choices
-    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }) });
+    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }), fact: args.fact });
     try {
       const result = await api("/api/internal/ask-user", { method: "POST", body });
       if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };
+      if (typeof result.notice === "string") return { text: result.notice };
       return { text: "Asked. Their answer will arrive as a new message." };
     } catch (e) {
       return { text: `Couldn't ask: ${e instanceof Error ? e.message : String(e)}`, isError: true };
@@ -1175,6 +1187,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   }
   if (name === "board_search" || name === "board_post") {
     const r = await api(name === "board_search" ? "/api/internal/board-search" : "/api/internal/board-post", { method: "POST", body: JSON.stringify(args) });
+    return { text: String(r.text ?? "") };
+  }
+  if (name === IMPORT_MEMORY_TOOL.name) {
+    const r = await api("/api/internal/import-memory", { method: "POST", body: JSON.stringify({ decline: args.decline === true }) });
     return { text: String(r.text ?? "") };
   }
   if (name === HAND_OFF_TOOL.name) {

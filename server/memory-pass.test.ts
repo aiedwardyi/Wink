@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -14,17 +15,26 @@ import {
   noteSummary,
   parseFacts,
   pendingRows,
-  replyPictures,
   secretLike,
   userTyping,
   type MemoryPass,
   type NoteGenerator,
 } from "./memory-pass.ts";
+import * as atomic from "./atomic.ts";
 import { memoryNotesEnabled } from "./config.ts";
+import type { ProviderInstance } from "./contracts.ts";
+import { AntigravityDriver } from "./drivers/antigravity.ts";
+import { createCliText } from "./drivers/cli-text.ts";
+import { CodexDriver } from "./drivers/codex.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import { replyTurns } from "./pick-sources.ts";
+import { loadProfileSyncSettings, saveProfileSyncSettings } from "./profile-sync.ts";
+import type { RateLimitsMap } from "./rate-limits-store.ts";
 import type { Message, StoreChange } from "./store.ts";
+import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -110,7 +120,7 @@ describe("memory pass", () => {
     on = true;
     botSwitch = new Map();
     writeMemoryFile("bot-t1", "");
-    rmSync(join(workspaceDir("bot-t1"), "memory"), { recursive: true, force: true });
+    removeTestData(join(workspaceDir("bot-t1"), "memory"));
     pass = start();
   });
 
@@ -138,18 +148,18 @@ describe("memory pass", () => {
       { instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText: defaultGenerateText },
       { instanceId: "claude-bound", driverKind: "claudeAgent", enabled: true, generateText },
     ], { instanceId: "claude-bound", available: true });
-    say("t1", "I prefer concise replies.");
-    say("t1", "I use pnpm for my projects.");
+    const first = say("t1", "I prefer concise replies.");
+    const second = say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
     expect(defaultGenerateText).not.toHaveBeenCalled();
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ text: "I prefer concise replies." }, { text: "I use pnpm for my projects." }]), {
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ id: first.id, text: first.text! }, { id: second.id, text: second.text! }]), {
       signal: expect.any(AbortSignal), timeoutMs: 120_000, ephemeral: true, lean: true,
     });
     expect(memoryFileRaw("bot-t1")).toBe(
       `${MEMORY_SEED}- Prefers concise replies (noted 2026-10-15)\n- Uses pnpm for projects (noted 2026-10-15)\n`,
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects", memoryBotId: "bot-t1" });
     expect(stored()).toEqual({ threads: {} });
   });
 
@@ -157,16 +167,16 @@ describe("memory pass", () => {
     const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
     const generateText = vi.fn(async () => recorded.reply.text);
     generator = noteGenerator([{ instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText }]);
-    store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
-    say("t1", "the second one");
+    const question = store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    const answer = say("t1", "the second one");
     say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, expect.anything());
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(`<source message_id="${answer.id}" question_id="${question.id}" />\n<context>${question.text}</context>\nthe second one`), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | model picker look | current\n- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n- Said: "the second one"\n',
     );
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects", memoryBotId: "bot-t1" });
   });
 
   it("attributes a helper batch once when its write waits for a busy turn", async () => {
@@ -180,6 +190,7 @@ describe("memory pass", () => {
         busy.add("bot-t1");
         return facts(["Prefers pnpm", "I prefer pnpm"]);
       });
+      generator = Object.assign(generate, { engine: "codex" });
       say("t1", "I prefer pnpm", { sendId: "source-send" });
       await settle("t1", 3 * MINUTE);
       busy.clear();
@@ -187,7 +198,7 @@ describe("memory pass", () => {
       expect(generate).toHaveBeenCalledTimes(1);
       const traces = readFileSync(join(dataDir, "turn-traces.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
       expect(traces).toHaveLength(1);
-      expect(traces[0]).toMatchObject({ botId: "bot-t1", threadId: "t1", sourceSendIds: ["source-send"], requests: [{ id: "request-1", usage: { input: 20, output: 2 }, nested: false }] });
+      expect(traces[0]).toMatchObject({ engine: "codex", botId: "bot-t1", threadId: "t1", sourceSendIds: ["source-send"], requests: [{ id: "request-1", usage: { input: 20, output: 2 }, nested: false }] });
       expect(chips("t1")).toHaveLength(1);
     } finally {
       if (timing === undefined) delete process.env.ORBIT_TURN_TIMING;
@@ -201,6 +212,214 @@ describe("memory pass", () => {
     for (let i = 0; i < 8; i += 1) say("t1", `line ${i}`);
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a malformed batch pending across restart and saves it on a healthy pass", async () => {
+    generate.mockResolvedValueOnce('[{"fact":1}]');
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    await settle("t1");
+    pass.dispose();
+    expect(stored()).toEqual({ threads: { t1: ids } });
+    expect(memoryFileRaw("bot-t1")).toBe("");
+    expect(readMemoryTopic("bot-t1", "decisions.md")).toBeNull();
+    expect(chips("t1")).toHaveLength(0);
+    pass = start();
+    generate.mockResolvedValueOnce(facts(["Prefers pnpm", "I prefer pnpm"]));
+    await settle("t1");
+    expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Prefers pnpm (noted 2026-10-15)\n`);
+    expect(stored()).toEqual({ threads: {} });
+  });
+
+  it("makes five settlements cost one attempt on a limited account", async () => {
+    const limits: RateLimitsMap = new Map();
+    const own = { instanceId: "acct-live", enabled: true, driverKind: "codex", generateText: vi.fn(async () => {
+      throw new Error("HTTP 429");
+    }) };
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, own, { limits, save: () => {} }) });
+    passes.push(pass);
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    for (let i = 0; i < 5; i++) await settle("t1");
+    pass.dispose();
+    expect(own.generateText).toHaveBeenCalledTimes(1);
+    expect(store.rows("t1").map(({ id }) => id)).toEqual(ids);
+    expect(stored()).toEqual({ threads: { t1: ids } });
+  });
+
+  it("makes five settlements cost one attempt on a signed-out account until a fresh probe", async () => {
+    const signedOut = new Set<string>();
+    const own = { instanceId: "acct-live", enabled: true, driverKind: "antigravityAgent", generateText: vi.fn(async () => {
+      throw new Error("UNAUTHENTICATED (code 401): Sign in again.");
+    }) };
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, own, { limits: new Map(), save: () => {}, signedOut }) });
+    passes.push(pass);
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    for (let i = 0; i < 5; i++) await settle("t1");
+    expect(own.generateText).toHaveBeenCalledTimes(1);
+    signedOut.clear();
+    await settle("t1");
+    pass.dispose();
+    expect(own.generateText).toHaveBeenCalledTimes(2);
+    expect(store.rows("t1").map(({ id }) => id)).toEqual(ids);
+    expect(stored()).toEqual({ threads: { t1: ids } });
+  });
+
+  it("keeps a moved, renamed or restored batch and saves it on the new home", async () => {
+    const id = say("t1", "I use pnpm").id;
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ host: "old-home", threads: { t1: [id] } }));
+    generate.mockResolvedValueOnce(facts(["Uses pnpm", "I use pnpm"]));
+    pass = createMemoryPass({ store, dataDir, host: "new-home", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    expect(stored()).toEqual({ host: "new-home", threads: { t1: [id] }, foreign: { t1: [id] } });
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memoryFileRaw("bot-t1")).toContain("Uses pnpm");
+    expect(stored()).toEqual({ host: "new-home", threads: {} });
+  });
+
+  it("runs a synced copy's restored batch only on the PC that saved it", async () => {
+    for (let i = 0; i < 8; i++) say("t1", "I use pnpm");
+    pass.dispose();
+    const startOn = (host: string, path: string) => {
+      const copy = createMemoryPass({ store, dataDir: path, host, generate: () => generator, enabled: () => true, busy: () => false });
+      passes.push(copy);
+      return copy;
+    };
+    pass = startOn("pc-a", dataDir);
+    say("t1", "I prefer tabs");
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    saveProfileSyncSettings(mirrorDir, { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: { "bot-t1": "synced-bot" } });
+    const mirror = startOn("pc-b", mirrorDir);
+    mirror.onSettled("bot-t1", "t1");
+    await mirror.idle();
+    expect(generate).not.toHaveBeenCalled();
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]![0]).toContain("I use pnpm");
+    expect(generate.mock.calls[0]![0]).toContain("I prefer tabs");
+    expect(stored()).toEqual({ host: "pc-a", threads: {} });
+  });
+
+  it("leaves a restored batch to its source when the sync mapping lands after startup", async () => {
+    for (let i = 0; i < 8; i++) say("t1", "I use pnpm");
+    pass.dispose();
+    const startOn = (host: string, path: string) => {
+      const copy = createMemoryPass({ store, dataDir: path, host, generate: () => generator, enabled: () => true, busy: () => false });
+      passes.push(copy);
+      return copy;
+    };
+    pass = startOn("pc-a", dataDir);
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    const sync = { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: {} };
+    saveProfileSyncSettings(mirrorDir, sync);
+    startOn("pc-b", mirrorDir).dispose();
+    const mirror = startOn("pc-b", mirrorDir);
+    saveProfileSyncSettings(mirrorDir, { ...sync, botMap: { "bot-t1": "synced-bot" } });
+    mirror.onSettled("bot-t1", "t1");
+    await mirror.idle();
+    expect(generate).not.toHaveBeenCalled();
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["mapping, then one local send", ["map", "say"]],
+    ["one local send, then mapping", ["say", "map"]],
+    ["two local sends, then mapping", ["say", "say", "map"]],
+    ["mapping, a claimed turn, then the next settlement", ["map", "say", "claim"]],
+  ])("submits a restored copy's own rows once: %s", async (_name, steps) => {
+    for (let i = 0; i < 8; i++) say("t1", "I prefer short replies");
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, host: "pc-a", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    const sync = { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: {} };
+    saveProfileSyncSettings(mirrorDir, sync);
+    // B's own store: A's rows arrived by sync, B's typing never reaches A
+    const storeB = fakeStore();
+    for (let i = 0; i < 8; i++) storeB.appendMessage("t1", { role: "user", kind: "text", text: "I prefer short replies" });
+    const claimed = new Set<string>();
+    const mirror = createMemoryPass({ store: storeB, dataDir: mirrorDir, host: "pc-b", generate: () => generator, enabled: () => true, busy: (botId) => claimed.has(botId) });
+    passes.push(mirror);
+    const mine: string[] = [];
+    for (const step of steps) {
+      if (step === "map") saveProfileSyncSettings(mirrorDir, { ...sync, botMap: { "bot-t1": "synced-bot" } });
+      if (step === "say") mine.push(storeB.appendMessage("t1", { role: "user", kind: "text", text: `I use pnpm ${mine.length}` }).id);
+      if (step === "claim") {
+        claimed.add("bot-t1");
+        mirror.onSettled("bot-t1", "t1", true);
+        await mirror.idle();
+        expect(generate).not.toHaveBeenCalled();
+        claimed.delete("bot-t1");
+      }
+    }
+    mirror.onSettled("bot-t1", "t1", true);
+    await mirror.idle();
+    expect(generate).toHaveBeenCalledTimes(1);
+    const prompt = generate.mock.calls[0]![0];
+    for (const [i] of mine.entries()) expect(prompt).toContain(`I use pnpm ${i}`);
+    expect(prompt).not.toContain("I prefer short replies");
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[1]![0]).toContain("I prefer short replies");
+    expect(generate.mock.calls[1]![0]).not.toContain("I use pnpm");
+  });
+
+  it("keeps a restored copy's local row out of the rows it leaves to the source", () => {
+    const theirs = Array.from({ length: 2 }, () => say("t1", "I prefer short replies").id);
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ host: "pc-a", threads: { t1: theirs } }));
+    pass = createMemoryPass({ store, dataDir, host: "pc-b", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    const mine = say("t1", "I use pnpm").id;
+    pass.dispose();
+    expect(stored()).toEqual({ host: "pc-b", threads: { t1: [...theirs, mine] }, foreign: { t1: theirs } });
+  });
+
+  it("never starts a helper for a turn claimed after the pass was scheduled", async () => {
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    busy.add("bot-t1");
+    await pass.idle();
+    expect(generate).not.toHaveBeenCalled();
+    busy.delete("bot-t1");
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a pass only after the settling call returns", async () => {
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    expect(generate).not.toHaveBeenCalled();
+    await pass.idle();
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an active extraction when the next turn starts and keeps its pending rows", async () => {
+    let finish: (output: string) => void = () => {};
+    generate.mockReturnValueOnce(new Promise<string>((resolve) => { finish = resolve; }));
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(generate).toHaveBeenCalledTimes(1);
+    say("t1", "I prefer concise replies");
+    pass.onTurn("bot-t1");
+    expect(generate.mock.calls[0]![1].aborted).toBe(true);
+    expect(chips("t1")).toHaveLength(0);
+    pass.onSettled("bot-t1", "t1", true);
+    finish(facts(["Uses pnpm", "I use pnpm"]));
+    await pass.idle();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[1]![0]).toContain("I use pnpm");
+    expect(generate.mock.calls[1]![0]).toContain("I prefer concise replies");
+    expect(stored()).toEqual({ threads: {} });
   });
 
   it("flushes at once before the engine compacts", async () => {
@@ -321,7 +540,7 @@ describe("memory pass", () => {
       "# Memory\n- Prefers pnpm\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n- Hates drama (noted 2026-10-15)\n",
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama", memoryBotId: "bot-t1" });
   });
 
   it("starts an empty file from the seed", async () => {
@@ -658,13 +877,28 @@ describe("memory pass", () => {
     await settle("t1", 3 * MINUTE);
     const prompt = generate.mock.calls[0]![0];
     expect(prompt).toContain("<context>");
-    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\nI use pnpm for my projects\.\n<\/user_lines>/);
+    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\n<source [^>]+>/);
+    expect(prompt).toContain("\nI use pnpm for my projects.\n</user_lines>");
     expect(prompt).not.toContain("Some setup. ".repeat(40));
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | Picker look follows the app theme | current\n- Picked: Picker look follows the app theme\n- Said: "the first one"\n',
     );
     expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("keeps a tweak said after an unbound pick in the same pass", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Should the picker follow the app theme, or stay dark always?" });
+    say("t1", "the first one");
+    say("t1", "and make the header smaller");
+    generate.mockResolvedValue(JSON.stringify([
+      { kind: "decision", fact: "Picker look follows the app theme", quote: "the first one", message_id: "not-a-message" },
+      { kind: "tweak", key: "Picker look follows the app theme", fact: "Make the header smaller", quote: "and make the header smaller" },
+    ]));
+    await settle("t1", 3 * MINUTE);
+    const timeline = readMemoryTopic("bot-t1", "decisions.md") ?? "";
+    expect(timeline).toContain("- Binding: unbound");
+    expect(timeline).toContain('"and make the header smaller"');
   });
 
   it("takes context from the bot's reply over a later options card, and from the card when no reply names the options", async () => {
@@ -730,16 +964,20 @@ describe("memory pass", () => {
     const old = "- Repo uses spaces (noted 2026-10-01)";
     const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
     writeMemoryFile("bot-t1", notes);
-    // a folder where the timeline goes fails its write
     const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
-    mkdirSync(side, { recursive: true });
+    const write = atomic.writeFileAtomic;
+    const failWrite = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...args) => {
+      if (path === side) throw new Error("timeline write failed");
+      write(path, ...args);
+    });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
     say("t1", "tabs");
     generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs", replaces: old }]));
     await settle("t1", 3 * MINUTE);
+    expect(failWrite).toHaveBeenCalledWith(side, expect.any(String), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(notes);
-    rmSync(side, { recursive: true });
+    failWrite.mockRestore();
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
     expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n");
@@ -747,11 +985,11 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(1);
   });
 
-  it("keeps the root of a picture path a bot names", () => {
+  it("does not offer files only named in a bot reply as saved pictures", () => {
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Mocks: /tmp/mock/C.png, ~/mock/B.png and C:\\mocks\\A.png. Which one?" });
     const { id } = say("t1", "c");
-    const shown = replyPictures(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
-    expect(shown?.map(({ path }) => path)).toEqual(["/tmp/mock/C.png", "~/mock/B.png", "C:\\mocks\\A.png"]);
+    const shown = replyTurns(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
+    expect(shown?.pictures).toEqual([]);
   });
 
   it("never lands the same pick twice", async () => {
@@ -937,13 +1175,13 @@ describe("memory pass filters", () => {
       expect(picked([decision("Repo password stays Tr0ub4dor", "yes")], [{ text: "yes", context: "Keep the repo password Tr0ub4dor?" }], "")).toEqual([]);
     });
 
-    it("keeps 3 per pass and one line per quote", () => {
+    it("keeps every decision in a pass and one line per quote", () => {
       const text = "dark, tabs, pnpm, vitest and npm";
       const context = "dark or light, tabs or spaces, pnpm or npm, vitest or jest, npm or yarn?";
       const own = [decision("Dark theme", "dark"), decision("Tabs for indent", "tabs"), decision("Pnpm for installs", "pnpm"), decision("Vitest for tests", "vitest")];
-      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       const shared = own.map((pick) => ({ ...pick, quote: text }));
-      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       expect(picked([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
         { line: "Npm for publishing", kind: "decision" },
       ]);
@@ -997,8 +1235,11 @@ describe("memory pass filters", () => {
 
   it("parses the model's JSON reply", () => {
     expect(parseFacts('```json\n[{"fact":"a","quote":"b"}]\n```')).toEqual([{ fact: "a", quote: "b" }]);
-    expect(parseFacts("nothing")).toEqual([]);
-    expect(parseFacts('[{"fact":1}]')).toEqual([]);
+    expect(parseFacts("[]")).toEqual([]);
+    expect(parseFacts("nothing")).toBeNull();
+    expect(parseFacts('[{"fact":1}]')).toBeNull();
+    expect(parseFacts('{"error":"incomplete response","details":[]')).toBeNull();
+    expect(parseFacts('{"facts":[{"fact":"a","quote":"b"}]}')).toBeNull();
   });
 
   it("appends within the budget only", () => {
@@ -1035,6 +1276,27 @@ describe("note generator", () => {
     expect(noteGenerator([])).toBeNull();
   });
 
+  it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("runs %s on its resolved account even with Main Claude ready", async (engine) => {
+    const own = instance(engine);
+    const claude = { ...instance("claudeAgent"), instanceId: "claude-main" };
+    const base = instance(engine, { text: "wrong account" });
+    const signal = new AbortController().signal;
+    const account = { instanceId: "claude-main", available: true };
+    const generate = noteGenerator([base, claude], account, own);
+    await expect(generate?.("prompt", signal)).resolves.toBe(engine);
+    expect(own.generateText).toHaveBeenCalledExactlyOnceWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true });
+    expect(claude.generateText).not.toHaveBeenCalled();
+    expect(base.generateText).not.toHaveBeenCalled();
+    expect(noteGenerator([base, claude], account, null)).toBeNull();
+    expect(noteGenerator([], undefined, instance("codex", { enabled: false }))).toBeNull();
+    expect(noteGenerator([], undefined, instance("codex", { text: null }))).toBeNull();
+  });
+
+  it("labels the background trace with the engine that runs the pass", async () => {
+    const own = instance("grokAgent");
+    expect(noteGenerator([], undefined, own)?.engine).toBe("grok");
+  });
+
   it("passes an optional usage observer without changing the helper call", async () => {
     const claude = instance("claudeAgent");
     const signal = new AbortController().signal;
@@ -1044,15 +1306,176 @@ describe("note generator", () => {
   });
 });
 
+describe("notes on the bot's own engine", () => {
+  const FAKE_CODEX = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-codex-app-server.ts");
+  let codex: ProviderInstance | undefined;
+
+  afterEach(async () => {
+    await codex?.dispose();
+    delete process.env.FAKE_CODEX_MESSAGES;
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a real helper rejection on its account without submitting again", async () => {
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-limit-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true,
+      environment: { CODEX_HOME: home, FAKE_CODEX_MODE: "text-rate-limited" }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const limits: RateLimitsMap = new Map();
+    const usage = { limits, save: vi.fn() };
+    await expect(noteGenerator([], undefined, own, usage)?.("notes", new AbortController().signal)).rejects.toThrow("Account text rate limit");
+    expect(noteGenerator([], undefined, own, usage)).toBeNull();
+    expect(usage.save).toHaveBeenCalledTimes(1);
+    expect(limits.get("codex")?.noteLimit).toEqual({ resetsAt: null });
+  });
+
+  it.each([
+    ["an RPC error", undefined],
+    ["an error event", { method: "error", params: { error: { message: "unexpected status 401 Unauthorized" }, willRetry: false } }],
+    ["a failed turn", { method: "turn/completed", params: { turn: { status: "failed", error: { message: "unexpected status 401 Unauthorized" } } } }],
+  ])("holds a Codex helper signed out by %s until a fresh account probe", async (_path, frame) => {
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-signed-out-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    const environment: Record<string, string> = frame ? { FAKE_CODEX_TOOL_FIXTURE: join(home, "frames.json") } : { FAKE_CODEX_MODE: "unauthorized" };
+    if (frame) writeFileSync(join(home, "frames.json"), JSON.stringify([frame]));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true,
+      environment: { CODEX_HOME: home, ...environment }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const usage = { limits: new Map() as RateLimitsMap, save: vi.fn(), signedOut: new Set<string>() };
+    await expect(noteGenerator([], undefined, own, usage)?.("notes", new AbortController().signal)).rejects.toThrow("401");
+    expect(noteGenerator([], undefined, own, usage)).toBeNull();
+    usage.signedOut.clear();
+    expect(noteGenerator([], undefined, own, usage)).not.toBeNull();
+    expect(usage.save).not.toHaveBeenCalled();
+  });
+
+  it("fills notes and the timeline for a Codex bot on a PC with no Claude", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
+    process.env.FAKE_CODEX_MESSAGES = JSON.stringify([{ text: recorded.reply.text, phase: "final_answer" }]);
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true, environment: { CODEX_HOME: home }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const store = fakeStore();
+    writeMemoryFile("bot-c1", "");
+    removeTestData(join(workspaceDir("bot-c1"), "memory"));
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), generate: () => noteGenerator([codex!], undefined, own), enabled: () => true, busy: () => false });
+    store.appendMessage("c1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    store.appendMessage("c1", { role: "user", kind: "text", text: "the second one" });
+    store.appendMessage("c1", { role: "user", kind: "text", text: "I use pnpm for my projects." });
+    pass.onSettled("bot-c1", "c1", true);
+    await pass.idle();
+    pass.dispose();
+    expect(memoryFileRaw("bot-c1")).toMatch(/^- Uses pnpm for projects \(noted \d{4}-\d{2}-\d{2}\)$/m);
+    expect(readMemoryTopic("bot-c1", "decisions.md")).toContain("- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n");
+  });
+});
+
+describe("signed-out note helpers", () => {
+  const FAKE_AGY = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-agy-cli.ts");
+  const cliHelper = (name: string, stderr: string) => {
+    const text = createCliText({ name, model: "text", timeoutMs: 30_000, parse: (stdout) => stdout,
+      command: async () => ({ cli: process.execPath, args: ["-e", `process.stderr.write(${JSON.stringify(stderr)});process.exit(1)`], env: { ...process.env } }) });
+    return { instanceId: name, driverKind: `${name.toLowerCase()}Agent`, enabled: true, generateText: text.generateText, dispose: async () => text.dispose() };
+  };
+  const geminiHelper = async (error: string) => {
+    chmodSync(FAKE_AGY, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-agy-signed-out-"));
+    return AntigravityDriver.create({ instanceId: "Gemini", displayName: undefined, enabled: true,
+      environment: { HOME: home, USERPROFILE: home, FAKE_AGY_RESULT_ERROR: error }, config: { cli: FAKE_AGY, fullAuto: false } });
+  };
+
+  // each engine's own words for a signed-out account; a wording missing here retries on every settlement
+  it.each([
+    ["Muse", "run ended with Failed: your API key from META_API_KEY was rejected — update or unset it"],
+    ["Muse", "run ended with Failed: your saved API key was rejected — run `muse login` or add a new key"],
+    ["Muse", "run ended with Failed: still unauthorized after a token refresh; run `muse login` again"],
+    ["Muse", "missing meta credentials: run `muse login` or set META_API_KEY"],
+    ["Grok", "Error: Not signed in. To authenticate without a browser, run:\n  grok login --device-code"],
+    ["Grok", "Error: Session expired. Run `grok login` to re-authenticate."],
+    ["Grok", "Error: Authentication failed. Run `grok login`, set XAI_API_KEY, or add api_key to ~/.grok/config.toml."],
+    ["Grok", "HTTP 401 Unauthorized: session expired"],
+    ["Gemini", "Unauthorized (code 401)"],
+    ["Gemini", "UNAUTHENTICATED (code 401): Sign in again."],
+  ])("makes five settlements cost one %s attempt: %s", async (engine, text) => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const helper = engine === "Gemini" ? await geminiHelper(text) : cliHelper(engine, text);
+    const generateText = vi.fn(helper.generateText!);
+    const usage = { limits: new Map() as RateLimitsMap, save: vi.fn(), signedOut: new Set<string>() };
+    const store = fakeStore();
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, { ...helper, generateText }, usage) });
+    try {
+      store.appendMessage("s1", { role: "user", kind: "text", text: "I use pnpm." });
+      for (let i = 0; i < 5; i++) {
+        pass.onSettled("bot-s1", "s1", true);
+        await pass.idle();
+      }
+      expect(generateText).toHaveBeenCalledTimes(1);
+      expect([...usage.signedOut]).toEqual([helper.instanceId]);
+      expect(store.rows("s1").map(({ role }) => role)).toEqual(["user"]);
+      // a fresh account probe clears the hold
+      usage.signedOut.clear();
+      expect(noteGenerator([], undefined, helper, usage)).not.toBeNull();
+    } finally {
+      pass.dispose();
+      await helper.dispose();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe("memory pass wiring", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const index = readFileSync(join(here, "index.ts"), "utf8");
   const bots = readFileSync(join(here, "bot-routes.ts"), "utf8");
 
-  it("runs every bot's pass on Claude, after 1:1 turns, without a session transcript", () => {
-    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\), botAccounts\.noteAccount\(\)\),[\s\S]*?botHasActiveTurn/);
+  it("keeps the legacy Claude selector and uses the resolved own account for other bots", () => {
+    expect(index).toContain("botAccounts.notes(bot, { limits: rateLimitsByInstance,");
+    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: noteHelper,[\s\S]*?botHasActiveTurn/);
+    expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?generate: noteHelper,/);
     expect(index).toMatch(/memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);\s*if \(!store\.groupByThread\(event\.threadId\)\)/);
     expect(index).toContain("memoryPass.dispose();");
+  });
+
+  it("lifts a signed-out helper only on a fresh account probe", () => {
+    expect(index).toContain("registry.onProbed((instanceId) => signedOutHelpers.delete(instanceId));");
+    expect(index).toContain("signedOut: signedOutHelpers");
+  });
+
+  it("stops a Gemini bot's note helpers as soon as a foreground send claims it", async () => {
+    const source = index.replace(/\r\n/g, "\n");
+    const start = source.indexOf("function tryClaimTurnStart(");
+    const claims = new Map<string, string | undefined>();
+    const kinds: Record<string, string> = { "bot-g1": "antigravityAgent", "bot-c1": "codex" };
+    const generate = vi.fn((_prompt: string, signal: AbortSignal) => new Promise<string>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }));
+    const store = fakeStore();
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), generate: () => generate, enabled: () => true, busy: (botId) => claims.has(botId) });
+    const memorySleep = { onTurn: vi.fn() };
+    const claim = new Function("scope", `with (scope) { ${ts.transpile(source.slice(start, source.indexOf("\n}\n", start) + 2), { target: ts.ScriptTarget.ES2022 })} return tryClaimTurnStart; }`)({
+      turnStartClaims: claims, memoryPass: pass, memorySleep,
+      store: { bot: (id: string) => ({ modelSelection: { instanceId: id } }) },
+      registry: { get: (id: string) => ({ driverKind: kinds[id] }) },
+    }) as (botId: string, threadId?: string) => boolean;
+    for (const thread of ["g1", "c1"]) {
+      writeMemoryFile(`bot-${thread}`, "");
+      store.appendMessage(thread, { role: "user", kind: "text", text: "I use pnpm for my projects." });
+      pass.onSettled(`bot-${thread}`, thread, true);
+    }
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
+    expect(claim("bot-g1", "g1")).toBe(true);
+    expect(claim("bot-c1", "c1")).toBe(true);
+    expect(generate.mock.calls.map(([, signal]) => signal.aborted)).toEqual([true, false]);
+    expect(memorySleep.onTurn).toHaveBeenCalledExactlyOnceWith("bot-g1");
+    pass.dispose();
   });
 
   it("runs the pass after a room turn, for the member that spoke", () => {
@@ -1060,7 +1483,7 @@ describe("memory pass wiring", () => {
   });
 
   it("reads the Settings switch live and drops pending notes on a config change", () => {
-    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?enabled: \(botId\) => \{[\s\S]*?memoryNotesEnabled\(cfg, bot\);[\s\S]*?\}\);/);
+    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?enabled: memoryJobEnabled,/);
     expect(index).toMatch(/saveConfig\(patch\);[\s\S]*?Object\.assign\(cfg, loadConfig\(\)\);\s*\}\s*if \(\(cfg\.profile[^\n]*\n\s*memoryPass\.onConfigChanged\(\);/);
     expect(index).toContain("memoryNotes: memoryNotesEnabled(cfg),");
   });
@@ -1074,7 +1497,7 @@ describe("memory pass wiring", () => {
 
   it("takes notes only for engines that load MEMORY.md", () => {
     expect(index).toMatch(
-      /enabled: \(botId\) => \{\s*const bot = store\.bot\(botId\);\s*const instance = bot && registry\.get\(bot\.modelSelection\.instanceId\);\s*return Boolean\(instance && supportsWorkspaceFiles\(instance\.driverKind\)\) && memoryNotesEnabled\(cfg, bot\);/,
+      /const memoryJobEnabled = \(botId: string\) => \{\s*const bot = store\.bot\(botId\);\s*const instance = bot && registry\.get\(bot\.modelSelection\.instanceId\);\s*return Boolean\(instance && supportsWorkspaceFiles\(instance\.driverKind\)\) && memoryNotesEnabled\(cfg, bot\);/,
     );
   });
 

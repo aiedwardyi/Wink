@@ -75,6 +75,7 @@ export interface TurnContextInput {
   recycleReason?: "compaction" | "session-fat" | "system";
   /** transcript-replay drivers get history via SendTurnInput.transcript instead */
   replaysNatively: boolean;
+  nativeReplay?: boolean;
   /** durable harness state, included only at a recovery boundary */
   taskRecord?: TaskRecordContext;
   /** Pre-sized durable state for the selected model window. */
@@ -266,14 +267,17 @@ export function countSessionToolRounds(
     if (message.kind !== "compaction") continue;
     // A repair re-covers an earlier row's span; the session it would restart never saw it.
     const covered = coveredThroughId(message);
-    if (covered !== undefined && messages.slice(0, index).some((earlier) => earlier.kind === "compaction" && coveredThroughId(earlier) === covered)) {
-      continue;
+    let repair = false;
+    for (let earlier = index - 1; covered !== undefined && !repair && earlier >= 0; earlier--) {
+      repair = messages[earlier]!.kind === "compaction" && coveredThroughId(messages[earlier]!) === covered;
     }
+    if (repair) continue;
     start = index + 1;
     break;
   }
   if (boundMessageId) {
-    const boundIndex = messages.findIndex((message) => message.id === boundMessageId);
+    // ids are unique, and the watermark is a recent row: read from the end
+    const boundIndex = messages.findLastIndex((message) => message.id === boundMessageId);
     if (boundIndex >= 0) start = Math.max(start, boundIndex + 1);
   }
   let count = 0;
@@ -318,6 +322,7 @@ export interface ResumeSeed {
   instanceId: string;
   cursor: unknown;
   compactionId: string | null;
+  nativeReplay?: true;
 }
 
 /** A cursor is resumable only once the provider accepted a prompt carrying the
@@ -530,9 +535,9 @@ export interface TaskRecordBlockOptions {
   latestUserText?: string;
   /** A request no completion settled; it takes the recovery shape too. */
   unsettledRequest?: string;
-  /** Clock stale asks are judged by. */
+  /** Clock parked asks and verdicts are judged by. */
   now?: number;
-  /** A status-style turn lists every open ask, not the oldest few. */
+  /** A status turn: the asks list says to build any summary from it. */
   allAsks?: boolean;
 }
 
@@ -658,6 +663,7 @@ export function withTaskRecord(text: string, record: string): string {
 
 export function buildTurnContext(input: TurnContextInput): {
   turnText: string;
+  nativeReplayPrefix?: string;
   /** false when the native session must not be resumed */
   resume: boolean;
 } {
@@ -682,18 +688,18 @@ export function buildTurnContext(input: TurnContextInput): {
     : asksText;
   if (!replay && !record) return { turnText: text, resume };
   if (!replay) return { turnText: `${record}\n\n${text}`, resume };
+  const history = [
+    record,
+    record ? "" : null,
+    replayPreamble(input),
+    "",
+    ...transcript.map((message) => replayLine(message, input.driverKind, input.model)),
+    "",
+    "",
+  ].filter((line) => line !== null).join("\n");
   return {
-    turnText: [
-      record,
-      record ? "" : null,
-      replayPreamble(input),
-      "",
-      ...transcript.map((message) => replayLine(message, input.driverKind, input.model)),
-      "",
-      REPLY_MARKER,
-      "",
-      text,
-    ].filter((line) => line !== null).join("\n"),
+    turnText: `${history}${REPLY_MARKER}\n\n${text}`,
+    ...(input.nativeReplay ? { nativeReplayPrefix: history } : {}),
     resume,
   };
 }

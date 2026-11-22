@@ -4,14 +4,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 
-import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
-import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
+import { botChain, CHAIN_LINES, handoffTarget, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
+import { roomMentionsHost, roomResponder } from "../../shared/room-routing.ts";
 import { sharableLocalFile } from "../attachments.ts";
-import type { Message } from "../store.ts";
+import type { BotRecord, Message, Store } from "../store.ts";
 import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
-import { broadcastDoorStop } from "./door-streams.ts";
-import { committedRoomText, recentRoomEntries, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
-import { copyRoomFile, MAX_MESSAGE_FILES, ownRoomFiles } from "./files.ts";
+import { broadcastDoorEntry, broadcastDoorStop } from "./door-streams.ts";
+import { appendRoomEntry, committedRoomText, recentRoomEntries, roomById, roomEntry, roomHostSeats, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
+import { copyRoomFile, discardUnpostedRoomFile, MAX_MESSAGE_FILES, ownRoomFiles } from "./files.ts";
 import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { askById, createAsk, roomAskDeps, roomAsks, runAsk, type HostedGroup } from "./asks.ts";
@@ -34,10 +34,10 @@ const groupBots = (group: HostedGroup) => group.memberIds.flatMap((id) => {
 export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = [], local?: LocalRow) {
   const { store, hostName } = roomAskDeps();
   const roomId = group.hosted.roomId;
-  const people = roomPeople(roomId);
+  const people = roomPeople(roomId, true);
   const person = sender.kind === "person" ? people.find((candidate) => candidate.id === sender.id) : undefined;
   if (sender.kind === "person" && !person) throw new RoomError(404, "you're not in this room");
-  const author: RoomAuthor = person ? { kind: "person", id: person.id, name: person.name } : { kind: "host", id: "host", name: hostName() };
+  const author: RoomAuthor = person && !person.host ? { kind: "person", id: person.id, name: person.name } : { kind: "host", id: "host", name: hostName() };
   const quote = replyToId === undefined ? null : roomEntry(roomId, replyToId);
   if (replyToId !== undefined && !quote) throw new RoomError(404, "no such message in this room");
   const files = fileIds.length ? ownRoomFiles(roomId, person?.id ?? "host", fileIds) : [];
@@ -45,14 +45,14 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   // Teammates' bots answer only on their owners' PCs, so their names and lines wake none here.
   const roomBots = teamBots(roomId);
   const quotesRoomBot = roomBots.some((roomBot) => roomBot.id === quote?.author.id) || Boolean(quote?.author.owner);
-  const nonWaking = [hostName(), ...people.map((candidate) => candidate.name)];
-  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot, roomBots.map((roomBot) => roomBot.name));
-  const ended = !person && liveBotChain(group) > 0;
-  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
+  const nonWaking = [hostName(), ...people.filter((candidate) => !candidate.host).map((candidate) => candidate.name)];
+  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText("person", text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot, roomBots.map((roomBot) => roomBot.name));
+  const ended = author.kind === "host" && liveBotChain(group) > 0;
+  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(person?.host ? { seat: person.id } : {}), ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
   stopped.delete(roomId);
   // the host's line ends a handoff; republish the group so its strip clears
   if (ended) store.patchGroup(group.id, {});
-  if (person) markPersonLine(group, entry, person.name);
+  if (person && !person.host) markPersonLine(group, entry, person.name);
   if (!bot || !person) return { entry, message, ask: null };
   const ask = createAsk({
     roomId,
@@ -73,6 +73,16 @@ function markPersonLine(group: HostedGroup, entry: RoomEntry, name: string, ping
   store.patchGroup(group.id, { unread: true });
   const line = { chat: group.id, threadId: group.threadId, room: group.name, name, text: roomLineText(entry.text, entry.files) };
   if (ping) alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert, undefined, alerts);
+}
+
+function hostMentioned(group: HostedGroup, entry: RoomEntry): boolean {
+  const roomId = group.hosted.roomId;
+  return roomHostSeats(roomId).length > 0 && roomMentionsHost(entry.text, roomAskDeps().hostName(),
+    [...roomPeople(roomId), ...groupBots(group), ...teamBots(roomId)].map((member) => member.name));
+}
+
+export function alertHostMention(group: HostedGroup, entry: RoomEntry): void {
+  if (hostMentioned(group, entry)) markPersonLine(group, entry, entry.author.name);
 }
 
 /** Room Stop ends a bot chain here and on every joined PC. */
@@ -106,18 +116,19 @@ export function liveBotChain(group: HostedGroup): number {
   }
 }
 
-/** A teammate's bot answer from its owner's PC: counted as the owner's line. Its @ to a host bot asks under the owner. */
-export function teamBotSend(group: HostedGroup, owner: RoomPerson, bot: TeamBot, text: string, replyToId?: string, sendId?: string): RoomEntry {
+/** A teammate's bot answer from its owner's PC: counted as the owner's line, with `fileIds` the owner uploaded. Its @ to a host bot asks under the owner. */
+export function teamBotSend(group: HostedGroup, owner: RoomPerson, bot: TeamBot, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = []): RoomEntry {
   const roomId = group.hosted.roomId;
   const quote = replyToId === undefined ? null : roomEntry(roomId, replyToId);
   if (replyToId !== undefined && !quote) throw new RoomError(404, "no such message in this room");
+  const files = fileIds.length ? ownRoomFiles(roomId, owner.id, fileIds) : [];
   const author: RoomAuthor = { kind: "bot", id: bot.id, name: bot.name, owner: owner.id };
-  const { entry } = writeRoomEntry(roomAskDeps().store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}) }, sendId);
+  const { entry } = writeRoomEntry(roomAskDeps().store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId);
   const people = roomPeople(roomId);
   const bots = groupBots(group);
-  const tagged = botLineResponder(entry.text, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)], bot.id);
+  const tagged = handoffTarget(entry, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)]);
   // a handoff pings no one; the line that closes it does
-  markPersonLine(group, entry, bot.name, !tagged);
+  markPersonLine(group, entry, bot.name, !tagged || hostMentioned(group, entry));
   const hit = stopped.has(roomId) || peopleOnlyRoom(roomId) ? null : tagged;
   const asked = bots.find((candidate) => candidate.id === hit?.id);
   if (asked) {
@@ -194,6 +205,34 @@ export async function hostRoomFiles(group: HostedGroup, text: string, sendId?: s
     }
   }
   return ids;
+}
+
+export function captureHostBotPicture(store: Pick<Store, "groupByThread" | "messagesFor">, bot: BotRecord, threadId: string, interrupted: () => boolean) {
+  const group = store.groupByThread(threadId);
+  if (!group?.hosted || group.threadId !== threadId || !roomById(group.hosted.roomId) || peopleOnlyRoom(group.hosted.roomId)) return null;
+  const roomId = group.hosted.roomId;
+  const ask = roomAsks(roomId, ["running", "stopping"]).find((candidate) => candidate.threadId === threadId && candidate.botId === bot.id);
+  const check = () => {
+    if (interrupted() || (ask && askById(ask.id)?.state !== "running")) throw new RoomError(409, "the turn was stopped");
+    return true;
+  };
+  return async (path: string, name: string, caption: string) => {
+    check();
+    const file = await copyRoomFile(path, roomId, { owner: "host", name, uploadId: randomBytes(18).toString("base64url"), still: check });
+    try {
+      check();
+      const entry = appendRoomEntry(roomId, {
+        author: { kind: "bot", id: bot.id, name: bot.name }, text: caption, files: [file],
+        ...(ask ? { replyToId: ask.entryId, askId: ask.id, grant: ask.grant, clean: ask.clean } : {}),
+      });
+      broadcastDoorEntry(roomId, entry);
+      const replyToId = ask ? store.messagesFor(threadId).find((message) => message.roomEntryId === ask.entryId)?.id : undefined;
+      return { roomEntryId: entry.id, roomFiles: [file], replyToId, url: `/api/rooms/${roomId}/files/${file.id}/preview` };
+    } catch (error) {
+      discardUnpostedRoomFile(roomId, file.id);
+      throw error;
+    }
+  };
 }
 
 /** The host's line from the group box. In a bot group the thread row keeps the full text for the bots; the room gets a capped copy, with `fileIds` from hostRoomFiles in place of the tags. */

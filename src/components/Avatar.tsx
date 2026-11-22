@@ -1,6 +1,7 @@
 // Bot avatar — cute mascot styles, wrapped in the historical MausAvatar
 // API so call sites keep compiling. Motion is blink + soft idle eyes only;
 // expression / pointer props are still accepted and ignored.
+import { User } from "lucide-react";
 import {
   forwardRef,
   memo,
@@ -257,7 +258,7 @@ export function RoomBotAvatar({ bot, ...props }: Omit<BotAvatarProps, "bot"> & {
   return <BotAvatar {...props} bot={{ ...bot, color: (bot.color || DEFAULT_MAUS_COLOR) as MausColor }} />;
 }
 
-/** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
+/** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "" (InitialsAvatar draws a person icon) */
 export function profileInitials(profile?: { name?: string; email?: string }): string {
   const name = profile?.name?.trim();
   if (name) {
@@ -268,7 +269,7 @@ export function profileInitials(profile?: { name?: string; email?: string }): st
       .join("");
   }
   const email = profile?.email?.trim();
-  return email ? email[0]!.toUpperCase() : "?";
+  return email ? email[0]!.toUpperCase() : "";
 }
 
 export function InitialsAvatar({
@@ -308,7 +309,7 @@ export function InitialsAvatar({
       className={`flex shrink-0 items-center justify-center rounded-full ${tone} text-ink-secondary font-medium`}
       style={{ width: size, height: size, fontSize: size * 0.38 }}
     >
-      {initials}
+      {initials || <User size={size * 0.6} aria-hidden="true" />}
     </div>
   );
 }

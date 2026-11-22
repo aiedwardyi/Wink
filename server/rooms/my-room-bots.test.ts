@@ -1,13 +1,17 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CHAIN_PENDING_MS } from "../../shared/bot-chain.ts";
 import { DATA_DIR } from "../config.ts";
-import type { Message } from "../store.ts";
+import { createInternalRoutes } from "../internal-routes.ts";
+import type { BotRecord, Message } from "../store.ts";
 import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, setJoinedWorks, type JoinedEntry } from "./joined.ts";
 import { MyRoomBotTurns, type MyRoomBotDeps } from "./my-room-bots.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const ROOM = "room1";
 const ME = { id: "p1", name: "Peter" };
@@ -17,7 +21,7 @@ const FILE = { id: "f".repeat(24), name: "q3.pdf", type: "application/pdf", byte
 
 let seq = 0;
 let thread: Message[];
-let deps: MyRoomBotDeps & Record<"startTurn" | "createTask" | "changed", ReturnType<typeof vi.fn>> & { client: Record<"botSend" | "file", ReturnType<typeof vi.fn>> };
+let deps: MyRoomBotDeps & Record<"startTurn" | "createTask" | "changed", ReturnType<typeof vi.fn>> & { client: Record<"botSend" | "botPicture" | "file", ReturnType<typeof vi.fn>> };
 
 function line(author: JoinedEntry["author"], text: string, extra: Partial<JoinedEntry> = {}): JoinedEntry {
   seq += 1;
@@ -31,7 +35,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
   closeJoinedDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   seq = 0;
   thread = [];
@@ -39,7 +43,7 @@ beforeEach(() => {
   setJoinedState(ROOM, { version: 1, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [{ id: "b1", name: "EdBot", color: "blue" }], teamBots: [PETE, MINI] });
   saveMyRoomBot(ROOM, PETE.id, "local-pete");
   deps = {
-    client: { botSend: vi.fn(async () => ({ ok: true, value: { seq: 99 } })), file: vi.fn(async () => ({ ok: true, value: { path: "C:\\cache\\q3.pdf" } })) },
+    client: { botSend: vi.fn(async () => ({ ok: true, value: { seq: 99 } })), botPicture: vi.fn(), file: vi.fn(async () => ({ ok: true, value: { path: "C:\\cache\\q3.pdf" } })) },
     bot: (botId: string) => (botId === "local-pete" ? { id: botId, name: "Pete" } : null),
     busy: () => false,
     hasTask: () => false,
@@ -400,6 +404,13 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "@EdBot Peter is free after 7.", ask.id);
   });
 
+  it("starts no turn from another bot's picture caption", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line(mini, "Chart for @Pete-Coder", { ...now(), files: [{ ...FILE, name: "chart.png", type: "image/png" }] }));
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+  });
+
   it("wakes it for this PC's other bot", async () => {
     const two = { id: "tb-CCCCCCCCCCCCCCCC", name: "Pete-Two", color: "", owner: ME.id };
     setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [], teamBots: [PETE, two] });
@@ -596,5 +607,123 @@ describe("a room bot's @ to this PC's bot", () => {
     turns.sent(ROOM, line(peter, "@Pete-Coder hi"));
     await settle();
     expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you.")\n"Peter" asked you: @Pete-Coder hi');
+  });
+
+  describe("a picture it shows", () => {
+    const picture = () => {
+      const path = join(DATA_DIR, "cat.png");
+      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      return path;
+    };
+    const start = async () => {
+      const turns = new MyRoomBotTurns(deps);
+      const ask = line(peter, "@Pete-Coder draw a cat");
+      turns.sent(ROOM, ask);
+      await settle();
+      return { turns, ask };
+    };
+
+    it("posts as the room's own line and hands the bot its room URL", async () => {
+      deps.client.botPicture.mockResolvedValueOnce({ ok: true, value: { seq: 5, id: "e5", files: [FILE] } });
+      const { turns, ask } = await start();
+      expect(turns.capturePicture("private-task")).toBeNull();
+      await expect(turns.capturePicture("task-1")!(picture(), "cat.png", "A cat")).resolves.toEqual({ messageId: "e5", url: `/api/joined/rooms/${ROOM}/files/${FILE.id}/preview` });
+      expect(deps.client.botPicture).toHaveBeenCalledWith(ROOM, PETE.id, "A cat", ask.id, "cat.png", expect.any(Buffer), expect.any(AbortSignal));
+    });
+
+    it("shows a local picture in the room task after the room turn settles", async () => {
+      const { turns } = await start();
+      await turns.settled("task-1", true);
+      const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
+      const appendMessage = vi.fn((_threadId: string, _message: Partial<Message>) => ({ id: "message" }));
+      const routes = createInternalRoutes({
+        cfg: {},
+        store: { bot: () => bot, taskByThread: () => undefined, appendMessage },
+        connectorThread: () => ({}),
+        captureRoomPicture: (_bot: BotRecord, task: string) => turns.capturePicture(task),
+      } as unknown as Parameters<typeof createInternalRoutes>[0]);
+      const body = { fromBotId: bot.id, fromThreadId: "task-1", path: picture() };
+      const req = Readable.from([JSON.stringify(body)]) as unknown as IncomingMessage;
+      const res = { writeHead: vi.fn(), end: vi.fn() };
+      await routes.showImage(req, res as unknown as ServerResponse);
+      expect(res.writeHead).toHaveBeenCalledWith(201, expect.any(Object));
+      expect(appendMessage).toHaveBeenCalledWith("task-1", expect.objectContaining({ kind: "screen", image: expect.any(String), shown: true }));
+      const image = appendMessage.mock.calls[0]![1].image;
+      expect(JSON.parse(res.end.mock.calls[0]![0])).toEqual({ messageId: "message", url: `/api/attachments/${image}` });
+      expect(deps.client.botPicture).not.toHaveBeenCalled();
+    });
+
+    it("keeps an answered ask out of the next prompt after a picture-only turn", async () => {
+      deps.client.botPicture.mockImplementationOnce(async () => ({ ok: true, value: line({ kind: "bot", ...PETE }, "", { files: [FILE] }) }));
+      deps.hasTask = (_botId, threadId) => threadId === "task-1";
+      const { turns, ask } = await start();
+      await turns.capturePicture("task-1")!(picture(), "cat.png", "");
+      await turns.settled("task-1", true);
+      turns.sent(ROOM, line(peter, "@Pete-Coder draw a dog"));
+      await settle();
+      expect(deps.startTurn).toHaveBeenCalledTimes(2);
+      expect(deps.startTurn.mock.calls[1]?.[2]).not.toContain(ask.text);
+    });
+
+    it("does not post a stopped generation as an answer to the next ask", async () => {
+      deps.interrupt = vi.fn(async () => {});
+      deps.hasTask = (_botId, threadId) => threadId === "task-1";
+      deps.client.botPicture.mockResolvedValue({ ok: true, value: { seq: 5, id: "e5", files: [FILE] } });
+      const { turns } = await start();
+      const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
+      const appendMessage = vi.fn(() => ({ id: "message" }));
+      const routes = createInternalRoutes({
+        cfg: { imageGen: { key: "test-key" } },
+        store: { bot: () => bot, taskByThread: () => undefined, groupTaskByThread: () => undefined, appendMessage },
+        connectorThread: () => ({}),
+        botOutputRoots: () => [DATA_DIR],
+        captureRoomPicture: (_bot: BotRecord, task: string) => turns.capturePicture(task),
+      } as unknown as Parameters<typeof createInternalRoutes>[0]);
+      let finish!: (response: Response) => void;
+      const result = new Promise<Response>((resolve) => (finish = resolve));
+      let started!: () => void;
+      const generating = new Promise<void>((resolve) => (started = resolve));
+      vi.stubGlobal("fetch", vi.fn(() => {
+        started();
+        return result;
+      }));
+      try {
+        const req = Readable.from([JSON.stringify({ fromBotId: bot.id, fromThreadId: "task-1", prompt: "cat" })]) as unknown as IncomingMessage;
+        const res = { writeHead: vi.fn(), end: vi.fn() };
+        const pending = routes.generateImage(req, res as unknown as ServerResponse);
+        await generating;
+        await turns.stopMine(ROOM);
+        await turns.settled("task-1", false);
+        turns.sent(ROOM, line(peter, "@Pete-Coder draw a dog"));
+        await settle();
+        expect(deps.startTurn).toHaveBeenCalledTimes(2);
+        const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        finish(new Response(JSON.stringify({ data: [{ b64_json: gif }] })));
+        await pending;
+        expect(JSON.parse(res.end.mock.calls[0]![0])).toMatchObject({ showError: "the room refused it: the turn was stopped" });
+        expect(deps.client.botPicture).not.toHaveBeenCalled();
+        expect(appendMessage).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("names why the room refused it and posts no line", async () => {
+      deps.client.botPicture.mockResolvedValueOnce({ ok: false, status: 507, error: "this room is out of space for files" });
+      const { turns } = await start();
+      await expect(turns.capturePicture("task-1")!(picture(), "cat.png", "A cat")).rejects.toMatchObject({ status: 507, message: "this room is out of space for files" });
+      expect(deps.client.botSend).not.toHaveBeenCalled();
+      deps.client.botPicture.mockResolvedValueOnce({ ok: false, status: 404, error: "not found" });
+      await expect(turns.capturePicture("task-1")!(picture(), "cat.png", "A cat")).rejects.toMatchObject({ status: 404, message: "the host's Wink is too old for pictures from teammates' bots" });
+    });
+
+    it("posts nothing once its owner pressed Stop", async () => {
+      deps.interrupt = vi.fn(async () => {});
+      const { turns } = await start();
+      const captured = turns.capturePicture("task-1")!;
+      await turns.stopMine(ROOM);
+      await expect(captured(picture(), "cat.png", "A cat")).rejects.toMatchObject({ status: 409 });
+      expect(deps.client.botPicture).not.toHaveBeenCalled();
+    });
   });
 });

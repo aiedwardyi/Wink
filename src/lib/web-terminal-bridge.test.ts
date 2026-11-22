@@ -334,6 +334,38 @@ describe("createWebTerminalBridge", () => {
     expect(closed).toEqual([]);
   });
 
+  it("keeps one roster refresh in flight and aborts it on cancel", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const bridge = make();
+    await bridge.readBot?.("bot-1");
+    await attach(bridge);
+    const request = vi.mocked(fetch);
+    const original = request.getMockImplementation()!;
+    const signals: Array<AbortSignal | null | undefined> = [];
+    const releases: Array<() => void> = [];
+    request.mockImplementation((url, init) => {
+      if (!String(url).endsWith("?panes=1")) return original(url, init);
+      signals.push(init?.signal);
+      return new Promise<Response>((resolve, reject) => {
+        releases.push(() => resolve(Response.json({ panes: [] })));
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(signals).toHaveLength(1);
+      releases[0]!();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(signals).toHaveLength(2);
+      await bridge.cancelOpen?.("bot-1");
+      expect(signals[1]?.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(signals).toHaveLength(2);
+    } finally {
+      releases.forEach((release) => release());
+    }
+  });
+
   it("picks up worker panes that open or close while the pane shows", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const bridge = make();

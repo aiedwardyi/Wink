@@ -1,14 +1,23 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createBotRoutes } from "./bot-routes.ts";
 import { acceptFacts, attachedImages, createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { currentPicks } from "./picks.ts";
+import { currentPicks, parseTimeline } from "./picks.ts";
 import type { GroupRecord, Message, StoreChange } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { timelinePicks } from "./timeline-picks.ts";
 import { memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
+import { removeTestData } from "./testing/test-home.ts";
+
+vi.mock("node:fs", async (original) => {
+  const actual = await original<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -62,9 +71,13 @@ describe("decision timeline", () => {
   };
   const reply = (...items: object[]) => generate.mockResolvedValueOnce(JSON.stringify(items));
   const timeline = () => readMemoryTopic(BOT, "decisions.md") ?? "";
+  const timelinePath = () => join(workspaceDir(BOT), "memory", "decisions.md");
+  const failTimelineRead = (code: string) => vi.mocked(readFileSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error(code), { code });
+  });
   const showMocks = () => {
-    const mock = (name: string) => join(dataDir, "mocks", `${name}.png`);
-    mkdirSync(join(dataDir, "mocks"), { recursive: true });
+    const mock = (name: string) => join(dataDir, "attachments", `${name}.png`);
+    mkdirSync(join(dataDir, "attachments"), { recursive: true });
     for (const [name, caption] of [["A", "A - plain list"], ["B", "B - tiles"], ["C", "C - Reddit cards"]] as const) {
       writeFileSync(mock(name), "");
       const shown = store.appendMessage("t1", { role: "bot", kind: "activity", tool: { name: "mcp__agents__show_image", ok: true, summary: mock(name) } });
@@ -79,15 +92,20 @@ describe("decision timeline", () => {
     reply({ kind: "decision", key: "forum", fact: "A - plain list", quote: "I choose A", over: ["C - Reddit cards"] });
     await settle();
     store.groups.set("room1", { id: "g", memberIds: [BOT, "bot-t2"] } as GroupRecord);
-    store.appendMessage("room1", { role: "bot", kind: "text", text: "For the forum: A - plain list, B - tiles, C - Reddit cards. Which one?" });
-    store.appendMessage("room1", { role: "user", kind: "text", text: "I choose C" });
+    const question = store.appendMessage("room1", { role: "bot", kind: "text", text: "For the forum: A - plain list, B - tiles, C - Reddit cards. Which one?" });
+    const answer = store.appendMessage("room1", { role: "user", kind: "text", text: "I choose C" });
     generate.mockResolvedValue(JSON.stringify([{ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "I choose C" }]));
     pass.onSettled(BOT, "room1");
     pass.onSettled("bot-t2", "room1");
     await vi.advanceTimersByTimeAsync(3 * MINUTE);
     await pass.idle();
-    expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
-    expect(currentPicks(readMemoryTopic("bot-t2", "decisions.md"))[0]?.picked).toBe("C - Reddit cards");
+    const bound = { picked: "C - Reddit cards", thread: "room1", messageId: answer.id, questionId: question.id };
+    expect(currentPicks(timeline())[0]).toMatchObject(bound);
+    expect(currentPicks(readMemoryTopic("bot-t2", "decisions.md"))[0]).toMatchObject(bound);
+    expect(store.messagesFor("room1").filter(({ tool }) => tool?.name === MEMORY_SAVE_TOOL).map(({ tool }) => tool)).toEqual([
+      expect.objectContaining({ memoryBotId: BOT }),
+      expect.objectContaining({ memoryBotId: "bot-t2" }),
+    ]);
     const calls = generate.mock.calls.length;
     store.appendMessage("room1", { role: "user", kind: "text", text: "I choose B", author: { kind: "person", id: "peer", name: "Peer" } });
     pass.onSettled(BOT, "room1");
@@ -95,6 +113,17 @@ describe("decision timeline", () => {
     await pass.idle();
     expect(generate).toHaveBeenCalledTimes(calls);
     expect(memorySystemPrompt(BOT)).toContain("C - Reddit cards");
+  });
+
+  it("lands every pick when more than 3 questions are answered in one pass", async () => {
+    const asks = [["forum", "A - plain list", "B - tiles"], ["header", "A - small title", "B - big title"], ["footer", "A - links row", "B - one line"], ["theme", "A - dark", "B - light"]] as const;
+    for (const [thing, first, second] of asks) {
+      bot(`For the ${thing}: ${first}, ${second}. Which one?`);
+      say(`I choose A for the ${thing}`);
+    }
+    reply(...asks.map(([thing, first]) => ({ kind: "decision", key: thing, fact: first, quote: `I choose A for the ${thing}` })));
+    await settle();
+    expect(currentPicks(timeline()).map((pick) => pick.key).sort()).toEqual(["footer", "forum", "header", "theme"]);
   });
 
   it("keeps an introductory letter pick and its tweak", async () => {
@@ -155,6 +184,220 @@ describe("decision timeline", () => {
     expect(currentPicks(timeline())[0]?.files).toEqual(["/real/a&b.png"]);
   });
 
+  it("keeps only the screenshots sent with the pick's own message", async () => {
+    bot("The settings page is done.");
+    say('the Reddit cards on the settings page look off\n\n<attached-image path="/shots/settings.png"/>');
+    bot("Forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    const answer = say('Reddit cards\n\n<attached-image path="/shots/forum.png"/>');
+    reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "Reddit cards", message_id: answer.id });
+    await settle();
+    expect(currentPicks(timeline())[0]?.files).toEqual(["/shots/forum.png"]);
+  });
+
+  it("stores every screenshot on the message that holds the quote and none from another", async () => {
+    bot("The settings page is done.");
+    say('the Reddit cards on the settings page look off\n\n<attached-image path="/shots/settings.png"/>');
+    bot("Forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    const answer = say('Reddit cards, both screens below\n\n<attached-image path="/shots/forum-1.png"/>\n\n<attached-image path="/shots/forum-2.png"/>');
+    reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "Reddit cards", message_id: answer.id });
+    await settle();
+    expect(currentPicks(timeline())[0]?.files).toEqual(["/shots/forum-1.png", "/shots/forum-2.png"]);
+  });
+
+  it("gives two picks answered with the same words their own question's screenshot and time", async () => {
+    bot("Forum looks: A - red cards, B - blue cards. Which one?");
+    const first = say('I choose B\n\n<attached-image path="/shots/forum.png"/>');
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    bot("Settings looks: A - gray cards, B - green cards. Which one?");
+    const second = say('I choose B\n\n<attached-image path="/shots/settings.png"/>');
+    reply(
+      { kind: "decision", key: "forum", fact: "B - blue cards", quote: "I choose B", message_id: first.id },
+      { kind: "decision", key: "settings", fact: "B - green cards", quote: "I choose B", message_id: second.id },
+    );
+    await settle();
+    const [forum, settings] = ["forum", "settings"].map((key) => currentPicks(timeline()).find((entry) => entry.key === key));
+    expect(forum).toMatchObject({ id: "2026-11-17 10:00", files: ["/shots/forum.png"] });
+    expect(settings).toMatchObject({ id: "2026-11-17 10:01", files: ["/shots/settings.png"] });
+  });
+
+  it("keeps a pick text-only when its answer and question IDs disagree", async () => {
+    const forum = bot("Forum: A - red cards or B - blue cards?");
+    say('I choose B\n\n<attached-image path="/shots/forum.png"/>');
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    const settings = bot("Settings: A - gray cards or B - blue cards?");
+    const answer = say('I choose B\n\n<attached-image path="/shots/settings.png"/>');
+    reply(
+      { kind: "decision", key: "Forum", fact: "B - blue cards", quote: "I choose B", message_id: answer.id, question_id: forum.id },
+      { kind: "decision", key: "Settings", fact: "B - blue cards", quote: "I choose B", message_id: answer.id, question_id: settings.id },
+    );
+    await settle();
+    const picks = currentPicks(timeline());
+    expect(picks.find(({ key }) => key === "Forum")).toMatchObject({ picked: "B - blue cards", binding: "unbound", files: [] });
+    expect(picks.find(({ key }) => key === "Forum")).not.toHaveProperty("at");
+    expect(picks.find(({ key }) => key === "Settings")).toMatchObject({ at: answer.at, questionId: settings.id, files: ["/shots/settings.png"] });
+  });
+
+  it("binds identical replies when two questions swap the same option words", async () => {
+    const header = bot("Header above footer: A - green cards or B - blue cards?");
+    const first = say('I choose B\n\n<attached-image path="/shots/header.png"/>');
+    await vi.advanceTimersByTimeAsync(1);
+    const footer = bot("Footer above header: A - blue cards or B - green cards?");
+    const second = say('I choose B\n\n<attached-image path="/shots/footer.png"/>');
+    reply(
+      { kind: "decision", key: "Footer above header", fact: "B - blue cards", quote: "I choose B", message_id: second.id },
+      { kind: "decision", key: "Header above footer", fact: "B - blue cards", quote: "I choose B", message_id: first.id },
+      { kind: "decision", key: "Footer above header", fact: "B - green cards", quote: "I choose B", message_id: second.id },
+    );
+    await settle();
+    expect(currentPicks(timeline())).toMatchObject([
+      { messageId: first.id, questionId: header.id, at: first.at, files: ["/shots/header.png"] },
+      { messageId: second.id, questionId: footer.id, at: second.at, files: ["/shots/footer.png"] },
+    ]);
+  });
+
+  it("keeps a text-only question from taking the previous question's pictures", async () => {
+    const mock = showMocks();
+    const question = bot("Forum: A - plain list or C - Reddit cards?");
+    say("I choose C");
+    bot("Settings: A - gray cards or B - green cards?");
+    const answer = say("I choose B");
+    reply({ kind: "decision", key: "Settings", fact: "B - green cards", quote: "I choose B", message_id: answer.id, question_id: question.id, picture: mock("C"), over: ["A - gray cards"], over_pictures: [mock("A")] });
+    await settle();
+    const [pick] = currentPicks(timeline());
+    expect(pick?.picture).toBeUndefined();
+    expect(pick?.overPictures).toEqual([]);
+  });
+
+  it("does not bind a completed illustrated question to a new pick with the same caption", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "screen", image: "forum.png", text: "B - blue cards" });
+    const forum = bot("Forum: A - red cards or B - blue cards?");
+    say("I choose B");
+    store.appendMessage("t1", { role: "bot", kind: "screen", image: "settings.png", text: "B - blue cards" });
+    bot("Settings: A - gray cards or B - blue cards?");
+    const answer = say("I choose B");
+    reply({ kind: "decision", key: "Settings", fact: "B - blue cards", quote: "I choose B", message_id: answer.id, question_id: forum.id, picture: join(dataDir, "attachments", "forum.png") });
+    await settle();
+    const [pick] = currentPicks(timeline());
+    expect(pick?.picture).toBeUndefined();
+    expect(pick).toMatchObject({ picked: "B - blue cards", binding: "unbound" });
+  });
+
+  it("uses the answer branch when another question with the same caption was delivered between them", async () => {
+    const show = (name: string, parentId: string | null) => store.appendMessage("t1", {
+      role: "bot", kind: "screen", image: `${name}.png`, text: "B - blue cards", parentId,
+    });
+    const ask = (name: string, parentId: string) => store.appendMessage("t1", { role: "bot", kind: "text", text: `${name}: A - gray cards or B - blue cards?`, parentId });
+    const forum = ask("Forum", show("forum", null).id);
+    ask("Settings", show("settings", null).id);
+    const answer = store.appendMessage("t1", { role: "user", kind: "text", text: "I choose B", parentId: forum.id });
+    const picture = join(dataDir, "attachments", "forum.png");
+    reply({ kind: "decision", key: "Forum", fact: "B - blue cards", quote: "I choose B", message_id: answer.id, question_id: forum.id, picture });
+    await settle();
+    expect(currentPicks(timeline())[0]).toMatchObject({ questionId: forum.id, picture: { path: picture } });
+  });
+
+  it("rejects a losing option as the winner and the winner as a rejected picture", async () => {
+    const mock = showMocks();
+    const question = bot("Forum: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    const answer = say("I choose C - Reddit cards");
+    reply({ kind: "decision", key: "Forum", fact: "C - Reddit cards", quote: "I choose C - Reddit cards", message_id: answer.id, question_id: question.id, picture: mock("A"), over: ["A - plain list", "B - tiles"], over_pictures: [mock("C")] });
+    await settle();
+    const [pick] = currentPicks(timeline());
+    expect(pick).toMatchObject({ picked: "C - Reddit cards", overPictures: [] });
+    expect(pick?.picture).toBeUndefined();
+  });
+
+  it("keeps the first winner when an illustrated question continues across turns", async () => {
+    const show = (name: string, caption: string) => {
+      store.appendMessage("t1", { role: "bot", kind: "screen", image: `${name}.png`, text: caption });
+      return join(dataDir, "attachments", `${name}.png`);
+    };
+    const red = show("red", "A - red cards");
+    const question = bot("Forum: A - red cards. Want to see B - blue cards too?");
+    say("Show blue too");
+    const blue = show("blue", "B - blue cards");
+    bot("B - blue cards. Which forum design do you prefer?");
+    const answer = say("I choose red cards");
+    reply({ kind: "decision", key: "Forum", fact: "A - red cards", quote: "I choose red cards", message_id: answer.id, question_id: question.id, picture: red, over: ["B - blue cards"], over_pictures: [blue] });
+    await settle();
+    expect(currentPicks(timeline())[0]).toMatchObject({ questionId: question.id, picture: { path: red }, overPictures: [{ path: blue }] });
+  });
+
+  it("does not save a mutable original named alongside a shown copy", async () => {
+    const original = join(dataDir, "menu.png");
+    const copy = join(dataDir, "attachments", "saved-menu.png");
+    mkdirSync(join(dataDir, "attachments"), { recursive: true });
+    writeFileSync(original, "old");
+    writeFileSync(copy, "old");
+    const tool = store.appendMessage("t1", { role: "bot", kind: "activity", tool: { name: "mcp__agents__show_image", summary: original } });
+    store.appendMessage("t1", { role: "bot", kind: "screen", parentId: tool.id, image: "saved-menu.png", text: "B - blue menu" });
+    bot(`Menu: A - red menu or B - blue menu? See ${original}`);
+    const answer = say("I choose B");
+    reply({ kind: "decision", key: "Menu", fact: "B - blue menu", quote: "I choose B", message_id: answer.id, picture: original });
+    await settle();
+    writeFileSync(original, "new");
+    const picture = currentPicks(timeline())[0]?.picture;
+    expect(picture?.path).toBe(copy);
+    expect(readFileSync(picture!.path, "utf8")).toBe("old");
+  });
+
+  it("takes a pick's pictures only from the question it answers", async () => {
+    mkdirSync(join(dataDir, "attachments"), { recursive: true });
+    const show = (name: string, caption: string) => {
+      const path = join(dataDir, "attachments", `${name}.png`);
+      writeFileSync(path, "");
+      const shown = store.appendMessage("t1", { role: "bot", kind: "activity", tool: { name: "mcp__agents__show_image", ok: true, summary: path } });
+      store.appendMessage("t1", { role: "bot", kind: "screen", parentId: shown.id, image: `${name}.png`, text: caption });
+      return path;
+    };
+    const red = show("forum-a", "A - red cards");
+    show("forum-b", "B - blue cards");
+    bot("Forum: A - red cards or B - blue cards?");
+    say("I choose blue cards");
+    const gray = show("settings-a", "A - gray cards");
+    const green = show("settings-b", "B - green cards");
+    bot("Settings: A - gray cards or B - green cards?");
+    say("I choose green cards");
+    reply(
+      { kind: "decision", key: "forum", fact: "B - blue cards", quote: "I choose blue cards", picture: green, over: ["A - red cards"], over_pictures: [gray] },
+      { kind: "decision", key: "settings", fact: "B - green cards", quote: "I choose green cards", picture: green, over: ["A - gray cards"], over_pictures: [red, gray] },
+    );
+    await settle();
+    const [forum, settings] = ["forum", "settings"].map((key) => currentPicks(timeline()).find((entry) => entry.key === key));
+    expect(forum?.picked).toBe("B - blue cards");
+    expect(forum?.picture).toBeUndefined();
+    expect(forum?.overPictures).toEqual([]);
+    expect(settings?.picture).toEqual({ path: green, caption: "B - green cards" });
+    expect(settings?.overPictures).toEqual([{ path: gray, caption: "A - gray cards" }]);
+  });
+
+  it("keeps each pick's saved copy when a later design reuses the same file name", async () => {
+    const mock = join(dataDir, "mocks", "menu.png");
+    const copy = (name: string) => join(dataDir, "attachments", name);
+    mkdirSync(join(dataDir, "mocks"), { recursive: true });
+    mkdirSync(join(dataDir, "attachments"), { recursive: true });
+    const round = (name: string, caption: string) => {
+      writeFileSync(mock, caption);
+      writeFileSync(copy(name), caption);
+      const shown = store.appendMessage("t1", { role: "bot", kind: "activity", tool: { name: "mcp__agents__show_image", ok: true, summary: mock } });
+      store.appendMessage("t1", { role: "bot", kind: "screen", parentId: shown.id, image: name, text: caption });
+    };
+    round("one.png", "A - tall header");
+    bot("Header: A - tall header or B - short header?");
+    say("I choose A");
+    reply({ kind: "decision", key: "header", fact: "A - tall header", quote: "I choose A", picture: copy("one.png") });
+    await settle();
+    round("two.png", "A - wide footer");
+    bot("Footer: A - wide footer or B - thin footer?");
+    say("I choose A for the footer");
+    reply({ kind: "decision", key: "footer", fact: "A - wide footer", quote: "I choose A for the footer", picture: copy("two.png") });
+    await settle();
+    expect(generate.mock.calls[1]![0]).toContain(`<pictures>\n${copy("two.png")} (A - wide footer)\n</pictures>`);
+    const [header, footer] = ["header", "footer"].map((key) => currentPicks(timeline()).find((entry) => entry.key === key));
+    expect(header?.picture?.path).toBe(copy("one.png"));
+    expect(footer?.picture?.path).toBe(copy("two.png"));
+  });
+
   it("keeps image paths whose folders contain ordinary sensitive words", () => {
     expect(attachedImages('<attached-image path="/mock/secret/menu.png"/>')).toEqual(["/mock/secret/menu.png"]);
   });
@@ -167,6 +410,195 @@ describe("decision timeline", () => {
     reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "C" });
     await settle();
     expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
+  });
+
+  describe("one pick per source", () => {
+    const shot = (name: string) => `/shots/${name}.png`;
+    const ask = (topic: string, options = "A - red cards or B - blue cards") => bot(`${topic}: ${options}?`);
+    const answer = (name: string) => say(`I choose B\n\n<attached-image path="${shot(name)}"/>`);
+    const screen = (name: string, caption: string) => {
+      store.appendMessage("t1", { role: "bot", kind: "screen", image: `${name}.png`, text: caption });
+      return join(dataDir, "attachments", `${name}.png`);
+    };
+    const claim = (key: string, question: string, answered: string, more = {}) => ({ kind: "decision", key, fact: "B - blue cards", quote: "I choose B", message_id: answered, question_id: question, ...more });
+    // SAFETY: the Timeline read uses only the bot's ids, its thread's messages and the room list.
+    const read = () => timelinePicks(parseTimeline(timeline()).entries, { id: BOT, threadId: "t1" } as never, { groups: [], messagesFor: store.messagesFor } as never);
+    const shown = () => read().map(({ key, binding, at, files, picture }) => [key, binding, at, files, picture]);
+    const byKey = () => Object.fromEntries(read().map(({ key, binding, at, files }) => [key, [binding, at, files]]));
+
+    it("gives an answer two picks claim only to the pick its question names", async () => {
+      ask("Forum");
+      answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const question = ask("Settings");
+      const settings = answer("settings");
+      reply(claim("Forum", question.id, settings.id), claim("Settings", question.id, settings.id));
+      await settle();
+      expect(shown()).toEqual([["Forum", "unbound", undefined, [], undefined], ["Settings", "verified", settings.at, [shot("settings")], undefined]]);
+    });
+
+    it("gives an answer two picks claim to neither when its question names both", async () => {
+      const question = ask("Forum and Settings");
+      const both = answer("both");
+      reply(claim("Forum", question.id, both.id), claim("Settings", question.id, both.id));
+      await settle();
+      expect(shown()).toEqual([["Forum", "unbound", undefined, [], undefined], ["Settings", "unbound", undefined, [], undefined]]);
+    });
+
+    it("gives a screenshot two picks claim to neither of them", async () => {
+      const forum = ask("Forum");
+      const first = answer("same");
+      vi.setSystemTime(NOW + MINUTE);
+      const settings = ask("Settings");
+      const second = answer("same");
+      reply(claim("Forum", forum.id, first.id), claim("Settings", settings.id, second.id));
+      await settle();
+      expect(shown()).toEqual([["Forum", "unbound", undefined, [], undefined], ["Settings", "unbound", undefined, [], undefined]]);
+    });
+
+    it.each(["before", "after"])("never takes an earlier question's picture shown %s it in the same turn", async (when) => {
+      const show = (topic: string) => {
+        const question = when === "after" ? ask(topic) : undefined;
+        const picture = screen(topic.toLowerCase(), "B - blue cards");
+        return { picture, question: question ?? ask(topic) };
+      };
+      const forum = show("Forum");
+      const { question } = show("Settings");
+      const settings = answer("settings");
+      reply(claim("Settings", question.id, settings.id, { picture: forum.picture }));
+      await settle();
+      const [pick] = read();
+      expect(pick).toMatchObject({ key: "Settings", binding: "verified", at: settings.at, files: [shot("settings")] });
+      expect(pick?.picture).toBeUndefined();
+    });
+
+    it.each([
+      ["swapped", "the same answer"], ["one swapped", "the same answer"], ["matching", "the same answer"],
+      ["swapped", "different answers"], ["matching", "different answers"],
+    ] as const)("binds %s question and answer pairs given %s only to the topic the question names", async (pairs, answers) => {
+      const forum = ask("Forum");
+      const first = answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const settings = ask("Settings");
+      const red = answers === "different answers";
+      const second = red ? say(`I choose A\n\n<attached-image path="${shot("settings")}"/>`) : answer("settings");
+      const picked = red ? { fact: "A - red cards", quote: "I choose A" } : {};
+      reply(...pairs === "matching" ? [claim("Forum", forum.id, first.id), claim("Settings", settings.id, second.id, picked)]
+        : [claim("Forum", settings.id, second.id, picked), ...pairs === "swapped" ? [claim("Settings", forum.id, first.id)] : []]);
+      await settle();
+      const rows = Object.fromEntries(read().map(({ key, binding, at, files }) => [key, [binding, at, files]]));
+      const unbound = ["unbound", undefined, []];
+      expect(rows).toEqual(pairs === "matching"
+        ? { Forum: ["verified", first.at, [shot("forum")]], Settings: ["verified", second.at, [shot("settings")]] }
+        : pairs === "swapped" ? { Forum: unbound, Settings: unbound } : { Forum: unbound });
+    });
+
+    it.each([
+      "Choose Forum: A - red cards or B - blue cards.", "Forum: A - red cards or B - blue cards?",
+      "Choose Forum: **A - red cards** or **B - blue cards**.", "Choose Forum: (a) red cards or (b) blue cards.",
+    ])("ends an earlier question's pictures at the option prompt %s", async (prompt) => {
+      const forum = screen("forum-only", "B - blue cards");
+      bot(prompt);
+      screen("settings-only", "B - blue cards");
+      const question = ask("Settings");
+      const settings = answer("settings");
+      reply(claim("Settings", question.id, settings.id, { picture: forum }));
+      await settle();
+      const [pick] = read();
+      expect(pick).toMatchObject({ key: "Settings", binding: "verified", at: settings.at, files: [shot("settings")] });
+      expect(pick?.picture).toBeUndefined();
+    });
+
+    it("moves a pick typed again later to its new time and screenshot", async () => {
+      const first = ask("Forum");
+      reply(claim("Forum", first.id, answer("old-forum").id));
+      await settle();
+      vi.setSystemTime(NOW + 60 * MINUTE);
+      const settings = ask("Settings", "A - red cards or B - green cards");
+      const settingsAnswer = answer("settings");
+      reply(claim("Settings", settings.id, settingsAnswer.id, { fact: "B - green cards" }));
+      await settle();
+      vi.setSystemTime(NOW + 120 * MINUTE);
+      const again = ask("Forum");
+      const noon = answer("noon-forum");
+      reply(claim("Forum", again.id, noon.id));
+      await settle();
+      expect(Object.fromEntries(read().map(({ key, at, files }) => [key, [at, files]]))).toEqual({
+        Forum: [noon.at, [shot("noon-forum")]], Settings: [settingsAnswer.at, [shot("settings")]],
+      });
+    });
+
+    it("keeps a pick's picture and time when another question's answer repeats its option under its name", async () => {
+      const forum = ask("Forum");
+      const first = answer("forum");
+      reply(claim("Forum", forum.id, first.id));
+      await settle();
+      vi.setSystemTime(NOW + 60 * MINUTE);
+      const settings = ask("Settings");
+      reply(claim("Forum", settings.id, answer("settings").id));
+      await settle();
+      expect(shown()).toEqual([["Forum", "verified", first.at, [shot("forum")], undefined]]);
+    });
+
+    it.each(["correct", "swapped", "omitted"].flatMap((pairs) => [
+      [pairs, "For the forum", "Forum layout is B - blue cards. Settings layout", "Forum layout", "Settings layout"],
+      [pairs, "Forum", "Forum is set to B - blue cards. Settings", "Forum", "Settings"],
+    ]))("never gives a pick the picture of a later question that restates it, %s pairs after %s", async (pairs, first, next, forumKey, settingsKey) => {
+      const forum = ask(first!);
+      const forumAnswer = answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const settings = ask(next!);
+      const settingsAnswer = answer("settings");
+      reply(...pairs === "correct" ? [claim(forumKey!, forum.id, forumAnswer.id), claim(settingsKey!, settings.id, settingsAnswer.id)]
+        : [claim(forumKey!, settings.id, settingsAnswer.id), ...pairs === "swapped" ? [claim(settingsKey!, forum.id, forumAnswer.id)] : []]);
+      await settle();
+      const unbound = ["unbound", undefined, []];
+      // "Forum layout" shares one word with each question, so even the correct pair ties: text only
+      const forumKept = forumKey === "Forum" ? ["verified", forumAnswer.at, [shot("forum")]] : unbound;
+      expect(byKey()).toEqual(pairs === "correct" ? { [forumKey!]: forumKept, [settingsKey!]: ["verified", settingsAnswer.at, [shot("settings")]] }
+        : pairs === "swapped" ? { [forumKey!]: unbound, [settingsKey!]: unbound } : { [forumKey!]: unbound });
+    });
+
+    it.each([
+      ["A - red cards or B - blue cards", "B - blue cards", "I choose B"],
+      ["1 - compact or 2 - roomy", "2 - roomy", "I choose 2"],
+    ])("never gives a pick the answer to a question named for another topic: Settings: %s", async (options, fact, quote) => {
+      ask("Forum", "A - red cards or C - green cards");
+      say("go with red");
+      vi.setSystemTime(NOW + MINUTE);
+      const settings = ask("Settings", options);
+      const answered = say(`${quote}\n\n<attached-image path="${shot("settings")}"/>`);
+      reply(claim("Forum", settings.id, answered.id, { fact, quote }));
+      await settle();
+      expect(byKey()).toEqual({ Forum: ["unbound", undefined, []] });
+    });
+
+    it("never gives a pick the answer to a question that only says that pick is done", async () => {
+      ask("First page");
+      answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const next = ask("Forum done. Next page");
+      const nextAnswer = answer("settings");
+      reply(claim("Forum", next.id, nextAnswer.id), claim("Settings", next.id, nextAnswer.id));
+      await settle();
+      expect(byKey()).toEqual({ Forum: ["unbound", undefined, []], Settings: ["unbound", undefined, []] });
+    });
+
+    it.each([
+      "Forum look is B - blue cards. Header size",
+      "Locked in: B - blue cards for the forum look. Next, header size",
+      "Forum look done. Header size",
+      "Blue cards for the forum look, got it. Header size",
+    ])("keeps each pick's own picture when the next question restates the last pick: %s", async (next) => {
+      const forum = ask("Forum look");
+      const forumAnswer = answer("forum");
+      vi.setSystemTime(NOW + MINUTE);
+      const header = ask(next);
+      const headerAnswer = answer("header");
+      reply(claim("Forum look", forum.id, forumAnswer.id), claim("Header size", header.id, headerAnswer.id));
+      await settle();
+      expect(byKey()).toEqual({ "Forum look": ["verified", forumAnswer.at, [shot("forum")]], "Header size": ["verified", headerAnswer.at, [shot("header")]] });
+    });
   });
 
   describe("typed answers beat card taps", () => {
@@ -251,7 +683,7 @@ describe("decision timeline", () => {
     dataDir = temps.make(join(tmpdir(), "decision-timeline-"));
     generate = vi.fn<NoteGenerator>(async () => "[]");
     writeMemoryFile(BOT, "");
-    rmSync(join(workspaceDir(BOT), "memory"), { recursive: true, force: true });
+    removeTestData(join(workspaceDir(BOT), "memory"));
     pass = start();
   });
 
@@ -259,6 +691,42 @@ describe("decision timeline", () => {
     pass.dispose();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it.each(["EBUSY", "EACCES"])("returns a server error when a Timeline GET hits %s", async (code) => {
+    const store = { bot: () => ({ id: BOT }) };
+    const routes = createBotRoutes({ store } as unknown as Parameters<typeof createBotRoutes>[0]);
+    const match = ["/memory/topics/decisions.md", BOT, "decisions.md"] as RegExpMatchArray;
+    const response = { writeHead: vi.fn(), end: vi.fn() };
+    mkdirSync(join(workspaceDir(BOT), "memory"), { recursive: true });
+    const text = "# Decision timeline\n";
+    writeFileSync(timelinePath(), text);
+    failTimelineRead(code);
+    await routes.memoryTopic(response as unknown as ServerResponse, match);
+    expect(response.writeHead).toHaveBeenCalledWith(500, expect.anything());
+    expect(timeline()).toBe(text);
+  });
+
+  it("keeps history and retries pending picks when the Timeline read fails just before writing", async () => {
+    const earlier = "# Decision timeline\n\n## 2026-11-17 09:00 | forum | current\n- Picked: A - plain list\n";
+    mkdirSync(join(workspaceDir(BOT), "memory"), { recursive: true });
+    writeFileSync(timelinePath(), earlier);
+    bot("For the header: A - dark, B - light. Which one?");
+    const line = say("I choose B for the header");
+    generate.mockImplementationOnce(async () => {
+      failTimelineRead("EBUSY");
+      return JSON.stringify([{ kind: "decision", key: "header", fact: "B - light", quote: line.text }]);
+    });
+    await settle();
+    expect(timeline()).toBe(earlier);
+    expect(JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"))).toEqual({ threads: { t1: [line.id] } });
+    expect(store.messagesFor("t1").some(({ tool }) => tool?.name === MEMORY_SAVE_TOOL)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    expect(generate).toHaveBeenCalledOnce();
+    expect(currentPicks(timeline()).map(({ key }) => key).sort()).toEqual(["forum", "header"]);
+    expect(JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"))).toEqual({ threads: {} });
   });
 
   it("leaves only the new pick current after a change of mind, the old one marked replaced", async () => {
@@ -277,7 +745,8 @@ describe("decision timeline", () => {
     await settle();
     expect(generate.mock.calls[1]![0]).toContain("<picks>\n- forum look: A - plain list\n  over: B - tiles; C - Reddit cards\n</picks>");
     expect(timeline()).toContain("## 2026-11-17 10:00 | forum look | replaced by 2026-11-17 10:03\n- Picked: ~~A - plain list~~\n");
-    expect(timeline()).toContain('## 2026-11-17 10:03 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "actually c"\n- Tweak 2026-11-17 10:03: "make the header smaller"\n');
+    expect(timeline()).toContain('## 2026-11-17 10:03 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "actually c"\n');
+    expect(timeline()).toContain('- Tweak 2026-11-17 10:03: "make the header smaller"\n');
     expect(timeline().match(/\| current$/gm)).toHaveLength(1);
     const prompt = memorySystemPrompt(BOT);
     expect(prompt).toContain('- forum look (11-17): C - Reddit cards + tweaks: "make the header smaller" (11-17)');
@@ -352,7 +821,10 @@ describe("decision timeline", () => {
     );
     expect(timeline().match(/\| current$/gm)).toHaveLength(1);
     expect(timeline()).toContain(
-      `- Picture: ${mock("C")} (C - Reddit cards)\n- Over: A - plain list; B - tiles\n- Over pictures: ${mock("A")} (A - plain list); ${mock("B")} (B - tiles)\n- Said: "c"\n- Tweak 2026-11-17 10:03: "make the header smaller"\n- Tweak 2026-11-17 10:06: "use a blue accent instead of orange"\n`,
+      `- Picture: ${mock("C")} (C - Reddit cards)\n- Over: A - plain list; B - tiles\n- Over pictures: ${mock("A")} (A - plain list); ${mock("B")} (B - tiles)\n- Said: "c"\n`,
+    );
+    expect(timeline()).toContain(
+      `- Tweak 2026-11-17 10:03: "make the header smaller"\n- Tweak 2026-11-17 10:06: "use a blue accent instead of orange"\n`,
     );
   });
 
@@ -404,7 +876,8 @@ describe("decision timeline", () => {
       { kind: "tweak", key: "forum look", fact: "smaller header", quote: "make the header smaller" },
     );
     await settle();
-    expect(timeline()).toContain('## 2026-11-17 10:03 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "actually c"\n- Tweak 2026-11-17 10:03: "make the header smaller"\n');
+    expect(timeline()).toContain('## 2026-11-17 10:03 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "actually c"\n');
+    expect(timeline()).toContain('- Tweak 2026-11-17 10:03: "make the header smaller"\n');
     const switched = timeline();
     for (const [asked, suggestion, fact] of [
       ["c or b", "I'd stay with C, but B - tiles is close.", "B - tiles"],
@@ -431,7 +904,10 @@ describe("decision timeline", () => {
     );
     await settle();
     expect(timeline()).toContain(
-      '## 2026-11-17 10:00 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "i choose c but make the header smaller and use a blue accent"\n- Tweak 2026-11-17 10:00: "make the header smaller"\n- Tweak 2026-11-17 10:00: "use a blue accent"\n',
+      '## 2026-11-17 10:00 | forum look | current\n- Picked: C - Reddit cards\n- Over: A - plain list; B - tiles\n- Said: "i choose c but make the header smaller and use a blue accent"\n',
+    );
+    expect(timeline()).toContain(
+      '- Tweak 2026-11-17 10:00: "make the header smaller"\n- Tweak 2026-11-17 10:00: "use a blue accent"\n',
     );
     const picked = timeline();
     for (const [line, fact] of [
@@ -478,13 +954,13 @@ describe("decision timeline", () => {
   });
 
   it("keeps the latest pick when one batch holds a pick and a switch", async () => {
-    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    const question = bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
     say("i choose a");
     await vi.advanceTimersByTimeAsync(MINUTE);
     say("no wait, i choose c");
     reply(
       { kind: "decision", key: "forum look", fact: "A - plain list", quote: "i choose a" },
-      { kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "i choose c" },
+      { kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "i choose c", question_id: question.id },
     );
     await settle();
     expect(currentPicks(timeline())).toMatchObject([{ key: "forum look", picked: "C - Reddit cards" }]);
@@ -492,7 +968,7 @@ describe("decision timeline", () => {
 
   it("lands a switch and its tweaks said in one batch after the options", async () => {
     const mock = showMocks();
-    bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
+    const question = bot("Three forum looks: A - plain list, B - tiles, C - Reddit cards. Which one?");
     say("a looks cleanest");
     bot("A it is: the plain list.");
     say("actually c");
@@ -501,7 +977,7 @@ describe("decision timeline", () => {
     bot("Noted.");
     say("and use a blue accent instead of orange");
     reply(
-      { kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "actually c", picture: mock("C"), over: ["A - plain list", "B - tiles"] },
+      { kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "actually c", question_id: question.id, picture: mock("C"), over: ["A - plain list", "B - tiles"] },
       { kind: "tweak", key: "forum look", fact: "smaller header", quote: "make the header smaller" },
       { kind: "tweak", key: "forum look", fact: "blue accent", quote: "use a blue accent instead of orange" },
     );
@@ -569,11 +1045,12 @@ describe("decision timeline", () => {
     reply({ kind: "decision", key: "forum look", fact: "A - plain list", quote: "i choose a" });
     await settle();
     const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Forum", subtitle: "Which forum look?", options: ["A - plain list", "B - tiles", "C - Reddit cards"], askUser: true } });
-    store.appendMessage("t1", { role: "user", kind: "text", text: "C", answersCard: card.id, actedAt: Date.now() });
+    const tapped = store.appendMessage("t1", { role: "user", kind: "text", text: "C", answersCard: card.id, actedAt: Date.now() });
     bot("Theme? A - dark, B - light, C - system");
-    say("C");
-    reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "C" }, { kind: "decision", key: "theme", fact: "C - system", quote: "C" });
-    await settle();    expect(Object.fromEntries(currentPicks(timeline()).map(({ key, picked }) => [key, picked]))).toEqual({ "forum look": "A - plain list", theme: "C - system" });
+    const typed = say("C");
+    reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "C", message_id: tapped.id }, { kind: "decision", key: "theme", fact: "C - system", quote: "C", message_id: typed.id });
+    await settle();
+    expect(Object.fromEntries(currentPicks(timeline()).map(({ key, picked }) => [key, picked]))).toEqual({ "forum look": "A - plain list", theme: "C - system" });
   });
 
   it("strips planted prompt tags from the user's own lines", async () => {

@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -7,6 +7,7 @@ import { handMail, mailForTurn, settleMail } from "./mail.ts";
 import { stallErrorActivity } from "./room-error-attribution.ts";
 import { Store } from "./store.ts";
 import { TurnRegistry } from "./turn-registry.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const parsed = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, true);
@@ -20,7 +21,7 @@ const onStall = find(parsed, (node) => ts.isPropertyAssignment(node) && node.nam
 const javascript = ts.transpileModule(`const onStall = ${onStall.initializer.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   vi.useFakeTimers();
 });
 

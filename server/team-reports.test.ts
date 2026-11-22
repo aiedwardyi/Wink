@@ -1,10 +1,9 @@
 import { createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Accounts } from "../relay/src/accounts.ts";
 import { reportHttp } from "../relay/src/reports-http.ts";
 import { ReportStore, type HeldReport } from "../relay/src/reports.ts";
@@ -18,10 +17,7 @@ import { sendTeamReport } from "./team-report-transport.ts";
 import { loadOrCreateIdentity, writeTicket } from "./phone-relay/store.ts";
 import { TeamReports } from "./team-reports.ts";
 import type { Store } from "./store.ts";
-import { createTempDirs } from "./testing/cleanup.ts";
-
-const temps = createTempDirs();
-afterAll(() => temps.remove());
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const ownerEmail = "edward@example.test";
 const owner = reportOwnerHash(ownerEmail);
@@ -48,7 +44,7 @@ function token(sub: string, email: string): string {
 }
 
 async function fixture() {
-  const root = temps.make(join(tmpdir(), "team-report-fixture-"));
+  const root = createFixtureHome("team-report-fixture-");
   const senderDir = join(root, "sender");
   const ownerDir = join(root, "owner");
   const sender = await profile(senderDir);
@@ -237,6 +233,17 @@ describe("private team reporting", () => {
     expect(await f.relay.claim()).toEqual([]);
     f.enroll(false);
     expect(await f.service.handle({ ...f.args, action: "send" })).toHaveProperty("error");
+  });
+
+  it("is a team member only while enrolled on the owner relay, kept through a reconnect", async () => {
+    const f = await fixture();
+    expect(f.service.member()).toBe(true);
+    f.link({ ...PHONE_RELAY_OFF, state: "reconnecting" });
+    expect(f.service.member()).toBe(true);
+    f.enroll(false);
+    expect(f.service.member()).toBe(false);
+    f.link({ ...status, reportOwner: "b".repeat(64) });
+    expect(f.service.member()).toBe(false);
   });
 
   it("redacts secrets before truncation and refuses escaped/oversized/secret-bearing image paths", async () => {

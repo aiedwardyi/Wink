@@ -14,15 +14,16 @@ let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement;
 const onPick = vi.fn();
 const onDismiss = vi.fn();
+const onJump = vi.fn();
 const message = (id: string, options = ["Analytics", "Models"]): Message => ({ id, at: 1, role: "bot", kind: "options",
   card: { title: "Question", subtitle: "Which design should we review first?", options, askUser: true, staysOpen: true } });
 
-async function render(id: string, options?: string[]) {
+async function render(id: string, options?: string[], jump?: () => void) {
   if (!root) {
     host = document.body.appendChild(document.createElement("div"));
     root = createRoot(host);
   }
-  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id, options), askerName: "Wink", count: 1, onPick, onDismiss })));
+  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id, options), askerName: "Wink", count: 1, onPick, onDismiss, onJump: jump })));
 }
 
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
@@ -59,11 +60,13 @@ const size = (cls: string, name: string, variant = "") => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  window.getSelection()?.removeAllRanges();
   if (root) await act(async () => root!.unmount());
   host?.remove();
   root = undefined;
   onPick.mockClear();
   onDismiss.mockClear();
+  onJump.mockClear();
   applyLocale("en");
 });
 
@@ -210,7 +213,7 @@ describe("question folding", () => {
     await settle();
     expect(pill()?.getAttribute("aria-label")).toContain("질문 펼치기");
     expect(pill()?.textContent).toContain("Wink");
-    expect(button("질문 숨기기")).not.toBeNull();
+    expect(button("질문 닫기")).not.toBeNull();
     expect(host.querySelector("[data-row-choices]")?.textContent).toContain("Analytics");
     await open();
     expect(pill()).toBeNull();
@@ -280,5 +283,70 @@ describe("question folding", () => {
     await press(pill()!, 0);
     await settle();
     expect(document.activeElement).toBe(button("Fold question"));
+  });
+});
+
+describe("jumping to the question's message", () => {
+  const body = () => host.querySelector<HTMLElement>("[data-question-body]")!;
+
+  it("jumps on a tap of the question text and nowhere else", async () => {
+    await render("jump-tap", undefined, onJump);
+    expect(body().className).toContain("cursor-pointer");
+    await press(body(), 1);
+    expect(onJump).toHaveBeenCalledTimes(1);
+    await press(button("Fold question"), 1);
+    await settle();
+    await press(host.querySelector("[data-question-row] button[aria-expanded]")!, 1);
+    await settle();
+    await press(host.querySelector("[data-term-choices] button")!, 1);
+    await press(button("Dismiss question"), 1);
+    expect(onJump).toHaveBeenCalledTimes(1);
+    expect(onPick).toHaveBeenCalledWith("Analytics");
+  });
+
+  it("does not jump while the person is selecting the question text", async () => {
+    await render("jump-select", undefined, onJump);
+    window.getSelection()!.selectAllChildren(body());
+    await press(body(), 1);
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  const key = (target: Element, name: string) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
+
+  it("jumps on Enter or Space from the focused question text, and on no other key", async () => {
+    await render("jump-keys", undefined, onJump);
+    await key(body(), "Enter");
+    await key(body(), " ");
+    expect(onJump).toHaveBeenCalledTimes(2);
+    await key(body(), "a");
+    await key(body(), "ArrowDown");
+    expect(onJump).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves Space to scroll a long question, and leaves keys from the choices alone", async () => {
+    await render("jump-keys-long", undefined, onJump);
+    Object.defineProperty(body(), "scrollHeight", { configurable: true, value: 400 });
+    Object.defineProperty(body(), "clientHeight", { configurable: true, value: 100 });
+    const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    await act(async () => { body().dispatchEvent(space); });
+    expect(onJump).not.toHaveBeenCalled();
+    expect(space.defaultPrevented).toBe(false);
+    await key(host.querySelector("[data-term-choices] button")!, "Enter");
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  it("does not jump by key while the person is selecting the question text", async () => {
+    await render("jump-keys-select", undefined, onJump);
+    window.getSelection()!.selectAllChildren(body());
+    await key(body(), "Enter");
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  it("is plain text when there is no message to jump to", async () => {
+    await render("jump-none");
+    expect(body().className).not.toContain("cursor-pointer");
+    await press(body(), 1);
+    await key(body(), "Enter");
+    expect(onJump).not.toHaveBeenCalled();
   });
 });

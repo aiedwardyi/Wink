@@ -16,6 +16,7 @@ import { GoogleAccountError, type GoogleAccountStatus } from "./google-account.t
 import { lateTick } from "./pc-wake.ts";
 import { PROFILE_SYNC_WORKSPACE_FILE, readSyncOperations } from "./profile-sync.ts";
 import { syncHold } from "./sync-hold.ts";
+import { THREAD_SYNC_V2_CUTOVER_FILE } from "./thread-sync-v2-gate.ts";
 
 export const GOOGLE_BINDING_FILE = "google-binding.json";
 export const GOOGLE_MIRROR_DIR = "google-drive";
@@ -31,7 +32,7 @@ const PASS_MS = 30_000;
 const REPUBLISH_MS = 1_000;
 const FULL_MS = 5 * 60_000;
 const FULL_MAX_MS = 30 * 60_000;
-const OPERATION_FILE = /^changes\/\d+-(.+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:json|notes|paths|pin|style|trash|room)$/;
+const OPERATION_FILE = /^changes\/\d+-(.+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:json|notes|paths|pin|style|trash|archive|room)$/;
 
 export type GoogleSyncState = "unavailable" | "signed-out" | "ready" | "joining" | "syncing" | "up-to-date" | "offline" | "drive-full" | "needs-sign-in" | "blocked" | "other-account" | "folder" | "error";
 export interface GoogleSyncStatus {
@@ -536,9 +537,24 @@ export function createGoogleSync(options: Options) {
     return { status: 200, body: status() };
   }
 
+  // An install that ever had a chat writer may be a copy still sharing it, so it keeps Start.
+  async function autoStart(): Promise<void> {
+    if (existsSync(join(dataDir, THREAD_SYNC_V2_CUTOVER_FILE))) return;
+    const current = await read();
+    if (current.state === "ready" && current.join && !current.join.first && !current.move && !current.problem) await start();
+  }
+  let starting: Promise<void> = Promise.resolve();
+  let signedIn = account.status().state === "pending" ? undefined : (account.owner()?.sub ?? null);
+
   const catchUp = () => chatFirst && binding.kind === "ok" && binding.binding.phase === "ready" && runnable() !== null;
 
   const unsubscribe = account.onSession(() => {
+    // A restored boot session or a repeat push of the same account is not a sign-in.
+    const was = signedIn;
+    signedIn = account.owner()?.sub ?? null;
+    if (was !== undefined && signedIn && signedIn !== was) {
+      starting = autoStart().catch((error) => log(`[google-sync] auto start failed: ${error instanceof Error ? error.message : String(error)}`));
+    }
     syncHold.google(mirrorPath());
     catching = runnable() !== null;
     total = 0;
@@ -549,7 +565,11 @@ export function createGoogleSync(options: Options) {
 
   return {
     status,
-    read,
+    /** Waits for an auto start the last sign-in began, so Settings never offers Start for it. */
+    read: async () => {
+      await starting;
+      return read();
+    },
     start,
     kick,
     /** Another PC uploaded, or this PC published a chat head: one pass now, or one more after the running one. A rate-limit wait and the poll deadline stand. */

@@ -1,4 +1,4 @@
-import { useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { Atom, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Hexagon, Leaf, MoonStar, Mountain, Orbit, Sparkle, Sparkles, Sun, X } from "lucide-react";
 import { shownModelSelection, useStore, type Bot, type ModelSelection } from "@/state/store";
@@ -12,7 +12,7 @@ import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { noReplySource, switchFromNoReply } from "@/lib/no-reply-switch";
 import type { AcceptedSend } from "@/lib/send-accept";
-import { ProviderMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { EngineSetup, engineChecking, needsCli, needsSignIn } from "./EngineSetup";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -21,7 +21,7 @@ import { loadModelPickerView, saveModelPickerView, type ModelPickerView } from "
 import { showTouchPickerLegend } from "@/lib/friends-chrome";
 import { pickerLookSkin, savePickerLook, shownPickerLook, usePickedLook } from "@/lib/picker-look";
 import { useSkin } from "@/lib/skins";
-import { ModelDial, useDialFontWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
+import { ModelDial, useDialFontWarm, useDialWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
 import { ModelChart } from "./ModelChart";
 import { PickerStyleButton, PickerStyleStrip } from "./PickerStyleStrip";
 import "./ModelPicker.css";
@@ -79,6 +79,9 @@ export function ModelPickerControl({
   const styles: ModelPickerView[] = dial && dialFits ? ["dial", "list", "chart"] : ["list"];
   const shown: ModelPickerView = dialView ? "dial" : chartView ? "chart" : "list";
   useDialFontWarm(dial, open);
+  const warmDial = useDialWarm(dial && dialFits && loadModelPickerView() === "dial", open);
+  const warmStageRef = useRef<HTMLDivElement>(null);
+  const warmDialRef = useRef<ModelDialHandle>(null);
   useEffect(() => {
     if (!presence.mounted) return;
     void window.ogb?.setModelPickerBackground?.(dialView || chartView ? "dial" : "list")?.catch(() => undefined);
@@ -93,7 +96,8 @@ export function ModelPickerControl({
   const saveTimerRef = useRef(0);
   const switchSourceRef = useRef<string | undefined>(undefined);
   const followUpRef = useRef(false);
-  followUpRef.current = Boolean(state.pendingQueued?.[bot.threadId]?.length) || bot.messages.some((message) => message.queued) || Boolean(accepted?.some((send) => send.kind === "sends-next"));
+  const queuedReply = useMemo(() => bot.messages.some((message) => message.queued), [bot.messages]);
+  followUpRef.current = Boolean(state.pendingQueued?.[bot.threadId]?.length) || queuedReply || Boolean(accepted?.some((send) => send.kind === "sends-next"));
   const stageRef = useRef<HTMLDivElement>(null);
   const touchStartRef = useRef({ x: 0, y: 0, stepped: true });
   const wheelRef = useRef({ at: 0, dir: 0, sum: 0 });
@@ -320,7 +324,7 @@ export function ModelPickerControl({
       className="flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 bg-control/60 py-1 pl-2 pr-2.5 text-[13px] text-ink hover:bg-raised-hover"
       title={modelChipTitle({ mode: selection.mode, instance: active, model: selection.model, effort: selection.effort }, t) + (shortcutEnabled ? ` (${shortcut}+M)` : "")}
     >
-      {active ? <ProviderMark driverKind={active.driverKind} size={14} className="shrink-0" /> : <Sparkles size={14} className="shrink-0 text-accent" />}
+      {active ? <ProviderBrandMark driverKind={active.driverKind} size={14} className="shrink-0" /> : <Sparkles size={14} className="shrink-0 text-accent" />}
       {/* Only the label side may shrink: a long name truncates in place while
           the accent dot, effort, and chevron stay visible at any width. The
           label is always the full selected model — never the bare engine
@@ -549,6 +553,14 @@ export function ModelPickerControl({
         </div>
       ) : trigger}
       {presence.mounted && (globalThis.document ? createPortal(dialog, document.body) : dialog)}
+      {warmDial && !presence.mounted && createPortal(
+        <div className="model-cross-backdrop" data-skin={pickerLookSkin(skin, look)} data-light={look !== "dark" || undefined} data-picker-family={family} data-dial-warm="" aria-hidden inert style={{ visibility: "hidden", pointerEvents: "none" }}>
+          <div className="model-cross-dialog">
+            <ModelDial rows={rows} draft={selection} canCommit={canCommit} onDraft={() => {}} onSave={() => false} handle={warmDialRef} stageRef={warmStageRef} bindingsId={`${bindingsId}-warm`} />
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

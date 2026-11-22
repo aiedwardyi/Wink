@@ -14,6 +14,7 @@ import type { HarnessHandler } from "../early-listen.ts";
 import { ALPN_ACME } from "../../shared/relay-protocol.ts";
 import { parseClientHello, type ClientHelloInfo } from "../../shared/tls-client-hello.ts";
 import { isRoomUpload, roomUploadMs } from "../rooms/upload-timeouts.ts";
+import type { ChallengeTarget } from "./acme.ts";
 import { realClock, type Cancel, type Clock } from "./clock.ts";
 import { markRelaySocket } from "./via.ts";
 
@@ -97,8 +98,26 @@ export type IngressRejection =
   | "timeout"
   | "too-many-pending";
 
+/** One name this PC answers to, with its own certificate and challenge. */
+class Site implements ChallengeTarget {
+  phone: SecureContext | null = null;
+  challenge: SecureContext | null = null;
+
+  setCertificate(keyPem: string, certPem: string): void {
+    this.phone = createSecureContext({ key: keyPem, cert: certPem });
+  }
+
+  setChallenge(keyPem: string, certPem: string): void {
+    this.challenge = createSecureContext({ key: keyPem, cert: certPem });
+  }
+
+  clearChallenge(): void {
+    this.challenge = null;
+  }
+}
+
 export interface IngressOptions {
-  /** `<label>.<base>`, the only SNI this PC serves. */
+  /** `<label>.<base>`, the SNI this PC serves, beside any alias(). */
   host: string;
   handler: HarnessHandler;
   clock?: Clock;
@@ -107,12 +126,11 @@ export interface IngressOptions {
 }
 
 export class RelayIngress {
-  private readonly host: string;
+  private readonly site = new Site();
+  private readonly sites = new Map<string, Site>();
   private readonly clock: Clock;
   private readonly onReject: (reason: IngressRejection) => void;
   private readonly http: Server;
-  private phoneContext: SecureContext | null = null;
-  private challengeContext: SecureContext | null = null;
   private readonly owned = new Set<Duplex>();
   private readonly pending = new Map<string, number>();
   /** Per phone socket: called when the server parsed a request head on it. */
@@ -120,7 +138,7 @@ export class RelayIngress {
   private closed = false;
 
   constructor(options: IngressOptions) {
-    this.host = options.host.toLowerCase();
+    this.sites.set(options.host.toLowerCase(), this.site);
     this.clock = options.clock ?? realClock;
     this.onReject = options.onReject ?? (() => {});
     this.http = createServer(options.handler);
@@ -132,20 +150,27 @@ export class RelayIngress {
   }
 
   get hasCertificate(): boolean {
-    return this.phoneContext !== null;
+    return this.site.phone !== null;
   }
 
   /** Installs or swaps the phone certificate; new connections use it, open ones keep theirs. */
   setCertificate(keyPem: string, certPem: string): void {
-    this.phoneContext = createSecureContext({ key: keyPem, cert: certPem });
+    this.site.setCertificate(keyPem, certPem);
   }
 
   setChallenge(keyPem: string, certPem: string): void {
-    this.challengeContext = createSecureContext({ key: keyPem, cert: certPem });
+    this.site.setChallenge(keyPem, certPem);
   }
 
   clearChallenge(): void {
-    this.challengeContext = null;
+    this.site.clearChallenge();
+  }
+
+  /** Answers `host` too, with the certificate its target is given. */
+  alias(host: string): ChallengeTarget {
+    const site = new Site();
+    this.sites.set(host.toLowerCase(), site);
+    return site;
   }
 
   /** Number of streams this ingress still owns (test hook). */
@@ -204,7 +229,7 @@ export class RelayIngress {
   /** Destroys every stream this ingress owns. Idempotent. */
   close(): void {
     this.closed = true;
-    this.challengeContext = null;
+    for (const site of this.sites.values()) site.clearChallenge();
     for (const stream of this.owned) stream.destroy();
     this.owned.clear();
   }
@@ -236,24 +261,25 @@ export class RelayIngress {
   }
 
   private route(source: Duplex, head: Buffer, info: ClientHelloInfo, peer: string, release: () => void): void {
-    if (info.sni !== this.host) return this.reject(source, "wrong-sni");
+    const host = info.sni;
+    const site = host === null ? undefined : this.sites.get(host);
+    if (host === null || !site) return this.reject(source, "wrong-sni");
     if (info.alpn.includes(ALPN_ACME)) {
       // RFC 8737 3: the validation server offers acme-tls/1 and nothing else.
       if (info.alpn.length !== 1) return this.reject(source, "unsupported-alpn");
-      const context = this.challengeContext;
+      const context = site.challenge;
       if (!context) return this.reject(source, "no-challenge");
-      return this.serveChallenge(source, head, context);
+      return this.serveChallenge(source, head, context, host);
     }
     if (info.alpn.length > 0 && !info.alpn.includes(ALPN_HTTP1)) return this.reject(source, "unsupported-alpn");
-    const context = this.phoneContext;
+    const context = site.phone;
     if (!context) return this.reject(source, "no-certificate");
-    this.servePhone(source, head, context, peer, release);
+    this.servePhone(source, head, context, host, peer, release);
   }
 
-  private terminate(source: Duplex, head: Buffer, context: SecureContext, alpn: string): TLSSocket {
+  private terminate(source: Duplex, head: Buffer, context: SecureContext, host: string, alpn: string): TLSSocket {
     const stream = new SpliceStream(source, head);
     this.own(stream);
-    const host = this.host;
     const tlsSocket = new TLSSocket(stream, {
       isServer: true,
       secureContext: context,
@@ -268,8 +294,8 @@ export class RelayIngress {
     return tlsSocket;
   }
 
-  private serveChallenge(source: Duplex, head: Buffer, context: SecureContext): void {
-    const tlsSocket = this.terminate(source, head, context, ALPN_ACME);
+  private serveChallenge(source: Duplex, head: Buffer, context: SecureContext, host: string): void {
+    const tlsSocket = this.terminate(source, head, context, host, ALPN_ACME);
     // The validation server only reads our certificate, then closes.
     tlsSocket.resume();
     tlsSocket.once("secure", () => {
@@ -278,8 +304,8 @@ export class RelayIngress {
     });
   }
 
-  private servePhone(source: Duplex, head: Buffer, context: SecureContext, peer: string, release: () => void): void {
-    const tlsSocket = this.terminate(source, head, context, ALPN_HTTP1);
+  private servePhone(source: Duplex, head: Buffer, context: SecureContext, host: string, peer: string, release: () => void): void {
+    const tlsSocket = this.terminate(source, head, context, host, ALPN_HTTP1);
     const cleaned = cleanPeer(peer);
     if (cleaned) relayPeers.set(tlsSocket, cleaned);
     markRelaySocket(tlsSocket);

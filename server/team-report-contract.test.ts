@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { spawnTestNode as spawn } from "./testing/harness-auth.ts";
 
 const root = process.env.TEAM_REPORT_CONTRACT_ROOT ?? process.cwd();
 

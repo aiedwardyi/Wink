@@ -12,7 +12,7 @@
 // truth (the JSON file is left behind as a one-time backup).
 import { chmodSync, closeSync, existsSync, openSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 import { termVerb } from "../shared/tool-verb.ts";
 
@@ -24,6 +24,10 @@ const DB_FILE = () => join(DATA_DIR, "messages.db");
 
 let handle: DatabaseSync | null = null;
 let handlePath: string | null = null;
+let opened = 0;
+const changes = new Map<string, number>();
+let transactionKeys = 0;
+const changeListeners = new Set<(threadId: string, id: string, deleted: boolean) => void>();
 
 function open(): DatabaseSync {
   const file = DB_FILE();
@@ -60,7 +64,27 @@ function open(): DatabaseSync {
       active_leaf_id TEXT
     );
   `);
+  db.function("message_changed", (threadId, id, deleted) => {
+    changes.set(String(threadId), (changes.get(String(threadId)) ?? 0) + 1);
+    for (const listener of changeListeners) listener(String(threadId), String(id), deleted === 1);
+    return null;
+  });
+  // An insert raises its thread's newest rowid; an insert trigger would slow a 237k-row import from 1.6 to 4.5 s.
+  db.exec(`
+    CREATE TEMP TRIGGER message_updated AFTER UPDATE ON main.messages BEGIN
+      SELECT message_changed(old.thread_id, old.id, 0);
+      SELECT message_changed(new.thread_id, new.id, 0) WHERE new.thread_id IS NOT old.thread_id OR new.id IS NOT old.id;
+    END;
+    CREATE TEMP TRIGGER message_deleted AFTER DELETE ON main.messages BEGIN SELECT message_changed(old.thread_id, old.id, 1); END;
+  `);
+  opened++;
   return db;
+}
+
+/** Calls `listener` inside each statement on this process's handle that updates or deletes a row (`deleted` for a delete), so one that throws fails the write. */
+export function onMessageChange(listener: (threadId: string, id: string, deleted: boolean) => void): () => void {
+  changeListeners.add(listener);
+  return () => changeListeners.delete(listener);
 }
 
 /** The live handle — reopened when the file was removed out from under us
@@ -91,16 +115,18 @@ export function openThreadExport(file: string) {
   };
 }
 
-// SAFETY: Stored rows use the Message envelope; preview fields are scrubbed on every read.
-const rowToMessage = (row: { json: string }): Message => redactToolMessage(JSON.parse(row.json) as Message);
+export function rowToMessage(row: { json: string }): Message {
+  // SAFETY: Stored rows use the Message envelope; preview fields are scrubbed on every read.
+  return redactToolMessage(JSON.parse(row.json) as Message);
+}
 
 export interface ThreadRows {
   messages: Message[];
   activeLeafId: string | null;
 }
 
-/** Read one thread, importing its legacy JSON file on first touch. */
-export function readThread(threadId: string, legacyFile: string): ThreadRows {
+/** Read one thread, importing its legacy JSON file on first touch; `chars` is the rows' stored JSON size, which the thread cache weighs. */
+export function readThread(threadId: string, legacyFile: string): ThreadRows & { chars: number } {
   const rows = db()
     .prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid")
     .all(threadId) as Array<{ json: string }>;
@@ -108,9 +134,10 @@ export function readThread(threadId: string, legacyFile: string): ThreadRows {
     const state = db()
       .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
       .get(threadId) as { active_leaf_id: string | null } | undefined;
-    return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
+    return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null, chars: rows.reduce((sum, row) => sum + row.json.length, 0) };
   }
-  return importLegacy(threadId, legacyFile);
+  const legacy = importLegacy(threadId, legacyFile);
+  return { ...legacy, chars: legacy.messages.reduce((sum, message) => sum + JSON.stringify(message).length, 0) };
 }
 
 /** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here. */
@@ -121,6 +148,18 @@ export function storedHead(threadId: string): string | null | undefined {
       "(SELECT id FROM messages WHERE thread_id = ?1 ORDER BY rowid DESC LIMIT 1) AS last",
   ).get(threadId) as { leaf: string | null; last: string | null };
   return row.last === null ? undefined : row.leaf || row.last;
+}
+
+/** A key that moves with every committed change to a thread's rows, or undefined when it has no rows here; key cached reads of a thread on it. */
+export function threadVersion(threadId: string): string | undefined {
+  // SAFETY: MAX(rowid) returns one integer row, NULL for no rows.
+  const row = db().prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null };
+  if (row.cursor === null) return undefined;
+  // other handles see none of an open transaction's writes, so a read keyed inside one must match no key after it ends
+  if (db().isTransaction) return `open:${++transactionKeys}`;
+  // SAFETY: PRAGMA data_version returns one integer row; it moves when another connection commits.
+  const other = db().prepare("PRAGMA data_version").get() as { data_version: number };
+  return `${opened}:${other.data_version}:${row.cursor}:${changes.get(threadId) ?? 0}`;
 }
 
 /** Whether a thread has more than `cap` rows; counts at most cap + 1 index entries. */
@@ -146,6 +185,22 @@ export function threadTailOn(handle: DatabaseSync, threadId: string, count: numb
     .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
     .get(threadId) as { active_leaf_id: string | null } | undefined;
   return { messages: rows.reverse().map(rowToMessage), options: options.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
+}
+
+/** A stored row's rowid, or undefined when the row is not stored here. */
+export function rowCursor(threadId: string, id: string): number | undefined {
+  // SAFETY: This projection selects SQLite's rowid.
+  const row = db().prepare("SELECT rowid AS cursor FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { cursor: number } | undefined;
+  return row?.cursor;
+}
+
+/** The `count` stored rows before a rowid, oldest first; cold-thread-worker.ts runs it on its own handle. */
+export function threadPageBeforeOn(handle: DatabaseSync, threadId: string, before: number, count: number): ThreadRows & { options: Message[] } {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = handle
+    .prepare("SELECT json FROM messages WHERE thread_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?")
+    .all(threadId, before, count) as Array<{ json: string }>;
+  return { messages: rows.reverse().map(rowToMessage), options: [], activeLeafId: null };
 }
 
 function importLegacy(threadId: string, legacyFile: string): ThreadRows {
@@ -234,10 +289,14 @@ export function replaceThread(threadId: string, messages: Message[], activeLeafI
   }
 }
 
+// the outermost withMessageTransaction open now; its end promise is made when a reader first waits on it
+let transaction: { ended?: Promise<void>; end?: () => void } | undefined;
+
 export function withMessageTransaction<T>(work: (database: DatabaseSync) => T): T {
   const database = db();
   const nested = database.isTransaction;
   database.exec(nested ? "SAVEPOINT message_write" : "BEGIN IMMEDIATE");
+  if (!nested) transaction = {};
   try {
     const result = work(database);
     database.exec(nested ? "RELEASE message_write" : "COMMIT");
@@ -245,8 +304,24 @@ export function withMessageTransaction<T>(work: (database: DatabaseSync) => T): 
   } catch (error) {
     database.exec(nested ? "ROLLBACK TO message_write; RELEASE message_write" : "ROLLBACK");
     throw error;
+  } finally {
+    if (!nested) {
+      transaction?.end?.();
+      transaction = undefined;
+    }
   }
 }
+
+/** Settles once the open withMessageTransaction commits or rolls back, or undefined outside one: another handle reads none of its writes before then. */
+export function messageTransactionEnd(): Promise<void> | undefined {
+  const open = transaction;
+  if (!open) return undefined;
+  return open.ended ??= new Promise((resolve) => {
+    open.end = resolve;
+  });
+}
+
+export type SendIdRows = { cursor: number; rows: Array<{ id: string; sendId: string }> };
 
 export interface ThreadRowPage {
   messages: Message[];
@@ -257,11 +332,16 @@ export function scanThreadRows(threadId: string, after = 0, limit = 256): Thread
   if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 1024) {
     throw new Error("Invalid thread scan page");
   }
+  const rows = threadRowsOn(db(), threadId, after, limit);
+  return { messages: rows.map(rowToMessage), cursor: rows.at(-1)?.cursor ?? after };
+}
+
+/** A thread's stored rows past `after`, oldest first and unparsed; cold-thread-worker.ts runs it on its own handle. */
+export function threadRowsOn(handle: DatabaseSync, threadId: string, after: number, limit: number): Array<{ cursor: number; json: string }> {
   // SAFETY: This projection selects SQLite's rowid and the stored message JSON.
-  const rows = db().prepare(
+  return handle.prepare(
     "SELECT rowid AS cursor, json FROM messages WHERE thread_id = ? AND rowid > ? ORDER BY rowid LIMIT ?",
   ).all(threadId, after, limit) as Array<{ cursor: number; json: string }>;
-  return { messages: rows.map(rowToMessage), cursor: rows.at(-1)?.cursor ?? after };
 }
 
 /** Pass the transaction handle to commit rows and their sync outbox together. */
@@ -294,6 +374,22 @@ export function applySyncedRows(
   return touched;
 }
 
+const MARKDOWN_LINK_MARKS = ["](", "]:"] as const;
+const FILE_TAG_MARKS = ["<file:", "<attached-file"] as const;
+export const LINK_MARKS = [...MARKDOWN_LINK_MARKS, ...FILE_TAG_MARKS] as const;
+
+/** Rows with link syntax, oldest first. */
+export function linkRows(threadId: string): Array<{ id: string; role: string; text: string; fromBotId: string | null }> {
+  // instr and JSON quoting preserve the suffix after a NUL, where LIKE and node:sqlite's TEXT result stop.
+  // SAFETY: id, role and textJson are TEXT, fromBotId is nullable TEXT.
+  const rows = db().prepare(
+    "SELECT id, role, json_quote(text) AS textJson, json_extract(json, '$.from.botId') AS fromBotId " +
+      "FROM messages WHERE thread_id = ? AND (instr(text, ?) OR instr(text, ?) " +
+      "OR (instr(text, '<') AND (instr(lower(text), ?) OR instr(lower(text), ?)))) ORDER BY rowid",
+  ).all(threadId, ...MARKDOWN_LINK_MARKS, ...FILE_TAG_MARKS) as Array<{ id: string; role: string; textJson: string; fromBotId: string | null }>;
+  return rows.map(({ textJson, ...row }) => ({ ...row, text: JSON.parse(textJson) }));
+}
+
 /** One stored row by key, without loading its thread. */
 export function readMessage(threadId: string, id: string): Message | undefined {
   // SAFETY: This projection selects the stored message JSON.
@@ -301,22 +397,46 @@ export function readMessage(threadId: string, id: string): Message | undefined {
   return row && rowToMessage(row);
 }
 
-/** The active path newest first, one row at a time, or null when the thread has no stored leaf. */
+/** The active path newest first, one row at a time, or null when there are no stored rows. */
 export function activePathBack(threadId: string): Iterable<Message> | null {
-  const leaf = (db().prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?").get(threadId) as { active_leaf_id: string | null } | undefined)?.active_leaf_id;
+  const leaf = storedHead(threadId);
   if (!leaf) return null;
-  const row = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?");
+  const database = db();
+  const row = database.prepare("SELECT rowid AS position, json FROM messages WHERE thread_id = ? AND id = ?");
   return (function* () {
     const seen = new Set<string>();
+    let previous: StatementSync | undefined;
     for (let id: string | null | undefined = leaf; id && !seen.has(id); ) {
       seen.add(id);
-      const found = row.get(threadId, id) as { json: string } | undefined;
+      const found = row.get(threadId, id) as { position: number; json: string } | undefined;
       if (!found) return;
       const message = rowToMessage(found);
+      // Flat legacy rows omit parentId. An explicit null ends the branch.
+      if (message.parentId === undefined) {
+        previous ??= database.prepare("SELECT id FROM messages WHERE thread_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT 1");
+        const prior = previous.get(threadId, found.position) as { id: string } | undefined;
+        message.parentId = prior?.id ?? null;
+      }
       yield message;
       id = message.parentId;
     }
   })();
+}
+
+/** A thread's rows newest first, parsed only as far as the caller reads. */
+export function rowsBack(threadId: string): Iterable<Message> {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid DESC").iterate(threadId) as Iterable<{ json: string }>;
+  return (function* () {
+    for (const row of rows) yield rowToMessage(row);
+  })();
+}
+
+/** The rowid of a thread's newest stored row, or 0 when it has none here. */
+export function lastCursor(threadId: string): number {
+  // SAFETY: MAX(rowid) returns one integer row, NULL for no rows.
+  const row = db().prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null };
+  return row.cursor ?? 0;
 }
 
 /** A thread's note rows newest first, parsed only as far as the caller reads. */
@@ -331,6 +451,50 @@ export function notesBackOn(handle: DatabaseSync, threadId: string): Iterable<Me
   return (function* () {
     for (const row of rows) yield rowToMessage(row);
   })();
+}
+
+/** A thread's note rows stamped at or after `at`, newest first: a pane edited after every note reads none; cold-thread-worker.ts runs it on its own handle. */
+export function notesSinceOn(handle: DatabaseSync, threadId: string, at: number): Iterable<Message> {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = handle.prepare("SELECT json FROM messages INDEXED BY messages_thread_at WHERE thread_id = ? AND kind = 'note' AND at >= ? ORDER BY rowid DESC").iterate(threadId, at) as Iterable<{ json: string }>;
+  return (function* () {
+    for (const row of rows) yield rowToMessage(row);
+  })();
+}
+
+/** A thread's options rows, oldest first, from their index. */
+export function optionRows(threadId: string): Message[] {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'options' ORDER BY rowid").all(threadId) as Array<{ json: string }>;
+  return rows.map(rowToMessage);
+}
+
+/** A thread's stored rows that record file writes, oldest first; cold-thread-worker.ts runs it on its own handle. No index: building one locks out every write for seconds on a 3 GB database. */
+export function writeRowsOn(handle: DatabaseSync, threadId: string): Message[] {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = handle.prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'activity' AND json_extract(json, '$.tool.writes') IS NOT NULL ORDER BY rowid").all(threadId) as Array<{ json: string }>;
+  return rows.map(rowToMessage);
+}
+
+/** A thread's top rowid and the sendIds of its user rows up to it, oldest first; cold-thread-worker.ts runs it on its own handle. */
+export function sendIdsOn(handle: DatabaseSync, threadId: string): SendIdRows {
+  // SAFETY: An aggregate always yields one row, whose cursor is null for an empty thread.
+  const top = handle.prepare("SELECT MAX(rowid) AS cursor FROM messages WHERE thread_id = ?").get(threadId) as { cursor: number | null } | undefined;
+  const cursor = top?.cursor ?? 0;
+  // SAFETY: This projection selects the row id and the sendId string it carries.
+  const rows = handle.prepare(
+    "SELECT id, json_extract(json, '$.sendId') AS sendId FROM messages WHERE thread_id = ? AND rowid <= ? AND role = 'user' AND json_extract(json, '$.sendId') IS NOT NULL ORDER BY rowid",
+  ).all(threadId, cursor) as SendIdRows["rows"];
+  return { cursor, rows };
+}
+
+/** The newest stamp a send is clocked past, by sendClock's rule over every stored row: a row's time, or the later acted time of a row that did not wait. */
+export function newestStampOn(handle: DatabaseSync, threadId: string): number {
+  // SAFETY: Two aggregates always yield one row; each is null for an empty thread.
+  const row = handle.prepare(
+    "SELECT MAX(at) AS at, MAX(CASE WHEN json_type(json, '$.actedAt') IN ('integer', 'real') AND COALESCE(json_type(json, '$.waited'), 'null') IN ('null', 'false') THEN json_extract(json, '$.actedAt') END) AS acted FROM messages WHERE thread_id = ?",
+  ).get(threadId) as { at: number | null; acted: number | null } | undefined;
+  return Math.max(0, row?.at ?? 0, row?.acted ?? 0);
 }
 
 /** Newest message time without loading the transcript. */
@@ -359,7 +523,7 @@ export function firstBotReplyAt(): number | null {
 
 /** Bot text replies grouped by thread, room speaker and engine tag, all time. */
 export function botRepliesByEngine(): Array<{ threadId: string; botId: string | null; engine: string | null; count: number }> {
-  // SAFETY: This SELECT list is three TEXT keys and one COUNT.
+  // SAFETY: This SELECT list is three text keys and one COUNT.
   return db().prepare(
     "SELECT thread_id AS threadId, json_extract(json, '$.from.botId') AS botId, json_extract(json, '$.engine') AS engine, COUNT(*) AS count " +
       "FROM messages WHERE role = 'bot' AND kind = 'text' GROUP BY 1, 2, 3",
@@ -369,6 +533,7 @@ export function botRepliesByEngine(): Array<{ threadId: string; botId: string | 
 export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
+  changes.delete(threadId);
 }
 
 export interface SearchHit {

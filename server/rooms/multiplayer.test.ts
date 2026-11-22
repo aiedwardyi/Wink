@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,13 +12,14 @@ import { DATA_DIR } from "../config.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { _resetSteerQueue, drainSteeredMessages, queuedRoomBotIds, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
-import { ASK_DENY_NOTE, askById, askRiders, asksWork, closeAsksDb, configureRoomAsks, endAsk, failTeammateAskTurn, hostedTurnRefused, readOnlyAskTurn, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
-import { closeInvitesDb, joinRoom, roomCode } from "./invites.ts";
+import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, closeAsksDb, configureRoomAsks, endAsk, failTeammateAskTurn, hostedTurnRefused, readOnlyAskTurn, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
+import { closeInvitesDb, joinRoom, ownerRoomCode, roomCode } from "./invites.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, setPersonWorks, type RoomPerson } from "./db.ts";
 import { goLive, openDoorStream } from "./door-streams.ts";
 import { askNote, COLLAB_LINE, publishTurnAnswer, teammatesLine } from "./multiplayer.ts";
 import { hostedSend } from "./send.ts";
 import { addTeamBot, removeTeamBot } from "./team-bots.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -59,7 +60,7 @@ beforeEach(() => {
   closeRoomsDb();
   closeAsksDb();
   _resetSteerQueue();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   wink = store.patchBot(store.createBot().id, { name: "Wink", color: "blue" })!.id;
   group = store.createGroup("Crew", [wink], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
@@ -283,7 +284,9 @@ describe("a teammate's request under the host's setting for the bot", () => {
     };
     walk(runner);
     expect(spread).toBe(true);
-    return new Function("authority", "chainAsk", "bot", "lane", "works", `const asked = ${runnerConst("asked")};\n${js(`const access = ${runnerConst("access")};`)}\nreturn access;`)(authority, chainAsk, bot, lane, works);
+    const deps = { authority, chainAsk, bot, lane, works, askById, askFromHost, askRiders };
+    const variables = ["riders", "asked", "lead", "guestAsked", "access"].map((name) => `const ${name} = ${runnerConst(name)};`).join("\n");
+    return new Function(...Object.keys(deps), `${js(variables)}\nreturn access;`)(...Object.values(deps));
   }
 
   /** Whether a room turn may make the bot work: the `works` of index.ts, from the asks it answers. */
@@ -328,6 +331,29 @@ describe("a teammate's request under the host's setting for the bot", () => {
   it("sends a teammate's turn without the switch read-only and never Auto, whatever the bot's mode", () => {
     expect(turnAccess("ask-1", { autoApprove: true }, false, false)).toEqual({ approval: "ask", readOnly: true });
     expect(turnAccess("ask-1", { autoApprove: false }, false, false)).toEqual({ approval: "ask", readOnly: true });
+  });
+
+  it("uses the host's approval mode for an owner seat and the guest's mode for a mixed turn", async () => {
+    store.patchBot(wink, { autoApprove: false, alwaysAllow: ["Bash:npm"] });
+    const roomId = group.hosted.roomId;
+    const device = "owner-pc-0123456789";
+    const { id, secret } = ownerRoomCode(roomId, device);
+    const joined = joinRoom(id, secret, ["Edward", "Wink"], { device });
+    if (!joined.ok) throw new Error(joined.error);
+    const { ask } = hostedSend(group, said(joined.person), "@Wink fix the build");
+    expect(turnAccess(ask!.id, { autoApprove: false })).toEqual(turnAccess(undefined, { autoApprove: false }));
+    expect(turnAccess(ask!.id, { autoApprove: true })).toEqual(turnAccess(undefined, { autoApprove: true }));
+
+    const rider = hostedSend(group, said(sora), "@Wink check my build too").ask!;
+    expect(turnWorks(ask!.id)).toBe(false);
+    setPersonWorks(roomId, sora.id, true);
+    expect(turnWorks(ask!.id)).toBe(true);
+    expect(turnAccess(ask!.id, { autoApprove: false })).toEqual({ approval: "ask", readOnly: true });
+    expect(startAsk(ask!.id)).toBe(true);
+    const { respondToRequest } = openRequest();
+    await vi.waitFor(() => expect(respondToRequest).toHaveBeenCalledWith(group.threadId, "r1", { behavior: "allow" }));
+    expect(startAsk(rider.id)).toBe(true);
+    expect(teammateAskTurn(roomId, group.threadId, wink)).toBe(true);
   });
 
   it("decides by who asked: off for a new member, on once the host flips their switch, off if any rider is off", () => {

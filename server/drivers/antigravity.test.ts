@@ -4,7 +4,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly;
 // spawnCli resolves it to `node <script>`, so these run everywhere.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ import * as auth from "./antigravity-auth.ts";
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { summaryInstance } from "../summary-instance.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { ProviderRegistry } from "../harness/registry.ts";
 import {
@@ -32,7 +33,8 @@ import {
   STATIC_ANTIGRAVITY_MODELS,
   WIN32_CREATEPROCESS_CMDLINE_MAX,
 } from "./antigravity.ts";
-import { describeSpawnFailure } from "../procs.ts";
+import { noteGenerator } from "../memory-pass.ts";
+import * as procs from "../procs.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
 
@@ -55,14 +57,20 @@ const FOREIGN_CREDENTIALS = [
 ];
 
 describe("readAntigravityModelCatalog", () => {
-  it("lists the three Gemini 4 Carbon tiers first, then Argon, then 3.8 Flash ahead of the legacy entries", () => {
+  it("lists the three Gemini 4 Carbon tiers first, then Neon, Hydrogen, Argon, then 3.8 Flash ahead of the legacy entries", () => {
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     expect(STATIC_ANTIGRAVITY_MODELS.options.slice(0, 3)).toEqual([
       { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)", contextWindow: 1_048_576 },
       { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)", contextWindow: 1_048_576 },
       { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)", contextWindow: 1_048_576 },
     ]);
-    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 6)).toEqual([
+    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 7)).toEqual([
+      { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-low", label: "Gemini 4 Neon (Low)", contextWindow: 1_048_576 },
+      { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)", contextWindow: 1_048_576 },
+    ]);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(10, 13)).toEqual([
       { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
@@ -92,6 +100,11 @@ describe("readAntigravityModelCatalog", () => {
     "gemini-4-carbon-high",
     "gemini-4-carbon-medium",
     "gemini-4-carbon-low",
+    // Neon tiers from `agy models` on 1.5.11.
+    "gemini-4-neon-high",
+    "gemini-4-neon-medium",
+    "gemini-4-neon-low",
+    "gemini-4-neon-xhigh",
     "gemini-4-argon-high",
     "gemini-4-argon-medium",
     "gemini-4-argon-low",
@@ -1097,6 +1110,78 @@ describe("Antigravity snapshot", () => {
     await instance.dispose();
   });
 
+  it("names the signed-in account from agy's logs and none once signed out", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-account-"));
+    try {
+      mkdirSync(join(home, ".gemini", "antigravity-cli", "log"), { recursive: true });
+      const log = join(home, ".gemini", "antigravity-cli", "log", "cli-20261119_100000.log");
+      writeFileSync(log, "I1119 10:47:13.5 261 server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=\n");
+      let signedIn = true;
+      vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => signedIn));
+      const instance = await AntigravityDriver.create({
+        instanceId: "agy-account", displayName: undefined, environment: { HOME: home, USERPROFILE: home }, enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      expect((await instance.snapshot()).account).toBe("ed@example.com");
+      signedIn = false;
+      expect((await instance.snapshot({ refresh: true })).account).toBeUndefined();
+      await instance.dispose();
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it("takes sign-in from agy's logs where the keyring cannot be probed", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-unprobed-"));
+    try {
+      mkdirSync(join(home, ".gemini", "antigravity-cli", "log"), { recursive: true });
+      const log = join(home, ".gemini", "antigravity-cli", "log", "cli-20261119_100000.log");
+      vi.mocked(auth.antigravitySignIn).mockImplementation((_probe, unprobed) => createSignIn(async () => undefined, unprobed));
+      const instance = await AntigravityDriver.create({
+        instanceId: "agy-unprobed", displayName: undefined, environment: { HOME: home, USERPROFILE: home }, enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      writeFileSync(log, "I1119 10:47:13.5 261 server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=\n");
+      expect(await instance.snapshot({ refresh: true })).toMatchObject({ authenticated: true, account: "ed@example.com" });
+      appendFileSync(log, "I1119 10:47:15.2 727 auth_manager.go:315] Logging out current user\n");
+      expect(await instance.snapshot({ refresh: true })).toMatchObject({ authenticated: false });
+      await instance.dispose();
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it("signs agy out and back in through its ACP server, with no terminal", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-acp-"));
+    const flag = join(dir, "signed-in");
+    const fake = join(dir, "fake-agy.cjs");
+    writeFileSync(flag, "");
+    writeFileSync(fake, `
+const fs = require("node:fs");
+if (process.argv.includes("--version")) { console.log("1.5.12"); process.exit(0); }
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "logout") fs.rmSync(${JSON.stringify(flag)}, { force: true });
+  if (method === "authenticate") fs.writeFileSync(${JSON.stringify(flag)}, "");
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => existsSync(flag)));
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-acp": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      expect((await registry.get("agy-acp")!.snapshot()).authenticated).toBe(true);
+      expect(await registry.signOut("agy-acp")).toBe(true);
+      expect(existsSync(flag)).toBe(false);
+      expect((await registry.get("agy-acp")!.snapshot({ refresh: true })).authenticated).toBe(false);
+      await registry.startSignIn("agy-acp");
+      await registry.logins.wait("agy-acp");
+      expect(registry.logins.state("agy-acp")).toBe("complete");
+      expect((await registry.get("agy-acp")!.snapshot({ refresh: true })).authenticated).toBe(true);
+    } finally {
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("re-checks sign-in on a refresh instead of reusing a recent signed-in answer", async () => {
     chmodSync(FAKE_CLI, 0o755);
     let signedIn = true;
@@ -1627,6 +1712,94 @@ describe("Antigravity computer MCP config", () => {
     }
   });
 
+  it("a note helper runs on its own empty MCP config, so a computer turn starts beside it", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpyield-"));
+    const holdHelper = join(home, "hold-helper");
+    const holdComputer = join(home, "hold-computer");
+    const helperReady = join(home, "helper.ready");
+    const computerReady = join(home, "computer.ready");
+    const helperDump = join(home, "helper.json");
+    const helper = await createIn(home, "helper", { FAKE_AGY_HOLD_FILE: holdHelper, FAKE_AGY_READY_FILE: helperReady, FAKE_AGY_MCP_DUMP: helperDump });
+    const computer = await createIn(home, "computer", { FAKE_AGY_HOLD_FILE: holdComputer, FAKE_AGY_READY_FILE: computerReady });
+    const computerRecorder = recordEvents(computer.adapter);
+    try {
+      const notes = helper.generateText!("notes").catch((error: unknown) => error);
+      await expect.poll(() => existsSync(helperReady)).toBe(true);
+      await computer.adapter.sendTurn({ threadId: "t-mcp-yield", text: "click", integrations: boxIntegrations });
+      await expect.poll(() => existsSync(computerReady), { timeout: 1_000 }).toBe(true);
+      expect(readConfig(home).mcpServers[ANTIGRAVITY_COMPUTER_MCP_KEY]).toEqual(boxEntry());
+
+      writeFileSync(holdHelper, "");
+      expect(await notes).toBe("done from fake agy");
+      const seen = readFileSync(helperDump, "utf8");
+      expect(JSON.parse(seen)).toEqual({ mcpServers: {} });
+      expect(seen).not.toContain("box-tok");
+
+      writeFileSync(holdComputer, "");
+      await computerRecorder.until((event) => event.type === "turn.completed");
+      expect(computerRecorder.events.at(-1)).toMatchObject({ ok: true });
+    } finally {
+      writeFileSync(holdHelper, "");
+      writeFileSync(holdComputer, "");
+      computerRecorder.stop();
+      await helper.dispose();
+      await computer.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a note helper's quota failure from the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-notelimit-"));
+    const helper = await createIn(home, "limited", { FAKE_AGY_RESULT_ERROR: "RESOURCE_EXHAUSTED (code 429): Quota exceeded for quota metric Generate requests." });
+    try {
+      await expect(helper.generateText!("notes")).rejects.toThrow("Account text rate limit");
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("holds a note helper after a sign-in rejection in the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-signedout-"));
+    const helper = await createIn(home, "signed-out", { FAKE_AGY_RESULT_ERROR: "UNAUTHENTICATED (code 401): Sign in again." });
+    const usage = { limits: new Map(), save: () => {}, signedOut: new Set<string>() };
+    try {
+      await expect(noteGenerator([], undefined, helper, usage)!("notes", new AbortController().signal)).rejects.toThrow("UNAUTHENTICATED (code 401)");
+      expect(noteGenerator([], undefined, helper, usage)).toBeNull();
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("writes notes on the bot's chat model only when the account is denied the text model", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-denied-"));
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const models = () => spawn.mock.calls.flatMap(([, args]) => args.includes("--model") ? [args[args.indexOf("--model") + 1]] : []);
+    const allowed = await createIn(home, "allowed");
+    const denied = await createIn(home, "denied", { FAKE_AGY_DENIED_MODEL: "gemini-3.8-flash-low" });
+    try {
+      await expect(summaryInstance(allowed, "gemini-4-carbon-low").generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low"]);
+      spawn.mockClear();
+      const own = summaryInstance(denied, "gemini-4-carbon-low");
+      for (let i = 0; i < 2; i++) await expect(own.generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low", "gemini-4-carbon-low", "gemini-4-carbon-low"]);
+    } finally {
+      await allowed.dispose();
+      await denied.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("reaps a child that hangs after result, restores the mount, and unblocks the next turn", async () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
@@ -1901,11 +2074,11 @@ describe("Antigravity Windows long-prompt transport", () => {
 
   it("maps ENAMETOOLONG spawn failures to a clear recoverable message", () => {
     const err = Object.assign(new Error("spawn agy ENAMETOOLONG"), { code: "ENAMETOOLONG" });
-    expect(describeSpawnFailure(err, "agy")).toEqual({
+    expect(procs.describeSpawnFailure(err, "agy")).toEqual({
       message: "spawn failed: command line too long for this OS (`agy`)",
       setup: false,
     });
     const e2big = Object.assign(new Error("spawn agy E2BIG"), { code: "E2BIG" });
-    expect(describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
+    expect(procs.describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
   });
 });

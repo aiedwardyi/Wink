@@ -3,6 +3,7 @@ import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { closedAskNotes } from "./ask-user.ts";
+import { noteOfferTurn } from "./memory-import-offer.ts";
 import { DATA_DIR } from "./config.ts";
 import * as context from "./context-compaction.ts";
 import * as mail from "./mail.ts";
@@ -13,8 +14,8 @@ import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { Store } from "./store.ts";
 import { asksNudge } from "./task-asks.ts";
-import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // Run the production turn-text preparation without booting the server.
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -31,7 +32,7 @@ const RECORD = "[Wink task record]\nGoal: ship the trim";
 
 beforeEach(async () => {
   closeMessageDb();
-  await removeTempDir(DATA_DIR);
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   vi.spyOn(console, "info").mockImplementation(() => {});
 });
@@ -68,14 +69,14 @@ function summarizedChat() {
     expect(ready.compaction).toBeUndefined();
     const prepared = landed ? { ...ready, compaction: store.activePath(threadId).find((row) => row.id === summary.id)!.compaction } : ready;
     const turn = prepareTurn({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge,
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, noteOfferTurn, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, stampShownAsks: () => {},
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, prepared,
       latestCompactionId: ready.compactionId ?? null, sessionPrompt: undefined, nativeAt,
       currentTurnEpoch: () => 0, epoch: 1,
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
       opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null }) }, modelContextWindow: 200_000,
-      taskRecord: undefined, durableTaskRecordText: RECORD, commsDepth: 0,
+      taskRecord: undefined, durableTaskRecordText: RECORD, commsDepth: 0, codexHistory: false,
     });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "ok" });
     return turn;

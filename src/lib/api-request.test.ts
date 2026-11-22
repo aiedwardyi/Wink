@@ -4,6 +4,28 @@ import { applyLocale } from "./i18n";
 
 afterEach(() => { vi.unstubAllGlobals(); applyLocale("en"); });
 
+const reply = (status: number, body: { error: string; code?: string }) => vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status }));
+
+it("sends a tab whose relay session ended to the page a reload reaches", async () => {
+  const replace = vi.fn();
+  vi.stubGlobal("location", { replace });
+  vi.stubGlobal("fetch", reply(401, { error: "unauthorized", code: "SIGNED_OUT" }));
+  await expect(api("/api/bots")).rejects.toThrow("unauthorized");
+  expect(replace).toHaveBeenCalledWith("/pair");
+});
+
+it.each([
+  ["a room's own 401", () => reply(401, { error: "unauthorized" })],
+  ["a server error", () => reply(503, { error: "phone access is off" })],
+  ["a network blip", () => vi.fn().mockRejectedValue(new TypeError("Failed to fetch"))],
+])("stays put on %s", async (_case, fetch) => {
+  const replace = vi.fn();
+  vi.stubGlobal("location", { replace });
+  vi.stubGlobal("fetch", fetch());
+  await expect(api("/api/bots")).rejects.toThrow();
+  expect(replace).not.toHaveBeenCalled();
+});
+
 it.each(["Failed to fetch", "Load failed"])("maps a fetch TypeError: %s", async (message) => {
   vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError(message)));
   const result = api("/api/bots");

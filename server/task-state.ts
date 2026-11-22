@@ -8,7 +8,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema } from "./task-asks.ts";
+import { ASK_LIMITS, ASK_UPDATE_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema } from "./task-asks.ts";
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
 export const TASK_STATE_MAX_BYTES = 16_384;
@@ -170,6 +170,7 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
     const at = Math.max(0, Math.trunc(item.at));
     return [{
       id: item.id, ask, status: item.status, ...(ref ? { ref } : {}), ...(item.kind ? { kind: item.kind } : {}), ...(choices ? { choices } : {}),
+      ...(item.until !== undefined ? { until: Math.max(0, Math.trunc(item.until)) } : {}), ...(item.shown !== undefined ? { shown: Math.max(0, Math.trunc(item.shown)) } : {}),
       at, changedAt: Math.max(0, Math.trunc(item.changedAt)),
     }];
   });
@@ -360,8 +361,9 @@ export function taskStateUpdateSchema(clipped: string[]) {
   const asks = z.array(z.object({
     id: z.string().trim().min(1).max(12).optional(),
     ask: z.string().trim().min(1).optional(),
-    status: z.enum(ASK_STATUSES),
+    status: z.enum(ASK_UPDATE_STATUSES),
     ref: z.string().refine((value) => value === "" || /\S/.test(value)).trim().optional(),
+    until: z.string().trim().min(1).max(40).optional(),
   }).strict()).transform((items) =>
     items.map((item, index) => ({
       ...item,

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 
 import { chunk, decodeChunks } from "../electron/verify-replay.mjs";
-import { createReplay, pruneReplays } from "./verify-replay.ts";
+import { createReplay, listReplays, pruneReplays } from "./verify-replay.ts";
 
 const head = { v: 1, runId: "run-123456", site: "site/index.html", page: "index.html", startedAt: Date.now(), tiles: { desktop: [1280, 720], phone: [392, 800] } };
 const end = { status: "completed", ms: 1000, issues: [], notChecked: [] };
@@ -83,4 +83,20 @@ it("writes with no disk work before save and prunes per card, age and total byte
   await mkdir(join(root, "thread-2"));
   await writeFile(join(root, "thread-2", "run-999999.lvr"), Buffer.alloc(100));
   expect([...(await pruneReplays(root, now, 50)).values()].flat()).toEqual([]);
+});
+
+it("lists only the replays this PC can still play", async () => {
+  const root = await mkdtemp(join(tmpdir(), "replays-")), dir = join(root, "thread");
+  await mkdir(dir);
+  await writeFile(join(dir, "run-fresh01.lvr"), "LVR1");
+  await writeFile(join(dir, "run-stale01.lvr"), "LVR1");
+  await writeFile(join(dir, "run-fresh01.lvr.tmp"), "LVR1");
+  await writeFile(join(dir, "run-nolink1.lvr"), "LVR1");
+  await writeFile(join(root, "index.json"), JSON.stringify({ "thread/run-fresh01": { card: "c", order: 1 }, "thread/run-stale01": { card: "c", order: 2 } }));
+  await writeFile(join(dir, "notes.txt"), "x");
+  const old = new Date(Date.now() - 8 * 86400_000);
+  await utimes(join(dir, "run-stale01.lvr"), old, old);
+  expect(await listReplays("thread", root)).toEqual(["run-fresh01"]);
+  expect(await listReplays("empty", root)).toEqual([]);
+  expect(await listReplays("../thread", root)).toEqual([]);
 });

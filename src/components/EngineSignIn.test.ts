@@ -9,6 +9,7 @@ import { EngineSignIn } from "./EngineSetup";
 import { EngineRow as EngineRowView } from "./EnginesSettings";
 import { ProviderRegistry } from "../../server/harness/registry.ts";
 import { makeFakeDriver } from "../../server/testing/fake-driver.ts";
+import { BUILT_IN_DRIVERS } from "../../server/drivers/builtIn.ts";
 
 function EngineRow(props: ComponentProps<typeof EngineRowView>) {
   return createElement(StoreProvider, null, createElement(EngineRowView, props));
@@ -75,7 +76,7 @@ describe("engine sign-in row", () => {
     } finally { await registry.disposeAll(); }
   });
 
-  it("keeps Linux Gemini sign-in available after an unsupported authentication probe", async () => {
+  it("keeps Linux Gemini sign-in available after an unsupported authentication probe, with no terminal to paste in", async () => {
     Object.assign(window, { ogb: { platform: "linux", openEngineSignIn: vi.fn(async () => "opened") } });
     const fetchMock = vi.fn(async () => json({}));
     vi.stubGlobal("fetch", fetchMock);
@@ -84,7 +85,8 @@ describe("engine sign-in row", () => {
     expect(host.textContent).toContain("Sign In");
     await click("Sign In");
     expect(fetchMock).toHaveBeenCalledWith("/api/instances/antigravity/sign-in", expect.objectContaining({ method: "POST" }));
-    expect(window.ogb!.openEngineSignIn).toHaveBeenCalledExactlyOnceWith("antigravity");
+    expect(window.ogb!.openEngineSignIn).not.toHaveBeenCalled();
+    expect(host.querySelector("code")).toBeNull();
   });
 
   it("keeps Windows Muse blank until its authentication probe answers", async () => {
@@ -217,17 +219,6 @@ describe("engine sign-in row", () => {
     expect(host.textContent).toBe("Sign In");
   });
 
-  it("clears the copied fallback when switching to another pending engine", async () => {
-    Object.assign(window, { ogb: { platform: "win32", openEngineSignIn: vi.fn(async () => "copied" as const) } });
-    vi.stubGlobal("fetch", vi.fn(async () => json({})));
-    await render(createElement(EngineSignIn, { instance: instance("antigravityAgent", { install: { signInCommand: "agy" } }) }));
-    await click("Sign In");
-    expect(host.querySelector("code")?.textContent).toBe("agy");
-    await act(async () => root!.render(createElement(I18nProvider, null,
-      createElement(EngineSignIn, { instance: instance("grokAgent", { loginState: "pending", loginCapture: capture }) }))));
-    expect([...host.querySelectorAll("code")].map((node) => node.textContent)).toEqual([capture.code]);
-  });
-
   it("ignores the previous engine's late start response after switching", async () => {
     let finish!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
@@ -260,21 +251,41 @@ describe("engine sign-in row", () => {
     expect(host.textContent).toContain("Enter this code in your browser");
   });
 
-  it.each(["claudeAgent", "antigravityAgent"])("keeps %s on the computer without relaying a code", async (kind) => {
+  it.each(["claudeAgent", "antigravityAgent"])("signs %s in from a phone with its link and a pasted code", async (kind) => {
     vi.mocked(window.matchMedia).mockReturnValue({ matches: true } as MediaQueryList);
-    await render(createElement(EngineSignIn, { instance: instance(kind, { install: { login: { args: ["login"] } }, loginState: "pending", loginCapture: capture }) }));
-    expect(host.textContent).toBe("Sign in on computer");
-    expect(host.querySelector("button, a, code")).toBeNull();
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ url: "https://auth.example/sign-in", inputGeneration: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { install } = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === kind)!;
+    await render(createElement(EngineSignIn, { instance: instance(kind, { install }) }));
+    expect(host.querySelector("[data-computer-only]")).toBeNull();
+    await click("Sign In");
+    expect(fetchMock.mock.calls[0]).toEqual([`/api/instances/${kind}/sign-in`, expect.objectContaining({ method: "POST", body: '{"device":true}' })]);
+    expect(host.querySelector("a")?.textContent).toBe("Open Link");
+    expect(host.querySelector("a")?.href).toBe("https://auth.example/sign-in");
+    const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(async () => {
+      input.value = "returned-code#state";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    fetchMock.mockImplementation(async () => json({}));
+    await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(fetchMock).toHaveBeenLastCalledWith(`/api/accounts/${kind}/sign-in/code`, expect.objectContaining({
+      method: "POST", body: JSON.stringify({ code: "returned-code#state", generation: 3 }),
+    }));
+    expect(host.textContent).not.toContain("returned-code#state");
   });
 
-  it("opens the agy terminal with its id and polls until connected", async () => {
+  it("signs agy in from the server without opening a terminal and polls until connected", async () => {
     const openEngineSignIn = vi.fn(async () => "running" as const);
     Object.assign(window, { ogb: { platform: "win32", openEngineSignIn } });
     const row = instance("antigravityAgent", { install: { signInCommand: "agy" } });
     vi.stubGlobal("fetch", vi.fn(async (url: string) => json(url === "/api/instances" ? { instances: [{ ...row, snapshot: { state: "available", authenticated: true } }] } : {})));
     await render(createElement(EngineSignIn, { instance: row }));
     await click("Sign In");
-    expect(openEngineSignIn).toHaveBeenCalledExactlyOnceWith("antigravityAgent");
+    expect(fetch).toHaveBeenCalledWith("/api/instances/antigravityAgent/sign-in", expect.objectContaining({ method: "POST" }));
+    expect(openEngineSignIn).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Sign in with your browser");
+    expect(host.querySelector("code")).toBeNull();
     await act(async () => vi.advanceTimersByTimeAsync(2000));
     expect(host.textContent).toBe("Connected");
   });
@@ -288,27 +299,6 @@ describe("engine sign-in row", () => {
     expect(host.textContent).toContain("Didn't finish. Try again.");
     expect(host.textContent).toContain("Sign In");
     expect(host.textContent).not.toContain(capture.code);
-  });
-
-  it.each(["copied", "no bridge"])("keeps waiting with the agy command after %s", async (mode) => {
-    const openEngineSignIn = vi.fn(async () => "copied" as const);
-    if (mode === "copied") Object.assign(window, { ogb: { platform: "win32", openEngineSignIn } });
-    const copy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
-    const row = instance("antigravityAgent", { install: { signInCommand: "agy" } });
-    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => json(url === "/api/instances"
-      ? { instances: [{ ...row, snapshot: { state: "available", authenticated: true } }] } : {}));
-    vi.stubGlobal("fetch", fetchMock);
-    await render(createElement(EngineSignIn, { instance: row }));
-    await click("Sign In");
-    expect(host.querySelector("code")?.textContent).toBe("agy");
-    expect(host.textContent).toContain("Cancel");
-    expect(host.querySelector("span")?.textContent).toBe("Paste the command in Terminal and press Enter.");
-    expect(host.textContent).not.toContain("Finish in your browser");
-    expect(host.textContent).not.toContain("Didn't finish");
-    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
-    if (mode === "no bridge") expect(copy).toHaveBeenCalledWith("agy");
-    await act(async () => vi.advanceTimersByTimeAsync(2000));
-    expect(host.textContent).toBe("Connected");
   });
 
   it("shows why sign-in could not start and leaves the other sign-in running", async () => {

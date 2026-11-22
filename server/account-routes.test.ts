@@ -29,7 +29,7 @@ function fixture(withNames = true, store?: AccountNames) {
     return { ...row };
   }), nameOf: () => "", selectorOf: () => null, resolve: () => ({ kind: "unknown" as const }) };
   const lifecycle = { accounts: { list: () => rows, isDefault: () => false, drains: {}, snapshot: [], get: () => undefined } } as unknown as AccountLifecycle;
-  const registry = { describeCached: async () => [], accountBlocked: () => false } as unknown as ProviderRegistry;
+  const registry = { describeCached: async () => [], accountBlocked: () => false, accountStopped: () => false } as unknown as ProviderRegistry;
   const onNamesChanged = vi.fn();
   const routes = createAccountRoutes(lifecycle, registry, withNames ? { names: store ?? names, onNamesChanged } : undefined);
   async function request(method: string, path = "/api/accounts", body?: unknown, raw?: string) {
@@ -60,7 +60,7 @@ describe("account names routes", () => {
       history: createUsageHistory(dir, { schedule: () => {} }), runs: async () => ({ known: true, runs: [] }),
     });
     const wire = () => createAccountRoutes({ accounts } as unknown as AccountLifecycle,
-      { describeCached: async () => [], accountBlocked: () => false } as unknown as ProviderRegistry,
+      { describeCached: async () => [], accountBlocked: () => false, accountStopped: () => false } as unknown as ProviderRegistry,
       { names, onNamesChanged: () => { board.touch(); } });
     let routes = wire();
     const request = async (method: string, id?: string, nickname?: string | null) => {
@@ -202,7 +202,7 @@ describe("lone base sign-in", () => {
       expect(await request("DELETE", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 200, data: {} });
       expect(cancelSignIn).toHaveBeenCalledExactlyOnceWith("claude");
       startSignIn.mockResolvedValue(null);
-      expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 404, data: { error: "Unknown engine sign-in" } });
+      expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 404, data: { error: "Unknown engine sign-in", code: "unknown-engine-sign-in" } });
       expect(registry.accountBlocked("claude")).toBe(true);
     } finally {
       lifecycle.dispose();

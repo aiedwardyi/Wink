@@ -78,6 +78,19 @@ function relayDeviceUrl(rawHost, teamRelay) {
   return RELAY_LABEL_RE.test(rawHost.slice(0, -base.length - 1)) ? `https://${rawHost}/pair?g=1` : "";
 }
 
+async function readyRelayDeviceUrl(rawHost, teamRelay, request = fetch) {
+  const url = relayDeviceUrl(rawHost, teamRelay);
+  if (!url) return "";
+  try {
+    const response = await request(new URL("/api/phone/google/start", url), {
+      method: "HEAD", redirect: "error", signal: AbortSignal.timeout(1500),
+    });
+    return response.status === 204 ? url : "";
+  } catch {
+    return "";
+  }
+}
+
 function deviceWindowTitle(rawName, host) {
   const name = Object.prototype.toString.call(rawName) === "[object String]" ? rawName.trim().slice(0, 64) : "";
   return `Wink - ${name || host}`;
@@ -294,4 +307,4 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
   };
 }
 
-module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, devicePickTarget, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus };
+module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, devicePickTarget, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, readyRelayDeviceUrl, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus };

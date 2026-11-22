@@ -2,10 +2,12 @@
 // status contract of design section 7. Dependencies are injected so tests run
 // against an in-process fake relay, a fake CA and a fake clock.
 
+import { join } from "node:path";
+
 import { googleSubHash } from "../../shared/google-id-token.ts";
 import { FrameError, PERSON_NAME_MAX, PHONE_RELAY_OFF, PC_NAME_MAX, encodeFrame, hostFor, type PhoneRelayStatus, type TeamSnag } from "../../shared/relay-protocol.ts";
 import { ACCOUNT_TOKEN_MAX_AGE_MS, idTokenClaims, registerAccount } from "./account.ts";
-import { CertManager, SECOND_ACME_DIRECTORY, type CertManagerOptions } from "./acme.ts";
+import { CertManager, SECOND_ACME_DIRECTORY, type CertManagerOptions, type CertSnapshot } from "./acme.ts";
 import { RelayClient, defaultConnector, type RelayConnector } from "./client.ts";
 import { realClock, type Cancel, type Clock } from "./clock.ts";
 import { CtWatch, crtShSource, type CtSource } from "./ct-watch.ts";
@@ -13,7 +15,7 @@ import { requestEab } from "./eab.ts";
 import type { HttpsDeps } from "./https.ts";
 import type { PhoneRelay, PhoneRelayOptions, RelayAccountSource } from "./index.ts";
 import { RelayIngress, type IngressRejection } from "./ingress.ts";
-import { relayHostFor, relayMode } from "./mode.ts";
+import { frontDoorHost, relayHostFor, relayMode } from "./mode.ts";
 import {
   accountProblem,
   clearAccount,
@@ -22,6 +24,7 @@ import {
   readAccount,
   readIdentity,
   readTicket,
+  relayDir,
   ticketProblem,
   writeAccount,
   writeTicket,
@@ -96,7 +99,9 @@ class RelayRuntime {
   private host: string | null = null;
   private client: RelayClient | null = null;
   private certs: CertManager | null = null;
-  private ct: CtWatch | null = null;
+  /** The front-door name's own certificate, for a PC enrolled on an older base. */
+  private doorCerts: CertManager | null = null;
+  private cts: CtWatch[] = [];
   private ingress: RelayIngress | null = null;
   private ctAlert: string | null = null;
   private wasConnected = false;
@@ -155,23 +160,29 @@ class RelayRuntime {
     this.ticket = ticket;
     const ingress = new RelayIngress({ host, handler, clock, onReject: this.deps.onIngressReject });
     this.ingress = ingress;
-    this.certs = new CertManager({
-      dataDir,
-      host,
-      directories: config.acmeDirectories ?? [],
-      accounts: config.acmeAccounts ?? {},
-      fallback: config.acmeDirectories?.length
-        ? undefined
-        : {
-            directory: SECOND_ACME_DIRECTORY,
-            externalAccount: () => requestEab({ base, identity, ticket: this.ticket, now: clock.now() }, this.deps.https),
-          },
-      clock,
-      target: ingress,
-      onChange: () => this.update(),
-      allowInsecureDirectories: this.deps.acmeInsecureDirectories,
-      createClient: this.deps.createAcmeClient,
-    });
+    const certsFor = (name: string, dir: string, target: CertManagerOptions["target"]) =>
+      new CertManager({
+        dataDir: dir,
+        host: name,
+        directories: config.acmeDirectories ?? [],
+        accounts: config.acmeAccounts ?? {},
+        fallback: config.acmeDirectories?.length
+          ? undefined
+          : {
+              directory: SECOND_ACME_DIRECTORY,
+              externalAccount: () => requestEab({ base, identity, ticket: this.ticket, now: clock.now() }, this.deps.https),
+            },
+        clock,
+        target,
+        onChange: () => this.update(),
+        allowInsecureDirectories: this.deps.acmeInsecureDirectories,
+        createClient: this.deps.createAcmeClient,
+      });
+    this.certs = certsFor(host, dataDir, ingress);
+    const door = frontDoorHost(host, base, this.options.frontDoor);
+    // Its own folder, so the saved base's certificate, ACME state and key history stay as they are.
+    const doorDir = join(relayDir(dataDir), "front-door");
+    if (door) this.doorCerts = certsFor(door, doorDir, ingress.alias(door));
     this.client = new RelayClient({
       relayHost: relayHostFor(base),
       identity,
@@ -192,23 +203,29 @@ class RelayRuntime {
       onChange: () => this.update(),
     });
     this.syncAccount();
-    if (this.deps.ctSource) {
-      this.ct = new CtWatch({
-        host,
-        dataDir,
-        clock,
-        source: this.deps.ctSource,
-        onAlert: (message) => {
-          this.ctAlert = message;
-          this.update();
-        },
-      });
+    const source = this.deps.ctSource;
+    if (source) {
+      const watched: [string, string][] = door ? [[host, dataDir], [door, doorDir]] : [[host, dataDir]];
+      this.cts = watched.map(
+        ([name, dir]) =>
+          new CtWatch({
+            host: name,
+            dataDir: dir,
+            clock,
+            source,
+            onAlert: (message) => {
+              this.ctAlert = message;
+              this.update();
+            },
+          }),
+      );
     }
     queueMicrotask(() => {
       if (this.stopped) return;
       this.certs?.start();
+      this.doorCerts?.start();
       this.client?.start();
-      this.ct?.start();
+      for (const ct of this.cts) ct.start();
       this.update();
     });
   }
@@ -338,10 +355,12 @@ class RelayRuntime {
     if (this.stopped || !this.client || !this.certs) return;
     const link = this.client.snapshot();
     const cert = this.certs.snapshot();
+    const door = this.doorCerts?.snapshot();
     const connected = link.state === "connected";
     if (connected !== this.wasConnected) {
       this.wasConnected = connected;
       this.certs.setConnected(connected);
+      this.doorCerts?.setConnected(connected);
       return this.update();
     }
     let state: PhoneRelayStatus["state"];
@@ -357,8 +376,8 @@ class RelayRuntime {
       relayRttMs: connected ? link.rttMs : null,
       poolIdle: link.poolIdle,
       certNotAfter: cert.notAfter,
-      lastError: this.ctAlert ?? linkError ?? (cert.error === "full" ? "relay-full" : cert.error),
-      nextRetryAt: link.nextRetryAt ?? cert.fullUntil,
+      lastError: this.ctAlert ?? linkError ?? certError(cert) ?? (door ? certError(door) : null),
+      nextRetryAt: link.nextRetryAt ?? cert.fullUntil ?? door?.retryAt ?? null,
     };
     if (connected && link.snags) next.snags = true;
     if (connected && link.reportOwner) next.reportOwner = link.reportOwner;
@@ -373,9 +392,14 @@ class RelayRuntime {
     this.cancelRetry();
     this.client?.stop();
     this.certs?.stop();
-    this.ct?.stop();
+    this.doorCerts?.stop();
+    for (const ct of this.cts) ct.stop();
     this.ingress?.close();
   }
+}
+
+function certError(cert: CertSnapshot): string | null {
+  return cert.error === "full" ? "relay-full" : cert.error;
 }
 
 function sameStatus(a: PhoneRelayStatus, b: PhoneRelayStatus): boolean {

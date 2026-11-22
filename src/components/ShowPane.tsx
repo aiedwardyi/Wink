@@ -14,6 +14,7 @@ import { MediaFiles, ShowMedia } from "./ShowMedia";
 import { TimelinePane } from "./TimelinePane";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import { VerifyWatchFrame } from "./VerifyWatch";
+import { ShowPaneButton } from "./ShowPaneButton";
 import { listedFor, useSharedWorkers, WorkerPage } from "./WorkerRows";
 import "./VerifyWatch.css";
 import "./ShowPane.css";
@@ -117,7 +118,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (expanded) { event.preventDefault(); setMaximized(false); }
-      else closePane();
+      else { event.preventDefault(); closePane(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -136,7 +137,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
-        <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>
+        {!phone && (source?.threadId || item?.threadId || watch?.threadId) ? <ShowPaneButton threadId={(source?.threadId || item?.threadId || watch?.threadId)!} workers={crew} inPane /> : <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>}
       </div>
       {item && (item.kind === "folder"
         ? <ShowFolder key={`${item.threadId}:${item.path}`} item={item} maximized={expanded} />
@@ -147,7 +148,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
       {tab === "media" && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />}
       {tab === "workers" && <WorkerPage source={crew} maximized={expanded} onClose={closePane} />}
       {tab === "map" && botId && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
-      {tab === "timeline" && botId && source && <TimelinePane key={botId} botId={botId} threadId={source.threadId} maximized={expanded} profileName={profileName} />}
+      {tab === "timeline" && botId && source && <TimelinePane key={botId} botId={botId} threadId={source.threadId} maximized={expanded} closing={closing} profileName={profileName} />}
     </aside>
   );
   // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons. One portal box moves between the dock and the body, so crossing the phone width keeps the pane mounted.

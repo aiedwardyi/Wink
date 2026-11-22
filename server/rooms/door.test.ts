@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { Agent, createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { join } from "node:path";
@@ -26,6 +26,7 @@ import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites, s
 import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const HOST = "abcdefghijklmnop.wink.test";
 const ORIGIN = `https://${HOST}`;
@@ -233,7 +234,7 @@ beforeEach(() => {
   // Monotonic, so a test that swaps fake timers can't move the limiters' clock back.
   clock = Math.max(clock, Date.now()) + 5 * MINUTE;
   vi.setSystemTime(clock);
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   reached.length = 0;
   peer = PEER;
   store = new Store(() => ({ instanceId: "fake", model: "m" }));

@@ -1,8 +1,10 @@
 // This PC's own bots in rooms it joined. Anyone in the room wakes one by @name
 // or a reply to its line, and a room bot by @name; it works here in one hidden
 // task per room and its answer goes back through the door under its room name.
-import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
-import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
+import { readFile } from "node:fs/promises";
+
+import { botChain, CHAIN_LINES, handoffTarget, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
+import { roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
 import { joinedEntries, joinedEntry, joinedRoom, joinedWorks, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
@@ -12,7 +14,7 @@ import { WINDOW_CHARS, WINDOW_ENTRIES } from "./windows.ts";
 export type MyBotTurn = { working?: boolean; since?: number; waiting?: boolean; error?: "failed" };
 
 export interface MyRoomBotDeps {
-  client: Pick<GuestClient, "botSend" | "file">;
+  client: Pick<GuestClient, "botSend" | "botPicture" | "file">;
   bot(botId: string): { id: string; name: string } | null;
   busy(botId: string): boolean;
   /** The bot's task thread still exists. */
@@ -28,11 +30,14 @@ export interface MyRoomBotDeps {
 }
 
 type Waiting = { roomId: string; id: string; botId: string; after: number; entry: JoinedEntry };
-type Running = Waiting & { since: number };
+type Running = Waiting & { since: number; pictureAbort: AbortController };
+
+const refused = (status: number, error: string) => Object.assign(new Error(error), { status });
 
 const DAY = 24 * 60 * 60 * 1000;
 
 const lineOf = (entry: JoinedEntry) => `${entry.author.name}: ${entry.text}`;
+const senderId = (entry: JoinedEntry) => entry.seat ?? entry.author.id;
 
 const shown = (message: Message) =>
   message.role === "bot" && message.kind === "text" && !message.summarized && !message.queued && !message.quick && !message.comm && Boolean(message.text?.trim());
@@ -78,7 +83,7 @@ export class MyRoomBotTurns {
   /** Runs after the door stored this PC's line; never on its send path. */
   sent(roomId: string, entry: JoinedEntry): void {
     const room = joinedRoom(roomId);
-    if (entry.author.kind === "person" && entry.author.id === room?.me.id) this.memberLine(roomId, entry);
+    if (entry.author.kind !== "bot" && senderId(entry) === room?.me.id) this.memberLine(roomId, entry);
   }
 
   /** The host's or a teammate's line wakes this PC's bot it @'s or replies to, like its owner's. */
@@ -98,9 +103,9 @@ export class MyRoomBotTurns {
     const room = joinedRoom(roomId);
     const state = room?.state;
     if (Date.now() - entry.at > DAY) return;
-    if (entry.author.kind !== "bot") return entry.author.id === room?.me.id ? undefined : this.memberLine(roomId, entry);
+    if (entry.author.kind !== "bot") return senderId(entry) === room?.me.id ? undefined : this.memberLine(roomId, entry);
     if (room?.status !== "joined" || !state?.teamBots || this.halted(roomId, entry.seq)) return;
-    const hit = botLineResponder(entry.text, [...state.bots, ...state.teamBots], [state.host, ...state.people.map((person) => person.name)], entry.author.id);
+    const hit = handoffTarget(entry, [...state.bots, ...state.teamBots], [state.host, ...state.people.map((person) => person.name)]);
     const own = hit && state.teamBots.some((bot) => bot.id === hit.id && bot.owner === room.me.id);
     this.queue(roomId, own ? myRoomBots(roomId).find((bot) => bot.id === hit.id) : undefined, entry);
   }
@@ -139,7 +144,10 @@ export class MyRoomBotTurns {
       if (row.roomId === roomId && ![...this.running.values()].some((run) => run.botId === row.botId)) this.cancelled.add(row);
     }
     const runs = [...this.running].filter(([, run]) => run.roomId === roomId);
-    for (const [threadId] of runs) this.stopped.add(threadId);
+    for (const [threadId, run] of runs) {
+      this.stopped.add(threadId);
+      run.pictureAbort.abort();
+    }
     for (const [threadId, run] of runs) {
       if (this.running.get(threadId) === run) await this.deps.interrupt(run.botId, threadId);
     }
@@ -214,14 +222,15 @@ export class MyRoomBotTurns {
       }
       const window = since(roomId, row.after, entry.seq);
       const { state } = room;
-      const ownerOf = (owner?: string) => (owner ? state.people.find((person) => person.id === owner)?.name : state.host);
+      const ownerOf = (owner?: string) => (!owner || state.hostSeats?.includes(owner) ? state.host : state.people.find((person) => person.id === owner)?.name);
       const others = [
         ...state.bots.map((other) => [other.name, state.host] as const),
         ...(state.teamBots ?? []).filter((other) => other.id !== bot.id).map((other) => [other.name, ownerOf(other.owner)] as const),
       ].flatMap(([name, owner]) => (owner ? [`${JSON.stringify(name)} (${JSON.stringify(owner)})`] : []));
       const me = JSON.stringify(room.me.name);
       const works = joinedWorks(roomId);
-      const readOnly = entry.author.kind === "bot" || (entry.author.id !== room.me.id && !works.has(entry.author.id));
+      const sender = senderId(entry);
+      const readOnly = entry.author.kind === "bot" || (sender !== room.me.id && !works.has(sender));
       if (readOnly && !this.deps.readOnlyTurns(local.id, threadId)) {
         const posted = await this.deps.client.botSend(roomId, bot.id, `${roomName} can't take requests from you yet. ${room.me.name} has to turn on "Can make bots work" for you.`, entry.id);
         setMyRoomBotTurn(roomId, bot.id, threadId, posted.ok ? posted.value.seq : entry.seq);
@@ -244,7 +253,7 @@ export class MyRoomBotTurns {
         ...(files.length ? ["Files on these lines, saved on this PC:", ...files] : []),
         `${asker} asked you: ${entry.text}`,
       ].join("\n");
-      this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length }));
+      this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length, pictureAbort: new AbortController() }));
       await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {
         if (this.running.get(threadId) === mine) void this.settled(threadId, false);
       }, readOnly);
@@ -271,6 +280,22 @@ export class MyRoomBotTurns {
       out.push(got.ok ? `${file.name}: ${got.value.path}` : `${file.name}: (could not download)`);
     }
     return out;
+  }
+
+  capturePicture(threadId: string) {
+    const run = this.running.get(threadId);
+    if (!run) return null;
+    return async (path: string, name: string, caption: string) => {
+      if (this.running.get(threadId) !== run || run.pictureAbort.signal.aborted) throw refused(409, "the turn was stopped");
+      const bytes = await readFile(path);
+      if (this.running.get(threadId) !== run || run.pictureAbort.signal.aborted) throw refused(409, "the turn was stopped");
+      const posted = await this.deps.client.botPicture(run.roomId, run.id, caption, run.entry.id, name, bytes, run.pictureAbort.signal);
+      if (!posted.ok) throw refused(posted.status, posted.status === 404 && posted.error === "not found" ? "the host's Wink is too old for pictures from teammates' bots" : posted.error);
+      const file = posted.value.files?.[0];
+      if (!file) throw refused(503, "unavailable");
+      setMyRoomBotTurn(run.roomId, run.id, threadId, posted.value.seq);
+      return { messageId: posted.value.id, url: `/api/joined/rooms/${run.roomId}/files/${file.id}/preview` };
+    };
   }
 
   /** Call on every settled turn; only a room task's posts. */

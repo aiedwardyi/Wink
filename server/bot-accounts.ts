@@ -4,7 +4,9 @@ import { AccountError, type AccountService } from "./accounts.ts";
 import type { AutomaticCandidate, AutomaticCapability } from "./automatic-selection.ts";
 import type { ModelCatalog, ModelSelection, ProviderInstance, ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
+import { noteGenerator, type NoteLimits } from "./memory-pass.ts";
 import type { BotRecord, Store } from "./store.ts";
+import { summaryInstance } from "./summary-instance.ts";
 
 export const SIGNED_OUT = "This account is signed out. Sign in again, then send your message.";
 export const SIGN_IN_UNCONFIRMED = "This account's sign-in isn't confirmed yet.";
@@ -57,7 +59,8 @@ export class BotAccounts {
       const id = this.routedAccount(instance.instanceId);
       if (!id && !this.accounts.drains[instance.instanceId]) return instance;
       const main = instances.find((row) => row.instanceId === id);
-      return { ...instance, pickerSnapshot: id && this.available(id) && main ? main.snapshot : { state: "unavailable" },
+      return { ...instance, pickerSnapshot: id && this.registry.accountChecking(id) ? { state: "checking" }
+        : id && this.available(id) && main ? main.snapshot : { state: "unavailable" },
         ...(main?.models ? { pickerModels: main.models } : {}),
       };
     });
@@ -71,7 +74,7 @@ export class BotAccounts {
       const account = accounts.find((row) => row.id === instance.instanceId);
       if (!account) return instance;
       return { ...instance, accountOf: account.of, accountMain: !account.error && this.accounts.isDefault(account.id),
-        accountState: account.existing && this.registry.accountBlocked(account.id) ? "stopped" as const : account.state,
+        accountState: account.existing && this.registry.accountStopped(account.id) ? "stopped" as const : account.state,
         ...(this.accounts.drains[account.id] ? { drain: this.accounts.drains[account.id] } : {}),
       };
     });
@@ -121,6 +124,20 @@ export class BotAccounts {
     const claude = this.registry.instances().find((instance) => instance.driverKind === "claudeAgent" && !instance.account && instance.enabled && instance.generateText);
     const id = claude && this.routedAccount(claude.instanceId);
     return id ? { instanceId: id, available: this.available(id) } : undefined;
+  }
+
+  notes(bot: Pick<BotRecord, "modelSelection">, usage?: NoteLimits) {
+    if (this.registry.get(bot.modelSelection.instanceId)?.driverKind === "claudeAgent") {
+      return noteGenerator(this.registry.instances(), this.noteAccount());
+    }
+    try {
+      const selection = this.resolve(bot);
+      if (!this.registry.accountAvailable(selection.instanceId, true)) return null;
+      const instance = this.registry.get(selection.instanceId);
+      return instance ? noteGenerator([], undefined, summaryInstance(instance, selection.model), usage) : null;
+    } catch {
+      return null;
+    }
   }
 
   references(bot: BotRecord, id: string): boolean {

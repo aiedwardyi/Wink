@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { AccountContext } from "./account-policy.ts";
-import type { InstanceConfigMap } from "./contracts.ts";
+import type { InstanceConfigMap, ProviderSnapshot } from "./contracts.ts";
 
 export const ACCOUNT_DRIVERS: readonly string[] = ["claudeAgent", "codex", "grokAgent"];
 const ACCOUNT_ID = /^acct_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -47,6 +47,14 @@ function plainDirectory(path: string, create: boolean) {
   }
 }
 
+export const MISSING_HOME: ProviderSnapshot = Object.freeze({ state: "available", authenticated: false, accountAuthenticated: false });
+
+// A saved home that went missing reads as signed out until Sign In creates it again (AccountService.openHome).
+// Only the home itself counts: when it exists, the provider's own auth check answers.
+export function missingAccountHome(account: AccountContext): boolean {
+  try { return ACCOUNT_ID.test(account.id) && !lstatSync(account.home, { throwIfNoEntry: false }); } catch { return false; }
+}
+
 export class AccountService {
   readonly error?: string;
   private state: State = { version: 1, accounts: [], retired: [] };
@@ -73,11 +81,13 @@ export class AccountService {
     try {
       this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
       this.validate(this.state);
-      if (this.state.accounts.length) {
+      const present = (path: string) => lstatSync(path, { throwIfNoEntry: false });
+      if (this.state.accounts.length && present(this.root)) {
         plainDirectory(this.root, false);
         for (const row of this.state.accounts) {
-          plainDirectory(this.home(row.id), false);
-          if (this.base(row.of).driver === "codex") plainDirectory(join(this.home(row.id), "state"), false);
+          const home = this.home(row.id);
+          if (present(home)) plainDirectory(home, false);
+          if (this.base(row.of).driver === "codex" && present(join(home, "state"))) plainDirectory(join(home, "state"), false);
         }
       }
       this.publish();
@@ -200,6 +210,14 @@ export class AccountService {
       const defaults = Object.fromEntries(Object.entries(this.state.defaults ?? {}).filter(([, accountId]) => accountId !== id));
       this.commit({ ...this.state, defaults, accounts: this.state.accounts.filter((row) => row.id !== id), retired: [...this.state.retired, id] });
     });
+  }
+
+  // The only path that brings a missing saved home back: Sign In on an account still in the store.
+  openHome(id: string) {
+    const row = this.require(id);
+    for (const path of [this.root, row.home, ...this.base(row.of).driver === "codex" ? [join(row.home, "state")] : []]) {
+      plainDirectory(path, !lstatSync(path, { throwIfNoEntry: false }));
+    }
   }
 
   validateBases(bases = this.bases()) { if (!this.error) this.validate(this.state, bases); }

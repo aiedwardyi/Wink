@@ -4,8 +4,8 @@
 // its choices, and a tap on the row opens the card again. It arrives as the row
 // when the box already holds a draft, a reply or attachments. Unlike an approval
 // it never takes the composer over: the bot keeps working, and typing a reply
-// answers it only when it has no choices. The row's x or a sideways swipe only
-// hides it here; the bot still waits, and a count on the composer brings it back.
+// answers it only when it has no choices. A sideways swipe hides the row here;
+// the bot still waits, and a count on the composer brings it back.
 import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X } from "lucide-react";
 import type { Message } from "@/state/store";
@@ -61,6 +61,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   count,
   index = count - 1,
   onStep,
+  onJump,
   typed = "",
   attached = 0,
   replying = false,
@@ -76,6 +77,8 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   index?: number;
   /** shows the question `step` places away */
   onStep?: (step: number) => void;
+  /** scrolls the chat to the message behind this question; absent when none is there */
+  onJump?: () => void;
   /** the message box's text and attachment count: a change after arrival shrinks the card */
   typed?: string;
   attached?: number;
@@ -150,7 +153,6 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
     </span>
   ) : <span className={BADGE}>{count}</span>;
   const label = t("ask.asks", { name: askerName });
-  // the row's x only hides it here, the card's x dismisses the question
   const controls = (open: boolean) => (
     <>
       <button
@@ -166,9 +168,9 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
       </button>
       <button
         type="button"
-        onClick={open ? onDismiss : hide}
-        aria-label={t(open ? "chat.dismissQuestion" : "ask.hideQuestion")}
-        title={t(open ? "chat.dismissQuestion" : "ask.hideQuestion")}
+        onClick={onDismiss}
+        aria-label={t("chat.dismissQuestion")}
+        title={t("chat.dismissQuestion")}
         className={cn(CONTROL, "-mr-1 pointer-coarse:after:-left-1 pointer-coarse:after:-right-3")}
       >
         <X size={14} aria-hidden="true" />
@@ -263,7 +265,12 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
                 {controls(true)}
               </div>
               {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
-              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]">{card.subtitle}</div>
+              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} onClick={onJump && (() => { if (!window.getSelection()?.toString()) onJump(); })} onKeyDown={onJump && ((event) => {
+                // Space scrolls a question that overflows, so only Enter jumps from there
+                const body = event.currentTarget;
+                const key = event.key === "Enter" || (event.key === " " && body.scrollHeight <= body.clientHeight);
+                if (event.target === body && key && !window.getSelection()?.toString()) { event.preventDefault(); onJump(); }
+              })} className={cn(onJump && "cursor-pointer", "mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>{card.subtitle}</div>
               <AskChoices options={card.options} onPick={onPick} />
             </div>
           </div>

@@ -159,7 +159,7 @@ it("derives the same positions from the clock with 8 ms and 16 ms frames", () =>
 
 it("redraws during a glide before a thing changes the UI", () => {
   const show = replay(result(0, 0, 0), result(2000, 1000, 0), end(2100));
-  toClock(show, 1300);
+  toClock(show, 200);
   const { version, ui } = show;
   expect(show.advance(16)).toBe(true);
   expect(show.version).toBeGreaterThan(version);
@@ -608,6 +608,66 @@ it("never lands two cursors on the same spot when checkers share boxes", () => {
     const landed = swarm(show).filter(c => show.clock >= c.at + c.duration && c.to.y >= 0).map(c => c.to);
     landed.forEach((p, i) => landed.slice(i + 1).forEach(q => expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(20)));
   }
+});
+
+it("never points a cursor back at a spot it just pointed at when few are in view", () => {
+  const show = replay(frame(0), ...[0, 1, 2].flatMap(i => [result(i, 100 + i * 300, 100), result(10 + i, 100 + i * 300, 100, { checker: "FIT" })]), end(40));
+  const targets = new Map<string, Array<{ x: number; y: number }>>(), seen = new Set<string>();
+  while (show.phase === "play") {
+    show.advance(16);
+    for (const [id, c] of show.cursors) {
+      if (show.clock < c.at + c.duration || seen.has(`${id}@${c.at}`) || c.to.y < 0 || c.to.y > 720) continue;
+      seen.add(`${id}@${c.at}`);
+      targets.set(id, [...targets.get(id) ?? [], c.to]);
+    }
+  }
+  for (const list of targets.values()) list.forEach((p, i) => expect(list.slice(Math.max(0, i - 4), i).filter(q => Math.hypot(p.x - q.x, p.y - q.y) < 12)).toEqual([]));
+});
+
+it("plays a busy page in one pass down: a late click never sends the view back up, and no cursor lands back where it just was", () => {
+  const chunks: VerifyReplayChunk[] = [frame(0), frame(0, "phone")];
+  for (const [tile, step, last] of [["desktop", 600, 11_900], ["phone", 680, 11_560]] as const) {
+    let y = 0;
+    for (let k = 0; k < 128; k++) {
+      const top = 90 + k * 96, stop = Math.min(last, Math.floor(Math.max(0, top - 80) / step) * step);
+      if (stop !== y) chunks.push(mark(k, "scroll", { tile, y: y = stop }), frame(k, tile));
+      chunks.push(result(k, 20, top, { tile, checker: "TEXT_A", where: `p#copy-${k}`, box: [20, top, 100, 20], scrollY: y }), result(k, 190, top, { tile, checker: "FIT", where: `button#wrap-${k}`, box: [190, top, 45, 44], scrollY: y }));
+    }
+    chunks.push(mark(200, "scroll", { tile, y: 40 }), mark(200, "point", { inp: { tile, type: "click", key: "signup", path: "button#signup", x: 20, y: 30, doc: false }, scrollY: 40 }));
+  }
+  const show = replay(...chunks, end(300));
+  const last = { desktop: 0, phone: 0 }, back = { desktop: 0, phone: 0 }, recent = new Map<string, Array<{ x: number; y: number }>>(), seen = new Set<string>(), returns: string[] = [];
+  while (show.phase === "play") {
+    show.advance(16);
+    for (const tile of ["desktop", "phone"] as const) {
+      if (show.scroll[tile] < last[tile]) back[tile]++;
+      last[tile] = show.scroll[tile];
+    }
+    for (const [id, c] of show.cursors) {
+      const p = show.cursorAt(c), key = `${id}@${c.at}`;
+      if (show.clock < c.at + c.duration || seen.has(key) || p.y < 0 || p.y > 800) continue;
+      seen.add(key);
+      const doc = { x: p.x, y: p.y + show.scroll[c.tile] }, list = recent.get(id) ?? [];
+      if (list.some(q => Math.hypot(q.x - doc.x, q.y - doc.y) < 12)) returns.push(`${id} ${doc.x},${doc.y}`);
+      recent.set(id, [...list, doc].slice(-4));
+    }
+  }
+  expect(back).toEqual({ desktop: 0, phone: 0 });
+  expect(returns).toEqual([]);
+});
+
+it("moves a resting cursor with its spot when the page scrolls under it", () => {
+  const show = replay(frame(0), result(0, 100, 100), result(1, 100, 510), result(2, 300, 560), mark(3, "scroll", { tile: "desktop", y: 300 }), frame(3), result(4, 300, 300, { scrollY: 300 }), end(10));
+  const spots = [110, 310, 520, 570], off: string[] = [];
+  while (show.phase === "play") {
+    show.advance(16);
+    for (const [id, c] of show.cursors) {
+      if (show.clock < c.at + c.duration || c.to.y < 0 || c.to.y > 704) continue;
+      const y = c.to.y + show.scroll[c.tile];
+      if (!spots.some(s => Math.abs(s - y) < 1)) off.push(`${id}@${show.clock} ${y}`);
+    }
+  }
+  expect(off).toEqual([]);
 });
 
 it("labels only a checker's own cursor, never its spares", () => {

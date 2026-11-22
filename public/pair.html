@@ -121,6 +121,22 @@
       .ok {
         color: var(--success);
       }
+      .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        margin-right: 8px;
+        vertical-align: -1px;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        animation: spin 800ms linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
       [hidden] {
         display: none !important;
       }
@@ -157,6 +173,7 @@
         const COPY = {
           en: {
             title: "Pair this phone",
+            opening: "Opening {name}…",
             help: "Enter the 6 digit code from Wink on your PC: Settings, Connections, Phone access.",
             code: "6 digit code",
             submit: "Pair",
@@ -177,6 +194,7 @@
           },
           ko: {
             title: "이 휴대폰 연결",
+            opening: "{name} 여는 중…",
             help: "PC의 Wink에서 설정 > 연결 > 휴대폰 접속에 표시된 6자리 코드를 입력하세요.",
             code: "6자리 코드",
             submit: "연결",
@@ -217,14 +235,23 @@
         input.setAttribute("aria-label", t("code"));
         submit.textContent = t("submit");
 
-        const goGoogle = new URLSearchParams(location.search).get("g") === "1";
-        // ?g=1 hands straight to the sign-in page, so this page draws nothing of its own unless Google is out.
-        if (!goGoogle) $("title").textContent = t("title");
-
+        const query = new URLSearchParams(location.search);
+        const goGoogle = query.get("g") === "1";
         const fragment = new URLSearchParams(location.hash.slice(1));
         const qrToken = fragment.get("k");
         const googleToken = fragment.get("g");
+        const pcName = query.get("n") || fragment.get("n") || "Wink";
         if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+
+        // ?g=1 and a Google return finish on their own, so they show only which PC is opening.
+        if (goGoogle || googleToken) {
+          const spinner = document.createElement("span");
+          spinner.className = "spinner";
+          spinner.setAttribute("aria-hidden", "true");
+          $("title").replaceChildren(spinner, t("opening").replace("{name}", () => pcName));
+        } else {
+          $("title").textContent = t("title");
+        }
 
         const say = (text, tone) => {
           status.textContent = text;
@@ -246,7 +273,6 @@
         const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
         async function finish() {
-          say(t("paired"), "ok");
           // The worker shows an offline page when this PC can't be reached later.
           try {
             await navigator.serviceWorker.register("/sw.js");
@@ -305,13 +331,15 @@
           say(t("pairing"));
           // One request id per attempt, so a retry after a lost answer gets the same phone.
           const error = await pair("/api/phone/pair", JSON.stringify({ credential, name: phoneName(), requestId: randomId() }));
-          if (!error) return finish();
+          if (!error) {
+            say(t("paired"), "ok");
+            return finish();
+          }
           say(t(error), "error");
           showForm();
         }
 
         async function runGoogle(credential) {
-          say(t("pairing"));
           const error = await pair("/api/phone/google", JSON.stringify({ credential, name: phoneName() }));
           if (!error) return finish();
           say(t(["wrong-account", "rate-limited", "network"].includes(error) ? error : "google-failed"), "error");

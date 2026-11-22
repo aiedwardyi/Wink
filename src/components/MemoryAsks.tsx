@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRight, ListChecks } from "lucide-react";
 import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { askCounts, botAsks, isClosed, type Ask, type AskStatus } from "@/lib/asks";
 import { Fold } from "./Fold";
@@ -35,6 +36,7 @@ export function MemoryAsks({ bot }: { bot: Bot }) {
   const { t } = useI18n();
   const [showAll, setShowAll] = useState(false);
   const [showDone, setShowDone] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   const asks = botAsks(bot);
   const counts = askCounts(asks);
   const open = asks.filter((ask) => !isClosed(ask));
@@ -48,7 +50,7 @@ export function MemoryAsks({ bot }: { bot: Bot }) {
         <span className="mm-sec-hint">{t("bot.memoryAsksHint")}</span>
       </div>
       {asks.length ? (
-        <div className="mm-task mm-asks-box">
+        <div ref={box} className="mm-task mm-asks-box">
           {open.length ? <AskRows asks={open.slice(0, FIRST)} className="mm-asks-open" /> : <div className="mm-empty">{t("bot.memoryAsksAllDone")}</div>}
           {open.length > FIRST && (
             <>
@@ -67,7 +69,7 @@ export function MemoryAsks({ bot }: { bot: Bot }) {
                 {t("bot.memoryAsksDone", { count: counts.closed })}
                 <ChevronRight size={14} aria-hidden="true" />
               </button>
-              <Fold open={showDone}>
+              <Fold open={showDone} onOpened={() => revealOnOpen(box.current?.querySelector<HTMLElement>(".mm-asks-closed > *") ?? null)}>
                 <AskRows asks={doneRows.shown} className="mm-asks-closed" />
                 {doneRows.more}
               </Fold>
