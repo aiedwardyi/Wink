@@ -15,6 +15,10 @@
 // FAKE_AGY_USAGE, when set, is the JSON usage on the response step and the result.
 // FAKE_AGY_STREAM=1 streams result.response as two text_delta steps first.
 // FAKE_AGY_WRITE_HOME=1 writes what real agy writes under HOME/.gemini on a turn.
+// FAKE_AGY_CONVERSATIONS_DIR, when set, is agy's one conversation store for every account:
+// a new conversation is named for the account in FAKE_AGY_ACCOUNT_FILE (read on every call),
+// and resuming one another account started fails the way the API refused it on 11-22
+// (init, user_input, error_message, result ERROR "Corrupted thought signature.") on any model.
 // Deterministic, no network.
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -156,11 +160,49 @@ if (process.env.FAKE_AGY_WRITE_HOME === "1" && prompt) {
 }
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
-const CONV = "conv-fake-123";
+const model = argv.includes("--model") ? argv[argv.indexOf("--model") + 1] : undefined;
+const resumed = argv.includes("--conversation") ? argv[argv.indexOf("--conversation") + 1] : undefined;
+const store = process.env.FAKE_AGY_CONVERSATIONS_DIR;
+const account = process.env.FAKE_AGY_ACCOUNT_FILE && existsSync(process.env.FAKE_AGY_ACCOUNT_FILE)
+  ? readFileSync(process.env.FAKE_AGY_ACCOUNT_FILE, "utf8").trim()
+  : "default";
+const storedConversation = () => {
+  if (resumed) return resumed;
+  mkdirSync(store!, { recursive: true });
+  const id = `conv-${account}-${process.pid}-${Date.now()}`;
+  writeFileSync(join(store!, id), account);
+  return id;
+};
+const CONV = store && prompt ? storedConversation() : "conv-fake-123";
+if (store && prompt && resumed) {
+  const owner = existsSync(join(store, resumed)) ? readFileSync(join(store, resumed), "utf8") : undefined;
+  if (owner !== account) {
+    const step = (step_index: number, step_type: string) =>
+      out({ event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index, state: "DONE", step_type } });
+    out({ event: "init", conversation_id: CONV, init: { model, cwd: process.cwd(), tools: ["run_command"], permission_mode: "accept-edits" } });
+    step(78, "user_input");
+    step(79, "system_message");
+    step(81, "error_message");
+    out({
+      event: "result",
+      conversation_id: CONV,
+      result: {
+        conversation_id: CONV,
+        status: "ERROR",
+        response: "",
+        error: "INVALID_ARGUMENT (code 400): Corrupted thought signature.",
+        duration_seconds: 874867.3,
+        num_turns: 15,
+        usage: { input_tokens: 554552, output_tokens: 4902, thinking_tokens: 0, cache_read_tokens: 1819326, total_tokens: 559454 },
+        finished_reason: "error",
+      },
+    });
+    process.exit(0);
+  }
+}
 const systemNotice = "The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n<SYSTEM_MESSAGE>internal notice</SYSTEM_MESSAGE>";
 const cancelledTool = process.env.FAKE_AGY_CANCELLED_TOOL === "1";
 const errorFile = process.env.FAKE_AGY_RESULT_ERROR_FILE;
-const model = argv.includes("--model") ? argv[argv.indexOf("--model") + 1] : undefined;
 const deniedModel = process.env.FAKE_AGY_DENIED_MODEL && model === process.env.FAKE_AGY_DENIED_MODEL
   ? `Permission 'aiplatform.endpoints.predict' denied on resource '/publishers/google/models/${model.replace(/-low$/, "")}' (or it may not exist).`
   : undefined;
