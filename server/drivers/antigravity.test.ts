@@ -15,6 +15,7 @@ import * as auth from "./antigravity-auth.ts";
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { summaryInstance } from "../summary-instance.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { ProviderRegistry } from "../harness/registry.ts";
 import {
@@ -32,7 +33,8 @@ import {
   STATIC_ANTIGRAVITY_MODELS,
   WIN32_CREATEPROCESS_CMDLINE_MAX,
 } from "./antigravity.ts";
-import { describeSpawnFailure } from "../procs.ts";
+import { noteGenerator } from "../memory-pass.ts";
+import * as procs from "../procs.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
 
@@ -532,6 +534,92 @@ describe("Antigravity turns (fake CLI)", () => {
     } finally {
       delete process.env.FAKE_AGY_DUMP;
       delete process.env.FAKE_AGY_RESUME_FAIL;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  // 11-22: the Python chat's conversation was built on 3.8 Flash and Hydrogen
+  // under one Gemini sign-in (Vertex); after signing in with another account,
+  // switching to Neon (then Hydrogen) got "Corrupted thought signature."
+  it.each(["gemini-4-neon-low", "gemini-4-carbon-high", "gemini-4-argon-medium", "gemini-4-hydrogen-low"])(
+    "a chat switched to %s after a Gemini sign-in change answers from its transcript, and switches back",
+    async (model) => {
+      const scratch = mkdtempSync(join(tmpdir(), "omb-agy-signature-"));
+      const dump = join(scratch, "dump.json");
+      const accountFile = join(scratch, "account");
+      writeFileSync(accountFile, "vertex-project");
+      process.env.FAKE_AGY_CONVERSATIONS_DIR = join(scratch, "conversations");
+      process.env.FAKE_AGY_ACCOUNT_FILE = accountFile;
+      process.env.FAKE_AGY_DUMP = dump;
+      const threadId = `t-signature-${model}`;
+      const turn = async (input: Omit<Parameters<typeof instance.adapter.sendTurn>[0], "threadId">) => {
+        const from = recorder.events.length;
+        const { turnId } = await instance.adapter.sendTurn({ threadId, ...input });
+        await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId && recorder.events.indexOf(event) >= from);
+        const events = recorder.events.slice(from);
+        const sessions = events.filter((event) => event.type === "session.started") as Array<{ sessionId: string | null }>;
+        return { events, cursor: sessions.at(-1)?.sessionId ?? undefined, argv: JSON.parse(readFileSync(dump, "utf8")).argv as string[], prompt: JSON.parse(readFileSync(dump, "utf8")).prompt as string };
+      };
+      try {
+        await create();
+        const earlier = await turn({ text: "my favorite loop is enumerate", model: "gemini-3.8-flash-low" });
+        expect(earlier.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+
+        writeFileSync(accountFile, "consumer-account");
+        const fallback = "Earlier in this chat:\nUser: my favorite loop is enumerate\n\nhi neon";
+        const switched = await turn({ text: "hi neon", model, resumeCursor: earlier.cursor, resumeFallback: { text: fallback } });
+        expect(switched.events.filter((event) => event.type === "runtime.error")).toEqual([]);
+        expect(switched.events.some((event) => event.type === "turn.retrying" && event.reason === "resume_cursor")).toBe(true);
+        expect(switched.events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
+        expect(switched.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        expect(switched.events.find((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toMatchObject({ text: "done from fake agy" });
+        // a new conversation under the current sign-in, holding the earlier talk
+        expect(switched.cursor).not.toBe(earlier.cursor);
+        expect(switched.argv).not.toContain("--conversation");
+        expect(switched.argv[switched.argv.indexOf("--model") + 1]).toBe(model);
+        expect(switched.prompt).toBe(fallback);
+
+        const back = await turn({ text: "back on flash", model: "gemini-3.8-flash-low", resumeCursor: switched.cursor, resumeFallback: { text: "unused" } });
+        expect(back.events.some((event) => event.type === "turn.retrying")).toBe(false);
+        expect(back.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        expect(back.argv[back.argv.indexOf("--conversation") + 1]).toBe(switched.cursor);
+        expect(back.prompt).toBe("back on flash");
+      } finally {
+        delete process.env.FAKE_AGY_CONVERSATIONS_DIR;
+        delete process.env.FAKE_AGY_ACCOUNT_FILE;
+        delete process.env.FAKE_AGY_DUMP;
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("switching Gemini models inside one sign-in keeps the same conversation", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-agy-same-account-"));
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_AGY_CONVERSATIONS_DIR = join(scratch, "conversations");
+    process.env.FAKE_AGY_DUMP = dump;
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-same-account", text: "one", model: "gemini-4-hydrogen-low" });
+      const first = await recorder.until((event) => event.type === "session.started") as { sessionId: string };
+      await recorder.until((event) => event.type === "turn.completed");
+      const from = recorder.events.length;
+      const { turnId } = await instance.adapter.sendTurn({
+        threadId: "t-same-account",
+        text: "two",
+        model: "gemini-4-neon-low",
+        resumeCursor: first.sessionId,
+        resumeFallback: { text: "unused" },
+      });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId && recorder.events.indexOf(event) >= from);
+      const events = recorder.events.slice(from);
+      expect(events.some((event) => event.type === "turn.retrying")).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      const argv = JSON.parse(readFileSync(dump, "utf8")).argv as string[];
+      expect(argv[argv.indexOf("--conversation") + 1]).toBe(first.sessionId);
+    } finally {
+      delete process.env.FAKE_AGY_CONVERSATIONS_DIR;
+      delete process.env.FAKE_AGY_DUMP;
       rmSync(scratch, { recursive: true, force: true });
     }
   });
@@ -1710,6 +1798,94 @@ describe("Antigravity computer MCP config", () => {
     }
   });
 
+  it("a note helper runs on its own empty MCP config, so a computer turn starts beside it", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpyield-"));
+    const holdHelper = join(home, "hold-helper");
+    const holdComputer = join(home, "hold-computer");
+    const helperReady = join(home, "helper.ready");
+    const computerReady = join(home, "computer.ready");
+    const helperDump = join(home, "helper.json");
+    const helper = await createIn(home, "helper", { FAKE_AGY_HOLD_FILE: holdHelper, FAKE_AGY_READY_FILE: helperReady, FAKE_AGY_MCP_DUMP: helperDump });
+    const computer = await createIn(home, "computer", { FAKE_AGY_HOLD_FILE: holdComputer, FAKE_AGY_READY_FILE: computerReady });
+    const computerRecorder = recordEvents(computer.adapter);
+    try {
+      const notes = helper.generateText!("notes").catch((error: unknown) => error);
+      await expect.poll(() => existsSync(helperReady)).toBe(true);
+      await computer.adapter.sendTurn({ threadId: "t-mcp-yield", text: "click", integrations: boxIntegrations });
+      await expect.poll(() => existsSync(computerReady), { timeout: 1_000 }).toBe(true);
+      expect(readConfig(home).mcpServers[ANTIGRAVITY_COMPUTER_MCP_KEY]).toEqual(boxEntry());
+
+      writeFileSync(holdHelper, "");
+      expect(await notes).toBe("done from fake agy");
+      const seen = readFileSync(helperDump, "utf8");
+      expect(JSON.parse(seen)).toEqual({ mcpServers: {} });
+      expect(seen).not.toContain("box-tok");
+
+      writeFileSync(holdComputer, "");
+      await computerRecorder.until((event) => event.type === "turn.completed");
+      expect(computerRecorder.events.at(-1)).toMatchObject({ ok: true });
+    } finally {
+      writeFileSync(holdHelper, "");
+      writeFileSync(holdComputer, "");
+      computerRecorder.stop();
+      await helper.dispose();
+      await computer.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a note helper's quota failure from the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-notelimit-"));
+    const helper = await createIn(home, "limited", { FAKE_AGY_RESULT_ERROR: "RESOURCE_EXHAUSTED (code 429): Quota exceeded for quota metric Generate requests." });
+    try {
+      await expect(helper.generateText!("notes")).rejects.toThrow("Account text rate limit");
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("holds a note helper after a sign-in rejection in the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-signedout-"));
+    const helper = await createIn(home, "signed-out", { FAKE_AGY_RESULT_ERROR: "UNAUTHENTICATED (code 401): Sign in again." });
+    const usage = { limits: new Map(), save: () => {}, signedOut: new Set<string>() };
+    try {
+      await expect(noteGenerator([], undefined, helper, usage)!("notes", new AbortController().signal)).rejects.toThrow("UNAUTHENTICATED (code 401)");
+      expect(noteGenerator([], undefined, helper, usage)).toBeNull();
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("writes notes on the bot's chat model only when the account is denied the text model", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-denied-"));
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const models = () => spawn.mock.calls.flatMap(([, args]) => args.includes("--model") ? [args[args.indexOf("--model") + 1]] : []);
+    const allowed = await createIn(home, "allowed");
+    const denied = await createIn(home, "denied", { FAKE_AGY_DENIED_MODEL: "gemini-3.8-flash-low" });
+    try {
+      await expect(summaryInstance(allowed, "gemini-4-carbon-low").generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low"]);
+      spawn.mockClear();
+      const own = summaryInstance(denied, "gemini-4-carbon-low");
+      for (let i = 0; i < 2; i++) await expect(own.generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low", "gemini-4-carbon-low", "gemini-4-carbon-low"]);
+    } finally {
+      await allowed.dispose();
+      await denied.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("reaps a child that hangs after result, restores the mount, and unblocks the next turn", async () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
@@ -1984,11 +2160,11 @@ describe("Antigravity Windows long-prompt transport", () => {
 
   it("maps ENAMETOOLONG spawn failures to a clear recoverable message", () => {
     const err = Object.assign(new Error("spawn agy ENAMETOOLONG"), { code: "ENAMETOOLONG" });
-    expect(describeSpawnFailure(err, "agy")).toEqual({
+    expect(procs.describeSpawnFailure(err, "agy")).toEqual({
       message: "spawn failed: command line too long for this OS (`agy`)",
       setup: false,
     });
     const e2big = Object.assign(new Error("spawn agy E2BIG"), { code: "E2BIG" });
-    expect(describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
+    expect(procs.describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
   });
 });

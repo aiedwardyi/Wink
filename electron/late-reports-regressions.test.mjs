@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
+import { testHome } from "../server/testing/test-home.ts";
 import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { createServerRevival } from "./server-revival.mjs";
@@ -27,7 +28,7 @@ afterEach(async () => {
 });
 
 async function fixture(handler = (_req, res) => res.end("{}")) {
-  const profile = await fs.mkdtemp(path.join(os.homedir(), "late-review-"));
+  const profile = await fs.mkdtemp(path.join(testHome(), "late-review-"));
   const dir = path.join(profile, "mailbox-outbox");
   await fs.mkdir(dir);
   const server = createServer(handler);

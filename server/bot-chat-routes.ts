@@ -5,9 +5,9 @@ import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
-import { serverSendClock } from "./send-clock.ts";
+import { serverClockCap, serverSendClock } from "./send-clock.ts";
 import { closedAskNotes, settledAsk } from "./ask-user.ts";
-import { coldLoading, sentRow } from "./cold-thread.ts";
+import { coldLoad, coldLoading, coldNewestStamp, sentRow } from "./cold-thread.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { PrepareFocus, ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -383,13 +383,18 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
       const call = parseCallTag(body.call);
       const cardId = typeof body.cardId === "string" ? body.cardId : undefined;
-      // the card must be on the active branch: a chat Map is loading lands first rather than be read here
-      const loading = cardId === undefined ? undefined : coldLoading(threadId);
+      const acted = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? body.actedAt : undefined;
+      // the clock is read as the send arrives: waiting for the chat below must not raise the cap a stamp ahead of it is held to
+      const cap = acted === undefined ? undefined : serverClockCap();
+      // the card and a keyed send's clock read the chat: an unloaded one loads off the server thread rather than be read here
+      const loading = (cardId === undefined && (acted === undefined || !sendId)) || store.loaded(threadId) ? undefined : coldLoad(store, threadId);
       if (loading) await loading;
+      // an unkeyed send reads only the chat's newest stamp there, so it lands before the load as a direct write did
+      const newest = acted === undefined || loading ? undefined : await coldNewestStamp(store, threadId);
       const asked = cardId === undefined ? undefined : store.activePath(threadId).find((message) => message.id === cardId);
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       // capped by the client's own rule, so a row stamped ahead of this clock cannot reorder the line on reload
-      const sentAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, serverSendClock(store.messagesFor(threadId))) : undefined;
+      const sentAt = acted === undefined ? undefined : Math.min(acted, newest === undefined ? serverSendClock(store.messagesFor(threadId), cap) : Math.max(cap!, newest + 1));
       // Send now on a held send: the user acted when they queued it
       const queuedSend = queueId && sendId ? queuedSteeredMessage(bot.id, threadId, sendId) : null;
       const actedAt = queuedSend?.actedAt ?? sentAt;

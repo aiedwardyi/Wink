@@ -187,6 +187,22 @@ export function threadTailOn(handle: DatabaseSync, threadId: string, count: numb
   return { messages: rows.reverse().map(rowToMessage), options: options.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
 }
 
+/** A stored row's rowid, or undefined when the row is not stored here. */
+export function rowCursor(threadId: string, id: string): number | undefined {
+  // SAFETY: This projection selects SQLite's rowid.
+  const row = db().prepare("SELECT rowid AS cursor FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { cursor: number } | undefined;
+  return row?.cursor;
+}
+
+/** The `count` stored rows before a rowid, oldest first; cold-thread-worker.ts runs it on its own handle. */
+export function threadPageBeforeOn(handle: DatabaseSync, threadId: string, before: number, count: number): ThreadRows & { options: Message[] } {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = handle
+    .prepare("SELECT json FROM messages WHERE thread_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?")
+    .all(threadId, before, count) as Array<{ json: string }>;
+  return { messages: rows.reverse().map(rowToMessage), options: [], activeLeafId: null };
+}
+
 function importLegacy(threadId: string, legacyFile: string): ThreadRows {
   let messages: Message[] = [];
   let activeLeafId: string | null = null;
@@ -470,6 +486,15 @@ export function sendIdsOn(handle: DatabaseSync, threadId: string): SendIdRows {
     "SELECT id, json_extract(json, '$.sendId') AS sendId FROM messages WHERE thread_id = ? AND rowid <= ? AND role = 'user' AND json_extract(json, '$.sendId') IS NOT NULL ORDER BY rowid",
   ).all(threadId, cursor) as SendIdRows["rows"];
   return { cursor, rows };
+}
+
+/** The newest stamp a send is clocked past, by sendClock's rule over every stored row: a row's time, or the later acted time of a row that did not wait. */
+export function newestStampOn(handle: DatabaseSync, threadId: string): number {
+  // SAFETY: Two aggregates always yield one row; each is null for an empty thread.
+  const row = handle.prepare(
+    "SELECT MAX(at) AS at, MAX(CASE WHEN json_type(json, '$.actedAt') IN ('integer', 'real') AND COALESCE(json_type(json, '$.waited'), 'null') IN ('null', 'false') THEN json_extract(json, '$.actedAt') END) AS acted FROM messages WHERE thread_id = ?",
+  ).get(threadId) as { at: number | null; acted: number | null } | undefined;
+  return Math.max(0, row?.at ?? 0, row?.acted ?? 0);
 }
 
 /** Newest message time without loading the transcript. */

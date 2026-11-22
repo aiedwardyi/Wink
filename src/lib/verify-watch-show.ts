@@ -218,6 +218,9 @@ export class VerifyWatchShow {
   head: VerifyReplayHead | null = null;
   end: VerifyReplayEnd | null = null;
   fixed = false;
+  /** a banner follows this run's end in its chain */
+  private last = true;
+  private prior: { head: VerifyReplayHead | null; end: VerifyReplayEnd | null } = { head: null, end: null };
   pinned: VerifyTile | null = null;
   parts = new Set<Part>();
   checks = 0;
@@ -228,6 +231,8 @@ export class VerifyWatchShow {
   scroll: Record<VerifyTile, number> = { desktop: 0, phone: 0 };
   frames: Record<VerifyTile, Stored | null> = { desktop: null, phone: null };
   reel: VerifyIssue[] = [];
+  /** every reel planned so far, across a chain's runs */
+  reels: VerifyIssue[] = [];
   /** set when the panel should close */
   closeAt = Infinity;
   /** run ms of the latest chunk let out */
@@ -256,7 +261,9 @@ export class VerifyWatchShow {
   }
 
   /** Starts the next run of a replay chain, or a fresh live stream after the gate reopens. */
-  beginRun() {
+  beginRun(last = true) {
+    this.prior = { head: this.head, end: this.end };
+    this.last = last;
     Object.assign(this, { head: null, end: null, checks: 0, ms: 0, outlines: [], ring: null, reel: [], liveMs: 0, held: [], planned: false, lanes: {} });
     this.parts = new Set();
     this.byChecker = new Map();
@@ -280,9 +287,16 @@ export class VerifyWatchShow {
     return (this.planned || this.end) && !this.history.phone.length ? ["desktop"] : ["desktop", "phone"];
   }
 
-  /** A replay still playing, which is when the chat card shows its lanes. */
+  /** A replay still playing, which is when the chat card shows its lanes; a chain's "after" plays on into its banner. */
   get showing() {
-    return !this.live && !["after", "done", "unavailable", "failed"].includes(this.phase);
+    return !this.live && (this.phase === "after" ? !this.last || this.mended : !["done", "unavailable", "failed"].includes(this.phase));
+  }
+
+  /** A clean recheck of the page the run before found problems on. */
+  get mended(): boolean {
+    const { head, end } = this.prior;
+    return Boolean(head?.site && head.page && head.site === this.head?.site && head.page === this.head.page
+      && end?.status === "completed" && end.issues.length && this.end?.status === "completed" && !this.end.issues.length);
   }
 
   pin(tile: VerifyTile) {
@@ -336,6 +350,7 @@ export class VerifyWatchShow {
     }
     this.held = [];
     this.planned = true;
+    if (end?.kind === "end") this.reels.push(...verifyReel(end.end.issues));
     const lists = (["desktop", "phone"] as const).map(tile => ({ tile, things: shownThings(thingsOf(rows.filter(row => tileOf(row.tile) === tile))) }));
     const count = Math.max(...lists.map(list => list.things.length));
     const total = count ? Math.min(SHOW_MAX_MS, Math.max(SHOW_MIN_MS, count * THING_MS)) : 0, start = this.clock;

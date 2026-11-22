@@ -12,7 +12,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
+import { StoreProvider, useStore, type Bot, type Group, type Message } from "@/state/store";
 import { createBotChatRoutes } from "../../server/bot-chat-routes";
 import { Store as ServerStore } from "../../server/store";
 
@@ -58,6 +58,12 @@ const bot = (messages: Message[]): Bot => ({
   modelSelection: { instanceId: "claude", model: "claude" },
 });
 
+let focused: ReturnType<typeof useStore>["state"]["focusMessage"] = null;
+function Probe() {
+  focused = useStore().state.focusMessage;
+  return null;
+}
+
 let root: ReturnType<typeof createRoot> | null = null;
 let host: HTMLElement | null = null;
 const calls: Array<{ method: string; path: string; body: unknown }> = [];
@@ -71,6 +77,7 @@ afterEach(async () => {
   host?.remove();
   root = null;
   host = null;
+  focused = null;
   calls.length = 0;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -91,7 +98,7 @@ async function mount(props: Parameters<typeof Composer>[0]) {
   vi.spyOn(console, "error").mockImplementation(() => {});
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, props))));
+  await act(async () => root!.render(createElement(StoreProvider, null, createElement(Probe), createElement(Composer, props))));
   await act(async () => FakeEventSource.current!.onmessage?.({
     data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }),
     lastEventId: "",
@@ -584,5 +591,62 @@ describe("one tray over the message box", () => {
     const together = tray?.querySelector('[data-attachment-tray="row"]');
     expect(together?.textContent).toContain("Replying to Ada");
     expect(together?.querySelectorAll('[aria-label="Remove image"]')).toHaveLength(2);
+  });
+});
+
+describe("jumping from the question card", () => {
+  const reply = (id: string, from?: Message["from"]): Message => ({ id, role: "bot", kind: "text", at: 1, text: "Here is why I am asking.", from });
+  const tool = (id: string): Message => ({ id, role: "bot", kind: "activity", at: 1, tool: { name: "Read", ok: true } });
+  const tap = () => act(async () => host!.querySelector<HTMLElement>("[data-question-body]")!.click());
+
+  it("lands on the bot's own text from the turn that raised the pinned question", async () => {
+    const stamped = ask({ replyId: "reply-1" });
+    await mount({ bot: bot([reply("reply-1"), tool("t1"), stamped]) });
+    await tap();
+    expect(focused).toMatchObject({ threadId: "asker-thread", messageId: "reply-1", consumed: false });
+  });
+
+  it("lands on the asking member's text in a room, not another member's", async () => {
+    const ada = bot([]);
+    const max = { ...bot([]), id: "max", name: "Max" };
+    const from = (member: Bot) => ({ botId: member.id, name: member.name, color: member.color });
+    const group: Group = {
+      id: "room", threadId: "room-thread", name: "War room", memberIds: [ada.id, max.id], bulletin: "",
+      defaultResponder: { kind: "everyone" }, unread: false, createdAt: 1,
+      messages: [reply("ada-text", from(ada)), reply("max-text", from(max)), { ...ask({ replyId: "ada-text" }), from: from(ada) }],
+    };
+    await mount({ group, members: [ada, max] });
+    await tap();
+    expect(focused).toMatchObject({ threadId: "room-thread", messageId: "ada-text" });
+  });
+
+  it("does nothing for a question whose turn wrote no text, even with an earlier turn's text above it", async () => {
+    await mount({ bot: bot([reply("earlier"), tool("t1"), question]) });
+    expect(host!.querySelector("[data-question-body]")!.className).not.toContain("cursor-pointer");
+    await tap();
+    expect(focused).toBeNull();
+  });
+
+  it("jumps to an older open question's own record, reached with the arrows", async () => {
+    const older = ask({ staysOpen: true, subtitle: "Older question?" });
+    const newest = ask({ staysOpen: true, subtitle: "Newest question?" });
+    await mount({ bot: bot([reply("reply-1"), older, newest]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    await expand();
+    await tap();
+    expect(card()?.textContent).toContain("Older question?");
+    expect(focused).toMatchObject({ messageId: older.id });
+  });
+
+  it("leaves the arrows and the choices to flip and answer, not jump", async () => {
+    const older = ask({ staysOpen: true, subtitle: "Older question?" });
+    const newest = ask({ staysOpen: true, subtitle: "Newest question?" });
+    await mount({ bot: bot([reply("reply-1"), older, newest]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    await act(async () => rowButton("Prod").click());
+    expect(focused).toBeNull();
+    expect(row()!.textContent).toContain("1/2");
   });
 });

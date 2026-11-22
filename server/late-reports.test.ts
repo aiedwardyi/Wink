@@ -2,9 +2,9 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 import { z } from "zod";
 
 import { installOrbitMsg, orbitBinFiles } from "../electron/terminal-mailbox.mjs";
@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 async function fixture(auto: (scope: { pane: string; bot: string; teacher: string }, text: string, identity?: MailboxIdentity) => Promise<boolean> = async () => false) {
-  const root = mkdtempSync(join(homedir(), "late-reports-"));
+  const root = mkdtempSync(join(testHome(), "late-reports-"));
   const profile = join(root, "프로필");
   mkdirSync(profile);
   const bin = (await installOrbitMsg(join(root, ".orbit", "bin"), "win32", profile))!;

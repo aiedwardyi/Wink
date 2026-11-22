@@ -147,7 +147,8 @@ The exact shape of its final message, plus one line: what it reused.
   engines the user is signed in to. Spread jobs across engines so no single plan
   runs out. Tell the user each pick with a one-sentence reason.
   - Hardest work (architecture, hard bugs, high stakes): Opus 5.5, GPT-6.2 Sol.
-  - Code and security audits: Gemini 4 Carbon and Gemini 4 Argon, GPT-6.2 Astra; Fable 5.2 at xhigh, code audits only.
+  - Code and security audits: Gemini 4 Carbon, GPT-6.2 Astra; Gemini 4 Neon: second reviewer; Fable 5.2 at xhigh, code audits only.
+  - Design and UI: Opus 5.5; Gemini 4 Neon: second opinion.
   - Routine builds: Sonnet 5.5, GPT-6.1 Terra, Muse 1.3.
   - Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.
   - Cheapest mechanical edits: Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash.

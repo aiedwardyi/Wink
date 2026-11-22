@@ -84,6 +84,8 @@
 //                      messages, written after init in place of the reply
 //   FAKE_CLAUDE_AUTH   in (default) | out | unsupported | malformed |
 //                      inherited-api-key — what `auth status` reports
+//   FAKE_CLAUDE_AUTH_FILE  path; while it exists, its JSON is what `auth status`
+//                      prints, read per call so a test can switch accounts live
 //   FAKE_CLAUDE_PROMPT_LOG  path; every stdin message is appended as a JSON
 //                      line {pid, argv, systemPrompt, text}, so a test sees
 //                      what each turn of a retained process was sent
@@ -138,7 +140,10 @@ if (argv[0] === "--version") {
   process.exit(0);
 }
 
-if (argv[0] === "auth" && argv[1] === "status") {
+const authFile = process.env.FAKE_CLAUDE_AUTH_FILE;
+if (argv[0] === "auth" && argv[1] === "status" && authFile && existsSync(authFile)) {
+  process.stdout.write(readFileSync(authFile, "utf8"), () => process.exit(0));
+} else if (argv[0] === "auth" && argv[1] === "status") {
   const auth = process.env.FAKE_CLAUDE_AUTH ?? "in";
   if (auth === "unsupported") {
     process.stderr.write("error: unknown command 'auth'\n");

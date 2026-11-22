@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +11,7 @@ import { configureRoomDoor, handleRoomDoor, removeRoomPerson, removeRoomTeamBot 
 import { closeInvitesDb, createInvite } from "./invites.ts";
 import { createPeopleOnlyRoom, peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const HOST = "abcdefghijklmnop.wink.test";
 
@@ -93,7 +93,7 @@ beforeEach(() => {
   closeInvitesDb();
   closeAsksDb();
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   wink = store.patchBot(store.createBot().id, { name: "Wink", color: "purple" })!.id;
   group = store.createGroup("Team", [wink], false, undefined, undefined, { roomId: createRoom("Team").id }) as HostedGroup;

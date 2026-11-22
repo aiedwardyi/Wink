@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { z } from "zod";
 
-import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, REPLY_REF, ROOM_REF, type Board, type BoardPost } from "./board.ts";
+import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, removable, REPLY_REF, ROOM_REF, type Board, type BoardPost } from "./board.ts";
 import { json, readBody } from "./http-helpers.ts";
 
 export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply", remove: "/api/board/delete" } as const;
@@ -68,7 +68,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         deps.board.bump(known.id, from.botId);
         return json(res, 200, { id: known.id, text: `The Board already had this fix as ${known.id}; it moved up instead of posting twice.` });
       }
-      const event = createHash("sha256").update(JSON.stringify([kind, title, text, parent_id ?? ""])).digest("hex").slice(0, 16);
+      const event = (n: number) => createHash("sha256").update(JSON.stringify([kind, title, text, parent_id ?? "", ...(n ? [n] : [])])).digest("hex").slice(0, 16);
       const post = deps.board.post({
         author_bot_id: from.botId,
         kind,
@@ -78,7 +78,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         project_id: project,
         error_sig: parent?.error_sig ?? sig,
         fix: kind === "fix" ? text : undefined,
-        source_ref: `${room ? ROOM_REF : "tool:"}${from.threadId}:${event}`,
+        source_ref: deps.board.next((n) => `${room ? ROOM_REF : "tool:"}${from.threadId}:${event(n)}`),
       });
       if (helped && parent && parent.author_bot_id !== from.botId) deps.board.helped([parent.id], from.botId);
       return json(res, 200, { id: post.id, text: `Posted to the Board as ${post.id}.` });
@@ -103,13 +103,13 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       });
       return json(res, 200, { post });
     },
-    /** The user deletes only what they typed in the Forum's reply box. */
+    /** The user deletes a top-level post with its whole thread, or only what they typed in the Forum's reply box; a bot has no route here. */
     async remove(req: IncomingMessage, res: ServerResponse) {
       const body = removeSchema.safeParse(await readBody(req));
       if (!body.success) return json(res, 400, { error: "a delete needs id" });
       const post = deps.board.get(body.data.id);
       if (!post) return json(res, 404, { error: `no Board post ${body.data.id}` });
-      if (!ownReply(post)) return json(res, 403, { error: "only your own replies can be deleted" });
+      if (!removable(post) && !ownReply(post)) return json(res, 403, { error: "only a top-level post or your own reply can be deleted" });
       deps.board.remove(post.id);
       return json(res, 200, { id: post.id });
     },

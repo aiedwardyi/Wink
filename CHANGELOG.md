@@ -2,6 +2,26 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.293] - 2026-11-22
+
+### Added
+- After a memory import, your bot tells you what it learned in a few short points.
+
+### Changed
+- Bots suggest Gemini 4 Neon as a second reviewer for audits and for design and UI work.
+- Model Index scores and costs are up to date as of November 21.
+
+### Fixed
+- Show earlier messages loads fast on long chats.
+- Play on a Live Verify replay brings it into view, and on a phone the replay keeps one height while it plays.
+- The sign-in page no longer flashes the code boxes before your PC opens.
+
+## [1.0.292] - 2026-11-21
+
+### Fixed
+- Chat lines stay where you sent them, live and after a reload, with no "Sends next" you did not ask for.
+- A worker report that gets cut off ends with a link to the full file.
+
 ## [1.0.291] - 2026-11-20
 
 ### Fixed

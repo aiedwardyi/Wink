@@ -237,7 +237,7 @@ export function ConnectDevices() {
           {deviceWindow && <Step n={2} done={false} active={ready && setup.pcOnline} title={t("settings.devices.openPcEmpty")} label={t("settings.devices.openButton")}>
             {pcs.map((pc) => <button key={pc.host} type="button" onClick={() => {
               setPcFailed(false);
-              void deviceWindow.open(pc.host, pc.name).then((opened) => {
+              void deviceWindow.open(pc.host, pc.name, pc.relayHost).then((opened) => {
                 if (!live.current || opened) return;
                 setPcFailed(true);
                 setRefresh((value) => value + 1);

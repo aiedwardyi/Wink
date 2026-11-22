@@ -15,10 +15,12 @@ import { CommsCallers } from "./comms-caller.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
 import { createForumLessons } from "./forum-lessons.ts";
+import { closeMessageDb } from "./message-db.ts";
 import { hasLocalUndeliveredPaneNote, isWakeNote } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { createVerifySite, type VerifyBridge } from "./verify-site.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const flags = vi.hoisted(() => ({ on: true, limits: {} as Record<string, number>, original: {} as Record<string, number> }));
 vi.mock("../shared/live-verify.ts", async (importOriginal) => {
@@ -105,7 +107,8 @@ function decide(runId: string, action: string, nonce: string, headers: Record<st
 }
 
 beforeEach(async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  closeMessageDb();
+  removeTestData(DATA_DIR);
   mkdirSync(scratch, { recursive: true });
   tmp = mkdtempSync(join(scratch, "site-"));
   work = join(tmp, "work");
@@ -286,6 +289,7 @@ afterEach(async () => {
   turnRegistry.settle("turn-2");
   server.closeAllConnections();
   await new Promise((r) => server.close(r));
+  closeMessageDb();
   Object.assign(flags.limits, flags.original);
   rmSync(tmp, { recursive: true, force: true });
 });

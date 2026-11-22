@@ -14,6 +14,7 @@ import { applyCredentialAllowlist } from "../config.ts";
 import { findCliCandidates, refreshPathCache, splitCliString } from "../env-path.ts";
 import { clearVersionCache, cliRevision } from "../procs.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
+import { MISSING_HOME, missingAccountHome } from "../accounts.ts";
 import { EngineLogin } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
 import { warmPool as sharedWarmPool, type WarmPool } from "../drivers/warm-pool.ts";
@@ -180,7 +181,8 @@ export class ProviderRegistry {
           enabled: entry.enabled ?? true,
           config,
           ...(entry.account ? { account: entry.account } : {}),
-          ...(entry.account && options?.deferAccountAuth ? { deferAccountAuth: true } : {}),
+          // A provider reload defers like a cold load where the check would start the CLI in a missing home; Sign In creates it.
+          ...(entry.account && (options?.deferAccountAuth || missingAccountHome(entry.account)) ? { deferAccountAuth: true } : {}),
         });
         return { entry: { instanceId, live }, rawCli, incarnation } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       } catch (e) {
@@ -323,9 +325,10 @@ export class ProviderRegistry {
     const entry = this.byId.get(id);
     if (entry?.live?.account) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
   }
-  accountAvailable(id: string) {
+  accountAvailable(id: string, confirmed = false) {
     const snapshot = this.probed.get(id)?.snapshot;
-    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
+    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" &&
+      (confirmed ? snapshot?.authenticated === true : snapshot?.authenticated !== false);
   }
   accountBusy(id: string) { return this.probing.has(id) || this.modelRefreshInFlight.has(id) || this.helperWork.has(id) || this.logins.state(id) === "pending" || this.get(id)?.accountBusy?.() === true; }
   invalidateAccount(id: string) { this.holdIdentity(id, "account"); this.get(id)?.invalidateAccount?.(); this.forget(id); }
@@ -379,14 +382,16 @@ export class ProviderRegistry {
     } : null;
   }
 
-  async startSignIn(instanceId: InstanceId, device = false) {
+  async startSignIn(instanceId: InstanceId, device = false, owner?: string) {
     const config = this.loginConfig(instanceId);
     if (!config || this.signingOut.has(instanceId)) return null;
     this.holdIdentity(instanceId, "sign-in");
     const login = config.install?.login;
     const args = device ? login?.deviceArgs : login?.args;
     if (!args) return null;
-    const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true });
+    const env = device ? { ...config.env, ...login?.deviceEnv } : config.env;
+    const paste = device || Boolean(config.account && config.engine === "claudeAgent");
+    const capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
     return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
       ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
     };
@@ -674,6 +679,11 @@ export class ProviderRegistry {
     const inst = entry.live;
     let snapshot: ProviderSnapshot;
     try {
+      const account = this.accounts.get(inst.instanceId);
+      // Launching would fail (Codex) or create the home (Claude, Grok); Sign In creates it.
+      if (account && missingAccountHome(account)) {
+        return { snapshot: { ...MISSING_HOME, authChecked: true }, cliCandidates: candidatesFor(driver), models: this.cacheDir ? structuredClone(inst.models) : undefined };
+      }
       const discovery = this.modelRefreshInFlight.get(inst.instanceId);
       if (discovery) await discovery;
       const lastRefresh = this.modelRefreshAt.get(inst.instanceId) ?? 0;

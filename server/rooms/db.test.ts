@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { DATA_DIR } from "../config.ts";
 import { Store, type GroupRecord } from "../store.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, RoomError, roomPeople, setPersonWorks, type RoomAuthor } from "./db.ts";
 import { writeRoomEntry } from "./mirror.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 // Joined at run time so no scanner mistakes a fixture for a live key.
@@ -33,7 +34,7 @@ let bot: RoomAuthor;
 
 beforeEach(() => {
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   const record = store.patchBot(store.createBot().id, { name: "Wink" })!;
   bot = { kind: "bot", id: record.id, name: record.name };

@@ -91,6 +91,7 @@ import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, 
 import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
+import { importOfferId } from "@/lib/import-links";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
@@ -98,7 +99,7 @@ import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
-import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, isBottomFollowScroll, newestBelowView, restoreTranscriptScroll, scrollToFollowBottom, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
+import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, isBottomFollowScroll, newestBelowView, onStopFollow, restoreTranscriptScroll, scrollToFollowBottom, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -717,6 +718,7 @@ const MessagesList = memo(function MessagesList({
     }
     return answers;
   }, [transcript]);
+  const importOffer = useMemo(() => importOfferId(transcript), [transcript]);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
@@ -886,6 +888,7 @@ const MessagesList = memo(function MessagesList({
                   streaming={streaming}
                   pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)}
                   peerReply={Boolean(replyComm)}
+                  importOffer={m.id === importOffer}
                   dock={dockTarget === item && dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
@@ -1192,6 +1195,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     followRef.current = next;
     setFollow(next);
   }, []);
+  // older rows mounting above a box mid-scroll would leave it short of view
+  const [revealing, setRevealing] = useState(false);
+  useEffect(() => onStopFollow(scrollRef.current, () => { setBottomFollow(false); setRevealing(true); }, () => setRevealing(false)), [setBottomFollow]);
 
   // one message at a time may be in edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1501,7 +1507,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
       if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
     },
   });
-  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && (!phone || !follow), follow, showEarlier);
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && !revealing && (!phone || !follow), follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1527,6 +1533,10 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     const el = scrollRef.current;
     return !el || el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_FOLLOW_THRESHOLD;
   };
+  // every gesture back at the end resumes here, so a revealing box holds follow off until the reader scrolls the chat
+  const resumeFollow = (back: boolean) => {
+    if (back && !revealing && !jump.messages && laterCount === 0) setBottomFollow(true);
+  };
   // a transcript too short to scroll has no scrollback to read, so an upward swipe there keeps follow
   const breakFollow = () => {
     const el = scrollRef.current;
@@ -1545,7 +1555,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     if (deltaY < 0) breakFollow();
     else {
       advanceLater(deltaY > 0);
-      if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+      resumeFollow(atEnd());
     }
   };
   const latestShown = Boolean(jump.messages || laterCount > 0 || (!follow && newestBelow));
@@ -1771,7 +1781,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
-            if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+            resumeFollow(atEnd());
           }
         }}
         onTouchEnd={() => (reaching.current = false)}
@@ -1791,7 +1801,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
           });
           previousScrollTop.current = scrollTop;
-          if (resume && !jump.messages && laterCount === 0) setBottomFollow(true);
+          resumeFollow(resume);
           measure();
         }}
         onClick={(e) => {

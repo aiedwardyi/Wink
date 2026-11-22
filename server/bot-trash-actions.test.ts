@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -11,6 +11,7 @@ import type { ProfileSyncSettings } from "./profile-sync.ts";
 import { RoutineManager } from "./routines.ts";
 import { Store, type BotRecord } from "./store.ts";
 import { ensureWorkspace, workspaceDir } from "./workspace.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const DAY = 86_400_000;
 
@@ -53,7 +54,7 @@ const threads = (bot: BotRecord) => [bot.threadId, ...(bot.tasks ?? []).map((tas
 const rows = (bot: BotRecord) => threads(bot).reduce((n, id) => n + scanThreadRows(id, 0, 1024).messages.length, 0);
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
 });
 
 describe("bot trash actions", () => {

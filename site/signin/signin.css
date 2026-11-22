@@ -81,6 +81,16 @@ h1 {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+button.privacy {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
 .doc .panel {
   max-width: 36rem;
   min-width: 0;
@@ -124,6 +134,9 @@ h1 {
 #google,
 .code {
   margin-top: 24px;
+}
+.code.trying {
+  opacity: 0;
 }
 .boxes {
   display: flex;

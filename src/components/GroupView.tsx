@@ -86,7 +86,7 @@ import { useFindCurrentId } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
-import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
+import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, onStopFollow, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -1156,6 +1156,9 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   }, []);
 
   useEffect(() => setBottomFollow(true), [transcriptKey, setBottomFollow]);
+  // older rows mounting above a box mid-scroll would leave it short of view
+  const [revealing, setRevealing] = useState(false);
+  useEffect(() => onStopFollow(scrollRef.current, () => { setBottomFollow(false); setRevealing(true); }, () => setRevealing(false)), [setBottomFollow]);
 
   // Docks like a 1:1 chat: under the reply while its text is streaming.
   const liveTail = laterCount === 0 && !jump.messages;
@@ -1335,7 +1338,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
       if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
     },
   });
-  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && (!phone || !follow), follow, showEarlier);
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && !revealing && (!phone || !follow), follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1347,6 +1350,10 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   const atEnd = () => {
     const el = scrollRef.current;
     return !el || el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_FOLLOW_THRESHOLD;
+  };
+  // every gesture back at the end resumes here, so a revealing box holds follow off until the reader scrolls the chat
+  const resumeFollow = (back: boolean) => {
+    if (back && !revealing && !jump.messages && laterCount === 0) setBottomFollow(true);
   };
   // a transcript too short to scroll has no scrollback to read, so an upward swipe there keeps follow
   const breakFollow = () => {
@@ -1434,7 +1441,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
           if (e.deltaY < 0) breakFollow();
           else {
             advanceLater(e.deltaY > 0);
-            if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+            resumeFollow(atEnd());
           }
         }}
         onTouchStart={(e) => {
@@ -1447,7 +1454,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
           if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
-            if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+            resumeFollow(atEnd());
           }
         }}
         onTouchEnd={() => (reaching.current = false)}
@@ -1466,7 +1473,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
             distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
           });
           previousScrollTop.current = scrollTop;
-          if (resume && !jump.messages && laterCount === 0) setBottomFollow(true);
+          resumeFollow(resume);
           measure();
         }}
         onClick={(e) => {

@@ -194,11 +194,12 @@ function browserPlatform(overrides: Partial<LiveEventsPlatform>): LiveEventsPlat
 export function openLiveEvents(
   handlers: LiveEventsHandlers,
   platformOverrides: Partial<LiveEventsPlatform> = {},
-): () => void {
+) {
   const platform = browserPlatform(platformOverrides);
   if (!platform) {
     handlers.onError?.();
-    return () => {};
+    const stop = () => {};
+    return Object.assign(stop, { reconnect: stop });
   }
 
   const staleMs = handlers.staleMs ?? LIVE_EVENTS_STALE_MS;
@@ -454,7 +455,7 @@ export function openLiveEvents(
   platform.windowTarget?.addEventListener("pageshow", onPageShow);
   platform.documentTarget?.addEventListener("visibilitychange", onVisibilityChange);
 
-  return () => {
+  const stop = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(staleTimer);
@@ -466,4 +467,5 @@ export function openLiveEvents(
     platform.windowTarget?.removeEventListener("pageshow", onPageShow);
     platform.documentTarget?.removeEventListener("visibilitychange", onVisibilityChange);
   };
+  return Object.assign(stop, { reconnect: () => reconnectNow(false) });
 }

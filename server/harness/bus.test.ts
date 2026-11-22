@@ -1,7 +1,7 @@
 // The bus is the seam every client depends on: events must arrive
 // stamped with their instanceId, cross-driver leaks must be dropped, and
 // neither logging nor a broken listener may take down the stream.
-import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +11,7 @@ import type { RuntimeEvent } from "../contracts.ts";
 import { redactSecrets } from "../redact.ts";
 import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { EventBus } from "./bus.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const testEvent = (over: Partial<RuntimeEvent> = {}): RuntimeEvent =>
   ({
@@ -36,7 +37,7 @@ async function liveInstance() {
 
 describe("EventBus", () => {
   beforeEach(() => {
-    rmSync(EVENTS_DIR, { recursive: true, force: true });
+    removeTestData(EVENTS_DIR);
     ensureDirs();
   });
 
@@ -382,7 +383,7 @@ describe("EventBus", () => {
   });
 
   it("reports an incomplete log once while continuing live delivery", () => {
-    rmSync(EVENTS_DIR, { recursive: true, force: true });
+    removeTestData(EVENTS_DIR);
     const bus = new EventBus();
     const seen: RuntimeEvent[] = [];
     bus.subscribe((e) => seen.push(e));
