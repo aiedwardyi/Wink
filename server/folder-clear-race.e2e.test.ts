@@ -1,13 +1,13 @@
 // A Settings Clear that lands while a send's named folders are checked off the server thread spends that send's folder.
 // folder-check-hook.ts holds the check.
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 import { harnessFetch as fetch, spawnHarness as spawn } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -35,7 +35,7 @@ const waitFor = async (predicate: () => boolean | Promise<boolean>, what: string
 };
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-folder-clear-"));
+  home = createFixtureHome("omb-folder-clear-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   gates = join(home, "gates");
   mkdirSync(gates);
@@ -69,7 +69,7 @@ afterAll(async () => {
     if (!child || child.exitCode !== null) return resolve();
     child.on("close", () => resolve());
   });
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 it("keeps the folder cleared when Settings Clear lands while the send's folders are checked", async () => {
