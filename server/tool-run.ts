@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:p
 import { stripVTControlCharacters } from "node:util";
 
 import type { ToolRun } from "./contracts.ts";
-import { mapGitRefs } from "./map-bot-self.ts";
+import { linkedGitDirs } from "./git-worktree.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { secretCommand } from "./tool-detail.ts";
 
@@ -150,7 +150,7 @@ function projectAt(root: string): string {
   const held = projects.get(root);
   if (held !== undefined) return held;
   const git = join(root, ".git");
-  let path = mapGitRefs(root)?.dir ?? (existsSync(git) ? git : root);
+  let path = linkedGitDirs(root)?.common ?? (existsSync(git) ? git : root);
   try { path = realpathSync.native(path); } catch {}
   const project = process.platform === "win32" ? path.toLowerCase() : path;
   if (projects.size >= 256) projects.delete(projects.keys().next().value!);

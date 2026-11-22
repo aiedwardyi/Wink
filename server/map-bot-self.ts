@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isNetworkPath } from "./bot-cwd.ts";
+import { linkedGitDirs } from "./git-worktree.ts";
 import type { MapPaneRecord } from "./map-pane.ts";
 import type { Message } from "./store.ts";
 
@@ -43,12 +44,9 @@ export function mapBotSelf(messages: readonly Message[], name: string, home: str
 
 /** A linked worktree keeps its refs in the main repo's .git, outside its folder. */
 export function mapGitRefs(root: string): { dir: string; match: (path: string) => boolean } | null {
-  try {
-    const link = /^gitdir:\s*(.+)$/m.exec(readFileSync(join(root, ".git"), "utf8"))?.[1].trim();
-    if (!link) return null;
-    const own = resolve(root, link);
-    const common = resolve(own, readFileSync(join(own, "commondir"), "utf8").trim());
-    const head = relative(common, join(own, "HEAD")).replaceAll("\\", "/");
-    return { dir: common, match: path => path === head || /^(packed-refs|refs\/)/.test(path) };
-  } catch { return null; }
+  const dirs = linkedGitDirs(root);
+  if (!dirs) return null;
+  const { own, common } = dirs;
+  const head = relative(common, join(own, "HEAD")).replaceAll("\\", "/");
+  return { dir: common, match: path => path === head || /^(packed-refs|refs\/)/.test(path) };
 }
