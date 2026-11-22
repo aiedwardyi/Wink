@@ -60,6 +60,7 @@ const size = (cls: string, name: string, variant = "") => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  window.getSelection()?.removeAllRanges();
   if (root) await act(async () => root!.unmount());
   host?.remove();
   root = undefined;
@@ -310,10 +311,42 @@ describe("jumping to the question's message", () => {
     expect(onJump).not.toHaveBeenCalled();
   });
 
+  const key = (target: Element, name: string) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
+
+  it("jumps on Enter or Space from the focused question text, and on no other key", async () => {
+    await render("jump-keys", undefined, onJump);
+    await key(body(), "Enter");
+    await key(body(), " ");
+    expect(onJump).toHaveBeenCalledTimes(2);
+    await key(body(), "a");
+    await key(body(), "ArrowDown");
+    expect(onJump).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves Space to scroll a long question, and leaves keys from the choices alone", async () => {
+    await render("jump-keys-long", undefined, onJump);
+    Object.defineProperty(body(), "scrollHeight", { configurable: true, value: 400 });
+    Object.defineProperty(body(), "clientHeight", { configurable: true, value: 100 });
+    const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    await act(async () => { body().dispatchEvent(space); });
+    expect(onJump).not.toHaveBeenCalled();
+    expect(space.defaultPrevented).toBe(false);
+    await key(host.querySelector("[data-term-choices] button")!, "Enter");
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  it("does not jump by key while the person is selecting the question text", async () => {
+    await render("jump-keys-select", undefined, onJump);
+    window.getSelection()!.selectAllChildren(body());
+    await key(body(), "Enter");
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
   it("is plain text when there is no message to jump to", async () => {
     await render("jump-none");
     expect(body().className).not.toContain("cursor-pointer");
     await press(body(), 1);
+    await key(body(), "Enter");
     expect(onJump).not.toHaveBeenCalled();
   });
 });
