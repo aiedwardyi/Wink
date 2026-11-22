@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -9,6 +9,7 @@ import { aboutYouPrompt, aboutYouRoutes, aboutYouSources, addToAboutYou, factsOf
 import { DATA_DIR } from "./config.ts";
 import { buildBrief } from "./live-call.ts";
 import { Store } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const file = join(DATA_DIR, "about-you", "MEMORY.md");
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -27,7 +28,7 @@ const paste = [
   "Source: ChatGPT",
 ].join("\n");
 
-beforeEach(() => rmSync(join(DATA_DIR, "about-you"), { recursive: true, force: true }));
+beforeEach(() => removeTestData(join(DATA_DIR, "about-you")));
 afterEach(() => vi.restoreAllMocks());
 
 describe("About You save", () => {

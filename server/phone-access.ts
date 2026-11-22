@@ -592,6 +592,7 @@ export class PhoneAccess {
 
   /** GET sends the phone to the sign-in page with a fresh challenge; HEAD only says whether it would. */
   private googleStart(req: IncomingMessage, res: ServerResponse, host: string): void {
+    if (this.status().state !== "connected") return send(res, 503, { error: "phone access is unavailable" });
     const label = this.googleLabel(host);
     if (!this.google || !label) return send(res, 409, { error: "google-unavailable" });
     if (req.method === "HEAD") {

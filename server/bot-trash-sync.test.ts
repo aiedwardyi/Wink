@@ -13,6 +13,7 @@ import {
 } from "./profile-sync.ts";
 import { RoutineManager } from "./routines.ts";
 import { Store } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const OLD_ENDINGS = /\.(?:json|notes|paths|pin|style)$/;
 let folder: string;
@@ -48,7 +49,7 @@ function plan(input: Partial<Parameters<typeof planProfileImport>[0]> & Pick<Par
 }
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   folder = mkdtempSync(join(tmpdir(), "omb-trash-sync-"));
   clock = 1_800_000_000_000;
   sequence = 0;

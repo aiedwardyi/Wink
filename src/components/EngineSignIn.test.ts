@@ -9,6 +9,7 @@ import { EngineSignIn } from "./EngineSetup";
 import { EngineRow as EngineRowView } from "./EnginesSettings";
 import { ProviderRegistry } from "../../server/harness/registry.ts";
 import { makeFakeDriver } from "../../server/testing/fake-driver.ts";
+import { BUILT_IN_DRIVERS } from "../../server/drivers/builtIn.ts";
 
 function EngineRow(props: ComponentProps<typeof EngineRowView>) {
   return createElement(StoreProvider, null, createElement(EngineRowView, props));
@@ -250,11 +251,28 @@ describe("engine sign-in row", () => {
     expect(host.textContent).toContain("Enter this code in your browser");
   });
 
-  it.each(["claudeAgent", "antigravityAgent"])("keeps %s on the computer without relaying a code", async (kind) => {
+  it.each(["claudeAgent", "antigravityAgent"])("signs %s in from a phone with its link and a pasted code", async (kind) => {
     vi.mocked(window.matchMedia).mockReturnValue({ matches: true } as MediaQueryList);
-    await render(createElement(EngineSignIn, { instance: instance(kind, { install: { login: { args: ["login"] } }, loginState: "pending", loginCapture: capture }) }));
-    expect(host.textContent).toBe("Sign in on computer");
-    expect(host.querySelector("button, a, code")).toBeNull();
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ url: "https://auth.example/sign-in", inputGeneration: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { install } = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === kind)!;
+    await render(createElement(EngineSignIn, { instance: instance(kind, { install }) }));
+    expect(host.querySelector("[data-computer-only]")).toBeNull();
+    await click("Sign In");
+    expect(fetchMock.mock.calls[0]).toEqual([`/api/instances/${kind}/sign-in`, expect.objectContaining({ method: "POST", body: '{"device":true}' })]);
+    expect(host.querySelector("a")?.textContent).toBe("Open Link");
+    expect(host.querySelector("a")?.href).toBe("https://auth.example/sign-in");
+    const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(async () => {
+      input.value = "returned-code#state";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    fetchMock.mockImplementation(async () => json({}));
+    await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(fetchMock).toHaveBeenLastCalledWith(`/api/accounts/${kind}/sign-in/code`, expect.objectContaining({
+      method: "POST", body: JSON.stringify({ code: "returned-code#state", generation: 3 }),
+    }));
+    expect(host.textContent).not.toContain("returned-code#state");
   });
 
   it("signs agy in from the server without opening a terminal and polls until connected", async () => {

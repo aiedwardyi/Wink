@@ -187,6 +187,8 @@ export interface Message {
   summarized?: boolean;
   /** Hidden: a later text of its turn says the same, so replay skips it. */
   restated?: true;
+  /** The reply of a new bot's offer turn that carries the Import Memory prompt; the provider buttons show only here. */
+  importOffer?: true;
   /** Bot replies: the engine driver kind that wrote it; older rows have none. */
   engine?: string;
   call?: import("../shared/live-call.ts").CallTag;

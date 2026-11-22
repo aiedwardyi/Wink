@@ -7,10 +7,10 @@ import { createTempDirs } from "./cleanup.ts";
 
 const files = [
   "server/memory-pass.test.ts", "server/memory-pass.guard.test.ts", "server/remote-access.test.ts",
-  "server/team-report-fixes.test.ts", "server/team-reports.test.ts", "server/device-sync.test.ts",
+  "server/team-report-fixes.test.ts", "server/device-sync.test.ts",
   "server/thread-sync-v2-gate.test.ts", "server/early-listen.test.ts", "server/compression.test.ts",
   "server/drivers/acp/acp.test.ts", "server/drivers/msp/runtime.test.ts", "server/drivers/acp/muse.test.ts",
-  "server/automatic-selection-route.test.ts", "relay/test/scripts.test.ts",
+  "relay/test/scripts.test.ts",
 ];
 
 describe("test temp ownership", () => {
@@ -60,6 +60,11 @@ describe("test temp ownership", () => {
     const text = readFileSync(resolve(process.env.DISK_AUTO_SOURCE_ROOT || ".", file), "utf8");
     expect(text).toContain("createTempDirs");
     expect(text).toContain("afterAll(() => temps.remove())");
-    expect(text).toContain("temps.make(join(tmpdir(),");
+    expect(text).toMatch(/temps\.make\(join\(tmpdir\(\),/);
+  });
+
+  it.each(["server/team-reports.test.ts", "server/automatic-selection-route.test.ts"])("registers owned profile fixtures in %s", (file) => {
+    const text = readFileSync(resolve(process.env.DISK_AUTO_SOURCE_ROOT || ".", file), "utf8");
+    expect(text).toContain("createFixtureHome(");
   });
 });

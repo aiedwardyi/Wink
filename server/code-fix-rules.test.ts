@@ -4,15 +4,15 @@
 // the repeat-mistakes rule, the decision-notes rule, the Forum rule and the model picks. Boots
 // the real server on each engine's fake CLI and reads what the CLI received.
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const fake = (name: string) => join(SERVER_DIR, "testing", name);
@@ -71,7 +71,7 @@ describe("code-fix rules on every engine", () => {
     return existsSync(dir) ? readdirSync(dir).map((file) => readFileSync(join(dir, file), "utf8")).join("\n") : "";
   };
   const sendAndRead = async (engine: Engine, path: string, text: string) => {
-    rmSync(dumpDir(engine), { recursive: true, force: true });
+    removeTestData(dumpDir(engine));
     mkdirSync(dumpDir(engine), { recursive: true });
     expect((await api("POST", path, { text })).status).toBe(202);
     const deadline = Date.now() + 20_000;
@@ -94,7 +94,7 @@ describe("code-fix rules on every engine", () => {
   };
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-code-fix-rules-"));
+    home = createFixtureHome("omb-code-fix-rules-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     const instances = Object.fromEntries(ENGINE_NAMES.map((engine) => {
       const spec = ENGINES[engine];
@@ -132,7 +132,7 @@ describe("code-fix rules on every engine", () => {
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    removeTestData(home);
   });
 
   it.each(ENGINE_NAMES)("reach a custom bot on %s in a 1:1 and a room", async (engine) => {
