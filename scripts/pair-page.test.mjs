@@ -56,13 +56,15 @@ describe("pair page", () => {
     const page = open("/pair");
     expect(page.help.hidden).toBe(false);
     expect(page.help.textContent).toContain("6 digit code");
+    expect(page.help.textContent).toContain(`Settings, ${en["settings.section.devices"]}, ${en["settings.devices.codeInstead"]}.`);
     expect(page.form.hidden).toBe(false);
   });
 
   it.each([
-    ["en", en, "Get a new code on your PC: Settings, Connections, Phone access."],
-    ["ko", ko, "PC의 설정 > 연결 > 휴대폰 접속에서 새 코드를 받으세요."],
-  ])("sends a refused phone to Phone access for a new code (%s)", async (locale, catalog, next) => {
+    // Named as Settings names them, so the page cannot point at a place Settings no longer has.
+    ["en", en, `Get a new code on your PC: Settings, ${en["settings.section.devices"]}, ${en["settings.devices.codeInstead"]}.`],
+    ["ko", ko, `PC의 설정 > ${ko["settings.section.devices"]} > ${ko["settings.devices.codeInstead"]}에서 새 코드를 받으세요.`],
+  ])("sends a refused phone to Code instead of Google for a new code (%s)", async (locale, catalog, next) => {
     localStorage.setItem("omb-locale", locale);
     for (const error of ["no-pairing", "too-many-attempts", "something-else"]) {
       const page = open("/pair#k=wkp_token", async () => new Response(JSON.stringify({ error }), { status: 409 }));
