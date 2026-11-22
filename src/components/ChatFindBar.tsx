@@ -83,11 +83,15 @@ export function ChatFindBar({
             pagingRef.current = true;
             setHits(found);
             setMore(false);
-            const rest = await api(searchPath(trimmed, found.at(-1), PAGE - found.length));
+            // the page again from just past the newest hit, which it reads as it stands now: a sync can edit or remove it meanwhile
+            const newest = found[0]!;
+            const rest = await api(searchPath(trimmed, { ...newest, row: newest.row! + 1 }));
             if (request !== requestRef.current) return;
             pagingRef.current = false;
-            found = [...found, ...(Array.isArray(rest?.hits) ? rest.hits : [])];
+            found = Array.isArray(rest?.hits) ? rest.hits : [];
             more = rest?.more === true;
+            // it no longer matches: land on the hit now newest
+            if (found[0]?.messageId !== newest.messageId) freshRef.current = true;
           }
           setHits(found);
           trackFeatureOnce("find.use");

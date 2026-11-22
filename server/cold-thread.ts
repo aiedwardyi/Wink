@@ -152,19 +152,35 @@ export async function findInChat(threadId: string, query: string, limit: number,
   const stop = onMessageChange((thread, id) => {
     if (thread === threadId) changed.add(id);
   });
-  let found: SearchHit[];
+  const live = (found: SearchHit[]) => {
+    const ids = found.filter((hit) => changed.has(hit.messageId)).map((hit) => hit.messageId);
+    const now = new Map(ids.length ? searchMessages(query, ids.length, threadId, { chips: options.chips, skip: options.skip, ids }).map((hit) => [hit.messageId, hit]) : []);
+    return found.flatMap((hit) => (!changed.has(hit.messageId) ? [hit] : now.has(hit.messageId) ? [now.get(hit.messageId)!] : []));
+  };
+  const found: SearchHit[] = [];
+  let hits: SearchHit[] = [];
   try {
-    found = await (scans ??= startReader())({ threadId, find: { query, limit: limit + 1, before: options.before, place: options.place, chips: options.chips, skip: [...options.skip] } });
-  } catch (error) {
-    console.error("chat find read failed; the server thread reads it", threadId, error);
-    found = searchMessages(query, limit + 1, threadId, options);
+    // hits dropped above leave the page short: read on from the last row scanned until it is full or the chat ends
+    for (let { before, place } = options; ;) {
+      const wanted = limit + 1 - hits.length;
+      let page: SearchHit[];
+      try {
+        page = await (scans ??= startReader())({ threadId, find: { query, limit: wanted, before, place, chips: options.chips, skip: [...options.skip] } });
+      } catch (error) {
+        console.error("chat find read failed; the server thread reads it", threadId, error);
+        page = searchMessages(query, wanted, threadId, { ...options, before, place });
+      }
+      found.push(...page);
+      hits = live(found);
+      const last = page.at(-1);
+      if (hits.length > limit || !last || page.length < wanted) break;
+      before = last.messageId;
+      place = { at: last.at, row: last.row };
+    }
   } finally {
     stop();
   }
-  const ids = found.filter((hit) => changed.has(hit.messageId)).map((hit) => hit.messageId);
-  const now = new Map(ids.length ? searchMessages(query, ids.length, threadId, { chips: options.chips, skip: options.skip, ids }).map((hit) => [hit.messageId, hit]) : []);
-  const hits = found.flatMap((hit) => (!changed.has(hit.messageId) ? [hit] : now.has(hit.messageId) ? [now.get(hit.messageId)!] : []));
-  return { hits: hits.slice(0, limit), more: found.length > limit };
+  return { hits: hits.slice(0, limit), more: hits.length > limit };
 }
 
 /** A Map row's reason from an unloaded chat, or null when the store must answer (loaded, no rows here, or the read failed). */
