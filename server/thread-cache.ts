@@ -68,7 +68,8 @@ export class ThreadCache {
   push(threadId: string, message: Message): void {
     const entry = this.entries.get(threadId);
     if (!entry) return;
-    // the rows before it are unchanged, so activePath can extend its last path
+    // activePath can extend its last path by a child of its leaf; any other row may be an ancestor it was missing
+    if (entry.state.path?.leafId !== (message.parentId ?? null)) entry.state.path = undefined;
     (entry.state.messages as Message[]).push(message);
     entry.chars += rowChars(message);
     this.trim();
