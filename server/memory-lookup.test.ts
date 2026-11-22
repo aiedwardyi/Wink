@@ -315,6 +315,27 @@ describe("corpus", () => {
     for (const [name, files, query] of layouts) expect(await fresh(files, query), name).toContain(query.replace(/\b\w/g, (first) => first.toUpperCase()));
   });
 
+  it("finds a note a message names beside a list label, however many of the list's rows repeat its words", async () => {
+    const supplies = (count: number) => Array.from({ length: count }, (_, n) => `- Supply ${n} crate${n} tent${n}`);
+    const notes = (rows: string[]) => `# Notes\n${rows.join("\n")}\n`;
+    const dentist = "- Dentist: Onyx Mill on 2026-11-25 (noted 2026-10-11)";
+    const meeting = ["Monday standup moved to ten", "Tuesday demo with Priya", "Wednesday budget review", "Thursday hiring sync", "Friday retro in room four", "roadmap check every month", "notes go to Farid", "skip on public holidays"].map((row) => `- Weekly team meeting: ${row}`);
+    const trips = ["Lisbon in March", "Oslo in May", "Kyoto in October", "Lima next year", "Cairo with Sam", "Perth for the wedding"].map((row) => `- Trip: ${row}`);
+    const chores = ["Alice", "Bruno", "Carla", "Dmitri", "Elena", "Farid", "Greta", "Hiro", "Ines", "Jonas", "Kira", "Luca", "Mona", "Nils", "Olga", "Pavel", "Quinn", "Rosa", "Sven", "Tara"].map((name) => `- Chores: ${name} weekly kitchen rota`);
+    const asked = "is the dentist at onyx mill before the weekly team meeting";
+    const layouts: Array<readonly [string, Record<string, readonly [string, number]>, string]> = [
+      ...[3, 5, 8].map((rows) => [`${rows} meeting rows`, { "side0.md": [notes([dentist, ...meeting.slice(0, rows)]), 16] }, asked] as const),
+      ...[30, 80].map((count) => [`8 meeting rows, filler ${count}`, { "side0.md": [notes([...supplies(count), dentist, ...meeting]), 16] }, asked] as const),
+      ...[5, 8].map((rows) => [`two files, ${rows} meeting rows`, { "health.md": [notes([dentist]), 16], "work.md": [notes(meeting.slice(0, rows)), 16] }, asked] as const),
+      ["8 meeting rows, no dentist word", { "side0.md": [notes([dentist, ...meeting]), 16] }, "is onyx mill before the weekly team meeting"],
+      ["8 meeting rows, filler 80, bare words", { "side0.md": [notes([...supplies(80), dentist, ...meeting]), 16] }, "dentist onyx mill weekly team meeting"],
+      ["one-word label", { "side0.md": [notes([dentist, ...trips]), 16] }, "is onyx mill before the trip"],
+      ["20 chore rows", { "side0.md": [notes([dentist, ...chores]), 16] }, "is the dentist at onyx mill before my weekly kitchen rota"],
+      ["20 chore rows, list words first", { "side0.md": [notes([dentist, ...chores]), 16] }, "weekly kitchen rota chores for alice and bruno and also the dentist at onyx mill"],
+    ];
+    for (const [name, files, query] of layouts) expect(await fresh(files, query), name).toContain("Onyx Mill");
+  });
+
   it("treats an impossible stamp as no stamp, so it never hides a newer value", async () => {
     const files = { "connections.md": ["# Stations\n- Station assignment: Silver Pier from 2026-10-01 (noted 2026-13-02)\n- Station assignment: Amber Quay (noted 2026-10-15)\n", 16] as const };
     expect(await fresh(files, "amber quay")).toContain("Amber Quay");
@@ -453,6 +474,21 @@ describe("corpus", () => {
       const files = [file("side0.md", [...supplies(count), ...rows], 12 + pick(8)), ...copies];
       const queries = [...rows.map((row) => /: ([A-Z]\w+ [A-Z]\w+)/.exec(row)![1]!.toLowerCase()), ...new Set([own, other].map((name) => name.toLowerCase()))];
       await check(`saved twice plan ${plan}, filler ${count}: ${layout(files)}`, files, queries);
+    }
+    // a note beside a list label of 3 to 20 rows, one word or several, its rows sharing more words or not, in one file or two: a message naming both still finds the note
+    const lists = ["Trip", "Chores", "Weekly team meeting", "Book club picks"];
+    const items = ["Monday standup moved to ten", "Tuesday demo with Priya", "Wednesday budget review", "Thursday hiring sync", "Friday retro in room four", "roadmap check every month", "notes go to Farid", "skip on public holidays", "Lisbon in March", "Oslo in May", "Kyoto in October", "Lima next year", "Cairo with Sam", "Perth for the wedding", "green tea in the morning", "works from home on fridays", "a dog called Biscuit", "chess online", "crime novels", "a blue hatchback"];
+    for (let plan = 0; plan < 400; plan++) {
+      const [own, place, list] = [labels[pick(4)]!, places[pick(8)]!, lists[pick(4)]!];
+      const shared = pick(2) ? "" : " weekly kitchen rota";
+      const listed = [...items].sort(() => pick(3) - 1).slice(0, 3 + pick(18)).map((item) => `- ${list}: ${item}${shared}`);
+      const note = `- ${own}: ${place}${["", ` on ${day(11, 20 + pick(6))}`][pick(2)]}${["", ` (noted ${day(10, 10 + pick(10))})`][pick(2)]}`;
+      const count = [0, 0, 8, 30, 80][pick(5)]!;
+      const files = pick(2) ? [file("side0.md", [...supplies(count), note, ...listed].sort(() => (pick(4) ? 0 : pick(3) - 1)), 16)] : [file("health.md", [note], 16), file("work.md", [...supplies(count), ...listed], 16)];
+      const [who, where, what] = [own.toLowerCase(), place.toLowerCase(), list.toLowerCase()];
+      const item = listed[pick(listed.length)]!.slice(list.length + 4).toLowerCase();
+      const queries = [where, `${who} ${where}`, `is the ${who} at ${where} before the ${what}`, `is ${where} before the ${what}`, `${who} ${where} ${what}`, `${what} ${item} and also the ${who} at ${where}`, what];
+      await check(`list plan ${plan}, filler ${count}: ${layout(files)}`, files, queries);
     }
     expect(asked).toBeGreaterThan(10_000);
     expect(missing.slice(0, 8), `${missing.length} values 83f790c87 returns are missing`).toEqual([]);
