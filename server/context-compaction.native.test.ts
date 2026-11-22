@@ -330,6 +330,30 @@ describe("native compaction plan", () => {
     for (const contact of contacts) expect.soft(written.compaction.summary).toContain(contact);
   });
 
+  it("writes a fresh summary when a full covered value list leaves no room for a newer value", async () => {
+    const later = "launch-owner@example.test";
+    const messages = [
+      message("covered", Array.from({ length: 300 }, (_, index) => `Add archive-${index}@example.test to the list.`).join("\n\n")),
+      message("saved", "", {
+        role: "bot", kind: "compaction", compaction: {
+          v: 1, summary: "The launch is approved for review.", coveredThroughId: "covered", firstKeptId: null,
+          contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
+        },
+      }),
+      message("later", `Please use ${later} for the release handoff.`),
+      ...longThread(),
+    ];
+    const input = { messages, contextWindow: 128_000 };
+    const plan = planCompaction(input);
+    if (!plan.needed) throw new Error("expected a plan");
+    const budgetTokens = nativeReplayBudget(input.contextWindow);
+    expect(prepareNativeReplay(plan, budgetTokens)).toBeUndefined();
+    expect(planCompaction({ ...input, resumeNativeReplay: { compactionId: "saved", budgetTokens } }).needed).toBe(true);
+    const written = await prepareModelContext({ ...input, plan, taskRecordText: "", summarize: async () => "SUMMARY\nThe release review continues." });
+    if (written.status !== "ready" || !written.compaction) throw new Error("expected a new summary");
+    expect(written.compaction.summary).toContain(later);
+  });
+
   it("keeps covered values when a long visible tail also contains typed values", () => {
     const contact = "covered-owner@example.test";
     const messages = [
@@ -340,7 +364,7 @@ describe("native compaction plan", () => {
           contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
         },
       }),
-      message("addresses", Array.from({ length: 500 }, (_, index) => `Add reviewer-${index}@example.test to the list.`).join("\n\n")),
+      message("addresses", Array.from({ length: 100 }, (_, index) => `Add reviewer-${index}@example.test to the list.`).join("\n\n")),
       ...longThread(),
     ];
     const plan = planCompaction({ messages, contextWindow: 24_000 });
@@ -348,6 +372,7 @@ describe("native compaction plan", () => {
     const prepared = prepareNativeReplay(plan, nativeReplayBudget(128_000));
     expect(prepared?.transcript[0]?.text).toContain(contact);
     expect(prepared?.replaySummary?.compaction.summary).toContain(contact);
-    expect(prepared?.transcript[1]?.text).toContain("reviewer-499@example.test");
+    expect(prepared?.replaySummary?.compaction.summary).toContain("reviewer-99@example.test");
+    expect(prepared?.transcript[1]?.text).toContain("reviewer-99@example.test");
   });
 });

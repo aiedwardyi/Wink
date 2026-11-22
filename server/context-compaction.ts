@@ -1261,8 +1261,11 @@ function replayWithTypedValues(
   if (covered && Buffer.byteLength(covered, "utf8") > room) return undefined;
   const head = covered || TYPED_VALUES_HEADER;
   const kept = new Set(head.split("\n"));
-  const later = typedValuesBlock(lines.filter(({ index }) => index > previous.coveredIndex), room - Buffer.byteLength(head, "utf8") + Buffer.byteLength(TYPED_VALUES_HEADER, "utf8"))
-    .split("\n").filter((line) => line.startsWith("- ") && !kept.has(line));
+  const newer = lines.filter(({ index }) => index > previous.coveredIndex);
+  const fitted = typedValuesBlock(newer, room - Buffer.byteLength(head, "utf8") + Buffer.byteLength(TYPED_VALUES_HEADER, "utf8"));
+  // Rooms read only this field, so a newer value with no room sends the turn down the summarizer path.
+  if (fitted !== typedValuesBlock(newer, Infinity)) return undefined;
+  const later = fitted.split("\n").filter((line) => line.startsWith("- ") && !kept.has(line));
   const block = later.length ? [head, ...later].join("\n") : covered;
   const next = `${text}\n\n${block}`;
   if (!summary || !block || next === stored) return { transcript, estimatedTokens };
