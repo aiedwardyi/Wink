@@ -783,4 +783,21 @@ export const CORPUS: CorpusCase[] = [
   ["ko", "haneulbyeol 이게 와이파이 비밀번호예요.", ["haneulbyeol"], []],
   ["ko", "violet9122\n이게 와이파이 비밀번호예요.", ["violet9122"], []],
   ["ko", "- violet9124\n- 이거 은행 비번이에요.", ["violet9124"], []],
+  // 2098C regression probe rows the corpus did not have yet
+  ["en", "My password is synthetic-demo-value", ["synthetic-demo-value"], []],
+  ["en", "My password is hunter2", ["hunter2"], []],
+  ["en", "My API key is sk-live-abcdefghijklmnopqrstuvwxyz123456", ["sk-live-abcdefghijklmnopqrstuvwxyz123456"], []],
+  ["en", "My verification code is 381204", ["381204"], []],
+  ["en", "The garage PIN is 7731", ["7731"], []],
+  ["en", "My bank account number is 123456789012", ["123456789012"], []],
+  ["en", "I write code in Rust.", [], ["I write code in Rust."]],
+  ["en", "My key hobby is climbing.", [], ["My key hobby is climbing."]],
+  ["ko", "비밀번호는 hunter2 입니다", ["hunter2"], []],
+  ["ko", "인증 코드는 381204 입니다", ["381204"], []],
+  // a secret word that names a field, or sits beside a word of another sense, keeps its own sense
+  ["en", "Credentials for certificate renewal: admin / sunflower", ["sunflower"], []],
+  ["en", "VPN credentials: alice / opensesame (client certificate required)", ["opensesame"], []],
+  ["en", "My VPN credentials are alice and opensesame, client certificate required", ["opensesame"], []],
+  ["ko", "비밀번호 관리자: sunflower", ["sunflower"], []],
+  ["en", "Password manager: opensesame", ["opensesame"], []],
 ];

@@ -25,10 +25,13 @@ const SAID = /^(?:[:：=]|is|are|was|[은는이가])$/iu;
 const LINK = String.raw`(?:[:：=→]|->|(?<![\p{L}\p{N}])(?:is|are|was)(?![\p{L}\p{N}])|[은는](?=\s))`;
 const SAYS = new RegExp(String.raw`^\s+(?:for|to|at|on|of|in|that)\s.*?${LINK}(.*)$`, "u");
 const SAID_PAST = new RegExp(String.raw`^.*?${LINK}(.*)$`, "u");
-const COPULA = /(?:\s*(?:이에요|예요|이야|입니다|이다|임|요))?[.!。]*$/u;
+// marks at the end match only from the start of their run, so a long run is read once, not once per mark
+const COPULA = /(?:\s*(?:이에요|예요|이야|입니다|이다|임|요)|(?<![.!。]))[.!。]*$/u;
 // a value then a break, so text after it does not hide it: "lilac27 (personal account)", "tulip742! and I change it"
-const LEAD = /^(\d[\d -]*\d(?![\p{L}\p{N}])|\S+?)[.,;!。]*(?=\s*$|\s*[(,;]|\s+(?:and|but|so|or|which|because|since|until|[-–—])(?:\s|$))/iu;
-const NOT_VALUE = /^(?:(?:~|\.{1,2})?\/\S+|\S+@\S+\.\S+|https?:\/\/\S+|\d+(?:\.\d+)?(?:ghz|mhz|[kmg]bps|[kmgt]b|k|km|kg|cm|mm)|\d+(?:\.\d+)+[a-z]*|\S*[a-z0-9](?:password|passcode)\S*|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)$/i;
+// a value longer than one mark ends on another character, so each run of marks is read once
+const LEAD = /^(\d[\d -]*\d(?![\p{L}\p{N}])|[.,;!。]|\S*?[^\s.,;!。])[.,;!。]*(?=\s*$|\s*[(,;]|\s+(?:and|but|so|or|which|because|since|until|[-–—])(?:\s|$))/iu;
+// an email splits at its first @ and is checked for spaces once, so a run of @ is not read once per @
+const NOT_VALUE = /^(?:(?:~|\.{1,2})?\/\S+|\S[^\s@]*@(?=\S*$)\S+\.\S+|https?:\/\/\S+|\d+(?:\.\d+)?(?:ghz|mhz|[kmg]bps|[kmgt]b|k|km|kg|cm|mm)|\d+(?:\.\d+)+[a-z]*|\S*[a-z0-9](?:password|passcode)\S*|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)$/i;
 
 // one value token, or a card or account number written in groups
 const valueOf = (rest: string) => {
@@ -36,7 +39,7 @@ const valueOf = (rest: string) => {
   return /^\d[\d -]*\d$/.test(value) ? [value.replace(/[ -]/g, "")] : NOT_VALUE.test(value) ? [value] : value.split(/\s*\/\s*/);
 };
 // a Korean particle after a value is not part of it: 8107이에요, lilac8105를
-const bare = (token: string) => token.replace(/^["'“‘(]+/, "").replace(/(?:이에요|예요|이야|입니다|이고|으로|로|을|를|은|는|이|가|도)?["'”’).,;!?。]*$/u, "");
+const bare = (token: string) => token.replace(/^["'“‘(]+/, "").replace(/(?:이에요|예요|이야|입니다|이고|으로|로|을|를|은|는|이|가|도|(?<!["'”’).,;!?。]))["'”’).,;!?。]*$/u, "");
 // a typed value is ASCII
 const valueLike = (raw: string) => {
   const token = bare(raw);
@@ -137,19 +140,20 @@ const OTHER = [
   /\bpasswords?(?= (?:managers?|management|hashing|hygiene|policy|policies)\b)/giu,
   /(?:비밀\s*번호|패스워드)(?=\s*(?:관리자|관리\s*앱|매니저))/gu,
   /\b1Password\b/gu,
-  // credentials as a degree or a certificate
-  /\bcredentials?\b(?=.*\b(?:certified|certification|certificate|degree|diploma|licensed)\b)/giu,
   // a flight number right after a flight word: "Flight KE7524 to Busan", "Boarding pass: KE7523"
   /(?<=\b(?:[Ff]lights?|[Ff]lying|[Ff]lew|[Bb]oarding [Pp]ass)(?: (?:number|no\.?))?[\s:#]+)(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\d{1,4}(?![\p{L}\p{N}_])/gu,
 ];
 const otherSense = (line: string) => OTHER.reduce((text, pattern) => text.replace(pattern, "thing"), line);
 // a word with a value's shape, a year included; a decade is not one
 const valued = (line: string) => line.split(/[\s\p{Script=Hangul}]+/u).some((word) => valueLike(word) && !/^'?\d{2}(?:\d{2})?s$/.test(bare(word)));
-// a line the check before this filter flags stays out, unless its secret words all mean something else and no word looks like a value
+// a line the check before this filter flags stays out, unless its secret words all mean something else and no word looks like a value;
+// a word that names a field keeps its own sense: "1Password: sunflower", "Password manager: opensesame"
 function stillHidden(line: string): boolean {
   if (!flagged(line)) return false;
   const text = otherSense(line);
-  return text === line || flagged(text) || valued(text);
+  const field = /^([^:：=]*)[:：=](.*)$/u.exec(text);
+  const named = Boolean(field && /\bthing\b/.test(field[1]) && /\S/.test(field[2].replace(/\bthing\b/g, "")));
+  return text === line || named || flagged(text) || valued(text);
 }
 // the line after a lone value names it: "plum8504x" then "That's my Netflix password.", "이게 와이파이 비밀번호예요"
 const NAMES_IT = /^\s*(?:[-*+]\s+)?(?:(?:(?:that|it)(?:'s|’s| is| was)|this is)\s+(?:my|the|our|your|his|her|their|a)|이게|이거|이건|그게|그거|그건)\s/iu;

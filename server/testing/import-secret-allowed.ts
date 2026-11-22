@@ -5,7 +5,6 @@ export const ALLOWED: [fact: string, reason: string][] = [
   ["Booked flight KE7523 from ICN to NRT next Tuesday", "a flight number, not a room invite code"],
   ["Collects PIN-UP magazines.", "PIN-up is a poster style, not a PIN"],
   ["Collects enamel pins.", "enamel pins are badges"],
-  ["Credentials: PMP certified, AWS Solutions Architect", "credentials are certifications here"],
   ["Does pin-striping on vintage cars.", "pin-striping is a painted or woven stripe"],
   ["Favorite book: The Secret History", "The Secret ... is a book title"],
   ["Flight 7C2345 to Osaka in May.", "a flight number, not a room invite code"],
