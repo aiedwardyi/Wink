@@ -1,6 +1,8 @@
-// Import Memory leaves out a line only when it gives a secret's value, so a secret word in prose stays a fact.
+// Import Memory leaves out every line the check before this filter left out, unless each secret word in it means something
+// else here ("PIN-up", "Secret Santa", "password manager", a flight number) and no word in it has a value's shape.
+// Past that check it also leaves out a value only this filter reads: a WiFi key, a door code, a value under a secret heading.
 import { redactRoomMemory } from "../shared/redact.ts";
-import { secretLike, tokenLike } from "./memory-pass.ts";
+import { secretLike } from "./memory-pass.ts";
 
 const EDGE = "(?<![\\p{L}\\p{N}])";
 // a Korean label may carry its particle: 와이파이는, 비번은
@@ -26,8 +28,6 @@ const SAID_PAST = new RegExp(String.raw`^.*?${LINK}(.*)$`, "u");
 const COPULA = /(?:\s*(?:이에요|예요|이야|입니다|이다|임|요))?[.!。]*$/u;
 // a value then a break, so text after it does not hide it: "lilac27 (personal account)", "tulip742! and I change it"
 const LEAD = /^(\d[\d -]*\d(?![\p{L}\p{N}])|\S+?)[.,;!。]*(?=\s*$|\s*[(,;]|\s+(?:and|but|so|or|which|because|since|until|[-–—])(?:\s|$))/iu;
-// a room invite code is six characters; a flight number of that length is not one
-const FLIGHT = /(?<![\p{L}\p{N}_#])(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\d{4}(?![\p{L}\p{N}_])/gu;
 const NOT_VALUE = /^(?:(?:~|\.{1,2})?\/\S+|\S+@\S+\.\S+|https?:\/\/\S+|\d+(?:\.\d+)?(?:ghz|mhz|[kmg]bps|[kmgt]b|k|km|kg|cm|mm)|\d+(?:\.\d+)+[a-z]*|\S*[a-z0-9](?:password|passcode)\S*|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)$/i;
 
 // one value token, or a card or account number written in groups
@@ -54,8 +54,12 @@ const VALUE_FOR = {
 const kindOf = (match: RegExpMatchArray): Kind => (match[1] ? "strong" : match[2] ? "wifi" : match[3] ? "door" : "weak");
 const single = (token: string) => Boolean(token) && !/\s/.test(token);
 
+// a network's name is not its key: "WiFi name: BlueHeron5G", "Wi-Fi network name is MapleHouse2024", "와이파이 이름"
+const NAME_AFTER = /^\s*(?:network\s+)?(?:name|ssid)\b|^\s*(?:네트워크\s*)?이름/iu;
+
 function labeledValue(line: string): boolean {
   for (const match of line.matchAll(LABEL)) {
+    if (match[2] && NAME_AFTER.test(line.slice(match.index + match[0].length))) continue;
     let rest = line.slice(match.index + match[0].length);
     let said = false;
     for (let step = 0; step < 8; step++) {
@@ -77,32 +81,14 @@ function labeledValue(line: string): boolean {
   return false;
 }
 
-// base left out every line with one of its secret words, so such a line goes when it gives a value anywhere in it:
-// "Use hunter2morrow as the password", "My bank PIN. It's 8210.", "API key is sk-x for staging"
-const MARK = new RegExp(`${LINK}|^[은는이가]`, "gu");
-function wordedValue(line: string): boolean {
-  return [...line.matchAll(LABEL)].some((match) => {
-    if (!secretLike(match[0])) return false;
-    const rest = line.slice(match.index + match[0].length);
-    if (rest.split(/\s+/).flatMap(valueOf).some(valueLike)) return true;
-    // before the label a value is linked to it: "Use x as the password", "x is my Netflix password", "x가 비밀번호예요"
-    const before = line.slice(0, match.index).split(/\s+/);
-    if (before.some((word, at) => valueLike(word) && (/\p{Script=Hangul}$/u.test(word) || /^(?:is|are|was|as)$/i.test(before[at + 1] ?? "")))) return true;
-    // a password needs no digit when it ends its clause: "Password for Netflix: sunflowerlake", "is currently sunflowermoon"
-    if (!match[1]) return false;
-    const clause = rest.split(/[.!?。](?:\s|$)/u)[0];
-    const mark = [...clause.matchAll(MARK)].at(-1);
-    const words = mark ? clause.slice(mark.index + mark[0].length).trim().split(/\s+/) : [];
-    const token = bare(words.at(-1) ?? "");
-    return words.length <= 2 && /^[\x21-\x7e]{4,}$/.test(token) && /[a-z]/i.test(token) && !NOT_VALUE.test(token);
-  });
-}
-
 // a value line under a secret heading: "qwer2017", "Mail: lilac4006"
 // under a heading like "Tokens" or "API keys" only a bare value counts, so "Max output: 8192" under "Token budgets" stays a fact
+// under a WiFi heading an item named for what the network is, not where, stays a fact: "Network name: BlueHeron5G", "이름: olleh5G2f3a"
+const NAMED = /^(?:(?:wi-?fi|wlan|와이파이)\s*)?(?:(?:network\s+)?name|network|ssid|router|modem|model|plan|provider|isp|mac(?:\s+address)?|band|channel|speed|이름|네트워크|통신사|공유기|모뎀|모델|요금제|속도)$/iu;
 function listedValue(line: string, kind: Kind, word = ""): boolean {
   const pair = /^([^:：=]{1,40}?)(?:\s*[:：=]\s*|\s+[-–—]\s+)(.+)$/u.exec(line);
   const named = Boolean(pair && pair[1].split(/\s+/).length <= 4);
+  if (named && kind === "wifi" && NAMED.test(pair![1].trim())) return false;
   if (named && word) return labeledValue(`${pair![1]} ${word}: ${pair![2]}`);
   if (named && kind === "weak") return false;
   const tokens = valueOf(named ? pair![2] : line);
@@ -125,28 +111,76 @@ function structure(raw: string, line: string): { depth: number; text: string } |
   return undefined;
 }
 
+// a table column named only by secret words holds secrets; "WiFi name" or "Password last changed" names something else
+const columnKind = (cell: string) => (cell.replace(LABEL, "").replace(/[\s/&+,()-]+/g, "") ? undefined : headingKind(cell));
+
+// the check this import ran before this filter
+const flagged = (line: string) => secretLike(line) || redactRoomMemory(line) !== line;
+// other senses of a secret word; each swaps out only that word, so the rest of the line is still read
+const OTHER = [
+  // a poster style, a suit stripe, a pin cushion, a card reader; pins as things; pin as a verb
+  /\bpins?(?=[- ]?(?:ups?|strip\w*|cushions?|pads?)\b)/giu,
+  /(?<=\b(?:bowling|enamel|lapel|hat|safety|bobby|push|hair|rolling|sewing|map)[ -])pins?\b/giu,
+  /\bpins?(?= bowling\b)/giu,
+  /\b[Pp]ins?(?= (?:my|the|it|this|that|them|these|those|a|an|your|our|their|his|her)\b)/gu,
+  /\b[Pp]ins?\b(?=.*\bPinterest\b)/gu,
+  // a name: "a dog named Pin"
+  /(?<=\b(?:named|called) )(?:Pin|Token)\b/gu,
+  // LLM, crypto and arcade tokens, token-based auth, a token of thanks
+  /\btokens?(?=[- ](?:based|budgets?|limits?|counts?|usage|economy|of (?:thanks|appreciation|gratitude))\b)/giu,
+  /(?<=\b(?:ETH|NFT|crypto|governance|utility|arcade|subway|bus) )tokens?\b/giu,
+  /토큰(?=\s*(?:기반|이코노미))/gu,
+  // Secret Santa, a secret talent, the secret to good coffee, a title such as The Secret Garden
+  /\bsecrets?(?= (?:santa|talents?|ingredients?|recipes?|menu|level|room|door|garden|weapon|sauce|admirer|agent|service|society|hobby|passion|skill|crush|life|identity|spot|trick|tips?|history|to (?:a|an|the|good|great|my|your|our|their|his|her|success|happiness))\b)/giu,
+  /(?<=\bThe )Secret(?= (?!(?:Key|Code|Word|Phrase|Password|Token|PIN|Pin|Number|Question|Answer)\b)\p{Lu})/gu,
+  // a password manager, password hashing or hygiene; 1Password is a manager's name
+  /\bpasswords?(?= (?:managers?|management|hashing|hygiene|policy|policies)\b)/giu,
+  /(?:비밀\s*번호|패스워드)(?=\s*(?:관리자|관리\s*앱|매니저))/gu,
+  /\b1Password\b/gu,
+  // credentials as a degree or a certificate
+  /\bcredentials?\b(?=.*\b(?:certified|certification|certificate|degree|diploma|licensed)\b)/giu,
+  // a flight number right after a flight word: "Flight KE7524 to Busan", "Boarding pass: KE7523"
+  /(?<=\b(?:[Ff]lights?|[Ff]lying|[Ff]lew|[Bb]oarding [Pp]ass)(?: (?:number|no\.?))?[\s:#]+)(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\d{1,4}(?![\p{L}\p{N}_])/gu,
+];
+const otherSense = (line: string) => OTHER.reduce((text, pattern) => text.replace(pattern, "thing"), line);
+// a word with a value's shape, a year included; a decade is not one
+const valued = (line: string) => line.split(/[\s\p{Script=Hangul}]+/u).some((word) => valueLike(word) && !/^'?\d{2}(?:\d{2})?s$/.test(bare(word)));
+// a line the check before this filter flags stays out, unless its secret words all mean something else and no word looks like a value
+function stillHidden(line: string): boolean {
+  if (!flagged(line)) return false;
+  const text = otherSense(line);
+  return text === line || flagged(text) || valued(text);
+}
+// the line after a lone value names it: "plum8504x" then "That's my Netflix password.", "이게 와이파이 비밀번호예요"
+const NAMES_IT = /^\s*(?:[-*+]\s+)?(?:(?:(?:that|it)(?:'s|’s| is| was)|this is)\s+(?:my|the|our|your|his|her|their|a)|이게|이거|이건|그게|그거|그건)\s/iu;
+
 /** Reads a paste line by line: "secret" for a line that gives a secret's value, "label" for a secret section's own heading line. */
-export function importSecrets(): (raw: string, line: string) => "secret" | "label" | undefined {
+export function importSecrets(): (raw: string, line: string, next?: string) => "secret" | "label" | undefined {
   let section = 0;
   let kind: Kind = "weak";
   let word = "";
-  // a table's header row decides whether its rows list secrets: "| Service | Password |"
-  let table: Kind | "" | undefined;
-  return (raw, line) => {
-    const row = line.replace(/^\|\s*|\s*\|$/g, "").replace(/\s*\|\s*/g, ": ");
-    const header = /^\s*\|.*\|\s*$/.test(raw) && table === undefined;
-    table = /^\s*\|.*\|\s*$/.test(raw) ? (table ?? headingKind(row) ?? "") : undefined;
-    const plain = row.replace(FLIGHT, "");
-    const given = Boolean(row) && (redactRoomMemory(plain) !== plain || tokenLike(row) || labeledValue(row) || wordedValue(row));
+  // a table's header row names the columns that hold secrets: "| Service | Password |"
+  let columns: (Kind | undefined)[] | undefined;
+  return (raw, line, next = "") => {
+    const text = flagged(line) ? otherSense(line) : line;
+    const cells = /^\s*\|.*\|\s*$/.test(raw) ? text.replace(/^\|\s*|\s*\|$/g, "").split(/\s*\|\s*/) : undefined;
+    const header = Boolean(cells) && !columns;
+    columns = cells ? (columns ?? cells.map(columnKind)) : undefined;
+    const row = cells ? cells.join(": ") : text;
+    const inColumn = !header && Boolean(cells?.some((cell, at) => { const column = columns?.[at]; return Boolean(column && VALUE_FOR[column](cell)); }));
+    const given = stillHidden(line) || labeledValue(row) || inColumn;
     const head = structure(raw, line);
     if (head) {
+      // a bold value under a secret heading is that value, not a new heading: "## Passwords" then "**lilac4023**"
+      if (section && head.depth === 7 && listedValue(head.text, kind, word)) return "secret";
       // any other heading ends the list, so "#### Hashing in use" under "### Passwords" is prose again
-      const found = headingKind(head.text);
+      const found = headingKind(otherSense(head.text));
       if (!found) section = 0;
       else if (!section || head.depth <= section) [section, kind, word] = [head.depth, found, bareWord(head.text)];
       return given ? "secret" : head.depth === 7 && section === 7 ? "label" : undefined;
     }
-    if (given || (row && !header && ((section && listedValue(row, kind, word)) || (table && listedValue(row, table))))) return "secret";
+    if (given || (row && !header && section && listedValue(row, kind, word))) return "secret";
+    if (single(line) && NAMES_IT.test(next) && next.trim().split(/\s+/).length <= 6 && stillHidden(next.trim())) return "secret";
     return undefined;
   };
 }

@@ -245,10 +245,8 @@ const TOKEN_PATTERNS = [
   /\b(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/,
 ];
 
-export const tokenLike = (text: string) => TOKEN_PATTERNS.some((pattern) => pattern.test(text));
-
 export function secretLike(text: string): boolean {
-  return redactSecretsInText(text) !== text || SECRET_WORDS.test(text) || SECRET_WORDS_KO.test(text) || tokenLike(text);
+  return redactSecretsInText(text) !== text || SECRET_WORDS.test(text) || SECRET_WORDS_KO.test(text) || TOKEN_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 function secretValue(text: string): boolean {

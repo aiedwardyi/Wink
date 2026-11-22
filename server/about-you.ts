@@ -84,9 +84,10 @@ export function factsOf(paste: string): { facts: string[]; hidden: number } {
   const facts: string[] = [];
   let hidden = 0;
   const secret = importSecrets();
-  for (const raw of paste.split(/\r?\n/)) {
+  const lines = paste.split(/\r?\n/);
+  for (const [at, raw] of lines.entries()) {
     const line = clean(raw);
-    const kind = secret(raw, line);
+    const kind = secret(raw, line, lines[at + 1]);
     if (!line || kind === "label" || SKIP.test(raw.trim()) || /[:：]$/.test(line)) continue;
     // a split could part a label from its value, so the whole line is checked
     if (kind) hidden++;
