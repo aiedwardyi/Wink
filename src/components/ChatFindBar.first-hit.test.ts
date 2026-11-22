@@ -53,7 +53,8 @@ async function open(initialMessageId: string | null = null) {
   const host = document.body.appendChild(document.createElement("main"));
   root = createRoot(host);
   await act(async () => root!.render(createElement(ChatFindBar, { threadId: "t", initialQuery: "q", initialMessageId, onClose: () => {} })));
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 220)); });
+  // the bar asks after its debounce
+  await act(async () => vi.waitFor(() => expect(mock.asked).not.toHaveLength(0)));
   const label = () => host.querySelector("[data-chat-find] span")?.textContent;
   const answer = async (body: Page) => act(async () => mock.answers.shift()!(body));
   return { label, answer };
