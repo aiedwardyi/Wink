@@ -59,11 +59,15 @@ const single = (token: string) => Boolean(token) && !/\s/.test(token);
 
 // a network's name is not its key: "WiFi name: BlueHeron5G", "Wi-Fi network name is MapleHouse2024", "와이파이 이름"
 const NAME_AFTER = /^\s*(?:network\s+)?(?:name|ssid)\b|^\s*(?:네트워크\s*)?이름/iu;
+// a label's value is read in the next 256 characters, so a line of many labels is read once, not once per label
+const REACH = 256;
 
 function labeledValue(line: string): boolean {
   for (const match of line.matchAll(LABEL)) {
-    if (match[2] && NAME_AFTER.test(line.slice(match.index + match[0].length))) continue;
-    let rest = line.slice(match.index + match[0].length);
+    const end = match.index + match[0].length;
+    const near = line.slice(end, end + REACH);
+    if (match[2] && NAME_AFTER.test(near)) continue;
+    let rest = near;
     let said = false;
     for (let step = 0; step < 8; step++) {
       const bridge = BRIDGE.exec(rest)?.[0];
@@ -77,7 +81,7 @@ function labeledValue(line: string): boolean {
     // "Netflix password: bluemoon" needs no digit; a bare "PIN cushion" does
     if (tokens.some(isValue) || (match[1] && said && tokens.length === 1 && tokens[0].length >= 4 && !NOT_VALUE.test(tokens[0]))) return true;
     // plain words before the value: "The door code for the gym is 8010", "pw for Hulu is x"; "Gate code for the pool: posted on the 2026 board" gives none
-    const clause = line.slice(match.index + match[0].length).split(/[.!?。](?:\s|$)/u)[0];
+    const clause = near.split(/[.!?。](?:\s|$)/u)[0];
     const after = (match[1] ? SAID_PAST : SAYS).exec(clause)?.[1];
     if (after?.trim().split(/\s+/).slice(0, 2).flatMap(valueOf).some(isValue)) return true;
   }
@@ -126,7 +130,7 @@ const OTHER = [
   /(?<=\b(?:bowling|enamel|lapel|hat|safety|bobby|push|hair|rolling|sewing|map)[ -])pins?\b/giu,
   /\bpins?(?= bowling\b)/giu,
   /\b[Pp]ins?(?= (?:my|the|it|this|that|them|these|those|a|an|your|our|their|his|her)\b)/gu,
-  /\b[Pp]ins?\b(?=.*\bPinterest\b)/gu,
+  /\b[Pp]ins?\b(?=(?: \S+){0,3} (?:on|to|from) Pinterest\b)/gu,
   // a name: "a dog named Pin"
   /(?<=\b(?:named|called) )(?:Pin|Token)\b/gu,
   // LLM, crypto and arcade tokens, token-based auth, a token of thanks
@@ -141,15 +145,15 @@ const OTHER = [
   /(?:비밀\s*번호|패스워드)(?=\s*(?:관리자|관리\s*앱|매니저))/gu,
   /\b1Password\b/gu,
   // a flight number right after a flight word: "Flight KE7524 to Busan", "Boarding pass: KE7523"
-  /(?<=\b(?:[Ff]lights?|[Ff]lying|[Ff]lew|[Bb]oarding [Pp]ass)(?: (?:number|no\.?))?[\s:#]+)(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\d{1,4}(?![\p{L}\p{N}_])/gu,
+  /(?<=\b(?:[Ff]lights?|[Ff]lying|[Ff]lew|[Bb]oarding [Pp]ass)(?: (?:number|no\.?))?[\s:#]{1,3})(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\d{1,4}(?![\p{L}\p{N}_])/gu,
 ];
 const otherSense = (line: string) => OTHER.reduce((text, pattern) => text.replace(pattern, "thing"), line);
 // a word with a value's shape, a year included; a decade is not one
 const valued = (line: string) => line.split(/[\s\p{Script=Hangul}]+/u).some((word) => valueLike(word) && !/^'?\d{2}(?:\d{2})?s$/.test(bare(word)));
 // a line the check before this filter flags stays out, unless its secret words all mean something else and no word looks like a value;
 // a word that names a field keeps its own sense: "1Password: sunflower", "Password manager: opensesame"
-function stillHidden(line: string): boolean {
-  if (!flagged(line)) return false;
+function stillHidden(line: string, flag = flagged(line)): boolean {
+  if (!flag) return false;
   const text = otherSense(line);
   const field = /^([^:：=]*)[:：=](.*)$/u.exec(text);
   const named = Boolean(field && /\bthing\b/.test(field[1]) && /\S/.test(field[2].replace(/\bthing\b/g, "")));
@@ -166,13 +170,14 @@ export function importSecrets(): (raw: string, line: string, next?: string) => "
   // a table's header row names the columns that hold secrets: "| Service | Password |"
   let columns: (Kind | undefined)[] | undefined;
   return (raw, line, next = "") => {
-    const text = flagged(line) ? otherSense(line) : line;
+    const flag = flagged(line);
+    const text = flag ? otherSense(line) : line;
     const cells = /^\s*\|.*\|\s*$/.test(raw) ? text.replace(/^\|\s*|\s*\|$/g, "").split(/\s*\|\s*/) : undefined;
     const header = Boolean(cells) && !columns;
     columns = cells ? (columns ?? cells.map(columnKind)) : undefined;
     const row = cells ? cells.join(": ") : text;
     const inColumn = !header && Boolean(cells?.some((cell, at) => { const column = columns?.[at]; return Boolean(column && VALUE_FOR[column](cell)); }));
-    const given = stillHidden(line) || labeledValue(row) || inColumn;
+    const given = stillHidden(line, flag) || labeledValue(row) || inColumn;
     const head = structure(raw, line);
     if (head) {
       // a bold value under a secret heading is that value, not a new heading: "## Passwords" then "**lilac4023**"

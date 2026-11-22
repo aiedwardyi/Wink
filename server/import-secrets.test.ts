@@ -38,11 +38,11 @@ describe("import secret filter corpus", () => {
     expect(counted.map(({ paste }) => paste)).toEqual(["| Account | Password last changed |\n| Gmail | 2024 |\n| Bank | 2023 |"]);
   });
 
-  // a run of marks is read once, not once per mark, so a long pasted line cannot hold up the server
+  // a run of marks or labels is read once, not once per mark or label, so a long pasted line cannot hold up the server
   it("reads a long line in one pass", () => {
     const marks = ".".repeat(100_000);
     const start = performance.now();
-    const { hidden } = factsOf([`WiFi: ${marks}x`, `WiFi: ${"@".repeat(100_000)}`, `Likes PIN-up posters ${marks}x`, `와이파이 비번은 ${marks}x예요`].join("\n"));
+    const { hidden } = factsOf([`WiFi: ${marks}x`, `WiFi: ${"@".repeat(100_000)}`, `Likes PIN-up posters ${marks}x`, `와이파이 비번은 ${marks}x예요`, "WiFi ".repeat(15_000), "와이파이 ".repeat(15_000)].join("\n"));
     expect(hidden).toBe(2);
     expect(performance.now() - start).toBeLessThan(2000);
   });
