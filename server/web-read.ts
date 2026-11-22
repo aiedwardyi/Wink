@@ -5,7 +5,7 @@ import { isIP } from "node:net";
 
 import { markPage, WEB_READ_FIRST_MARK, WEB_READ_OWN_TOOL, WEB_READ_SEARCH_ONLY, WEB_READ_STOP, type WebReadReader, type WebReadResult } from "../shared/web-read.ts";
 import { json, readBody } from "./http-helpers.ts";
-import { nodeTransport, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
+import { MAX_BODY_BYTES, nodeTransport, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
 import { parseRobots, robotsAllows, type RobotsRule } from "./web-read-robots.ts";
 import { bodyText, capText, challengeReason, htmlToText, pdfToText } from "./web-read-text.ts";
 
@@ -26,7 +26,7 @@ export const READ_DEADLINE_MS = 30_000;
 const ROBOTS_CACHE_MS = 24 * 60 * 60_000;
 export const ROBOTS_ROWS = 300;
 const MAX_HOPS = 5;
-const CACHE_ROWS = 300;
+export const CACHE_ROWS = 300;
 /** The longest first read the tool path sends: its label and the longest capped read a request body can carry (1 MB). */
 const FIRST_READ_MAX = WEB_READ_FIRST_MARK.length + capText("x".repeat(1_000_000)).length;
 // Provider-side readers that got through where Wink's own fetch could not (RESULT.md: Grok 6/6, Codex 5/6).
@@ -54,11 +54,19 @@ export class SiteGate {
     this.now = now;
   }
 
+  /** Why a site paused after a 429 gets no request now, or null. */
+  held(hostname: string): string | null {
+    const site = siteKey(hostname);
+    const until = this.paused.get(site) ?? 0;
+    const now = this.now();
+    return until > now ? `${site} answered 429 (too many requests), so Wink leaves it alone for ${Math.ceil((until - now) / 60_000)} more min` : null;
+  }
+
   admit(hostname: string): string | null {
+    const paused = this.held(hostname);
+    if (paused) return paused;
     const site = siteKey(hostname);
     const now = this.now();
-    const until = this.paused.get(site) ?? 0;
-    if (until > now) return `${site} answered 429 (too many requests), so Wink leaves it alone for ${Math.ceil((until - now) / 60_000)} more min`;
     const recent = (this.hits.get(site) ?? []).filter((at) => now - at < SITE_WINDOW_MS);
     if (recent.length >= SITE_BUDGET) {
       this.hits.set(site, recent);
@@ -76,7 +84,8 @@ export class SiteGate {
 
 type Step = { ok: boolean; route: string; text: string; tried: string[]; final?: boolean; keep?: boolean; searchOnly?: boolean; first?: string };
 type Got = { hop: Hop; url: URL } | { error: string; final?: boolean; gated?: boolean; searchOnly?: boolean };
-type GetOpts = { admitted?: Set<string>; body?: Buffer; deadline?: AbortSignal; robots?: boolean };
+/** `site`: every hop must stay on this site (siteKey). */
+type GetOpts = { admitted?: Set<string>; body?: Buffer; deadline?: AbortSignal; robots?: boolean; site?: string };
 
 export function youtubeId(url: URL): string | null {
   const host = url.hostname.toLowerCase().replace(/^(www|m|music)\./, "");
@@ -131,6 +140,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
       const refused = refusedTarget(current);
       if (refused) return { error: `redirected to ${refused}, not followed`, final: true };
       if (isLinkedIn(current.hostname)) return { error: "redirected to linkedin.com, which Wink never fetches (search results only)", searchOnly: true };
+      if (opts.site && siteKey(current.hostname) !== opts.site) return { error: `redirected off ${opts.site}, not followed` };
       if (opts.deadline?.aborted) return { error: overDeadline };
       if (seen.has(current.href)) return { error: "redirect loop" };
       seen.add(current.href);
@@ -143,6 +153,9 @@ export function createWebReader(deps: WebReaderDeps = {}) {
         const closed = await robotsVerdict(current, admitted, opts.deadline);
         if (closed) return { error: closed };
       }
+      // A 429 from another read can pause the site while this one waited.
+      const paused = gate.held(current.hostname);
+      if (paused) return { error: paused, gated: true };
       const signal = opts.deadline ? AbortSignal.any([AbortSignal.timeout(HOP_MS), opts.deadline]) : AbortSignal.timeout(HOP_MS);
       let got: Hop;
       try {
@@ -181,6 +194,8 @@ export function createWebReader(deps: WebReaderDeps = {}) {
         return `${label}: HTTP 429, ${siteKey(got.url.hostname)} paused for 10 min, no retry`;
       }
       if (status >= 500) return `${label}: HTTP ${status}, so the site counts as closed to automated reads`;
+      // Short of the size cap, a cut-off file may be missing this path's rule: unreachable, not permission.
+      if (status < 300 && got.hop.truncated && got.hop.body.length < MAX_BODY_BYTES) return `${label}: the file was cut off mid-read, so the site counts as closed to automated reads`;
       // A missing or refused robots.txt (4xx) sets no rules.
       hit = { rules: status >= 200 && status < 300 ? parseRobots(got.hop.body.toString("utf8")) : [], at: now() };
       robotsCache.delete(url.origin);
@@ -191,12 +206,14 @@ export function createWebReader(deps: WebReaderDeps = {}) {
   }
 
   /** Caption text for a player response, read from the caption link it carries; `stop` means the next path would not help. */
-  async function captions(player: PlayerResponse, label: string, admitted: Set<string>, deadline: AbortSignal): Promise<Step & { meta?: string; stop?: boolean }> {
-    const details = player.videoDetails ?? {};
+  async function captions(player: PlayerResponse | null, label: string, admitted: Set<string>, deadline: AbortSignal): Promise<Step & { meta?: string; stop?: boolean }> {
+    const details = player?.videoDetails ?? {};
     const head = [details.title ? `# ${details.title}` : "", details.author ? `Channel: ${details.author}` : ""].filter(Boolean).join("\n");
     const meta = [head, details.shortDescription ? `Description:\n${details.shortDescription}` : ""].filter(Boolean).join("\n\n");
-    const tracks = player.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
-    const track = tracks.find((t) => t.languageCode?.startsWith("en") && !t.kind) ?? tracks.find((t) => t.languageCode?.startsWith("en")) ?? tracks[0];
+    const listed = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    const tracks = Array.isArray(listed) ? listed.filter((t) => t instanceof Object) : [];
+    const english = (t: CaptionTrack) => String(t.languageCode ?? "").startsWith("en");
+    const track = tracks.find((t) => english(t) && !t.kind) ?? tracks.find(english) ?? tracks[0];
     if (!track?.baseUrl) return { ok: false, route: "youtube", text: "", meta, stop: Boolean(details.title), tried: [`${label}: ${details.title ? "this video has no captions" : "no video data"}`] };
     let captionUrl: URL;
     try {
@@ -206,7 +223,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     }
     if (siteKey(captionUrl.hostname) !== "youtube.com") return { ok: false, route: "youtube", text: "", meta, tried: [`${label}: caption link points off youtube.com, not followed`] };
     captionUrl.searchParams.set("fmt", "json3");
-    const caption = await get(captionUrl, label, { admitted, deadline });
+    const caption = await get(captionUrl, label, { admitted, deadline, site: "youtube.com" });
     if ("error" in caption) return { ok: false, route: "youtube", text: "", meta, stop: caption.gated || caption.final, tried: [`${label}: ${caption.error}`] };
     if (caption.hop.status === 429) {
       gate.pause(caption.url.hostname);
@@ -245,9 +262,9 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     } else if (api.hop.status !== 200) {
       tried.push(`${label} (player API): HTTP ${api.hop.status}`);
     } else {
-      let player: PlayerResponse = {};
+      let player: PlayerResponse | null = {};
       try {
-        player = JSON.parse(api.hop.body.toString("utf8")) as PlayerResponse;
+        player = JSON.parse(api.hop.body.toString("utf8")) as PlayerResponse | null;
       } catch {}
       fromApi = await captions(player, `${label} (player API)`, admitted, deadline);
       if (fromApi.ok || fromApi.stop) return fromApi;
@@ -255,7 +272,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     }
 
     // Fallback, GET only: the watch page and the caption link it carries.
-    const page = await get(watch, `${label} (watch page)`, { admitted, deadline });
+    const page = await get(watch, `${label} (watch page)`, { admitted, deadline, robots: true });
     if ("error" in page) return { ok: false, route: "youtube", text: "", meta: fromApi.meta, tried: [...tried, `${label} (watch page): ${page.error}`] };
     if (page.hop.status === 429) {
       const stop = paused(page.url);
@@ -359,16 +376,15 @@ export function createWebReader(deps: WebReaderDeps = {}) {
       if (hit && now() - hit.at < CACHE_MS) {
         step = { ...hit.step, tried: [`step 0 cache: read ${Math.round((now() - hit.at) / 60_000)} min ago`, ...hit.step.tried] };
       } else {
+        const started = now();
         let pending = inflight.get(key);
         if (!pending) {
           pending = ladder(url).finally(() => inflight.delete(key));
           inflight.set(key, pending);
         }
         step = await pending;
-        if (step.keep && !opts.guest) {
-          cache.set(key, { step, at: now() });
-          if (cache.size > CACHE_ROWS) cache.delete(cache.keys().next().value!);
-        }
+        // A step-4 answer remembered while this read ran is newer: it stays.
+        if (step.keep && !opts.guest && (cache.get(key)?.at ?? -Infinity) < started) store(key, step);
       }
     }
     // A redirect that lands on a never-fetch host makes the read search-only too.
@@ -389,6 +405,13 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     return { status: "blocked", url: key, route: "stop", text: text ? `${text}\n\n${WEB_READ_STOP}` : WEB_READ_STOP, tried };
   }
 
+  /** Every cache write: the oldest row leaves past CACHE_ROWS. */
+  function store(key: string, step: Step): void {
+    cache.delete(key);
+    cache.set(key, { step, at: now() });
+    if (cache.size > CACHE_ROWS) cache.delete(cache.keys().next().value!);
+  }
+
   /** Step 4's answer, so the same URL is not read twice within the cache window. */
   function remember(raw: string, route: string, text: string, first?: string): void {
     let url: URL;
@@ -399,7 +422,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     }
     if (refusedTarget(url) || isLinkedIn(url.hostname) || !text.trim()) return;
     url.hash = "";
-    cache.set(url.href, { step: { ok: true, route, text, tried: [`${route}: read earlier`], keep: true, ...(first ? { first: capText(first, FIRST_READ_MAX) } : {}) }, at: now() });
+    store(url.href, { ok: true, route, text, tried: [`${route}: read earlier`], keep: true, ...(first ? { first: capText(first, FIRST_READ_MAX) } : {}) });
   }
 
   return { read, remember, gate };

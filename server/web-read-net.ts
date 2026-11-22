@@ -111,7 +111,8 @@ export const nodeTransport: Transport = (url, headers, signal, body) =>
       for (const [key, value] of Object.entries(res.headers)) if (key !== "set-cookie" && value !== undefined) flat[key] = Array.isArray(value) ? value.join(", ") : value;
       const status = res.statusCode ?? 0;
       if (status >= 300 && status < 400) {
-        res.resume();
+        // Only Location matters: close the connection rather than download the redirect's body.
+        res.destroy();
         return resolve({ status, headers: flat, body: Buffer.alloc(0), truncated: false });
       }
       const chunks: Buffer[] = [];

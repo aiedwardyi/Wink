@@ -1,7 +1,7 @@
 // Hostile-server cases ported from the earlier read_url reader (PR 1821), run against web_read's own transport.
 import { createServer, type Server } from "node:http";
-import { deflateSync, gzipSync } from "node:zlib";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createGzip, deflateSync, gzipSync } from "node:zlib";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 
 import { createWebReader } from "./web-read.ts";
 import { guardedLookup, nodeTransport, POST_URLS, privateAddress, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
@@ -23,14 +23,34 @@ const cpuAfter = async (ms: number) => {
 let site: Server;
 let base = "";
 const methods: string[] = [];
+// Resolves when the server sees the client close that path's connection.
+const closed = new Map<string, () => void>();
+const whenClosed = (path: string) => new Promise<void>((resolve) => closed.set(path, resolve));
 beforeAll(async () => {
   site = createServer((req, res) => {
     methods.push(`${req.method} ${req.url}`);
     if (req.url === "/bomb") return res.writeHead(200, { "content-type": "text/plain", "content-encoding": "br" }).end(bomb);
     if (req.url === "/gzbomb") return res.writeHead(200, { "content-type": "text/plain", "content-encoding": "gzip" }).end(gzBomb);
     if (req.url === "/stall-gz") {
+      // A small flushed gzip prefix, then silence: only the deadline can end this read.
       res.writeHead(200, { "content-type": "text/plain", "content-encoding": "gzip" });
-      return res.write(gzBomb.subarray(0, 4096));
+      const zip = createGzip();
+      zip.on("data", (chunk: Buffer) => res.write(chunk));
+      res.on("close", () => {
+        zip.destroy();
+        closed.get("/stall-gz")?.();
+      });
+      zip.write("hello ".repeat(1000));
+      return zip.flush();
+    }
+    if (req.url === "/hop-drip") {
+      res.writeHead(302, { location: "/latin" });
+      const timer = setInterval(() => res.write("x".repeat(1000)), 20);
+      res.on("close", () => {
+        clearInterval(timer);
+        closed.get("/hop-drip")?.();
+      });
+      return;
     }
     if (req.url === "/drip") {
       res.writeHead(200, { "content-type": "text/plain" });
@@ -72,9 +92,13 @@ describe("web_read transport against hostile servers", () => {
     expect(await cpuAfter(1000)).toBeLessThan(250);
   }, 30_000);
 
-  it("tears the decoder down when the read times out mid-body", async () => {
-    await expect(get("/stall-gz", 300)).resolves.toMatchObject({ truncated: true }).catch(() => undefined);
-    expect(await cpuAfter(500)).toBeLessThan(250);
+  it("tears the decoder down when the read times out mid-body, keeping what arrived", async () => {
+    const closing = whenClosed("/stall-gz");
+    const hop = await get("/stall-gz", 300);
+    expect(hop.truncated).toBe(true);
+    // 6,000 decoded bytes, far under the cap: the deadline ended this read.
+    expect(hop.body.toString()).toBe("hello ".repeat(1000));
+    await closing;
   });
 
   it("answers when a compressed response is cut off mid-body", async () => {
@@ -87,6 +111,14 @@ describe("web_read transport against hostile servers", () => {
     await get("/drip", 600).then((hop) => expect(hop.truncated).toBe(true), (error) => expect(String(error)).toMatch(/abort|timeout/i));
     expect(Date.now() - started).toBeLessThan(3000);
   });
+
+  it("closes a redirect's connection once it has the headers, without reading its body", async () => {
+    const stop = new AbortController();
+    onTestFinished(() => stop.abort());
+    const closing = whenClosed("/hop-drip");
+    expect(await nodeTransport(new URL(base + "/hop-drip"), { "user-agent": "test" }, stop.signal)).toMatchObject({ status: 302, headers: { location: "/latin" } });
+    await closing;
+  }, 5000);
 
   it("reports a redirect without following it, and never keeps a cookie", async () => {
     expect(await get("/hop")).toMatchObject({ status: 302, headers: { location: "/latin" } });

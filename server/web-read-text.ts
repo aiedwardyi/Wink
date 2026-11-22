@@ -199,15 +199,16 @@ async function contentText(content: string, room: number): Promise<string> {
   let inText = false;
   let inArray = false;
   let nextYield = YIELD_EVERY;
+  const breathe = (at: number) => {
+    nextYield = at + YIELD_EVERY;
+    return tick();
+  };
   const flush = (separator: string) => {
     if (separator && out && !out.endsWith(separator) && !out.endsWith("\n")) out += separator;
   };
   let i = 0;
   while (i < content.length && out.length < room) {
-    if (i >= nextYield) {
-      nextYield = i + YIELD_EVERY;
-      await tick();
-    }
+    if (i >= nextYield) await breathe(i);
     const c = content[i]!;
     if (c === "(") {
       // A literal string: balanced parentheses nest, a backslash escapes the next char.
@@ -215,6 +216,7 @@ async function contentText(content: string, room: number): Promise<string> {
       let text = "";
       i++;
       while (i < content.length && depth > 0) {
+        if (i >= nextYield) await breathe(i);
         const d = content[i]!;
         if (d === "\\") {
           const e = content[i + 1] ?? "";
@@ -236,7 +238,8 @@ async function contentText(content: string, room: number): Promise<string> {
         }
         if (d === "(") depth++;
         else if (d === ")" && --depth === 0) break;
-        text += d;
+        // Past what this stream may still add, a string is only scanned to its end.
+        if (text.length < room) text += d;
         i++;
       }
       i++;
@@ -260,7 +263,7 @@ async function contentText(content: string, room: number): Promise<string> {
       continue;
     }
     if (c === "%") {
-      while (i < content.length && content[i] !== "\n" && content[i] !== "\r") i++;
+      while (i < content.length && content[i] !== "\n" && content[i] !== "\r") if (++i >= nextYield) await breathe(i);
       continue;
     }
     if (isSpace(c) || isDelimiter(c)) {
@@ -268,7 +271,7 @@ async function contentText(content: string, room: number): Promise<string> {
       continue;
     }
     let j = i;
-    while (j < content.length && !isDelimiter(content[j]!)) j++;
+    while (j < content.length && !isDelimiter(content[j]!)) if (++j >= nextYield) await breathe(j);
     const token = content.slice(i, j);
     i = j;
     const value = Number(token);

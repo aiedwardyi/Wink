@@ -2,7 +2,7 @@ import { deflateSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { WEB_READ_OWN_TOOL, WEB_READ_PAGE_MARK, WEB_READ_SEARCH_ONLY, WEB_READ_STOP } from "../shared/web-read.ts";
-import { createWebReader, GUEST_READS_PER_MINUTE, PAUSE_429_MS, READ_DEADLINE_MS, ROBOTS_ROWS, SITE_BUDGET, siteKey, webReadRoute, youtubeId } from "./web-read.ts";
+import { CACHE_ROWS, createWebReader, GUEST_READS_PER_MINUTE, PAUSE_429_MS, READ_DEADLINE_MS, ROBOTS_ROWS, SITE_BUDGET, siteKey, webReadRoute, youtubeId } from "./web-read.ts";
 import { parseRobots, robotsAllows } from "./web-read-robots.ts";
 import { guardedLookup, POST_URLS, privateAddress, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
 import { challengeReason, htmlToText, pdfToText, TEXT_CAP } from "./web-read-text.ts";
@@ -512,6 +512,21 @@ describe("web_read gate follow-up (Neon 2123N)", () => {
       expect(robotsAllows(rules, `/${"a".repeat(100_000)}`)).toBe(true);
       expect(Date.now() - started).toBeLessThan(500);
     });
+
+    it("a percent-encoded * in a rule is a literal character, not a wildcard", () => {
+      const rules = parseRobots("User-agent: *\nDisallow: /docs/%2A$\n");
+      expect(robotsAllows(rules, "/docs/index")).toBe(true);
+      expect(robotsAllows(rules, "/docs/%2a")).toBe(false);
+      expect(robotsAllows(parseRobots("User-agent: *\nDisallow: /docs/*.pdf$\n"), "/docs/a.pdf")).toBe(false);
+    });
+
+    it("reads a file of many agents and many rules in linear time", () => {
+      const agents = "User-agent: bot\n".repeat(16_000) + "User-agent: *\n";
+      const body = agents + "Disallow: /private\n".repeat(Math.floor((500_000 - agents.length) / 19));
+      const started = Date.now();
+      expect(parseRobots(body).length).toBeGreaterThan(10_000);
+      expect(Date.now() - started).toBeLessThan(100);
+    });
   });
 });
 
@@ -636,6 +651,16 @@ describe("web_read gate follow-up (Fable 2123)", () => {
     expect(worstGap).toBeLessThan(50);
   });
 
+  it.each([
+    ["one 8 MB string", flatePdf("BT (" + "a".repeat(7_900_000) + ") Tj ET")],
+    ["one 8 MB comment", flatePdf("BT %" + "a".repeat(7_900_000) + "\n ET")],
+    ["one 8 MB token", flatePdf("BT " + "a".repeat(7_900_000) + " ET")],
+  ])("%s: the event loop never waits over 50 ms", async (_name, pdf) => {
+    await pdfToText(plainPdf("BT (warm up) Tj ET"));
+    const { worstGap } = await timed(() => pdfToText(pdf));
+    expect(worstGap).toBeLessThan(50);
+  });
+
   it("the whole ladder stays responsive on the gate's PDF", async () => {
     const { transport } = fake({ "https://evil.example/x.pdf": { type: "application/pdf", body: plainPdf("BT (" + "\\(".repeat(200_000) + " ET") } });
     const { ms, worstGap } = await timed(() => createWebReader({ transport }).read("https://evil.example/x.pdf"));
@@ -742,8 +767,8 @@ describe("web_read gate follow-up (Fable 2123)", () => {
       expect((await reader.read("https://site.example/")).status).toBe("ok");
       const room = await serve(true, reader);
       const statuses: unknown[] = [];
-      for (let n = 0; n <= GUEST_READS_PER_MINUTE; n++) statuses.push((await room.call({ url: "https://site.example/" })).status);
-      expect(statuses.slice(0, GUEST_READS_PER_MINUTE).every((s) => s === "ok")).toBe(true);
+      for (let n = 0; n < GUEST_READS_PER_MINUTE; n++) statuses.push((await room.call({ url: "https://site.example/" })).status);
+      expect(statuses).toEqual(Array(GUEST_READS_PER_MINUTE).fill("ok"));
       const capped = await room.call({ url: "https://site.example/" });
       expect(capped.status).toBe("blocked");
       expect(capped.text).toContain("try again in a minute");
@@ -891,5 +916,122 @@ describe("web_read gate follow-up (2123E)", () => {
       expect(later.text).toContain("[Also found by Wink's own first read:]\n[Partial: ");
       expect(later.text).toBe(live.text);
     });
+  });
+});
+
+describe("web_read review follow-ups", () => {
+  const deferred = () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    return { held, release };
+  };
+  const article = (word: string) => ({ html: page(word, `<main>${paras(8, word)}</main>`) });
+
+  it("a fetch that ends after a step-4 answer was remembered does not overwrite it", async () => {
+    const url = "https://www.reddit.com/r/a/comments/2/";
+    const { transport } = fake({ [url]: { status: 403, html: "blocked by network security" } });
+    const entered = deferred();
+    const gate = deferred();
+    const slow: Transport = async (target, headers, signal, body) => {
+      if (target.href === url) {
+        entered.release();
+        await gate.held;
+      }
+      return transport(target, headers, signal, body);
+    };
+    const reader = createWebReader({ transport: slow });
+    const pending = reader.read(url);
+    await entered.held;
+    reader.remember(url, "reader:codex", "The thread's full text, read by the borrowed reader.");
+    gate.release();
+    expect((await pending).status).toBe("blocked");
+    expect(await reader.read(url)).toMatchObject({ status: "ok", route: "reader:codex" });
+  });
+
+  it(`remembered pages count toward the cache's ${CACHE_ROWS} rows`, async () => {
+    const { transport, requests } = fake({ "https://m0.example/": article("Mzero") });
+    const reader = createWebReader({ transport });
+    for (let i = 0; i <= CACHE_ROWS; i++) reader.remember(`https://m${i}.example/`, "reader:codex", `Reader text ${i}.`);
+    expect(await reader.read("https://m0.example/")).toMatchObject({ status: "ok", route: "fetch" });
+    expect(await reader.read(`https://m${CACHE_ROWS}.example/`)).toMatchObject({ status: "ok", route: "reader:codex" });
+    expect(requests).toEqual(["https://m0.example/"]);
+  });
+
+  it("a 429 that arrives while a read waits on robots.txt stops that read's page request too", async () => {
+    const pages = fake({ "https://s.example/a": article("Alpha"), "https://s.example/b": article("Beta") });
+    const entered = deferred();
+    const gate = deferred();
+    let robotsReads = 0;
+    const transport: Transport = async (url, headers, signal, body) => {
+      if (url.pathname === "/robots.txt" && ++robotsReads === 1) {
+        entered.release();
+        await gate.held;
+      } else if (url.pathname === "/robots.txt") return { status: 429, headers: {}, body: Buffer.alloc(0), truncated: false };
+      return pages.transport(url, headers, signal, body);
+    };
+    const reader = createWebReader({ transport });
+    const first = reader.read("https://s.example/a");
+    await entered.held;
+    expect((await reader.read("https://s.example/b")).tried[0]).toMatch(/robots\.txt: HTTP 429, s\.example paused/);
+    gate.release();
+    const a = await first;
+    expect(a.status).toBe("blocked");
+    expect(a.tried[0]).toMatch(/s\.example answered 429/);
+    expect(pages.requests).toEqual([]);
+  });
+
+  it("a robots.txt cut off mid-file counts as unreachable, not as permission, and is not kept", async () => {
+    const pages = fake({ "https://r.example/secret": article("Secret"), "https://r.example/other": article("Other") });
+    let robotsReads = 0;
+    const transport: Transport = async (url, headers, signal, body) => {
+      if (url.pathname !== "/robots.txt") return pages.transport(url, headers, signal, body);
+      robotsReads++;
+      return { status: 200, headers: { "content-type": "text/plain" }, body: Buffer.from("User-agent: *\nAllow: /pub\n"), truncated: true };
+    };
+    const reader = createWebReader({ transport });
+    const result = await reader.read("https://r.example/secret");
+    expect(result.status).toBe("blocked");
+    expect(result.tried[0]).toMatch(/robots\.txt: .*closed to automated reads/);
+    await reader.read("https://r.example/other");
+    expect(robotsReads).toBe(2);
+    expect(pages.requests).toEqual([]);
+  });
+
+  it.each([
+    ["null", "null"],
+    ["caption tracks that are not a list", JSON.stringify({ captions: { playerCaptionsTracklistRenderer: { captionTracks: {} } } })],
+  ])("a player API answer of %s falls back to the watch page instead of failing the read", async (_name, body) => {
+    const watchTrack = { baseUrl: "https://www.youtube.com/api/timedtext?v=abc123XYZ00&lang=en", languageCode: "en" };
+    const { transport, requests } = fake({ [YT_API]: { type: "application/json", body }, [YT_WATCH]: { html: player([watchTrack]) }, [YT_CAPTION]: { type: "application/json", body: json3 } });
+    const result = await createWebReader({ transport }).read("https://www.youtube.com/watch?v=abc123XYZ00");
+    expect(result).toMatchObject({ status: "ok", route: "youtube-captions" });
+    expect(requests).toEqual([YT_API, YT_WATCH, YT_CAPTION]);
+  });
+
+  it("a caption link that redirects off youtube.com is not followed", async () => {
+    const { transport, requests } = fake({
+      [YT_API]: { type: "application/json", body: ytPlayer([YT_API_TRACK]) },
+      [YT_CAPTION]: { status: 302, location: "https://other.example/t" },
+      "https://other.example/t": { type: "application/json", body: json3 },
+      [YT_WATCH]: { html: "<html><body>no player</body></html>" },
+    });
+    const result = await createWebReader({ transport }).read("https://www.youtube.com/watch?v=abc123XYZ00");
+    expect(result.status).toBe("blocked");
+    expect(result.tried.join("\n")).toMatch(/off youtube\.com, not followed/);
+    expect(requests).not.toContain("https://other.example/t");
+  });
+
+  it("a watch page redirect checks robots.txt where it lands", async () => {
+    const consent = "https://consent.youtube.com/m?continue=watch";
+    const { transport, requests, robots } = fake({
+      [YT_API]: YT_UNPLAYABLE,
+      [YT_WATCH]: { status: 302, location: consent },
+      "https://consent.youtube.com/robots.txt": { body: "User-agent: *\nDisallow: /m\n" },
+      [consent]: { html: player([]) },
+    });
+    const result = await createWebReader({ transport }).read("https://www.youtube.com/watch?v=abc123XYZ00");
+    expect(result.status).toBe("blocked");
+    expect(robots).toContain("https://consent.youtube.com/robots.txt");
+    expect(requests).not.toContain(consent);
   });
 });

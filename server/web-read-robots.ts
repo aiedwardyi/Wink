@@ -6,18 +6,23 @@ export type RobotsRule = { allow: boolean; pattern: string };
 /** RFC 9309 asks readers to parse at least 500 KiB; more than that is ignored. */
 const PARSE_BYTES = 512_000;
 
-function normalize(path: string): string {
+const recode = (part: string) => {
   try {
-    return encodeURI(decodeURI(path));
+    return encodeURI(decodeURI(part));
   } catch {
-    return path;
+    return part;
   }
+};
+
+/** %2A stays encoded: a reserved character is compared encoded (RFC 9309 2.2.2), so it never turns into a wildcard. */
+function normalize(path: string): string {
+  return path.split(/%2a/i).map(recode).join("%2A");
 }
 
 /** The rules of every "*" group in a robots.txt body. */
 export function parseRobots(body: string): RobotsRule[] {
   const rules: RobotsRule[] = [];
-  let agents: string[] = [];
+  let star = false;
   let inRules = false;
   for (const raw of body.slice(0, PARSE_BYTES).split(/\r\n|\r|\n/)) {
     const line = raw.replace(/#.*$/, "").trim();
@@ -26,13 +31,13 @@ export function parseRobots(body: string): RobotsRule[] {
     const key = match[1]!.toLowerCase();
     const value = match[2]!.trim();
     if (key === "user-agent") {
-      if (inRules) agents = [];
+      if (inRules) star = false;
       inRules = false;
-      agents.push(value.toLowerCase());
+      if (value === "*") star = true;
     } else if (key === "allow" || key === "disallow") {
       inRules = true;
       // An empty Disallow allows everything, so it adds no rule.
-      if (agents.includes("*") && value) rules.push({ allow: key === "allow", pattern: normalize(value) });
+      if (star && value) rules.push({ allow: key === "allow", pattern: normalize(value) });
     }
   }
   return rules;
