@@ -6286,10 +6286,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         const finalGraceInputs = { ...graceInputs, grace: { ...summaryGrace, requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle } };
         const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;
-        if (systemRecycle || (finalGrace && !finalGrace.safe)) {
+        // Native history was sized before late sends folded in; past its room the turn summarizes like base.
+        const replayOverflow = codexHistory && estimateContextTokens([{ text: systemUpdate + text }]) > (replaysTranscript ? nativeReplayBudget(modelContextWindow) : replayRoom);
+        if (systemRecycle || replayOverflow || (finalGrace && !finalGrace.safe)) {
           const lateCount = late.length;
-          if (summarySkipped) {
-            onSummaryWait({ threadId, sendId: latencySendId, mode: "waited", waitedMs: 0, reason: finalGrace && !finalGrace.safe ? finalGrace.reason : "session-recycle" });
+          if (summarySkipped || replayOverflow) {
+            onSummaryWait({ threadId, sendId: latencySendId, mode: "waited", waitedMs: 0, reason: finalGrace && !finalGrace.safe ? finalGrace.reason : replayOverflow ? "headroom" : "session-recycle" });
             const waitedMs = await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), {
               sendId: latencySendId, grace: finalGraceInputs, onWait: onSummaryWait,
             });
@@ -6316,6 +6318,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
             seed.compactionId = compacted.expanded ? null : latestCompactionId;
+            delete seed.nativeReplay;
             if (currentTurnEpoch(bot.id) !== epoch || (opts?.sendId && isSendCancelled(opts.sendId))) {
               throw Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true });
             }
