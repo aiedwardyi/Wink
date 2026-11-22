@@ -40,6 +40,9 @@ const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
 const SUMMARY_MAX = 120;
 const STATE_FILE = "memory-pass.json";
+// A helper limit that named no reset holds notes for the shortest subscription
+// window: a spent window is back by then, and a throttle long over.
+const BARE_LIMIT_MS = 5 * 60 * 60_000;
 
 const listSchema = z.union([z.array(z.string()), z.string()]).nullish();
 const factsSchema = z
@@ -106,7 +109,8 @@ export function noteGenerator(
   const id = helper.instanceId;
   const report = id && usage ? usage.limits.get(id) : undefined;
   const now = Date.now();
-  if (exhaustedWindow(report?.windows, now) || (report?.noteLimit && (report.noteLimit.resetsAt === null || report.noteLimit.resetsAt > now))) return null;
+  // a window spent in one pool while another still has room: the helper's own rejection decides
+  if (exhaustedWindow(report?.windows?.filter((w) => !w.otherPoolLeft), now) || (report?.noteLimit?.resetsAt ?? 0) > now) return null;
   if (id && usage?.signedOut?.has(id)) return null;
   const generate: NoteGenerator = async (prompt, signal, onUsage) => {
     try {
@@ -115,7 +119,7 @@ export function noteGenerator(
       const limit = !signal.aborted && error instanceof Error && usageLimitFromError(error, true);
       if (limit && id && usage) {
         const previous = usage.limits.get(id);
-        usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: limit });
+        usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: { resetsAt: limit.resetsAt ?? Date.now() + BARE_LIMIT_MS } });
         usage.save();
       } else if (id && !signal.aborted && error instanceof Error && (isSignOut(error.message) || UNAVAILABLE.test(error.message))) usage?.signedOut?.add(id);
       throw error;

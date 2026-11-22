@@ -308,6 +308,18 @@ describe("antigravityRateLimitWindows", () => {
     expect(antigravityRateLimitWindows(groups(0.2), now).find((window) => window.id === "seven_day")).toEqual(
       { id: "seven_day", usedPercent: 80, resetsAt: now + 7 * DAY, windowMinutes: 10_080 },
     );
+    // A spent Argon still shows on the bar, marked as leaving the Gemini pool to run on.
+    expect(antigravityRateLimitWindows(groups(0), now).find((window) => window.id === "seven_day")).toEqual(
+      { id: "seven_day", usedPercent: 100, resetsAt: now + 7 * DAY, windowMinutes: 10_080, otherPoolLeft: true },
+    );
+  });
+
+  it("leaves a window spent in every pool unmarked", () => {
+    const now = Date.parse("2026-09-14T12:00:00Z");
+    const spent = (id: string) => ({ id, name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: 0, reset_time: "2026-09-21T12:00:00Z" });
+    expect(antigravityRateLimitWindows({ groups: [{ buckets: [spent("gemini-weekly")] }, { buckets: [spent("3p-weekly")] }] }, now)).toEqual([
+      { id: "seven_day", usedPercent: 100, resetsAt: Date.parse("2026-09-21T12:00:00Z"), windowMinutes: 10_080 },
+    ]);
   });
 
   it("drops buckets without a fill level and tolerates junk", () => {

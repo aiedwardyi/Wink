@@ -29,7 +29,7 @@ import { CodexDriver } from "./drivers/codex.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { replyTurns } from "./pick-sources.ts";
 import { loadProfileSyncSettings, saveProfileSyncSettings } from "./profile-sync.ts";
-import type { RateLimitsMap } from "./rate-limits-store.ts";
+import type { RateLimitsMap, RateLimitsReport } from "./rate-limits-store.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
@@ -1304,6 +1304,46 @@ describe("note generator", () => {
     await noteGenerator([claude])!("prompt", signal, onUsage);
     expect(claude.generateText).toHaveBeenCalledWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true, onUsage });
   });
+
+  describe("account limits", () => {
+    const HOUR = 3_600_000;
+    const now = Date.parse("2026-11-22T00:00:00Z");
+    const own = (error?: Error) => ({ instanceId: "grok", driverKind: "grokAgent", enabled: true, generateText: vi.fn(async () => {
+      if (error) throw error;
+      return "[]";
+    }) });
+    const usage = (report?: RateLimitsReport) => ({ limits: new Map<string, RateLimitsReport>(report ? [["grok", report]] : []), save: vi.fn() });
+    beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(now));
+    afterEach(() => vi.restoreAllMocks());
+
+    it("holds notes after a limit with no reset time only for the shortest window", async () => {
+      const limits = usage();
+      await expect(noteGenerator([], undefined, own(new Error("xAI HTTP 429: Too Many Requests")), limits)?.("notes", new AbortController().signal)).rejects.toThrow();
+      expect(limits.limits.get("grok")?.noteLimit).toEqual({ resetsAt: now + 5 * HOUR });
+      expect(noteGenerator([], undefined, own(), limits)).toBeNull();
+      vi.spyOn(Date, "now").mockReturnValue(now + 5 * HOUR);
+      expect(noteGenerator([], undefined, own(), limits)).not.toBeNull();
+    });
+
+    it("keeps a limit's own reset time, and stops reading a stored limit with none", async () => {
+      const limits = usage();
+      const error = Object.assign(new Error("429"), { data: { error: { type: "rate_limit_exceeded" }, resetsAt: (now + 30 * HOUR) / 1000 } });
+      await expect(noteGenerator([], undefined, own(error), limits)?.("notes", new AbortController().signal)).rejects.toThrow();
+      expect(limits.limits.get("grok")?.noteLimit).toEqual({ resetsAt: now + 30 * HOUR });
+      vi.spyOn(Date, "now").mockReturnValue(now + 29 * HOUR);
+      expect(noteGenerator([], undefined, own(), limits)).toBeNull();
+      vi.spyOn(Date, "now").mockReturnValue(now + 30 * HOUR + 1);
+      expect(noteGenerator([], undefined, own(), limits)).not.toBeNull();
+      expect(noteGenerator([], undefined, own(), usage({ windows: [], observedAt: new Date(now).toISOString(), noteLimit: { resetsAt: null } }))).not.toBeNull();
+    });
+
+    it("pauses on a spent window unless another pool of it still has room", () => {
+      const spent = { id: "seven_day", usedPercent: 100, resetsAt: now + 48 * HOUR };
+      const report = (otherPoolLeft?: boolean) => usage({ windows: [{ ...spent, ...(otherPoolLeft && { otherPoolLeft }) }], observedAt: new Date(now).toISOString() });
+      expect(noteGenerator([], undefined, own(), report())).toBeNull();
+      expect(noteGenerator([], undefined, own(), report(true))).not.toBeNull();
+    });
+  });
 });
 
 describe("notes on the bot's own engine", () => {
@@ -1328,7 +1368,7 @@ describe("notes on the bot's own engine", () => {
     await expect(noteGenerator([], undefined, own, usage)?.("notes", new AbortController().signal)).rejects.toThrow("Account text rate limit");
     expect(noteGenerator([], undefined, own, usage)).toBeNull();
     expect(usage.save).toHaveBeenCalledTimes(1);
-    expect(limits.get("codex")?.noteLimit).toEqual({ resetsAt: null });
+    expect(limits.get("codex")?.noteLimit?.resetsAt).toBeGreaterThan(Date.now());
   });
 
   it.each([

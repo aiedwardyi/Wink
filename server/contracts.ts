@@ -182,6 +182,8 @@ export interface RateLimitWindow {
   usedPercent: number;
   resetsAt: number | null;
   windowMinutes?: number;
+  /** Spent in its most used pool while another pool of the same window still has room (Antigravity). */
+  otherPoolLeft?: boolean;
 }
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void;

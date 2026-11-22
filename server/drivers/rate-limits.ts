@@ -198,12 +198,14 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
     }
   }
   const best = new Map<string, RateLimitWindow>();
+  const room = new Set<string>();
   for (const candidate of candidates) {
     const kind = classify(candidate.name);
     if (!kind) continue;
     if (typeof candidate.fraction !== "number" || !Number.isFinite(candidate.fraction)) continue;
     if (candidate.fraction < 0 || candidate.fraction > 1) continue;
     const usedPercent = round1((1 - candidate.fraction) * 100);
+    if (usedPercent < 100) room.add(kind.id);
     const current = best.get(kind.id);
     if (!current || usedPercent > current.usedPercent) {
       best.set(kind.id, { id: kind.id, usedPercent, resetsAt: candidate.resetMs, windowMinutes: kind.windowMinutes });
@@ -212,6 +214,8 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
   const out: RateLimitWindow[] = [];
   for (const id of ["five_hour", "seven_day", "daily"] as const) {
     const window = best.get(id);
+    // the bar shows the spent pool; the note helper may still run on another one
+    if (window && window.usedPercent >= 100 && room.has(id)) window.otherPoolLeft = true;
     if (window) out.push(window);
   }
   return out;
