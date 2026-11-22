@@ -133,6 +133,18 @@ export const CORPUS: CorpusCase[] = [
   ["en", "WiFi password: correct horse battery staple", ["correct horse battery staple"], []],
   ["ko", "비밀번호: 해바라기", ["해바라기"], []],
   ["ko", "넷플릭스 비번은 bluemoon77 이에요.", ["bluemoon77"], []],
+
+  // a value with text after it, a bold token, room invite codes
+  ["en", "Password: lilac5001 (personal account)", ["lilac5001"], []],
+  ["en", "My password is tulip742! and I change it monthly.", ["tulip742"], []],
+  ["en", "Netflix password: bluemoon (shared with family)", ["bluemoon"], []],
+  ["en", "Card number: 4111 1111 1111 1112 (Visa)", ["4111 1111 1111 1112"], []],
+  ["en", "WiFi: qwer5002, the guest one is qwer5003", ["qwer5002"], []],
+  ["ko", "비밀번호는 lilac5004 (개인 계정)", ["lilac5004"], []],
+  ["en", "- **ghp_c8f3k2m9q7w4e1r6t5y0u2i3**", ["ghp_c8f3k2m9q7w4e1r6t5y0u2i3"], []],
+  ["en", "**sk-proj-b8f3k2m9q7w4e1r6t5y0**", ["sk-proj-b8f3k2m9q7w4e1r6t5y0"], []],
+  ["en", "invite code K7MZ3Q", ["K7MZ3Q"], []],
+  ["en", "My room invite is 3A7B2C", ["3A7B2C"], []],
   ["ko", "사용자의 노트북 암호는 maple2050입니다.", ["maple2050"], []],
 
   // ordinary facts near secret words
@@ -181,6 +193,14 @@ export const CORPUS: CorpusCase[] = [
   ["en", "Flying KE7523 to Jeju on Dec 3.", [], ["Flying KE7523 to Jeju on Dec 3."]],
   ["en", "Flight OZ561 to Tokyo next month.", [], ["Flight OZ561 to Tokyo next month."]],
   ["en", "Phone: 010-1234-5678", [], ["Phone: 010-1234-5678"]],
+  ["en", "Flight 7C2345 to Osaka in May.", [], ["Flight 7C2345 to Osaka in May."]],
+  ["en", "Booked UA2345 to SFO.", [], ["Booked UA2345 to SFO."]],
+  ["en", "Password manager: 1Password", [], ["Password manager: 1Password"]],
+  ["en", "Password: changed monthly (work policy).", [], ["Password: changed monthly (work policy)."]],
+  ["en", "WiFi 802.11ax router at home.", [], ["WiFi 802.11ax router at home."]],
+  ["en", "### Passwords\n#### Hashing in use\nargon2id", [], ["argon2id"]],
+  ["en", "## Passwords\n**Tips**\nUses argon2id at work.", [], ["Uses argon2id at work."]],
+  ["en", "## WiFi\n### Router\nASUS RT-AX88U", [], ["ASUS RT-AX88U"]],
   ["en", "Apartment 1204, building 3.", [], ["Apartment 1204, building 3."]],
   ["en", "Runs a 5K every Saturday.", [], ["Runs a 5K every Saturday."]],
   ["en", "Drives a 2019 Kia Niro.", [], ["Drives a 2019 Kia Niro."]],

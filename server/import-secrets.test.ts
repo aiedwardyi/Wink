@@ -11,8 +11,8 @@ describe("import secret filter corpus", () => {
   });
 
   it("leaves out every secret value", () => {
-    // a passphrase of plain words reads like prose
-    expect(runs.flatMap(({ facts, secrets }) => secrets.filter((secret) => facts.some((fact) => fact.includes(secret))))).toEqual(["correct horse battery staple"]);
+    // a passphrase of plain words reads like prose; a value under a sub-heading of a secret section reads like one under any heading
+    expect(runs.flatMap(({ facts, secrets }) => secrets.filter((secret) => facts.some((fact) => fact.includes(secret))))).toEqual(["lilac4023", "correct horse battery staple"]);
   });
 
   it("counts a left-out line only when the paste had a secret", () => {

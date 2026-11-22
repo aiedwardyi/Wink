@@ -1,5 +1,5 @@
 // Import Memory leaves out a line only when it gives a secret's value, so a secret word in prose stays a fact.
-import { redactSecretsInText } from "../shared/redact.ts";
+import { redactRoomMemory } from "../shared/redact.ts";
 import { tokenLike } from "./memory-pass.ts";
 
 const EDGE = "(?<![\\p{L}\\p{N}])";
@@ -16,6 +16,10 @@ const HEADING = new RegExp(`${EDGE}(?:${STRONG}|${WEAK}|codes|keys|logins|코드
 const BRIDGE = new RegExp(`^(?:\\s+|[-–—]|\\([^)]{0,30}\\)|[:：=]|(?:is|are|was)(?![\\p{L}\\p{N}])|[은는이가](?![\\p{L}\\p{N}])|(?:${STRONG}|keys?|codes?|numbers?|no\\.?|#|login|비밀번호|번호|코드|키)${END})`, "iu");
 const SAID = /^(?:[:：=]|is|are|was|[은는이가])$/iu;
 const COPULA = /(?:\s*(?:이에요|예요|이야|입니다|이다|임|요))?[.!。]*$/u;
+// a value then a break, so text after it does not hide it: "lilac27 (personal account)", "tulip742! and I change it"
+const LEAD = /^(\d[\d -]*\d(?![\p{L}\p{N}])|\S+?)[.,;!。]*(?=\s*$|\s*[(,;]|\s+(?:and|but|so|or|which|because|since|until|[-–—])(?:\s|$))/iu;
+// a room invite code is six characters; a flight number of that length is not one
+const FLIGHT = /(?<![\p{L}\p{N}_#])(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\d{4}(?![\p{L}\p{N}_])/gu;
 const NOT_VALUE = /^(?:\S+@\S+\.\S+|https?:\/\/\S+|\d+(?:\.\d+)?(?:ghz|mhz|[kmg]bps|[kmgt]b|k|km|kg|cm|mm)|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)$/i;
 
 // one value token, or a card or account number written in groups
@@ -36,8 +40,8 @@ function labeledValue(line: string): boolean {
       said ||= SAID.test(bridge.trim()) || /[-–—]/.test(bridge);
       rest = rest.slice(bridge.length);
     }
-    const tokens = valueOf(rest);
-    if (!tokens.every(single)) continue;
+    const lead = LEAD.exec(rest.replace(COPULA, ""))?.[1].replace(/^(\d[\d -]*\d)$/, (digits) => digits.replace(/[ -]/g, ""));
+    const tokens = valueOf(rest).every(single) ? valueOf(rest) : lead ? [lead] : [];
     // "Netflix password: bluemoon" needs no digit; a bare "PIN cushion" does
     if (tokens.some(valueLike) || (match[1] && said && tokens.length === 1 && tokens[0].length >= 4)) return true;
   }
@@ -65,16 +69,18 @@ function structure(raw: string, line: string): { depth: number; text: string } |
 export function importSecrets(): (raw: string, line: string) => "secret" | "label" | undefined {
   let section = 0;
   return (raw, line) => {
+    const row = line.replace(/^\|\s*|\s*\|$/g, "").replace(/\s*\|\s*/g, ": ");
+    const plain = row.replace(FLIGHT, "");
+    const given = Boolean(row) && (redactRoomMemory(plain) !== plain || tokenLike(row) || labeledValue(row));
     const head = structure(raw, line);
     if (head) {
+      // any other heading ends the list, so "#### Hashing in use" under "### Passwords" is prose again
       if (HEADING.test(head.text)) {
         if (!section || head.depth <= section) section = head.depth;
-      } else if (head.depth <= section) section = 0;
-      return head.depth === 7 && section === 7 ? "label" : undefined;
+      } else section = 0;
+      return given ? "secret" : head.depth === 7 && section === 7 ? "label" : undefined;
     }
-    if (!line) return undefined;
-    const row = line.replace(/^\|\s*|\s*\|$/g, "").replace(/\s*\|\s*/g, ": ");
-    if (redactSecretsInText(row) !== row || tokenLike(row) || labeledValue(row) || (section && listedValue(row))) return "secret";
+    if (given || (row && section && listedValue(row))) return "secret";
     return undefined;
   };
 }
