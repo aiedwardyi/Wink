@@ -2393,3 +2393,58 @@ it("never restarts Main on a pane switch after a folder pick", async () => {
   await f.select(null);
   expect(f.open.mock.calls.filter(([input]) => !input.sessionId).map(([input]) => input.restart)).toEqual([false, false, false]);
 });
+
+it("never shows Main or sends it a key while a clicked worker waits on the pane list", async () => {
+  const { createWebTerminalBridge } = await import("@/lib/web-terminal-bridge");
+  vi.stubGlobal("localStorage", window.localStorage);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const writes: { sessionId: string; data: string }[] = [];
+  const lives: string[] = [];
+  let release!: () => void;
+  const listed = new Promise<void>((resolve) => { release = resolve; });
+  const roster = [{ sessionId: "main", label: "Main", generation: 1, main: true }, { sessionId: "worker", label: "Worker", generation: 1, main: false }];
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(String(input), "http://127.0.0.1");
+    if (url.pathname.endsWith("/terminal/live")) {
+      const sessionId = url.searchParams.get("sessionId") ?? "main";
+      lives.push(sessionId);
+      const frame = { kind: "snapshot", lease: "lease", sessionId, generation: 1, output: `${sessionId} scrollback`, seq: 5, cols: 80, rows: 24, exitCode: null };
+      const body = new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
+        init?.signal?.addEventListener("abort", () => { try { controller.close(); } catch {} }, { once: true });
+      } });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    }
+    if (url.pathname.endsWith("/terminal/input")) {
+      writes.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: true });
+    }
+    if (url.pathname.endsWith("/terminal")) {
+      await listed;
+      return Response.json({ panes: roster });
+    }
+    return Response.json({ ok: true });
+  }));
+  const webBridge = createWebTerminalBridge("bot-web");
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const painted = terminal.write.mock.calls.length;
+  const settle = () => new Promise((done) => setTimeout(done, 35));
+  try {
+    await act(async () => root.render(createElement(TerminalWorkspace, { bot: { id: "bot-web", name: "Web" }, visible: true, focusBlocked: false, onClose: vi.fn(), paneFocus: { sessionId: "worker" }, webBridge })));
+    await act(settle);
+    await act(async () => { terminal.__emitData("q"); await settle(); });
+    expect(lives).toEqual([]);
+    expect(terminal.write.mock.calls.slice(painted).map(([text]) => text)).not.toContain("main scrollback");
+    expect(writes).toEqual([]);
+    await act(async () => { release(); await settle(); });
+    await vi.waitFor(() => expect(lives.at(-1)).toBe("worker"));
+    await act(async () => { terminal.__emitData("z"); await settle(); });
+    expect(writes).toEqual([expect.objectContaining({ sessionId: "worker", data: "z" })]);
+  } finally {
+    release();
+    await webBridge.cancelOpen?.("bot-web");
+  }
+});

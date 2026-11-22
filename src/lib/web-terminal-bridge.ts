@@ -410,6 +410,14 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
         remote = snapshot.cols && snapshot.rows ? { cols: snapshot.cols, rows: snapshot.rows } : null;
         if (!live()) close();
       };
+      if (!input.sessionId) {
+        // The host attaches a bare open to any live pane, so a bot with only workers needs its main shell first.
+        const roster = await readPanes();
+        if (mine !== epoch) throw new Error("Terminal open was canceled");
+        const list: Array<{ main: boolean }> = Array.isArray(roster?.panes) ? roster.panes : [];
+        if (list.length && !list.some((pane) => pane.main)) await request(`${base}/start`, { method: "POST" });
+        if (mine !== epoch) throw new Error("Terminal open was canceled");
+      }
       let snapshot: Snapshot;
       try {
         snapshot = await connect(input.sessionId, adopt);

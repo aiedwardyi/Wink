@@ -120,33 +120,16 @@ describe("createWebTerminalBridge", () => {
     await expect(opened).resolves.toMatchObject({ id: "s1" });
   });
 
-  it("opens with a live request while the 25-pane roster is still loading", async () => {
-    roster = Array.from({ length: 25 }, (_, index) => ({ sessionId: `pane-${index}`, label: null, generation: 1, main: index === 0 }));
-    const network = vi.mocked(fetch).getMockImplementation()!;
-    let releaseRoster!: () => void;
-    const pending = new Promise<void>((resolve) => { releaseRoster = resolve; });
-    vi.mocked(fetch).mockImplementation(async (input, init) => {
-      if (!String(input).includes("/terminal/live")) await pending;
-      return network(input, init);
-    });
+  it("starts the main shell before attaching when only worker panes run", async () => {
+    roster = [{ sessionId: "w1", label: "worker", generation: 1, main: false }];
     const bridge = make();
-    const panes = bridge.readBot?.("bot-1", { panesOnly: true });
     const opened = bridge.open({ botId: "bot-1", cols: 80, rows: 24 });
-    void opened.catch(() => {});
-    try {
-      await Promise.resolve();
-      expect(lives.map((live) => live.url)).toEqual(["/api/bots/bot-1/terminal/live?main=1"]);
-      expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
-        "/api/bots/bot-1/terminal?panes=1",
-        "/api/bots/bot-1/terminal/live?main=1",
-      ]);
-      lives[0].push(snapshot());
-      await expect(opened).resolves.toMatchObject({ output: "prompt> " });
-    } finally {
-      await bridge.cancelOpen?.("bot-1");
-      releaseRoster();
-      await panes;
-    }
+    opened.catch(() => {});
+    await flush();
+    expect(posts.map((post) => post.path)).toEqual(["/api/bots/bot-1/terminal/start"]);
+    expect(lives.map((live) => live.url)).toEqual(["/api/bots/bot-1/terminal/live?main=1"]);
+    lives[0].push(snapshot());
+    await expect(opened).resolves.toMatchObject({ id: "s1" });
   });
 
   it("attaches a picked pane by its session and surfaces other refusals", async () => {
