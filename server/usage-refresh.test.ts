@@ -696,11 +696,13 @@ describe("antigravity /usage quota command", () => {
     expect(data).toEqual(groups);
   });
 
-  it("throws refresh on exec failure, garbage, and empty groups — never signin", async () => {
+  it("throws refresh on exec failure and garbage, noplan on empty groups — never signin", async () => {
     await expect(readAntigravityUsageCommand("agy", {}, async () => null)).rejects.toThrow("refresh");
     await expect(readAntigravityUsageCommand("agy", {}, async () => "not json\n")).rejects.toThrow("refresh");
-    await expect(readAntigravityUsageCommand("agy", {}, async () => `${usageLine({ groups: [] })}\n`)).rejects.toThrow("refresh");
+    await expect(readAntigravityUsageCommand("agy", {}, async () => `${usageLine({ groups: [] })}\n`)).rejects.toThrow("noplan");
     await expect(readAntigravityUsageCommand("agy", {}, async () => "")).rejects.toThrow("refresh");
+    const prompted = JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "Here is your usage." } });
+    await expect(readAntigravityUsageCommand("agy", {}, async () => `${prompted}\n`)).rejects.toThrow("refresh");
   });
 
   it("ignores foreign or unnamed command payloads even when they carry quota-shaped data", async () => {
@@ -800,13 +802,14 @@ describe("antigravity /usage as agy 1.5 prints it", () => {
     expect(result.report?.windows.map((window) => [window.id, window.usedPercent])).toEqual([["five_hour", 30], ["seven_day", 8.7]]);
   });
 
-  it.each(gcpLines.map((_, index) => index))("shows no bar for the Cloud / API-key output line %i (0 is captured)", async (index) => {
+  it.each(gcpLines.map((_, index) => index))("clears the bar for the Cloud / API-key output line %i (0 is captured)", async (index) => {
     const line = gcpLines[index];
-    await expect(quotaOf(line)).rejects.toThrow("refresh");
+    await expect(quotaOf(line)).rejects.toThrow("noplan");
     const refresh = createUsageRefresh({ platform: "linux", antigravity: async () => quotaOf(line) });
     const result = await refresh("antigravityAgent", { instanceId: "agy" });
+    expect(result.cleared).toBe(true);
     expect(result.report).toBeUndefined();
-    expect(result.error).toBe("Could not refresh Antigravity limits");
+    expect(result.error).toBeUndefined();
   });
 
   it("shows no bar when /usage exits non-zero (API key: code 2) or times out", async () => {
@@ -834,6 +837,13 @@ describe("antigravity /usage: not a plan versus transient failure", () => {
     expect(result.cleared).toBe(true);
     expect(result.report).toBeUndefined();
     expect(result.error).toBeUndefined();
+  });
+
+  it("clears the last report when agy answers with empty groups, exit 0", async () => {
+    const empty = `${JSON.stringify({ event: "command_result", command: { name: "usage", data: { groups: [] } } })}\n`;
+    const result = await refreshWith(async () => empty)("antigravityAgent", { instanceId: "agy" }, previous);
+    expect(result.cleared).toBe(true);
+    expect(result.report).toBeUndefined();
   });
 
   it("keeps the last report on a timeout, a spawn failure or any other transient error", async () => {

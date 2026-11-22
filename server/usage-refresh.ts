@@ -162,13 +162,15 @@ export function agyNotAPlan(error: Error | null, stderr = ""): boolean {
   return code === 2 || (code === 1 && /authentication required/i.test(stderr));
 }
 
+// A SUCCESS result without usage data is an older agy that ran "/usage" as a prompt, so only failures count as an answer.
+const agyFailedAnswer = z.union([z.object({ event: z.literal("error") }), z.object({ event: z.literal("result"), result: z.object({ status: z.literal("ERROR") }) })]);
+
 /** Quota from `agy -p /usage --output-format stream-json`: the CLI prints a
  * structured `command_result` (plus a final `result`, same `command.data`)
  * without spending a token or needing the IDE open, so bars can appear
  * before any chat message. Returns the first `data` payload that reads as
- * quota windows; anything else (exec failure, unparseable output, empty
- * groups) is a refresh error, never signin — a logged-out CLI answers with
- * empty groups and exit 0, indistinguishable from "no quota to report". */
+ * quota windows. An agy answer without plan buckets (empty groups, an error
+ * event or result, exit 0) is "noplan"; exec failure or unparseable output is a refresh error. */
 export function readAntigravityUsageCommand(
   cli: string,
   env: NodeJS.ProcessEnv,
@@ -205,6 +207,7 @@ export function readAntigravityUsageCommand(
     const out = await run(cli, ["-p", "/usage", "--output-format", "stream-json"]);
     if (out === AGY_NOT_A_PLAN) throw new Error("noplan");
     if (!out) throw new Error("refresh");
+    let answered = false;
     for (const line of out.split("\n")) {
       if (!line.trim()) continue;
       let message: unknown;
@@ -214,6 +217,7 @@ export function readAntigravityUsageCommand(
         continue;
       }
       const data = dataOf(message);
+      if (data !== undefined || agyFailedAnswer.safeParse(message).success) answered = true;
       if (data !== undefined) {
         try {
           if (antigravityRateLimitWindows(data as JsonValue).length > 0) return data as JsonValue;
@@ -222,7 +226,7 @@ export function readAntigravityUsageCommand(
         }
       }
     }
-    throw new Error("refresh");
+    throw new Error(answered ? "noplan" : "refresh");
   })();
 }
 

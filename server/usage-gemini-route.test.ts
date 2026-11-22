@@ -16,6 +16,7 @@ import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const FAKE_AGY_CLI = join(SERVER_DIR, "testing", "fake-agy-cli.ts");
+const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const LIVE = join(SERVER_DIR, "testing", "fixtures", "agy-usage-live.jsonl");
 
 const refreshSchema = z.object({
@@ -30,6 +31,7 @@ const instancesSchema = z.object({ instances: z.array(z.object({ instanceId: z.s
 let child: ChildProcess;
 let home: string;
 let modeFile: string;
+let claudeAuthFile: string;
 let port = 0;
 let stderr = "";
 let before: unknown;
@@ -51,6 +53,8 @@ const settled = async () => {
 };
 const connections = async () => instancesSchema.parse(await get("/api/instances")).instances.find((instance) => instance.instanceId === "gemini")?.snapshot;
 const setMode = (mode: string) => writeFileSync(modeFile, mode);
+const signClaude = (email?: string) => writeFileSync(claudeAuthFile, JSON.stringify(email
+  ? { loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", email } : { loggedIn: false, authMethod: "none", apiProvider: "firstParty" }));
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1], 24_300, 2_000);
@@ -58,6 +62,8 @@ beforeAll(async () => {
   mkdirSync(join(home, ".orbit"), { recursive: true });
   modeFile = join(home, "agy-usage-mode");
   setMode("plan");
+  claudeAuthFile = join(home, "claude-auth.json");
+  signClaude("alice@example.test");
   copyFileSync(LIVE, join(home, "agy-usage-live.jsonl"));
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
     instances: {
@@ -67,6 +73,7 @@ beforeAll(async () => {
         environment: { FAKE_AGY_USAGE_MODE_FILE: modeFile, FAKE_AGY_USAGE_FIXTURE: join(home, "agy-usage-live.jsonl") },
         config: { cli: FAKE_AGY_CLI },
       },
+      claude: { driver: "claudeAgent", displayName: "Fixture Claude", environment: { FAKE_CLAUDE_AUTH_FILE: claudeAuthFile }, config: { cli: FAKE_CLAUDE_CLI } },
     },
   }));
   const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1) };
@@ -134,9 +141,25 @@ describe("Gemini usage follows the login, not a restart", () => {
   }, 60_000);
 
   it("a signed-out CLI never shows a bar it did not just read", async () => {
+    expect(await geminiWindows()).toHaveLength(2);
     setMode("signedout");
     const result = await refresh();
-    expect(result.error).toBe("Could not refresh Antigravity limits");
+    expect(result.report).toBeUndefined();
+    expect(result.error).toBeUndefined();
+    expect(await geminiWindows()).toEqual([]);
     expect(await connections()).toEqual(before);
+  }, 30_000);
+
+  it("a live account switch or sign-out keeps Instances and Usage answering, and Gemini's Connections row still", async () => {
+    for (const email of ["bravo@example.test", undefined, "alice@example.test"]) {
+      signClaude(email);
+      const instances = await fetch(`${origin()}/api/instances?refresh=1`);
+      expect(instances.status).toBe(200);
+      const claude = instancesSchema.parse(await instances.json()).instances.find((instance) => instance.instanceId === "claude")?.snapshot;
+      expect(claude).toMatchObject(email ? { authenticated: true, account: email } : { authenticated: false });
+      expect((await fetch(`${origin()}/api/usage/board`)).status).toBe(200);
+      expect((await fetch(`${origin()}/api/instances`)).status).toBe(200);
+      expect(await connections()).toEqual(before);
+    }
   }, 30_000);
 });
