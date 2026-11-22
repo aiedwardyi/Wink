@@ -25,7 +25,7 @@ export function traceTerminalRead(
     const healthy = answered && res.statusCode < 400 && ms < TERMINAL_READ_SLOW_MS;
     const last = lastLogged.get(botId);
     if (healthy && last !== undefined && arrived - last < TERMINAL_READ_QUIET_MS) return;
-    lastLogged.set(botId, arrived);
+    lastLogged.set(botId, Math.max(arrived, last ?? arrived));
     const bytes = Math.max(0, (socket?.bytesWritten ?? 0) - sent);
     log(`terminal read: bot=${botId} via=${relay ? "relay" : "local"} arrived=${new Date(arrived).toISOString()} ms=${ms} bytes=${bytes} status=${answered ? res.statusCode : "aborted"}`);
   });

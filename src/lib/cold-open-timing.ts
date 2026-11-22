@@ -355,7 +355,7 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     },
     /** A terminal view came on screen. */
     terminalOpened() {
-      if (terminal) clearTimeout(terminal.timer);
+      finishTerminal();
       const tap = page.now();
       terminal = {
         tap: Math.round(tap),

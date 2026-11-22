@@ -569,6 +569,22 @@ describe("cold-open timing", () => {
     expect(JSON.stringify(fake.sent)).not.toMatch(/b1|s1|terminal\?/);
   });
 
+  it("sends a terminal open still waiting on its read when the terminal opens again", () => {
+    const fake = createFake();
+    const timing = createColdOpenTiming(fake.page);
+    fake.at(5_000);
+    timing.terminalOpened();
+    fake.at(5_100);
+    timing.terminalFetching();
+    fake.at(8_000);
+    timing.terminalOpened();
+    timing.terminalFetching();
+    fake.at(8_200);
+    timing.terminalShown();
+    fake.paint();
+    expect(fake.sent.map((sent) => [sent.terminal?.tap, sent.terminal?.paint])).toEqual([[5_000, undefined], [8_000, 8_200]]);
+  });
+
   it("leaves a pending cold open alone while a terminal opens", () => {
     const fake = createFake("https://home.example/?t0=1800000000500");
     const timing = createColdOpenTiming(fake.page);

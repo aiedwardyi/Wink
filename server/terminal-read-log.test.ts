@@ -5,16 +5,26 @@ import { TERMINAL_READ_QUIET_MS, TERMINAL_READ_SLOW_MS, traceTerminalRead } from
 
 afterEach(() => vi.useRealTimers());
 
-function read(botId: string, options: { relay?: boolean; statusCode?: number; finished?: boolean; bytes?: number; took?: number } = {}) {
+function open(botId: string, options: { relay?: boolean; statusCode?: number; finished?: boolean } = {}) {
   const lines: string[] = [];
   const socket = { bytesWritten: 1000 };
   const res = Object.assign(new EventEmitter(), { statusCode: options.statusCode ?? 200, writableFinished: options.finished ?? true, socket });
   // SAFETY: the log reads only once(), statusCode, writableFinished and socket.bytesWritten, all present on this stand-in.
   traceTerminalRead(botId, options.relay ?? false, performance.now(), res as never, (line) => lines.push(line));
+  return {
+    lines,
+    close(bytes = 512) {
+      socket.bytesWritten += bytes;
+      res.emit("close");
+    },
+  };
+}
+
+function read(botId: string, options: { relay?: boolean; statusCode?: number; finished?: boolean; bytes?: number; took?: number } = {}) {
+  const request = open(botId, options);
   vi.advanceTimersByTime(options.took ?? 20);
-  socket.bytesWritten += options.bytes ?? 512;
-  res.emit("close");
-  return lines;
+  request.close(options.bytes);
+  return request.lines;
 }
 
 describe("terminal read log", () => {
@@ -43,5 +53,16 @@ describe("terminal read log", () => {
     expect(read("bot-2")).toHaveLength(0);
     vi.advanceTimersByTime(TERMINAL_READ_QUIET_MS);
     expect(read("bot-2")).toHaveLength(1);
+  });
+
+  it("logs a slow read that ends after a newer one without reopening the quiet window", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    const slow = open("bot-4");
+    vi.advanceTimersByTime(TERMINAL_READ_QUIET_MS - 1_000);
+    expect(read("bot-4")).toHaveLength(1);
+    vi.advanceTimersByTime(6_000);
+    slow.close();
+    expect(slow.lines).toHaveLength(1);
+    expect(read("bot-4")).toHaveLength(0);
   });
 });
