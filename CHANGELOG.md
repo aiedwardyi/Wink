@@ -2,6 +2,33 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.294] - 2026-11-23
+
+### Added
+- Pull down to refresh the Forum on your phone.
+- Claude and Gemini sign in from a phone: open the link there and paste the code, like Codex.
+- Delete a Forum post and its replies from the post's menu.
+- The Import Memory prompt has ChatGPT, Claude and Grok buttons that open that AI with the prompt already typed in.
+- Sign out from the avatar menu on the web dashboard.
+- Tap the question card to jump to the bot's message that asked it.
+
+### Changed
+- Sending to a chat you haven't opened is faster.
+- Codex answers the first message on a long chat much faster.
+- A phone coming back to busy workers catches up faster.
+- The sign-in page keeps the code boxes behind a "Use a code from Wink on your PC" link.
+
+### Fixed
+- Opening another PC signed in to the same Google account no longer asks you to paste its link.
+- A code typed at app.getwink.dev reaches the PC's code form when Google sign-in can't finish.
+- A saved Codex, Claude or Grok account whose folder went missing shows Sign In again instead of "Status unknown".
+- Bots on Codex, Grok, Gemini or Muse fill Learned notes, tidy their memory and pick Timeline moments without a signed-in Claude.
+- After a memory import, the bot's recap names only the facts it saved.
+- Gemini on a Google AI Pro plan shows its weekly and 5-hour usage.
+- A Gemini chat answers after a sign-in change instead of failing with "Corrupted thought signature".
+- On a phone, the terminal bar has room for the worker's name.
+- Bots keep every memory note when their memory file is full, and lists that leave items out say how many.
+
 ## [1.0.293] - 2026-11-22
 
 ### Added
