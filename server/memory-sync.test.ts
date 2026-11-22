@@ -30,7 +30,7 @@ function pcs(count = 2) {
 
 type PC = ReturnType<typeof pcs>[number];
 
-const sync = (pc: PC) => syncBotMemory(pc.folder, "bot-1", pc.workspace, pc.ledger, { legacy: pc.legacy, host: pc.host });
+const sync = (pc: PC, now?: number) => syncBotMemory(pc.folder, "bot-1", pc.workspace, pc.ledger, { legacy: pc.legacy, host: pc.host, now });
 const ownSnapshot = (pc: PC) => join(memorySyncDir(pc.folder, "bot-1"), `${pc.ledger.device}.json`);
 const capture = (pc: PC) => readFileSync(ownSnapshot(pc), "utf8");
 
@@ -85,9 +85,10 @@ function devices(...ids: string[]) {
 
 const tidying = (...all: PC[]) => all.map((pc) => tidiesHere(pc.ledger, "bot-1"));
 
+// the message's own pass runs on the clock that stamped it
 function talk(pc: PC, at: number) {
   markTalked(pc.ledger, "bot-1", at);
-  sync(pc);
+  sync(pc, at);
 }
 
 // each PC gets every other's latest copy
@@ -304,6 +305,50 @@ describe("memory sync", () => {
     expect(tidying(c)).toEqual([false]);
     talk(c, T0 + 14 * DAY + 1);
     expect(tidying(c)).toEqual([true]);
+  });
+
+  it("takes the tidy six hours after a message here when the PC that has it shows nothing, closed or gone", () => {
+    const [a, b] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
+    seed(MEMORY_SEED, a, b);
+    talk(a, T0);
+    talk(b, T0);
+    swap(a, b);
+    // a week on the laptop: it takes the tidy, then is closed
+    talk(b, T0 + 8 * DAY);
+    swap(a, b);
+    expect(tidying(a, b)).toEqual([false, true]);
+    // back at the desktop: it waits on the laptop's copy, then takes the tidy once that has shown nothing for six hours
+    const back = T0 + 8 * DAY + 60 * 60_000;
+    talk(a, back);
+    expect(tidying(a)).toEqual([false]);
+    talk(a, back + 4 * 60 * 60_000);
+    sync(a, back + 6 * 60 * 60_000 - 1);
+    expect(tidying(a)).toEqual([false]);
+    sync(a, back + 6 * 60 * 60_000);
+    expect(tidying(a)).toEqual([true]);
+  });
+
+  it("keeps waiting on a PC that names itself while its copy changes after each message here", () => {
+    const [a, b] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
+    seed(MEMORY_SEED, a, b);
+    const now = Date.now();
+    // b's clock is two days behind, so it leaves out a's stamps and keeps naming itself
+    const ahead = now + 2 * DAY;
+    talk(b, now);
+    receive(b, a);
+    talk(a, ahead);
+    expect(tidying(a, b)).toEqual([false, true]);
+    for (let day = 0; day < 3; day++) {
+      talk(a, ahead + day * DAY + 60 * 60_000);
+      talk(b, now + day * DAY + 3 * 60 * 60_000);
+      receive(b, a);
+      sync(a, ahead + day * DAY + 23 * 60 * 60_000);
+      expect(tidying(a, b)).toEqual([false, true]);
+    }
+    // b goes quiet after a message here: a takes the tidy six hours on
+    talk(a, ahead + 3 * DAY + 60 * 60_000);
+    sync(a, ahead + 3 * DAY + 7 * 60 * 60_000);
+    expect(tidying(a)).toEqual([true]);
   });
 
   // known case: Drive replays a PC's copy from before the user went back to it. The other PC takes the tidy again until the real copy
