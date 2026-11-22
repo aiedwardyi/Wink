@@ -2700,6 +2700,9 @@ function messagePage(threadId: string, limit: number | undefined, before?: strin
 /** A bounded page centred on a known message, used when a search result is
  * opened on a client that only hydrated the newest part of the transcript. */
 function messageWindow(threadId: string, messageId: string, limit: number) {
+  // a chat not in memory reads just the window; loading a long one took seconds
+  const stored = store.storedWindow(threadId, messageId, limit);
+  if (stored) return { messages: stored.messages.map(slimMessage), hasMore: stored.hasMore };
   const all = store.messagesFor(threadId);
   const index = all.findIndex((message) => message.id === messageId);
   if (index < 0) return null;
