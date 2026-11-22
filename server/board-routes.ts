@@ -28,7 +28,7 @@ export interface BoardRouteDeps {
   /** "read-only" while someone without "Can make bots work" asked for the caller's turn; "room" on any other team room turn. */
   roomTurn(from: { botId: string; threadId: string }): "read-only" | "room" | null;
   /** The error signature of a fix this thread just proved; a kind fix post carries it, and merges into a post that holds it. */
-  proven?(threadId: string): string | undefined;
+  proven?(threadId: string, text: string): string | undefined;
   fixFor?(sig: string, projectId: string): BoardPost | undefined;
 }
 
@@ -57,7 +57,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       const { kind, title, body: text, parent_id, helped } = body.data;
       const parent = parent_id ? deps.board.get(parent_id) : undefined;
       if (parent_id && !parent) return json(res, 404, { error: `no Board post ${parent_id}` });
-      const sig = kind === "fix" && !parent && !room ? deps.proven?.(from.threadId) : undefined;
+      const sig = kind === "fix" && !parent && !room ? deps.proven?.(from.threadId, `${title}\n${text}`) : undefined;
       const project = parent?.project_id ?? deps.projectOf(from.threadId);
       const known = sig ? deps.fixFor?.(sig, project) : undefined;
       if (known) {

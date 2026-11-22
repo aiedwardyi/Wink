@@ -9,6 +9,7 @@ import type { ProviderInstance } from "../contracts.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { redactToolMessage } from "../tool-detail.ts";
+import { runSig } from "../tool-run.ts";
 import { GrokAgentDriver } from "./acp/grok.ts";
 import { MuseAgentDriver } from "./acp/muse.ts";
 import { ClaudeDriver } from "./claude.ts";
@@ -224,6 +225,19 @@ describe.each(engines)("$name tool detail", ({ name, driver, cli, fixtureEnv }) 
     expect(started[4]).not.toHaveProperty("verb");
   });
 
+  it("hands the Forum loop the real error line with tool detail off", async () => {
+    writeFixture([
+      { id: "fail", command: "python -m pytest tests/test_loader.py", output: "Traceback (most recent call last):\n  File \"loader.py\", line 12, in load\nKeyError: 'name'\n", failed: true },
+      { id: "pass", command: "python -m pytest tests/test_loader.py", output: "1 passed" },
+    ]);
+    await create();
+    const [fail, pass] = await run();
+    expect(fail).toMatchObject({ ok: false, run: { shown: "python -m pytest tests/test_loader.py", error: "KeyError: 'name'", sig: runSig("KeyError: 'name'") } });
+    expect(pass).toMatchObject({ ok: true, run: { cmd: (fail as { run: { cmd: string } }).run.cmd } });
+    expect(pass).not.toHaveProperty("run.sig");
+    expect(recorder.events.some((event) => "detail" in event)).toBe(false);
+  });
+
   it("captures a command and its output", async () => {
     const event = await capture({ id: "command", command: "echo one", output: "one\r\ntwo\r\nthree\r\nfour\r\n" });
     expect(event.detail).toEqual({ input: "echo one", output: ["one", "two", "three"], more: 1 });
@@ -389,6 +403,58 @@ describe.each(engines)("$name tool detail", ({ name, driver, cli, fixtureEnv }) 
       expect(events[2]).not.toHaveProperty("detail");
     } finally {
       unsubscribe();
+    }
+  });
+});
+
+describe("Claude tool run", () => {
+  let instance: ProviderInstance | undefined;
+  let scratch: string;
+
+  beforeEach(() => {
+    ensureDirs();
+    chmodSync(join(TESTING, "fake-claude-cli.ts"), 0o755);
+    scratch = mkdtempSync(join(tmpdir(), "omb-claude-run-"));
+  });
+
+  afterEach(async () => {
+    delete process.env.FAKE_CLAUDE_TOOL_FIXTURE;
+    await instance?.dispose();
+    await removeTempDir(scratch);
+  });
+
+  it("hands the Forum loop the error line under the exit code with tool detail off", async () => {
+    const fixture = join(scratch, "tools.json");
+    const command = "pnpm tsc --noEmit";
+    writeFileSync(fixture, JSON.stringify([
+      { name: "Bash", input: { command }, content: "Exit code 2\nsrc/app.ts(3,1): error TS2304: Cannot find name 'foo'.\n\nFound 1 error in src/app.ts:3", is_error: true },
+      { name: "Edit", input: { file_path: join(scratch, "app.ts"), old_string: "a", new_string: "b" }, content: "The file has been updated." },
+      { name: "Bash", input: { command }, content: "" },
+    ]));
+    process.env.FAKE_CLAUDE_TOOL_FIXTURE = fixture;
+    saveConfig({ features: { toolDetailCapture: false } });
+    instance = await ClaudeDriver.create({
+      instanceId: "claude-run-test",
+      displayName: "Claude",
+      environment: {},
+      enabled: true,
+      config: { cli: join(TESTING, "fake-claude-cli.ts"), permissionMode: "bypassPermissions" },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-claude-run", text: "typecheck" });
+      await recorder.until((event) => event.type === "turn.completed");
+      const tools = recorder.events.filter((event) => event.type === "item.completed" && event.itemType === "tool");
+      const line = "src/app.ts(3,1): error TS2304: Cannot find name 'foo'.";
+      expect(tools).toMatchObject([
+        { ok: false, run: { shown: command, error: line, sig: runSig(line) } },
+        { ok: true, writes: [join(scratch, "app.ts")] },
+        { ok: true, run: { cmd: (tools[0] as { run: { cmd: string } }).run.cmd } },
+      ]);
+      expect(tools[1]).not.toHaveProperty("run");
+      expect(recorder.events.some((event) => "detail" in event)).toBe(false);
+    } finally {
+      recorder.stop();
     }
   });
 });

@@ -49,6 +49,9 @@ export const KEPT_LIMITS: Limits = {
   "server/forum-loop.ts": {
     MAX_FAILED: "Crash: bounds the failed commands one long turn holds while waiting for a pass.",
     MAX_CLAIMS: "Crash: bounds the proven fixes held for threads whose bot never posts.",
+    MAX_THREAD_CLAIMS: "Crash: bounds the proven fixes one thread holds before it posts.",
+    MAX_GIVEN: "Crash: bounds the bot and error pairs remembered so a fix is handed over once.",
+    MAX_PENDING: "Crash: bounds the handoffs waiting for engines that cannot take one mid-turn.",
   },
   "server/group-routes.ts": {
     "channel name must be at most": BODY,

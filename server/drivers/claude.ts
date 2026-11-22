@@ -33,6 +33,7 @@ import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, typ
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 import { askPreallowedOps, BUILTIN_SERVERS, claudeAskRules, type BuiltinServer } from "./builtin-ops.ts";
 import { captureToolDetail } from "../tool-detail.ts";
+import { toolRun } from "../tool-run.ts";
 
 import type {
   DriverCreateInput,
@@ -1925,6 +1926,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                   : undefined;
                 const input = call?.input && typeof call.input === "object" ? call.input as Record<string, unknown> : {};
                 const path = input.file_path ?? input.notebook_path;
+                const run = call?.name === "Bash" && typeof input.command === "string" ? toolRun(input.command, firstText(b.content), Boolean(b.is_error)) : undefined;
                 emit({
                   ...base(threadId, currentTurnId()),
                   type: "item.completed",
@@ -1935,6 +1937,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                   ...(summary && summary !== call?.summary ? { summary } : {}),
                   ...(call ? { durationMs: Date.now() - call.at } : {}),
                   ...(detail ? { detail } : {}),
+                  ...(run ? { run } : {}),
                 });
               }
             }

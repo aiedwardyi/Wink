@@ -13,6 +13,8 @@ export type InstanceId = string;
 export type ThreadId = string;
 export type TurnId = string;
 export type CloudBackend = "box" | "vps";
+/** A shell call as the Forum loop reads it; never sent to clients. */
+export interface ToolRun { cmd: string; shown?: string; sig?: string; error?: string }
 
 export type ProviderErrorCode =
   | "missing_cli"
@@ -126,7 +128,7 @@ export type RuntimeEvent = RuntimeEventBase &
         writes?: string[];
       }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
-    | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail; writes?: string[] }
+    | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail; writes?: string[]; run?: ToolRun }
     | { type: "item.completed"; itemType: "assistant_text"; text: string; summarized?: boolean; phase?: "commentary" | "partial_answer" | "final_answer" }
     | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string }
     | {

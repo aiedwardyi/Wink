@@ -25,6 +25,7 @@ import { shareUserSetup } from "../../account-shared-setup.ts";
 import { baseAccount } from "../../worker-resume.ts";
 import { describeSpawnFailure, execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { captureToolDetail } from "../../tool-detail.ts";
+import { toolRun } from "../../tool-run.ts";
 import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
@@ -78,6 +79,16 @@ function acpToolDetail(call: z.infer<typeof toolCallSchema>) {
     grouped: call.kind === "read" || call.kind === "search",
     isError: call.status === "failed",
   });
+}
+
+const commandInput = z.object({ command: z.string() });
+
+function acpToolRun(call: z.infer<typeof toolCallSchema>, ok: boolean) {
+  if (call.kind !== "execute") return undefined;
+  const command = z.string().safeParse(call.rawInput).data ?? commandInput.safeParse(call.rawInput).data?.command ?? call.title;
+  if (!command) return undefined;
+  const text = (call.content ?? []).flatMap((block) => block.type === "content" && block.content.type === "text" ? [block.content.text ?? ""] : []).join("\n");
+  return toolRun(command, text || z.string().safeParse(call.rawOutput).data, !ok);
 }
 
 /**
@@ -1211,6 +1222,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             ok,
           };
           if (detail) event.detail = detail;
+          const run = call ? acpToolRun(call, ok) : undefined;
+          if (run) event.run = run;
           if (ok && call?.kind === "edit") {
             const args = toolInputSchema.safeParse(call.rawInput);
             event.writes = [...new Set([...(call.locations ?? []).map(location => location.path), ...(call.content ?? []).flatMap(block => block.type === "diff" ? [block.path] : []), ...(args.success ? Object.values(args.data).filter((path): path is string => path !== undefined) : typeof call.rawInput === "string" ? [call.rawInput] : [])])].slice(0, 32);

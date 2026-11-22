@@ -133,7 +133,7 @@ import { createBotCalls } from "./bot-call.ts";
 import { BOARD_DIR, createBoard, projectIdOf } from "./board.ts";
 import { createForumLessons } from "./forum-lessons.ts";
 import { createBoardCalls, FORUM_HOLDS_FILE } from "./board-calls.ts";
-import { createForumLoop, FORUM_LOOP_FILE } from "./forum-loop.ts";
+import { createForumLoop, FORUM_LOOP_FILE, forumPostRule } from "./forum-loop.ts";
 import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -3285,6 +3285,7 @@ const boardCalls = createBoardCalls({
   },
 });
 
+const forumLoopOn = process.env.OMB_FORUM_LOOP !== "off";
 const forumLoop = createForumLoop({
   board,
   botOf: (threadId) => store.botByThread(threadId)?.id,
@@ -3303,7 +3304,7 @@ const forumLoop = createForumLoop({
       console.warn(`forum loop: ${cause}`);
     }
   },
-  enabled: process.env.OMB_FORUM_LOOP !== "off",
+  enabled: forumLoopOn,
 });
 
 const botCalls = createBotCalls({
@@ -3879,7 +3880,7 @@ bus.subscribe((event: RuntimeEvent) => {
   quickAnswersTaken(store, event);
   roomEchoesTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
-  if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
+  if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent.type === "item.completed" && visibleEvent.itemType === "tool" && visibleEvent.run ? { ...visibleEvent, run: undefined } : visibleEvent });
   // the settle below writes to disk; the reply's last frame must not wait behind it
   if (event.type === "turn.completed") for (const client of sseClients) sendNow(client.res);
   if (event.type === "turn.started") {
@@ -5097,7 +5098,7 @@ const PLAIN_WORDS_INSTRUCTIONS =
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
-  ` Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
+  ` ${forumPostRule(forumLoopOn)}Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
 const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
 
@@ -8105,7 +8106,7 @@ const boardRoutes = createBoardRoutes({
   caller: (header) => commsCallers.resolve(header),
   known: (botId) => Boolean(store.bot(botId)),
   projectOf: boardProject,
-  proven: (threadId) => forumLoop.claim(threadId),
+  proven: (threadId, text) => forumLoop.claim(threadId, text),
   fixFor: (sig, projectId) => {
     const post = forumLoop.knownFix(sig, projectId);
     return post?.project_id === projectId ? post : undefined;
