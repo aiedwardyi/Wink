@@ -49,7 +49,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravityLoggedOutSince, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
@@ -532,11 +532,9 @@ export function measureAntigravityTransportLengths(opts: {
 }
 
 // agy's saved sign-in is one per machine, so every instance shares one keyring sign-out and its running turns.
-// "Signed out by Wink" is kept in the data folder too, so a quit, crash or restart before the delete keeps it.
 const keyringSignOut = antigravityKeyringSignOut(() => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING), {
   present: () => probeAntigravitySignIn(),
   mark: signedOutMarkFile(join(DATA_DIR, "gemini-signed-out")),
-  loggedOutSince: (since) => antigravityLoggedOutSince(since),
 });
 
 export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
@@ -587,7 +585,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const children = new Set<ChildProcess>();
 
     const emit = (event: RuntimeEvent) => {
-      if (event.type === "turn.completed" && event.ok && !keyringSignOut.waiting) signIn.record(true);
+      if (event.type === "turn.completed" && event.ok) signIn.record(true);
       else if (event.type === "runtime.error" && event.signIn) signIn.record(false);
       if (event.type === "turn.started") keyringSignOut.turnStarted(`${instanceId}\0${event.turnId}`);
       else if (event.type === "turn.completed") keyringSignOut.turnEnded(`${instanceId}\0${event.turnId}`);
@@ -623,11 +621,12 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     // the first id as live and drops events from any other.
     const sendTurn = async (turn: SendTurnInput, relaunchOf?: string, busyResumes = 0, priorUsage: TurnUsage = { input: 0, output: 0 }, shownResponses = new Set<string>()) => {
       const { threadId } = turn;
+      const pendingSignOut = !relaunchOf && keyringSignOut.pending;
+      const signedOut = pendingSignOut && await pendingSignOut;
       if (disposed) throw new Error("Antigravity instance is disposed");
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = relaunchOf ?? newId();
-      // Signed out, with the delete waiting on turns that started before: this new turn asks for sign-in instead.
-      if (!relaunchOf && keyringSignOut.waiting) {
+      if (signedOut) {
         emit({ ...base(threadId, turnId), type: "turn.started" });
         emit({ ...base(threadId, turnId), type: "runtime.error", message: "Gemini is not signed in.", setup: true, signIn: true, signedOut: true });
         emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "signed_out", cost: null });
@@ -1165,7 +1164,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      const authenticated = keyringSignOut.waiting ? false : await signIn.check(opts?.rescan || opts?.refresh);
+      const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
       return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
     };
 
@@ -1188,9 +1187,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // agy older than 1.5 has no ACP logout, and could not update to get one: delete its saved sign-in instead.
       signOutWithoutCli: async (failure) => {
         if (failure !== "update_offline" && failure !== "update_failed") return false;
-        const signedOut = await keyringSignOut.signOut();
-        if (signedOut) signIn.record(false);
-        return signedOut;
+        return keyringSignOut.signOut();
       },
       signingIn: () => keyringSignOut.signingIn(),
       signedOutByCli: () => keyringSignOut.signedOutByAgy(),
@@ -1236,8 +1233,11 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       generateText: async (prompt, opts) => {
         const stopped = opts?.signal ?? new AbortController().signal;
         stopped.throwIfAborted();
-        // Signed out by Wink: the saved sign-in may still be there, but it is not Wink's to use.
-        if (keyringSignOut.waiting) throw new Error("Gemini is not signed in.");
+        const pendingSignOut = keyringSignOut.pending;
+        if (pendingSignOut) {
+          if (await pendingSignOut) throw new Error("Gemini is not signed in.");
+          stopped.throwIfAborted();
+        }
         let cwd: string | null = null;
         try {
           const home = antigravityHelperHome(env);

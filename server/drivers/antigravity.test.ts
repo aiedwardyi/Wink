@@ -125,7 +125,6 @@ async function geminiShown(registry: ProviderRegistry, instanceId: string) {
 /** Where agy writes its logs in this test process's home. */
 const AGY_LOGS = join(testHome(), ".gemini", "antigravity-cli", "log");
 const AGY_LOGOUT = "server_oauth.go:192] Logging out current user";
-const AGY_SIGNED_IN = "server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=";
 
 /** agy logging `events` now, as it does: glog's local time, in a cli log named for when the run started. */
 function agyLog(...events: string[]) {
@@ -138,15 +137,17 @@ function agyLog(...events: string[]) {
   appendFileSync(log, events.map((event) => `I${day} ${time}.${pad(now.getMilliseconds(), 3)}000    42 ${event}\n`).join(""));
 }
 
-/** Sign out while a turn runs, then the store refuses the delete: Wink keeps the sign-out as its mark. */
+/** Start Sign Out during a turn and let the store refuse the delete. */
 async function refusedSignOut(registry: ProviderRegistry, fixture: ReturnType<typeof heldGeminiFixture>, store: { deletes: number }) {
   await registry.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
   await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
-  expect(await registry.signOut("one")).toBe(true);
+  const out = registry.signOut("one");
+  await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
   writeFileSync(fixture.hold, "");
-  await vi.waitFor(() => expect(store.deletes).toBe(1));
-  expect(existsSync(SIGNED_OUT_MARK)).toBe(true);
-  expect(await geminiShown(registry, "one")).toBe(false);
+  expect(await out).toBe(false);
+  expect(store.deletes).toBe(1);
+  expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+  expect(await geminiShown(registry, "one")).toBe(true);
 }
 
 /** agy 1.3.0 offline (`oldOfflineAgy`) whose turns hold until `hold` exists, with its saved sign-in as a file. */
@@ -1394,15 +1395,13 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
 
       await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
       await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
-      expect(await registry.signOut("agy-old")).toBe(true);
+      const out = registry.signOut("agy-old");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
       expect(existsSync(keyring.entry)).toBe(true);
-      expect((await registry.describe()).find((entry) => entry.instanceId === "agy-old")!.snapshot.authenticated).toBe(false);
+      expect((await registry.describe()).find((entry) => entry.instanceId === "agy-old")!.snapshot.authenticated).toBe(true);
 
-      // Sent after Sign out, while the earlier turn still runs: asks for sign-in without starting agy.
       rmSync(ready);
-      await live.adapter.sendTurn({ threadId: "t-during", text: "hi" });
-      expect(await ended("t-during")).toMatchObject({ ok: false });
-      expect(errors("t-during")).toEqual([expect.objectContaining({ signIn: true, signedOut: true })]);
+      const during = live.adapter.sendTurn({ threadId: "t-during", text: "hi" });
       expect(existsSync(ready)).toBe(false);
       expect(keyring.forget).not.toHaveBeenCalled();
 
@@ -1410,7 +1409,12 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       expect(await ended("t-before")).toMatchObject({ ok: true });
       expect(errors("t-before")).toEqual([]);
       expect(recorder.events.some((event) => event.type === "item.completed" && event.threadId === "t-before" && event.itemType === "assistant_text")).toBe(true);
-      await vi.waitFor(() => expect(existsSync(keyring.entry)).toBe(false));
+      expect(await out).toBe(true);
+      await during;
+      expect(await ended("t-during")).toMatchObject({ ok: false });
+      expect(errors("t-during")).toEqual([expect.objectContaining({ signIn: true, signedOut: true })]);
+      expect(existsSync(ready)).toBe(false);
+      expect(existsSync(keyring.entry)).toBe(false);
       expect(keyring.forget.mock.calls).toEqual([["gemini:antigravity"]]);
       expect((await live.snapshot()).authenticated).toBe(false);
 
@@ -1427,7 +1431,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
   });
 
   // Gate 2120D: a Sign in that fails while the delete waits must not hand the old sign-in back.
-  it("stays signed out when Sign in fails offline while Sign out waits on a running turn, then deletes", async () => {
+  it("finishes Sign Out after another instance fails to sign in", async () => {
     const dir = mkdtempSync(join(tmpdir(), "omb-agy-reconnect-"));
     const calls = join(dir, "calls.txt");
     const hold = join(dir, "hold");
@@ -1436,7 +1440,11 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     const fake = oldOfflineAgy(dir, calls, { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry });
     const registry = new ProviderRegistry([AntigravityDriver]);
     try {
-      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      const config = { cli: `"${process.execPath}" "${fake}"`, fullAuto: false };
+      await registry.load({
+        "agy-old": { driver: "antigravityAgent", config },
+        "agy-other": { driver: "antigravityAgent", config },
+      });
       const live = registry.get("agy-old")!;
       const recorder = recordEvents(live.adapter);
       const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
@@ -1444,25 +1452,22 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
 
       await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
       await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
-      expect(await registry.signOut("agy-old")).toBe(true);
+      const out = registry.signOut("agy-old");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
       expect(existsSync(keyring.entry)).toBe(true);
 
-      await registry.startSignIn("agy-old");
-      await registry.logins.wait("agy-old");
-      const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-old")!;
+      await registry.startSignIn("agy-other");
+      await registry.logins.wait("agy-other");
+      const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-other")!;
       expect(row.loginError).toBe("update_offline");
-      expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
-      rmSync(ready);
-      await live.adapter.sendTurn({ threadId: "t-during", text: "hi" });
-      expect(await ended("t-during")).toMatchObject({ ok: false });
-      expect(errors("t-during")).toEqual([expect.objectContaining({ signIn: true, signedOut: true })]);
-      expect(existsSync(ready)).toBe(false);
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
       expect(keyring.forget).not.toHaveBeenCalled();
 
       writeFileSync(hold, "");
       expect(await ended("t-before")).toMatchObject({ ok: true });
       expect(errors("t-before")).toEqual([]);
-      await vi.waitFor(() => expect(existsSync(keyring.entry)).toBe(false));
+      expect(await out).toBe(true);
+      expect(existsSync(keyring.entry)).toBe(false);
       expect(keyring.forget.mock.calls).toEqual([["gemini:antigravity"]]);
       expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
       await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
@@ -1475,15 +1480,13 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     }
   });
 
-  // Gate 2120D: Sign out already said done, so a refused delete afterwards still reads signed out.
-  it("stays signed out when the store refuses the delete that waited on a running turn", async () => {
+  it("lets a queued turn use the saved login after the delete is refused", async () => {
     const dir = mkdtempSync(join(tmpdir(), "omb-agy-refused-"));
     const calls = join(dir, "calls.txt");
     const hold = join(dir, "hold");
     const ready = join(dir, "ready");
     const keyring = fakeKeyring(dir);
     keyring.forget.mockImplementation(async () => false);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fake = oldOfflineAgy(dir, calls, { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry });
     const registry = new ProviderRegistry([AntigravityDriver]);
     try {
@@ -1495,23 +1498,20 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
 
       await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
       await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
-      expect(await registry.signOut("agy-old")).toBe(true);
-      expect((await registry.describe()).find((entry) => entry.instanceId === "agy-old")!.snapshot.authenticated).toBe(false);
+      const out = registry.signOut("agy-old");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      const next = live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
 
       writeFileSync(hold, "");
       expect(await ended("t-before")).toMatchObject({ ok: true });
-      await vi.waitFor(() => expect(keyring.forget).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not delete agy's saved sign-in")));
+      expect(await out).toBe(false);
+      await next;
+      expect(await ended("t-next")).toMatchObject({ ok: true });
+      expect(errors("t-next")).toEqual([]);
+      expect(keyring.forget).toHaveBeenCalledOnce();
       expect(existsSync(keyring.entry)).toBe(true);
-      expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
-      await registry.refreshLogins();
-      expect((await registry.describe()).find((entry) => entry.instanceId === "agy-old")!.snapshot.authenticated).toBe(false);
-
-      rmSync(ready);
-      await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
-      expect(await ended("t-next")).toMatchObject({ ok: false });
-      expect(errors("t-next")).toEqual([expect.objectContaining({ signIn: true, signedOut: true })]);
-      expect(existsSync(ready)).toBe(false);
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
 
       // Sign out again once the store accepts: it deletes now and still reads signed out.
       keyring.forget.mockImplementation(async () => { rmSync(keyring.entry); return true; });
@@ -1561,7 +1561,11 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
 `);
     const registry = new ProviderRegistry([AntigravityDriver]);
     try {
-      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      const config = { cli: `"${process.execPath}" "${fake}"`, fullAuto: false };
+      await registry.load({
+        "agy-old": { driver: "antigravityAgent", config },
+        "agy-other": { driver: "antigravityAgent", config },
+      });
       const live = registry.get("agy-old")!;
       const recorder = recordEvents(live.adapter);
       const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
@@ -1569,13 +1573,15 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
 
       await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
       await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
-      expect(await registry.signOut("agy-old")).toBe(true);
+      const out = registry.signOut("agy-old");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
       expect(existsSync(keyring.entry)).toBe(true);
 
       writeFileSync(online, "");
-      await registry.startSignIn("agy-old");
-      await registry.logins.wait("agy-old");
-      expect(registry.logins.state("agy-old")).toBe("complete");
+      await registry.startSignIn("agy-other");
+      await registry.logins.wait("agy-other");
+      expect(registry.logins.state("agy-other")).toBe("complete");
+      expect(await out).toBe(false);
       expect(readFileSync(keyring.entry, "utf8")).toBe("new-sign-in");
       expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
 
@@ -1613,7 +1619,6 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     }
   });
 
-  // Gate 2120E: Sign out said done, so no later run may use the old sign-in, whatever ends this one.
   it("lands a Sign out that waits on a running turn when Wink quits, and the next run reads signed out", async () => {
     const fixture = heldGeminiFixture("omb-agy-quit-");
     const store = { refuse: false, deletes: 0 };
@@ -1623,10 +1628,12 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       runs.push(first);
       await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
       await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
-      expect(await first.signOut("one")).toBe(true);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
       expect(existsSync(fixture.entry)).toBe(true);
       // server/index.ts exits as soon as disposeAll resolves: the delete is done by then.
       await first.disposeAll();
+      expect(await out).toBe(true);
       expect(store.deletes).toBe(1);
       expect(existsSync(fixture.entry)).toBe(false);
 
@@ -1644,7 +1651,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     }
   });
 
-  it("keeps a Sign out that waits on a running turn through a crash: the next run reads signed out and deletes", async () => {
+  it("keeps the saved login after a crash interrupts Sign Out", async () => {
     const fixture = heldGeminiFixture("omb-agy-crash-");
     const store = { refuse: false, deletes: 0 };
     const runs: ProviderRegistry[] = [];
@@ -1653,16 +1660,21 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       runs.push(first);
       await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
       await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
-      expect(await first.signOut("one")).toBe(true);
-      expect(await geminiShown(first, "one")).toBe(false);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      expect(await geminiShown(first, "one")).toBe(true);
 
-      // The first run is never disposed: a crash or kill ends it with its turn still running.
       const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
       runs.push(second);
-      expect(await geminiShown(second, "one")).toBe(false);
-      await vi.waitFor(() => expect(existsSync(fixture.entry)).toBe(false));
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(existsSync(fixture.entry)).toBe(true);
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      expect(store.deletes).toBe(0);
+      expect(await second.signOut("one")).toBe(true);
+      await first.disposeAll();
+      expect(await out).toBe(true);
+      expect(existsSync(fixture.entry)).toBe(false);
       expect(store.deletes).toBe(1);
-      expect(await geminiShown(second, "one")).toBe(false);
       writeFileSync(fixture.hold, "");
       expect(await geminiTurn(second, "one", "t-next")).toMatchObject({ ok: false, signIn: true, reply: false });
     } finally {
@@ -1673,9 +1685,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     }
   });
 
-  // Gate 2120E and 2120F: a refused delete leaves the old sign-in saved, never usable: not by a chat, not by
-  // generateText, not after a restart.
-  it("stays signed out after a refused delete and a restart, and generateText never runs on the old sign-in", async () => {
+  it("keeps summaries working after refusal and preserves the login on restart", async () => {
     const fixture = heldGeminiFixture("omb-agy-restart-");
     const store = { refuse: true, deletes: 0 };
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1685,27 +1695,26 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       runs.push(first);
       await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
       await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
-      expect(await first.signOut("one")).toBe(true);
-      await expect(first.get("two")!.generateText!("a summary")).rejects.toThrow("Gemini is not signed in.");
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      const summary = first.get("two")!.generateText!("a summary");
       writeFileSync(fixture.hold, "");
-      await vi.waitFor(() => expect(store.deletes).toBe(1));
+      expect(await out).toBe(false);
+      await expect(summary).resolves.toEqual(expect.any(String));
+      expect(store.deletes).toBe(1);
       expect(existsSync(fixture.entry)).toBe(true);
-      expect(await geminiShown(first, "one")).toBe(false);
-      await expect(first.get("one")!.generateText!("a summary")).rejects.toThrow("Gemini is not signed in.");
+      expect(await geminiShown(first, "one")).toBe(true);
       await first.disposeAll();
 
-      rmSync(fixture.ready, { force: true });
+      const deletes = store.deletes;
       const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
       runs.push(second);
-      expect(await geminiShown(second, "one")).toBe(false);
-      expect(await geminiShown(second, "two")).toBe(false);
-      await expect(second.get("one")!.generateText!("a summary")).rejects.toThrow("Gemini is not signed in.");
-      expect(await geminiTurn(second, "one", "t-next")).toMatchObject({ ok: false, signIn: true, reply: false });
-      // No agy ran for any of it: not for generateText, not for the chat.
-      expect(existsSync(fixture.ready)).toBe(false);
-      await vi.waitFor(() => expect(store.deletes).toBeGreaterThan(1));
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(await geminiShown(second, "two")).toBe(true);
+      expect(existsSync(fixture.entry)).toBe(true);
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      expect(store.deletes).toBe(deletes);
 
-      // Once the store accepts, Sign out finishes the job.
       store.refuse = false;
       expect(await second.signOut("one")).toBe(true);
       expect(existsSync(fixture.entry)).toBe(false);
@@ -1714,6 +1723,45 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       writeFileSync(fixture.hold, "");
       for (const run of runs) await run.disposeAll();
       warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("shows signed in until a deferred delete succeeds and reports refusal for a fresh retry", async () => {
+    const fixture = heldGeminiFixture("omb-agy-refuse-live-");
+    const store = { refuse: true, deletes: 0 };
+    let registry: ProviderRegistry | undefined;
+    try {
+      ({ registry } = await freshGeminiRun(fixture.cli, fixture.entry, store));
+      const held = geminiTurn(registry, "one", "t-held");
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const signOut = registry.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      const shownDuringReply = await geminiShown(registry, "one");
+      const deletesDuringReply = store.deletes;
+      writeFileSync(fixture.hold, "");
+      const reply = await held;
+      const refused = await signOut;
+      await vi.waitFor(() => expect(store.deletes).toBe(1));
+      const shownAfterRefusal = await geminiShown(registry, "two");
+      const next = await geminiTurn(registry, "two", "t-after-refusal");
+      expect({ shownDuringReply, deletesDuringReply, refused, shownAfterRefusal }).toEqual({
+        shownDuringReply: true, deletesDuringReply: 0, refused: false, shownAfterRefusal: true,
+      });
+      expect(reply).toMatchObject({ ok: true, reply: true });
+      expect(next).toMatchObject({ ok: true, reply: true });
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      expect(store.deletes).toBe(1);
+      store.refuse = false;
+      expect(await registry.signOut("one")).toBe(true);
+      expect(store.deletes).toBe(2);
+      expect(existsSync(fixture.entry)).toBe(false);
+      expect(await geminiShown(registry, "two")).toBe(false);
+      expect(await geminiTurn(registry, "two", "t-after-delete")).toMatchObject({ ok: false, signIn: true, reply: false });
+    } finally {
+      writeFileSync(fixture.hold, "");
+      await registry?.disposeAll();
       rmSync(SIGNED_OUT_MARK, { force: true });
       rmSync(fixture.dir, { recursive: true, force: true });
     }
@@ -1772,10 +1820,12 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       ({ registry } = await freshGeminiRun(fixture.cli, fixture.entry, store));
       await registry.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
       await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
-      expect(await registry.signOut("one")).toBe(true);
+      const out = registry.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
       writeFileSync(fixture.hold, "");
-      await vi.waitFor(() => expect(store.deletes).toBe(1));
-      expect(await geminiShown(registry, "one")).toBe(false);
+      expect(await out).toBe(false);
+      expect(store.deletes).toBe(1);
+      expect(await geminiShown(registry, "one")).toBe(true);
 
       writeFileSync(updated, "");
       expect(await registry.signOut("one")).toBe(true);
@@ -1809,12 +1859,13 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       runs.push(first);
       await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
       await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
-      expect(await first.signOut("one")).toBe(true);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
       writeFileSync(fixture.hold, "");
-      await vi.waitFor(() => expect(store.deletes).toBe(1));
+      expect(await out).toBe(false);
       await first.disposeAll();
-      expect(existsSync(SIGNED_OUT_MARK)).toBe(true);
-      rmSync(SIGNED_OUT_MARK);
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      expect(store.deletes).toBe(1);
 
       const second = await load();
       runs.push(second);
@@ -1833,9 +1884,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     }
   });
 
-  // Gate 2120G B9: with a refused Sign out still kept, agy in a terminal logs out and signs in again. That sign-in is
-  // newer than the one Wink signed out of: it is seen, used and never deleted, now or after a restart.
-  it("keeps a sign-in made outside Wink after agy's own logout while a refused Sign out is kept", async () => {
+  it("allows an outside replacement after a refused delete without another delete", async () => {
     const fixture = heldGeminiFixture("omb-agy-outside-");
     const store = { refuse: true, deletes: 0 };
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1846,9 +1895,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       await refusedSignOut(first, fixture, store);
 
       rmSync(fixture.entry);
-      agyLog(AGY_LOGOUT);
       writeFileSync(fixture.entry, "outside-sign-in");
-      agyLog(AGY_SIGNED_IN);
       expect(await geminiShown(first, "one")).toBe(true);
       expect(await geminiTurn(first, "two", "t-next")).toMatchObject({ ok: true, signIn: false, reply: true });
       expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
@@ -1865,7 +1912,6 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       for (const run of runs) await run.disposeAll();
       warn.mockRestore();
       rmSync(SIGNED_OUT_MARK, { force: true });
-      removeTestData(AGY_LOGS);
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
@@ -1881,12 +1927,11 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       runs.push(first);
       await refusedSignOut(first, fixture, store);
       await first.disposeAll();
-      expect(existsSync(SIGNED_OUT_MARK)).toBe(true);
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      writeFileSync(SIGNED_OUT_MARK, new Date().toISOString());
 
       rmSync(fixture.entry);
-      agyLog(AGY_LOGOUT);
       writeFileSync(fixture.entry, "outside-sign-in");
-      agyLog(AGY_SIGNED_IN);
       store.refuse = false;
       const deletes = store.deletes;
       const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
@@ -1901,33 +1946,28 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       for (const run of runs) await run.disposeAll();
       warn.mockRestore();
       rmSync(SIGNED_OUT_MARK, { force: true });
-      removeTestData(AGY_LOGS);
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
 
-  // The sign-in Wink signed out of is still deleted when agy only ran on it, or logged out before the Sign out.
-  it("still deletes the sign-in Wink signed out of when agy ran on it or logged out only before the Sign out", async () => {
+  it("finishes a deferred Sign Out despite a foreign logout log", async () => {
     const fixture = heldGeminiFixture("omb-agy-old-still-out-");
-    const store = { refuse: true, deletes: 0 };
+    const store = { refuse: false, deletes: 0 };
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const runs: ProviderRegistry[] = [];
     try {
       const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
       runs.push(first);
-      await refusedSignOut(first, fixture, store);
-      agyLog(AGY_SIGNED_IN);
-      mkdirSync(AGY_LOGS, { recursive: true });
-      writeFileSync(join(AGY_LOGS, "cli-20260101_000000.log"), `I0101 00:00:00.000000    42 ${AGY_LOGOUT}\n`);
-      expect(await geminiShown(first, "one")).toBe(false);
+      await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      agyLog(AGY_LOGOUT);
+      expect(await geminiShown(first, "one")).toBe(true);
       await first.disposeAll();
-
-      store.refuse = false;
-      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
-      runs.push(second);
-      await vi.waitFor(() => expect(existsSync(fixture.entry)).toBe(false));
-      expect(await geminiShown(second, "one")).toBe(false);
-      expect(await geminiTurn(second, "one", "t-next")).toMatchObject({ ok: false, signIn: true, reply: false });
+      expect(await out).toBe(true);
+      expect(store.deletes).toBe(1);
+      expect(existsSync(fixture.entry)).toBe(false);
     } finally {
       writeFileSync(fixture.hold, "");
       for (const run of runs) await run.disposeAll();

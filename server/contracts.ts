@@ -515,11 +515,9 @@ export interface ProviderInstance {
   /** Refresh a live catalog without recreating the provider instance. */
   readonly refreshModels?: () => Promise<void>;
   loginConfig?(): { cli: string; env: Record<string, string | undefined> };
-  /** Its logout command failed for `failure`: sign out without it where the engine can. True once signed out
-   * (the engine may finish the job when its running turns end); false leaves the logout failed. */
+  /** When CLI logout fails, returns whether the fallback finished signing out. */
   signOutWithoutCli?(failure: import("./engine-login.ts").LoginCapture["error"]): Promise<boolean>;
-  /** A sign-in is starting. Resolves once it may proceed, with the call to make when it ends: a sign-out that
-   * already reported done stays signed out until a sign-in succeeds. */
+  /** A sign-in is starting. Resolves when it can proceed, with a callback for its outcome. */
   signingIn?(): Promise<(succeeded: boolean) => void>;
   /** Its logout command succeeded: whatever sign-out was still pending is done. */
   signedOutByCli?(): void;

@@ -34,7 +34,7 @@ export function forgetAntigravitySignIn(target: typeof ANTIGRAVITY_KEYRING, plat
   });
 }
 
-/** Where "signed out by Wink" is kept, so it outlives a quit, crash or restart. */
+/** The on-disk record of a deferred sign-out. */
 export interface SignedOutMark {
   /** When Wink signed out (epoch ms), with no sign-in since; undefined when it has not. */
   read(): number | undefined;
@@ -42,19 +42,15 @@ export interface SignedOutMark {
   write(signedOutAt: number | undefined): void;
 }
 
-/** The time a mark file holds: none for no file, a folder or anything Wink did not write. A mark that is there but
- * cannot be read right now (held open) reads as `unreadable`. */
-function markTime(path: string, unreadable?: number): number | undefined {
-  let text: string;
+function markTime(path: string): number | undefined {
   try {
-    text = readFileSync(path, "utf8");
-  } catch (error) {
-    // SAFETY: Filesystem failures expose Node's errno code.
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR" ? undefined : unreadable;
+    const text = readFileSync(path, "utf8").trim();
+    const at = Date.parse(text);
+    if (Number.isFinite(at) && new Date(at).toISOString() === text) return at;
+  } catch {
+    return undefined;
   }
-  const at = Date.parse(text.trim());
-  return Number.isNaN(at) ? undefined : at;
+  return undefined;
 }
 
 /** The mark as a file holding when Wink signed out. A sign-in or delete that cannot remove it (another process holds
@@ -63,7 +59,7 @@ export function signedOutMarkFile(path: string): SignedOutMark {
   const cleared = `${path}.cleared`;
   return {
     read: () => {
-      const at = markTime(path, Date.now());
+      const at = markTime(path);
       if (at === undefined || (markTime(cleared) ?? -Infinity) < at) return at;
       try {
         rmSync(path, { force: true });
@@ -92,16 +88,14 @@ export function signedOutMarkFile(path: string): SignedOutMark {
 
 /**
  * Signs agy out by deleting its saved sign-in, without cutting off a running turn: agy before 1.5 rereads that
- * sign-in on every request, so a delete under a running turn fails its reply. While turns run, sign-out reads as
- * done and no new turn starts; the delete lands when the last running turn ends, or when Wink shuts down.
+ * sign-in on every request. The sign-out request and new turns wait for the delete, which lands when the last
+ * running turn ends or Wink shuts down.
  *
- * Once sign-out has reported done, Wink reads signed out until a sign-in succeeds, whatever else fails: a refused
- * delete, a failed sign-in or a quit, crash or restart before the delete leaves the saved sign-in in place but never
- * usable. That promise is kept in `mark`: read when the first instance attaches, which tries the delete again, and
- * cleared by a delete that lands or a sign-in that succeeds. A sign-in holds the delete off while it runs (it may be
- * saving a new sign-in); if it fails, the delete lands as soon as no turn runs. It is cleared too once agy logs its
- * own logout after it (`loggedOutSince`, as from agy in a terminal): the sign-in Wink signed out of is gone then, so
- * a saved sign-in is a newer one and stays.
+ * Only the current run may finish a deferred delete. At boot Wink clears any readable mark and uses the saved
+ * sign-in as it is, because the keyring cannot identify which login a past run meant to delete.
+ *
+ * A sign-in holds the delete off while it may be saving a new sign-in. Success clears the pending sign-out, as
+ * does a successful agy logout. A failed sign-in lets a pending delete land once no turn runs.
  *
  * One delete at a time: a sign-out while a delete runs gets that delete's answer, and a delete finds out first
  * whether there is still a saved sign-in (`present`), so a second sign-out never fails on the first one's delete.
@@ -109,69 +103,55 @@ export function signedOutMarkFile(path: string): SignedOutMark {
 export function antigravityKeyringSignOut(forget: () => Promise<boolean>, opts: {
   present?: () => Promise<boolean | undefined>;
   mark?: SignedOutMark;
-  loggedOutSince?: (since: number) => boolean;
 } = {}) {
   const running = new Set<string>();
   const signedOut = new Set<() => void>();
-  // Sign-out reported done, and no sign-in has succeeded since. In memory for this run, in `mark` for the next.
-  let promised = false;
-  let promisedAt = 0;
+  let deferred: { result: Promise<boolean>; resolve: (ok: boolean) => void } | undefined;
   let signIns = 0;
   // Instances attached in this run; the last one to let go ends the run, and the next attach reads `mark` again.
   let attached = 0;
   let run = 0;
   let loaded = false;
   let landing: Promise<boolean> | undefined;
-  const promise = (signedOutNow: boolean) => {
-    if (promised === signedOutNow) return;
-    const at = Date.now();
+  const writeMark = (at: number | undefined) => {
     try {
-      opts.mark?.write(signedOutNow ? at : undefined);
+      opts.mark?.write(at);
     } catch (error) {
-      if (signedOutNow) throw error;
-      // The next run reads signed out and deletes again: a sign-in that succeeded meanwhile would be lost.
-      console.warn("[antigravity] could not clear Wink's signed-out mark for agy", error);
+      console.warn("[antigravity] could not update Wink's signed-out mark for agy", error);
     }
-    promised = signedOutNow;
-    promisedAt = at;
   };
-  const outdated = () => {
-    if (promised && !landing && opts.loggedOutSince?.(promisedAt)) promise(false);
+  const finishDeferred = (ok: boolean) => {
+    if (!deferred) return;
+    const { resolve } = deferred;
+    deferred = undefined;
+    writeMark(undefined);
+    resolve(ok);
   };
   const land = () => landing ??= (async () => {
+    let ok = false;
     try {
-      const ok = (await opts.present?.()) === false || await forget();
-      if (ok) {
-        promise(false);
-        for (const listener of signedOut) listener();
-      }
+      ok = (await opts.present?.()) === false || await forget();
+      if (ok) for (const listener of signedOut) listener();
       return ok;
     } finally {
+      finishDeferred(ok);
       landing = undefined;
     }
   })();
   const landWhenFree = () => {
-    outdated();
-    if (!promised || running.size || landing || signIns) return;
-    void land().then((ok) => {
-      if (!ok) console.warn("[antigravity] could not delete agy's saved sign-in; Wink keeps it signed out");
-    });
+    if (!deferred || running.size || landing || signIns) return;
+    void land().catch((error) => console.warn("[antigravity] could not delete agy's saved sign-in", error));
   };
   return {
-    /** Signed out by Wink, or deleting: read as signed out, start no turn. */
-    get waiting() {
-      outdated();
-      return promised || landing !== undefined;
+    get pending() {
+      return deferred?.result ?? landing;
     },
-    /** An instance starts: the first one of a run reads the mark, and deletes what a past run promised to. */
+    /** Only this run may finish a deferred delete. */
     attach() {
       attached += 1;
       if (loaded) return;
       loaded = true;
-      const at = opts.mark?.read();
-      promised = at !== undefined;
-      promisedAt = at ?? 0;
-      landWhenFree();
+      if (opts.mark?.read() !== undefined) writeMark(undefined);
     },
     /** An instance is gone and its turns stopped: a waiting delete lands now, before Wink can exit. */
     async release(stopped: (turn: string) => boolean) {
@@ -181,7 +161,7 @@ export function antigravityKeyringSignOut(forget: () => Promise<boolean>, opts: 
       attached -= 1;
       if (attached > 0) return;
       running.clear();
-      promised = false;
+      finishDeferred(false);
       signIns = 0;
       loaded = false;
       run += 1;
@@ -192,23 +172,19 @@ export function antigravityKeyringSignOut(forget: () => Promise<boolean>, opts: 
     turnEnded(id: string) {
       if (running.delete(id)) landWhenFree();
     },
-    /** True once signed out, or once the delete is waiting on running turns or a sign-in. */
     async signOut(): Promise<boolean> {
-      if (landing && await landing) return true;
-      if (running.size || signIns) {
-        try {
-          promise(true);
-        } catch (error) {
-          console.warn("[antigravity] could not save Wink's signed-out mark for agy", error);
-          return false;
-        }
-        return true;
-      }
-      return land();
+      if (deferred) return deferred.result;
+      if (landing) return landing;
+      if (!running.size && !signIns) return land();
+      let resolve!: (ok: boolean) => void;
+      const result = new Promise<boolean>((done) => { resolve = done; });
+      deferred = { result, resolve };
+      writeMark(Date.now());
+      return result;
     },
     /** agy's own logout succeeded: its saved sign-in is gone, so nothing is left to delete. */
     signedOutByAgy() {
-      promise(false);
+      finishDeferred(true);
     },
     /** A sign-in is starting: once any delete in flight has finished, holds the delete off until `ended`. */
     async signingIn(): Promise<(succeeded: boolean) => void> {
@@ -220,7 +196,7 @@ export function antigravityKeyringSignOut(forget: () => Promise<boolean>, opts: 
         if (!open || started !== run) return;
         open = false;
         signIns -= 1;
-        if (succeeded) promise(false);
+        if (succeeded) finishDeferred(false);
         else landWhenFree();
       };
     },
@@ -272,34 +248,6 @@ function latestLogEvent(env: Record<string, string | undefined>): string | null 
     if (code !== "ENOENT" && code !== "ENOTDIR") console.warn("[antigravity] could not read agy's logs", error);
   }
   return undefined;
-}
-
-const LOGOUT_AT = /^[IWEF](\d\d)(\d\d) (\d\d):(\d\d):(\d\d)(?:\.(\d{1,3}))?\d*\s[^\n]*Logging out current user/gm;
-
-/** Whether agy's logs record its own logout at or after `since` (epoch ms): agy deleted its saved sign-in then. */
-export function antigravityLoggedOutSince(since: number, env: Record<string, string | undefined> = process.env): boolean {
-  const dir = logDir(env);
-  try {
-    for (const name of readdirSync(dir)) {
-      const stamp = LOG_NAME.exec(name)?.[1];
-      if (!stamp) continue;
-      const path = join(dir, name);
-      const stat = statSync(path);
-      if (stat.mtimeMs < since || stat.size > LOG_MAX_BYTES) continue;
-      // glog writes local time with no year: the year the log started in, or the next one once the month wraps.
-      const year = Number(stamp.slice(0, 4));
-      for (const [, month, day, hour, minute, second, fraction = "0"] of readFileSync(path, "utf8").matchAll(LOGOUT_AT)) {
-        const at = new Date(year + (Number(month) < Number(stamp.slice(4, 6)) ? 1 : 0), Number(month) - 1, Number(day),
-          Number(hour), Number(minute), Number(second), Number(fraction.padEnd(3, "0")));
-        if (at.getTime() >= since) return true;
-      }
-    }
-  } catch (error) {
-    // SAFETY: Filesystem failures expose Node's errno code.
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") console.warn("[antigravity] could not read agy's logs", error);
-  }
-  return false;
 }
 
 /** agy keeps no account file; its own logs name the email on every sign-in, subscription or Cloud project. */
