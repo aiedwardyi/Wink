@@ -36,6 +36,7 @@ const botsRequest = z
   .strict();
 const sse = z.object({ created: ms, open: ms.optional(), errors: size, lastError: ms.optional() }).strict();
 const cache = z.object({ hit: z.boolean(), paint: ms.optional() }).strict();
+const terminal = z.object({ tap: ms, fetchStart: ms.optional(), read: botsRequest.optional(), paint: ms.optional(), sinceResume: ms.optional() }).strict();
 const server = z.object({ botsMs: ms, sseClients: size, uptimeS: size }).partial().strict();
 const nav = z
   .object({
@@ -56,7 +57,7 @@ export const coldOpenRecordSchema = z
   .object({
     desktop: z.literal(true).optional(),
     openId: z.string().regex(OPEN_ID).optional(),
-    label: z.enum(["notification", "open", "warm", "resume"]),
+    label: z.enum(["notification", "open", "warm", "resume", "terminal"]),
     t0: ms.optional(),
     hiddenMs: ms.optional(),
     nav: nav.optional(),
@@ -69,6 +70,7 @@ export const coldOpenRecordSchema = z
     bots: botsRequest.optional(),
     taskSwitch: request.optional(),
     cache: cache.optional(),
+    terminal: terminal.optional(),
     server: server.optional(),
     chatPaint: ms.optional(),
     jsCached: z.boolean().optional(),

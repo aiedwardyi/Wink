@@ -3,6 +3,7 @@ import { Check, Copy, CornerDownLeft, RotateCcw, TerminalSquare, X } from "lucid
 import type { Bot } from "@/state/store";
 import { api, visibleMessages } from "@/state/store";
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { noteTerminalFetching, noteTerminalOpened, noteTerminalShown } from "@/lib/cold-open-timing";
 import { paintRun, runPaint, type RunPaint } from "@/lib/ansi-palette";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
@@ -149,11 +150,13 @@ export function RemoteTerminalView({
     const targetPane = onMainTab ? undefined : picked ?? fallbackPane;
     try {
       const qs = targetPane ? `?sessionId=${encodeURIComponent(targetPane)}` : "";
+      noteTerminalFetching();
       const next = await api(`${path}${qs}`);
       if (request < appliedRequestRef.current) return;
       appliedRequestRef.current = request;
       restoringRef.current = null;
       setSnapshot(next);
+      noteTerminalShown();
       setError(null);
       setActionError(null);
     } catch (cause) {
@@ -218,6 +221,10 @@ export function RemoteTerminalView({
   useEffect(() => {
     lastViewedPanes.set(bot.id, selectedPane);
   }, [bot.id, selectedPane]);
+
+  useEffect(() => {
+    if (visible) noteTerminalOpened();
+  }, [visible]);
 
   useEffect(() => {
     if (!visible) return;

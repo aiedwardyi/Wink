@@ -38,6 +38,17 @@ const resources = [
     nextHopProtocol: "h2",
   },
   { name: "https://home.example/api/bots/b1/tasks/t-new", startTime: 1500, responseEnd: 2600, transferSize: 900, encodedBodySize: 600, ...hidden },
+  {
+    name: "https://home.example/api/bots/b1/terminal?sessionId=s1",
+    startTime: 5100.4,
+    responseEnd: 12700.9,
+    transferSize: 4200,
+    encodedBodySize: 3900,
+    requestStart: 5120.2,
+    responseStart: 12600.5,
+    decodedBodySize: 9000,
+    nextHopProtocol: "h2",
+  },
 ];
 
 const USER_AGENT = "Mozilla/5.0 (Linux; Android 14; SM-S928N) SamsungBrowser/27.0";
@@ -73,6 +84,8 @@ function fakePage(href: string, navType: NavigationTimingType = "navigate", extr
     expire: () => vi.advanceTimersByTime(COLD_OPEN_TIMEOUT_MS),
   };
 }
+
+const createFake = (href = "https://home.example/remote") => fakePage(href, "reload");
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -501,6 +514,70 @@ describe("cold-open timing", () => {
     expect(withoutClickTime("https://home.example/?bot=b1&t0=5&thread=t1#x")).toBe("/?bot=b1&thread=t1#x");
     expect(withoutClickTime("https://home.example/?t0=5")).toBe("/");
     expect(withoutClickTime("https://home.example/?bot=b1&thread=t1")).toBeNull();
+  });
+
+  it("records a terminal open from the tap to the first read's paint, and how soon after a resume", () => {
+    const fake = createFake();
+    const timing = createColdOpenTiming(fake.page);
+    fake.at(1_000);
+    timing.visibility(true);
+    fake.at(4_000);
+    timing.visibility(false);
+    fake.at(5_000);
+    timing.terminalOpened();
+    fake.at(5_100);
+    timing.terminalFetching();
+    fake.at(9_000);
+    timing.terminalFetching();
+    fake.at(12_800);
+    timing.terminalShown();
+    fake.at(12_850);
+    fake.paint();
+    timing.terminalShown();
+    fake.paint();
+    expect(fake.sent).toEqual([
+      {
+        label: "terminal",
+        hiddenMs: 3_000,
+        terminal: {
+          tap: 5_000,
+          fetchStart: 5_100,
+          read: { start: 5_100, end: 12_701, transferSize: 4_200, encodedBodySize: 3_900, requestStart: 5_120, responseStart: 12_601, decodedBodySize: 9_000, nextHopProtocol: "h2" },
+          paint: 12_850,
+          sinceResume: 1_000,
+        },
+        displayMode: "standalone",
+        visibility: "visible",
+        build: "index-DNyEQLOj.js",
+        userAgent: USER_AGENT,
+      },
+    ]);
+  });
+
+  it("sends a terminal open whose read never came back after 30 s, without a paint, and never its address", () => {
+    const fake = createFake();
+    const timing = createColdOpenTiming(fake.page);
+    fake.at(5_900);
+    timing.terminalOpened();
+    fake.at(6_000);
+    timing.terminalFetching();
+    fake.expire();
+    fake.expire();
+    expect(fake.sent).toEqual([
+      { label: "terminal", terminal: { tap: 5_900, fetchStart: 6_000 }, displayMode: "standalone", visibility: "visible", build: "index-DNyEQLOj.js", userAgent: USER_AGENT },
+    ]);
+    expect(JSON.stringify(fake.sent)).not.toMatch(/b1|s1|terminal\?/);
+  });
+
+  it("leaves a pending cold open alone while a terminal opens", () => {
+    const fake = createFake("https://home.example/?t0=1800000000500");
+    const timing = createColdOpenTiming(fake.page);
+    timing.terminalOpened();
+    timing.terminalFetching();
+    timing.terminalShown();
+    timing.chatShown("t1");
+    fake.paint();
+    expect(fake.sent.map((sent) => sent.label)).toEqual(["terminal", "notification"]);
   });
 
   it("swallows a send that throws", () => {
