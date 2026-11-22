@@ -79,11 +79,32 @@ describe("resume after busy workers", () => {
       expect(await back.until((frame) => frame.kind === "hello")).toMatchObject({ resumed: true });
       await back.until((frame) => frame.kind === "bot" && frame.bot.id === ada.id && frame.bot.color === "#112233");
       const bots = back.frames.filter((frame) => frame.kind === "bot");
-      const last = (id: string) => bots.filter((frame) => frame.bot.id === id).at(-1).bot;
+      const last = (id: string) => bots.filter((frame) => frame.bot.id === id).at(-1)!.bot;
       expect(last(ada.id)).toMatchObject({ pinned: false, color: "#112233" });
       expect(last(bea.id)).toMatchObject({ color: "#336699" });
       const seqs = back.frames.slice(1).map((frame) => frame.seq);
       expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    } finally {
+      back.close();
+    }
+  }, 60_000);
+
+  it("replays a bot made while away before anything in its chat", async () => {
+    const first = await openSse(`${origin()}/api/events`);
+    const cursor = (await first.until((frame) => frame.kind === "hello")).cursor;
+    first.close();
+    const { status, body } = await api("POST", "/api/bots", { name: "Cy" });
+    expect(status).toBe(201);
+    const cy = (body as { bot: { id: string; threadId: string } }).bot;
+    expect((await api("PATCH", `/api/bots/${cy.id}`, { color: "#445566" })).status).toBe(200);
+
+    const back = await openSse(`${origin()}/api/events?since=${encodeURIComponent(cursor)}`);
+    try {
+      expect(await back.until((frame) => frame.kind === "hello")).toMatchObject({ resumed: true });
+      await back.until((frame) => frame.kind === "bot" && frame.bot.id === cy.id && frame.bot.color === "#445566");
+      const about = back.frames.filter((frame) => frame.bot?.id === cy.id || frame.threadId === cy.threadId);
+      expect(about.some((frame) => frame.kind === "message")).toBe(true);
+      expect(about[0].kind).toBe("bot");
     } finally {
       back.close();
     }

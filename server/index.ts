@@ -2785,7 +2785,7 @@ function broadcast(payload: Record<string, unknown>) {
 }
 
 /** A bot frame is the whole bot but its transcript, and a task.packet the whole strip, so a replay
- * needs only the newest of each: the older slot leaves the ring and the ring reaches further back.
+ * needs only the first and newest of each: the slots between leave and the ring reaches further back.
  * A busy:true bot frame stays until a newer one is busy too, since the client clears its
  * optimistic thinking state only on busy:true. */
 function replaySlot(seq: number, kind: string, safe: Record<string, unknown>, frame: string): (typeof replayBuffer)[number] {
@@ -2801,6 +2801,8 @@ function replaySlot(seq: number, kind: string, safe: Record<string, unknown>, fr
     if (replayBuffer[at].key !== key) continue;
     const older = replayBuffer[at].payload?.bot as Record<string, unknown> | undefined;
     if (bot && (!older || older.threadId !== bot.threadId || (older.busy === true && bot.busy !== true))) break;
+    // the oldest slot may announce a new bot ahead of the frames in its chat
+    if (!replayBuffer.some((slot, index) => index < at && slot.key === key)) break;
     replayBuffer.splice(at, 1);
     // older fields this frame omits still reach a client that replays both
     if (bot && older) payload = { ...payload, bot: { ...older, ...(payload.bot as Record<string, unknown>) } };
