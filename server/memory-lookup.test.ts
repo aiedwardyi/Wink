@@ -9,6 +9,7 @@ import { DATA_DIR } from "./config.ts";
 import { buildRecallIndex, createMemoryLookup, notedDay, RECALL_HEADER, type MemoryLookup, type MemoryLookupDeps, type NoteFile } from "./memory-lookup.ts";
 import { userTyping } from "./memory-pass.ts";
 import { parseJson } from "./schema.ts";
+import { asRead, gatePlans, gateProbes } from "./testing/recall-corpus.ts";
 import { buildRecallIndex as baseIndex } from "./testing/recall-index-83f790c87.ts";
 import { ensureWorkspace, workspaceDir, writeMemoryFile } from "./workspace.ts";
 
@@ -243,12 +244,12 @@ describe("corpus", () => {
     expect(ask(lookup, botId, "olive tram Tuesday morning airport").join("")).not.toContain("Tuesday");
   });
 
-  it("ranks a note-taker row by the day it was noted, never a later day its words name", async () => {
+  it("answers a row naming a later day as 83f790c87 does, and a later-noted row it hides when 83f790c87's rows answer nothing", async () => {
     const text = "- Dentist: Dr. Smith on Main Street (noted 2026-10-15)\n- Dentist: Dr. Lee on Harbor Road, cleaning 2026-11-20 (noted 2026-10-10)\n";
     const index = await buildRecallIndex([{ source: "memory/health.md", tier: 0, text, mtime: new Date(2026, 9, 15, 12).getTime() }]);
-    const found = (query: string) => index.hits(index.terms(query)).map((hit) => hit.text).join("\n");
+    const found = (query: string) => answer(index, query).map((hit) => hit.text).join("\n");
+    expect(found("dentist harbor road")).toContain("Dr. Lee");
     expect(found("dentist main street")).toContain("Dr. Smith");
-    expect(found("dentist harbor road")).not.toContain("Dr. Lee");
     index.close();
   });
 
@@ -380,29 +381,20 @@ describe("corpus", () => {
     expect(await fresh({ "connections.md": [`# Notes\n${filler}\n${acme}\n${globex}\n`, 15] }, "research station")).toContain("Cobalt Acme");
   });
 
-  it("returns every value 83f790c87 recall returns, unless it returns a later-noted bot row of its label naming another day instead", async () => {
+  it("returns every note 83f790c87 recall returns, on every message of the review gates and the seeded plans", async () => {
     const value = (text: string) => text.replace(/\s*\(noted [^)]*\)$/, "");
-    const label = (text: string) => /^([^:]{2,60}):\s/.exec(text)?.[1]?.toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
-    const noted = (text: string) => {
-      const day = /\(noted (\d{4}-\d{2}-\d{2})\)$/.exec(text)?.[1] ?? "";
-      return day && new Date(`${day}T00:00:00Z`).toJSON()?.startsWith(day) ? day : "";
-    };
-    const named = (text: string) => text.match(/\d{4}-\d{2}-\d{2}/g)?.sort().pop() ?? "";
     const missing: string[] = [];
     let asked = 0;
+    let short = 0;
     const check = async (name: string, files: NoteFile[], queries: string[]) => {
-      const [before, after] = [await baseIndex(files), await buildRecallIndex(files)];
-      const rows = files.flatMap((file) => file.text.split("\n").filter((row) => row.startsWith("- ")));
-      const found = new Map(queries.map((query) => [query, answer(after, query).map((hit) => value(hit.text))]));
-      // a later-noted row stands in for a value only when this index returns it and it names another day, so two notes of one day both show
-      const returned = new Set([...found.values()].flat());
+      const [read, now] = asRead(files);
+      const [before, after] = [await baseIndex(read), await buildRecallIndex(now)];
       for (const query of queries) {
         asked++;
-        for (const hit of answer(before, query)) {
-          const day = noted(hit.text);
-          if (found.get(query)!.includes(value(hit.text)) || (day && rows.some((row) => label(row) === hit.topic && noted(row) > day && named(row) !== named(hit.text) && returned.has(value(row))))) continue;
-          missing.push(`${name} | ${query} | 83f790c87 ${hit.text} | now ${found.get(query)!.join(" / ") || "nothing"}`);
-        }
+        const found = answer(after, query).map((hit) => value(hit.text));
+        const lost = answer(before, query).filter((hit) => !found.includes(value(hit.text)));
+        if (lost.length) short++;
+        for (const hit of lost) missing.push(`${name} | ${query} | 83f790c87 ${hit.text} | now ${found.join(" / ") || "nothing"}`);
       }
       before.close();
       after.close();
@@ -490,16 +482,19 @@ describe("corpus", () => {
       const queries = [where, `${who} ${where}`, `is the ${who} at ${where} before the ${what}`, `is ${where} before the ${what}`, `${who} ${where} ${what}`, `${what} ${item} and also the ${who} at ${where}`, what];
       await check(`list plan ${plan}, filler ${count}: ${layout(files)}`, files, queries);
     }
-    expect(asked).toBeGreaterThan(10_000);
-    expect(missing.slice(0, 8), `${missing.length} values 83f790c87 returns are missing`).toEqual([]);
-  }, 120_000);
+    // the gates' probes, gate T's 798 messages among them, and the first 1000 plans of each seed gates R, S and T ran
+    const seeds = [["q", 20261122], ["q", 5150], ["r", 909], ["q", 424242], ["r", 7717], ["s", 1122], ["s", 86420], ["s", 220119]] as const;
+    for (const { family, name, files, messages } of [...gateProbes(), ...seeds.flatMap(([profile, seed]) => gatePlans(seed, 1_000, profile))]) await check(`${family} ${name}`, files, messages);
+    expect(asked).toBeGreaterThan(90_000);
+    expect(missing.slice(0, 8), `${missing.length} notes 83f790c87 returns are missing on ${short} of ${asked} messages`).toEqual([]);
+  }, 300_000);
 
-  it("answers two same-day values of a label from the first in the file, since a repeated copy counts once", async () => {
+  it("answers two same-day values of a label as 83f790c87 does, a repeated copy and all", async () => {
     const rows = ["- Standup: moved to 10am (noted 2026-10-12)", "- Standup: starts 9am sharp (noted 2026-10-12)", "- Standup: moved to 10am (noted 2026-10-12)"];
     const files: NoteFile[] = [{ source: "memory/team.md", tier: 0, text: `# Team\n${FILLER}\n${rows.join("\n")}\n`, mtime: new Date(2026, 9, 20, 12).getTime() }];
     const [before, after] = [await baseIndex(files), await buildRecallIndex(files)];
     expect(answer(before, "standup moved 10am or 9am sharp").map((hit) => hit.text)).toEqual([rows[1]]);
-    expect(answer(after, "standup moved 10am or 9am sharp").map((hit) => hit.text)).toEqual([rows[0]]);
+    expect(answer(after, "standup moved 10am or 9am sharp").map((hit) => hit.text)).toEqual([rows[1]]);
     expect(answer(after, "standup starts 9am sharp").map((hit) => hit.text)).toEqual([rows[1]]);
     before.close();
     after.close();

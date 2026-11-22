@@ -207,8 +207,15 @@ function hasNearPair(positions: number[][]): boolean {
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
   const parsed = files.flatMap(piecesOfFile);
+  // review-base's rows answer first, so recall never returns less than it did: a label keeps its newest-dated rows of the files read whole
+  const readWhole = new Set(files.filter((file) => file.mtime).map((file) => file.source));
+  const latest = new Map<string, string>();
+  for (const piece of parsed.flat()) if (readWhole.has(piece.source) && piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
+  const rows = parsed.filter((row) => readWhole.has(row[0]!.source) && row.every((piece) => piece.date === latest.get(piece.topic)));
+  const pieces = rows.flat();
+  // when none of them pass, the rows recall keeps by the day each was noted answer, the start of a file past the budget among them;
+  // a note said again is one row there, the newest copy recall keeps and of equals the one search ranks first, so repeating it never makes its words common
   const shown = recalled(parsed.map((row) => row[0]!));
-  // a note said again is one row, the newest copy recall keeps and of equals the one search ranks first, so repeating it never makes its words common
   const notes = parsed.map((row) => `${row[0]!.source}\0${row.map(({ text }) => text).join("\n").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)$/, "")}`);
   const day = (row: Piece[]) => row[0]!.noted || row[0]!.date;
   const size = (row: Piece[]) => row.reduce((sum, { tokens }) => sum + tokens.length, 0);
@@ -217,42 +224,72 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     const kept = newest.get(notes[at]!);
     if (shown[at] && (!kept || day(row) > day(kept) || (day(row) === day(kept) && size(row) < size(kept)))) newest.set(notes[at]!, row);
   }
-  // a copy under another heading still answers to that heading
-  for (const [at, row] of parsed.entries()) {
-    const kept = newest.get(notes[at]!);
-    if (shown[at] && kept && kept !== row) for (const piece of kept) piece.title = [...piece.title, ...row[0]!.title];
-  }
-  const rows = parsed.filter((row, at) => newest.get(notes[at]!) === row);
-  const pieces = rows.flat();
+  const kept = [...newest.values()];
+  const keptRefs = new Set(kept.map((row) => row[0]!.ref));
+  const indexed = new Set(rows);
+  const later = kept.filter((row) => !indexed.has(row)).flat();
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, tokenize='porter unicode61')");
-  const insert = db.prepare("INSERT INTO notes(rowid, text) VALUES (?, ?)");
+  db.exec("CREATE VIRTUAL TABLE later USING fts5(text, tokenize='porter unicode61')");
   db.exec("BEGIN");
-  for (const [index, piece] of pieces.entries()) {
-    insert.run(index + 1, piece.text);
-    if ((index + 1) % YIELD_EVERY === 0) await yieldLoop();
+  for (const [table, list] of [["notes", pieces], ["later", later]] as const) {
+    const insert = db.prepare(`INSERT INTO ${table}(rowid, text) VALUES (?, ?)`);
+    for (const [index, piece] of list.entries()) {
+      insert.run(index + 1, piece.text);
+      if ((index + 1) % YIELD_EVERY === 0) await yieldLoop();
+    }
   }
   db.exec("COMMIT");
-  const search = db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? ORDER BY bm25(notes), rowid LIMIT ${HIT_LIMIT}`);
+  const search = (table: string, list: Piece[]) => {
+    const statement = db.prepare(`SELECT rowid AS id, bm25(${table}) AS score FROM ${table} WHERE ${table} MATCH ? ORDER BY bm25(${table}), rowid LIMIT ${HIT_LIMIT}`);
+    // SAFETY: the SELECT above names exactly these two columns.
+    return (match: string) => (statement.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...list[hit.id - 1]!, score: hit.score }));
+  };
+  const [first, then] = [search("notes", pieces), search("later", later)];
 
-  const documents = new Map<string, number>();
-  for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
-  // recall answers one row per label, so a word only one label's rows hold is rare however many copies or edits of a note repeat it;
-  // what it weighs still goes by rows, and its labels are counted only once a message uses it while it is common by rows
+  const weigh = (rows: Piece[][]) => {
+    const documents = new Map<string, number>();
+    for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
+    const total = rows.length;
+    const maxIdf = Math.log(1 + (total + 0.5) / 0.5);
+    const idfOf = (count: number) => Math.log(1 + (total - count + 0.5) / (count + 0.5));
+    const idf = (word: string) => {
+      const count = documents.get(word) ?? 0;
+      return count ? idfOf(count) : maxIdf;
+    };
+    return { documents, maxIdf, idfOf, idf, rareBar: Math.min(RARE_IDF, idfOf(1)) };
+  };
+  const strict = weigh(rows);
+  let loose: ReturnType<typeof weigh> | undefined;
+  const { documents, idf } = strict;
+  // recall answers one row per label, so a word only one label's kept rows hold is rare however many copies or edits of a note repeat it
   const labels = new Map<string, number>();
   const labelsOf = (word: string) => {
-    if (!labels.has(word)) labels.set(word, new Set(rows.filter((row) => row.some((piece) => piece.tokens.includes(word))).map((row) => row[0]!.topic)).size);
+    if (!labels.has(word)) labels.set(word, new Set(kept.filter((row) => row.some((piece) => piece.tokens.includes(word))).map((row) => row[0]!.topic)).size);
     return labels.get(word)!;
   };
   const vocabulary = [...documents.keys()].filter((word) => word.length >= 3);
-  const total = rows.length;
-  const maxIdf = Math.log(1 + (total + 0.5) / 0.5);
-  const idfOf = (count: number) => Math.log(1 + (total - count + 0.5) / (count + 0.5));
-  const idf = (word: string) => {
-    const count = documents.get(word) ?? 0;
-    return count ? idfOf(count) : maxIdf;
+  const pass = (weights: ReturnType<typeof weigh>, byLabels: boolean, { list, groups }: Terms, hits: RecallHit[]) => {
+    if (list.length < 2) return [];
+    const known = groups.map((group) => group.filter((option) => weights.documents.has(option)));
+    const weight = (options: string[]) => (options.length ? Math.max(...options.map(weights.idf)) : weights.maxIdf);
+    const whole = known.reduce((sum, options) => sum + weight(options), 0);
+    return hits.filter((hit) => {
+      let cover = 0;
+      let rare = 0;
+      const positions: number[][] = [];
+      for (const options of known) {
+        const at = hit.tokens.flatMap((token, position) => (options.some((option) => matchesToken(token, option)) ? [position] : []));
+        if (!at.length) continue;
+        const value = weight(options);
+        cover += value;
+        if (value >= weights.rareBar || (byLabels && Math.max(...options.map((option) => weights.idfOf(labelsOf(option)))) >= weights.rareBar)) rare++;
+        positions.push(at);
+      }
+      if (positions.length < 2 || rare < 1 || cover / whole < MIN_COVER || !hasNearPair(positions)) return false;
+      return known.flat().some((option) => hit.title.some((token) => matchesToken(token, option)));
+    });
   };
-  const rareBar = Math.min(RARE_IDF, idfOf(1));
 
   const repair = (term: string, expired?: () => boolean): string[] => {
     if (term.length < 4 || documents.has(term)) return [term];
@@ -286,30 +323,15 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     },
     hits({ groups }) {
       const match = [...new Set(groups.flat())].map((term) => `"${term}"`).join(" OR ");
-      if (!match) return [];
-      // SAFETY: the SELECT above names exactly these two columns.
-      return (search.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
+      return match ? first(match) : [];
     },
-    gate({ list, groups }, hits) {
-      if (list.length < 2) return [];
-      const known = groups.map((group) => group.filter((option) => documents.has(option)));
-      const weight = (options: string[]) => (options.length ? Math.max(...options.map(idf)) : maxIdf);
-      const whole = known.reduce((sum, options) => sum + weight(options), 0);
-      return hits.filter((hit) => {
-        let cover = 0;
-        let rare = 0;
-        const positions: number[][] = [];
-        for (const options of known) {
-          const at = hit.tokens.flatMap((token, position) => (options.some((option) => matchesToken(token, option)) ? [position] : []));
-          if (!at.length) continue;
-          const value = weight(options);
-          cover += value;
-          if (value >= rareBar || Math.max(...options.map((option) => idfOf(labelsOf(option)))) >= rareBar) rare++;
-          positions.push(at);
-        }
-        if (positions.length < 2 || rare < 1 || cover / whole < MIN_COVER || !hasNearPair(positions)) return false;
-        return known.flat().some((option) => hit.title.some((token) => matchesToken(token, option)));
-      });
+    gate(terms, hits) {
+      const passed = pass(strict, false, terms, hits);
+      if (passed.length) return passed;
+      // review-base's rows pass none: the kept rows answer, weighed as kept, and a word only one label holds counts as rare
+      loose ??= weigh(kept);
+      const match = [...new Set(terms.groups.flat())].map((term) => `"${term}"`).join(" OR ");
+      return pass(loose, true, terms, [...hits.filter((hit) => keptRefs.has(hit.ref)), ...(match ? then(match) : [])]);
     },
     close: () => db.close(),
   };
