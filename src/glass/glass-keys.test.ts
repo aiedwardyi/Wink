@@ -118,6 +118,7 @@ describe("glasses keys", () => {
 
   it("pair.html reads spoken digits the same way", () => {
     expect(pairDigits, "spokenDigits not found in pair.html").toBeTruthy();
+    // SAFETY: the matched source is pair.html's arrow from said text to digits.
     const read = vm.runInNewContext(`(${pairDigits})`) as (text: string) => string;
     for (const [said, digits] of SPOKEN) expect(read(said), said).toBe(digits);
   });

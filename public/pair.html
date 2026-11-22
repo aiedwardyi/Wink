@@ -138,9 +138,9 @@
         }
       }
       @font-face {
-        font-family: "Space Grotesk";
-        src: url(/fonts/SpaceGrotesk-Variable.woff2) format("woff2");
-        font-weight: 300 700;
+        font-family: "Geist";
+        src: url(/fonts/Geist-Variable.woff2) format("woff2");
+        font-weight: 100 900;
       }
       body.glasses,
       body.glasses main {
@@ -153,90 +153,74 @@
         display: none;
       }
       .glass {
-        --raised: #23252c;
-        --focus: #a9b3ff;
-        --accent-text: #b5bdff;
-        position: relative;
         height: 100vh;
         height: 100dvh;
         overflow: hidden;
-        font-family: "Space Grotesk", sans-serif;
+        color: #fff;
+        font-family: "Geist", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
       }
-      .glass header {
-        position: absolute;
-        top: 24px;
-        left: 24px;
-        right: 24px;
+      .glass #g-ask,
+      .glass #g-done {
+        box-sizing: border-box;
+        height: 100%;
         display: flex;
+        flex-direction: column;
         align-items: center;
-        gap: 16px;
-        height: 76px;
+        justify-content: center;
+        padding: 28px 34px 40px;
+        text-align: center;
       }
-      .glass header img {
-        border-radius: 14px;
+      .g-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(255, 77, 157, 0.2);
       }
       .glass h1 {
-        margin: 0;
-        font-size: 36px;
-        line-height: 44px;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-        white-space: nowrap;
+        margin: 22px 0 0;
+        font-size: 28px;
+        font-weight: 650;
+        letter-spacing: -0.025em;
       }
       .glass p {
-        position: absolute;
-        left: 24px;
-        right: 24px;
-        font-size: 24px;
-        line-height: 32px;
+        margin: 10px 0 0;
+        font-size: 18px;
+        font-weight: 430;
+        line-height: 1.4;
+        color: #9aa2b4;
       }
-      .glass header p {
-        position: static;
-      }
-      #g-text {
-        top: 124px;
-        font-size: 28px;
-        line-height: 36px;
-        color: var(--ink);
-      }
-      #g-sub {
-        top: 200px;
+      #g-text strong {
+        color: #e2e6f2;
+        font-weight: 580;
       }
       .g-code {
-        position: absolute;
-        top: 256px;
-        left: 50%;
+        position: relative;
         display: flex;
-        gap: 12px;
-        padding: 10px;
-        border-radius: 14px;
-        transform: translateX(-50%);
+        gap: 22px;
+        margin-top: 38px;
       }
-      .g-code:focus-within,
-      #g-pair:focus {
-        outline: 3px solid var(--focus);
-        outline-offset: 3px;
-        box-shadow: 0 0 20px color-mix(in srgb, var(--focus) 55%, transparent);
+      .g-group {
+        display: flex;
+        gap: 9px;
       }
-      .g-code span {
+      .g-group span {
+        box-sizing: border-box;
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 70px;
-        height: 92px;
-        border-radius: 8px;
-        background: var(--raised);
-        box-shadow: inset 0 0 0 1px var(--hairline);
-        font-size: 56px;
-        font-weight: 600;
+        width: 66px;
+        height: 82px;
+        border-radius: 19px;
+        border: 1.5px solid rgba(255, 255, 255, 0.2);
+        background: linear-gradient(180deg, #191c25 0%, #12141b 100%);
+        font-size: 36px;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
       }
-      .g-code span:empty::after {
-        content: "";
-        width: 28px;
-        height: 3px;
-        margin-top: 44px;
-        background: var(--ink-secondary);
-        opacity: 0.6;
+      .g-code:focus-within span.next {
+        border: 2.5px solid #fff;
+        box-shadow: 0 0 22px rgba(255, 255, 255, 0.16);
       }
       .g-code input {
         all: unset;
@@ -245,55 +229,51 @@
         color: transparent;
         caret-color: transparent;
       }
-      #g-hint {
-        top: 400px;
-        font-size: 22px;
-        line-height: 28px;
-        text-align: center;
-      }
-      #g-hint.heard {
-        top: 396px;
-      }
       #g-pair {
-        position: absolute;
-        left: 24px;
-        right: 24px;
-        bottom: 40px;
-        height: 72px;
-        border: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+        width: 268px;
+        height: 60px;
+        margin-top: 38px;
+        border: none;
         border-radius: 999px;
-        background: color-mix(in srgb, var(--accent) 20%, transparent);
-        color: var(--accent-text);
-        font-size: 28px;
-        font-weight: 700;
+        background: #fff;
+        color: #08090c;
+        font: inherit;
+        font-size: 20px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+      }
+      #g-pair:focus {
+        outline: none;
+        box-shadow: 0 0 26px rgba(255, 255, 255, 0.24);
+      }
+      .glass #g-pair[hidden] {
+        display: block !important;
+        visibility: hidden;
+      }
+      .glass #g-hint {
+        margin-top: 24px;
+        font-size: 15px;
+        font-weight: 450;
+        color: #777f92;
       }
       .g-ok {
-        position: absolute;
-        top: 160px;
-        left: 50%;
+        box-sizing: border-box;
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 120px;
-        height: 120px;
-        border: 4px solid var(--success);
+        width: 104px;
+        height: 104px;
+        border: 3px solid #5be3a4;
         border-radius: 50%;
-        color: var(--success);
-        box-shadow: 0 0 30px color-mix(in srgb, var(--success) 40%, transparent);
-        transform: translateX(-50%);
+        color: #5be3a4;
+        box-shadow: 0 0 30px rgba(91, 227, 164, 0.35);
       }
       #g-paired {
-        top: 312px;
-        font-size: 40px;
-        line-height: 48px;
-        font-weight: 700;
-        color: var(--ink);
-        text-align: center;
-      }
-      #g-opening {
-        top: 370px;
+        margin-top: 26px;
         font-size: 28px;
-        text-align: center;
+        font-weight: 650;
+        letter-spacing: -0.025em;
+        color: #fff;
       }
       [hidden] {
         display: none !important;
@@ -322,22 +302,16 @@
         <p id="status" class="status" role="status" aria-live="polite"></p>
       </div>
       <section id="glass" class="glass" hidden>
-        <header>
-          <img src="/app-icon.svg?v=2" alt="" />
-          <div>
-            <h1 id="g-title"></h1>
-            <p id="g-pc" hidden></p>
-          </div>
-        </header>
         <div id="g-ask">
+          <img class="g-icon" src="/app-icon.svg?v=2" alt="" />
+          <h1 id="g-title"></h1>
           <p id="g-text"></p>
-          <p id="g-sub"></p>
-          <label class="g-code"><input id="g-code" type="text" autocomplete="off" spellcheck="false" /><span></span><span></span><span></span><span></span><span></span><span></span></label>
-          <p id="g-hint" role="status" aria-live="polite"></p>
+          <label class="g-code"><input id="g-code" type="text" autocomplete="off" spellcheck="false" /><span class="g-group"><span></span><span></span><span></span></span><span class="g-group"><span></span><span></span><span></span></span></label>
           <button id="g-pair" type="button" hidden></button>
+          <p id="g-hint" role="status" aria-live="polite"></p>
         </div>
         <div id="g-done" hidden>
-          <span class="g-ok"><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
+          <span class="g-ok"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
           <p id="g-paired"></p>
           <p id="g-opening"></p>
         </div>
@@ -402,20 +376,20 @@
         const t = (key) => COPY[lang][key] || COPY.en[key] || COPY[lang].failed;
         const GLASS = {
           en: {
-            title: "Pair glasses",
-            text: "Enter the 6-digit code from Wink on your PC.",
-            sub: "Settings › Devices › Code instead of Google",
-            hint: "⏎ say or write the code",
+            title: "Pair with Wink",
+            text: "Enter the 6-digit code from {pc}",
+            pc: "your PC",
+            hint: "Wink on PC › Settings › Devices",
             heard: "heard “{text}”",
-            pair: "Pair",
+            pair: "Connect",
             paired: "Paired",
             opening: "Opening Wink…",
           },
           ko: {
-            title: "안경 연결",
-            text: "PC의 Wink에 표시된 6자리 코드를 입력하세요.",
-            sub: "설정 › 기기 › Google 대신 코드로 연결",
-            hint: "⏎ 코드를 말하거나 쓰세요",
+            title: "Wink와 연결",
+            text: "{pc}에 표시된 6자리 코드를 입력하세요",
+            pc: "PC",
+            hint: "PC의 Wink › 설정 › 기기",
             heard: "들은 내용 “{text}”",
             pair: "연결",
             paired: "연결됨",
@@ -574,15 +548,15 @@
           const gCode = $("g-code");
           const gHint = $("g-hint");
           const gPair = $("g-pair");
-          const cells = [...document.querySelectorAll(".g-code span")];
+          const cells = [...document.querySelectorAll(".g-group span")];
           const named = query.get("n") || fragment.get("n");
           document.body.classList.add("glasses");
           $("glass").hidden = false;
           $("g-title").textContent = GLASS.title;
-          $("g-pc").textContent = named || "";
-          $("g-pc").hidden = !named;
-          $("g-text").textContent = GLASS.text;
-          $("g-sub").textContent = GLASS.sub;
+          const pc = document.createElement("strong");
+          pc.textContent = named || GLASS.pc;
+          const [before, after] = GLASS.text.split("{pc}");
+          $("g-text").replaceChildren(before, pc, after);
           gPair.textContent = GLASS.pair;
           $("g-paired").textContent = GLASS.paired;
           $("g-opening").textContent = GLASS.opening;
@@ -592,7 +566,10 @@
           };
           const read = () => {
             const digits = spokenDigits(gCode.value).slice(0, 6);
-            cells.forEach((cell, i) => (cell.textContent = digits[i] || ""));
+            cells.forEach((cell, i) => {
+              cell.textContent = digits[i] || "";
+              cell.classList.toggle("next", i === digits.length);
+            });
             const said = gCode.value.trim();
             if (/[a-z]/i.test(said)) hint(GLASS.heard.replace("{text}", () => said), "heard");
             else hint(GLASS.hint);

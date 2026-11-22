@@ -1,13 +1,16 @@
 import type { SwipeStep } from "@/lib/phone-swipe";
 
-export type GlassScreen = "chat" | "check";
-export type GlassFocus = "speak" | "header" | "send" | "again" | "other";
+export type GlassScreen = "chat" | "check" | "models";
+export type GlassFocus = "speak" | "header" | "listen" | "send" | "again" | "other";
 
 export type GlassAction =
   | { type: "chat"; step: Exclude<SwipeStep, 0> }
   | { type: "reply"; dir: -1 | 1 }
   | { type: "messages" }
-  | { type: "menu" }
+  | { type: "models" }
+  | { type: "listen" }
+  | { type: "model"; dir: -1 | 1 }
+  | { type: "pick" }
   | { type: "composer" }
   | { type: "check" }
   | { type: "send" }
@@ -21,14 +24,22 @@ export function glassKey(screen: GlassScreen, focus: GlassFocus, key: string, te
     if (key === "ArrowLeft" || key === "ArrowRight") return { type: "chat", step: key === "ArrowLeft" ? -1 : 1 };
     if (focus === "header") {
       if (key === "ArrowDown") return { type: "messages" };
-      return key === "Enter" ? { type: "menu" } : null;
+      return key === "Enter" ? { type: "models" } : null;
+    }
+    if (focus === "listen") {
+      if (key === "ArrowUp") return { type: "messages" };
+      return key === "Enter" ? { type: "listen" } : null;
     }
     if (key === "ArrowUp" || key === "ArrowDown") return { type: "reply", dir: key === "ArrowUp" ? -1 : 1 };
     if (key === "Enter" && focus === "speak") return text ? { type: "check" } : { type: "composer" };
     return null;
   }
-  if (key === "ArrowDown") return { type: "again" };
-  if (key === "ArrowUp") return { type: "toSend" };
+  if (screen === "models") {
+    if (key === "ArrowUp" || key === "ArrowDown") return { type: "model", dir: key === "ArrowUp" ? -1 : 1 };
+    return key === "Enter" ? { type: "pick" } : null;
+  }
+  if (key === "ArrowLeft" || key === "ArrowDown") return { type: "again" };
+  if (key === "ArrowRight" || key === "ArrowUp") return { type: "toSend" };
   if (key !== "Enter") return null;
   if (focus === "send") return { type: "send" };
   if (focus === "again") return text ? { type: "check" } : { type: "composer" };
@@ -42,7 +53,7 @@ export type ReplyMove =
   | { type: "header" }
   | { type: "none" };
 
-/** ArrowUp past a reply's top opens the older one at its end; past the oldest it reaches the header. ArrowDown walks back to the newest. */
+/** ArrowUp past a reply's top opens the older one at its end; past the oldest it reaches the model chip. ArrowDown walks back to the newest. */
 export function replyMove(at: ReplyPosition, dir: -1 | 1): ReplyMove {
   if (dir < 0) {
     if (!at.atTop) return { type: "scroll", dir };

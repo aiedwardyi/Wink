@@ -1,59 +1,69 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { I18nProvider } from "@/lib/i18n";
-import { dragOffset, neighborId, reducedMotion, swipeChatIds } from "@/lib/phone-swipe";
+import { neighborId, swipeChatIds } from "@/lib/phone-swipe";
 import { loadSidebarOrder } from "@/lib/sidebar-preferences";
+import { speaker } from "@/lib/tts";
 import { StoreProvider, useStore } from "@/state/store";
 import { glassKey, type GlassFocus } from "./glass-keys";
 import { GlassChat, type GlassChatHandle } from "./GlassChat";
+import { GlassDeck } from "./GlassDeck";
+import { GlassModels, useGlassModels } from "./GlassModels";
 import { GlassSpeak } from "./GlassSpeak";
 import "./glass.css";
 
-function focusOf(): { focus: GlassFocus; field: HTMLInputElement | null } {
+const DECK_MS = 1200;
+
+function focusOf() {
   const el = document.activeElement;
   const role = el instanceof HTMLElement ? el.dataset.glass : undefined;
-  const focus: GlassFocus = role === "speak" || role === "header" || role === "send" || role === "again" ? role : "other";
+  const focus: GlassFocus = role === "speak" || role === "header" || role === "listen" || role === "send" || role === "again" ? role : "other";
   return { focus, field: el instanceof HTMLInputElement ? el : null };
 }
 
 function focusGlass(role: GlassFocus) {
-  document.querySelector<HTMLElement>('.glass-layer:not([inert]) [data-glass="' + role + '"]')?.focus();
+  document.querySelector<HTMLElement>('.glass [data-glass="' + role + '"]')?.focus();
 }
 
 function Glasses() {
   const { state, dispatch } = useStore();
   const [draft, setDraft] = useState<string | null>(null);
-  const [slide, setSlide] = useState<{ from: string; step: -1 | 1 } | null>(null);
+  const [picking, setPicking] = useState<number | null>(null);
+  const [deck, setDeck] = useState(false);
   const [bump, setBump] = useState(0);
-  const [hot, setHot] = useState<-1 | 1 | null>(null);
   const [pressed, setPressed] = useState(false);
-  const [sent, setSent] = useState<{ botId: string; text: string } | null>(null);
   const chat = useRef<GlassChatHandle | null>(null);
+  const deckTimer = useRef(0);
 
   const bot = state.bots.find((candidate) => candidate.id === state.selectedId) ?? state.bots.find((candidate) => !candidate.hidden);
   const ids = swipeChatIds(state.bots, [], loadSidebarOrder(), bot?.id);
-  const name = (from: string, step: -1 | 1) => {
-    const id = neighborId(ids, from, step);
-    return state.bots.find((candidate) => candidate.id === id)?.name;
-  };
+  const models = useGlassModels(bot);
 
   useEffect(() => {
     if (bot && bot.id !== state.selectedId) dispatch({ type: "select", id: bot.id });
   }, [bot?.id, state.selectedId, dispatch]);
 
   useLayoutEffect(() => {
-    if (draft === null) focusGlass("speak");
-  }, [bot?.id, draft === null]);
+    if (draft === null && picking === null) focusGlass("speak");
+  }, [bot?.id, draft === null, picking === null]);
 
   useEffect(() => {
-    const onPop = () => setDraft(null);
+    const onPop = () => {
+      setDraft(null);
+      setPicking(null);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  const latest = useRef({ bot, ids, draft });
-  latest.current = { bot, ids, draft };
+  const latest = useRef({ bot, ids, draft, picking, models, deck });
+  latest.current = { bot, ids, draft, picking, models, deck };
 
   useEffect(() => {
+    const showDeck = () => {
+      setDeck(true);
+      clearTimeout(deckTimer.current);
+      deckTimer.current = window.setTimeout(() => setDeck(false), DECK_MS);
+    };
     const toCheck = (field: HTMLInputElement | null) => {
       const text = field?.value.trim();
       if (!field || !text) return;
@@ -63,35 +73,61 @@ function Glasses() {
       requestAnimationFrame(() => focusGlass("send"));
     };
     const onChange = (event: Event) => {
-      const role = (event.target as HTMLElement).dataset?.glass;
-      if (role === "speak" || role === "again") toCheck(event.target as HTMLInputElement);
+      const field = event.target;
+      if (field instanceof HTMLInputElement && (field.dataset.glass === "speak" || field.dataset.glass === "again")) toCheck(field);
     };
     const onKey = (event: KeyboardEvent) => {
-      const { bot, ids, draft } = latest.current;
+      const { bot, ids, draft, picking, models, deck } = latest.current;
       if (!bot) return;
+      if (deck && event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        clearTimeout(deckTimer.current);
+        setDeck(false);
+        if (event.key === "Enter") return event.preventDefault();
+      }
       const { focus, field } = focusOf();
-      const action = glassKey(draft === null ? "chat" : "check", focus, event.key, Boolean(field?.value.trim()));
+      const screen = draft !== null ? "check" : picking !== null ? "models" : "chat";
+      const action = glassKey(screen, focus, event.key, Boolean(field?.value.trim()));
       if (event.key.startsWith("Arrow")) event.preventDefault();
       if (!action) return;
       if (action.type !== "composer") event.preventDefault();
       switch (action.type) {
         case "chat": {
-          setHot(action.step);
           const target = neighborId(ids, bot.id, action.step);
-          if (!target) {
-            setBump(action.step);
-            break;
-          }
-          if (!reducedMotion()) setSlide({ from: bot.id, step: action.step });
-          dispatch({ type: "select", id: target });
+          if (target) dispatch({ type: "select", id: target });
+          else setBump(action.step);
+          showDeck();
           break;
         }
-        case "reply":
-          if (chat.current?.move(action.dir) === "header") focusGlass("header");
+        case "reply": {
+          const step = chat.current?.move(action.dir);
+          if (step === "header") focusGlass("header");
+          else if (step === "none") focusGlass("listen");
           break;
+        }
         case "messages":
           focusGlass("speak");
           break;
+        case "models":
+          window.history.pushState({ glass: "models" }, "");
+          setPicking(Math.max(0, models.findIndex((model) => model.current)));
+          break;
+        case "model":
+          setPicking((at) => Math.min(Math.max(0, (at ?? 0) + action.dir), models.length - 1));
+          break;
+        case "pick": {
+          const model = picking === null ? undefined : models[picking];
+          const shown = bot.modelSelection;
+          if (model && !(model.current && model.selection.model === shown.model && model.selection.effort === shown.effort)) {
+            dispatch({ type: "setModel", botId: bot.id, selection: model.selection });
+          }
+          window.history.back();
+          break;
+        }
+        case "listen": {
+          const reply = chat.current?.reply();
+          if (reply?.text && !reply.live) void speaker.speak(reply.text, { botId: bot.id, messageId: reply.id, voiceId: bot.voice });
+          break;
+        }
         case "composer":
           if (focus === "speak") setPressed(true);
           break;
@@ -99,10 +135,7 @@ function Glasses() {
           toCheck(field);
           break;
         case "send":
-          if (draft) {
-            dispatch({ type: "send", botId: bot.id, text: draft, threadId: bot.threadId, sendId: crypto.randomUUID() });
-            setSent({ botId: bot.id, text: draft });
-          }
+          if (draft) dispatch({ type: "send", botId: bot.id, text: draft, threadId: bot.threadId, sendId: crypto.randomUUID() });
           window.history.back();
           break;
         case "again":
@@ -113,10 +146,7 @@ function Glasses() {
           break;
       }
     };
-    const onKeyUp = () => {
-      setHot(null);
-      setPressed(false);
-    };
+    const onKeyUp = () => setPressed(false);
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keyup", onKeyUp, true);
     document.addEventListener("change", onChange, true);
@@ -124,6 +154,7 @@ function Glasses() {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKeyUp, true);
       document.removeEventListener("change", onChange, true);
+      clearTimeout(deckTimer.current);
     };
   }, [dispatch]);
 
@@ -134,38 +165,18 @@ function Glasses() {
   }, [bump]);
 
   if (!bot) return <div className="glass" />;
-  if (draft !== null) {
-    return (
-      <div className="glass">
-        <GlassSpeak bot={bot} draft={draft} />
-      </div>
-    );
-  }
-  const from = slide && slide.from !== bot.id ? state.bots.find((candidate) => candidate.id === slide.from) : undefined;
-  const leaving = from && slide ? (
-    <div key={"out-" + from.id} className={slide.step > 0 ? "glass-slide out-next" : "glass-slide out-prev"} onAnimationEnd={() => setSlide(null)}>
-      <GlassChat bot={from} left={name(from.id, -1)} right={name(from.id, 1)} active={false} hot={slide.step} />
-    </div>
-  ) : null;
   return (
     <div className="glass">
-      {leaving}
-      <div
-        key={bot.id}
-        className={from && slide ? (slide.step > 0 ? "glass-slide in-next" : "glass-slide in-prev") : "glass-slide"}
-        style={bump ? { transform: "translateX(" + dragOffset(-bump * 24, false) + "px)" } : undefined}
-      >
-        <GlassChat
-          bot={bot}
-          left={name(bot.id, -1)}
-          right={name(bot.id, 1)}
-          hot={hot}
-          pressed={pressed}
-          sent={sent?.botId === bot.id ? sent.text : null}
-          active
-          handle={chat}
-        />
-      </div>
+      {draft !== null ? (
+        <GlassSpeak bot={bot} draft={draft} />
+      ) : picking !== null ? (
+        <GlassModels bot={bot} models={models} at={picking} />
+      ) : (
+        <>
+          <GlassChat key={bot.id} bot={bot} ids={ids} pressed={pressed} handle={chat} />
+          {deck && <GlassDeck ids={ids} at={bot.id} bump={bump} />}
+        </>
+      )}
     </div>
   );
 }
