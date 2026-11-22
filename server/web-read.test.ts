@@ -177,6 +177,14 @@ describe("web_read steps 3-6", () => {
     expect((await createWebReader({ transport, readers: () => [bots[0]!, bots[3]!] }).read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "me", ownToolFailed: true })).reader).toBeUndefined();
   });
 
+  it("a caller whose engine is unknown (empty) borrows no reader, since any bot might be its own engine", async () => {
+    const { transport } = fake(blocked);
+    const unknown = [{ botId: "me", name: "Me", engine: "", busy: false }, bots[1]!, bots[3]!];
+    const result = await createWebReader({ transport, readers: () => unknown }).read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "me", ownToolFailed: true });
+    expect(result.reader).toBeUndefined();
+    expect(result.tried.join("\n")).toMatch(/step 4 cross-engine reader: no free Codex or Grok bot/);
+  });
+
   it("stops honestly when no Codex or Grok bot is free", async () => {
     const { transport } = fake(blocked);
     const reader = createWebReader({ transport, readers: () => [bots[4]!] });
@@ -1014,6 +1022,23 @@ describe("web_read review follow-ups", () => {
     const result = await createWebReader({ transport }).read("https://www.youtube.com/watch?v=abc123XYZ00");
     expect(result).toMatchObject({ status: "ok", route: "youtube-captions" });
     expect(requests).toEqual([YT_API, YT_WATCH, YT_CAPTION]);
+  });
+
+  it.each([["an object", {}], ["a string", "none"], ["a number", 3]])("a titled player API answer with tracks as %s still tries the watch page", async (_name, tracks) => {
+    const watchTrack = { baseUrl: "https://www.youtube.com/api/timedtext?v=abc123XYZ00&lang=en", languageCode: "en" };
+    const body = ytPlayer(tracks as unknown as unknown[]);
+    const { transport, requests } = fake({ [YT_API]: { type: "application/json", body }, [YT_WATCH]: { html: player([watchTrack]) }, [YT_CAPTION]: { type: "application/json", body: json3 } });
+    const result = await createWebReader({ transport }).read("https://www.youtube.com/watch?v=abc123XYZ00");
+    expect(result).toMatchObject({ status: "ok", route: "youtube-captions" });
+    expect(requests).toEqual([YT_API, YT_WATCH, YT_CAPTION]);
+  });
+
+  it("a titled player API answer with a real empty track list still stops with no captions", async () => {
+    const { transport, requests } = fake({ [YT_API]: { type: "application/json", body: ytPlayer([]) } });
+    const result = await createWebReader({ transport }).read("https://www.youtube.com/watch?v=abc123XYZ00");
+    expect(result.status).toBe("blocked");
+    expect(result.tried.join("\n")).toMatch(/this video has no captions/);
+    expect(requests).toEqual([YT_API]);
   });
 
   it("a caption link that redirects off youtube.com is not followed", async () => {

@@ -214,7 +214,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     const tracks = Array.isArray(listed) ? listed.filter((t) => t instanceof Object) : [];
     const english = (t: CaptionTrack) => String(t.languageCode ?? "").startsWith("en");
     const track = tracks.find((t) => english(t) && !t.kind) ?? tracks.find(english) ?? tracks[0];
-    if (!track?.baseUrl) return { ok: false, route: "youtube", text: "", meta, stop: Boolean(details.title), tried: [`${label}: ${details.title ? "this video has no captions" : "no video data"}`] };
+    if (!track?.baseUrl) return { ok: false, route: "youtube", text: "", meta, stop: Boolean(details.title) && Array.isArray(listed), tried: [`${label}: ${details.title && Array.isArray(listed) ? "this video has no captions" : "no video data"}`] };
     let captionUrl: URL;
     try {
       captionUrl = new URL(track.baseUrl, "https://www.youtube.com");
@@ -351,6 +351,8 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     const bots = deps.readers?.() ?? [];
     // Step 4 is another engine's web tools: the caller's own engine already failed at step 3.
     const own = bots.find((bot) => bot.botId === callerBotId)?.engine;
+    // An empty engine is a caller whose provider is not ready (index.ts stores ""): which engine failed is unknown, so no other bot is known to differ.
+    if (own === "") return undefined;
     const reader = bots
       .filter((bot) => bot.botId !== callerBotId && bot.engine !== own && !bot.busy && rank(bot.engine) >= 0)
       .sort((a, b) => rank(a.engine) - rank(b.engine))[0];
