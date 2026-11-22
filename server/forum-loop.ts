@@ -23,6 +23,18 @@ const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0,
 // another bot's words ride in one fenced line: no newline can start a forged "Wink:" line, no quote or bracket can close the fence
 const flat = (text: string, max: number) => cut(text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").replace(/[<>"`]/g, "'").replace(/\s+/g, " ").trim(), max);
 const errorWords = (line: string) => boardWords(line).filter((word) => !GENERIC.has(word));
+// a post is about an error when it quotes 3 of its words in a row (all of them when it has fewer); sharing loose words is not enough
+const quotes = (error: readonly string[], text: readonly string[]) => {
+  let best = 0;
+  for (let at = 0; at < text.length; at++) {
+    for (let from = 0; from < error.length; from++) {
+      let run = 0;
+      while (at + run < text.length && text[at + run] === error[from + run]) run++;
+      best = Math.max(best, run);
+    }
+  }
+  return error.length > 0 && best >= Math.min(3, error.length);
+};
 
 /** Before the loop, bots were told to post any fix that took 2+ tries; the loop asks only after a proven one. */
 export const forumPostRule = (loop: boolean) => (loop ? "" : "After something took 2+ tries, board_post kind fix: the error and the line that fixed it. ");
@@ -49,6 +61,7 @@ export function createForumLoop(deps: ForumLoopDeps) {
   const pending = new Map<string, { text: string; at: number }>();
   const claims = new Map<string, Claim[]>();
   const given = new Map<string, string>();
+  const armed = new Map<string, string>();
 
   const turnOf = (threadId: string) => {
     let turn = turns.get(threadId);
@@ -61,11 +74,19 @@ export function createForumLoop(deps: ForumLoopDeps) {
     map.set(key, value);
   };
   const log = (row: ForumLoopRow) => deps.log?.(enabled ? row : { ...row, shadow: true });
+  // newest wins: an engine that cannot steer gets at most one handoff on its next turn
+  const later = (threadId: string, text: string) => bounded(pending, threadId, { text, at: now() }, MAX_PENDING);
+  // A steer written after the turn's last model request is answered as its own query, a second reply. One written
+  // while a shell call runs rides the request that carries that call's result, so the text waits for the next one.
   const deliver = (threadId: string, text: string) => {
-    if (!enabled) return;
-    // newest wins: an engine that cannot steer gets at most one handoff on its next turn
-    const later = () => bounded(pending, threadId, { text, at: now() }, MAX_PENDING);
-    deps.steer(threadId, text).then((taken) => taken || later(), later);
+    if (enabled) bounded(armed, threadId, text, MAX_PENDING);
+  };
+  const release = (threadId: string, steer: boolean) => {
+    const text = armed.get(threadId);
+    if (text === undefined) return;
+    armed.delete(threadId);
+    if (!steer) return later(threadId, text);
+    deps.steer(threadId, text).then((taken) => taken || later(threadId, text), () => later(threadId, text));
   };
   /** A proven fix another bot posted for this signature, this project's first. Only a proven post carries a loop signature. */
   const knownFix = (sig: string, project: string, botId?: string): BoardPost | undefined => {
@@ -108,7 +129,7 @@ export function createForumLoop(deps: ForumLoopDeps) {
     log({ kind: "proven", botId, threadId, sig: before.sig });
     if (!enabled) return;
     const held = (claims.get(threadId) ?? []).filter((claim) => claim.sig !== before.sig);
-    bounded(claims, threadId, [...held.slice(1 - MAX_THREAD_CLAIMS), { sig: before.sig, words: errorWords(before.error), at: now() }], MAX_CLAIMS);
+    bounded(claims, threadId, [...held.slice(1 - MAX_THREAD_CLAIMS), { sig: before.sig, words: errorWords(before.error.replace(/\S*[\\/]\S*/g, " ")), at: now() }], MAX_CLAIMS);
     if (turn.nudged) return;
     turn.nudged = true;
     deliver(threadId, `Wink: \`${flat(before.shown, 120)}\` passed after your edit; before it failed with "${flat(before.error, HIT_CHARS)}". If that fix would help another bot, post it once: board_post kind fix, the error as title, and in 1 to 3 lines of your own words what fixed it.`);
@@ -116,7 +137,14 @@ export function createForumLoop(deps: ForumLoopDeps) {
 
   return {
     event(event: RuntimeEvent): void {
-      if (event.type === "turn.completed" || event.type === "session.exited") return void turns.delete(event.threadId);
+      if (event.type === "turn.completed" || event.type === "session.exited") {
+        turns.delete(event.threadId);
+        return release(event.threadId, false);
+      }
+      if (event.type === "item.started") {
+        if (armed.size && event.itemType === "tool" && (event.verb ?? event.title) === "Bash") release(event.threadId, true);
+        return;
+      }
       if (event.type !== "item.completed" || event.itemType !== "tool") return;
       // ordinary calls end here: nothing failed this turn, so no edit or pass can prove a fix
       if (event.ok && !turns.get(event.threadId)?.failed.size) return;
@@ -143,8 +171,8 @@ export function createForumLoop(deps: ForumLoopDeps) {
       if (!enabled) return undefined;
       const held = claims.get(threadId)?.filter((claim) => now() - claim.at <= CLAIM_MS);
       if (!held?.length) return void claims.delete(threadId);
-      const words = new Set(boardWords(text));
-      const match = held.find((claim) => claim.words.length > 0 && claim.words.filter((word) => words.has(word)).length >= Math.min(2, claim.words.length));
+      const words = errorWords(text);
+      const match = held.find((claim) => quotes(claim.words, words));
       const rest = held.filter((claim) => claim !== match);
       if (rest.length) claims.set(threadId, rest);
       else claims.delete(threadId);

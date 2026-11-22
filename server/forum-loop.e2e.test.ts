@@ -15,6 +15,7 @@ const FAKE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
 const KEY_ERROR = "Exit code 1\nTraceback (most recent call last):\n  File \"loader.py\", line 12, in load\nKeyError: 'name'";
+const SECRET = "my_opaque_env_secret_7766554433";
 
 describe("forum loop on a default install", () => {
   let child: ChildProcess;
@@ -68,6 +69,7 @@ describe("forum loop on a default install", () => {
         instance("astra", [bash("python -m pytest tests/test_loader.py", KEY_ERROR, true), edit, bash("python -m pytest tests/test_loader.py", "1 passed")]),
         instance("nova", [bash("python -m pytest tests/test_loader.py", KEY_ERROR, true)]),
         instance("sol", [bash("pnpm tsc --noEmit", "Exit code 2\nsrc/app.ts(3,1): error TS2304: Cannot find name 'foo'.", true)]),
+        instance("vault", [bash("cat .env.local", `Exit code 1\nError: ${SECRET} is not a valid key`, true)]),
       ]),
     }));
     const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"), OMB_PORT: String(PORT) };
@@ -91,23 +93,39 @@ describe("forum loop on a default install", () => {
     const astra = await newBot("astra");
     await say(astra, "fix the loader");
     await waitFor(() => rows().some((row) => row.kind === "proven" && row.botId === astra), "the proven row");
+    // the nudge comes after the turn's last shell call, so it waits for the next turn instead of a second reply
+    expect(await replies(astra)).toBe(1);
     const token = JSON.parse(readFileSync(join(home, "astra-dump.json"), "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
     const posted = await api("POST", "/api/internal/board-post", { kind: "fix", title: "KeyError 'name' in loader", body: "Use cfg.get('name'); the key is optional." }, { authorization: `Bearer ${token}` });
     expect(posted.status).toBe(200);
 
     const nova = await newBot("nova");
     await say(nova, "run the loader tests");
+    expect(await replies(nova)).toBe(1);
     await say(nova, "and once more");
+    expect(await replies(nova)).toBe(2);
     expect(sent("nova").split("<forum-note>")).toHaveLength(2);
     expect(sent("nova")).toContain(`Forum ${posted.body.id}`);
     expect(sent("nova")).toContain("Use cfg.get('name')");
-    // the fake CLI replays its fixture on a steer that lands after its burst, so "again" can show more than once
-    const [first, ...rest] = rows().filter((row) => row.botId === nova).map((row) => row.kind);
-    expect([first, [...new Set(rest)]]).toEqual(["repeat", ["again"]]);
+    expect(rows().filter((row) => row.botId === nova).map((row) => row.kind)).toEqual(["repeat", "again"]);
 
     const sol = await newBot("sol");
     await say(sol, "typecheck");
     expect(sent("sol")).not.toContain("<forum-note>");
     expect(rows().filter((row) => row.botId === sol)).toEqual([]);
   }, 90_000);
+
+  it("keeps a shell call's output out of the event log and the events API", async () => {
+    const vault = await newBot("vault");
+    await say(vault, "check the env file");
+    const { threadId } = await bot(vault);
+    // native entries are the CLI's own stream, logged the same way before the Forum loop
+    const events = JSON.stringify((await api("GET", `/api/threads/${threadId}/events`)).body.entries.filter((entry: { kind: string }) => entry.kind === "runtime"));
+    const logged = readFileSync(join(home, ".orbit", "events", `${threadId}.ndjson`), "utf8");
+    expect(events).toContain('"itemType":"tool"');
+    for (const text of [events, logged]) {
+      expect(text).not.toContain('"run":');
+      expect(text).not.toContain(SECRET);
+    }
+  }, 60_000);
 });

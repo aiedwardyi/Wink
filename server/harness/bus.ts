@@ -84,7 +84,8 @@ export class EventBus {
     // `token=~/.aws/credentials` would hide the path from the guard while
     // the provider still ran it. Client-facing copies (SSE/broadcast) are
     // redacted at that sink; do not undo PR72 there.
-    const safe = persistCopies(event);
+    // run is the Forum loop's in-process read of a shell call; like a broadcast, the log never holds it
+    const safe = persistCopies(event.type === "item.completed" && event.itemType === "tool" && event.run ? { ...event, run: undefined } : event);
     const persistedEvents = pendingWarning ? [pendingWarning, ...safe] : safe;
     try {
       // the canonical log is a file people paste into bug reports; scrub

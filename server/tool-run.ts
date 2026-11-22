@@ -5,6 +5,7 @@ import { stripVTControlCharacters } from "node:util";
 
 import type { ToolRun } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { secretCommand } from "./tool-detail.ts";
 
 const BOILERPLATE = [
   /^exit (?:code|status):? -?\d+$/i,
@@ -23,6 +24,8 @@ const BOILERPLATE = [
 const STRONG = /^(?:[\w.$]*(?:Error|Exception)\b.*:|(?:error|fatal|panic)\b|npm (?:error|ERR!)|E {2,}\S)|\berror(?:\[\w+\]| [A-Z]+\d+)?:/i;
 const WEAK = /\b(?:error|failed|failure|cannot|can't|could not|unable|not found|no such|denied|refused|hang up|timed? ?out|undefined|invalid|unexpected|missing)\b/i;
 const SOURCE = /\b[\w.-]+\.(?:[cm]?[jt]sx?|py|rs|go|java|kt|cs|c|cc|cpp|h|hpp|rb|php|swift|vue|svelte|json|toml|ya?ml|lock)\b\S*/g;
+// the failing test, so two tests printing one assertion line sign apart: vitest, pytest, jest, cargo, go, playwright
+const TEST_NAME = [/^FAIL\s+(\S+)\s+>\s+(.+)$/, /^FAILED\s+(\S+?)::(\S+)/, /^●\s+(.+)$/, /^---- (\S+) stdout ----$/, /^--- FAIL: (\S+)/, /^\d+\)\s+(\S+?):\d+:\d+\s+›\s+(.+)$/];
 const LINE_CHARS = 240;
 const SHOWN_CHARS = 120;
 
@@ -37,8 +40,17 @@ export function errorLine(output: string): string {
   return (traceback ? strong.at(-1) : strong[0]) ?? lines.find((line) => WEAK.test(line)) ?? "";
 }
 
+/** The first failing test a runner names, its file without folders, which differ per checkout. */
+export function failingTest(output: string): string {
+  for (const line of stripVTControlCharacters(output).split(/\r?\n/)) {
+    const [, first, name] = TEST_NAME.map((rule) => rule.exec(line.trim())).find(Boolean) ?? [];
+    if (first) return (name === undefined ? first : `${first.replace(/^.*[\\/]/, "")} > ${name}`).toLowerCase().replace(/\s+/g, " ");
+  }
+  return "";
+}
+
 /** Paths, line numbers and ids drop out; error codes stay, so TS2304 and TS2322 sign apart. Its own hash, so no post's text-made error_sig can match it. */
-export function runSig(line: string): string {
+export function runSig(line: string, test = ""): string {
   const stem = line.toLowerCase()
     .replace(/^e\s+/, "")
     .replace(/https?:\/\/\S+/g, " ")
@@ -49,14 +61,15 @@ export function runSig(line: string): string {
     .replace(/\d+/g, " ")
     .replace(/[^\p{L}\s]+/gu, " ")
     .split(/\s+/).filter(Boolean).slice(0, 24).join(" ");
-  return stem ? digest(`forum-loop\n${stem}`) : "";
+  return stem ? digest(test ? `forum-loop\n${test}\n${stem}` : `forum-loop\n${stem}`) : "";
 }
 
 export function toolRun(command: string, output: string | undefined, failed: boolean): ToolRun {
-  if (!failed) return { cmd: digest(command) };
+  // a secret command's output is never quoted, so nothing it printed reaches a log, a steer or a post
+  if (!failed || secretCommand(command)) return { cmd: digest(command) };
   const line = redactSecretsInText(errorLine(output ?? ""));
   const run: ToolRun = { cmd: digest(command), shown: cut(redactSecretsInText(command.replace(/\s+/g, " ").trim()), SHOWN_CHARS) };
-  const sig = line ? runSig(line) : "";
+  const sig = line ? runSig(line, failingTest(output ?? "")) : "";
   if (sig) {
     run.sig = sig;
     run.error = cut(line, LINE_CHARS);

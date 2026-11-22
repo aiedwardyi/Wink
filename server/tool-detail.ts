@@ -21,6 +21,7 @@ interface ToolCapture {
 
 const inputSchema = z.object({ command: z.string().optional().catch(undefined), path: z.string().optional().catch(undefined) });
 const SECRET_COMMAND = /token|secret|password|passwd|credential|api[\s_-]*key|(?:^|[\s;/\\|&()'"])(?:env|printenv|set)(?=$|[\s;|&()'"])|\b(?:cat|type|get-content)\b[^\r\n;&|]*\.env/i;
+export const secretCommand = (command: string) => SECRET_COMMAND.test(normalize(command));
 const CREDENTIAL_ASSIGNMENT = /(?<![A-Za-z0-9_-])(?:[A-Za-z0-9_-]+[_-])?(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PASS|CREDENTIALS?|AUTH|SESSION)["']?\s*[=:]\s*/gi;
 // CREDENTIAL_ASSIGNMENT minus its prefix and lookbehind: a line this misses has no assignment.
 const ASSIGNMENT_HINT = /(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PASS|CREDENTIALS?|AUTH|SESSION)["']?\s*[=:]/i;

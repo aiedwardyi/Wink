@@ -110,6 +110,20 @@ describe("EventBus", () => {
     });
   });
 
+  it("hands subscribers a shell call's run but never logs it", () => {
+    const run = { cmd: "c0ffee", shown: "node seed.js", sig: "s1", error: "Error: my_opaque_value_7766554433 rejected" };
+    const bus = new EventBus();
+    const seen: RuntimeEvent[] = [];
+    bus.subscribe((event) => seen.push(event));
+    bus.publish(testEvent({ threadId: "tool-run", type: "item.completed", itemType: "tool", itemId: "i1", ok: false, run }));
+
+    expect(seen[0]).toMatchObject({ run });
+    const logged = readFileSync(join(EVENTS_DIR, "tool-run.ndjson"), "utf8");
+    expect(logged).toContain('"itemId":"i1"');
+    expect(logged).not.toContain('"run"');
+    expect(logged).not.toContain("my_opaque_value");
+  });
+
   it("lets policy see the raw sensitive path that persist and client copies mask", () => {
     // token=… is credential-shaped, so redactSecrets hides ~/.aws/credentials
     // before sensitive-guard can match it. Ask mode must inspect the original.
