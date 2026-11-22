@@ -2863,6 +2863,8 @@ const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> 
 const readOnlyTurnThreads = new Set<string>();
 /** Task threads that answer a room this PC joined: their Board posts are room posts. */
 const joinedRoomThreads = new Set<string>();
+/** Joined-room task threads whose current turn someone other than this PC's person asked for. */
+const joinedGuestThreads = new Set<string>();
 
 function settlePendingToolMessages(threadId: string, turnId?: string): void {
   const prefix = `${threadId}:`;
@@ -7027,8 +7029,10 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => {
+  startTurn: (botId, threadId, prompt, typed, failed, readOnly, guest) => {
     joinedRoomThreads.add(threadId);
+    if (guest) joinedGuestThreads.add(threadId);
+    else joinedGuestThreads.delete(threadId);
     return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
   },
   readOnlyTurns: (botId, threadId) => {
@@ -8162,6 +8166,11 @@ function readOnlyRoomTurn(botId: string, threadId: string) {
   const hosted = store.groupByThread(threadId)?.hosted;
   return readOnlyTurnThreads.has(threadId) || Boolean(hosted && readOnlyAskTurn(hosted.roomId, threadId, botId));
 }
+/** A room turn anyone but this PC's owner asked for, read-only or with "Can make bots work". */
+function guestRoomTurn(botId: string, threadId: string) {
+  const hosted = store.groupByThread(threadId)?.hosted;
+  return readOnlyRoomTurn(botId, threadId) || joinedGuestThreads.has(threadId) || Boolean(hosted && teammateAskTurn(hosted.roomId, threadId, botId));
+}
 const boardRoutes = createBoardRoutes({
   board,
   caller: (header) => commsCallers.resolve(header),
@@ -8238,7 +8247,7 @@ const webRead = webReadRoute(createWebReader({
     const ready = snapshot?.state === "available" && snapshot.authenticated !== false;
     return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy) };
   }),
-}), (header) => commsCallers.resolve(header), readOnlyRoomTurn);
+}), (header) => commsCallers.resolve(header), guestRoomTurn);
 const verifySite = createVerifySite({
   store,
   resolveCommsCaller: (header) => commsCallers.resolve(header),

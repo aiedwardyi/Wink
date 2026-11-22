@@ -28,6 +28,24 @@ function attribute(tag: string, name: string): string | undefined {
   return match ? (match[1] ?? match[2] ?? match[3] ?? "") : undefined;
 }
 
+/** Where a tag ends: the first ">" outside a quoted attribute value, as browsers read it; -1 when a value never closes. */
+function tagEnd(html: string, from: number): number {
+  let i = from;
+  while (i < html.length) {
+    const c = html[i];
+    if (c === ">") return i;
+    i++;
+    if (c !== "=") continue;
+    while (i < html.length && " \t\n\r\f".includes(html[i]!)) i++;
+    const quote = html[i];
+    if (quote !== '"' && quote !== "'") continue;
+    const close = html.indexOf(quote, i + 1);
+    if (close < 0) return -1;
+    i = close + 1;
+  }
+  return -1;
+}
+
 function tidy(raw: string): string {
   return decodeEntities(raw)
     .split("\n")
@@ -77,7 +95,7 @@ export function htmlToText(html: string): PageText {
       pos = open + 1;
       continue;
     }
-    const end = html.indexOf(">", open + 1);
+    const end = name ? tagEnd(html, open + name[0].length) : html.indexOf(">", open + 1);
     if (end < 0) break;
     pos = end + 1;
     if (!name) continue;
@@ -132,7 +150,7 @@ const CHALLENGES: Array<[RegExp, string]> = [
   [/attention required! \| cloudflare/i, "Cloudflare block page"],
   [/blocked by network security/i, "site's network security block"],
   [/js_challenge/i, "JavaScript challenge page"],
-  [/px-captcha|_pxcaptcha|press (?:&amp;|&) hold/i, "PerimeterX bot check"],
+  [/px-captcha|_pxcaptcha/i, "PerimeterX bot check"],
   [/_incapsula_resource|incapsula incident/i, "Imperva bot check"],
   [/access denied[\s\S]{0,400}reference #[\d.a-f]+/i, "Akamai access denied page"],
 ];
@@ -143,6 +161,8 @@ const SHORT_CHALLENGES: Array<[RegExp, string]> = [
   [/g-recaptcha|h-captcha|hcaptcha\.com|verify (?:that )?you are (?:a )?human|are you a robot|unusual traffic/i, "CAPTCHA page"],
   [/sign ?in to (?:continue|view|see)|log ?in to (?:continue|view|see)|join now to see/i, "login wall"],
   [/enable javascript (?:and cookies )?to continue|please enable js/i, "JavaScript-only bot check"],
+  // An article may quote it; PerimeterX's own page says little else.
+  [/press (?:&amp;|&) hold/i, "PerimeterX bot check"],
 ];
 const AUTH_PATH = /\/(login|signin|sign-in|sign_in|authwall|checkpoint|uas\/login|accounts\/login|i\/flow\/login)(\/|\?|$)/i;
 

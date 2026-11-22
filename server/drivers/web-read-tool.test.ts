@@ -102,4 +102,21 @@ describe("web_read tool", () => {
     expect(out).toMatchObject({ status: "blocked", route: "stop", text: WEB_READ_STOP });
     expect(out.tried.at(-1)).toMatch(/no reply within web_read's 0 s limit/);
   });
+
+  it("the same limit covers Wink's own read", async () => {
+    const h = harness(blocked, { text: "unused" });
+    const started = Date.now();
+    const result = await webRead({ url: blocked.url }, () => new Promise(() => undefined), h.askBot, false, 200);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(JSON.parse(result.text)).toMatchObject({ status: "blocked", route: "stop", text: WEB_READ_STOP });
+    expect(h.asks).toEqual([]);
+  });
+
+  it("the same limit covers the cache write after a borrowed reader answers", async () => {
+    const api = async (_path: string, init?: RequestInit) => (JSON.parse(String(init?.body)).remember ? new Promise<Record<string, unknown>>(() => undefined) : blocked as unknown as Record<string, unknown>);
+    const started = Date.now();
+    const result = await webRead({ url: blocked.url, own_tool_failed: true }, api, async () => ({ text: "The library opens at nine on Saturday and closes at noon." }), false, 200);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(JSON.parse(result.text)).toMatchObject({ status: "ok", route: "reader:codex" });
+  });
 });

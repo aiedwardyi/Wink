@@ -75,7 +75,11 @@ const CASES: Case[] = [
   { name: "JSON API", url: "https://api.example.org/v1/item/7", routes: { "https://api.example.org/v1/item/7": { type: "application/json", body: '{"id":7,"name":"seven"}' } }, status: "ok", route: "fetch", text: /"seven"/ },
   { name: "RSS feed", url: "https://example.org/feed.xml", routes: { "https://example.org/feed.xml": { type: "application/rss+xml", body: "<rss><channel><title>Feed</title></channel></rss>" } }, status: "ok", route: "fetch", text: /<title>Feed/ },
   { name: "SPA shell", url: "https://app.example.io/dashboard", routes: { "https://app.example.io/dashboard": { html: page("App", '<div id="root"></div><script src="/main.js"></script>') } }, status: "blocked", route: "fetch", tried: /empty JavaScript page/, next: true },
-  { name: "X post (og meta)", url: "https://x.com/jack/status/20", routes: { "https://x.com/jack/status/20": { html: page("X", '<div id="react-root"></div>', '<meta property="og:description" content="just setting up my twttr and saying hello to everyone here">') } }, status: "ok", route: "fetch:meta", text: /just setting up my twttr[\s\S]*JavaScript/ },
+  { name: "X post (og meta)", url: "https://x.com/jack/status/20", routes: { "https://x.com/jack/status/20": { html: page("X", '<div id="react-root"></div>', '<meta property="og:description" content="just setting up my twttr and saying hello to everyone here">') } }, status: "blocked", route: "fetch:meta", text: /^\[Partial: only the page's title and summary were readable\.\]\n\n\[Page text below[^\n]*\n# X\n\njust setting up my twttr/, next: true },
+  { name: "thread with only the site's summary", url: "https://forum.example.org/thread/8", routes: { "https://forum.example.org/thread/8": { html: page("Forum", '<div id="app"></div><script src="/app.js"></script>', '<meta name="description" content="An independent discussion forum for open source software and documentation.">') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*independent discussion forum/, next: true },
+  { name: "short static post", url: "https://library.example.org/meeting", routes: { "https://library.example.org/meeting": { html: page("Hours", "<article>Library hours change on Saturday. Doors open at nine and close at noon.</article>") } }, status: "ok", route: "fetch", text: /Doors open at nine and close at noon/ },
+  { name: "quoted > in an attribute", url: "https://grammar.example.org/compare", routes: { "https://grammar.example.org/compare": { html: page("Compare", `<p title="upper > lower">Opening paragraph.</p>${paras(5, "Grammar")}`) } }, status: "ok", route: "fetch", text: /\n# Compare\n\nOpening paragraph\./ },
+  { name: "article quoting a bot check's words", url: "https://access.example.org/buttons", routes: { "https://access.example.org/buttons": { html: page("Accessible buttons", `<main>${paras(24, "Access")} The sign tells visitors to press &amp; hold the button.</main>`) } }, status: "ok", route: "fetch", text: /press & hold the button/ },
   { name: "Cloudflare challenge", url: "https://shop.example.com/item", routes: { "https://shop.example.com/item": { status: 403, html: "<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>" } }, status: "blocked", route: "fetch", tried: /Cloudflare bot check \(Just a moment\) \(HTTP 403\)/, next: true },
   { name: "Product Hunt (Cloudflare)", url: "https://www.producthunt.com/products/wink", routes: { "https://www.producthunt.com/products/wink": { status: 403, html: '<html><body><script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script></body></html>' } }, status: "blocked", route: "fetch", tried: /Cloudflare bot check/, next: true },
   { name: "Cloudflare challenge served as 200", url: "https://cf200.example.com/", routes: { "https://cf200.example.com/": { html: `<html><head><title>Just a moment...</title></head><body>${paras(3, "x")}</body></html>` } }, status: "blocked", route: "fetch", tried: /Cloudflare/, next: true },
@@ -230,7 +234,7 @@ describe("web_read politeness", () => {
   it("skips the reader on a turn another person started", async () => {
     const { transport } = fake({ "https://www.g2.com/products/x/reviews": { status: 403, html: "<title>Just a moment...</title>" } });
     const reader = createWebReader({ transport, now: () => 0, readers: () => [{ botId: "g", name: "Grok", engine: "grokAgent", busy: false }] });
-    const out = await reader.read("https://www.g2.com/products/x/reviews", { ownToolFailed: true, callerBotId: "me", noReader: true });
+    const out = await reader.read("https://www.g2.com/products/x/reviews", { ownToolFailed: true, callerBotId: "me", guest: true });
     expect(out).toMatchObject({ status: "blocked", route: "stop" });
     expect(out.reader).toBeUndefined();
     expect(out.tried.at(-1)).toMatch(/another person started/);
@@ -727,7 +731,10 @@ describe("web_read gate follow-up (Fable 2123)", () => {
     });
 
     it(`caps a room's guest turns at ${GUEST_READS_PER_MINUTE} reads a minute, then frees them`, async () => {
-      const room = await serve(true);
+      const reader = createWebReader({ transport: fake({ "https://site.example/": { html: page("Site", `<main>${paras(8, "Topic")}</main>`) } }).transport });
+      // Guests read the cache but never fill it: the owner's read did.
+      expect((await reader.read("https://site.example/")).status).toBe("ok");
+      const room = await serve(true, reader);
       const statuses: unknown[] = [];
       for (let n = 0; n <= GUEST_READS_PER_MINUTE; n++) statuses.push((await room.call({ url: "https://site.example/" })).status);
       expect(statuses.slice(0, GUEST_READS_PER_MINUTE).every((s) => s === "ok")).toBe(true);

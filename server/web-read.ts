@@ -289,9 +289,12 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     if (hop.status < 200 || hop.status >= 300) return { ok: false, route: "fetch", text: "", tried: tried(`HTTP ${hop.status}`), keep: hop.status < 500 };
     if (page) {
       const heading = page.title ? `# ${page.title}\n\n` : "";
-      if (page.text.length >= 200) return { ok: true, route: "fetch", text: heading + page.text, tried: tried(`ok, ${page.text.length.toLocaleString("en-US")} chars`), keep: true };
+      // A page that runs no script can't build more text, so short text is the whole page.
+      const scripted = /<script\b(?![^>]*\btype\s*=\s*["']?application\/(?:ld\+)?json)/i.test(body);
+      if (page.text.length >= 200 || (page.text && !scripted)) return { ok: true, route: "fetch", text: heading + page.text, tried: tried(`ok, ${page.text.length.toLocaleString("en-US")} chars`), keep: true };
+      // A title and summary may be the site's, not this page's: shown, but the ladder goes on.
       if (page.description.length >= 40) {
-        return { ok: true, route: "fetch:meta", text: `${heading}${page.description}\n\n[Only the page's title and summary were readable: the page builds its text with JavaScript.]`, tried: tried("ok, title and summary only"), keep: true };
+        return { ok: false, route: "fetch:meta", text: `[Partial: only the page's title and summary were readable.]\n\n${markPage(heading + page.description)}`, tried: tried("title and summary only"), keep: true };
       }
       return { ok: false, route: "fetch", text: "", tried: tried("empty JavaScript page (no readable text without a browser)"), keep: true };
     }
@@ -325,7 +328,8 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     return reader ? { botId: reader.botId, name: reader.name, engine: reader.engine } : undefined;
   }
 
-  async function read(raw: string, opts: { ownToolFailed?: boolean; callerBotId?: string; noReader?: boolean } = {}): Promise<WebReadResult> {
+  /** `guest`: another person started this turn, so no step 4 and no cache writes. */
+  async function read(raw: string, opts: { ownToolFailed?: boolean; callerBotId?: string; guest?: boolean } = {}): Promise<WebReadResult> {
     const trimmed = raw.trim();
     let url: URL;
     try {
@@ -352,7 +356,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
           inflight.set(key, pending);
         }
         step = await pending;
-        if (step.keep) {
+        if (step.keep && !opts.guest) {
           cache.set(key, { step, at: now() });
           if (cache.size > CACHE_ROWS) cache.delete(cache.keys().next().value!);
         }
@@ -370,9 +374,9 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     }
     tried.push("step 3 your own web tool: failed");
     // A turn another person started in a room may not spend the host's other bots.
-    const reader = opts.noReader ? undefined : pickReader(opts.callerBotId ?? "");
+    const reader = opts.guest ? undefined : pickReader(opts.callerBotId ?? "");
     if (reader) return { status: "blocked", url: key, route: step.route, text, tried, reader, ...(searchOnly ? { searchOnly } : {}) };
-    tried.push(opts.noReader ? "step 4 cross-engine reader: skipped, another person started this turn" : "step 4 cross-engine reader: no free Codex or Grok bot to ask");
+    tried.push(opts.guest ? "step 4 cross-engine reader: skipped, another person started this turn" : "step 4 cross-engine reader: no free Codex or Grok bot to ask");
     return { status: "blocked", url: key, route: "stop", text: text ? `${text}\n\n${WEB_READ_STOP}` : WEB_READ_STOP, tried };
   }
 
@@ -439,6 +443,6 @@ export function webReadRoute(
       roomReads.set(source.threadId, recent);
       if (roomReads.size > GUEST_ROOMS) roomReads.delete(roomReads.keys().next().value!);
     }
-    return json(res, 200, await reader.read(url, { ownToolFailed: body.own_tool_failed === true, callerBotId: source.botId, noReader: guest || body.no_reader === true }));
+    return json(res, 200, await reader.read(url, { ownToolFailed: body.own_tool_failed === true, callerBotId: source.botId, guest: guest || body.no_reader === true }));
   };
 }

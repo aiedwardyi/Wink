@@ -7,7 +7,7 @@ type Json = Record<string, unknown>;
 type Api = (path: string, init?: RequestInit) => Promise<Json>;
 type AskBot = (toBotId: string, message: string) => Promise<Json>;
 
-/** One web_read call, step 4 included, ends within this; Wink's own steps get READ_DEADLINE_MS (30 s) of it. */
+/** One web_read call ends within this: Wink's read (its own steps get READ_DEADLINE_MS, 30 s), step 4 and the cache write. */
 export const WEB_READ_CALL_MS = 120_000;
 
 export const WEB_READ_TOOL = {
@@ -31,27 +31,27 @@ export function readerPrompt(url: string, searchOnly = false): string {
 const shown = (r: Pick<WebReadResult, "status" | "route" | "tried" | "text" | "next">) =>
   JSON.stringify({ status: r.status, route: r.route, tried: r.tried, ...(r.next ? { next: r.next } : {}), text: r.text });
 
+const LATE = Symbol("late");
+
 export async function webRead(args: Json, api: Api, askBot: AskBot, guestTurn = false, callMs = WEB_READ_CALL_MS): Promise<{ text: string; isError?: boolean }> {
-  const started = Date.now();
   const url = typeof args.url === "string" ? args.url.trim() : "";
   if (!url) return { text: "web_read needs url.", isError: true };
-  const r = (await api(WEB_READ_ROUTE, { method: "POST", body: JSON.stringify({ url, own_tool_failed: args.own_tool_failed === true, ...(guestTurn ? { no_reader: true } : {}) }) })) as unknown as WebReadResult;
+  const late = `no reply within web_read's ${Math.round(callMs / 1000)} s limit`;
+  const deadline = AbortSignal.timeout(callMs);
+  const limit = new Promise<typeof LATE>((resolve) => deadline.addEventListener("abort", () => resolve(LATE), { once: true }));
+  const within = <T>(work: Promise<T>) => Promise.race([work, limit]);
+  const r = (await within(api(WEB_READ_ROUTE, { method: "POST", signal: deadline, body: JSON.stringify({ url, own_tool_failed: args.own_tool_failed === true, ...(guestTurn ? { no_reader: true } : {}) }) }))) as unknown as WebReadResult | typeof LATE;
+  if (r === LATE) return { text: shown({ status: "blocked", route: "stop", tried: [`step 2 fetch: ${late}`], text: WEB_READ_STOP }) };
   if (r.status !== "blocked" || !r.reader || guestTurn) return { text: shown(r) };
   const reader = r.reader;
   const who = `@${reader.name} (${reader.engine})`;
   const tried = [...r.tried];
   let reply: Json;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const left = Math.max(callMs - (Date.now() - started), 0);
-  const limit = new Promise<Json>((resolve) => {
-    timer = setTimeout(() => resolve({ error: `no reply within web_read's ${Math.round(callMs / 1000)} s limit` }), left);
-  });
   try {
-    reply = await Promise.race([askBot(reader.botId, readerPrompt(r.url, r.searchOnly)), limit]);
+    const answered = await within(askBot(reader.botId, readerPrompt(r.url, r.searchOnly)));
+    reply = answered === LATE ? { error: late } : answered;
   } catch (error) {
     reply = { error: (error as Error).message };
-  } finally {
-    clearTimeout(timer);
   }
   const answer = typeof reply.text === "string" ? reply.text.trim() : "";
   const failed = reply.limit ?? reply.error ?? (reply.busy ? "busy" : reply.taskId ? "still working after the wait limit" : "");
@@ -61,7 +61,7 @@ export async function webRead(args: Json, api: Api, askBot: AskBot, guestTurn = 
     const text = search ? `From search results, not the page:\n${answer.replace(/^SEARCH:\s*/i, "")}` : answer;
     if (search) tried.push(`step 4 ${who}: could not open the page`, `step 5 search snippets via ${who}: ok`);
     else tried.push(`step 4 ${who}: ok`);
-    await api(WEB_READ_ROUTE, { method: "POST", body: JSON.stringify({ url: r.url, remember: { route, text } }) }).catch(() => undefined);
+    await within(api(WEB_READ_ROUTE, { method: "POST", signal: deadline, body: JSON.stringify({ url: r.url, remember: { route, text } }) }).catch(() => undefined));
     return { text: shown({ status: "ok", route, tried, text: capText(markPage(text)) }) };
   }
   const why = failed ? String(failed) : answer.replace(/^BLOCKED:?\s*/i, "").split("\n")[0] || "no reply";
