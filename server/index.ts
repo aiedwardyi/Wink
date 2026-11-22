@@ -423,6 +423,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
+  restoreSyncedAvatar,
   readSyncOperationsFor,
   syncAvatarMatches,
   saveProfileSyncSettings,
@@ -1497,6 +1498,7 @@ let profileSyncLastSyncAt: number | null = null;
 let profileSyncSeen: ProfileImportSeen = { signature: "", invalid: false, missingAssets: [] };
 let profileImports = 0;
 const syncAvatarAssets = new Map<string, string>();
+const STORED_AVATAR = /^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/;
 
 function syncSectionId(section: string | undefined): string | null {
   const key = sectionKey(section);
@@ -1556,16 +1558,17 @@ function nextProfileSyncOperation(
   return operation;
 }
 
-function syncAvatarAssetForBot(bot: BotRecord, folder: string): string | null {
+/** undefined: the picture's file is gone here, which says nothing about the picture, so no op may clear it on other PCs. */
+function syncAvatarAssetForBot(bot: BotRecord, folder: string): string | null | undefined {
   if (!bot.avatarUrl) return null;
-  const match = bot.avatarUrl.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/);
+  const match = bot.avatarUrl.match(STORED_AVATAR);
   if (!match) return null;
   // attachments never change under their name, and every publish and import pass asks again
   const cacheKey = `${folder}\n${bot.avatarUrl}`;
   const cached = syncAvatarAssets.get(cacheKey);
   if (cached) return cached;
   const attachment = readAttachment(match[1]!);
-  if (!attachment) return null;
+  if (!attachment) return undefined;
   try {
     const asset = writeSyncAvatarAsset(folder, attachment.bytes, match[1]!.split(".").pop() ?? "");
     syncAvatarAssets.set(cacheKey, asset);
@@ -1592,6 +1595,7 @@ function importSyncAvatar(folder: string, avatarAsset: unknown): string | null {
 }
 
 function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unknown> {
+  const avatarAsset = syncAvatarAssetForBot(bot, folder);
   return {
     name: bot.name,
     title: bot.title,
@@ -1599,7 +1603,7 @@ function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unk
     color: bot.color,
     mascotExpression: bot.mascotExpression ?? null,
     mascotStyle: bot.mascotStyle ?? null,
-    avatarAsset: syncAvatarAssetForBot(bot, folder),
+    ...(avatarAsset === undefined ? {} : { avatarAsset }),
     ...(bot.avatarCrop ? { avatarCrop: bot.avatarCrop } : {}),
     sectionId: syncSectionId(bot.section),
     pinned: Boolean(bot.pinned),
@@ -1771,7 +1775,7 @@ function applySyncedBotFields(
   }
   const current = store.bot(bot.id);
   const avatarCrop = importedSyncAvatarCrop(synced.avatarCrop, current?.avatarCrop);
-  const currentMatch = current?.avatarUrl?.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/);
+  const currentMatch = current?.avatarUrl?.match(STORED_AVATAR);
   const currentBytes = currentMatch ? readAttachment(currentMatch[1]!)?.bytes : undefined;
   const avatarUrl = currentBytes && syncAvatarMatches(folder, importedAvatar, currentBytes)
     ? current!.avatarUrl
@@ -1781,11 +1785,22 @@ function applySyncedBotFields(
   return true;
 }
 
+/** Bot pictures whose files are gone here come back from the sync folder, under the name bots.json already holds. */
+function restoreLostBotAvatars(folder: string): void {
+  for (const bot of store.bots) {
+    const name = bot.avatarUrl?.match(STORED_AVATAR)?.[1];
+    const globalId = profileSyncSettings.botMap[bot.id];
+    if (!name || !globalId || attachmentExists(name)) continue;
+    if (restoreSyncedAvatar(folder, profileSyncSettings.syncedHashes, globalId, ATTACHMENTS_DIR, name)) console.warn(`bot sync: restored ${bot.name}'s lost picture`);
+  }
+}
+
 /** Applies what other devices published since the last pass: newest recordedAt wins, a local edit waiting to publish is kept. */
 async function importProfileChanges(): Promise<void> {
   const folder = profileSyncSettings.folder;
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return;
   ensureProfileSyncWorkspace(folder);
+  restoreLostBotAvatars(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
   profileImports++;
