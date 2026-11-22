@@ -23,6 +23,8 @@ class FakeEventSource {
 
 const quiz: Message = { id: "quiz", at: 1, role: "bot", kind: "options", parentId: null, card: { title: "What do you mostly want help with?", subtitle: "Pick one", options: ["Work & projects", "Life admin"] } };
 const typed: Message = { id: "u1", at: 2, role: "user", kind: "text", text: "hi", parentId: null };
+const routine: Message = { id: "r1", at: 3, role: "bot", kind: "routine.run", text: "", parentId: null, routineRun: { runId: "r", routineId: "x", routineName: "Morning brief", status: "completed" } };
+const brief: Message = { id: "r2", at: 4, role: "bot", kind: "text", text: "Here is your morning brief.", parentId: "r1" };
 const bot = (messages: Message[]): Bot => ({
   id: "helper", threadId: "thread-helper", name: "Helper", title: "", description: "", notifications: false,
   color: "blue", unread: false, busy: false, activity: "idle", modelSelection: { instanceId: "inst", model: "m" }, messages, activeLeafId: messages.at(-1)?.id,
@@ -36,11 +38,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function mount(current: Bot, aboutYou: { sources: unknown[]; declined: boolean }) {
+async function mount(current: Bot, aboutYou: { sources: unknown[]; declined: boolean; imported?: boolean }, post?: (url: string) => Response) {
   vi.stubGlobal("EventSource", FakeEventSource);
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => url === "/api/bots?messages=200"
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => url === "/api/bots?messages=200"
     ? Response.json({ bots: [current], groups: [], computerControl: {} })
-    : url === "/api/about-you" ? Response.json(aboutYou) : new Response("{}", { status: 404 })));
+    : init?.method === "POST" && post ? post(url)
+    : url.startsWith("/api/about-you") ? Response.json(aboutYou) : new Response("{}", { status: 404 })));
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
     unobserve() {}
@@ -71,6 +74,35 @@ it("a new chat shows only the import row before message 1, and no starter quiz",
 it("typing a message hides the row", async () => {
   const host = await mount(bot([typed]), { sources: [], declined: false });
   expect(host.querySelector("[data-import-card]")).toBeNull();
+});
+
+it("a chat with any message shows no row, even when nothing was typed", async () => {
+  const host = await mount(bot([routine, brief]), { sources: [], declined: false });
+  expect(host.textContent).toContain("Here is your morning brief.");
+  expect(host.querySelector("[data-import-card]")).toBeNull();
+});
+
+it("the row does not come back after an Only this bot import", async () => {
+  const aboutYou = { sources: [], declined: false, imported: false };
+  const post = (url: string) => {
+    if (url !== "/api/bots/helper/memory/import") return new Response("{}", { status: 404 });
+    aboutYou.imported = true;
+    return Response.json({ source: "ChatGPT", found: 1, added: 1, duplicates: 0, hidden: 0 });
+  };
+  const host = await mount(bot([]), aboutYou, post);
+  const click = (el: Element | null | undefined) => act(async () => (el as HTMLElement).click());
+  await click(host.querySelector("[data-import-card] button[aria-expanded]"));
+  const box = host.querySelector("textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "- Plays cello on Sundays.\nSource: ChatGPT");
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click([...host.querySelectorAll("[role=radio]")].find((radio) => radio.textContent === "Only this bot"));
+  await click([...host.querySelectorAll("button")].find((button) => button.textContent === "Add to memory"));
+  expect(host.querySelector("[data-import-saved]")?.textContent).toContain("This bot");
+  await unmount?.();
+  const again = await mount(bot([]), aboutYou, post);
+  expect(again.querySelector("[data-import-card]")).toBeNull();
 });
 
 it("no row once Import Memory has content or the row was dismissed", async () => {

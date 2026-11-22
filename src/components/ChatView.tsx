@@ -720,9 +720,9 @@ const MessagesList = memo(function MessagesList({
     return answers;
   }, [transcript]);
   const importOffer = useMemo(() => importOfferId(transcript), [transcript]);
-  // like the quiz it replaced, the import row goes once the user has typed
-  const typed = useMemo(() => transcript.some((message) => message.role === "user" && message.kind === "text"), [transcript]);
-  const importRow = useImportOffer(!typed);
+  // the import row is for a chat with nothing in it yet; a quiz older builds seeded never shows, so it does not count
+  const empty = useMemo(() => transcript.every(shouldHideOnboardingCard), [transcript]);
+  const importRow = useImportOffer(bot.id, empty);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.

@@ -155,6 +155,11 @@ export function addToBotMemory(botId: string, paste: string, date: string): Abou
   }, (text) => writeMemoryFile(botId, text));
 }
 
+/** The bot holds an "Only this bot" import: a line one saved in its own memory. */
+export function botImported(botId: string): boolean {
+  return savedLines(memoryFileRaw(botId)).some((line) => TAG.test(line));
+}
+
 export function importDeclined(): boolean {
   return existsSync(declinedFile());
 }
@@ -237,8 +242,8 @@ export function day(ms: number): string {
 }
 
 export const aboutYouRoutes = {
-  get(res: ServerResponse) {
-    return json(res, 200, { sources: aboutYouSources(), declined: importDeclined() });
+  get(res: ServerResponse, botId?: string) {
+    return json(res, 200, { sources: aboutYouSources(), declined: importDeclined(), imported: Boolean(botId && botImported(botId)) });
   },
   decline(res: ServerResponse) {
     declineImport();

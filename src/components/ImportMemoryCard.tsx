@@ -16,30 +16,35 @@ import { ROW_BUTTON } from "./SettingsPrimitives";
 type Scope = "all" | "bot";
 type Added = { source: string; added: number; found: number; hidden: number };
 
-const LINK = "text-accent-text hover:underline focus-visible:underline focus-visible:outline-none";
-const ICON_BUTTON = "flex size-8 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink";
+// phone hit areas reach 40 px; the look at rest stays the mock's
+const LINK = "relative text-accent-text hover:underline focus-visible:underline focus-visible:outline-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:inset-x-0";
+const ICON_BUTTON = "relative flex size-8 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-1";
+// the pills' group scrolls sideways, which would clip their hit area; two short pills never need to scroll here
+const SCOPE_HIT = "[@media(pointer:coarse)]:[&_[role=radiogroup]]:overflow-visible [@media(pointer:coarse)]:[&_[role=radio]]:after:absolute [@media(pointer:coarse)]:[&_[role=radio]]:after:inset-x-0 [@media(pointer:coarse)]:[&_[role=radio]]:after:-inset-y-[6.5px] [@media(pointer:coarse)]:[&_[role=radio]]:after:z-10";
 
-// the last answer, so a chat opened after it paints the row without waiting
+// the last answers, so a chat opened after them paints the row without waiting
 let offered: boolean | null = null;
+const ownImport = new Set<string>();
 
 export type ImportOffer = { offer: boolean | null; close: () => void };
 
-/** A chat with nothing typed yet offers the import while Import Memory is empty and it was never dismissed; null until known. */
-export function useImportOffer(fresh: boolean): ImportOffer {
-  const [offer, setOffer] = useState(offered);
+/** A chat with nothing in it yet offers the import while Import Memory is empty, this bot holds no import of its own and it was never dismissed; null until known. */
+export function useImportOffer(botId: string, fresh: boolean): ImportOffer {
+  const [offer, setOffer] = useState(offered && !ownImport.has(botId));
   useEffect(() => {
     if (!fresh) return;
     let gone = false;
-    void api("/api/about-you").then((body) => {
+    void api(`/api/about-you?bot=${encodeURIComponent(botId)}`).then((body) => {
       offered = Array.isArray(body?.sources) && !body.sources.length && body.declined !== true;
-      if (!gone) setOffer(offered);
+      if (body?.imported === true) ownImport.add(botId);
+      if (!gone) setOffer(offered && !ownImport.has(botId));
     }).catch(() => {
       if (!gone) setOffer(false);
     });
     return () => {
       gone = true;
     };
-  }, [fresh]);
+  }, [botId, fresh]);
   return { offer: fresh ? offer : false, close: () => setOffer(false) };
 }
 
@@ -91,6 +96,7 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
       if (!body.added) setNote(aboutYouNote(body, t));
       else {
         if (scope === "all") offered = false;
+        else ownImport.add(botId);
         setSaved({ ...body, scope });
         setText("");
         setPrompt(false);
@@ -157,7 +163,8 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
         <div className="flex flex-col gap-[22px] border-t border-hairline/60 px-[18px] pb-[18px] pt-4">
           <Step step={1} title={t("importCard.step1")}>
             <ImportProviderButtons prompt={t("aboutYou.prompt")} copy />
-            <button type="button" onClick={() => setPrompt(!prompt)} aria-expanded={prompt} className="flex w-fit items-center gap-1.5 text-[12.5px] text-ink-secondary hover:text-ink focus-visible:text-ink focus-visible:outline-none">
+            {/* the chips' hit area takes the gap above, so this one grows down to 40 px */}
+            <button type="button" onClick={() => setPrompt(!prompt)} aria-expanded={prompt} className="relative flex w-fit items-center gap-1.5 text-[12.5px] text-ink-secondary hover:text-ink focus-visible:text-ink focus-visible:outline-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-top-0.5 [@media(pointer:coarse)]:after:-bottom-[19px]">
               {prompt ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
               {prompt ? t("importCard.hidePrompt") : t("importCard.showPrompt")}
             </button>
@@ -178,13 +185,15 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
               }}
             />
             {text.trim() && (
-              <SegmentedRow
-                label={t("importCard.useFor")}
-                hint={t("importCard.useForHint")}
-                value={scope}
-                options={[{ id: "all", label: t("importCard.allBots") }, { id: "bot", label: t("importCard.thisBot") }]}
-                onChange={setScope}
-              />
+              <div className={SCOPE_HIT}>
+                <SegmentedRow
+                  label={t("importCard.useFor")}
+                  hint={t("importCard.useForHint")}
+                  value={scope}
+                  options={[{ id: "all", label: t("importCard.allBots") }, { id: "bot", label: t("importCard.thisBot") }]}
+                  onChange={setScope}
+                />
+              </div>
             )}
             {note && <div role="status" className="text-[13px] text-ink">{note}</div>}
             <div className="flex justify-end gap-2">

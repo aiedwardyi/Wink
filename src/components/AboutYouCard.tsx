@@ -43,7 +43,7 @@ export function ImportPromptBox({ className }: { className?: string }) {
       <button
         onClick={() => void copy()}
         aria-label={copied ? t("aboutYou.copied") : t("aboutYou.copy")}
-        className="relative shrink-0 rounded p-1.5 text-ink-secondary hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-1 [@media(pointer:coarse)]:after:content-['']"
+        className="relative shrink-0 rounded p-1.5 text-ink-secondary hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-[7px] [@media(pointer:coarse)]:after:content-['']"
       >
         {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
       </button>

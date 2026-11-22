@@ -208,6 +208,23 @@ describe("Import Memory scope", () => {
     expect(aboutYouSources()).toEqual([{ source: "ChatGPT", facts: ["Grows tomatoes."] }]);
     expect(memoryFileRaw(bot.id)).not.toContain("tomatoes");
   });
+
+  it("tells a new chat whether this bot already holds its own import", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "m" }));
+    const bot = store.createBot();
+    const other = store.createBot();
+    const answer = (botId?: string) => {
+      let raw = "";
+      const res = { writeHead: () => {}, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
+      aboutYouRoutes.get(res, botId);
+      return JSON.parse(raw);
+    };
+    expect(answer(bot.id)).toMatchObject({ sources: [], declined: false, imported: false });
+    addToBotMemory(bot.id, "- Plays cello on Sundays.\nSource: Claude", "2026-11-22");
+    expect(answer(bot.id)).toMatchObject({ sources: [], imported: true });
+    expect(answer(other.id)).toMatchObject({ sources: [], imported: false });
+    expect(answer()).toMatchObject({ sources: [], imported: false });
+  });
 });
 
 describe("big import", () => {

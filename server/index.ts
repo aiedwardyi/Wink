@@ -9215,7 +9215,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       return await terminalLive.handle(req, res, bot.id, m[2], url);
     }
-    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res);
+    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res, store.bot(url.searchParams.get("bot") ?? "")?.id);
     if (path === "/api/about-you" && method === "POST") {
       await aboutYouRoutes.add(req, res);
       // past the prompt's cut, Import Memory is looked up by every bot
