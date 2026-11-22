@@ -7,6 +7,9 @@ import { cachedSignIn } from "./auth-status.ts";
 
 type KeyringExec = (file: string, args: string[], options: ExecFileOptionsWithStringEncoding, done: (error: ExecFileException | null, stdout: string) => void) => void;
 
+/** Where agy saves its sign-in: the OS keyring entry service "gemini", account "antigravity". */
+export const ANTIGRAVITY_KEYRING = "gemini:antigravity";
+
 export function probeAntigravitySignIn(platform = process.platform, run: KeyringExec = execFile): Promise<boolean | undefined> {
   if (platform !== "win32" && platform !== "darwin") return Promise.resolve(undefined);
   const file = platform === "win32" ? "cmdkey.exe" : "security";
@@ -22,7 +25,20 @@ export function probeAntigravitySignIn(platform = process.platform, run: Keyring
   });
 }
 
+/** Deletes a saved agy sign-in (service:account) from the OS keyring; false where there is none to delete or it fails. */
+export function forgetAntigravitySignIn(target: string, platform = process.platform, run: KeyringExec = execFile): Promise<boolean> {
+  const split = target.indexOf(":");
+  if (split < 1 || split === target.length - 1 || (platform !== "win32" && platform !== "darwin")) return Promise.resolve(false);
+  const file = platform === "win32" ? "cmdkey.exe" : "security";
+  const args = platform === "win32" ? [`/delete:${target}`] : ["delete-generic-password", "-s", target.slice(0, split), "-a", target.slice(split + 1)];
+  return new Promise((resolve) => {
+    run(file, args, { windowsHide: true, timeout: 5000, encoding: "utf8" }, (error) => resolve(!error));
+  });
+}
+
 const LOG_EVENT = /applyAuthResult: email=([^,\s]+),|Logging out current user/g;
+// `agy -p` writes cli-<stamp>.log and `agy acp` (Wink's sign-in and sign-out) acp-server-<stamp>-<n>.log.
+const LOG_NAME = /^(?:cli|acp-server)-(\d{8}_\d{6})\S*\.log$/;
 const LOG_FILES = 20;
 const LOG_MAX_BYTES = 8 * 1024 * 1024;
 const logResults = new Map<string, { identity: string; last: string | null | undefined }>();
@@ -44,7 +60,9 @@ function logAccount(path: string): string | null | undefined {
 function latestLogEvent(env: Record<string, string | undefined>): string | null | undefined {
   const dir = join(env.HOME || env.USERPROFILE || homedir(), ".gemini", "antigravity-cli", "log");
   try {
-    const names = readdirSync(dir).filter((name) => /^cli-.*\.log$/.test(name)).sort().reverse().slice(0, LOG_FILES);
+    const stamp = (name: string) => LOG_NAME.exec(name)![1];
+    const names = readdirSync(dir).filter((name) => LOG_NAME.test(name))
+      .sort((a, b) => stamp(b).localeCompare(stamp(a)) || b.localeCompare(a)).slice(0, LOG_FILES);
     const listed = new Set(names.map((name) => join(dir, name)));
     for (const path of logResults.keys()) if (dirname(path) === dir && !listed.has(path)) logResults.delete(path);
     for (const name of names) {

@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +26,14 @@ if (process.argv.includes("--login")) {
   if (method === "authenticate") process.stdout.write(JSON.stringify({ method: "session/update", params: { text: "Open https://accounts.google.com/o/oauth2/auth?x=1 to sign in" } }) + "\\n");
   reply({ result: {} });
 });
+`);
+
+// agy 1.3.0 has no ACP server: `agy acp` prints this (recorded from the real CLI) and exits 2.
+const oldAgy = join(dir, "agy-1.3.0.cjs");
+writeFileSync(oldAgy, `
+const fs = require("node:fs");
+fs.appendFileSync(process.env.FAKE_AGY_CALLS, process.argv.slice(2).join(" ") + "\\n");
+process.stderr.write(fs.readFileSync(${JSON.stringify(join(import.meta.dirname, "..", "testing", "fixtures", "agy-1.3.0-acp.stderr.txt"))}, "utf8"), () => process.exit(2));
 `);
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -55,6 +65,37 @@ describe("agy sign-in helper", () => {
     const result = await run(mode, { FAKE_AGY_REFUSE: mode === "login" ? "authenticate" : "logout" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("refused");
+  });
+
+  it("says why an agy older than 1.5 cannot sign in or out, instead of only that it closed", async () => {
+    for (const mode of ["login", "logout"]) {
+      const result = await run(mode, { OMB_AGY_CLI: `"${process.execPath}" "${oldAgy}"` });
+      expect(result.status).toBe(1);
+      expect(result.calls).toEqual(["acp"]);
+      expect(result.stderr).toContain("agy is older than 1.5 and has no ACP server");
+    }
+  });
+
+  it.runIf(process.platform === "win32")("signs an agy older than 1.5 out by deleting its saved sign-in", async () => {
+    // A throwaway Credential Manager entry stands in for agy's gemini:antigravity.
+    const target = `omb-test-${randomUUID()}:antigravity`;
+    const listed = () => execFileSync("cmdkey.exe", ["/list"], { encoding: "utf8", windowsHide: true }).includes(`target=${target}`);
+    execFileSync("cmdkey.exe", [`/generic:${target}`, "/user:antigravity", "/pass:not-a-token"], { windowsHide: true });
+    try {
+      expect(listed()).toBe(true);
+      const result = await run("logout", { OMB_AGY_CLI: `"${process.execPath}" "${oldAgy}"`, OMB_AGY_KEYRING: target });
+      expect(result.status).toBe(0);
+      expect(result.calls).toEqual(["acp"]);
+      expect(listed()).toBe(false);
+    } finally {
+      try { execFileSync("cmdkey.exe", [`/delete:${target}`], { stdio: "ignore", windowsHide: true }); } catch {}
+    }
+  });
+
+  it("logs out over ACP, not through the keyring, when agy has an ACP server", async () => {
+    const result = await run("logout", { OMB_AGY_KEYRING: "omb-test-absent:antigravity" });
+    expect(result.status).toBe(0);
+    expect(result.calls).toEqual(["initialize", "logout"]);
   });
 
   it("fails when agy cannot start", async () => {

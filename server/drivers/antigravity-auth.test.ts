@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { antigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
 
 const execFile = vi.fn();
 
@@ -30,6 +30,20 @@ describe("Antigravity keyring sign-in", () => {
     expect(await probeAntigravitySignIn("win32", execFile)).toBeUndefined();
     execFile.mockClear();
     expect(await probeAntigravitySignIn("linux", execFile)).toBeUndefined();
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("deletes the saved sign-in the probe reads, on Windows and macOS only", async () => {
+    execFile.mockImplementation((_file, _args, _opts, done) => done(null, ""));
+    expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "win32", execFile)).toBe(true);
+    expect(execFile).toHaveBeenLastCalledWith("cmdkey.exe", ["/delete:gemini:antigravity"], expect.objectContaining({ windowsHide: true, timeout: 5000 }), expect.any(Function));
+    expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "darwin", execFile)).toBe(true);
+    expect(execFile).toHaveBeenLastCalledWith("security", ["delete-generic-password", "-s", "gemini", "-a", "antigravity"], expect.objectContaining({ timeout: 5000 }), expect.any(Function));
+    execFile.mockImplementation((_file, _args, _opts, done) => done({ code: 1 }, ""));
+    expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "win32", execFile)).toBe(false);
+    execFile.mockClear();
+    for (const target of ["gemini", ":antigravity", "gemini:"]) expect(await forgetAntigravitySignIn(target, "win32", execFile)).toBe(false);
+    expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "linux", execFile)).toBe(false);
     expect(execFile).not.toHaveBeenCalled();
   });
 
@@ -129,6 +143,19 @@ describe("Antigravity account from agy's logs", () => {
     expect(readAntigravityLogSignIn(home({ "cli-20261119_100000.log": signedIn("ed@example.com", "consumer") }))).toBe(true);
     expect(readAntigravityLogSignIn(home({ "cli-20261119_100000.log": `${signedIn("ed@example.com", "consumer")}I1119 10:47:15.2 727 auth_manager.go:315] Logging out current user\n` }))).toBe(false);
     expect(readAntigravityLogSignIn(home({ "cli-20261119_100000.log": "I1119 11:00:00.1 1 main.go:1] started\n" }))).toBeUndefined();
+  });
+
+  it("reads the ACP server's logs, where Wink's own sign-out lands, by time and not by name", () => {
+    // agy 1.5.14's `agy acp` logout writes acp-server-<stamp>-<n>.log, not cli-*.log.
+    const logout = "I1122 16:08:37.690676      84 server_oauth.go:192] Logging out current user\n";
+    expect(readAntigravityLogSignIn(home({
+      "cli-20261122_155418.log": signedIn("ed@example.com", "gcp"),
+      "acp-server-20261122_160837-944.log": logout,
+    }))).toBe(false);
+    expect(readAntigravityAccount(home({
+      "acp-server-20261122_160837-944.log": logout,
+      "cli-20261122_170000.log": signedIn("new@example.com", "consumer"),
+    }))).toBe("new@example.com");
   });
 
   it("forgets logs that are no longer listed", () => {
