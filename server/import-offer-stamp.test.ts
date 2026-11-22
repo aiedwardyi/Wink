@@ -43,7 +43,7 @@ function chat() {
   const deps: Record<string, unknown> = {
     takePeerReplyStamp, isVoiceLine, persistPeerUserReply, noteOfferTurn, takeImportOffer,
     peerReplyComm: new Map(), lastReply: new Map(), markChatLatency: () => {},
-    turnSummary: { note: () => {} },
+    turnSummary: { note: () => {} }, askTexts: { text() {} }, turnOwnerId: undefined,
     store: { findLast: (_: string, predicate: (message: Message) => boolean) => messages.findLast(predicate) },
     pushMessage: (message: Omit<Message, "id" | "at">) => {
       const row = { id: `m${messages.length}`, at: 1, ...message } as Message;

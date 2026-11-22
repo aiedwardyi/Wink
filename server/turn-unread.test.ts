@@ -67,7 +67,7 @@ function rig(target: "bot" | "group") {
     reportServerFailure: () => {}, terminalBridgeAccess: null, INCOMPLETE_LOG_MESSAGE: "internal log failure",
     ...turnReply, store, bot: { id: "bot-1" }, group: { id: "group-1" },
     routineReportGroup: undefined, turnSummary: turnReply.turnSummaries(), limitWaits: { bind: () => {} },
-    turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(), turnOwnerId: "bot-1", memorySleep: { onTurn() {} },
+    turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(), turnOwnerId: "bot-1", memorySleep: { onTurn() {} }, askTexts: { started() {}, text() {} },
     threadId: "thread-1", stopScreenPoller: () => {}, activeVpsThreads: new Map(), groupSpeakers: new Map(),
     roomLanes: { thread: () => undefined }, lane: false,
     pushMessage: (message: Omit<Message, "id" | "at">) => messages.push({ id: `message-${messages.length}`, at: 1, ...message }),
