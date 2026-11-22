@@ -43,6 +43,7 @@ import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { joinedRoomIdOf, roomFileRefusal } from "@/lib/team-rooms";
+import { noteJoinedFrame } from "@/lib/joined-rooms";
 import { BOARD_CHANGED_EVENT, isForumSelection } from "@/lib/board";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
@@ -2651,6 +2652,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         settling.current.clear();
         // a held resume's task.resume frame may be lost in the gap
         for (const settle of pendingTaskResumes.current.values()) settle(null);
+        noteJoinedFrame(null);
         // The mount's deferred load covers the first boundary; a later one may follow a missed instances frame.
         const instances = partByKey.get("instances");
         if (snapshotBoundaries++ > 0 && instances) {
@@ -2660,6 +2662,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       onFrame: (frame) => {
         receivedAt.set(frame, Date.now());
+        if (frame.kind === "joined") {
+          const roomId = (frame as { roomId?: unknown }).roomId;
+          noteJoinedFrame(typeof roomId === "string" ? roomId : null);
+        }
         if (!hydrated) {
           pendingFrames.push(frame);
           return;
