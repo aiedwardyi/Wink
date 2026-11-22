@@ -92,7 +92,7 @@ export function notedDay(text: string): string {
   return date >= 1 && date <= (month === 2 && !leap ? 28 : (MONTH_DAYS[month - 1] ?? 0)) ? day : "";
 }
 
-// a note-taker row gives way to one noted later whatever day its words name, unless an unstamped row outdates every latest-noted one; then a label keeps its newest-dated rows
+// a label keeps the rows naming its latest-noted row's day, so an older note naming another day gives way, unless an unstamped row outdates every latest-noted one; then it keeps its newest-dated rows
 export function recalled(rows: Array<{ topic: string; noted: string; date: string }>): boolean[] {
   const labels = new Map<string, { noted: string; date: string; unstamped: string; newest: string }>();
   const tops = rows.map((row) => {
@@ -109,7 +109,7 @@ export function recalled(rows: Array<{ topic: string; noted: string; date: strin
   return rows.map((row, at) => {
     const top = tops[at]!;
     if (top.date < top.unstamped) return row.date === top.newest;
-    return (!row.noted || row.noted === top.noted) && row.date === top.date;
+    return row.date === top.date;
   });
 }
 

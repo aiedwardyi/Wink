@@ -359,26 +359,27 @@ describe("corpus", () => {
     expect(await fresh({ "connections.md": [`# Notes\n${filler}\n${acme}\n${globex}\n`, 15] }, "research station")).toContain("Cobalt Acme");
   });
 
-  it("returns every value 83f790c87 recall returns, unless it returns a later-noted bot row of its label instead", async () => {
+  it("returns every value 83f790c87 recall returns, unless it returns a later-noted bot row of its label naming another day instead", async () => {
     const value = (text: string) => text.replace(/\s*\(noted [^)]*\)$/, "");
     const label = (text: string) => /^([^:]{2,60}):\s/.exec(text)?.[1]?.toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
     const noted = (text: string) => {
       const day = /\(noted (\d{4}-\d{2}-\d{2})\)$/.exec(text)?.[1] ?? "";
       return day && new Date(`${day}T00:00:00Z`).toJSON()?.startsWith(day) ? day : "";
     };
+    const named = (text: string) => text.match(/\d{4}-\d{2}-\d{2}/g)?.sort().pop() ?? "";
     const missing: string[] = [];
     let asked = 0;
     const check = async (name: string, files: NoteFile[], queries: string[]) => {
       const [before, after] = [await baseIndex(files), await buildRecallIndex(files)];
       const rows = files.flatMap((file) => file.text.split("\n").filter((row) => row.startsWith("- ")));
       const found = new Map(queries.map((query) => [query, answer(after, query).map((hit) => value(hit.text))]));
-      // a later-noted row stands in for a value only when this index returns it
+      // a later-noted row stands in for a value only when this index returns it and it names another day, so two notes of one day both show
       const returned = new Set([...found.values()].flat());
       for (const query of queries) {
         asked++;
         for (const hit of answer(before, query)) {
           const day = noted(hit.text);
-          if (found.get(query)!.includes(value(hit.text)) || (day && rows.some((row) => label(row) === hit.topic && noted(row) > day && returned.has(value(row))))) continue;
+          if (found.get(query)!.includes(value(hit.text)) || (day && rows.some((row) => label(row) === hit.topic && noted(row) > day && named(row) !== named(hit.text) && returned.has(value(row))))) continue;
           missing.push(`${name} | ${query} | 83f790c87 ${hit.text} | now ${found.get(query)!.join(" / ") || "nothing"}`);
         }
       }
@@ -394,6 +395,7 @@ describe("corpus", () => {
     const old = "- Ferry booking: provisional Silver Pier";
     const saved = "- Ferry booking: confirmed Amber Quay for 2026-11-20 (noted 2026-10-15)";
     const deck = "- Ferry ticket: car deck upgrade paid (noted 2026-10-16)";
+    const outboundNoted = "- Ferry ticket: outbound from Silver Pier on 2026-11-20 (noted 2026-10-14)";
     const amber = "- Ferry booking: confirmed Amber Quay for 2026-11-20 (noted 2026-10-10)";
     const cedar = "- Ferry booking: moved to Cedar Dock (noted 2026-10-15)";
     const acme = "- Research station: Cobalt Acme (noted 2026-10-15)";
@@ -410,6 +412,7 @@ describe("corpus", () => {
       ["O6", [file("auto-notes-overflow.md", ["- Field booking: Indigo Globex for 2026-10-16 (noted 2026-10-14)", "- Field booking: Cobalt Acme (noted 2026-10-15)"], 17)], ["cobalt acme", "indigo globex", "field booking"]],
       ...[[file("connections.md", [outbound, inbound, deck], 16)], [file("connections.md", [deck, outbound, inbound], 16)], [file("connections.md", [outbound, inbound], 15), file("auto-notes-overflow.md", [deck], 16)]].map((files, at) => [`Q1 ${at}`, files, ["silver pier", "amber quay", "car deck upgrade", "ferry ticket"]] as const),
       ...[[file("auto-notes-overflow.md", [old, amber, cedar, "- Packs a raincoat"], 16)], [file("auto-notes-overflow.md", [old, amber, cedar, "- Packs a raincoat (noted 2026-10-16)"], 16)], [file("auto-notes-overflow.md", [amber, cedar], 15), file("travel.md", [old, "- Packs a raincoat"], 16)]].map((files, at) => [`Q2 ${at}`, files, ["silver pier", "amber quay", "cedar dock", "ferry booking"]] as const),
+      ...[[outboundNoted, inbound], [inbound, outboundNoted]].map((rows, at) => [`R2 ${at}`, [file("connections.md", rows, 15)], ["silver pier", "amber quay", "ferry ticket"]] as const),
     ] as const) await check(name, [...files], [...queries]);
     // seeded, so a failing plan replays
     let seed = 1991;
