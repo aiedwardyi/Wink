@@ -481,22 +481,93 @@ describe("RemoteTerminalView", () => {
     }
   });
 
-  it("cancels a read the watchdog gives up on and sends the next one past the browser cache", async () => {
+  // A read that never answers, the way a fetch rejects once it is cancelled.
+  const hung = (signals: (AbortSignal | undefined)[]) => (_path: string, init?: RequestInit) => {
+    signals.push(init?.signal ?? undefined);
+    return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
+  };
+
+  it("sends the next read past a hung one and cancels the hung one once it answers", async () => {
     vi.useFakeTimers();
     const signals: (AbortSignal | undefined)[] = [];
-    store.api.mockImplementationOnce((_path: string, init?: RequestInit) => {
-      signals.push(init?.signal ?? undefined);
-      return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
-    }).mockResolvedValue({ screenText: "next read" });
+    store.api.mockImplementationOnce(hung(signals)).mockResolvedValue({ screenText: "next read" });
     const { host, root } = await renderView();
     try {
       await act(async () => vi.advanceTimersByTimeAsync(5_000));
-      expect(signals[0]?.aborted).toBe(true);
-      expect(host.querySelector('[role="alert"]')).toBeNull();
+      expect(signals[0]?.aborted).toBe(false);
       await act(async () => vi.advanceTimersByTimeAsync(1_000));
       expect(store.api).toHaveBeenCalledTimes(2);
       expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", READ);
       expect(host.querySelector("pre")?.textContent).toBe("next read");
+      expect(host.querySelector('[role="alert"]')).toBeNull();
+      expect(signals[0]?.aborted).toBe(true);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps at most two reads open on a link that answers nothing, and cancels them on close", async () => {
+    vi.useFakeTimers();
+    const signals: (AbortSignal | undefined)[] = [];
+    store.api.mockImplementation(hung(signals));
+    const { root } = await renderView();
+    await act(async () => vi.advanceTimersByTimeAsync(6_000));
+    expect(signals.map((signal) => signal?.aborted)).toEqual([false, false]);
+    await act(async () => vi.advanceTimersByTimeAsync(6_000));
+    expect(signals.map((signal) => signal?.aborted)).toEqual([true, false, false]);
+    await act(async () => root.unmount());
+    expect(signals.map((signal) => signal?.aborted)).toEqual([true, true, true]);
+  });
+
+  // A response still arriving when the watchdog gives up; cancelling its body makes responseBody() answer {}.
+  const arriving = (ms: number, frame: object) => (_path: string, init?: RequestInit) =>
+    new Promise((done) => {
+      const timer = window.setTimeout(() => done(frame), ms);
+      init?.signal?.addEventListener("abort", () => { window.clearTimeout(timer); done({}); });
+    });
+
+  it("paints a first read that is still arriving when the watchdog gives up", async () => {
+    vi.useFakeTimers();
+    store.api.mockImplementation(arriving(7_300, { screenText: "P12 slow", sessionId: "s1", generation: 1 }));
+    const { host, root } = await renderView();
+    try {
+      await act(async () => vi.advanceTimersByTimeAsync(7_300));
+      expect(host.querySelector("pre")?.textContent).toBe("P12 slow");
+      expect(composer(host)).not.toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps the screen while a slow refresh arrives, then shows it", async () => {
+    vi.useFakeTimers();
+    store.api.mockResolvedValueOnce({ screenText: "P12 first", sessionId: "s1", generation: 1 })
+      .mockImplementation(arriving(7_000, { screenText: "P12 second", sessionId: "s1", generation: 1 }));
+    const { host, root } = await renderView();
+    try {
+      expect(host.querySelector("pre")?.textContent).toBe("P12 first");
+      // The refresh starts at 1 s and its body lands at 8 s, past the 5 s watchdog.
+      for (const step of [1_000, 4_250, 800, 1_450]) {
+        await act(async () => vi.advanceTimersByTimeAsync(step));
+        expect(host.querySelector("pre")?.textContent).toBe("P12 first");
+        expect(composer(host)).not.toBeNull();
+      }
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+      expect(host.querySelector("pre")?.textContent).toBe("P12 second");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps the last frame when a refresh body is cut off", async () => {
+    vi.useFakeTimers();
+    store.api.mockResolvedValueOnce({ screenText: "P12 first", sessionId: "s1", generation: 1 }).mockResolvedValue({});
+    const { host, root } = await renderView();
+    try {
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
+      expect(store.api).toHaveBeenCalledTimes(2);
+      expect(host.querySelector("pre")?.textContent).toBe("P12 first");
+      expect(composer(host)).not.toBeNull();
     } finally {
       await act(async () => root.unmount());
     }

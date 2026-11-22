@@ -153,13 +153,15 @@ export function RemoteTerminalView({
       const qs = targetPane ? `?sessionId=${encodeURIComponent(targetPane)}` : "";
       const next = await api(`${path}${qs}`, { ...READ, signal });
       if (request < appliedRequestRef.current) return;
+      // A body cut off mid-read decodes to {}: it holds no frame, so the last one stays.
+      if (!Object.keys(next ?? {}).length) return;
       appliedRequestRef.current = request;
       restoringRef.current = null;
       setSnapshot(next);
       setError(null);
       setActionError(null);
     } catch (cause) {
-      // A read the watchdog cancelled leaves the screen to the next one.
+      // A read cancelled on close or pane switch has nothing left to show.
       if (signal?.aborted || request < appliedRequestRef.current) return;
       appliedRequestRef.current = request;
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -195,9 +197,7 @@ export function RemoteTerminalView({
     if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
     const spin = new Promise<void>((done) => window.setTimeout(done, SPIN_MS));
     // api() has no timeout, so a dropped connection would pin the spinner until TCP gives up
-    const read = new AbortController();
-    await Promise.race([refresh(read.signal), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
-    read.abort();
+    await Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
     await spin;
     setRefreshing(false);
   }, [refresh]);
@@ -228,20 +228,27 @@ export function RemoteTerminalView({
     if (!visible) return;
     let timer = 0;
     let live = true;
-    let read = new AbortController();
-    // The next tick waits for this read, so a slow link never stacks them; a dropped one is cancelled at the timeout.
+    // Reads in flight, oldest first. Closing or switching panes cancels them, since nothing can show them.
+    const reads: AbortController[] = [];
+    // The next tick waits for this read, so a slow link never stacks them; a dropped one holds the poll only until the timeout.
+    // A read still arriving then runs on and paints: cancelling it would drop a frame that is on its way.
     const tick = async () => {
-      read = new AbortController();
-      await Promise.race([refresh(read.signal), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
-      read.abort();
+      const read = new AbortController();
+      // A link that answers nothing holds at most two of the phone's few sockets: a third read cancels the oldest.
+      if (reads.push(read) > 2) reads.shift()?.abort();
+      const answered = refresh(read.signal).then(() => {
+        // Older reads can only be discarded after this answer, so they free their sockets now.
+        for (const older of reads.splice(0, reads.indexOf(read) + 1)) if (older !== read) older.abort();
+      });
+      await Promise.race([answered, new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
       if (live) timer = window.setTimeout(tick, REFRESH_MS);
     };
     void tick();
     return () => {
       live = false;
-      read.abort();
       window.clearTimeout(timer);
       appliedRequestRef.current = ++requestRef.current;
+      for (const read of reads.splice(0)) read.abort();
     };
   }, [visible, refresh]);
 
