@@ -595,6 +595,9 @@ export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
 }
 
+/** A hit's at and rowid: an in-chat find page past it starts there even once its row is gone. */
+export type FindPlace = { at: number; row: number };
+
 export interface SearchHit {
   threadId: string;
   messageId: string;
@@ -610,6 +613,8 @@ export interface SearchHit {
   matches: number;
   /** room messages: which member said it */
   from?: string;
+  /** with `at`, where the row sits in its chat: a find page goes on from there even once the row is gone */
+  row: number;
 }
 
 // Same header and detail block the terminal row draws. Search must not outrun it.
@@ -686,13 +691,14 @@ export function searchSnippet(haystack: string, needle: string): Pick<SearchHit,
  * previous follow the transcript. One ordered LIKE scan, deliberately: local
  * transcripts are usually megabytes, and it needs no FTS extension to exist;
  * a gigabyte chat scans for seconds, so an in-chat find runs off the server
- * thread (searchMessagesOn). In one chat, `before` pages past that hit.
+ * thread (searchMessagesOn). In one chat, `before` pages past that hit, at
+ * its `place` when given, and `ids` limits the scan to those rows.
  * `skip` threads never count toward `limit`. */
 export function searchMessages(
   query: string,
   limit = 40,
   threadId?: string,
-  options: { before?: string; chips?: boolean; skip?: ReadonlySet<string> } = {},
+  options: { before?: string; place?: FindPlace; chips?: boolean; skip?: ReadonlySet<string>; ids?: readonly string[] } = {},
 ): SearchHit[] {
   return searchMessagesOn(db(), query, limit, threadId, options);
 }
@@ -703,7 +709,7 @@ export function searchMessagesOn(
   query: string,
   limit = 40,
   threadId?: string,
-  { before, chips = false, skip }: { before?: string; chips?: boolean; skip?: ReadonlySet<string> } = {},
+  { before, place, chips = false, skip, ids }: { before?: string; place?: FindPlace; chips?: boolean; skip?: ReadonlySet<string>; ids?: readonly string[] } = {},
 ): SearchHit[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
@@ -724,11 +730,14 @@ export function searchMessagesOn(
       "     WHERE lower(CASE WHEN substr(value, 1, 1) IN ('+', '-') THEN substr(value, 1, 1) || ' ' || substr(value, 2) ELSE value END) LIKE ?1 ESCAPE '\\'))"
     : "";
   // SAFETY: This projection selects at and SQLite's rowid.
-  const cursor = threadId && before
-    ? handle.prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined
-    : undefined;
+  const cursor = !threadId || !before ? undefined
+    : place ?? handle.prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined;
   if (before && !cursor) return [];
-  const scope = threadId ? `thread_id = ?3 AND ${cursor ? "(at < ?4 OR (at = ?4 AND rowid < ?5)) AND " : ""}` : "";
+  const after = cursor ? "(at < ?4 OR (at = ?4 AND rowid < ?5)) AND " : "";
+  // `ids` reads just those rows by key: the unary + keeps SQLite off the chat's (thread_id, at) index, which walks every row
+  const scope = !threadId ? ""
+    : ids ? `+thread_id = ?3 AND rowid IN (SELECT rowid FROM messages WHERE thread_id = ?3 AND id IN (SELECT value FROM json_each(?${cursor ? 6 : 4}))) AND ${after}`
+    : `thread_id = ?3 AND ${after}`;
   const order = threadId ? "" : "CASE WHEN kind = 'text' THEN 0 ELSE 1 END, ";
   // Text matches its text. Activity matches the fields a row can draw, then
   // the visible detail only; a default-skin chip draws its name and summary. Engine
@@ -758,7 +767,7 @@ export function searchMessagesOn(
     from_name: string | null;
   };
   const hits: SearchHit[] = [];
-  const args = [pattern, like(fragment), ...(threadId ? [threadId] : []), ...(cursor ? [cursor.at, cursor.row] : [])];
+  const args = [pattern, like(fragment), ...(threadId ? [threadId] : []), ...(cursor ? [cursor.at, cursor.row] : []), ...(threadId && ids ? [JSON.stringify(ids)] : [])];
   const rows = ordered.iterate(...args);
   for (const { row: rowid, thread_id } of rows) {
     if (skip?.has(String(thread_id))) continue;
@@ -773,6 +782,7 @@ export function searchMessagesOn(
       role: row.role,
       kind: row.kind,
       ...searchSnippet(haystack, needle),
+      row: Number(rowid),
     };
     if (row.from_name) hit.from = row.from_name;
     hits.push(hit);

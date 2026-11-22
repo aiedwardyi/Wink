@@ -1445,10 +1445,10 @@ export class Store {
     return path;
   }
 
-  /** Which of `ids` lie on the active path; a thread not loaded walks its stored path, never reading every row. */
-  onActivePath(threadId: string, ids: readonly string[]): Set<string> {
+  /** Which of `ids` lie on the active path; a thread not loaded walks its stored path, never reading every row. `head`, from findHead when the find began, is the head a load then would have held. */
+  onActivePath(threadId: string, ids: readonly string[], head?: string | null): Set<string> {
     if (!this.threads.has(threadId)) {
-      this.readOnDisk(threadId);
+      this.readOnDisk(threadId, head);
       return mdb.onStoredPath(threadId, ids, this.foundOnDisk.get(threadId));
     }
     const path = new Set(this.activePath(threadId).map((m) => m.id));
@@ -1463,9 +1463,14 @@ export class Store {
     return window;
   }
 
+  /** For a chat not loaded, the head a load now would hold: a find reads its hits off this thread, and a sync can land before they come back. */
+  findHead(threadId: string): string | null | undefined {
+    return this.threads.has(threadId) ? undefined : mdb.storedHead(threadId) ?? null;
+  }
+
   /** Notes a chat a find or jump read from disk; the first read keeps the head a load there would have held. */
-  private readOnDisk(threadId: string): void {
-    if (!this.foundOnDisk.has(threadId)) this.foundOnDisk.set(threadId, mdb.storedHead(threadId) ?? null);
+  private readOnDisk(threadId: string, head = mdb.storedHead(threadId) ?? null): void {
+    if (!this.foundOnDisk.has(threadId)) this.foundOnDisk.set(threadId, head);
   }
 
   /** The head of a chat not loaded: once a find or jump read it from disk, the head a load there held until a head is stored. */

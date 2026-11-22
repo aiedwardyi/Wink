@@ -51,9 +51,10 @@ export function ChatFindBar({
     };
   }, []);
 
-  const searchPath = (text: string, before?: string, limit = PAGE) =>
+  // a page goes on from the last hit's place, which stays put even when a sync removes that row
+  const searchPath = (text: string, before?: SearchHit, limit = PAGE) =>
     `/api/search?q=${encodeURIComponent(text)}&limit=${limit}&threadId=${encodeURIComponent(threadId)}${view}` +
-    (before ? `&before=${encodeURIComponent(before)}` : "");
+    (before ? `&before=${encodeURIComponent(before.messageId)}&at=${before.at}&row=${before.row}` : "");
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -82,7 +83,7 @@ export function ChatFindBar({
             pagingRef.current = true;
             setHits(found);
             setMore(false);
-            const rest = await api(searchPath(trimmed, found.at(-1)!.messageId, PAGE - found.length));
+            const rest = await api(searchPath(trimmed, found.at(-1), PAGE - found.length));
             if (request !== requestRef.current) return;
             pagingRef.current = false;
             found = [...found, ...(Array.isArray(rest?.hits) ? rest.hits : [])];
@@ -126,7 +127,7 @@ export function ChatFindBar({
     if (!last || pagingRef.current) return;
     pagingRef.current = true;
     const request = requestRef.current;
-    void api(searchPath(query.trim(), last.messageId))
+    void api(searchPath(query.trim(), last))
       .then((body) => {
         if (request !== requestRef.current) return;
         const page: SearchHit[] = Array.isArray(body?.hits) ? body.hits : [];

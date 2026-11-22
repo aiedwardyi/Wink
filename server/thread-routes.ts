@@ -10,7 +10,7 @@ import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { coldLoad, coldPageBefore, findInChat } from "./cold-thread.ts";
 import { createMediaIndex } from "./media-index.ts";
-import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
+import { searchHaystack, searchMessages, searchSnippet, type SearchHit } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { serveRoomFile } from "./rooms/files.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -150,8 +150,11 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
       const threadId = url.searchParams.get("threadId")?.trim() || undefined;
-      // in-chat find: the page after `before`, matched against what the chat's skin draws
+      // in-chat find: the page after `before`, matched against what the chat's skin draws; its `at` and `row` place it even once that row is gone
       const before = threadId ? url.searchParams.get("before") || undefined : undefined;
+      const at = Number(url.searchParams.get("at") ?? NaN);
+      const row = Number(url.searchParams.get("row") ?? NaN);
+      const place = before && Number.isSafeInteger(at) && Number.isSafeInteger(row) ? { at, row } : undefined;
       const chips = url.searchParams.get("view") === "chips";
       if (threadId && !store.botByThread(threadId) && !store.groupByThread(threadId)) {
         return json(res, 404, { error: "no such conversation" });
@@ -159,15 +162,21 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       const needle = q.trim().toLowerCase();
       const skip = new Set([...store.trash.threadIds(), ...hidden]);
       // one chat's find reads off the server thread: a long chat scans for seconds
-      const found = threadId ? await findInChat(threadId, q, limit + 1, { before, chips, skip }) : searchMessages(q, limit + 1, threadId, { before, chips, skip });
-      const page = found.slice(0, limit);
+      const head = threadId ? store.findHead(threadId) : undefined;
+      let page: SearchHit[], more: boolean;
+      if (threadId) ({ hits: page, more } = await findInChat(threadId, q, limit, { before, place, chips, skip }));
+      else {
+        const found = searchMessages(q, limit + 1, threadId, { before, chips, skip });
+        page = found.slice(0, limit);
+        more = found.length > limit;
+      }
       // whether each hit sits on its thread's visible branch - a click on
       // one that does not has to switch versions first (and only then).
       // A chat not in memory answers from disk: loading a long one took seconds.
       const activePaths = new Map<string, Set<string>>();
       const onActivePath = (threadId: string, messageId: string) => {
         let ids = activePaths.get(threadId);
-        if (!ids) activePaths.set(threadId, (ids = store.onActivePath(threadId, page.filter((hit) => hit.threadId === threadId).map((hit) => hit.messageId))));
+        if (!ids) activePaths.set(threadId, (ids = store.onActivePath(threadId, page.filter((hit) => hit.threadId === threadId).map((hit) => hit.messageId), head)));
         return ids.has(messageId);
       };
       const threadRows = new Map<string, Map<string, Message>>();
@@ -196,7 +205,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
           return null;
         })
         .filter((hit): hit is NonNullable<typeof hit> => hit !== null);
-      return json(res, 200, { hits, more: found.length > limit });
+      return json(res, 200, { hits, more });
     },
     exportThread: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {
       const threadId = m[1];
