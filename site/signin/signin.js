@@ -26,6 +26,8 @@
   let listed = [];
   let account = "";
   let showBoxes = () => {};
+  // On the return leg: the PC's own page, whose code form needs no Google.
+  let pairPage = "";
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
@@ -127,6 +129,11 @@
     spin.className = "spinner";
     spin.setAttribute("aria-hidden", "true");
     return spin;
+  }
+
+  // A return leg that cannot open the PC with Google, such as in a browser where Google sign-in cannot finish, still has the PC's code.
+  function offerCode() {
+    if (pairPage) $("code").hidden = false;
   }
 
   function opening(name) {
@@ -484,6 +491,7 @@
         buttonShown = true;
         $("title").textContent = "Sign in";
         slot.hidden = false;
+        offerCode();
         slot.classList.remove("ready");
         slot.classList.toggle("last", LABEL_RE.test(remembered()));
         slot.replaceChildren();
@@ -571,10 +579,12 @@
     const listed = await loadPcs(pcToken);
     if (!listed) {
       say(OFFLINE, "error");
+      offerCode();
       return;
     }
     if (!listed.some((row) => row.label === pc) || (held && subject(pcToken) !== held)) {
       say(NOT_YOURS, "error");
+      offerCode();
       return;
     }
     go(pc, `#g=${encodeURIComponent(pcToken)}`, name);
@@ -633,7 +643,12 @@
       say(BAD_LINK, "error");
       return;
     }
-    void returnLeg(pc, m).catch(() => say(GOOGLE_DOWN, "error"));
+    pairPage = `https://${pc}.${config.base}/pair`;
+    $("usecode").addEventListener("click", () => location.assign(pairPage));
+    void returnLeg(pc, m).catch(() => {
+      say(GOOGLE_DOWN, "error");
+      offerCode();
+    });
   }
 
   if (PHONE_RE.test(navigator.userAgent)) $("subtitle").textContent = "Reach Wink on your PC from this phone.";

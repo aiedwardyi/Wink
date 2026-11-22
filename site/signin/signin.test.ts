@@ -752,6 +752,46 @@ describe("entering a PC's code", () => {
   const focused = () => boxes().findIndex((box) => box === document.activeElement);
   const live = { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } } satisfies Record<string, Answer>;
 
+  // A browser where Google sign-in cannot finish (Meta's glasses web view): a typed code came back here and stopped at Google.
+  it("sends a return leg Google cannot finish to the PC's own code form, without remembering the PC", async () => {
+    open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_A, name: "Ada" }]);
+    await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    expect(document.getElementById("code")?.hidden).toBe(true);
+    prompts[0]!(hiddenMoment());
+    expect(document.getElementById("code")?.hidden).toBe(false);
+    expect(link().hidden).toBe(false);
+    expect(link().textContent).toBe("Use a code from Wink on your PC");
+    expect(boxesHidden()).toBe(true);
+    link().click();
+    expect(location.href).toBe(pair(LABEL_A, ""));
+    expect(boxesHidden()).toBe(true);
+    expect(localStorage.getItem(LAST_PC)).toBeNull();
+  });
+
+  it("keeps the code out of a return leg Google opens", async () => {
+    open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_A, name: "Ada" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    inits[0]!.callback({ credential: PC_TOKEN });
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, `#g=${PC_TOKEN}`)));
+    expect(document.getElementById("code")?.hidden).toBe(true);
+  });
+
+  it.each<[string, Pc[] | "fail", string | undefined]>([
+    ["the account does not own the PC", [{ label: LABEL_B, name: "Zed" }], undefined],
+    ["the relay cannot be reached", "fail", undefined],
+    ["Google cannot load", [{ label: LABEL_A, name: "Ada" }], GIS_BOOM],
+  ])("offers the PC's code form when the return leg stops because %s", async (_, body, gisError) => {
+    open(`/signin?pc=${LABEL_A}&m=${M}`, body, gisError);
+    if (!gisError) {
+      await vi.waitFor(() => expect(inits).toHaveLength(1));
+      inits[0]!.callback({ credential: PC_TOKEN });
+    }
+    await vi.waitFor(() => expect(status().className).toBe("status error"));
+    expect(document.getElementById("code")?.hidden).toBe(false);
+    link().click();
+    expect(location.href).toBe(pair(LABEL_A, ""));
+  });
+
   it("offers the code on a cold start only", () => {
     open("/signin", []);
     expect(document.getElementById("code")?.hidden).toBe(false);
