@@ -105,10 +105,11 @@ export function shutdownStampsForClose(input: {
 
 export function lastUserInstruction(
   messages: ReadonlyArray<{ id: string; role: string; kind?: string; text?: string; at: number }>,
+  skipIds?: ReadonlySet<string>,
 ): { text: string; messageId: string; at: number } | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
-    if (message.role !== "user" || (message.kind !== undefined && message.kind !== "text")) continue;
+    if (message.role !== "user" || (message.kind !== undefined && message.kind !== "text") || skipIds?.has(message.id)) continue;
     const text = message.text?.trim();
     if (!text) continue;
     return { text, messageId: message.id, at: message.at };
@@ -121,10 +122,12 @@ export function lastUserInstruction(
 export function unsettledRequest(
   packet: { instructionId?: string; settledInstructionId?: string } | null | undefined,
   messages: ReadonlyArray<{ id: string; role: string; kind?: string; text?: string; steered?: boolean }>,
+  skipIds?: ReadonlySet<string>,
 ): string {
+  // a settled packet reads no lines: a long chat's path is not copied for it
   if (!packet?.instructionId || packet.instructionId === packet.settledInstructionId) return "";
   const lines = messages.filter((message) =>
-    message.role === "user" && (message.kind === undefined || message.kind === "text") && message.text?.trim());
+    message.role === "user" && (message.kind === undefined || message.kind === "text") && message.text?.trim() && !skipIds?.has(message.id));
   const index = lines.findIndex((line) => line.id === packet.instructionId);
   // Each local send records its instruction, so a later unsteered line synced in from another device.
   if (index < 0 || lines.slice(index + 1).some((line) => !line.steered)) return "";

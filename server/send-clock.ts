@@ -19,6 +19,11 @@ export function serverClockSample(): number {
   return readServerClock().at;
 }
 
-export function serverSendClock(messages: Parameters<typeof sendClock>[0]): number {
-  return sendClock(messages, readServerClock().cap);
+/** The cap a send's stamp is held to, read once where the send arrives: a wait for the chat after it must not move it. */
+export function serverClockCap(): number {
+  return readServerClock().cap;
+}
+
+export function serverSendClock(messages: Parameters<typeof sendClock>[0], cap = readServerClock().cap): number {
+  return sendClock(messages, cap);
 }

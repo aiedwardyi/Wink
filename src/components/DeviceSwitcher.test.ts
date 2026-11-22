@@ -244,7 +244,7 @@ describe("DeviceSwitcher", () => {
       expect(navigate).not.toHaveBeenCalled();
       expect(open).not.toHaveBeenCalled();
     } else {
-      expect(open).toHaveBeenCalledWith("laptop.tail1234.ts.net", "laptop");
+      expect(open).toHaveBeenCalledWith("laptop.tail1234.ts.net", "laptop", undefined);
       expect(navigate).not.toHaveBeenCalled();
       expect(host.querySelector("ul:not([inert])")).toBeNull();
     }
@@ -366,7 +366,7 @@ describe("DeviceSwitcher", () => {
     expect(host.querySelector("ul:not([inert])")).toBeNull();
     await act(async () => click(toggle));
     await act(async () => click(host.querySelector("[data-device-id=work]")!));
-    expect(open).toHaveBeenCalledWith("work.tail1234.ts.net", "Work");
+    expect(open).toHaveBeenCalledWith("work.tail1234.ts.net", "Work", undefined);
     expect(navigate).not.toHaveBeenCalled();
     expect(host.querySelector("ul:not([inert])")).toBeNull();
   });

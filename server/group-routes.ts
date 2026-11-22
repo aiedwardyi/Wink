@@ -21,7 +21,8 @@ import { hostRoomFiles, stopBotChain } from "./rooms/send.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import { scanQuestion } from "../shared/open-question.ts";
-import { serverSendClock } from "./send-clock.ts";
+import { serverClockCap, serverSendClock } from "./send-clock.ts";
+import { coldLoad } from "./cold-thread.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
 
@@ -450,12 +451,17 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const sendId = parseSendId(body.sendId);
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
+      const acted = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? body.actedAt : undefined;
+      // the clock is read as the send arrives: waiting for the chat below must not raise the cap a stamp ahead of it is held to
+      const cap = acted === undefined ? undefined : serverClockCap();
+      // the card, the clock, the sendId match and the room's turn read the chat: an unloaded one loads off the server thread rather than be read here
+      if (!store.loaded(threadId)) await coldLoad(store, threadId);
       // a tapped question card is answered by the member that asked, whatever the room's rule
       const asked = typeof body.cardId === "string" ? store.messagesFor(threadId).find((message) => message.id === body.cardId) : undefined;
       const askerId = asked?.card?.askUser ? asked.from?.botId : undefined;
       const answersCard = asked?.card?.askUser ? asked.id : undefined;
       // capped by the client's own rule, so a row stamped ahead of this clock cannot reorder the line on reload
-      const actedAt = typeof body.actedAt === "number" && Number.isFinite(body.actedAt) && body.actedAt >= 0 ? Math.min(body.actedAt, serverSendClock(store.messagesFor(threadId))) : undefined;
+      const actedAt = acted === undefined ? undefined : Math.min(acted, serverSendClock(store.messagesFor(threadId), cap));
       const waited = body.waited === true || undefined;
       const sendSeq = typeof body.sendSeq === "number" && Number.isSafeInteger(body.sendSeq) && body.sendSeq > 0 ? body.sendSeq : undefined;
       const anchor = body.sentAfterId;

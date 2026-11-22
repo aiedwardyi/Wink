@@ -35,6 +35,7 @@ import "./bot-cwd.ts";
 import { resolveBotTerminalFolder } from "./terminal-cwd.ts";
 import {
   applyResolvedProjectFolder,
+  checkProjectFolders,
   opensHostFiles,
   projectFolderPrompt,
   projectNotesPrompt,
@@ -138,7 +139,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
-import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
+import { LoginBusyError, logSignInRefusal, signInOwner, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -184,7 +185,7 @@ import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.t
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, coldLoading, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldLoading, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -334,10 +335,10 @@ import {
   supportsWorkspaceFiles,
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
-import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
+import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer, noteOfferTurn, takeImportOffer } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -437,7 +438,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, memoryJobMachine, peerMemoryLanded, pinMemoryJobOwner, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -1843,6 +1844,15 @@ async function importProfileChanges(): Promise<void> {
       markSynced(synced, { entity: "bot", entityId: item.globalId, changes: Object.fromEntries(Object.entries(local).filter(([field]) => !(field in remoteBot))) });
     }
   }
+  if (!remote.invalidFiles.length) {
+    ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice);
+    for (const [botId, syncId] of Object.entries(profileSyncSettings.botMap)) {
+      const owner = Object.hasOwn(state.botOrigins, syncId) ? state.botOrigins[syncId] : undefined;
+      if (!owner || !pinMemoryJobOwner(memorySyncLedger, syncId, owner)) continue;
+      if (memoryJobsHere(botId)) memorySleep.onSettled(botId);
+    }
+    saveMemoryLedger();
+  }
   const finish = () => {
     if (botTrash) finishRevive(trashSyncHost(), marks.revive, (botId) => threadSyncV2?.rebuild(botId));
     for (const key of Object.keys(state.tombstones).filter((value) => value.startsWith("bot:"))) {
@@ -2369,6 +2379,8 @@ let profilePublishTimer: ReturnType<typeof setTimeout> | undefined;
 const memorySyncLedger = loadMemorySyncLedger(DATA_DIR);
 const legacyMemoryLedger = loadLegacyMemoryLedger(DATA_DIR);
 let savedMemoryLedger = JSON.stringify(memorySyncLedger);
+const memoryJobDevice = memoryJobMachine(DATA_DIR);
+if (memorySyncLedger.device) ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice);
 
 function publishProfileChangesSafely(): void {
   try {
@@ -2469,8 +2481,11 @@ function saveMemoryLedger(): void {
   }
 }
 
-// whether this PC is the one that tidies each synced bot, as of its last sync pass
-const memoryTidyHere = new Map<string, boolean>();
+function memoryJobsHere(botId: string): boolean {
+  const folder = profileSyncSettings.folder;
+  const syncId = chatSyncBotId(profileSyncSettings, botId);
+  return !syncId || Boolean(folder && existsSync(folder) && tidiesHere(memorySyncLedger, syncId, profileSyncSettings.deviceId, memoryJobDevice));
+}
 
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
 async function syncMemoryPass(botId: string): Promise<boolean> {
@@ -2483,7 +2498,6 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
-  memoryTidyHere.set(botId, tidiesHere(memorySyncLedger, botSyncId, snapshots));
   // the poll runs for every idle bot, so only pulled changes refresh the page and check
   if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
     memoryHealthCheck.refresh(botId);
@@ -2568,7 +2582,7 @@ const googleSync = createGoogleSync({
   folder: () => profileSyncSettings.folder,
   prepare: () => {
     const device = memorySyncLedger.device;
-    if (ensureMemorySyncDevice(memorySyncLedger) !== device) {
+    if (ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice) !== device) {
       saveMemorySyncLedger(DATA_DIR, memorySyncLedger);
       savedMemoryLedger = JSON.stringify(memorySyncLedger);
     }
@@ -3060,31 +3074,33 @@ const summaryBuild = createSummaryBuild({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   userName: () => cfg.profile?.name?.trim() || "User",
 });
+const signedOutHelpers = new Set<string>();
+registry.onProbed((instanceId) => signedOutHelpers.delete(instanceId));
+const noteHelper = (botId: string) => {
+  const bot = store.bot(botId);
+  return bot ? botAccounts.notes(bot, { limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR), signedOut: signedOutHelpers }) : null;
+};
+const memoryJobEnabled = (botId: string) => {
+  const bot = store.bot(botId);
+  const instance = bot && registry.get(bot.modelSelection.instanceId);
+  return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
+};
+const ownNoteEngine = (botId: string) => registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.driverKind !== "claudeAgent";
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
-  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
-  enabled: (botId) => {
-    const bot = store.bot(botId);
-    const instance = bot && registry.get(bot.modelSelection.instanceId);
-    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
-  },
+  generate: noteHelper,
+  enabled: memoryJobEnabled,
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  host: deviceMachine,
 });
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
-  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
-  enabled: (botId) => {
-    const bot = store.bot(botId);
-    const instance = bot && registry.get(bot.modelSelection.instanceId);
-    const folder = profileSyncSettings.folder;
-    // two PCs tidying the same notes apart would leave parked copies, so a synced bot is tidied on one, and not while its folder is out of reach
-    const synced = Boolean(folder && chatSyncBotId(profileSyncSettings, botId));
-    const tidier = memoryTidyHere.get(botId) === true && Boolean(folder && existsSync(folder));
-    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot) && (!synced || tidier);
-  },
+  generate: noteHelper,
+  requiresGenerator: ownNoteEngine,
+  enabled: (botId) => memoryJobEnabled(botId) && memoryJobsHere(botId),
   busy: (botId) => botHasActiveTurn(botId),
   changed: (botId) => broadcast({ kind: "memory.changed", botId }),
   // saved now, so a restart before the next sync pass still knows the tidy alone made this change
@@ -3343,7 +3359,7 @@ const refreshUsage = createUsageRefresh({
 });
 const checkMuseUsage = createMuseCheck();
 const refreshSwappedUsage = createUsageSwapRefresh({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
-  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); },
+  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); else usageBoard.touch(); },
 });
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
@@ -3907,7 +3923,10 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       limitWaits.bind(event.threadId, event.turnId);
       unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
-      if (turnOwnerId) memorySleep.onTurn(turnOwnerId);
+      if (turnOwnerId) {
+        if (ownNoteEngine(turnOwnerId)) memoryPass.onTurn(turnOwnerId);
+        memorySleep.onTurn(turnOwnerId);
+      }
       break;
     case "session.started":
       if (bot && event.sessionId && event.providerInstanceId && !staleTurnEvent(event.threadId, event.turnId)) {
@@ -3933,7 +3952,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
-            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}) },
+            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}), ...takeImportOffer(event.threadId, event.text) },
         );
         markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "assistant.persisted", {
           turnId: event.turnId,
@@ -4403,6 +4422,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
+      noteOfferTurn(event.threadId, false);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
       for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
       const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
@@ -5124,6 +5144,11 @@ function botHasLiveTurn(botId: string, threadId?: string): boolean {
 function tryClaimTurnStart(botId: string, threadId: string | undefined): boolean {
   if (turnStartClaims.has(botId)) return false;
   turnStartClaims.set(botId, threadId);
+  // agy's note helper holds the machine-global MCP file a computer turn needs alone, so stop it before preparation.
+  if (registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.driverKind === "antigravityAgent") {
+    memoryPass.onTurn(botId);
+    memorySleep.onTurn(botId);
+  }
   return true;
 }
 
@@ -5232,7 +5257,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1).tool) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1, bot.threadId).tool) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5389,9 +5414,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     persistTaskPacket(packet, { staged: true });
   }
 
-  // Map may be loading this chat off the server thread, and the model context below reads all of it
-  const loading = coldLoading(threadId);
-  if (loading) await loading;
+  // the model context below reads the whole chat: an unloaded one loads off the server thread, joining a load Map started
+  if (!store.loaded(threadId)) await coldLoad(store, threadId);
 
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
@@ -5408,9 +5432,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
   );
-  const earlierMessages = messagesBeforeSummary.filter((message) => !skipTranscript.has(message.id));
-  const latestUser = lastUserInstruction(earlierMessages);
-  const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, earlierMessages);
+  const latestUser = lastUserInstruction(messagesBeforeSummary, skipTranscript);
+  const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, messagesBeforeSummary, skipTranscript);
   // Recovery Current request must be this send's text. skipTranscript excludes
   // userMessage.id, so transcript lookup alone would show a prior user turn.
   // A Resume card carries no request of its own, so it falls back to the turn
@@ -5498,7 +5521,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           turnsAtWrite: task.usage?.turns ?? taskRecord.turnsAtWrite,
         })) ?? taskRecord;
       }
-      recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages.filter((message) => !skipTranscript.has(message.id)))?.text) || "";
+      recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages, skipTranscript)?.text) || "";
       durableTaskRecordText = taskRecord
         ? taskRecordBlock(taskRecord, Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
             { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn })
@@ -5695,8 +5718,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
-    ? importMemoryTurn(activeMessages)
+    ? importMemoryTurn(activeMessages, 0, threadId)
     : { offer: false, tool: false };
+  noteOfferTurn(threadId, importMemory.offer);
+  if (importMemory.offer) noteImportOffer(threadId);
   const currentPrompt = [
     ...(importMemory.offer ? [importOfferNote()] : []),
     composeUserTurnPrompt(text, turnOpts),
@@ -5902,17 +5927,28 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const namedByUser = !opts?.cardContinuation && !opts?.automationSource && !opts?.commsDepth;
       // The send was persisted before the awaits above, so a Clear that
       // landed meanwhile spends it like any other history line.
-      const clearedAt = bot.projectFolderClearedAt ?? -Infinity;
-      const currentFolderText = namedByUser && userMessage.at > clearedAt ? text : undefined;
-      const resolvedProject = worksInWorkspace && opts?.runOn !== "cloud"
-        ? applyResolvedProjectFolder({
+      const clearedAt = bot.projectFolderClearedAt;
+      const folderInput = () => worksInWorkspace && opts?.runOn !== "cloud"
+        ? {
             pin: bot.cwd,
             remembered: bot.lastProjectCwd,
             continuation: !namedByUser,
-            userTexts: userProjectTexts(store.messagesFor(threadId), currentFolderText, {
+            userTexts: userProjectTexts(store.messagesFor(threadId), namedByUser && userMessage.at > (bot.projectFolderClearedAt ?? -Infinity) ? text : undefined, {
               since: bot.projectFolderClearedAt,
             }),
             recentPaths: projectPathsFromRecords({ bots: store.bots, groups: store.groups }),
+          }
+        : undefined;
+      const checking = folderInput();
+      // the folders a long chat names are checked off the server thread first; a pin reads none of them
+      const checked = checking && !checking.pin?.trim() ? await checkProjectFolders(checking) : undefined;
+      // a Settings Clear or pin during the check is read as it is now, so the lines it spent stay spent
+      const unchanged = checking?.pin === bot.cwd && checking?.remembered === bot.lastProjectCwd && clearedAt === bot.projectFolderClearedAt;
+      const resolving = unchanged ? checking : folderInput();
+      const resolvedProject = resolving
+        ? applyResolvedProjectFolder({
+            ...resolving,
+            checked,
             remember: (cwd) => store.rememberProjectCwd(bot.id, cwd),
             forget: () => store.forgetProjectCwd(bot.id),
           })
@@ -8706,7 +8742,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
         setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
-        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : []) } : {}),
+        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [], teamRelayBase(googleEnv.teamRelay)) } : {}),
         phones: phoneVisits.list(),
       });
     }
@@ -8727,7 +8763,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "POST" && path === BOARD_ROUTES.remove) return await boardRoutes.remove(req, res);
     if (method === "GET" && path === "/api/devices") {
       const listed = syncedDevices();
-      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay), Date.now(), !relay && isLoopbackHost(req.headers.host));
       return json(res, 200, { devices });
     }
     if (method === "DELETE" && path.startsWith("/api/devices/")) {
@@ -9278,7 +9314,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
     if (method === "POST" && path === "/api/accounts") await enableWorkerAccounts(terminalBridgeAccess);
-    if (await accountRoutes(req, res, method, path)) return;
+    if (await accountRoutes(req, res, method, path, signInOwner(req.headers, phone?.id))) return;
     m = path.match(/^\/api\/usage\/(refresh|check)\/([^/]+)$/);
     if (m && method === "POST") {
       const instanceId = m[2];
@@ -9299,6 +9335,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             museModel: museCheckModel(store.bots.filter((bot) => bot.modelSelection.instanceId === instanceId).map((bot) => bot.modelSelection.model)),
           }, previous)
         : await refreshUsage(instance.driverKind, { ...usageOptions, fresh: url.searchParams.get("fresh") === "1", maxAgeMs: 30_000 }, previous);
+      if (result.cleared && rateLimitsByInstance.delete(instanceId)) {
+        scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR);
+        usageBoard.touch();
+      }
       if (result.report) {
         const current = rateLimitsByInstance.get(instanceId);
         if (!current || Date.parse(result.report.observedAt) >= Date.parse(current.observedAt)) {
@@ -9338,9 +9378,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
           const body = await readBody(req);
           if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
-          const capture = await registry.startSignIn(id, body?.device === true);
+          const capture = await registry.startSignIn(id, body?.device === true, signInOwner(req.headers, phone?.id));
           return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         }
+        if (method === "DELETE" && !registry.logins.owns(id, signInOwner(req.headers, phone?.id))) return refuse(403, SIGNED_IN_ELSEWHERE, "sign-in-elsewhere");
         if (method === "DELETE") return await registry.cancelSignIn(id)
           ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         if (method === "GET") {
@@ -9359,6 +9400,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
+      // Owner check and sign-out's cancel run in this one turn, so no newer sign-in can slip between them.
+      if (!registry.logins.owns(engineSignOut[1], signInOwner(req.headers, phone?.id))) return json(res, 403, { error: SIGNED_IN_ELSEWHERE, code: "sign-in-elsewhere" });
       const signedOut = await registry.signOut(engineSignOut[1]);
       return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
         : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });

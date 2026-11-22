@@ -4,12 +4,17 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
+import { exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
+import { isSignOut } from "./drivers/signout.ts";
 import { notedDay, pastTheCut, recalled, recallRows, rowDate } from "./memory-lookup.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import { loadProfileSyncSettings } from "./profile-sync.ts";
+import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
+import { chatSyncBotId } from "./thread-sync.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import {
   appendLines,
@@ -54,6 +59,7 @@ const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
 // a row by its words and the day it was noted, so rows coming or going around it never move it; one written here also keeps the rows in its words above it
 const landedSchema = z.object({ line: z.string(), date: z.string(), copy: z.number().optional() });
 const stateSchema = z.object({
+  host: z.string().optional(),
   threads: z.record(z.string(), z.array(z.string())),
   // notes a full MEMORY.md turned away before the overflow file; they are gone, never reported as moved
   dropped: z.record(z.string(), droppedSchema).optional(),
@@ -66,9 +72,11 @@ const stateSchema = z.object({
     wrote: z.array(landedSchema).optional(),
     seen: z.array(landedSchema).optional(),
   })).optional().catch(undefined),
+  // restored from another PC: left to it once this copy syncs the bot's chats
+  foreign: z.record(z.string(), z.array(z.string())).optional(),
 });
 
-export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>;
+export type NoteGenerator = ((prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>) & { engine?: string };
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
@@ -82,18 +90,21 @@ export type DroppedNotes = DroppedCount & { lost?: DroppedCount };
 
 export interface MemoryPassDeps {
   store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot">>;
-  /** The Claude one-shot call, whatever engine the bot runs; null when no Claude CLI is set up. */
+  /** The selected account's one-shot call, if it can run. */
   generate(botId: string): NoteGenerator | null;
   /** The bot's Auto notes switch, read live. */
   enabled(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
   dataDir: string;
+  /** This PC; pending ids restored from another PC stay that PC's work while this copy syncs chats with it. */
+  host?: string;
   now?(): number;
 }
 
 export interface MemoryPass {
   /** Call when a 1:1 turn settles; `flush` runs the pass now, before the engine compacts. */
   onSettled(botId: string, threadId: string, flush?: boolean): void;
+  onTurn(botId: string): void;
   /** Call after a config change: bots switched off drop pending ids and any running pass. */
   onConfigChanged(): void;
   /** Notes sent to the overflow file because MEMORY.md was full, since the last save. */
@@ -103,13 +114,37 @@ export interface MemoryPass {
   dispose(): void;
 }
 
+type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string };
+export type NoteLimits = { limits: RateLimitsMap; save(): void; signedOut?: Set<string> };
+
 export function noteGenerator(
-  instances: readonly (Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string })[],
+  instances: readonly NoteInstance[],
   account?: { instanceId: string; available: boolean },
+  own?: NoteInstance | null,
+  usage?: NoteLimits,
 ): NoteGenerator | null {
-  if (account && !account.available) return null;
-  const claude = instances.find((instance) => (!account || instance.instanceId === account.instanceId) && instance.driverKind === "claudeAgent" && instance.enabled && instance.generateText);
-  return claude ? (prompt, signal, onUsage) => claude.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true, ...(onUsage ? { onUsage } : {}) }) : null;
+  const helper = own !== undefined ? own : account && !account.available ? null
+    : instances.find((instance) => (!account || instance.instanceId === account.instanceId) && instance.driverKind === "claudeAgent" && instance.enabled && instance.generateText);
+  if (!helper?.enabled || !helper.generateText) return null;
+  const id = helper.instanceId;
+  const report = id && usage ? usage.limits.get(id) : undefined;
+  const now = Date.now();
+  if (exhaustedWindow(report?.windows, now) || (report?.noteLimit && (report.noteLimit.resetsAt === null || report.noteLimit.resetsAt > now))) return null;
+  if (id && usage?.signedOut?.has(id)) return null;
+  const generate: NoteGenerator = async (prompt, signal, onUsage) => {
+    try {
+      return await helper.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true, ...(onUsage ? { onUsage } : {}) });
+    } catch (error) {
+      const limit = !signal.aborted && error instanceof Error && usageLimitFromError(error, true);
+      if (limit && id && usage) {
+        const previous = usage.limits.get(id);
+        usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: limit });
+        usage.save();
+      } else if (id && !signal.aborted && error instanceof Error && (isSignOut(error.message) || UNAVAILABLE.test(error.message))) usage?.signedOut?.add(id);
+      throw error;
+    }
+  };
+  return Object.assign(generate, { engine: helper.driverKind.replace(/Agent$/, "") });
 }
 
 /** A user row typed on this PC into the chat, not a bot, routine, peer, draft or attachment. */
@@ -207,15 +242,16 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
   ].join("\n");
 }
 
-export function parseFacts(output: string): Fact[] {
+export function parseFacts(output: string): Fact[] | null {
   const start = output.indexOf("[");
   const end = output.lastIndexOf("]");
-  if (start < 0 || end < start) return [];
+  // a list inside an object is not the reply's fact list
+  if (start < 0 || end < start || output.slice(0, start).includes("{")) return null;
   try {
     const parsed = factsSchema.safeParse(JSON.parse(output.slice(start, end + 1)));
-    return parsed.success ? parsed.data : [];
+    return parsed.success ? parsed.data : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -640,6 +676,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   // notes sent to the overflow file, and apart from them notes an older version turned away and lost
   const overflowed = new Map<string, DroppedCount>();
   const lost = new Map<string, DroppedCount>();
+  const foreign = new Map<string, string[]>();
   // generated but unsaved, so a busy turn or a moved revision never pays for the same batch twice
   const held = new Map<string, Batch>();
   const replays = new Map<string, Pick<Batch, "ids" | "picked" | "wrote" | "seen"> & { notes: HeldNote[] }>();
@@ -665,10 +702,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
   const busy = (botId: string, key: string) => deps.busy(botId, sourceThread(key));
 
+  let claim = false;
   try {
     const state = stateSchema.parse(JSON.parse(readFileSync(statePath, "utf8")));
+    const restored = Boolean(state.host && deps.host && state.host !== deps.host);
     for (const [threadId, ids] of Object.entries(state.threads)) {
-      if (ids.length) pending.set(threadId, ids);
+      if (!ids.length) continue;
+      pending.set(threadId, ids);
+      const theirs = restored ? ids : state.foreign?.[threadId];
+      if (theirs?.length) foreign.set(threadId, [...theirs]);
     }
     for (const [botId, record] of Object.entries(state.dropped ?? {})) lost.set(botId, record);
     for (const [botId, record] of Object.entries(state.overflow ?? {})) overflowed.set(botId, record);
@@ -676,6 +718,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       replays.set(threadId, batch);
       held.set(threadId, { ...batch, facts: [], source: [] });
     }
+    claim = Boolean(deps.host && state.host !== deps.host);
   } catch {
     // first run or unreadable: start empty
   }
@@ -684,15 +727,18 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     clearTimeout(saveTimer);
     saveTimer = undefined;
     try {
-      const state: z.infer<typeof stateSchema> = { threads: Object.fromEntries(pending) };
+      const state: z.infer<typeof stateSchema> = { host: deps.host, threads: Object.fromEntries(pending) };
       if (lost.size) state.dropped = Object.fromEntries(lost);
       if (overflowed.size) state.overflow = Object.fromEntries(overflowed);
       if (replays.size) state.held = Object.fromEntries(replays);
+      if (foreign.size) state.foreign = Object.fromEntries(foreign);
       writeFileAtomic(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
     } catch (error) {
       console.warn(`[memory-pass] state save failed (${error instanceof Error ? error.name : "error"})`);
     }
   };
+  // stamp a legacy or copied file at once, so a copy taken before the next save cannot run these rows again
+  if (claim) save();
   const saveSoon = () => {
     if (saveTimer || disposed) return;
     saveTimer = setTimeout(save, SAVE_DELAY_MS);
@@ -710,7 +756,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const enqueue = (botId: string, threadId: string) => {
-    if (disposed || running.has(threadId) || queue.some((item) => item.threadId === threadId)) return;
+    const active = running.get(threadId);
+    if (disposed || (active && !active.controller.signal.aborted) || queue.some((item) => item.threadId === threadId)) return;
     clearTimeout(timers.get(threadId));
     timers.delete(threadId);
     queue.push({ botId, threadId });
@@ -725,14 +772,21 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   const log = (fields: PassLog) => console.info(`[memory-pass] ${JSON.stringify(fields)}`);
 
-  const done = (threadId: string, ids: string[]) => {
-    held.delete(threadId);
-    replays.delete(threadId);
+  const drop = (threadId: string, ids: string[]) => {
     const taken = new Set(ids);
     const rest = (pending.get(threadId) ?? []).filter((id) => !taken.has(id));
     if (rest.length) pending.set(threadId, rest);
     else pending.delete(threadId);
+    const theirs = foreign.get(threadId)?.filter((id) => !taken.has(id));
+    if (theirs?.length) foreign.set(threadId, theirs);
+    else foreign.delete(threadId);
     save();
+  };
+
+  const done = (threadId: string, ids: string[]) => {
+    held.delete(threadId);
+    replays.delete(threadId);
+    drop(threadId, ids);
   };
 
   const hold = (threadId: string, batch: Batch, notes: HeldNote[]) => {
@@ -927,8 +981,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   };
 
   const run = async (botId: string, threadId: string, signal: AbortSignal) => {
+    if (signal.aborted || !deps.enabled(botId)) return;
+    const theirs = foreign.get(threadId);
+    const source = theirs && sourceBot(threadId);
+    // read now, not at startup: the bot's sync mapping can land after a restore
+    if (source && chatSyncBotId(loadProfileSyncSettings(deps.dataDir), source.id)) drop(threadId, theirs);
     const ids = [...(pending.get(threadId) ?? [])];
-    if (!ids.length || !deps.enabled(botId)) return;
+    if (!ids.length) return;
+    if (busy(botId, threadId)) return arm(botId, threadId);
     const kept = held.get(threadId);
     if (kept) {
       land(botId, threadId, kept, readMemoryFile(botId), memoryFileRaw(botId), 0);
@@ -936,7 +996,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       return;
     }
     const generate = deps.generate(botId);
-    if (!generate) return warnOnce("no Claude CLI instance");
+    if (!generate) return;
     const messages = deps.store.messagesFor(sourceThread(threadId));
     const rows = pendingRows(messages, ids);
     const typed = ids.flatMap((id) => {
@@ -966,7 +1026,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const memory = readMemoryFile(botId);
     const raw = memoryFileRaw(botId);
     const started = now();
-    const trace = startTurnTrace(() => ({ engine: "claude", botId, threadId, batchId: `${threadId}:${ids.join(":")}`, sourceMessageIds: ids, sourceSendIds: ids.flatMap((id) => rows.get(id)?.sendId ? [rows.get(id)!.sendId!] : []) }));
+    const trace = startTurnTrace(() => ({ engine: generate.engine, botId, threadId, batchId: `${threadId}:${ids.join(":")}`, sourceMessageIds: ids, sourceSendIds: ids.flatMap((id) => rows.get(id)?.sendId ? [rows.get(id)!.sendId!] : []) }));
     const endPass = trace?.span("background_pass");
     let request = 0;
     let outcome = "helper-failed";
@@ -978,9 +1038,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       } : undefined);
       outcome = "helper-settled";
     } catch (error) {
-      if (disposed || !deps.enabled(botId)) return;
+      if (disposed || signal.aborted || !deps.enabled(botId)) return;
       if (UNAVAILABLE.test(error instanceof Error ? error.message : String(error))) {
-        return warnOnce("Claude CLI missing or signed out");
+        return warnOnce("engine CLI missing or signed out");
       }
       log({ botId, threadId, lines: lines.length, ms: now() - started, result: "error" });
       return;
@@ -991,7 +1051,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
-    land(botId, threadId, { ids, facts: parseFacts(output), source: lines }, memory, raw, now() - started);
+    const facts = parseFacts(output);
+    if (facts === null) return;
+    land(botId, threadId, { ids, facts, source: lines }, memory, raw, now() - started);
   };
 
   const pump = () => {
@@ -1011,7 +1073,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       timer.unref?.();
       const pass = { botId, controller, done: Promise.resolve() };
       running.set(threadId, pass);
-      pass.done = run(botId, threadId, controller.signal)
+      // started off the caller's stack, so a settling turn never waits on a pass
+      pass.done = Promise.resolve().then(() => run(botId, threadId, controller.signal))
         .catch((error) => console.warn(`[memory-pass] pass failed (${error instanceof Error ? error.name : "error"})`))
         .finally(() => {
           clearTimeout(timer);
@@ -1036,8 +1099,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (!deps.enabled(target.id)) continue;
       const key = group ? roomKey(target.id, threadId) : threadId;
       const ids = pending.get(key) ?? [];
-      if (!ids.includes(message.id)) ids.push(message.id);
-      pending.set(key, ids.slice(-MAX_PENDING));
+      if (!ids.includes(message.id)) pending.set(key, [...ids, message.id].slice(-MAX_PENDING));
       clearTimeout(timers.get(key));
       timers.delete(key);
       queued = true;
@@ -1061,6 +1123,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     for (const threadId of replays.keys()) if (off(threadId)) replays.delete(threadId);
     const before = pending.size;
     for (const threadId of pending.keys()) if (off(threadId)) pending.delete(threadId);
+    for (const threadId of foreign.keys()) if (!pending.has(threadId)) foreign.delete(threadId);
     if (pending.size !== before) save();
   };
 
@@ -1080,6 +1143,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         if (flush || count >= BATCH_MESSAGES || held.has(key)) enqueue(botId, key);
         else arm(botId, key);
       }
+    },
+    onTurn(botId) {
+      for (const pass of running.values()) if (pass.botId === botId) pass.controller.abort();
     },
     onConfigChanged() {
       if (!disposed) stop();

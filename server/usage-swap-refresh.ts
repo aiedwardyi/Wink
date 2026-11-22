@@ -22,7 +22,12 @@ export function createUsageSwapRefresh(deps: {
         cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli,
         environment: config.environment, account: config.account,
       });
-      if (!result.report || epochs.get(id) !== epoch) return;
+      if (epochs.get(id) !== epoch) return;
+      if (result.cleared) {
+        if (deps.rateLimits.delete(id)) deps.save(id);
+        return;
+      }
+      if (!result.report) return;
       const current = deps.rateLimits.get(id);
       if (current && Date.parse(current.observedAt) > Date.parse(result.report.observedAt)) return;
       deps.rateLimits.set(id, result.report);
