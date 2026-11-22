@@ -20,7 +20,7 @@ class FakeEngine implements LiveEngine {
   close() { this.closed = true; }
 }
 
-type FakeAudio = CallAudioPort & { played: number; flushed: number; mic?: (pcm: ArrayBuffer) => void };
+type FakeAudio = Omit<CallAudioPort, "playing"> & { playing: boolean; played: number; flushed: number; mic?: (pcm: ArrayBuffer) => void };
 function fakeAudio(): FakeAudio {
   return {
     played: 0,
@@ -76,7 +76,7 @@ function say(s: Awaited<ReturnType<typeof started>>, text: string) {
   s.audio.mic!(loudFrame());
   s.engine().events.heard(text);
   s.engine().events.answering();
-  s.engine().events.audio(new ArrayBuffer(8));
+  s.engine().events.audio(new Int16Array(4));
   s.engine().events.turnDone();
 }
 
@@ -121,7 +121,7 @@ describe("same-bot call", () => {
     expect(s.call.state().status).toBe("speaking");
 
     s.engine().events.answering();
-    s.engine().events.audio(new ArrayBuffer(8));
+    s.engine().events.audio(new Int16Array(4));
     s.engine().events.said("The login fix is merged");
     expect(s.audio.played).toBe(1);
     expect(s.call.state().caption).toMatchObject({ who: "voice", text: "The login fix is merged" });
@@ -156,11 +156,11 @@ describe("same-bot call", () => {
     const s = await started();
     s.call.observe({ busy: false, messages: [bot("b9", "First part of a long reply here. Second part that he does not want. Third part as well.")] });
     s.engine().events.answering();
-    s.engine().events.audio(new ArrayBuffer(8));
+    s.engine().events.audio(new Int16Array(4));
     expect(s.call.state().status).toBe("speaking");
     s.call.interrupt();
     expect(s.audio.flushed).toBe(1);
-    s.engine().events.audio(new ArrayBuffer(8));
+    s.engine().events.audio(new Int16Array(4));
     expect(s.audio.played).toBe(1);
     s.engine().events.turnDone();
     expect(s.engine().texts).toHaveLength(1);
@@ -180,7 +180,7 @@ describe("same-bot call", () => {
     s.call.observe({ busy: false, messages: [bot("b9", "All green, nothing waiting on you.")] });
     s.engine().events.answering();
     s.tick(300);
-    s.engine().events.audio(new ArrayBuffer(8));
+    s.engine().events.audio(new Int16Array(4));
     expect(s.call.firstWordMs).toEqual([2_300]);
   });
 

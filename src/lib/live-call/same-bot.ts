@@ -4,10 +4,9 @@ import { callPace, isVoiceLine, spokenText, type CallPrefs } from "../../../shar
 import { activeLocale } from "@/lib/i18n";
 import { isShownMessage } from "@/lib/shown-message";
 import type { Message } from "@/state/store-types";
-import { MIC_BLOCKED, MIC_BUSY, MIC_MISSING, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
+import { MIC_ERRORS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
 
-const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
 const QUOTA = /quota|resource.?exhausted/i;
 const MAX_RECONNECTS = 3;
 const READ = "[READ]\n";

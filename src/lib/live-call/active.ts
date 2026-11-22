@@ -33,7 +33,7 @@ export function callsSupported(): boolean {
 }
 
 export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: ActiveCall["room"], answer?: CallAnswer): ActiveCall {
-  call = { id: ++calls, botId: bot.id, bot, sound, opener, room, ...(answer === "bot" ? { answer } : {}) };
+  call = { id: ++calls, botId: bot.id, bot, sound, opener, room, answer };
   releaseReload ??= holdReloadOpen();
   trackScreen("live-call");
   note = null;
