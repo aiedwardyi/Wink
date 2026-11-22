@@ -137,6 +137,164 @@
           transform: rotate(360deg);
         }
       }
+      @font-face {
+        font-family: "Space Grotesk";
+        src: url(/fonts/SpaceGrotesk-Variable.woff2) format("woff2");
+        font-weight: 300 700;
+      }
+      body.glasses,
+      body.glasses main {
+        display: block;
+        place-items: normal;
+        padding: 0;
+        background: #000;
+      }
+      body.glasses .panel {
+        display: none;
+      }
+      .glass {
+        --raised: #23252c;
+        --focus: #a9b3ff;
+        --accent-text: #b5bdff;
+        position: relative;
+        height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
+        font-family: "Space Grotesk", sans-serif;
+      }
+      .glass header {
+        position: absolute;
+        top: 24px;
+        left: 24px;
+        right: 24px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        height: 76px;
+      }
+      .glass header img {
+        border-radius: 14px;
+      }
+      .glass h1 {
+        margin: 0;
+        font-size: 36px;
+        line-height: 44px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+      }
+      .glass p {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        font-size: 24px;
+        line-height: 32px;
+      }
+      .glass header p {
+        position: static;
+      }
+      #g-text {
+        top: 124px;
+        font-size: 28px;
+        line-height: 36px;
+        color: var(--ink);
+      }
+      #g-sub {
+        top: 200px;
+      }
+      .g-code {
+        position: absolute;
+        top: 256px;
+        left: 50%;
+        display: flex;
+        gap: 12px;
+        padding: 10px;
+        border-radius: 14px;
+        transform: translateX(-50%);
+      }
+      .g-code:focus-within,
+      #g-pair:focus {
+        outline: 3px solid var(--focus);
+        outline-offset: 3px;
+        box-shadow: 0 0 20px color-mix(in srgb, var(--focus) 55%, transparent);
+      }
+      .g-code span {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 70px;
+        height: 92px;
+        border-radius: 8px;
+        background: var(--raised);
+        box-shadow: inset 0 0 0 1px var(--hairline);
+        font-size: 56px;
+        font-weight: 600;
+      }
+      .g-code span:empty::after {
+        content: "";
+        width: 28px;
+        height: 3px;
+        margin-top: 44px;
+        background: var(--ink-secondary);
+        opacity: 0.6;
+      }
+      .g-code input {
+        all: unset;
+        position: absolute;
+        inset: 0;
+        color: transparent;
+        caret-color: transparent;
+      }
+      #g-hint {
+        top: 400px;
+        font-size: 22px;
+        line-height: 28px;
+        text-align: center;
+      }
+      #g-hint.heard {
+        top: 396px;
+      }
+      #g-pair {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        bottom: 40px;
+        height: 72px;
+        border: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--accent) 20%, transparent);
+        color: var(--accent-text);
+        font-size: 28px;
+        font-weight: 700;
+      }
+      .g-ok {
+        position: absolute;
+        top: 160px;
+        left: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 120px;
+        height: 120px;
+        border: 4px solid var(--success);
+        border-radius: 50%;
+        color: var(--success);
+        box-shadow: 0 0 30px color-mix(in srgb, var(--success) 40%, transparent);
+        transform: translateX(-50%);
+      }
+      #g-paired {
+        top: 312px;
+        font-size: 40px;
+        line-height: 48px;
+        font-weight: 700;
+        color: var(--ink);
+        text-align: center;
+      }
+      #g-opening {
+        top: 370px;
+        font-size: 28px;
+        text-align: center;
+      }
       [hidden] {
         display: none !important;
       }
@@ -163,6 +321,27 @@
         </form>
         <p id="status" class="status" role="status" aria-live="polite"></p>
       </div>
+      <section id="glass" class="glass" hidden>
+        <header>
+          <img src="/app-icon.svg?v=2" alt="" />
+          <div>
+            <h1 id="g-title"></h1>
+            <p id="g-pc" hidden></p>
+          </div>
+        </header>
+        <div id="g-ask">
+          <p id="g-text"></p>
+          <p id="g-sub"></p>
+          <label class="g-code"><input id="g-code" type="text" autocomplete="off" spellcheck="false" /><span></span><span></span><span></span><span></span><span></span><span></span></label>
+          <p id="g-hint" role="status" aria-live="polite"></p>
+          <button id="g-pair" type="button" hidden></button>
+        </div>
+        <div id="g-done" hidden>
+          <span class="g-ok"><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
+          <p id="g-paired"></p>
+          <p id="g-opening"></p>
+        </div>
+      </section>
     </main>
     <script>
       // Pairs this phone with one PC. The QR link carries a 2 minute token in the
@@ -221,6 +400,41 @@
           lang = saved === "ko" ? "ko" : saved === "system" ? system : "en";
         } catch {}
         const t = (key) => COPY[lang][key] || COPY.en[key] || COPY[lang].failed;
+        const GLASS = {
+          en: {
+            title: "Pair glasses",
+            text: "Enter the 6-digit code from Wink on your PC.",
+            sub: "Settings › Devices › Code instead of Google",
+            hint: "⏎ say or write the code",
+            heard: "heard “{text}”",
+            pair: "Pair",
+            paired: "Paired",
+            opening: "Opening Wink…",
+          },
+          ko: {
+            title: "안경 연결",
+            text: "PC의 Wink에 표시된 6자리 코드를 입력하세요.",
+            sub: "설정 › 기기 › Google 대신 코드로 연결",
+            hint: "⏎ 코드를 말하거나 쓰세요",
+            heard: "들은 내용 “{text}”",
+            pair: "연결",
+            paired: "연결됨",
+            opening: "Wink 여는 중…",
+          },
+        }[lang];
+        // The glasses lens is a small square; the server's redirect to /pair carries no other sign.
+        const glasses = window.matchMedia?.("(max-width: 800px) and (min-aspect-ratio: 4/5) and (max-aspect-ratio: 5/4)").matches === true;
+        const spokenDigits = (text) => {
+          const words = new Map(Object.entries({
+            zero: "0", oh: "0", o: "0", one: "1", won: "1", two: "2", to: "2", too: "2", three: "3",
+            four: "4", for: "4", five: "5", six: "6", seven: "7", eight: "8", ate: "8", nine: "9",
+          }));
+          return text
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .map((word) => (/^\d+$/.test(word) ? word : (words.get(word) ?? "")))
+            .join("");
+        };
         document.documentElement.lang = lang;
 
         const $ = (id) => document.getElementById(id);
@@ -278,7 +492,7 @@
             await navigator.serviceWorker.register("/sw.js");
             await Promise.race([navigator.serviceWorker.ready, wait(3000)]);
           } catch {}
-          location.replace("/");
+          location.replace(glasses ? "/glasses" : "/");
         }
 
         async function pair(path, body) {
@@ -356,12 +570,67 @@
 
         google.addEventListener("click", startGoogle);
 
+        function showGlass() {
+          const gCode = $("g-code");
+          const gHint = $("g-hint");
+          const gPair = $("g-pair");
+          const cells = [...document.querySelectorAll(".g-code span")];
+          const named = query.get("n") || fragment.get("n");
+          document.body.classList.add("glasses");
+          $("glass").hidden = false;
+          $("g-title").textContent = GLASS.title;
+          $("g-pc").textContent = named || "";
+          $("g-pc").hidden = !named;
+          $("g-text").textContent = GLASS.text;
+          $("g-sub").textContent = GLASS.sub;
+          gPair.textContent = GLASS.pair;
+          $("g-paired").textContent = GLASS.paired;
+          $("g-opening").textContent = GLASS.opening;
+          const hint = (text, tone) => {
+            gHint.textContent = text;
+            gHint.className = tone || "";
+          };
+          const read = () => {
+            const digits = spokenDigits(gCode.value).slice(0, 6);
+            cells.forEach((cell, i) => (cell.textContent = digits[i] || ""));
+            const said = gCode.value.trim();
+            if (/[a-z]/i.test(said)) hint(GLASS.heard.replace("{text}", () => said), "heard");
+            else hint(GLASS.hint);
+            gPair.hidden = digits.length !== 6;
+            if (!gPair.hidden) gPair.focus();
+            return digits;
+          };
+          gCode.addEventListener("input", read);
+          gCode.addEventListener("change", read);
+          gPair.addEventListener("click", async () => {
+            const digits = read();
+            if (digits.length !== 6) return;
+            gPair.disabled = true;
+            hint(t("pairing"));
+            const error = await pair("/api/phone/pair", JSON.stringify({ credential: digits, name: phoneName(), requestId: randomId() }));
+            gPair.disabled = false;
+            if (!error) {
+              $("g-ask").hidden = true;
+              $("g-done").hidden = false;
+              return finish();
+            }
+            gCode.value = "";
+            read();
+            hint(t(error), "error");
+            gCode.focus();
+          });
+          hint(GLASS.hint);
+          gCode.focus();
+        }
+
         if (googleToken) {
           void runGoogle(googleToken);
         } else if (qrToken) {
           void run(qrToken);
         } else if (goGoogle) {
           void googleReady(true).then((ready) => (ready ? startGoogle() : showForm(false)));
+        } else if (glasses) {
+          showGlass();
         } else {
           showForm();
         }

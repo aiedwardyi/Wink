@@ -20,6 +20,7 @@ const SPOKEN: [string, string][] = [
   ["for ate to nine won seven", "482917"],
   ["zero oh 1 too three", "00123"],
   ["the code is 48 29 17", "482917"],
+  ["constructor toString 4", "4"],
   ["", ""],
 ];
 

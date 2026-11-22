@@ -1,0 +1,207 @@
+/* The lens adds light: black is see-through, so the window stays #000 in every skin. */
+.glass {
+  --ink: var(--color-ink);
+  --ink2: var(--color-ink-secondary);
+  --acc: var(--color-accent);
+  --acct: var(--color-accent-text);
+  --focus: var(--color-focus);
+  --acink: var(--color-accent-ink);
+  --raised: var(--color-raised);
+  --hair: var(--color-hairline);
+  --ok: var(--color-success);
+  --r2: var(--radius-xl);
+  position: fixed;
+  inset: 0;
+  /* clip, not hidden: focusing the incoming chat would scroll a hidden box and skip the slide */
+  overflow: clip;
+  background: #000;
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+.glass-slide,
+.glass-layer {
+  position: absolute;
+  inset: 0;
+  transition: transform 160ms ease-out;
+}
+.glass-slide.in-next { animation: glass-in-next 260ms cubic-bezier(0.22, 1, 0.36, 1); }
+.glass-slide.in-prev { animation: glass-in-prev 260ms cubic-bezier(0.22, 1, 0.36, 1); }
+.glass-slide.out-next { animation: glass-out-next 260ms cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.glass-slide.out-prev { animation: glass-out-prev 260ms cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+@keyframes glass-in-next { from { transform: translateX(100%); } }
+@keyframes glass-in-prev { from { transform: translateX(-100%); } }
+@keyframes glass-out-next { to { transform: translateX(-100%); opacity: 0; } }
+@keyframes glass-out-prev { to { transform: translateX(100%); opacity: 0; } }
+
+.glass-hdr {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  right: 24px;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  text-align: left;
+  border-radius: var(--r2);
+}
+.glass-av {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  overflow: hidden;
+  border-radius: var(--r2);
+}
+.glass-av img { width: 100% !important; height: 100% !important; display: block; }
+.glass-hcol { display: flex; flex-direction: column; min-width: 0; }
+.glass-nm {
+  font-size: 36px;
+  line-height: 44px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.glass-chip { font-size: 24px; line-height: 32px; color: var(--acct); white-space: nowrap; }
+.glass-chip.quiet { color: var(--ink2); }
+.glass-chev { font-size: 15px; margin-left: 8px; opacity: 0.75; }
+.glass-st {
+  margin-left: auto;
+  align-self: flex-start;
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 22px;
+  line-height: 28px;
+  white-space: nowrap;
+}
+.glass-st.done { color: var(--ok); }
+.glass-st.work { color: var(--acct); }
+.glass-dot { width: 12px; height: 12px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+.glass-chk { width: 20px; height: 20px; }
+
+.glass-you {
+  position: absolute;
+  top: 110px;
+  left: 24px;
+  right: 24px;
+  height: 32px;
+  font-size: 24px;
+  line-height: 32px;
+  color: var(--ink2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.glass-you b { color: var(--ink); font-weight: 600; }
+.glass-sent { color: var(--ok); font-weight: 600; }
+
+.glass-panel {
+  position: absolute;
+  top: 150px;
+  left: 24px;
+  right: 24px;
+  max-height: 352px;
+  padding: 16px 22px;
+  overflow: hidden;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  border-radius: var(--r2);
+}
+.glass-scroll { max-height: 320px; overflow: hidden; }
+.glass-reply { font-size: 32px; line-height: 40px; white-space: pre-line; overflow-wrap: anywhere; }
+.glass-more {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 58px;
+  z-index: 2;
+  background: var(--raised);
+  text-align: center;
+  font-size: 20px;
+  line-height: 50px;
+  color: var(--ink2);
+}
+.glass-caret { display: inline-block; width: 14px; height: 30px; margin-left: 6px; vertical-align: -4px; background: var(--acc); }
+
+.glass-bar {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 24px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.glass-nb { width: 150px; font-size: 24px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.glass-nb.r { text-align: right; }
+.glass-nb.hot { color: var(--acct); font-weight: 700; }
+
+/* Speak is a real text field, so Enter on it opens Meta's system composer. */
+.glass-speak,
+.glass-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--acct);
+}
+.glass-speak {
+  height: 60px;
+  padding: 0 30px;
+  gap: 10px;
+  font-size: 26px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--acc) 16%, transparent);
+  border: 2px solid color-mix(in srgb, var(--acc) 45%, transparent);
+}
+.glass-speak.pressed { background: var(--acc); color: var(--acink); }
+.glass-speak svg,
+.glass-btn svg { width: 28px; height: 28px; }
+.glass-speak input,
+.glass-btn input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.glass-speak:focus-within,
+.glass-btn:focus-visible,
+.glass-btn:focus-within,
+.glass-hdr:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  box-shadow: 0 0 20px color-mix(in srgb, var(--focus) 55%, transparent);
+}
+
+.glass-check { position: absolute; top: 120px; left: 24px; right: 24px; }
+.glass-draft {
+  max-height: 232px;
+  overflow: hidden;
+  padding: 16px 22px;
+  font-size: 32px;
+  line-height: 40px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  border-radius: var(--r2);
+}
+.glass-hint { margin-top: 24px; font-size: 22px; line-height: 28px; color: var(--ink2); }
+.glass-btn {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  height: 72px;
+  gap: 12px;
+  font-size: 28px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--acc) 20%, transparent);
+  border: 2px solid color-mix(in srgb, var(--acc) 50%, transparent);
+}
+.glass-btn.send { bottom: 118px; }
+.glass-btn.ghost { bottom: 30px; color: var(--ink2); background: transparent; border-color: var(--hair); font-weight: 600; }
