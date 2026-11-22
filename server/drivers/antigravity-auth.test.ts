@@ -1,9 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravityLoggedOutSince, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
+
+// Spied on below: a mark another process holds open cannot be removed.
+vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
 
 const execFile = vi.fn();
 
@@ -222,8 +226,8 @@ describe("Antigravity keyring sign-out", () => {
     expect(keyring.waiting).toBe(false);
   });
 
-  const memoryMark = (signedOut = false) => {
-    const mark = { signedOut, read: () => mark.signedOut, write: (value: boolean) => { mark.signedOut = value; } };
+  const memoryMark = (at?: number) => {
+    const mark = { at, read: () => mark.at, write: (value: number | undefined) => { mark.at = value; } };
     return mark;
   };
 
@@ -233,7 +237,7 @@ describe("Antigravity keyring sign-out", () => {
     before.attach();
     before.turnStarted("a");
     expect(await before.signOut()).toBe(true);
-    expect(mark.signedOut).toBe(true);
+    expect(mark.at).toBeDefined();
 
     // The run ends with the turn still running; the next run starts from the mark alone.
     const forget = vi.fn(async () => true);
@@ -242,21 +246,21 @@ describe("Antigravity keyring sign-out", () => {
     expect(after.waiting).toBe(true);
     await vi.waitFor(() => expect(after.waiting).toBe(false));
     expect(forget).toHaveBeenCalledTimes(1);
-    expect(mark.signedOut).toBe(false);
+    expect(mark.at).toBeUndefined();
   });
 
   it("keeps a refused delete signed out across runs, until a sign-in succeeds", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const mark = memoryMark(true);
+    const mark = memoryMark(Date.now());
     const forget = vi.fn(async () => false);
     const keyring = antigravityKeyringSignOut(forget, { mark });
     keyring.attach();
     await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
     expect(keyring.waiting).toBe(true);
-    expect(mark.signedOut).toBe(true);
+    expect(mark.at).toBeDefined();
     (await keyring.signingIn())(true);
     expect(keyring.waiting).toBe(false);
-    expect(mark.signedOut).toBe(false);
+    expect(mark.at).toBeUndefined();
     warn.mockRestore();
   });
 
@@ -287,10 +291,10 @@ describe("Antigravity keyring sign-out", () => {
     await keyring.release(() => true);
     expect(keyring.waiting).toBe(false);
     lateSignIn(true); // a sign-in from the run that ended changes nothing now
-    expect(mark.signedOut).toBe(true);
+    expect(mark.at).toBeDefined();
     keyring.attach();
     expect(keyring.waiting).toBe(true);
-    mark.signedOut = false;
+    mark.at = undefined;
     await keyring.release(() => true);
     keyring.attach();
     expect(keyring.waiting).toBe(false);
@@ -329,7 +333,7 @@ describe("Antigravity keyring sign-out", () => {
     await keyring.signOut();
     keyring.signedOutByAgy();
     expect(keyring.waiting).toBe(false);
-    expect(mark.signedOut).toBe(false);
+    expect(mark.at).toBeUndefined();
     keyring.turnEnded("a");
     await Promise.resolve();
     expect(forget).not.toHaveBeenCalled();
@@ -337,26 +341,105 @@ describe("Antigravity keyring sign-out", () => {
 
   it("does not say done when the signed-out mark cannot be saved", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const keyring = antigravityKeyringSignOut(vi.fn(async () => true), { mark: { read: () => false, write: () => { throw new Error("disk full"); } } });
+    const keyring = antigravityKeyringSignOut(vi.fn(async () => true), { mark: { read: () => undefined, write: () => { throw new Error("disk full"); } } });
     keyring.turnStarted("a");
     expect(await keyring.signOut()).toBe(false);
     expect(keyring.waiting).toBe(false);
     warn.mockRestore();
   });
 
-  it("keeps the mark as a file", () => {
+  // Gate 2120G B11: the mark could not be removed when the sign-in succeeded (another process held it open).
+  it("lets a sign-in win over a mark it could not remove: the next run deletes nothing and drops the mark", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-mark-held-"));
+    const path = join(dir, "gemini-signed-out");
+    writeFileSync(path, "2026-10-01T00:00:00.000Z\n");
+    const { rmSync: remove } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const held = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (target === path) throw Object.assign(new Error(`EPERM: operation not permitted, unlink '${path}'`), { code: "EPERM" });
+      remove(target, options);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const before = antigravityKeyringSignOut(vi.fn(async () => false), { mark: signedOutMarkFile(path) });
+      before.attach();
+      expect(before.waiting).toBe(true);
+      (await before.signingIn())(true);
+      expect(before.waiting).toBe(false);
+      expect(existsSync(path)).toBe(true);
+      held.mockRestore();
+
+      const forget = vi.fn(async () => true);
+      const after = antigravityKeyringSignOut(forget, { mark: signedOutMarkFile(path) });
+      after.attach();
+      expect(after.waiting).toBe(false);
+      await Promise.resolve();
+      expect(forget).not.toHaveBeenCalled();
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      held.mockRestore();
+      warn.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the mark as a file holding when Wink signed out", () => {
     const dir = mkdtempSync(join(tmpdir(), "omb-agy-mark-"));
     try {
       const mark = signedOutMarkFile(join(dir, "data", "gemini-signed-out"));
-      expect(mark.read()).toBe(false);
-      mark.write(true);
-      expect(mark.read()).toBe(true);
-      mark.write(false);
-      mark.write(false);
-      expect(mark.read()).toBe(false);
+      expect(mark.read()).toBeUndefined();
+      mark.write(Date.UTC(2026, 10, 23, 1, 2, 3, 456));
+      expect(mark.read()).toBe(Date.UTC(2026, 10, 23, 1, 2, 3, 456));
+      mark.write(undefined);
+      mark.write(undefined);
+      expect(mark.read()).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // Gate 2120G B12: only a file holding a time is a mark.
+  it.each([
+    ["a folder", (path: string) => mkdirSync(path)],
+    ["an empty file", (path: string) => writeFileSync(path, "")],
+    ["junk", (path: string) => writeFileSync(path, Buffer.from([0, 255, 1, 254, 13, 10, 0]))],
+  ])("reads %s where the mark goes as no mark", (_what, put) => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-mark-"));
+    try {
+      const path = join(dir, "gemini-signed-out");
+      put(path);
+      expect(signedOutMarkFile(path).read()).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120G B9 and B10: agy in a terminal logged out after Wink's Sign out, then signed in again.
+  it("stops keeping a sign-out once agy logs its own logout after it, and deletes nothing", async () => {
+    const mark = memoryMark(1_000);
+    const forget = vi.fn(async () => true);
+    const loggedOutSince = vi.fn((_since: number) => false);
+    const keyring = antigravityKeyringSignOut(forget, { mark, loggedOutSince });
+    keyring.turnStarted("a");
+    keyring.attach();
+    expect(keyring.waiting).toBe(true);
+    expect(loggedOutSince).toHaveBeenLastCalledWith(1_000);
+    loggedOutSince.mockReturnValue(true);
+    expect(keyring.waiting).toBe(false);
+    expect(mark.at).toBeUndefined();
+    keyring.turnEnded("a");
+    await Promise.resolve();
+    expect(forget).not.toHaveBeenCalled();
+  });
+
+  it("checks agy's logs from the time of a sign-out made in this run", async () => {
+    const loggedOutSince = vi.fn((_since: number) => false);
+    const keyring = antigravityKeyringSignOut(vi.fn(async () => true), { mark: memoryMark(), loggedOutSince });
+    keyring.attach();
+    keyring.turnStarted("a");
+    const before = Date.now();
+    await keyring.signOut();
+    expect(keyring.waiting).toBe(true);
+    expect(loggedOutSince.mock.lastCall![0]).toBeGreaterThanOrEqual(before);
   });
 });
 
@@ -389,6 +472,19 @@ describe("Antigravity account from agy's logs", () => {
   it("reads nothing after a logout, even in the same log", () => {
     const env = home({ "cli-20261119_100000.log": `${signedIn("ed@example.com", "consumer")}I1119 10:47:15.2 727 auth_manager.go:315] Logging out current user\n` });
     expect(readAntigravityAccount(env)).toBeUndefined();
+  });
+
+  it("finds agy's own logout at or after a time, in local time across a new year, and none before it", () => {
+    const env = home({
+      "cli-20251231_100000.log": `I1231 10:00:00.000000 84 server_oauth.go:192] Logging out current user\n${signedIn("ed@example.com", "consumer")}`,
+      "cli-20251231_235900.log": "I1231 23:59:30.000000 1 main.go:1] started\nI0101 00:00:01.5 727 auth_manager.go:315] Logging out current user\n",
+      "cli-20260102_100000.log": signedIn("ed@example.com", "consumer"),
+    });
+    expect(antigravityLoggedOutSince(new Date(2025, 11, 31, 9).getTime(), env)).toBe(true);
+    expect(antigravityLoggedOutSince(new Date(2026, 0, 1, 0, 0, 1, 500).getTime(), env)).toBe(true);
+    expect(antigravityLoggedOutSince(new Date(2026, 0, 1, 0, 0, 1, 501).getTime(), env)).toBe(false);
+    expect(antigravityLoggedOutSince(Date.now() + 60_000, env)).toBe(false);
+    expect(antigravityLoggedOutSince(0, { HOME: join(tmpdir(), "omb-agy-no-such-home") })).toBe(false);
   });
 
   it("reads nothing without logs", () => {

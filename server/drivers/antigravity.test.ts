@@ -121,6 +121,33 @@ async function geminiShown(registry: ProviderRegistry, instanceId: string) {
   return (await registry.describe({ refresh: true })).find((entry) => entry.instanceId === instanceId)!.snapshot.authenticated;
 }
 
+/** Where agy writes its logs in this test process's home. */
+const AGY_LOGS = join(process.env.HOME!, ".gemini", "antigravity-cli", "log");
+const AGY_LOGOUT = "server_oauth.go:192] Logging out current user";
+const AGY_SIGNED_IN = "server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=";
+
+/** agy logging `events` now, as it does: glog's local time, in a cli log named for when the run started. */
+function agyLog(...events: string[]) {
+  const now = new Date();
+  const pad = (value: number, width = 2) => String(value).padStart(width, "0");
+  const day = `${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map((value) => pad(value)).join(":");
+  mkdirSync(AGY_LOGS, { recursive: true });
+  const log = join(AGY_LOGS, `cli-${now.getFullYear()}${day}_${time.replaceAll(":", "")}.log`);
+  appendFileSync(log, events.map((event) => `I${day} ${time}.${pad(now.getMilliseconds(), 3)}000    42 ${event}\n`).join(""));
+}
+
+/** Sign out while a turn runs, then the store refuses the delete: Wink keeps the sign-out as its mark. */
+async function refusedSignOut(registry: ProviderRegistry, fixture: ReturnType<typeof heldGeminiFixture>, store: { deletes: number }) {
+  await registry.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+  await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+  expect(await registry.signOut("one")).toBe(true);
+  writeFileSync(fixture.hold, "");
+  await vi.waitFor(() => expect(store.deletes).toBe(1));
+  expect(existsSync(SIGNED_OUT_MARK)).toBe(true);
+  expect(await geminiShown(registry, "one")).toBe(false);
+}
+
 /** agy 1.3.0 offline (`oldOfflineAgy`) whose turns hold until `hold` exists, with its saved sign-in as a file. */
 function heldGeminiFixture(prefix: string) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -1801,6 +1828,136 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       for (const run of runs) await run.disposeAll();
       warn.mockRestore();
       rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120G B9: with a refused Sign out still kept, agy in a terminal logs out and signs in again. That sign-in is
+  // newer than the one Wink signed out of: it is seen, used and never deleted, now or after a restart.
+  it("keeps a sign-in made outside Wink after agy's own logout while a refused Sign out is kept", async () => {
+    const fixture = heldGeminiFixture("omb-agy-outside-");
+    const store = { refuse: true, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await refusedSignOut(first, fixture, store);
+
+      rmSync(fixture.entry);
+      agyLog(AGY_LOGOUT);
+      writeFileSync(fixture.entry, "outside-sign-in");
+      agyLog(AGY_SIGNED_IN);
+      expect(await geminiShown(first, "one")).toBe(true);
+      expect(await geminiTurn(first, "two", "t-next")).toMatchObject({ ok: true, signIn: false, reply: true });
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      await first.disposeAll();
+
+      store.refuse = false;
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(store.deletes).toBe(1);
+      expect(readFileSync(fixture.entry, "utf8")).toBe("outside-sign-in");
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(AGY_LOGS, { recursive: true, force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120G B10: the same logout and sign-in in a terminal while Wink is closed: the next run keeps that sign-in.
+  it("keeps a sign-in made outside Wink while it was closed, after agy's own logout, over a kept Sign out", async () => {
+    const fixture = heldGeminiFixture("omb-agy-outside-closed-");
+    const store = { refuse: true, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await refusedSignOut(first, fixture, store);
+      await first.disposeAll();
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(true);
+
+      rmSync(fixture.entry);
+      agyLog(AGY_LOGOUT);
+      writeFileSync(fixture.entry, "outside-sign-in");
+      agyLog(AGY_SIGNED_IN);
+      store.refuse = false;
+      const deletes = store.deletes;
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(await geminiTurn(second, "two", "t-next")).toMatchObject({ ok: true, signIn: false, reply: true });
+      expect(store.deletes).toBe(deletes);
+      expect(readFileSync(fixture.entry, "utf8")).toBe("outside-sign-in");
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(AGY_LOGS, { recursive: true, force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // The sign-in Wink signed out of is still deleted when agy only ran on it, or logged out before the Sign out.
+  it("still deletes the sign-in Wink signed out of when agy ran on it or logged out only before the Sign out", async () => {
+    const fixture = heldGeminiFixture("omb-agy-old-still-out-");
+    const store = { refuse: true, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await refusedSignOut(first, fixture, store);
+      agyLog(AGY_SIGNED_IN);
+      mkdirSync(AGY_LOGS, { recursive: true });
+      writeFileSync(join(AGY_LOGS, "cli-20260101_000000.log"), `I0101 00:00:00.000000    42 ${AGY_LOGOUT}\n`);
+      expect(await geminiShown(first, "one")).toBe(false);
+      await first.disposeAll();
+
+      store.refuse = false;
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      await vi.waitFor(() => expect(existsSync(fixture.entry)).toBe(false));
+      expect(await geminiShown(second, "one")).toBe(false);
+      expect(await geminiTurn(second, "one", "t-next")).toMatchObject({ ok: false, signIn: true, reply: false });
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(AGY_LOGS, { recursive: true, force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120G B12: Wink never writes a folder where its mark goes; one there is no mark, run after run.
+  it("reads a folder where the signed-out mark goes as no mark: the saved sign-in stays, run after run", async () => {
+    const fixture = heldGeminiFixture("omb-agy-mark-folder-");
+    writeFileSync(fixture.hold, "");
+    const store = { refuse: false, deletes: 0 };
+    const runs: ProviderRegistry[] = [];
+    mkdirSync(SIGNED_OUT_MARK, { recursive: true });
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      expect(await geminiShown(first, "one")).toBe(true);
+      expect(await geminiTurn(first, "one", "t-first")).toMatchObject({ ok: true, reply: true });
+      await first.disposeAll();
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(store.deletes).toBe(0);
+      expect(existsSync(fixture.entry)).toBe(true);
+    } finally {
+      for (const run of runs) await run.disposeAll();
+      rmSync(SIGNED_OUT_MARK, { recursive: true, force: true });
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });

@@ -49,7 +49,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravityLoggedOutSince, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
@@ -536,6 +536,7 @@ export function measureAntigravityTransportLengths(opts: {
 const keyringSignOut = antigravityKeyringSignOut(() => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING), {
   present: () => probeAntigravitySignIn(),
   mark: signedOutMarkFile(join(DATA_DIR, "gemini-signed-out")),
+  loggedOutSince: (since) => antigravityLoggedOutSince(since),
 });
 
 export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
