@@ -59,7 +59,7 @@ function fixture(t, options = {}) {
     for (const client of clients) client.close();
     for (const step of undo) step();
     // A host that kept panes for an adopting app ends them for one that cannot adopt.
-    const sweeper = createWorkerHostClient({ root, ptyModule: () => "", answerMs: 500, launch: async () => { throw new Error("No host left to sweep"); } });
+    const sweeper = createWorkerHostClient({ root, ptyModule: () => "", install: path.join(root, "app"), answerMs: 500, launch: async () => { throw new Error("No host left to sweep"); } });
     if (await sweeper.prewarm()) sweeper.close();
     await until(() => hosts.every((pid) => !alive(pid)), 15_000).catch(() => {});
     const left = hosts.filter(alive);
@@ -419,16 +419,15 @@ test("a host that died leaves its record, and the next host is still found while
   assert.equal(pane.hosted(), true);
 });
 
-test("a host whose record never landed is reached on the pipe it was launched with", { ...windows, timeout: 60_000 }, async (t) => {
-  const f = fixture(t);
+// An app before this fix launched over a dead host's record without clearing it, and the host could not rename its own over it.
+async function strandedHost(f) {
   const dead = path.join(f.slot, "host.json");
   fs.mkdirSync(f.slot, { recursive: true });
   writeWorkerHostRecord(dead, { protocol: WORKER_HOST_PROTOCOL, pid: 1, nonce: "dead", secret: "5".repeat(64), pipe: `\\\\.\\pipe\\wink-worker-test-${randomUUID()}` });
   const reading = fs.openSync(dead, "r");
   f.undo.push(() => fs.closeSync(reading));
-  // An app before this fix launched over the dead host's record without clearing it.
   const nonce = randomUUID();
-  const launch = { nonce, secret: "6".repeat(64), pipe: `\\\\.\\pipe\\wink-worker-test-${nonce}`, ptyModule: require.resolve("node-pty") };
+  const launch = { nonce, secret: "6".repeat(64), pipe: `\\\\.\\pipe\\wink-worker-test-${nonce}`, install: path.join(f.root, "app"), ptyModule: require.resolve("node-pty") };
   writeWorkerHostRecord(path.join(f.slot, "launch.json"), launch);
   const orphan = spawn(process.execPath, [entry, f.slot], { detached: true, windowsHide: true, stdio: "ignore" });
   orphan.unref();
@@ -436,13 +435,90 @@ test("a host whose record never landed is reached on the pipe it was launched wi
   await until(() => fs.existsSync(path.join(f.slot, "host-errors.log")));
   assert.match(fs.readFileSync(path.join(f.slot, "host-errors.log"), "utf8"), /EPERM: operation not permitted, rename/);
   assert.equal(workerHostLock(path.join(f.slot, "host.lock")), "alive");
+  return orphan.pid;
+}
+
+// A host an earlier app launched and then gave up on: it read its launch record in time but takes the slot only now.
+async function lateHost(f) {
+  const nonce = randomUUID();
+  writeWorkerHostRecord(path.join(f.slot, "launch.json"), { nonce, secret: "7".repeat(64), pipe: `\\\\.\\pipe\\wink-worker-test-${nonce}`, install: path.join(f.root, "app"), ptyModule: require.resolve("node-pty") });
+  const late = spawn(process.execPath, [entry, f.slot], { detached: true, windowsHide: true, stdio: "ignore" });
+  late.unref();
+  f.hosts.push(late.pid);
+  await until(() => workerHostRecord(path.join(f.slot, "host.json"))?.pid === late.pid && !fs.existsSync(path.join(f.slot, "launch.json")));
+  return late.pid;
+}
+
+test("a host whose record never landed is reached on the pipe it was launched with", { ...windows, timeout: 60_000 }, async (t) => {
+  const f = fixture(t);
+  const orphan = await strandedHost(f);
   const client = f.make({ adopt: true });
   assert.equal(await client.prewarm(), true);
-  assert.equal(client.state().host.pid, orphan.pid);
+  assert.equal(client.state().host.pid, orphan);
   const pane = client.spawn(f.pane("pane-1"), noLocal);
   await pane.ready;
   assert.equal(pane.hosted(), true);
-  assert.deepEqual(f.lines, [`worker host ready pid=${orphan.pid} already running`]);
+  assert.deepEqual(f.lines, [`worker host ready pid=${orphan} already running`]);
+});
+
+test("another install sharing the profile does not take over a host it did not launch", { ...windows, timeout: 60_000 }, async (t) => {
+  const f = fixture(t);
+  const orphan = await strandedHost(f);
+  const stranger = f.make({ adopt: true, install: path.join(f.root, "other-app") });
+  assert.equal(await stranger.prewarm(), false);
+  assert.equal(stranger.state().host, null);
+  assert.equal(workerHostLock(path.join(f.slot, "host.lock")), "alive");
+  assert.ok(fs.existsSync(path.join(f.slot, "launch.json")));
+  const own = f.make({ adopt: true });
+  assert.equal(await own.prewarm(), true);
+  assert.equal(own.state().host.pid, orphan);
+});
+
+test("a late host that takes the slot while the next app clears a dead record keeps its own", { ...windows, timeout: 60_000 }, async (t) => {
+  const f = fixture(t, { publishMs: 3_000 });
+  const record = path.join(f.slot, "host.json");
+  fs.mkdirSync(f.slot, { recursive: true });
+  writeWorkerHostRecord(record, { protocol: WORKER_HOST_PROTOCOL, pid: 1, nonce: "dead", secret: "5".repeat(64), pipe: `\\\\.\\pipe\\wink-worker-test-${randomUUID()}` });
+  // The late host publishes after the app found host.lock free and before it launches its own.
+  const readdir = fs.promises.readdir;
+  let late = null;
+  fs.promises.readdir = async (folder, ...rest) => {
+    if (folder === f.root && !late) late = await lateHost(f);
+    return readdir(folder, ...rest);
+  };
+  f.undo.push(() => { fs.promises.readdir = readdir; });
+  const next = f.make();
+  assert.equal(await next.prewarm(), false);
+  fs.promises.readdir = readdir;
+  assert.equal(workerHostRecord(record)?.pid, late);
+  const after = f.make();
+  assert.equal(await after.prewarm(), true);
+  assert.equal(after.state().host.pid, late);
+});
+
+test("a launch refused by a late host does not hide that host from the next app", { ...windows, timeout: 60_000 }, async (t) => {
+  const f = fixture(t, { publishMs: 3_000 });
+  let late = null;
+  const launches = [];
+  const contender = f.make({ launch: async (input) => {
+    late = await lateHost(f);
+    // This app's own host then finds host.lock taken and leaves; its launch record stays behind.
+    writeWorkerHostRecord(path.join(input.slot, "launch.json"), { ...input.launch, ptyModule: input.ptyModule });
+    const child = spawn(process.execPath, [entry, input.slot], { detached: true, windowsHide: true, stdio: "ignore" });
+    launches.push(once(child, "exit"));
+    f.hosts.push(child.pid);
+    return { pid: child.pid, staged: {} };
+  } });
+  assert.equal(await contender.prewarm(), false);
+  assert.deepEqual((await launches[0]).slice(0, 1), [1]);
+  assert.ok(fs.existsSync(path.join(f.slot, "launch.json")));
+  assert.equal(workerHostRecord(path.join(f.slot, "host.json"))?.pid, late);
+  const next = f.make();
+  assert.equal(await next.prewarm(), true);
+  assert.equal(next.state().host.pid, late);
+  const pane = next.spawn(f.pane("pane-1"), noLocal);
+  await pane.ready;
+  assert.equal(pane.hosted(), true);
 });
 
 test("a host of an unknown version is left alone", windows, async (t) => {
