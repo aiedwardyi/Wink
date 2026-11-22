@@ -8267,6 +8267,7 @@ const botRoutes = createBotRoutes({
   projectNotesCheck,
   memoryHealthCheck,
   noteTalked,
+  refreshLookup: (botId) => memoryLookup.refresh(botId),
   activeVpsThreads,
   resumePaneWakes,
 });
@@ -9217,10 +9218,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res, store.bot(url.searchParams.get("bot") ?? "")?.id);
     if (path === "/api/about-you" && method === "POST") {
-      await aboutYouRoutes.add(req, res);
-      // past the prompt's cut, Import Memory is looked up by every bot
-      for (const bot of store.bots) void memoryLookup.refresh(bot.id);
-      return;
+      // past the prompt's cut, Import Memory is looked up by every bot, from the next turn on
+      return aboutYouRoutes.add(req, res, Date.now, async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
     }
     if (path === "/api/about-you/decline" && method === "POST") return aboutYouRoutes.decline(res);
     m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);

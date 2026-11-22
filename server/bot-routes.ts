@@ -47,6 +47,8 @@ type BotRouteDeps = {
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
   noteTalked: (botId: string) => void;
+  /** Rebuilds the bot's memory lookup index (memory-lookup.ts refresh). */
+  refreshLookup: (botId: string) => Promise<void>;
   activeVpsThreads: Map<string, string>;
   resumePaneWakes: (botId: string) => void;
 };
@@ -526,6 +528,8 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (result.added) {
         deps.noteTalked(m[1]);
         memoryHealthCheck.refresh(m[1]);
+        // lines past the prompt's cut are found from the next turn on, so the index is current before the reply
+        await deps.refreshLookup(m[1]);
       }
       return json(res, 200, result);
     },
