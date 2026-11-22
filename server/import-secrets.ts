@@ -1,5 +1,6 @@
 // Import Memory leaves out every line the check before this filter left out, unless each secret word in it means something
-// else here ("PIN-up", "Secret Santa", "password manager", a flight number) and no word in it has a value's shape.
+// else here ("PIN-up", "Secret Santa", "password manager", a flight number) and nothing left gives a value: no word with a
+// value's shape, no master, unlock, sign in or log in, no spelled-out or spaced digits, no "is" + one word, no second clause.
 // Past that check it also leaves out a value only this filter reads: a WiFi key, a door code, a value under a secret heading.
 import { redactRoomMemory } from "../shared/redact.ts";
 import { secretLike } from "./memory-pass.ts";
@@ -90,12 +91,12 @@ function labeledValue(line: string): boolean {
 
 // a value line under a secret heading: "qwer2017", "Mail: lilac4006"
 // under a heading like "Tokens" or "API keys" only a bare value counts, so "Max output: 8192" under "Token budgets" stays a fact
-// under a WiFi heading an item named for what the network is, not where, stays a fact: "Network name: BlueHeron5G", "이름: olleh5G2f3a"
-const NAMED = /^(?:(?:wi-?fi|wlan|와이파이)\s*)?(?:(?:network\s+)?name|network|ssid|router|modem|model|plan|provider|isp|mac(?:\s+address)?|band|channel|speed|이름|네트워크|통신사|공유기|모뎀|모델|요금제|속도)$/iu;
+// under a WiFi heading a named item stays a fact unless the name is a secret label: "Guest network: MapleGuest24", not "Key: x"
+const SECRET_NAME = new RegExp(`${EDGE}(?:${STRONG}|keys?|codes?|pass|키|코드)${END}`, "iu");
 function listedValue(line: string, kind: Kind, word = ""): boolean {
   const pair = /^([^:：=]{1,40}?)(?:\s*[:：=]\s*|\s+[-–—]\s+)(.+)$/u.exec(line);
   const named = Boolean(pair && pair[1].split(/\s+/).length <= 4);
-  if (named && kind === "wifi" && NAMED.test(pair![1].trim())) return false;
+  if (named && kind === "wifi" && !SECRET_NAME.test(pair![1])) return false;
   if (named && word) return labeledValue(`${pair![1]} ${word}: ${pair![2]}`);
   if (named && kind === "weak") return false;
   const tokens = valueOf(named ? pair![2] : line);
@@ -123,26 +124,25 @@ const columnKind = (cell: string) => (cell.replace(LABEL, "").replace(/[\s/&+,()
 
 // the check this import ran before this filter
 const flagged = (line: string) => secretLike(line) || redactRoomMemory(line) !== line;
-// other senses of a secret word; each swaps out only that word, so the rest of the line is still read
+// other senses of a secret word, each with a reviewed fact in testing/import-secret-allowed.ts; each swaps out only that word
 const OTHER = [
-  // a poster style, a suit stripe, a pin cushion, a card reader; pins as things; pin as a verb
+  // a poster style, a suit stripe, a pin cushion, a card reader; enamel pins; pin as a verb, but "my pin" is a PIN
   /\bpins?(?=[- ]?(?:ups?|strip\w*|cushions?|pads?)\b)/giu,
-  /(?<=\b(?:bowling|enamel|lapel|hat|safety|bobby|push|hair|rolling|sewing|map)[ -])pins?\b/giu,
-  /\bpins?(?= bowling\b)/giu,
-  /\b[Pp]ins?(?= (?:my|the|it|this|that|them|these|those|a|an|your|our|their|his|her)\b)/gu,
+  /(?<=\benamel[ -])pins?\b/giu,
+  /(?<!\b(?:[Mm]y|[Yy]our|[Hh]is|[Hh]er|[Oo]ur|[Tt]heir|[Ii]ts|[Tt]he|[Aa]n?|[Tt]his|[Tt]hat|\S+['’]s) )\b[Pp]ins?(?= (?:my|the|it|this|that|them|these|those|a|an|your|our|their|his|her)\b)/gu,
   /\b[Pp]ins?\b(?=(?: \S+){0,3} (?:on|to|from) Pinterest\b)/gu,
   // a name: "a dog named Pin"
-  /(?<=\b(?:named|called) )(?:Pin|Token)\b/gu,
-  // LLM, crypto and arcade tokens, token-based auth, a token of thanks
-  /\btokens?(?=[- ](?:based|budgets?|limits?|counts?|usage|economy|of (?:thanks|appreciation|gratitude))\b)/giu,
-  /(?<=\b(?:ETH|NFT|crypto|governance|utility|arcade|subway|bus) )tokens?\b/giu,
+  /(?<=\bnamed )(?:Pin|Token)\b/gu,
+  // LLM and ETH tokens, token-based auth
+  /\btokens?(?=[- ](?:based|budgets?)\b)/giu,
+  /(?<=\bETH )tokens?\b/giu,
   /토큰(?=\s*(?:기반|이코노미))/gu,
-  // Secret Santa, a secret talent, the secret to good coffee, a title such as The Secret Garden
-  /\bsecrets?(?= (?:santa|talents?|ingredients?|recipes?|menu|level|room|door|garden|weapon|sauce|admirer|agent|service|society|hobby|passion|skill|crush|life|identity|spot|trick|tips?|history|to (?:a|an|the|good|great|my|your|our|their|his|her|success|happiness))\b)/giu,
+  // Secret Santa, the secret to good coffee, a title such as The Secret Garden; "my secret to the safe" is a secret
+  /\bsecrets?(?= (?:santa|to good)\b)/giu,
   /(?<=\bThe )Secret(?= (?!(?:Key|Code|Word|Phrase|Password|Token|PIN|Pin|Number|Question|Answer)\b)\p{Lu})/gu,
-  // a password manager, password hashing or hygiene; 1Password is a manager's name
-  /\bpasswords?(?= (?:managers?|management|hashing|hygiene|policy|policies)\b)/giu,
-  /(?:비밀\s*번호|패스워드)(?=\s*(?:관리자|관리\s*앱|매니저))/gu,
+  // a password manager or hygiene; 1Password is a manager's name
+  /\bpasswords?(?= (?:managers?|hygiene)\b)/giu,
+  /비밀\s*번호(?=\s*관리자)/gu,
   /\b1Password\b/gu,
   // a flight number right after a flight word: "Flight KE7524 to Busan", "Boarding pass: KE7523"
   /(?<=\b(?:[Ff]lights?|[Ff]lying|[Ff]lew|[Bb]oarding [Pp]ass)(?: (?:number|no\.?))?[\s:#]{1,3})(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\d{1,4}(?![\p{L}\p{N}_])/gu,
@@ -150,6 +150,15 @@ const OTHER = [
 const otherSense = (line: string) => OTHER.reduce((text, pattern) => text.replace(pattern, "thing"), line);
 // a word with a value's shape, a year included; a decade is not one
 const valued = (line: string) => line.split(/[\s\p{Script=Hangul}]+/u).some((word) => valueLike(word) && !/^'?\d{2}(?:\d{2})?s$/.test(bare(word)));
+const DIGITS = "zero|one|two|three|four|five|six|seven|eight|nine";
+// a value cue the swap leaves ("the master is", "sign in with", "4 4 6 2", "is sunflowerlake", "haneulbada 예요") or a second clause
+const CUE = new RegExp(
+  String.raw`(?<![\p{L}\p{N}])(?:master|unlock\w*|(?:sign(?:s|ed|ing)?|log(?:s|ged|ging)?)[- ]?in(?:to)?|logins?|(?:(?:${DIGITS}|\d{1,2})[\s,-]+){2,}(?:${DIGITS}|\d{1,2})` +
+    String.raw`|(?:is|are|was|were|takes|took)\s+["'“‘]?(?!thing(?![\p{L}\p{N}]))[a-z]+(?:-[a-z]+)*["'”’]?(?=\s*(?:[.,;:!?。()]|(?:and|but|so|or)(?![\p{L}\p{N}])|$))` +
+    String.raw`|(?!thing)[a-z]+\s?(?:이에요|예요|입니다|이야|이다|야|임))(?![\p{L}\p{N}])|마스터|잠금|[;；]|[.!?。]\s+\S|,\s*(?:and|but|so|or)\s` +
+    String.raw`|(?<![가-힣])(?:[공영일이삼사오육칠팔구][\s-]+){2,}[공영일이삼사오육칠팔구](?:이에요|예요|입니다|이다|이야|야|요)?(?![가-힣])`,
+  "iu",
+);
 // a line the check before this filter flags stays out, unless its secret words all mean something else and no word looks like a value;
 // a word that names a field keeps its own sense: "1Password: sunflower", "Password manager: opensesame"
 function stillHidden(line: string, flag = flagged(line)): boolean {
@@ -157,7 +166,7 @@ function stillHidden(line: string, flag = flagged(line)): boolean {
   const text = otherSense(line);
   const field = /^([^:：=]*)[:：=](.*)$/u.exec(text);
   const named = Boolean(field && /\bthing\b/.test(field[1]) && /\S/.test(field[2].replace(/\bthing\b/g, "")));
-  return text === line || named || flagged(text) || valued(text);
+  return text === line || named || flagged(text) || valued(text) || CUE.test(text);
 }
 // the line after a lone value names it: "plum8504x" then "That's my Netflix password.", "이게 와이파이 비밀번호예요"
 const NAMES_IT = /^\s*(?:[-*+]\s+)?(?:(?:(?:that|it)(?:'s|’s| is| was)|this is)\s+(?:my|the|our|your|his|her|their|a)|이게|이거|이건|그게|그거|그건)\s/iu;
