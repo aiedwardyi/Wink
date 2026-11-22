@@ -331,6 +331,21 @@ describe("find in a chat not in memory", () => {
       expect(rest.hits.map((hit) => hit.messageId)).toEqual(["mid", "old"]);
     });
 
+    it("a page whose scanned hits were all edited away goes on to the live ones", async () => {
+      const s = synced();
+      s.sync([...rows(row("a", null, 1), row("b", "a", 2), row("c", "b", 3), row("d", "c", 4)), head("d")]);
+      const wrote = afterScan(s.threadId, () => s.sync(rows(row("d", "c", 4, "now amber"), row("c", "b", 3, "now amber"))));
+      const first = await s.search("limit=1");
+      expect(wrote.done).toBe(true);
+      expect(first.hits.map((hit) => hit.messageId)).toEqual(["b"]);
+      expect(first.more).toBe(true);
+      const [newest] = first.hits;
+      // the find bar reads the rest from just past the newest hit, so that hit comes again as it stands
+      const rest = await s.search(`limit=100&before=${newest!.messageId}&at=${newest!.at}&row=${newest!.row + 1}`);
+      expect(rest.hits.map((hit) => hit.messageId)).toEqual(["b", "a"]);
+      expect(rest.more).toBe(false);
+    });
+
     it("an append before the scan starts is in the answer", async () => {
       const s = synced();
       s.sync([...rows(row("anchor", null, 1)), head("anchor")]);

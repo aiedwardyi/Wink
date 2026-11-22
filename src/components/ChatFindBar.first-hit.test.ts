@@ -69,9 +69,9 @@ describe("ChatFindBar first hit", () => {
     await answer({ hits: [hit("m0")], more: true });
     expect(mock.landed).toEqual(["m0"]);
     expect(label()).toBe("find.searching");
-    // the rest goes on from the hit's place, not its row: a sync can remove that row in between
-    expect(mock.asked[1]).toBe("/api/search?q=q&limit=99&threadId=t&view=chips&before=m0&at=1&row=7");
-    await answer({ hits: rest, more: true });
+    // the rest goes on from just past the hit's place, the hit included: a sync can edit or remove that row in between
+    expect(mock.asked[1]).toBe("/api/search?q=q&limit=100&threadId=t&view=chips&before=m0&at=1&row=8");
+    await answer({ hits: [hit("m0"), ...rest], more: true });
     expect(mock.landed).toEqual(["m0"]);
     expect(label()).toBe("find.of 1/100+");
   });
@@ -88,7 +88,24 @@ describe("ChatFindBar first hit", () => {
     const { answer } = await open("m5");
     await answer({ hits: [hit("m0")], more: true });
     expect(mock.landed).toEqual([]);
-    await answer({ hits: rest, more: false });
+    await answer({ hits: [hit("m0"), ...rest], more: false });
     expect(mock.landed).toEqual(["m5"]);
+  });
+
+  it("moves to the next hit when a sync took the newest one before the rest came", async () => {
+    const { label, answer } = await open();
+    await answer({ hits: [hit("m0")], more: true });
+    expect(mock.landed).toEqual(["m0"]);
+    // m0 was edited so it no longer matches: the rest, read from just past it, leaves it out
+    await answer({ hits: rest, more: false });
+    expect(mock.landed).toEqual(["m0", "m1"]);
+    expect(label()).toBe("find.of 1/99");
+  });
+
+  it("stays on the newest hit when the rest has it again", async () => {
+    const { answer } = await open();
+    await answer({ hits: [hit("m0")], more: true });
+    await answer({ hits: [hit("m0"), ...rest], more: false });
+    expect(mock.landed).toEqual(["m0"]);
   });
 });

@@ -17,8 +17,8 @@ const page = Array.from({ length: 100 }, (_, i) => hit(`m${i}`));
 vi.mock("@/state/store", () => ({
   // the store's dispatch is stable, as useReducer's is
   useStore: () => ({ state: {}, dispatch: mock.dispatch }),
-  // the newest hit, then the rest of the first page; any later page waits for the test
-  api: (path: string) => (path.includes("&before=m0&") ? Promise.resolve({ hits: page.slice(1), more: true })
+  // the newest hit, then the first page again from just past it; any later page waits for the test
+  api: (path: string) => (path.includes("&before=m0&") ? Promise.resolve({ hits: page, more: true })
     : path.includes("&before=") ? new Promise<Page>((resolve) => { mock.pages.push(resolve); })
       : Promise.resolve({ hits: page.slice(0, 1), more: true })),
 }));
