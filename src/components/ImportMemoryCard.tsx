@@ -19,8 +19,9 @@ type Added = { source: string; added: number; found: number; hidden: number };
 // phone hit areas reach 40 px; the look at rest stays the mock's
 const LINK = "relative text-accent-text hover:underline focus-visible:underline focus-visible:outline-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:inset-x-0";
 const ICON_BUTTON = "relative flex size-8 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-1";
-// the pills' group scrolls sideways, which would clip their hit area; two short pills never need to scroll here
-const SCOPE_HIT = "[@media(pointer:coarse)]:[&_[role=radiogroup]]:overflow-visible [@media(pointer:coarse)]:[&_[role=radio]]:after:absolute [@media(pointer:coarse)]:[&_[role=radio]]:after:inset-x-0 [@media(pointer:coarse)]:[&_[role=radio]]:after:-inset-y-[6.5px] [@media(pointer:coarse)]:[&_[role=radio]]:after:z-10";
+// the pills' group scrolls sideways, which would clip their hit area; two short pills never need to scroll here,
+// and the thumb's shadow stays cut at the group's edge as the scroll clip cut it
+const SCOPE_HIT = "[@media(pointer:coarse)]:[&_[role=radiogroup]]:overflow-visible [@media(pointer:coarse)]:[&_[data-segmented-thumb]]:[clip-path:inset(-3px_round_var(--radius-lg))] [@media(pointer:coarse)]:[&_[role=radio]]:after:absolute [@media(pointer:coarse)]:[&_[role=radio]]:after:inset-x-0 [@media(pointer:coarse)]:[&_[role=radio]]:after:-inset-y-[6.5px] [@media(pointer:coarse)]:[&_[role=radio]]:after:z-10";
 
 // the last answers, so a chat opened after them paints the row without waiting
 let offered: boolean | null = null;
