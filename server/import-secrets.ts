@@ -154,7 +154,7 @@ const DIGITS = "zero|one|two|three|four|five|six|seven|eight|nine";
 // a value cue the swap leaves ("the master is", "sign in with", "4 4 6 2", "is sunflowerlake", "haneulbada 예요") or a second clause
 const CUE = new RegExp(
   String.raw`(?<![\p{L}\p{N}])(?:master|unlock\w*|(?:sign(?:s|ed|ing)?|log(?:s|ged|ging)?)[- ]?in(?:to)?|logins?|(?:(?:${DIGITS}|\d{1,2})[\s,-]+){2,}(?:${DIGITS}|\d{1,2})` +
-    String.raw`|(?:is|are|was|were|takes|took)\s+["'“‘]?(?!thing(?![\p{L}\p{N}]))[a-z]+(?:-[a-z]+)*["'”’]?(?=\s*(?:[.,;:!?。()]|(?:and|but|so|or)(?![\p{L}\p{N}])|$))` +
+    String.raw`|(?:is|are|was|were|takes|took)\s+["'“‘]?(?!thing(?![\p{L}\p{N}]))[a-z]+(?:-[a-z]+)*["'”’]?(?=\s*(?:[.,;:!?。()]|(?:and|but|so|or|for|at|on|in|to|with|from|since|until|now|today|these|this)(?![\p{L}\p{N}])|$))` +
     String.raw`|(?!thing)[a-z]+\s?(?:이에요|예요|입니다|이야|이다|야|임))(?![\p{L}\p{N}])|마스터|잠금|[;；]|[.!?。]\s+\S|,\s*(?:and|but|so|or)\s` +
     String.raw`|(?<![가-힣])(?:[공영일이삼사오육칠팔구][\s-]+){2,}[공영일이삼사오육칠팔구](?:이에요|예요|입니다|이다|이야|야|요)?(?![가-힣])`,
   "iu",

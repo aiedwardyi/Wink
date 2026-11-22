@@ -935,7 +935,7 @@ export const CORPUS: CorpusCase[] = [
   ["en", "Door code policy: the building changes it monthly.", [], ["Door code policy: the building changes it monthly."]],
   ["ko", "토큰 비용을 줄이려고 캐시를 써요.", [], ["토큰 비용을 줄이려고 캐시를 써요."]],
   ["en", "API key rotation is every 90 days at my company.", [], ["API key rotation is every 90 days at my company."]],
-  // a value after a word of another sense: digits split by spaces, a second clause, a copula after a space
+  // a value after a word of another sense: digits split by spaces, a second clause, a copula after a space, words after the value
   ["en", "PIN pad at the gym takes 4 4 6 2.", ["4 4 6 2"], []],
   ["en", "The PIN pad code is 4 4 6 2.", ["4 4 6 2"], []],
   ["en", "The bank pin the teller set is 4 4 6 2.", ["4 4 6 2"], []],
@@ -948,4 +948,8 @@ export const CORPUS: CorpusCase[] = [
   ["en", "Collects enamel pins. Combination is 12 34 56.", ["12 34 56"], []],
   ["en", "PIN-up posters; my code there is 4 4 6 2", ["4 4 6 2"], []],
   ["ko", "비밀번호 관리자 앱 쓰는데 그건 haneulbada 이에요.", ["haneulbada"], []],
+  ["en", "My password manager is correct-horse-battery-staple for work.", ["correct-horse-battery-staple"], []],
+  ["en", "My password manager is sunflowerlake for work.", ["sunflowerlake"], []],
+  ["en", "The PIN pad code is quietriver at the gym.", ["quietriver"], []],
+  ["en", "Password manager vault is plumtree since May.", ["plumtree"], []],
 ];

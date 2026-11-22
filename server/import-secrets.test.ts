@@ -85,7 +85,7 @@ describe("import secret filter rules", () => {
   // after a comma a value needs a cue; a second clause or sentence stays out whatever it says, and so do spaced digits
   it("leaves out a letters-only, spelled-out or spaced value after a word in its other sense", () => {
     const digits = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
-    const en = [(v: string) => `the master is ${v}.`, (v: string) => `I unlock it with ${v}.`, (v: string) => `I sign in as dana with ${v}.`, (v: string) => `log in: ${v}`, (v: string) => `it was ${v}.`, (v: string) => `it takes ${v}.`];
+    const en = [(v: string) => `the master is ${v}.`, (v: string) => `I unlock it with ${v}.`, (v: string) => `I sign in as dana with ${v}.`, (v: string) => `log in: ${v}`, (v: string) => `it was ${v}.`, (v: string) => `it takes ${v}.`, (v: string) => `it is ${v} ${pick(["for", "at", "since", "with"])} ${word()}.`];
     const ko = [(v: string) => `마스터는 ${v}예요.`, (v: string) => `잠금은 ${v}`, (v: string) => `그건 ${v}이에요.`, (v: string) => `그건 ${v} 이에요.`];
     const wrong: string[] = [];
     for (const [fact] of ALLOWED) {
