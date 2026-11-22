@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { closedAskNotes } from "./ask-user.ts";
-import { estimateContextTokens, holdWorkerNotes, nativeReplayBudget, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, withoutTurnNotes } from "./context-compaction.ts";
+import { estimateContextTokens, holdWorkerNotes, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, withoutTurnNotes } from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
 import { composeUserTurnPrompt, userTurnReactionKeys } from "./replies.ts";
 import { adoptHumanRoot } from "./comms-root.ts";
@@ -14,6 +14,7 @@ import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } fro
 import type { Message } from "./store.ts";
 import { createSummaryBuild, type SummaryWait } from "./summary-build.ts";
 import { asksNudge } from "./task-asks.ts";
+import { nativeReplayBudget } from "./context-compaction.ts";
 import { buildResumeFallback, buildTurnContext, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord } from "./turn-context.ts";
 import { currentTurnTrace, tracePart } from "./turn-timing.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
@@ -334,7 +335,7 @@ describe("summary grace dispatch", () => {
         return live;
       } },
       instanceId: "codex", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
-      turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
+      turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, noteOfferTurn: () => {}, withoutTurnNotes,
       buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge, stampShownAsks: () => {},
       estimateContextTokens, nativeReplayBudget, replayRoom: 0, limitWaits: { track() {}, bind() {} }, selection: {},
       clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
