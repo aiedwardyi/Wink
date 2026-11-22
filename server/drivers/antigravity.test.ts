@@ -17,6 +17,7 @@ import type { ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { summaryInstance } from "../summary-instance.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
+import { removeTestData, testHome } from "../testing/test-home.ts";
 import { ProviderRegistry } from "../harness/registry.ts";
 import {
   ANTIGRAVITY_COMPUTER_MCP_KEY,
@@ -122,7 +123,7 @@ async function geminiShown(registry: ProviderRegistry, instanceId: string) {
 }
 
 /** Where agy writes its logs in this test process's home. */
-const AGY_LOGS = join(process.env.HOME!, ".gemini", "antigravity-cli", "log");
+const AGY_LOGS = join(testHome(), ".gemini", "antigravity-cli", "log");
 const AGY_LOGOUT = "server_oauth.go:192] Logging out current user";
 const AGY_SIGNED_IN = "server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=";
 
@@ -1864,7 +1865,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       for (const run of runs) await run.disposeAll();
       warn.mockRestore();
       rmSync(SIGNED_OUT_MARK, { force: true });
-      rmSync(AGY_LOGS, { recursive: true, force: true });
+      removeTestData(AGY_LOGS);
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
@@ -1900,7 +1901,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       for (const run of runs) await run.disposeAll();
       warn.mockRestore();
       rmSync(SIGNED_OUT_MARK, { force: true });
-      rmSync(AGY_LOGS, { recursive: true, force: true });
+      removeTestData(AGY_LOGS);
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
@@ -1932,7 +1933,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       for (const run of runs) await run.disposeAll();
       warn.mockRestore();
       rmSync(SIGNED_OUT_MARK, { force: true });
-      rmSync(AGY_LOGS, { recursive: true, force: true });
+      removeTestData(AGY_LOGS);
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
@@ -1957,7 +1958,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       expect(existsSync(fixture.entry)).toBe(true);
     } finally {
       for (const run of runs) await run.disposeAll();
-      rmSync(SIGNED_OUT_MARK, { recursive: true, force: true });
+      removeTestData(SIGNED_OUT_MARK);
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
