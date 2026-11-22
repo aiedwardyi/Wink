@@ -439,7 +439,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, memoryJobMachine, peerMemoryLanded, pinMemoryJobOwner, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, memoryJobMachine, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -1845,15 +1845,6 @@ async function importProfileChanges(): Promise<void> {
       markSynced(synced, { entity: "bot", entityId: item.globalId, changes: Object.fromEntries(Object.entries(local).filter(([field]) => !(field in remoteBot))) });
     }
   }
-  if (!remote.invalidFiles.length) {
-    ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice);
-    for (const [botId, syncId] of Object.entries(profileSyncSettings.botMap)) {
-      const owner = Object.hasOwn(state.botOrigins, syncId) ? state.botOrigins[syncId] : undefined;
-      if (!owner || !pinMemoryJobOwner(memorySyncLedger, syncId, owner)) continue;
-      if (memoryJobsHere(botId)) memorySleep.onSettled(botId);
-    }
-    saveMemoryLedger();
-  }
   const finish = () => {
     if (botTrash) finishRevive(trashSyncHost(), marks.revive, (botId) => threadSyncV2?.rebuild(botId));
     for (const key of Object.keys(state.tombstones).filter((value) => value.startsWith("bot:"))) {
@@ -2485,7 +2476,7 @@ function saveMemoryLedger(): void {
 function memoryJobsHere(botId: string): boolean {
   const folder = profileSyncSettings.folder;
   const syncId = chatSyncBotId(profileSyncSettings, botId);
-  return !syncId || Boolean(folder && existsSync(folder) && tidiesHere(memorySyncLedger, syncId, profileSyncSettings.deviceId, memoryJobDevice));
+  return !syncId || Boolean(folder && existsSync(folder) && tidiesHere(memorySyncLedger, syncId));
 }
 
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
@@ -2498,12 +2489,16 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   if (memorySyncUnchanged(folder, botSyncId, workspaceDir(botId), memorySyncLedger)) return false;
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
+  const tidied = memoryJobsHere(botId);
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
+  const pulled = Object.values(results).some((result) => result === "pulled" || result === "conflict");
   // the poll runs for every idle bot, so only pulled changes refresh the page and check
-  if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
+  if (pulled) {
     memoryHealthCheck.refresh(botId);
     broadcast({ kind: "memory.changed", botId });
   }
+  // notes another PC took, or a tidy this PC just took over, wait for a quiet spell here like this PC's own turns
+  if ((pulled || !tidied) && memoryJobsHere(botId)) memorySleep.onSettled(botId);
   return true;
 }
 

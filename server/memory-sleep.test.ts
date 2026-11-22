@@ -18,7 +18,7 @@ import {
   noteLines,
   type MemorySleep,
 } from "./memory-sleep.ts";
-import { markTalked, markTidied, memorySyncDir, pinMemoryJobOwner, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
+import { markTalked, markTidied, memorySyncDir, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
 import { listMemoryTopics, loadMemory, MEMORY_MAX_LINES, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
@@ -694,16 +694,19 @@ describe("memory sleep", () => {
       const pc = (bot: string, index: number) => {
         const folder = join(root, `drive-${index}`);
         mkdirSync(folder);
-        const ledger: MemorySyncLedger = { bots: {} };
+        // a's device sorts first, so a tidies while the user messages the bot on both
+        const ledger: MemorySyncLedger = { bots: {}, device: index ? "bbbbbbbbbbbb" : "aaaaaaaaaaaa", host: `host-${index}` };
         const legacy: LegacyMemoryLedger = {};
         ledgers.set(bot, ledger);
         return { bot, folder, workspace: workspaceDir(bot), ledger, legacy, host: `host-${index}`, syncBotMemory };
       };
       type Pc = ReturnType<typeof pc>;
       const [a, b] = [pc(botA, 0), pc(botB, 1)];
-      for (const pc of [a, b]) pinMemoryJobOwner(pc.ledger, "bot-1", a.host);
       const standby = () => {
-        for (const pc of [a, b]) if (!tidiesHere(pc.ledger, "bot-1", pc.host)) away.add(pc.bot);
+        for (const pc of [a, b]) {
+          if (tidiesHere(pc.ledger, "bot-1")) away.delete(pc.bot);
+          else away.add(pc.bot);
+        }
       };
       const sync = (pc: Pc) => pc.syncBotMemory(pc.folder, "bot-1", pc.workspace, pc.ledger, { legacy: pc.legacy, host: pc.host });
       const receive = (from: Pc, to: Pc) => {
@@ -749,6 +752,37 @@ describe("memory sleep", () => {
       await quiet();
       settle();
       expect(memoryFileRaw(botB)).toBe(memory("- Uses pnpm", "- Wants short replies with bullets (noted 2026-11-10)", "- Lives in Seoul"));
+      expect(parked(botA, botB)).toEqual([]);
+    });
+
+    it("hand the tidy to the PC still in use once the other went a week without a message, and tidy there only", async () => {
+      const [botA, botB] = [bots[0]!, `${bots[0]}-pc2`];
+      const { a, b, share, sync, receive, settle, standby } = twoPcs(botA, botB);
+      markTalked(a.ledger, "bot-1", NOW - 8 * DAY);
+      writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
+      share();
+      standby();
+      expect([...away]).toEqual([botB]);
+      // the user goes on with the bot on b; until a sees that, both take the tidy as theirs, and b's waits for a quiet spell
+      markTalked(b.ledger, "bot-1", NOW);
+      sync(b);
+      standby();
+      expect([...away]).toEqual([]);
+      const retired = vi.fn<NoteGenerator>().mockResolvedValue("{}");
+      perBot.set(botA, retired);
+      generator = null;
+      sleep.onSettled(botB);
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      receive(b, a);
+      sync(a);
+      standby();
+      expect([...away]).toEqual([botA]);
+      sleep.onSettled(botA);
+      await quiet();
+      expect(retired).not.toHaveBeenCalled();
+      expect(noteLines(memoryFileRaw(botB))).toHaveLength(2);
+      settle();
+      expect(memoryFileRaw(botA)).toBe(memoryFileRaw(botB));
       expect(parked(botA, botB)).toEqual([]);
     });
 

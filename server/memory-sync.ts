@@ -53,7 +53,8 @@ type Snapshot = z.infer<typeof snapshotSchema>;
 const ledgerSchema = z.object({
   device: z.string().regex(DEVICE).optional(),
   jobDevice: z.string().regex(DEVICE).optional(),
-  jobOwners: z.record(z.string().regex(ID), z.string().regex(ID)).optional(),
+  // this PC's devices from before a rename on the same machine
+  renamed: z.array(z.string().regex(DEVICE)).optional(),
   host: z.string().optional(),
   clock: z.number().int().nonnegative().optional(),
   talked: z.record(z.string(), time).optional(),
@@ -66,6 +67,8 @@ const ledgerSchema = z.object({
       seen: z.string().optional(),
       // the idle tidy's last change to MEMORY.md, as text hashes, until a pass takes it in
       tidy: z.object({ from: z.string(), to: z.string() }).optional(),
+      // the PC the last full pass picked to run the idle tidy
+      tidier: z.string().regex(DEVICE).optional(),
     }),
   ),
 });
@@ -213,7 +216,7 @@ function passInputs(dirs: string[], workspace: string, local: string[], bot: Mem
       stats.push(`${path}:-`);
     }
   }
-  return hash(JSON.stringify([stats, bot.files, talkedAt, me])) ?? undefined;
+  return hash(JSON.stringify([stats, bot.files, talkedAt, me, bot.tidier])) ?? undefined;
 }
 
 async function readSnapshotsAsync(dir: string): Promise<Snapshots | undefined> {
@@ -250,22 +253,25 @@ export async function readMemorySnapshots(folder: string, botSyncId: string): Pr
   }
 }
 
-/** Background jobs belong to the bot's original profile publisher, even during delayed sync. */
-export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string, device: string, jobMachine?: string): boolean {
-  return Boolean(ledger.device && ledger.jobDevice === (jobMachine ?? ledger.device) && ledger.jobOwners?.[botSyncId] === device);
+// a PC whose user has not messaged the bot for this long while they did on another PC is gone, and its tidy moves on
+const HANDOVER_MS = 7 * 24 * 60 * 60_000;
+
+// every PC that reads the same copies picks the same one: the lowest device the user messaged within HANDOVER_MS of the latest message anywhere
+function pickTidier(talked: Map<string, number>): string | undefined {
+  const latest = Math.max(...talked.values());
+  return [...talked].filter(([, at]) => at >= latest - HANDOVER_MS).map(([device]) => device).sort()[0];
+}
+
+/** Background jobs run on the PC the last full sync pass picked; a renamed PC keeps them. */
+export function tidiesHere(ledger: MemorySyncLedger, botSyncId: string): boolean {
+  const tidier = ledger.bots[botSyncId]?.tidier;
+  return Boolean(tidier && (tidier === ledger.device || ledger.renamed?.includes(tidier)));
 }
 
 /** Kept across a hostname change, different for a copied ~/.orbit; undefined when the OS has no machine id. */
 export function memoryJobMachine(dataDir: string): string | undefined {
   const id = readOsMachineId();
   return id && createHash("sha256").update(`wink-memory-jobs\0${id}\0${resolve(dataDir)}`).digest("hex").slice(0, 12);
-}
-
-export function pinMemoryJobOwner(ledger: MemorySyncLedger, botSyncId: string, owner: string): boolean {
-  const owners = ledger.jobOwners ??= {};
-  if (Object.hasOwn(owners, botSyncId)) return false;
-  owners[botSyncId] = owner;
-  return true;
 }
 
 /** The idle tidy changed MEMORY.md from `before` to `after`: if the next pass finds only that change, a copy that holds what the tidy started from wins over it with nothing set aside. Save the ledger after it. */
@@ -291,14 +297,13 @@ function machine(): string {
 // a ledger copied or restored onto another PC must not keep writing as the PC it came from
 function deviceId(ledger: MemorySyncLedger, host: string, jobMachine?: string): string {
   const moved = Boolean(ledger.device && ledger.host !== host);
-  // A copied ledger gets a new sync device, but keeps its original job binding; one bound to this unmoved device moves to the machine key.
-  if (moved) ledger.jobDevice ??= ledger.device;
-  else if (jobMachine && ledger.jobDevice === ledger.device) ledger.jobDevice = jobMachine;
+  // a new hostname on the same machine is a rename that keeps the jobs picked for the old device; a copy on another machine keeps none
+  if (moved) ledger.renamed = jobMachine && ledger.jobDevice === jobMachine ? [...(ledger.renamed ?? []), ledger.device!].slice(-8) : undefined;
   if (!ledger.device || moved) {
     ledger.device = randomBytes(6).toString("hex");
     ledger.host = host;
   }
-  ledger.jobDevice ??= jobMachine ?? ledger.device;
+  if (jobMachine) ledger.jobDevice = jobMachine;
   return ledger.device;
 }
 
@@ -452,6 +457,12 @@ export function syncBotMemory(
   const snapshots = groups.flatMap((group) => group ?? []);
   const firstSync = !ledger.bots[botSyncId];
   const bot = (ledger.bots[botSyncId] ??= { files: {} });
+  // a read that missed a copy keeps the last pick, so a PC it hid cannot leave two PCs tidying
+  if (!groups.some((group) => group?.partial)) {
+    const talked = new Map([[me, talkedAt]]);
+    for (const snapshot of snapshots) if (snapshot.device !== me) talked.set(snapshot.device, Math.max(snapshot.talkedAt, talked.get(snapshot.device) ?? 0));
+    bot.tidier = pickTidier(talked);
+  }
   // a wiped or never-created workspace has nothing to publish; forgetting it pulls instead of deleting everywhere, from this PC's own snapshot too
   const restore = !existsSync(workspace);
   if (restore) bot.files = {};
@@ -601,6 +612,6 @@ export function syncBotMemory(
   // a skipped file or snapshot is retried by the next poll, so the pass is not recorded as seen
   const complete = !groups.some((group) => group?.partial) && !Object.values(results).includes("skipped");
   // a file written after the snapshots were read may not be what was read, so the racy window starts at the read
-  bot.seen = complete && after ? passInputs(dirs, workspace, after, { files: bot.files }, talkedAt, me, Math.min(now, read?.at ?? now)) : undefined;
+  bot.seen = complete && after ? passInputs(dirs, workspace, after, { files: bot.files, tidier: bot.tidier }, talkedAt, me, Math.min(now, read?.at ?? now)) : undefined;
   return results;
 }

@@ -92,6 +92,7 @@ describe("memory check refresh sites", () => {
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const sync = index.slice(index.indexOf("async function syncMemoryPass("), index.indexOf("async function syncMemoryOnce("));
     expect(sync).toContain("const results = syncBotMemory(");
-    expect(sync).toMatch(/if \(Object\.values\(results\)\.some\(\(result\) => result === "pulled" \|\| result === "conflict"\)\) \{\s*memoryHealthCheck\.refresh\(botId\);\s*broadcast\(\{ kind: "memory.changed", botId \}\);\s*\}/);
+    expect(sync).toContain('const pulled = Object.values(results).some((result) => result === "pulled" || result === "conflict");');
+    expect(sync).toMatch(/if \(pulled\) \{\s*memoryHealthCheck\.refresh\(botId\);\s*broadcast\(\{ kind: "memory.changed", botId \}\);\s*\}/);
   });
 });
