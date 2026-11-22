@@ -10,7 +10,7 @@ interface Page {
 
 const mock = vi.hoisted(() => ({ landed: new Array<string>(), asked: new Array<string>(), answers: new Array<(body: Page) => void>(), dispatch: () => {} }));
 
-const hit = (messageId: string) => ({ threadId: "t", messageId, at: 1, role: "bot", kind: "text", snippet: "q", matchStart: 0, matchLength: 1, matches: 1 });
+const hit = (messageId: string, row = 7) => ({ threadId: "t", messageId, at: 1, row, role: "bot", kind: "text", snippet: "q", matchStart: 0, matchLength: 1, matches: 1 });
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- the bar talks to the API and the store; this test answers each request by hand.
 vi.mock("@/state/store", () => ({
@@ -69,7 +69,8 @@ describe("ChatFindBar first hit", () => {
     await answer({ hits: [hit("m0")], more: true });
     expect(mock.landed).toEqual(["m0"]);
     expect(label()).toBe("find.searching");
-    expect(mock.asked[1]).toBe("/api/search?q=q&limit=99&threadId=t&view=chips&before=m0");
+    // the rest goes on from the hit's place, not its row: a sync can remove that row in between
+    expect(mock.asked[1]).toBe("/api/search?q=q&limit=99&threadId=t&view=chips&before=m0&at=1&row=7");
     await answer({ hits: rest, more: true });
     expect(mock.landed).toEqual(["m0"]);
     expect(label()).toBe("find.of 1/100+");

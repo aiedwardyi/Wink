@@ -1,5 +1,6 @@
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BotTrash } from "./bot-trash.ts";
@@ -273,6 +274,97 @@ describe("find in a chat not in memory", () => {
       expect(store.loaded(threadId)).toBe(false);
       sync([head(null)]);
       expect(await find()).toEqual({ "jump-root": false, "jump-child": false });
+    });
+  });
+
+  describe("a write between the scan and the answer", () => {
+    const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
+    const row = (id: string, parentId: string | null, at: number, text = `kiwi ${id}`): Message => ({ id, parentId, at, role: "user", kind: "text", text });
+    const rows = (...messages: Message[]): SyncChange[] => messages.map((value) => ({ cursor: 0, kind: "row", rowId: value.id, value, conflict: false }));
+    const head = (value: string | null): SyncChange => ({ cursor: 0, kind: "head", rowId: "", value, conflict: false });
+    type Page = { hits: Array<{ messageId: string; at: number; row: number; matches: number; onActivePath: boolean }>; more: boolean };
+    const marks = (page: Page) => Object.fromEntries(page.hits.map((hit) => [hit.messageId, hit.onActivePath]));
+    function synced() {
+      removeTestData(DATA_DIR);
+      const store = new Store(selection);
+      const bot = store.createBot({ name: "Synced" }, { seedMessages: false });
+      const threadId = "pending-task";
+      const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+      const search = async (query = "") => {
+        let body = "";
+        const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+        await route.search(res, new URL(`http://localhost/search?q=kiwi&threadId=${threadId}&${query}`));
+        return JSON.parse(body) as Page;
+      };
+      return { store, threadId, sync: (changes: SyncChange[]) => store.applySyncChanges(bot.id, threadId, changes), search };
+    }
+    // runs `write` once the scan worker has answered for this chat, before the route builds its answer
+    function afterScan(threadId: string, write: () => void) {
+      const wrote = { done: false };
+      const emit = Worker.prototype.emit;
+      const spy = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
+        const value = (args[0] as { value?: unknown } | undefined)?.value;
+        if (event === "message" && Array.isArray(value) && value.some((hit: { threadId?: string }) => hit?.threadId === threadId)) {
+          spy.mockRestore();
+          write();
+          wrote.done = true;
+        }
+        return emit.call(this, event, ...args);
+      });
+      return wrote;
+    }
+    afterEach(() => vi.restoreAllMocks());
+
+    it.each([
+      ["removed", (s: ReturnType<typeof synced>, id: string) => s.store.removeSyncNotices(s.threadId, [id])],
+      ["edited", (s: ReturnType<typeof synced>, id: string) => s.sync(rows(row(id, "mid", 1_000, "now amber")))],
+    ])("pages past a newest hit %s after it was found", async (_, write) => {
+      const s = synced();
+      // one stamp for all three: their order is their rowid
+      s.sync([...rows(row("old", null, 1_000), row("mid", "old", 1_000), row("new", "mid", 1_000)), head("new")]);
+      const first = await s.search("limit=1");
+      expect(first.hits.map((hit) => hit.messageId)).toEqual(["new"]);
+      expect(first.more).toBe(true);
+      const [newest] = first.hits;
+      write(s, newest!.messageId);
+      const rest = await s.search(`limit=99&before=${newest!.messageId}&at=${newest!.at}&row=${newest!.row}`);
+      expect(rest.hits.map((hit) => hit.messageId)).toEqual(["mid", "old"]);
+    });
+
+    it("an append before the scan starts is in the answer", async () => {
+      const s = synced();
+      s.sync([...rows(row("anchor", null, 1)), head("anchor")]);
+      const started = s.search();
+      s.sync([...rows(row("synced", "anchor", 2)), head("synced")]);
+      const first = await started;
+      expect(marks(first)).toEqual({ synced: true, anchor: true });
+      expect(first).toEqual(await s.search());
+    });
+
+    it.each([
+      ["a branch switch", (s: ReturnType<typeof synced>) => s.sync([head("right")])],
+      ["an edit", (s: ReturnType<typeof synced>) => s.sync(rows(row("right", "root", 3, "changed to amber")))],
+      ["a removal", (s: ReturnType<typeof synced>) => s.store.removeSyncNotices(s.threadId, ["right"])],
+    ])("%s after the scan is in the answer as the next find has it", async (_, write) => {
+      const s = synced();
+      s.sync([...rows(row("root", null, 1), row("left", "root", 2), row("right", "root", 3)), head("left")]);
+      const wrote = afterScan(s.threadId, () => write(s));
+      const first = await s.search();
+      expect(wrote.done).toBe(true);
+      expect(first.hits.every((hit) => hit.matches > 0)).toBe(true);
+      expect(first).toEqual(await s.search());
+    });
+
+    it("rows synced after the scan keep the head the find began with", async () => {
+      const s = synced();
+      s.sync(rows(row("staged-anchor", null, 1)));
+      const wrote = afterScan(s.threadId, () => s.sync(rows(row("staged-child", "staged-anchor", 2))));
+      expect(marks(await s.search())).toEqual({ "staged-anchor": true });
+      expect(wrote.done).toBe(true);
+      // a loaded chat kept the newest row it saw as its head until a head came
+      expect(marks(await s.search())).toEqual({ "staged-child": false, "staged-anchor": true });
+      s.sync([head("staged-child")]);
+      expect(marks(await s.search())).toEqual({ "staged-child": true, "staged-anchor": true });
     });
   });
 });
