@@ -774,6 +774,8 @@ export class Store {
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
   private threads: ThreadCache;
+  /** Chats a find answered from disk, where the old find loaded them. */
+  private foundOnDisk = new Set<string>();
   /** Threads a driver still owns after Stop marked its bot idle; the cache keeps them. */
   private heldThreads: () => Iterable<string> = () => [];
   private taskPackets = new Map<string, TaskResumePacket | null>();
@@ -1196,6 +1198,7 @@ export class Store {
   /** A thread's durable record: DB rows plus any legacy JSON leftovers. `tell` false writes no delete for other PCs. */
   deleteThreadRecord(threadId: string, tell = true) {
     this.threads.delete(threadId);
+    this.foundOnDisk.delete(threadId);
     this.taskPackets.delete(threadId);
     try {
       deleteTaskResumePacket(threadId);
@@ -1409,7 +1412,10 @@ export class Store {
 
   /** Which of `ids` lie on the active path; a thread not loaded walks its stored path, never reading every row. */
   onActivePath(threadId: string, ids: readonly string[]): Set<string> {
-    if (!this.threads.has(threadId)) return mdb.onStoredPath(threadId, ids);
+    if (!this.threads.has(threadId)) {
+      this.foundOnDisk.add(threadId);
+      return mdb.onStoredPath(threadId, ids);
+    }
     const path = new Set(this.activePath(threadId).map((m) => m.id));
     return new Set(ids.filter((id) => path.has(id)));
   }
@@ -2364,6 +2370,9 @@ export class Store {
         task = { threadId, title: UNTITLED_TASK, createdAt: 0, resumeCursors: {} };
         bot.tasks = [...(bot.tasks ?? []), task];
       }
+      // a parentless row or a null head reads differently from disk than in a loaded chat; read in a chat find left on disk first, as finding it once loaded it
+      const loadedReading = (change: SyncChange) => change.kind === "head" ? change.value === null : change.kind === "row" && (change.value as Message).parentId === undefined;
+      if (this.foundOnDisk.has(threadId) && changes.some(loadedReading)) this.thread(threadId);
       const cached = this.threads.peek(threadId);
       const events: StoreChange[] = [];
       const pathChanged = mdb.withMessageTransaction((db) => {

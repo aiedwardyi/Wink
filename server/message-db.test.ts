@@ -223,12 +223,13 @@ describe("message-db", () => {
     expect(thread.activeLeafId).toBeNull();
   });
 
-  it("deleteThread drops the thread's change count", () => {
-    insertMessage("t4", msg("m1", "edited soon"));
-    updateMessage("t4", msg("m1", "edited"));
+  it("a thread deleted and re-created on the same rowid never repeats its version", () => {
+    insertMessage("t4", msg("m1", "first"));
+    const first = threadVersion("t4");
     deleteThread("t4");
     insertMessage("t4", msg("m1", "back"));
-    expect(threadVersion("t4")?.split(":").at(-1)).toBe("0");
+    expect(threadVersion("t4")?.split(":").at(-2)).toBe(first?.split(":").at(-2));
+    expect(threadVersion("t4")).not.toBe(first);
   });
 
   it("search is case-insensitive, escapes LIKE wildcards, and snips long text", () => {

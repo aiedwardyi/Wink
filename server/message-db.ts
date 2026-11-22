@@ -25,6 +25,7 @@ const DB_FILE = () => join(DATA_DIR, "messages.db");
 let handle: DatabaseSync | null = null;
 let handlePath: string | null = null;
 let opened = 0;
+// never cleared: a thread deleted and re-created can reuse its rowids, so only this count tells the two apart
 const changes = new Map<string, number>();
 let transactionKeys = 0;
 const changeListeners = new Set<(threadId: string, id: string, deleted: boolean) => void>();
@@ -566,7 +567,6 @@ export function botRepliesByEngine(): Array<{ threadId: string; botId: string | 
 export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
-  changes.delete(threadId);
 }
 
 export interface SearchHit {

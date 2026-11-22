@@ -7,8 +7,9 @@ import { BotTrash } from "./bot-trash.ts";
 import { DATA_DIR } from "./config.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { RoutineManager } from "./routines.ts";
-import { Store } from "./store.ts";
+import { Store, type Message } from "./store.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
+import type { SyncChange } from "./thread-sync-v2.ts";
 
 function pager() {
   vi.useFakeTimers();
@@ -126,6 +127,52 @@ describe("find in a chat not in memory", () => {
     expect(store.loaded(bot.threadId)).toBe(false);
     store.messagesFor(bot.threadId);
     expect(await find()).toEqual(shown);
+  });
+
+  describe("after sync, marks the version a loaded chat would", () => {
+    const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
+    const row = (id: string, parentId?: string | null): Message => ({ id, ...(parentId === undefined ? {} : { parentId }), at: 1_000, role: "user", kind: "text", text: `kiwi ${id}` });
+    const rows = (...messages: Message[]): SyncChange[] => messages.map((value) => ({ cursor: 0, kind: "row", rowId: value.id, value, conflict: false }));
+    const head = (value: string | null): SyncChange => ({ cursor: 0, kind: "head", rowId: "", value, conflict: false });
+    function synced() {
+      rmSync(DATA_DIR, { recursive: true, force: true });
+      const store = new Store(selection);
+      const bot = store.createBot({ name: "Synced" }, { seedMessages: false });
+      const threadId = "synced-task";
+      const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+      const find = async () => {
+        let body = "";
+        const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+        await route.search(res, new URL(`http://localhost/search?q=kiwi&threadId=${threadId}`));
+        return Object.fromEntries(JSON.parse(body).hits.map((hit: { messageId: string; onActivePath: boolean }) => [hit.messageId, hit.onActivePath]));
+      };
+      return { sync: (changes: SyncChange[]) => store.applySyncChanges(bot.id, threadId, changes), find };
+    }
+
+    it("a task deleted and re-created with the same ids and row count", async () => {
+      const { sync, find } = synced();
+      sync([...rows(row("left", null), row("right", null), row("tip", "left")), head("tip")]);
+      expect(await find()).toEqual({ left: true, right: false, tip: true });
+      sync([{ cursor: 0, kind: "delete", rowId: "", value: { deletedAt: 2_000 }, conflict: false }]);
+      sync([...rows(row("left", null), row("right", null), row("tip", "right")), head("tip")]);
+      expect(await find()).toEqual({ left: false, right: true, tip: true });
+    });
+
+    it("a legacy row without a parent made the tip", async () => {
+      const { sync, find } = synced();
+      sync([...rows(row("old", null)), head("old")]);
+      expect(await find()).toEqual({ old: true });
+      sync([...rows(row("flat")), head("flat")]);
+      expect(await find()).toEqual({ old: false, flat: true });
+    });
+
+    it("a null head", async () => {
+      const { sync, find } = synced();
+      sync([...rows(row("root", null), row("child", "root")), head("child")]);
+      expect(await find()).toEqual({ root: true, child: true });
+      sync([head(null)]);
+      expect(await find()).toEqual({ root: false, child: false });
+    });
   });
 });
 
