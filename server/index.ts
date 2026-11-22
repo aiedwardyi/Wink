@@ -3907,8 +3907,8 @@ bus.subscribe((event: RuntimeEvent) => {
         bindPeerTurn(event.threadId, event.turnId);
       }
       limitWaits.bind(event.threadId, event.turnId);
-      unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
       if (turnOwnerId) askTexts.started(turnOwnerId, event.threadId, event.turnId);
+      unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
       if (turnOwnerId) memorySleep.onTurn(turnOwnerId);
       break;
     case "session.started":
