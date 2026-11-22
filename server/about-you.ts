@@ -107,7 +107,7 @@ export type AboutYouAdd = { source: string; found: number; added: number; duplic
 export type AboutYouError = { error: "empty" | "too-large" | "failed" };
 
 /** Adds each fact of the paste once to the shared About You file. */
-export function addToAboutYou(paste: string, date: string): AboutYouAdd | AboutYouError {
+export function addToAboutYou(paste: string, date: string, accepted?: string[]): AboutYouAdd | AboutYouError {
   if (!paste.trim()) return { error: "empty" };
   if (bytes(paste) > ABOUT_YOU_MAX_PASTE) return { error: "too-large" };
   const source = sourceOf(paste);
@@ -132,6 +132,7 @@ export function addToAboutYou(paste: string, date: string): AboutYouAdd | AboutY
       seen.add(key);
       size += bytes(line) + 1;
       result.added++;
+      if (accepted && accepted.length < 8) accepted.push(fact);
     }
     if (result.added) {
       mkdirSync(join(DATA_DIR, "about-you"), { recursive: true, mode: 0o700 });
