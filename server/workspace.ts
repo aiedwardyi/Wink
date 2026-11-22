@@ -8,8 +8,8 @@
 // memory/ holds topic files the bot reads on demand with its ordinary
 // file tools. Plain markdown on purpose — the user can open, edit, or
 // delete anything the bot believes.
-import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
@@ -148,6 +148,9 @@ export function memoryRevision(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
+/** The revision readMemoryFile reports for these raw bytes. */
+const rawRevision = (raw: string) => memoryRevision(!raw.trim() || raw === MEMORY_SEED ? "" : raw);
+
 /** ensureWorkspace first: the user may edit memory before the bot has ever
  * run a turn, and the write must not depend on that ordering. */
 export function writeMemoryFile(botId: string, text: string): void {
@@ -156,14 +159,107 @@ export function writeMemoryFile(botId: string, text: string): void {
 }
 
 /** Writes only while MEMORY.md is still at `baseRevision`, so an editor never
- * overwrites notes it has not seen. No base writes as before, for older clients. */
+ * overwrites notes it has not seen. No base writes as before, for older clients.
+ * A second name pins the file it checked: a line another writer appends before
+ * the new text lands is carried over, and a file changed in place goes back as
+ * a conflict on Windows while nothing has touched the new text, else is parked
+ * as a conflict copy, so a save never erases an edit it did not see. */
 export function saveMemoryFile(botId: string, text: string, baseRevision?: string) {
-  const current = readMemoryFile(botId);
-  if (baseRevision !== undefined && baseRevision !== current.revision) {
+  const conflict = () => {
+    const current = readMemoryFile(botId);
     return { conflict: true as const, text: current.text, revision: current.revision };
+  };
+  const save = () => {
+    writeMemoryFile(botId, text);
+    return { conflict: false as const, ...readMemoryFile(botId) };
+  };
+  const stem = join(workspaceDir(botId), "memory", "MEMORY");
+  const park = (late: string) => parkCopy(stem, late);
+  if (baseRevision === undefined) return save();
+  if (baseRevision !== readMemoryFile(botId).revision) return conflict();
+  const path = join(ensureWorkspace(botId), "MEMORY.md");
+  const swap = swapPinned(path, text, (checked) => rawRevision(checked) === baseRevision, stem);
+  // no file yet, or a volume without hard links: the check above is all there is
+  if (swap === null) return save();
+  if (!swap.landed) return conflict();
+  if (swap.late === undefined) return { conflict: false as const, ...readMemoryFile(botId) };
+  let back: Swap | null = null;
+  try {
+    // the other writer's whole file goes back, and the caller saves again on top of it
+    back = swapPinned(path, swap.late, (current) => current === text, stem);
+  } catch {
+    /* a failed restore leaves the new file, and the old one is parked below */
   }
-  writeMemoryFile(botId, text);
-  return { conflict: false as const, ...readMemoryFile(botId) };
+  if (back?.landed) {
+    if (back.late !== undefined) park(back.late);
+    return conflict();
+  }
+  // a writer changed the new file after it landed, so it stays
+  park(swap.late);
+  const current = readMemoryFile(botId);
+  return current.text.startsWith(text) ? { conflict: false as const, ...current } : conflict();
+}
+
+// set aside where the prompt names it for the bot to merge, as memory sync parks a copy
+function parkCopy(stem: string, late: string): void {
+  writeFileAtomic(`${stem}.conflict-${memoryRevision(late).slice(0, 8)}.md`, late, { mode: 0o600 });
+}
+
+type Swap = { landed: boolean; late?: string };
+
+/** Puts `next` at `path` while `holds` accepts the file there. A second name pins the file it replaces: a line
+ * another writer appends to it before `next` lands is carried over, and any other change comes back as `late`,
+ * or off Windows, where that writer may not be done, the pinned file itself is parked as `<stem>.conflict-<id>.md`.
+ * Null when the file cannot be pinned. */
+function swapPinned(path: string, next: string, holds: (current: string) => boolean, stem: string): Swap | null {
+  const id = randomUUID();
+  const pin = `${path}.${process.pid}.${id}.tmp`;
+  try {
+    linkSync(path, pin);
+  } catch {
+    return null;
+  }
+  try {
+    const current = readFileSync(pin, "utf8");
+    if (!holds(current)) return { landed: false };
+    writeFileAtomic(path, next, { mode: 0o600 });
+    const late = readFileSync(pin, "utf8");
+    if (late === current) return { landed: true };
+    // only Windows refuses a rename over a file another process has open, so elsewhere `late` can be cut mid-write
+    const whole = process.platform === "win32";
+    if (late.startsWith(current) && (whole || late.endsWith("\n"))) {
+      try {
+        appendLines(path, late.slice(current.length));
+        return { landed: true };
+      } catch {
+        /* kept below like any other change */
+      }
+    }
+    if (whole) return { landed: true, late };
+    // the file itself, never its bytes, so a writer still writing finishes into the copy
+    linkSync(pin, `${stem}.conflict-${id.slice(0, 8)}.md`);
+    return { landed: true };
+  } finally {
+    try {
+      rmSync(pin, { force: true });
+    } catch {
+      /* best-effort cleanup: MEMORY.md or a parked copy holds its bytes */
+    }
+  }
+}
+
+/** Appends durably, on a line of its own even when the file's last line has no break. */
+export function appendLines(path: string, text: string): void {
+  const fd = openSync(path, "a+", 0o600);
+  try {
+    const { size } = fstatSync(fd);
+    const last = Buffer.alloc(1);
+    const lead = size > 0 && !text.startsWith("\n") && readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a ? "\n" : "";
+    writeFileSync(fd, `${lead}${text}`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Raw MEMORY.md bytes, including seed. Missing file is empty. */

@@ -2,7 +2,7 @@
 // a full file turned away. Computed after a reply settles, never at send.
 import { setImmediate } from "node:timers/promises";
 
-import type { DroppedNotes } from "./memory-pass.ts";
+import { OVERFLOW_FILE, type DroppedNotes } from "./memory-pass.ts";
 import { sessionNoticeDue, type SessionNoticeMarks } from "./session-notice.ts";
 import { MEMORY_LINE_MAX_BYTES, type MemoryHealth } from "./workspace.ts";
 
@@ -20,6 +20,8 @@ function listed(names: string[]): string {
   return items.length === 1 ? items[0]! : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
+const notes = (count: number) => (count === 1 ? "1 auto note" : `${count} auto notes`);
+
 export function memoryNotice(health: MemoryHealth, dropped?: DroppedNotes): string {
   const { longLines, orphans } = health;
   const parts = [
@@ -27,12 +29,13 @@ export function memoryNotice(health: MemoryHealth, dropped?: DroppedNotes): stri
     orphans.length
       ? `${listed(orphans.map((name) => `memory/${name}`))} ${orphans.length === 1 ? "has" : "have"} no pointer line in MEMORY.md`
       : "",
-    dropped?.dropped
-      ? `${dropped.dropped === 1 ? "1 auto note" : `${dropped.dropped} auto notes`} since ${monthDay(dropped.since)} ${dropped.dropped === 1 ? "was" : "were"} not saved because the file is full`
+    dropped?.lost?.dropped
+      ? `${notes(dropped.lost.dropped)} since ${monthDay(dropped.lost.since)} ${dropped.lost.dropped === 1 ? "was" : "were"} not saved because the file is full`
       : "",
+    dropped?.dropped ? `${notes(dropped.dropped)} since ${monthDay(dropped.since)} went to memory/${OVERFLOW_FILE} because MEMORY.md is full` : "",
   ].filter(Boolean);
   if (!parts.length) return "";
-  const move = longLines || dropped?.dropped;
+  const move = longLines || dropped?.dropped || dropped?.lost?.dropped;
   const fix = [
     move ? "This session, move details into memory/ side files, one topic each, with a short pointer line in MEMORY.md saying when to read it. Keep every fact and exact value whole." : "",
     orphans.length ? (move ? "Add the missing pointer lines too." : "This session, add a short pointer line in MEMORY.md for each, saying when to read it.") : "",
