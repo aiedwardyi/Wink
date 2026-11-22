@@ -52,7 +52,7 @@ export function ImportPromptBox({ className }: { className?: string }) {
 }
 
 /** Lines of a paste that looked like passwords, left out of memory. They live only in this component:
- * Keep saves one as written, to wherever the paste went; leaving keeps them out. */
+ * Keep saves one as written, to wherever the paste went, and it leaves the list; leaving keeps the rest out. */
 export function SkippedLines({ lines, keep, className }: { lines: string[]; keep: (line: string) => Promise<void>; className?: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -74,27 +74,24 @@ export function SkippedLines({ lines, keep, className }: { lines: string[]; keep
     }
   };
 
+  // a kept line is in memory now, so it no longer counts as skipped
+  const left = lines.flatMap((line, at) => (kept.has(at) ? [] : [{ line, at }]));
+  if (!left.length) return null;
+
   return (
     <div data-import-skipped className={className}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-fit items-center gap-1.5 text-left text-[12.5px] leading-5 text-ink-secondary hover:text-ink focus-visible:text-ink focus-visible:outline-none">
         {open ? <ChevronDown size={14} aria-hidden className="shrink-0" /> : <ChevronRight size={14} aria-hidden className="shrink-0" />}
-        {lines.length === 1 ? t("importCard.skippedOne") : t("importCard.skipped", { count: lines.length })}
+        {left.length === 1 ? t("importCard.skippedOne") : t("importCard.skipped", { count: left.length })}
       </button>
       <Fold open={open}>
         <ul className="mt-1.5 flex flex-col gap-1.5">
-          {lines.map((line, at) => (
+          {left.map(({ line, at }) => (
             <li key={at} className="flex items-center gap-2">
               <span className="min-w-0 flex-1 text-[13px] leading-5 text-ink [overflow-wrap:anywhere]">{line}</span>
-              {kept.has(at) ? (
-                <span className="flex h-7 shrink-0 items-center gap-1 px-2 text-[12px] text-ink-secondary">
-                  <Check size={14} aria-hidden className="text-success" />
-                  {t("importCard.kept")}
-                </span>
-              ) : (
-                <button type="button" onClick={() => void save(at)} disabled={busy} className={cn(ROW_BUTTON, "text-ink")}>
-                  {t("importCard.keep")}
-                </button>
-              )}
+              <button type="button" onClick={() => void save(at)} disabled={busy} className={cn(ROW_BUTTON, "text-ink")}>
+                {t("importCard.keep")}
+              </button>
             </li>
           ))}
         </ul>

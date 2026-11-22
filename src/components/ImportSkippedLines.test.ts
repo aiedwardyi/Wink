@@ -73,7 +73,7 @@ it("0 flags: the saved box is today's, with no review line", async () => {
   expect(saved.querySelector("[data-import-skipped]")).toBeNull();
 });
 
-it("flags: one compact line, folded, that lists each line with Keep; Keep saves it to the scope picked", async () => {
+it("flags: one compact line, folded, that lists each line with Keep; Keep saves it to the scope picked and takes it off the skipped list", async () => {
   const { host, calls } = await mount(createElement(ImportMemoryCard, { botId: "helper", onClose: () => {} }), ({ body }) => (body as { keep?: string[] }).keep
     ? { source: "ChatGPT", found: 1, added: 1, duplicates: 0, hidden: 0, flagged: [] }
     : { source: "ChatGPT", found: 2, added: 2, duplicates: 0, hidden: 0, flagged: [PASSWORD, PIN] });
@@ -86,9 +86,14 @@ it("flags: one compact line, folded, that lists each line with Keep; Keep saves 
   expect([...skipped.querySelectorAll("li")].map((li) => li.textContent)).toEqual([`${PASSWORD}Keep`, `${PIN}Keep`]);
   await click(skipped.querySelectorAll("li")[1]!.querySelector("button"));
   expect(calls.at(-1)).toEqual({ url: "/api/bots/helper/memory/import", body: { keep: [PIN], source: "ChatGPT" } });
-  expect(skipped.querySelectorAll("li")[1]!.textContent).toBe(`${PIN}Kept`);
-  expect(skipped.querySelectorAll("li")[0]!.textContent).toBe(`${PASSWORD}Keep`);
+  // the kept line is saved, so it leaves the count and the list at once
+  expect(toggle.textContent).toBe("1 line looks like a password, skipped");
+  expect([...skipped.querySelectorAll("li")].map((li) => li.textContent)).toEqual([`${PASSWORD}Keep`]);
   expect(host.querySelector("[data-import-saved]")!.textContent).toContain("Added 3 facts from ChatGPT · This bot");
+  await click(button(host, "Keep"));
+  expect(calls.at(-1)).toEqual({ url: "/api/bots/helper/memory/import", body: { keep: [PASSWORD], source: "ChatGPT" } });
+  expect(host.querySelector("[data-import-skipped]")).toBeNull();
+  expect(host.querySelector("[data-import-saved]")!.textContent).toContain("Added 4 facts from ChatGPT · This bot");
   // held in the open card only
   expect(JSON.stringify({ ...localStorage })).not.toContain("hunter2");
   expect(JSON.stringify({ ...sessionStorage })).not.toContain("hunter2");
@@ -111,7 +116,8 @@ it("Settings > Import Memory lists flagged lines the same way and keeps one to A
   await click(button(host, "Keep"));
   expect(calls.at(-1)).toEqual({ url: "/api/about-you", body: { keep: [PIN], source: "ChatGPT" } });
   expect(host.textContent).toContain("2 facts");
-  expect(host.querySelector("[data-import-skipped] li")!.textContent).toBe(`${PIN}Kept`);
+  // its only skipped line is kept, so the review line goes
+  expect(host.querySelector("[data-import-skipped]")).toBeNull();
 });
 
 it("Settings with 0 flags shows only today's note", async () => {
