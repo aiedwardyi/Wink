@@ -1288,7 +1288,7 @@ describe("open window and jump pill", () => {
       { id: "m596", at: 1, role: "bot", kind: "text", text: "REASON_FOR_ASKING;" },
       tool(597),
       tool(598),
-      { id: "m599", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true } },
+      { id: "m599", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true, replyId: "m596" } },
     ];
     const threadId = view === "chat" ? "thread-a" : "thread-g";
     const loaded = thread.slice(-200);
@@ -1303,6 +1303,48 @@ describe("open window and jump pill", () => {
     expect(host.querySelector('[data-mid="m596"]')!.textContent).toContain("REASON_FOR_ASKING;");
     await act(async () => { await vi.advanceTimersByTimeAsync(1900); });
     expect(flashed(host, "m596")).toBe(false);
+  });
+
+  it.each(["chat", "room"] as const)("pages in the %s question's text from before the loaded tail, then flashes it", async (view) => {
+    const thread: Message[] = [
+      ...rows(0, 300),
+      { id: "m300", at: 1, role: "bot", kind: "text", text: "OLD_REASON_FOR_ASKING;" },
+      ...Array.from({ length: 298 }, (_, i): Message => ({ id: `m${301 + i}`, at: 1, role: "bot", kind: "activity", tool: { name: "Read", ok: true } })),
+      { id: "m599", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true, staysOpen: true, replyId: "m300" } },
+    ];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    await act(async () => host.querySelector<HTMLElement>("[data-question-body]")!.click());
+    await vi.waitFor(() => expect(flashed(host, "m300")).toBe(true));
+    expect(host.querySelector('[data-mid="m300"]')!.textContent).toContain("OLD_REASON_FOR_ASKING;");
+  });
+
+  it.each(["chat", "room"] as const)("does nothing on a tap of the %s question asked by a woken turn with no text", async (view) => {
+    const ada = view === "room" ? { from: { botId: "ada", name: "Ada", color: "blue" as const } } : {};
+    const between: Message = view === "room"
+      ? { id: "wake", at: 1, role: "bot", kind: "text", text: "MAX_BRINGS_ADA_BACK;", from: { botId: "max", name: "Max", color: "blue" } }
+      : { id: "wake", at: 1, role: "bot", kind: "note", text: "[pane aaaaaaaa] DONE JOB" };
+    const thread: Message[] = [
+      ...rows(0, 500),
+      { id: "prev", at: 1, role: "bot", kind: "text", text: "EARLIER_TURN_REPLY;", ...ada },
+      between,
+      ...Array.from({ length: 90 }, (_, i): Message => ({ id: `t${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "Read", ok: true }, ...ada })),
+      { id: "ask", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Revert the deploy?", options: ["Yes", "No"], askUser: true, staysOpen: true }, ...ada },
+    ];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    const body = host.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.className).not.toContain("cursor-pointer");
+    await act(async () => body.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(store.state.focusMessage).toBeNull();
+    expect(flashed(host, "prev")).toBe(false);
   });
 
   it.each(["chat", "room"] as const)("does nothing on a tap of the %s question card that came with no text", async (view) => {

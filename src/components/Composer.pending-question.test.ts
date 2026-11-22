@@ -600,7 +600,8 @@ describe("jumping from the question card", () => {
   const tap = () => act(async () => host!.querySelector<HTMLElement>("[data-question-body]")!.click());
 
   it("lands on the bot's own text from the turn that raised the pinned question", async () => {
-    await mount({ bot: bot([reply("reply-1"), tool("t1"), question]) });
+    const stamped = ask({ replyId: "reply-1" });
+    await mount({ bot: bot([reply("reply-1"), tool("t1"), stamped]) });
     await tap();
     expect(focused).toMatchObject({ threadId: "asker-thread", messageId: "reply-1", consumed: false });
   });
@@ -612,15 +613,15 @@ describe("jumping from the question card", () => {
     const group: Group = {
       id: "room", threadId: "room-thread", name: "War room", memberIds: [ada.id, max.id], bulletin: "",
       defaultResponder: { kind: "everyone" }, unread: false, createdAt: 1,
-      messages: [reply("ada-text", from(ada)), reply("max-text", from(max)), { ...question, from: from(ada) }],
+      messages: [reply("ada-text", from(ada)), reply("max-text", from(max)), { ...ask({ replyId: "ada-text" }), from: from(ada) }],
     };
     await mount({ group, members: [ada, max] });
     await tap();
     expect(focused).toMatchObject({ threadId: "room-thread", messageId: "ada-text" });
   });
 
-  it("does nothing for a question that came with no text", async () => {
-    await mount({ bot: bot([tool("t1"), question]) });
+  it("does nothing for a question whose turn wrote no text, even with an earlier turn's text above it", async () => {
+    await mount({ bot: bot([reply("earlier"), tool("t1"), question]) });
     expect(host!.querySelector("[data-question-body]")!.className).not.toContain("cursor-pointer");
     await tap();
     expect(focused).toBeNull();

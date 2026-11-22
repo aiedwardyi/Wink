@@ -291,7 +291,7 @@ export function Composer({
   const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
   const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
-  const jumpId = question ? questionJumpId(threadMessages, question, pinned) : null;
+  const jumpId = question ? questionJumpId(threadMessages, question, pinned, Boolean(group ? group.hasMore : bot?.hasMore)) : null;
   const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
   const questionAsker = question
     ? group
