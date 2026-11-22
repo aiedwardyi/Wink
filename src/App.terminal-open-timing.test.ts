@@ -29,15 +29,22 @@ const mount = async () => {
     groups: [], selectedId: "b1",
   }));
   const hold = { id: "", requested: false, release: () => {}, gate: Promise.resolve() };
+  const first = { reads: 0, requested: false, release: () => {}, gate: Promise.resolve() };
   const roster = async (path: string) => {
     const id = new URL(path, "http://localhost").searchParams.get("sessionId");
+    // The default-pane reads: the shortcut's own lookup comes first, then the opened view's first read.
+    if (path.endsWith("/api/bots/b1/terminal") && ++first.reads === 2) {
+      first.requested = true;
+      await first.gate;
+    }
     if (hold.id && id === hold.id) {
       hold.requested = true;
       await hold.gate;
     }
     return new Response(JSON.stringify({ sessionId: id ?? "main", generation: 1, screenText: "ready", panes }));
   };
-  const fetched = vi.fn((input: string, _init?: RequestInit) => String(input).includes("/terminal") ? roster(String(input)) : new Promise<Response>(() => {}));
+  const fetched = vi.fn((input: string, _init?: RequestInit) => String(input).includes("/terminal") && !String(input).includes("pane-counts") ? roster(String(input)) : new Promise<Response>(() => {}));
+  vi.useFakeTimers({ toFake: ["performance"] });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
     matches: query.includes("max-width"), media: query, onchange: null,
@@ -51,10 +58,12 @@ const mount = async () => {
   const root = createRoot(host);
   await act(async () => root.render(createElement(App)));
   return {
+    /** Holds back the opened view's first default-pane read, then the read of `id`; each runs on once released. */
     hold: (id: string) => {
+      first.gate = new Promise<void>((done) => { first.release = done; });
       hold.id = id;
       hold.gate = new Promise<void>((done) => { hold.release = done; });
-      return hold;
+      return { first, hold };
     },
     openWorker: (n: number) => act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: `Digit${n}`, altKey: true, bubbles: true, cancelable: true }));
@@ -69,6 +78,7 @@ const mount = async () => {
       lastViewedPanes.clear();
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
+      vi.useRealTimers();
       localStorage.clear();
     },
   };
@@ -78,29 +88,30 @@ it("starts a terminal open's timing at the tap, so the lazy chunk's download is 
   const f = await mount();
   try {
     await f.openWorker(2);
-    await new Promise((done) => setTimeout(done, 300));
-    expect(f.records()).toEqual([]);
+    vi.advanceTimersByTime(300);
     chunk.release();
     await vi.waitFor(() => expect(f.records()).toHaveLength(1));
     const { tap, fetchStart, paint } = f.records()[0].terminal!;
-    expect(fetchStart! - tap).toBeGreaterThanOrEqual(250);
+    expect(fetchStart! - tap).toBeGreaterThanOrEqual(300);
     expect(paint).toBeGreaterThanOrEqual(fetchStart!);
   } finally { await f.unmount(); }
 });
 
-it("finishes a worker open only when that worker's read is shown, not the first pane's", async () => {
+it("finishes a worker open when that worker's read is shown, not when the first pane's is", async () => {
   chunk.release();
   const f = await mount();
   try {
-    const held = f.hold(PANES[1]);
+    const { first, hold } = f.hold(PANES[1]);
     await f.openWorker(2);
-    await vi.waitFor(() => expect(held.requested).toBe(true));
-    await new Promise((done) => setTimeout(done, 300));
-    expect(f.records()).toEqual([]);
-    held.release();
+    await vi.waitFor(() => expect(first.requested).toBe(true));
+    vi.advanceTimersByTime(300);
+    first.release();
+    await vi.waitFor(() => expect(hold.requested).toBe(true));
+    vi.advanceTimersByTime(300);
+    hold.release();
     await vi.waitFor(() => expect(f.records()).toHaveLength(1));
     const { tap, fetchStart, paint } = f.records()[0].terminal!;
-    expect(fetchStart! - tap).toBeGreaterThanOrEqual(0);
-    expect(paint! - fetchStart!).toBeGreaterThanOrEqual(250);
+    expect(fetchStart! - tap).toBeGreaterThanOrEqual(300);
+    expect(paint! - fetchStart!).toBeGreaterThanOrEqual(300);
   } finally { await f.unmount(); }
 });
