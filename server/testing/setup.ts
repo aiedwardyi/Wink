@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
 import { removeTestData, startTestRun } from "../../companion/src/test-profile.ts";
+import { replaceKeyringTool } from "../drivers/os-keyring.ts";
 import { scrubProfileEnv } from "./profile-env.ts";
 
 const home = startTestRun();
@@ -25,6 +26,12 @@ delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 // wholesale, and "it is safe because of a line in another file" is not the
 // footing that delete should stand on.
 process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
+
+// The OS credential store (Windows Credential Manager, macOS keychain) is the user's real one whatever HOME
+// says: no test runs its tool. Here it is a store that refuses everything; a test that needs one injects its own.
+replaceKeyringTool((_file, _args, _options, done) => {
+  done(Object.assign(new Error("tests never run the OS keyring tool"), { code: "EACCES" }), "");
+});
 
 // SQLite keeps the database file open for the lifetime of its handle.
 // Windows will not remove a directory containing an open database, so close

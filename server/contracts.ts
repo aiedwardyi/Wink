@@ -515,6 +515,11 @@ export interface ProviderInstance {
   /** Refresh a live catalog without recreating the provider instance. */
   readonly refreshModels?: () => Promise<void>;
   loginConfig?(): { cli: string; env: Record<string, string | undefined> };
+  /** Its logout command failed for `failure`: sign out without it where the engine can. True once signed out
+   * (the engine may finish the job when its running turns end); false leaves the logout failed. */
+  signOutWithoutCli?(failure: import("./engine-login.ts").LoginCapture["error"]): Promise<boolean>;
+  /** A sign-in is starting: drop any sign-out still waiting on running turns. */
+  signingIn?(): void;
   readonly adapter: ProviderAdapter;
   /** `rescan` = the user asked (Check again, saved a CLI): probes that
    * would start WSL are allowed to, where a passive refresh may not.

@@ -391,6 +391,7 @@ export class ProviderRegistry {
     if (!args) return null;
     const env = device ? { ...config.env, ...login?.deviceEnv } : config.env;
     const paste = device || Boolean(config.account && config.engine === "claudeAgent");
+    this.get(instanceId)?.signingIn?.();
     const capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
     return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
       ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
@@ -416,6 +417,8 @@ export class ProviderRegistry {
       await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
       await this.logins.wait(instanceId);
       let success = this.logins.state(instanceId) === "complete";
+      const signingOut = this.get(instanceId);
+      if (!success && !config.account && signingOut?.signOutWithoutCli) success = await signingOut.signOutWithoutCli(this.logins.capture(instanceId).error);
       if (success || this.accounts.has(instanceId)) {
         if (success) this.logins.clear(instanceId);
         const previous = this.probed.get(instanceId);

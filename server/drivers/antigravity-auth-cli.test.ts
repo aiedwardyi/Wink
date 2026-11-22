@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,33 +86,19 @@ describe("agy sign-in helper", () => {
   });
 
   it.each([["FAKE_AGY_OFFLINE", "(offline): Error: failed to check for updates"], ["FAKE_AGY_INSTALL_FAIL", "(failed): Error: failed to install update"]])("says why an agy older than 1.5 could not update itself to sign in (%s)", async (flag, reason) => {
-    const result = await run("login", { OMB_AGY_CLI: `"${process.execPath}" "${oldAgy}"`, [flag]: "1", OMB_AGY_KEYRING: "omb-test-absent:antigravity" });
+    const result = await run("login", { OMB_AGY_CLI: `"${process.execPath}" "${oldAgy}"`, [flag]: "1" });
     expect(result.status).toBe(1);
     expect(result.calls).toEqual(["acp", "update"]);
     expect(result.stderr).toContain(`agy is older than 1.5 and could not update itself ${reason}`);
     expect(result.stderr).not.toContain("ACP");
   });
 
-  it.runIf(process.platform === "win32").each(["FAKE_AGY_OFFLINE", "FAKE_AGY_INSTALL_FAIL"])("signs an agy older than 1.5 out by deleting its saved sign-in when it can't update (%s)", async (flag) => {
-    // A throwaway Credential Manager entry stands in for agy's gemini:antigravity.
-    const target = `omb-test-${randomUUID()}:antigravity`;
-    const listed = () => execFileSync("cmdkey.exe", ["/list"], { encoding: "utf8", windowsHide: true }).includes(`target=${target}`);
-    execFileSync("cmdkey.exe", [`/generic:${target}`, "/user:antigravity", "/pass:not-a-token"], { windowsHide: true });
-    try {
-      expect(listed()).toBe(true);
-      const result = await run("logout", { OMB_AGY_CLI: `"${process.execPath}" "${oldAgy}"`, OMB_AGY_KEYRING: target, [flag]: "1" });
-      expect(result.status).toBe(0);
-      expect(result.calls).toEqual(["acp", "update"]);
-      expect(listed()).toBe(false);
-    } finally {
-      try { execFileSync("cmdkey.exe", [`/delete:${target}`], { stdio: "ignore", windowsHide: true }); } catch {}
-    }
-  });
-
-  it("logs out over ACP, not through the keyring, when agy has an ACP server", async () => {
-    const result = await run("logout", { OMB_AGY_KEYRING: "omb-test-absent:antigravity" });
-    expect(result.status).toBe(0);
-    expect(result.calls).toEqual(["initialize", "logout"]);
+  it.each([["FAKE_AGY_OFFLINE", "(offline)"], ["FAKE_AGY_INSTALL_FAIL", "(failed)"]])("leaves an agy older than 1.5 that can't update signed in, and says why, for the driver to sign out (%s)", async (flag, reason) => {
+    // The helper never touches the OS keyring: the driver deletes agy's saved sign-in once its running turns end.
+    const result = await run("logout", { OMB_AGY_CLI: `"${process.execPath}" "${oldAgy}"`, [flag]: "1" });
+    expect(result.status).toBe(1);
+    expect(result.calls).toEqual(["acp", "update"]);
+    expect(result.stderr).toContain(`agy is older than 1.5 and could not update itself ${reason}`);
   });
 
   it("fails when agy cannot start", async () => {

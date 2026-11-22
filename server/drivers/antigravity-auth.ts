@@ -1,16 +1,14 @@
-import { execFile, type ExecFileException, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { cachedSignIn } from "./auth-status.ts";
-
-type KeyringExec = (file: string, args: string[], options: ExecFileOptionsWithStringEncoding, done: (error: ExecFileException | null, stdout: string) => void) => void;
+import { runKeyringTool, type KeyringExec } from "./os-keyring.ts";
 
 /** Where agy saves its sign-in: the OS keyring entry service "gemini", account "antigravity". */
 export const ANTIGRAVITY_KEYRING = "gemini:antigravity";
 
-export function probeAntigravitySignIn(platform = process.platform, run: KeyringExec = execFile): Promise<boolean | undefined> {
+export function probeAntigravitySignIn(platform = process.platform, run: KeyringExec = runKeyringTool): Promise<boolean | undefined> {
   if (platform !== "win32" && platform !== "darwin") return Promise.resolve(undefined);
   const file = platform === "win32" ? "cmdkey.exe" : "security";
   const args = platform === "win32" ? ["/list"] : ["find-generic-password", "-s", "gemini", "-a", "antigravity"];
@@ -25,15 +23,64 @@ export function probeAntigravitySignIn(platform = process.platform, run: Keyring
   });
 }
 
-/** Deletes a saved agy sign-in (service:account) from the OS keyring; false where there is none to delete or it fails. */
-export function forgetAntigravitySignIn(target: string, platform = process.platform, run: KeyringExec = execFile): Promise<boolean> {
-  const split = target.indexOf(":");
-  if (split < 1 || split === target.length - 1 || (platform !== "win32" && platform !== "darwin")) return Promise.resolve(false);
+/** Deletes agy's saved sign-in from the OS keyring, and no other entry: any other name is refused.
+ * False where there is none to delete or it fails. */
+export function forgetAntigravitySignIn(target: typeof ANTIGRAVITY_KEYRING, platform = process.platform, run: KeyringExec = runKeyringTool): Promise<boolean> {
+  if (target !== ANTIGRAVITY_KEYRING || (platform !== "win32" && platform !== "darwin")) return Promise.resolve(false);
   const file = platform === "win32" ? "cmdkey.exe" : "security";
-  const args = platform === "win32" ? [`/delete:${target}`] : ["delete-generic-password", "-s", target.slice(0, split), "-a", target.slice(split + 1)];
+  const args = platform === "win32" ? ["/delete:gemini:antigravity"] : ["delete-generic-password", "-s", "gemini", "-a", "antigravity"];
   return new Promise((resolve) => {
     run(file, args, { windowsHide: true, timeout: 5000, encoding: "utf8" }, (error) => resolve(!error));
   });
+}
+
+/**
+ * Signs agy out by deleting its saved sign-in, without cutting off a running turn: agy before 1.5 rereads that
+ * sign-in on every request, so a delete under a running turn fails its reply. While turns run, sign-out reads as
+ * done and no new turn starts; the delete lands when the last running turn ends. A sign-in drops a waiting delete.
+ */
+export function antigravityKeyringSignOut(forget: () => Promise<boolean>) {
+  const running = new Set<string>();
+  const signedOut = new Set<() => void>();
+  let waiting = false;
+  let landing: Promise<boolean> | undefined;
+  const land = () => landing ??= (async () => {
+    try {
+      const ok = await forget();
+      if (ok) for (const listener of signedOut) listener();
+      return ok;
+    } finally {
+      waiting = false;
+      landing = undefined;
+    }
+  })();
+  return {
+    /** A sign-out is waiting for running turns or its delete: read as signed out, start no turn. */
+    get waiting() {
+      return waiting;
+    },
+    turnStarted(id: string) {
+      running.add(id);
+    },
+    turnEnded(id: string) {
+      if (!running.delete(id) || !waiting || running.size || landing) return;
+      void land().then((ok) => {
+        if (!ok) console.warn("[antigravity] could not delete agy's saved sign-in after its running turns ended");
+      });
+    },
+    /** True once signed out, or once the delete is waiting on running turns. */
+    async signOut(): Promise<boolean> {
+      waiting = true;
+      return running.size && !landing ? true : land();
+    },
+    signingIn() {
+      waiting = false;
+    },
+    onSignedOut(listener: () => void) {
+      signedOut.add(listener);
+      return () => signedOut.delete(listener);
+    },
+  };
 }
 
 const LOG_EVENT = /applyAuthResult: email=([^,\s]+),|Logging out current user/g;

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ANTIGRAVITY_KEYRING, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
 
 const execFile = vi.fn();
 
@@ -42,8 +42,17 @@ describe("Antigravity keyring sign-in", () => {
     execFile.mockImplementation((_file, _args, _opts, done) => done({ code: 1 }, ""));
     expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "win32", execFile)).toBe(false);
     execFile.mockClear();
-    for (const target of ["gemini", ":antigravity", "gemini:"]) expect(await forgetAntigravitySignIn(target, "win32", execFile)).toBe(false);
     expect(await forgetAntigravitySignIn(ANTIGRAVITY_KEYRING, "linux", execFile)).toBe(false);
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["win32", "darwin"] as const)("refuses to delete any entry but gemini:antigravity (%s)", async (platform) => {
+    execFile.mockImplementation((_file, _args, _opts, done) => done(null, ""));
+    const others = ["omb-test-0b5e3c1e-5d1a-4c55-9d43-3f0c6f1f8d10:antigravity", "gemini:other", "other:antigravity", "Gemini:antigravity", "gemini:antigravity ", "gemini:antigravity\n", "gemini", ":antigravity", "gemini:", ""];
+    for (const target of others) {
+      // SAFETY: a JavaScript caller can pass any string; the literal type is the compile-time half of this guard.
+      expect(await forgetAntigravitySignIn(target as typeof ANTIGRAVITY_KEYRING, platform, execFile)).toBe(false);
+    }
     expect(execFile).not.toHaveBeenCalled();
   });
 
@@ -86,6 +95,61 @@ describe("Antigravity keyring sign-in", () => {
     auth.record(true);
     finish(undefined);
     expect(await refresh).toBe(true);
+  });
+});
+
+describe("Antigravity keyring sign-out", () => {
+  const deferred = () => {
+    let resolve!: (ok: boolean) => void;
+    return { promise: new Promise<boolean>((done) => { resolve = done; }), resolve: (ok: boolean) => resolve(ok) };
+  };
+
+  it("deletes at once when no turn runs", async () => {
+    const forget = vi.fn(async () => true);
+    const signedOut = vi.fn();
+    const keyring = antigravityKeyringSignOut(forget);
+    keyring.onSignedOut(signedOut);
+    expect(await keyring.signOut()).toBe(true);
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(signedOut).toHaveBeenCalledTimes(1);
+    expect(keyring.waiting).toBe(false);
+  });
+
+  it("waits for every running turn, reads as signed out meanwhile, then deletes once", async () => {
+    const forget = vi.fn(async () => true);
+    const keyring = antigravityKeyringSignOut(forget);
+    keyring.turnStarted("a");
+    keyring.turnStarted("b");
+    expect(await keyring.signOut()).toBe(true);
+    expect(keyring.waiting).toBe(true);
+    keyring.turnEnded("a");
+    keyring.turnEnded("never-started");
+    expect(forget).not.toHaveBeenCalled();
+    keyring.turnEnded("b");
+    await vi.waitFor(() => expect(keyring.waiting).toBe(false));
+    expect(forget).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays signed out while the delete runs, and reports a failed delete", async () => {
+    const pending = deferred();
+    const keyring = antigravityKeyringSignOut(() => pending.promise);
+    const out = keyring.signOut();
+    expect(keyring.waiting).toBe(true);
+    pending.resolve(false);
+    expect(await out).toBe(false);
+    expect(keyring.waiting).toBe(false);
+  });
+
+  it("drops a waiting delete when a sign-in starts", async () => {
+    const forget = vi.fn(async () => true);
+    const keyring = antigravityKeyringSignOut(forget);
+    keyring.turnStarted("a");
+    await keyring.signOut();
+    keyring.signingIn();
+    expect(keyring.waiting).toBe(false);
+    keyring.turnEnded("a");
+    await Promise.resolve();
+    expect(forget).not.toHaveBeenCalled();
   });
 });
 

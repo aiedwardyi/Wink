@@ -4,7 +4,6 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly;
 // spawnCli resolves it to `node <script>`, so these run everywhere.
-import { execFileSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,17 +38,17 @@ import * as procs from "../procs.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
 
-// agy's sign-in entry is a throwaway Credential Manager name here, never the real gemini:antigravity.
-const keyringTarget = vi.hoisted(() => `omb-test-${crypto.randomUUID()}:antigravity`);
-vi.mock("./antigravity-auth.ts", async (original) => ({ ...await original<typeof import("./antigravity-auth.ts")>(), ANTIGRAVITY_KEYRING: keyringTarget }));
-
-/** agy 1.3.0 as recorded: no `acp`, and `agy update` with no network. */
-function oldOfflineAgy(dir: string, calls: string): string {
+/** agy 1.3.0 as recorded: no `acp`, and `agy update` with no network. Turns run the fake CLI with `turnEnv`. */
+function oldOfflineAgy(dir: string, calls: string, turnEnv: Record<string, string> = {}): string {
   const reply = (name: string) => JSON.parse(readFileSync(new URL(`../../test/fixtures/recorded/antigravity/${name}.json`, import.meta.url), "utf8")).reply;
   const fake = join(dir, "fake-agy.cjs");
   writeFileSync(fake, `
 const fs = require("node:fs");
 if (process.argv.includes("--version")) { console.log("1.3.0"); process.exit(0); }
+if (process.argv[2] !== "acp" && process.argv[2] !== "update") {
+  const turn = require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(FAKE_CLI)}, ...process.argv.slice(2)], { stdio: "inherit", env: { ...process.env, ...${JSON.stringify(turnEnv)} } });
+  process.exit(turn.status ?? 1);
+}
 fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
 const reply = process.argv.includes("update") ? ${JSON.stringify(reply("update-offline"))} : ${JSON.stringify(reply("acp-unsupported"))};
 process.stdout.write(reply.stdout ?? "", () => process.stderr.write(reply.stderr, () => process.exit(reply.exitCode)));
@@ -57,9 +56,24 @@ process.stdout.write(reply.stdout ?? "", () => process.stderr.write(reply.stderr
   return fake;
 }
 
+/** agy's saved sign-in as a file: what the driver probes and deletes in place of the OS keyring. */
+function fakeKeyring(dir: string) {
+  const entry = join(dir, "gemini-antigravity");
+  writeFileSync(entry, "not-a-token");
+  vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => existsSync(entry)));
+  const forget = vi.mocked(auth.forgetAntigravitySignIn).mockImplementation(async (target) => {
+    if (target !== auth.ANTIGRAVITY_KEYRING || !existsSync(entry)) return false;
+    rmSync(entry);
+    return true;
+  });
+  return { entry, forget };
+}
+
 const createSignIn = auth.antigravitySignIn;
 beforeEach(() => {
   vi.spyOn(auth, "antigravitySignIn").mockImplementation(() => createSignIn(async () => true));
+  // No test here reaches the OS keyring; a test that signs out hands the driver a fake one (fakeKeyring).
+  vi.spyOn(auth, "forgetAntigravitySignIn").mockResolvedValue(false);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -1247,25 +1261,76 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     }
   });
 
-  it.runIf(process.platform === "win32")("signs an agy without ACP (1.3.0) out offline, and the Connections row reads signed out", async () => {
+  it("signs an agy without ACP (1.3.0) out offline by deleting only gemini:antigravity, and the Connections row reads signed out", async () => {
     const dir = mkdtempSync(join(tmpdir(), "omb-agy-offline-"));
     const calls = join(dir, "calls.txt");
     const fake = oldOfflineAgy(dir, calls);
-    const listed = () => execFileSync("cmdkey.exe", ["/list"], { encoding: "utf8", windowsHide: true }).includes(`target=${keyringTarget}`);
-    execFileSync("cmdkey.exe", [`/generic:${keyringTarget}`, "/user:antigravity", "/pass:not-a-token"], { windowsHide: true });
-    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => listed()));
+    const keyring = fakeKeyring(dir);
     const registry = new ProviderRegistry([AntigravityDriver]);
     try {
       await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
-      expect(registry.get("agy-old")!.loginConfig!().env.OMB_AGY_KEYRING).not.toBe("gemini:antigravity");
+      expect(Object.keys(registry.get("agy-old")!.loginConfig!().env)).not.toContain("OMB_AGY_KEYRING");
       expect((await registry.get("agy-old")!.snapshot()).authenticated).toBe(true);
       expect(await registry.signOut("agy-old")).toBe(true);
-      expect(listed()).toBe(false);
+      expect(keyring.forget.mock.calls).toEqual([["gemini:antigravity"]]);
+      expect(existsSync(keyring.entry)).toBe(false);
       expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update"]);
-      expect((await registry.describe()).find((row) => row.instanceId === "agy-old")!.snapshot.authenticated).toBe(false);
+      const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-old")!;
+      expect(row.snapshot.authenticated).toBe(false);
+      expect(row.loginState).toBeUndefined();
     } finally {
       await registry.disposeAll();
-      try { execFileSync("cmdkey.exe", [`/delete:${keyringTarget}`], { stdio: "ignore", windowsHide: true }); } catch {}
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a Gemini turn started before an offline Sign out finish its reply; the next turn asks for sign-in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-overlap-"));
+    const calls = join(dir, "calls.txt");
+    const hold = join(dir, "hold");
+    const ready = join(dir, "ready");
+    const keyring = fakeKeyring(dir);
+    // agy 1.3.0 rereads its saved sign-in for each request, as Gate B's fake did.
+    const fake = oldOfflineAgy(dir, calls, { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry });
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      const live = registry.get("agy-old")!;
+      const recorder = recordEvents(live.adapter);
+      const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const errors = (threadId: string) => recorder.events.filter((event) => event.type === "runtime.error" && event.threadId === threadId);
+      expect((await live.snapshot()).authenticated).toBe(true);
+
+      await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
+      await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(existsSync(keyring.entry)).toBe(true);
+      expect((await registry.describe()).find((entry) => entry.instanceId === "agy-old")!.snapshot.authenticated).toBe(false);
+
+      // Sent after Sign out, while the earlier turn still runs: asks for sign-in without starting agy.
+      rmSync(ready);
+      await live.adapter.sendTurn({ threadId: "t-during", text: "hi" });
+      expect(await ended("t-during")).toMatchObject({ ok: false });
+      expect(errors("t-during")).toEqual([expect.objectContaining({ signIn: true, signedOut: true })]);
+      expect(existsSync(ready)).toBe(false);
+      expect(keyring.forget).not.toHaveBeenCalled();
+
+      writeFileSync(hold, "");
+      expect(await ended("t-before")).toMatchObject({ ok: true });
+      expect(errors("t-before")).toEqual([]);
+      expect(recorder.events.some((event) => event.type === "item.completed" && event.threadId === "t-before" && event.itemType === "assistant_text")).toBe(true);
+      await vi.waitFor(() => expect(existsSync(keyring.entry)).toBe(false));
+      expect(keyring.forget.mock.calls).toEqual([["gemini:antigravity"]]);
+      expect((await live.snapshot()).authenticated).toBe(false);
+
+      // agy itself now reads signed out.
+      await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect(await ended("t-next")).toMatchObject({ ok: false });
+      expect(errors("t-next")).toEqual([expect.objectContaining({ signIn: true })]);
+      expect(existsSync(ready)).toBe(true);
+    } finally {
+      writeFileSync(hold, "");
+      await registry.disposeAll();
       rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -49,7 +49,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { ANTIGRAVITY_KEYRING, antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
 import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
@@ -531,6 +531,9 @@ export function measureAntigravityTransportLengths(opts: {
   };
 }
 
+// agy's saved sign-in is one per machine, so every instance shares one keyring sign-out and its running turns.
+const keyringSignOut = antigravityKeyringSignOut(() => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING));
+
 export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Gemini (Antigravity)", supportsMultipleInstances: true },
@@ -555,6 +558,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const { instanceId, config } = input;
     const env = antigravityEnvironment(input.environment);
     const signIn = antigravitySignIn(undefined, () => readAntigravityLogSignIn(env));
+    const forgetSignedOut = keyringSignOut.onSignedOut(() => signIn.record(false));
     const catalogEnv: Record<string, string | undefined> = env;
     let models = STATIC_ANTIGRAVITY_MODELS;
     const refreshModels = async () => {
@@ -577,8 +581,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const children = new Set<ChildProcess>();
 
     const emit = (event: RuntimeEvent) => {
-      if (event.type === "turn.completed" && event.ok) signIn.record(true);
+      if (event.type === "turn.completed" && event.ok && !keyringSignOut.waiting) signIn.record(true);
       else if (event.type === "runtime.error" && event.signIn) signIn.record(false);
+      if (event.type === "turn.started") keyringSignOut.turnStarted(`${instanceId}\0${event.turnId}`);
+      else if (event.type === "turn.completed") keyringSignOut.turnEnded(`${instanceId}\0${event.turnId}`);
       finishNative(event);
       for (const l of [...listeners]) l(event);
     };
@@ -614,6 +620,13 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       if (disposed) throw new Error("Antigravity instance is disposed");
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = relaunchOf ?? newId();
+      // Signed out, with the delete waiting on turns that started before: this new turn asks for sign-in instead.
+      if (!relaunchOf && keyringSignOut.waiting) {
+        emit({ ...base(threadId, turnId), type: "turn.started" });
+        emit({ ...base(threadId, turnId), type: "runtime.error", message: "Gemini is not signed in.", setup: true, signIn: true, signedOut: true });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "signed_out", cost: null });
+        return { turnId };
+      }
 
       // Default cwd to a per-thread workspace under DATA_DIR — deliberately
       // NOT homedir(): a bot running unattended should not get the whole home
@@ -1146,7 +1159,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
+      const authenticated = keyringSignOut.waiting ? false : await signIn.check(opts?.rescan || opts?.refresh);
       return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
     };
 
@@ -1164,8 +1177,16 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       snapshot,
       loginConfig: () => ({
         cli: `"${process.execPath}" "${SPAWNED_PROXIES.antigravityAuth}"`,
-        env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli, OMB_AGY_KEYRING: ANTIGRAVITY_KEYRING },
+        env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli },
       }),
+      // agy older than 1.5 has no ACP logout, and could not update to get one: delete its saved sign-in instead.
+      signOutWithoutCli: async (failure) => {
+        if (failure !== "update_offline" && failure !== "update_failed") return false;
+        const signedOut = await keyringSignOut.signOut();
+        if (signedOut) signIn.record(false);
+        return signedOut;
+      },
+      signingIn: () => keyringSignOut.signingIn(),
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {
@@ -1286,6 +1307,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       },
       dispose: async () => {
         disposed = true;
+        forgetSignedOut();
         for (const { stop } of active.values()) stop();
         reapChildren(true); // escalate to SIGKILL — disposal must reap every child
         listeners.clear();

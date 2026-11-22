@@ -1,12 +1,11 @@
 // Signs agy in or out over its ACP server: it has no login or logout subcommand.
 // agy before 1.5 has no ACP server, so the helper updates it once and carries on; Wink's turns keep auto-update off.
-// A logout whose update can't run deletes agy's saved sign-in from the OS keyring entry OMB_AGY_KEYRING names.
+// When the update can't run, it says why; a logout then falls back to the driver deleting agy's saved sign-in.
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
 import { resolveCliSpawn } from "../env-path.ts";
 import { killCliTree } from "../kill-cli-tree.ts";
-import { forgetAntigravitySignIn } from "./antigravity-auth.ts";
 
 const AUTH_URL = /https:\/\/accounts\.google\.com\/[^\s"'\\]+/;
 // What agy 1.3 prints for `agy acp` before exiting with code 2.
@@ -19,7 +18,6 @@ function agy(args: string[], stdio: "pipe" | "inherit") {
   const { command, args: spawnArgs } = resolveCliSpawn(process.env.OMB_AGY_CLI || "agy", args);
   const env = { ...process.env };
   delete env.OMB_AGY_CLI;
-  delete env.OMB_AGY_KEYRING;
   const child = spawn(command, spawnArgs, { stdio: [stdio, stdio, "pipe"], windowsHide: true, env });
   let stderr = "";
   child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
@@ -91,20 +89,19 @@ function update(): Promise<string | undefined> {
   });
 }
 
-async function updating(mode: string, run: () => Promise<number | typeof OLD>): Promise<number> {
+async function updating(run: () => Promise<number | typeof OLD>): Promise<number> {
   const result = await run();
   if (result !== OLD) return result;
   const failed = await update();
   const retried = failed === undefined ? await run() : OLD;
   if (retried !== OLD) return retried;
-  const keyring = process.env.OMB_AGY_KEYRING;
-  if (mode === "logout" && keyring && await forgetAntigravitySignIn(keyring)) return 0;
+  // engine-login reads this line; a logout's driver then deletes agy's saved sign-in itself.
   console.error(`agy is older than 1.5 and could not update itself (${failed && OFFLINE.test(failed) ? "offline" : "failed"})${failed ? `: ${failed}` : ""}`);
   return 1;
 }
 
 const mode = process.argv[2];
-if (mode === "login" && process.argv[3] === "--paste") process.exit(await updating(mode, pasteLogin));
-if (mode === "login" || mode === "logout") process.exit(await updating(mode, () => acp(mode)));
+if (mode === "login" && process.argv[3] === "--paste") process.exit(await updating(pasteLogin));
+if (mode === "login" || mode === "logout") process.exit(await updating(() => acp(mode)));
 console.error("usage: antigravity-auth-cli login|logout");
 process.exit(2);
