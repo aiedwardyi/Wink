@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DeviceRow, DevicesSection, PendingRow } from "./DeviceRows";
+import { RoomCode } from "./RoomCode";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { trackFeature, trackSetting } from "@/lib/usage-stats";
 
@@ -67,6 +68,11 @@ const input = "min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py
 const note = "mt-2 break-words text-[12px] leading-relaxed text-ink-secondary";
 
 type Google = { state: string; email?: string };
+const needsSignIn = (google: Google | null) => google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+// The dashboard lists only PCs on its own relay base.
+const onFrontDoor = (relay: RelayStatus | null) => (relay?.host ? relay.host.endsWith(`.${FRONT_DOOR}`) : !relay?.base || relay.base === FRONT_DOOR);
+// PUT answers 200 enabled for a PC with no ticket (enrolling) or a dead one (rejected): that PC is not on.
+const live = (relay: RelayStatus) => relay.enabled && !relay.problem && ["connected", "certifying", "reconnecting"].includes(relay.state);
 type Saved = { status: RelayStatus | null; google: Google | null; phones: Phone[] | null };
 const KEY = "omb-phone-relay";
 let last: Saved | null = null;
@@ -124,6 +130,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [openCode, setOpenCode] = useState<string | null>(null);
   const copiedTimer = useRef<number | undefined>(undefined);
   const [signingIn, setSigningIn] = useState(false);
   const signInAttempt = useRef(0);
@@ -132,7 +139,8 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     () => request("/api/google-account").then((body: Google) => {
       keep({ google: body });
       setGoogle(body);
-    }, () => {}),
+      return body;
+    }, () => null),
     [request],
   );
 
@@ -184,12 +192,12 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   // Unknown until the first answer: the row paints at once, a placeholder where the switch goes, never a false Off.
   const known = status !== null || refused;
 
-  const run = async (work: () => Promise<void>, failure: (cause: unknown) => string) => {
+  const run = async <T,>(work: () => Promise<T>, failure: (cause: unknown) => string) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      await work();
+      return await work();
     } catch (cause) {
       setError(failure(cause));
     } finally {
@@ -200,8 +208,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const save = (on: boolean) =>
     run(
       async () => {
-        setStatus(await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) }));
+        const next: RelayStatus = await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) });
+        setStatus(next);
         trackSetting("phoneAccess", on ? "off" : "on", on ? "on" : "off");
+        return next;
       },
       () => t("settings.phoneAccess.saveError"),
     );
@@ -229,7 +239,9 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   const joinWithGoogle = () =>
     run(
       async () => {
-        setStatus(await request("/api/phone-relay/google-enroll", { method: "POST" }));
+        const next: RelayStatus = await request("/api/phone-relay/google-enroll", { method: "POST" });
+        setStatus(next);
+        return next;
       },
       (cause) => {
         onNoRelay();
@@ -249,22 +261,33 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   // A second press reopens the browser: the desktop app drops the attempt before it.
   const signIn = async () => {
     const account = window.ogb?.googleAccount;
-    if (!account) return;
+    if (!account) return false;
     const attempt = ++signInAttempt.current;
     setSigningIn(true);
     setError(null);
-    const result = await account.signIn().catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
-    if (attempt !== signInAttempt.current) return;
+    const result = await account.signIn({ hold: true }).catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
+    if (attempt !== signInAttempt.current) return false;
     setSigningIn(false);
-    if (result.ok) return void (await loadGoogle());
+    if (result.ok) {
+      await loadGoogle();
+      return attempt === signInAttempt.current;
+    }
     const failure = googleSignInError(result.error);
     if (failure) setError(t(failure));
+    return false;
   };
   const configured = status?.configured === true;
   const joinable = !configured && status?.joinable === true;
-  const confirm = () => {
+  const turnOn = () => (joinable ? joinWithGoogle() : save(true));
+  const confirm = async () => {
     setAsking(false);
-    void (joinable ? joinWithGoogle() : save(true));
+    const account = window.ogb?.googleAccount;
+    // On first open the account read can still be out: wait for it, so a signed-out PC signs in first.
+    if (!account || !needsSignIn(google ?? (await loadGoogle()))) return void turnOn();
+    if (!(await signIn())) return;
+    // The Google tab waits here: it opens this PC's relay dashboard only once the PC is on it.
+    const on = await turnOn();
+    void account.finish(on && live(on) && on.base ? on.base : null);
   };
   const link = status?.host ? `https://${status.host}/` : null;
   const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;
@@ -310,7 +333,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
   );
 
   // Without a relay a sign-in cannot turn this on: the switch opens the other ways instead.
-  const signedOut = known && (configured || joinable) && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+  const signedOut = known && (configured || joinable) && needsSignIn(google);
   const unavailable = known && ((refused && !status) || status?.available === false || (!configured && status?.available !== true));
   const toggle = (
     <button
@@ -331,7 +354,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
     </button>
   );
   const signInButton = window.ogb?.googleAccount ? (
-    <button type="button" onClick={() => void signIn()} className={ROW_BUTTON}>
+    <button type="button" onClick={() => setAsking(true)} className={ROW_BUTTON}>
       {t("settings.devices.signIn")}
     </button>
   ) : null;
@@ -356,6 +379,19 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
           ? t("settings.phoneAccess.setup.help")
           : t(`settings.phoneAccess.state.${state}`);
   const connected = enabled && state === "connected";
+  // Only app.getwink.dev has a page to type the code into.
+  const codeShown = connected && door;
+  useEffect(() => {
+    if (!codeShown) return;
+    let live = true;
+    void request("/api/phone-relay/code").then((body: { code: string | null }) => {
+      if (live) setOpenCode(body.code);
+    }, () => {});
+    return () => {
+      live = false;
+      setOpenCode(null);
+    };
+  }, [codeShown, request]);
   const needsInvite = enabled && (state === "enrolling" || status?.problem === "revoked" || status?.problem === "ticket-expired");
   // Off with an error: the relay client failed to load or start.
   const failed = enabled && state === "off" && status?.lastError !== null;
@@ -399,6 +435,11 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
                   </button>
                 </div>
                 <div className="mt-1.5 break-keep text-[11px] leading-[1.35] text-ink-secondary">{t("settings.devices.openAnywhereHelp")}</div>
+                {codeShown && openCode ? (
+                  <div data-open-code="" className="mt-2.5">
+                    <RoomCode code={openCode} short={openCode} label={t("settings.devices.openCode")} hint={t("settings.devices.openCodeHint", { site: FRONT_DOOR })} />
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -427,12 +468,12 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       {asking ? (
         <ConfirmDialog
           title={t("settings.devices.reachConfirm")}
-          body={t("settings.devices.reachConfirmBody")}
+          body={onFrontDoor(status) ? t("settings.devices.reachConfirmBody", { door: FRONT_DOOR }) : t("settings.devices.reachConfirmBodyOther")}
           confirmLabel={t("settings.devices.turnOn")}
           cancelLabel={t("settings.phoneAccess.cancel")}
           danger={false}
           confirmDisabled={busy}
-          onConfirm={confirm}
+          onConfirm={() => void confirm()}
           onCancel={() => {
             setAsking(false);
             setError(null);

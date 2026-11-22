@@ -29,6 +29,7 @@ describe("ui kit gate", () => {
     ["press", 'export const A = () => <button className="rounded-md px-2 transition-colors hover:bg-raised">Save</button>;', tsx],
     ["press", 'export const A = () => <button className="rounded-md px-2 hover:bg-raised active:scale-95">Save</button>;', tsx],
     ["press", 'export const A = ({ go }) => <div onClick={go} className="rounded-lg px-3 hover:bg-raised">Open</div>;', tsx],
+    ["row", 'export const A = ({ go }) => <button onClick={go} className="w-full px-6 text-left hover:bg-raised/40">Post</button>;', tsx],
   ])("rejects a hand-rolled %s: %s", (rule, source, file) => {
     expect(uiKitHits(file, source).map((hit) => hit.rule)).toEqual([rule]);
   });
@@ -39,6 +40,7 @@ describe("ui kit gate", () => {
     [".spinner { animation: spin 1s linear infinite; }", css],
     ['el.animate([{ rotate: "0deg" }, { rotate: "360deg" }], { duration: 1200, iterations: Infinity });', tsx],
     ['export const A = () => <button className="rounded-md px-2 hover:bg-raised">Save</button>;', tsx],
+    ['export const A = ({ go }) => <button onClick={go} className="w-full px-6 text-left hover:bg-raised/50">Post</button>;', tsx],
     ['export const A = () => <button className="transition hover:bg-raised motion-reduce:transition-none">Move</button>;', tsx],
     ['export const A = ({ drag }) => <div role="separator" onClick={drag} className="hover:bg-accent/40" />;', tsx],
     ["@media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; } }", css],

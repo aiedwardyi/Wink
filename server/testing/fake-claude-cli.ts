@@ -84,10 +84,19 @@
 //                      messages, written after init in place of the reply
 //   FAKE_CLAUDE_AUTH   in (default) | out | unsupported | malformed |
 //                      inherited-api-key — what `auth status` reports
+//   FAKE_CLAUDE_AUTH_FILE  path; while it exists, its JSON is what `auth status`
+//                      prints, read per call so a test can switch accounts live
 //   FAKE_CLAUDE_PROMPT_LOG  path; every stdin message is appended as a JSON
 //                      line {pid, argv, systemPrompt, text}, so a test sees
 //                      what each turn of a retained process was sent
 //   FAKE_CLAUDE_INIT_REPLY  error: refuse an `initialize` control request
+//   FAKE_CLAUDE_GET_USAGE  path to the JSON a `get_usage` control request
+//                      answers with; FAKE_USAGE_CALLS gets that path per answer
+//   FAKE_CLAUDE_RENEW  token endpoint URL: at start the CLI redeems the
+//                      refreshToken in $CLAUDE_CONFIG_DIR/.credentials.json
+//                      there and saves what it answers, as the real CLI renews
+//                      an expired login; stdin's end GETs <URL>/eof, and the
+//                      process exits only once that save is done
 //   FAKE_CLAUDE_EAGER_INIT  path; a session process prints `init` before any
 //                      stdin, then creates this file
 //   FAKE_CLAUDE_HOLD_DIR  path; a prompt whose last hold:<name> is that name
@@ -131,7 +140,10 @@ if (argv[0] === "--version") {
   process.exit(0);
 }
 
-if (argv[0] === "auth" && argv[1] === "status") {
+const authFile = process.env.FAKE_CLAUDE_AUTH_FILE;
+if (argv[0] === "auth" && argv[1] === "status" && authFile && existsSync(authFile)) {
+  process.stdout.write(readFileSync(authFile, "utf8"), () => process.exit(0));
+} else if (argv[0] === "auth" && argv[1] === "status") {
   const auth = process.env.FAKE_CLAUDE_AUTH ?? "in";
   if (auth === "unsupported") {
     process.stderr.write("error: unknown command 'auth'\n");
@@ -1083,6 +1095,17 @@ const playTurn = (prompt: JsonValue, held = false) => {
   }
 };
 
+// Started before any stdin, as the real CLI renews an expired login on start.
+const renewal = process.env.FAKE_CLAUDE_RENEW && process.env.CLAUDE_CONFIG_DIR
+  ? renewLogin(process.env.FAKE_CLAUDE_RENEW, join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json")) : undefined;
+async function renewLogin(endpoint: string, file: string) {
+  const stored = JSON.parse(readFileSync(file, "utf8"));
+  const answer = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ grant_type: "refresh_token", refresh_token: stored.claudeAiOauth.refreshToken }) });
+  const minted = await answer.json() as { access_token: string; refresh_token: string };
+  writeFileSync(file, JSON.stringify({ ...stored, claudeAiOauth: { ...stored.claudeAiOauth, accessToken: minted.access_token, refreshToken: minted.refresh_token } }));
+}
+
 let buf = "";
 process.stdin.on("data", (c) => {
   buf += c;
@@ -1106,6 +1129,10 @@ process.stdin.on("data", (c) => {
       const requestId = String(control.request_id ?? "");
       if (control.request?.subtype === "interrupt" && onInterrupt) onInterrupt(requestId);
       else if (control.request?.subtype === "apply_flag_settings") answerFlagSettings(requestId, control.request.settings?.effortLevel);
+      else if (control.request?.subtype === "get_usage" && process.env.FAKE_CLAUDE_GET_USAGE) {
+        if (process.env.FAKE_USAGE_CALLS) appendFileSync(process.env.FAKE_USAGE_CALLS, `${process.env.FAKE_CLAUDE_GET_USAGE}\n`);
+        out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: JSON.parse(readFileSync(process.env.FAKE_CLAUDE_GET_USAGE, "utf8")) } });
+      }
       else if (control.request?.subtype === "initialize") {
         if (process.env.FAKE_CLAUDE_INIT_REPLY === "error") out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "unsupported" } });
         else {
@@ -1132,5 +1159,8 @@ process.stdin.on("data", (c) => {
 });
 process.stdin.on("end", () => {
   stdinEnded = true;
-  finishIfDone();
+  if (renewal) {
+    void fetch(`${process.env.FAKE_CLAUDE_RENEW}/eof`).catch(() => undefined);
+    void renewal.then(finishIfDone, finishIfDone);
+  } else finishIfDone();
 });

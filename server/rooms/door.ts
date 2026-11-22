@@ -9,7 +9,7 @@ import { RateLimiter, rateKey } from "../phone-auth.ts";
 import { parseSendId } from "../send-idempotency.ts";
 import type { Message, Store } from "../store.ts";
 import { revalidatePersonAsks, type HostedGroup } from "./asks.ts";
-import { committedRoomText, noticeText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, RoomError, roomPeople, type RoomPerson } from "./db.ts";
+import { committedRoomText, noticeText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, RoomError, roomHostSeats, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
   broadcastDoorReactions,
@@ -27,9 +27,10 @@ import {
   type DoorState,
   type LineReactions,
 } from "./door-streams.ts";
-import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
-import { deletedRoomFiles } from "./files.ts";
+import { FILE_PATH, fileAction, fileIdsOf, fileRoute, reply as replyRoomFile, sameFiles } from "./file-routes.ts";
+import { deletedRoomFiles, discardUnpostedRoomFile, saveRoomFile } from "./files.ts";
 import { guestByKey, inviteRoomId, joinRoom, removeGuest, shortCodeTarget, type JoinResult } from "./invites.ts";
+import { OWNER_SEAT_PREFIX } from "./seat-key.ts";
 import { hostedSend, teamBotSend } from "./send.ts";
 import { recordRoomJoin } from "./share.ts";
 import { addTeamBot, removePersonTeamBots, removeTeamBot, teamBot, teamBots } from "./team-bots.ts";
@@ -46,8 +47,8 @@ const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
 /** Under the 256 KB frame cap guests read. */
 const REACTION_FRAME_BYTES = 192 * 1024;
-const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|react|notice|bots|bot-send|asks\/[\w-]{1,64}\/cancel|bots\/([\w-]{1,64})\/remove)$/;
-const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", react: "POST", notice: "POST", bots: "POST", "bot-send": "POST", "remove-bot": "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
+const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|react|notice|bots|bot-send|bot-picture|asks\/[\w-]{1,64}\/cancel|bots\/([\w-]{1,64})\/remove)$/;
+const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", react: "POST", notice: "POST", bots: "POST", "bot-send": "POST", "bot-picture": "POST", "remove-bot": "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const SHORT = /^[2-9A-HJ-NP-Z]{6}$/i;
 const JOIN_STATUS = {
@@ -62,7 +63,7 @@ const JOIN_STATUS = {
 } satisfies Record<Extract<JoinResult, { ok: false }>["error"], number>;
 
 export interface RoomDoorDeps {
-  store: Pick<Store, "groups" | "messagesFor" | "onChange" | "emit" | "bot" | "toggleReaction" | "patchGroup">;
+  store: Pick<Store, "groups" | "messagesFor" | "onChange" | "emit" | "bot" | "toggleReaction" | "patchGroup" | "patchMessage">;
   hostName(): string;
   onPeopleChanged?(group: HostedGroup): void;
 }
@@ -143,6 +144,7 @@ const takenNames = (group: HostedGroup) => [
 
 function sharedState(group: HostedGroup) {
   const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name, works: person.works }));
+  const hostSeats = roomHostSeats(group.hosted.roomId);
   const bots = group.memberIds.flatMap((id) => {
     const bot = door!.deps.store.bot(id);
     return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color, ...(bot.mascotStyle ? { mascotStyle: bot.mascotStyle } : {}) }] : [];
@@ -150,6 +152,7 @@ function sharedState(group: HostedGroup) {
   const teamBotList = teamBots(group.hosted.roomId).map(({ id, name, color, owner, mascotStyle }) => ({ id, name, color, owner, ...(mascotStyle ? { mascotStyle } : {}) }));
   return {
     roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots, teamBots: teamBotList,
+    ...(hostSeats.length ? { hostSeats } : {}),
     ...(group.picture ? { picture: group.picture } : {}),
     ...(group.notice ? { notice: group.notice } : {}),
   };
@@ -163,7 +166,7 @@ function doorState(group: HostedGroup, person: RoomPerson): DoorState {
   const last = door!.versions.get(roomId);
   const version = last?.shared === text ? last.version : Math.max((last?.version ?? 0) + 1, Date.now());
   door!.versions.set(roomId, { version, shared: text });
-  return { version, ...shared, me: { id: person.id, name: person.name }, myAsks: [] };
+  return { version, ...shared, me: person.host ? { id: person.id, name: shared.host, host: true } : { id: person.id, name: person.name }, myAsks: [] };
 }
 
 function pushRoomState(roomId: string): void {
@@ -171,7 +174,7 @@ function pushRoomState(roomId: string): void {
   if (!group) return;
   const last = door!.versions.get(roomId);
   if (last && last.shared === JSON.stringify(sharedState(group))) return;
-  const people = roomPeople(roomId);
+  const people = roomPeople(roomId, true);
   sendDoorState(roomId, (personId) => {
     const person = people.find((candidate) => candidate.id === personId);
     return person ? doorState(group, person) : null;
@@ -217,6 +220,7 @@ async function rename(req: IncomingMessage, res: ServerResponse, roomId: string,
   if (!group || still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
   const value = record(body.value)?.name;
   if (typeof value !== "string") return send(res, 400, { error: "bad request" });
+  if (still.person.host) return send(res, 200, { name: door!.deps.hostName() });
   const name = renameRoomPerson(roomId, person.id, value, takenNames(group));
   pushRoomState(roomId);
   door!.deps.onPeopleChanged?.(group);
@@ -243,7 +247,7 @@ async function react(req: IncomingMessage, res: ServerResponse, roomId: string, 
   if (typeof entryId !== "string" || typeof emoji !== "string" || !(EXTENDED_REACTIONS as readonly string[]).includes(emoji)) return send(res, 400, { error: "bad request" });
   const message = door!.deps.store.messagesFor(call.group.threadId).find((candidate) => candidate.roomEntryId === entryId);
   if (!message) return send(res, 404, { error: "no such message in this room" });
-  const patched = door!.deps.store.toggleReaction(call.group.threadId, message.id, emoji, `person:${person.id}`) ?? message;
+  const patched = door!.deps.store.toggleReaction(call.group.threadId, message.id, emoji, person.host ? "user" : `person:${person.id}`) ?? message;
   send(res, 200, { marks: lineReactions(patched).marks });
 }
 
@@ -253,7 +257,7 @@ async function pinNotice(req: IncomingMessage, res: ServerResponse, roomId: stri
   const call = await guestFields(req, res, roomId, person);
   if (!call) return;
   const { entryId } = call.fields;
-  const by = `person:${person.id}`;
+  const by = person.host ? "host" : `person:${person.id}`;
   if (entryId === null) {
     if (call.group.notice && call.group.notice.by !== by) return send(res, 403, { error: "forbidden" });
     door!.deps.store.patchGroup(call.group.id, { notice: undefined });
@@ -303,35 +307,77 @@ export function removeRoomTeamBot(roomId: string, botId: string): boolean {
   return removed;
 }
 
-async function botSend(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
-  const body = await readJson(req, BOT_BODY_BYTES);
+function pictureMetadata(value: string | string[] | undefined): unknown {
+  if (typeof value !== "string" || value.length > 8 * 1024 || !/^[\w-]+$/.test(value)) return null;
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// a picture has its own action: an older host's bot-send would post its caption and drop the file
+async function botSend(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson, picture = false): Promise<void> {
+  const upload = picture && req.headers["content-type"] === "application/octet-stream";
+  const body = upload ? { ok: true as const, value: pictureMetadata(req.headers["x-orbit-room-picture"]) } : await readJson(req, BOT_BODY_BYTES);
   if (!body.ok) return bodyError(res, body.status);
+  const answer = (status: number, value: unknown) =>
+    upload && !req.readableEnded ? replyRoomFile(res, status, value, req) : send(res, status, value);
   const group = doorGroup(roomId);
-  if (!group) return notFound(res);
+  if (!group) return answer(404, { error: "not found" });
   const bearer = bearerOf(req);
-  const still = bearer ? guestByKey(bearer) : null;
-  if (still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
+  const still = () => bearer ? guestByKey(bearer) : null;
+  const guest = still();
+  if (guest?.roomId !== roomId || guest.person.id !== person.id) return answer(401, { error: "unauthorized" });
   const fields = record(body.value);
-  const { botId, text, replyToId } = fields ?? {};
-  if (typeof botId !== "string" || typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return send(res, 400, { error: "bad request" });
+  const { botId, text, replyToId, name } = fields ?? {};
+  const pictureName = typeof name === "string" ? name : null;
+  const fileIds = picture && !upload ? fileIdsOf(fields?.fileIds) : [];
+  if (typeof botId !== "string" || typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return answer(400, { error: "bad request" });
+  if (!fileIds || (picture && !upload && !fileIds.length) || (upload && (pictureName === null || text.length > 500))) return answer(400, { error: "bad request" });
   const bot = /^[\w-]{1,64}$/.test(botId) ? teamBot(roomId, botId) : null;
-  if (!bot || bot.owner !== person.id) return send(res, 403, { error: "forbidden" });
-  if (replyToId !== undefined && !/^[\w-]{1,64}$/.test(replyToId)) return send(res, 404, { error: "no such message in this room" });
+  if (!bot || bot.owner !== person.id) return answer(403, { error: "forbidden" });
+  if (replyToId !== undefined && !/^[\w-]{1,64}$/.test(replyToId)) return answer(404, { error: "no such message in this room" });
   let sendId: string | undefined;
   try {
     sendId = parseSendId(fields?.sendId === undefined ? undefined : String(fields.sendId));
   } catch {
-    return send(res, 400, { error: "bad sendId" });
+    return answer(400, { error: "bad sendId" });
   }
+  if (upload && !sendId) return answer(400, { error: "bad sendId" });
+  const sentAlready = () => sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === bot.id) : undefined;
+  const canPost = () => !res.destroyed && !req.socket.destroyed && still()?.person.id === person.id
+    && doorGroup(roomId)?.threadId === group.threadId && teamBot(roomId, bot.id)?.owner === person.id;
+  let uploaded: string | undefined;
   try {
-    const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === bot.id) : undefined;
-    const entry = earlier?.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : earlier ? null : teamBotSend(group, person, bot, text, replyToId, sendId);
-    if (!entry) return send(res, 409, { error: "sendId was used for another message" });
-    send(res, 200, { entry: doorEntry(entry) });
+    let earlier = sentAlready();
+    if (upload && !earlier) {
+      if (replyToId !== undefined && !roomEntry(roomId, replyToId)) throw new RoomError(404, "no such message in this room");
+      const file = await saveRoomFile(req, roomId, { owner: person.id, name: pictureName, uploadId: sendId!, still: canPost });
+      uploaded = file.id;
+      if (!canPost()) {
+        discardUnpostedRoomFile(roomId, uploaded);
+        if (!res.destroyed) answer(401, { error: "unauthorized" });
+        return;
+      }
+      if (!file.type.startsWith("image/")) {
+        discardUnpostedRoomFile(roomId, uploaded);
+        return answer(415, { error: "not a PNG, JPEG, GIF, or WebP image" });
+      }
+      earlier = sentAlready();
+    }
+    const entry = earlier?.roomEntryId ? roomEntry(roomId, earlier.roomEntryId)
+      : earlier ? null : teamBotSend(group, person, bot, text, replyToId, sendId, uploaded ? [uploaded] : fileIds);
+    if (upload && earlier && (!entry?.files?.length || entry.replyToId !== replyToId || entry.text !== committedRoomText("bot", text))) {
+      throw new RoomError(409, "sendId was used for another message");
+    }
+    if (!entry) throw new RoomError(409, "sendId was used for another message");
+    answer(200, { entry: doorEntry(entry) });
   } catch (error) {
+    if (uploaded) discardUnpostedRoomFile(roomId, uploaded);
     const status = (error as { status?: number }).status;
     if (status === undefined) throw error;
-    send(res, status, { error: (error as Error).message });
+    if (!res.destroyed) answer(status, { error: (error as Error).message });
   }
 }
 
@@ -392,14 +438,38 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   // An unknown invite still goes through joinRoom, so it spends the join limit.
   const roomId = inviteRoomId(codeId);
   if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
+  if (codeId.startsWith(OWNER_SEAT_PREFIX) && fields?.roomId === undefined) return send(res, 400, { error: "bad-code" });
   const group = roomId ? doorGroup(roomId) : null;
   if (roomId && !group) return send(res, 404, { error: "no-invite" });
-  const result = joinRoom(codeId, secret, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device }, rateKey(peer));
+  const result = joinRoom(codeId, secret, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device, key: bearerOf(req) }, rateKey(peer));
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
-  recordRoomJoin(result.roomId, result.person);
+  if (group && result.person.host) mergeHostSeat(group, result.person);
+  else recordRoomJoin(result.roomId, result.person);
   pushRoomState(result.roomId);
   tellHost(result.roomId);
-  send(res, 200, { roomId: result.roomId, person: { id: result.person.id, name: result.person.name }, key: result.key, ...(short ? { code: `wkr1:${relayHost}:${codeId}.${secret}` } : {}) });
+  const { id, name, host } = result.person;
+  send(res, 200, { roomId: result.roomId, person: { id, name, ...(host ? { host } : {}) }, key: result.key, ...(short ? { code: `wkr1:${relayHost}:${codeId}.${secret}` } : {}) });
+}
+
+function mergeHostSeat(group: HostedGroup, person: RoomPerson): void {
+  const { store } = door!.deps;
+  const messages = store.messagesFor(group.threadId);
+  const by = `person:${person.id}`;
+  const readAt = group.readAt ?? messages.findLast((message) => message.role === "user" && message.author?.kind !== "person")?.at ?? 0;
+  let hadOwnUnread = false;
+  let otherUnread = false;
+  for (const message of messages) {
+    const own = message.author?.kind === "person" && message.author.id === person.id;
+    if (message.at > readAt) {
+      if (own) hadOwnUnread = true;
+      else if (message.kind === "text" && (message.author?.kind === "person" || (message.role === "bot" && !message.summarized && !message.roomEcho))) otherUnread = true;
+    }
+    const reactions = message.reactions?.some((mark) => mark.by === by) ? message.reactions.flatMap((mark) => mark.by !== by ? [mark] :
+      message.reactions!.some((existing) => existing.by === "user" && existing.emoji === mark.emoji) ? [] : [{ ...mark, by: "user" }]) : undefined;
+    if (own || reactions) store.patchMessage(group.threadId, message.id, { ...(own ? { author: { kind: "host", id: "host", name: person.name }, origin: undefined } : {}), ...(reactions ? { reactions } : {}) });
+  }
+  const notice = group.notice?.by === by ? { ...group.notice, by: "host" } : undefined;
+  if (notice || (group.unread && hadOwnUnread && !otherUnread)) store.patchGroup(group.id, { ...(notice ? { notice } : {}), ...(hadOwnUnread && !otherUnread ? { unread: false } : {}) });
 }
 
 const bearerOf = (req: IncomingMessage) => /^Bearer (\S{1,256})$/.exec(req.headers.authorization ?? "")?.[1];
@@ -479,10 +549,10 @@ async function sendLine(req: IncomingMessage, res: ServerResponse, roomId: strin
     return send(res, 400, { error: "bad sendId" });
   }
   try {
-    const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === person.id) : undefined;
+    const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === (still.person.host ? "host" : person.id)) : undefined;
     if (earlier) {
       const entry = earlier.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : null;
-      if (!entry || entry.text !== committedRoomText("person", text) || entry.replyToId !== replyToId || !sameFiles((entry.files ?? []).map((file) => file.id), fileIds)) {
+      if (!entry || (still.person.host && entry.seat !== person.id) || entry.text !== committedRoomText("person", text) || entry.replyToId !== replyToId || !sameFiles((entry.files ?? []).map((file) => file.id), fileIds)) {
         return send(res, 409, { error: "sendId was used for another message" });
       }
       return send(res, 200, { entry: doorEntry(entry) });
@@ -543,7 +613,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   if (action === "notice") return pinNotice(req, res, guest.roomId, guest.person);
   if (action === "bots") return addBot(req, res, guest.roomId, guest.person);
   if (action === "remove-bot") return removeBot(req, res, guest.roomId, guest.person, route![3]!);
-  if (action === "bot-send") return botSend(req, res, guest.roomId, guest.person);
+  if (action === "bot-send" || action === "bot-picture") return botSend(req, res, guest.roomId, guest.person, action === "bot-picture");
   if (action === "cancel") return send(res, 404, { error: "no such ask" });
   removeRoomPerson(guest.roomId, guest.person.id, req.socket);
   send(res, 200, { ok: true }, { connection: "close" });

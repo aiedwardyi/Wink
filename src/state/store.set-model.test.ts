@@ -131,7 +131,7 @@ describe("setModel", () => {
     const fetchBefore = fetch;
     vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => url.endsWith("/interrupt") ? Promise.resolve(Response.json({ ok: true, stopped: true, returned: [] }))
       : url.endsWith("/edit") ? Promise.resolve(Response.json({ error: "changed" }, { status: 409 })) : fetchBefore(url, init)));
-    const instances = [["claude", "claudeAgent", running.model], ["codex", "codex", "gpt-6.1-sol"]].map(([instanceId, driverKind, model]) => ({
+    const instances = [["claude", "claudeAgent", running.model], ["codex", "codex", "gpt-6.2-sol"]].map(([instanceId, driverKind, model]) => ({
       instanceId, driverKind, displayName: instanceId,
       snapshot: { state: "available", authenticated: true }, models: { default: model, options: [{ id: model, label: model }] }, capabilities: {},
     })) as InstanceInfo[];
@@ -141,7 +141,7 @@ describe("setModel", () => {
     const picker = createRoot(host);
     await act(async () => picker.render(createElement(ModelPickerControl, { bot, switchControl: control, onSwitching, store: { state: { instances, selectedId: "b1" }, dispatch: store.dispatch, refreshInstances: async () => {} } })));
     await act(async () => control.current!());
-    await act(async () => document.querySelector<HTMLButtonElement>('[data-model-cell="gpt-6.1-sol"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-model-cell="gpt-6.2-sol"]')!.click());
     await act(async () => document.querySelector<HTMLButtonElement>(".model-cross-footer button")!.click());
     expect(onSwitching.mock.calls.map(([stage]) => stage)).toEqual(["saving", "rerunning", null]);
     expect(store.state.error).toBe("changed");
@@ -160,7 +160,7 @@ describe("setModel", () => {
       : url.endsWith("/edit") ? Promise.resolve(Response.json({ error: "the bot is working - stop it before editing" }, { status: 409 })) : fetchBefore(url, init));
     vi.stubGlobal("fetch", routes);
     await act(async () => store.dispatch({ type: "send", botId: "b1", text: "and this", sendId: "s2" }));
-    const instances: InstanceInfo[] = [["claude", "claudeAgent", running.model], ["codex", "codex", "gpt-6.1-sol"]].map(([instanceId, driverKind, model]) => ({
+    const instances: InstanceInfo[] = [["claude", "claudeAgent", running.model], ["codex", "codex", "gpt-6.2-sol"]].map(([instanceId, driverKind, model]) => ({
       instanceId, driverKind, displayName: instanceId,
       snapshot: { state: "available", authenticated: true }, models: { default: model, options: [{ id: model, label: model }] }, capabilities: {},
     }));
@@ -170,7 +170,7 @@ describe("setModel", () => {
     const picker = createRoot(host);
     await act(async () => picker.render(createElement(ModelPickerControl, { bot, accepted: store.state.acceptedSends["t-b1"], switchControl: control, onSwitching, store: { state: { instances, selectedId: "b1" }, dispatch: store.dispatch, refreshInstances: async () => {} } })));
     await act(async () => control.current!());
-    await act(async () => document.querySelector<HTMLButtonElement>('[data-model-cell="gpt-6.1-sol"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-model-cell="gpt-6.2-sol"]')!.click());
     await act(async () => document.querySelector<HTMLButtonElement>(".model-cross-footer button")!.click());
     await act(async () => receipt(Response.json({ ok: true, threadId: "t-b1", message: { id: "u2", parentId: "u1", role: "user", kind: "text", text: "and this", at: 2, sendId: "s2" } }, { status: 202 })));
     await act(async () => stopped(Response.json({ ok: true, stopped: true, returned: [] })));
@@ -183,7 +183,7 @@ describe("setModel", () => {
 
   it.each(["steered", "queued", "returned", "posting"] as const)("checks a %s follow-up after the switch stop", async (followUp) => {
     const bot: Bot = { ...botOf(true), messages: [{ id: "u1", role: "user", kind: "text", text: "hello", at: 1 }] };
-    const instances: InstanceInfo[] = [["claude", "claudeAgent", running.model], ["codex", "codex", "gpt-6.1-sol"]].map(([instanceId, driverKind, model]) => ({
+    const instances: InstanceInfo[] = [["claude", "claudeAgent", running.model], ["codex", "codex", "gpt-6.2-sol"]].map(([instanceId, driverKind, model]) => ({
       instanceId, driverKind, displayName: instanceId,
       snapshot: { state: "available", authenticated: true }, models: { default: model, options: [{ id: model, label: model }] }, capabilities: {},
     }));
@@ -206,7 +206,7 @@ describe("setModel", () => {
     await act(async () => control.current!());
     await act(async () => store.dispatch({ type: "send", botId: "b1", text: "and this", sendId: "s2" }));
     expect(store.state.acceptedSends["t-b1"]).toEqual([expect.objectContaining({ sendId: "s2", kind: "sends-next" })]);
-    await act(async () => document.querySelector<HTMLButtonElement>('[data-model-cell="gpt-6.1-sol"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-model-cell="gpt-6.2-sol"]')!.click());
     await act(async () => document.querySelector<HTMLButtonElement>(".model-cross-footer button")!.click());
     expect(picked).toBeTypeOf("function");
     expect(stopped).toBeUndefined();
@@ -215,7 +215,7 @@ describe("setModel", () => {
       await act(async () => receipt(Response.json({ ok: true, steered: true, threadId: "t-b1", message: { ...message, steered: true } })));
       expect(store.state.acceptedSends["t-b1"]).toBeUndefined();
     }
-    const selection = { instanceId: "codex", model: "gpt-6.1-sol", mode: "pinned" };
+    const selection = { instanceId: "codex", model: "gpt-6.2-sol", mode: "pinned" };
     await act(async () => picked(Response.json({ bot: { ...bot, pendingModelSelection: selection } })));
     if (followUp === "queued" || followUp === "returned") {
       await act(async () => receipt(Response.json({ ok: true, queued: true, queueId: "q2", threadId: "t-b1" })));

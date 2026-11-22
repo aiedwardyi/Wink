@@ -7,8 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
-import { closeShow, useMapThread, useWorkersThread } from "@/lib/show-pane";
+import { FORUM_SELECTION } from "@/lib/board";
+import { closeShow, useMapThread, useTimelineThread, useWorkersThread } from "@/lib/show-pane";
 import { WHATS_NEW } from "@/lib/whats-new";
+import { newerRelease } from "../../shared/release-order";
 import type { SceneModule } from "@/scenes/scene-host";
 
 type Run = { frames: number; stopped: boolean };
@@ -115,6 +117,16 @@ describe("whats new card", () => {
     expect(onClose).toHaveBeenCalledTimes(3);
   });
 
+  it("leaves Escape to an open side pane, so the tour card stays", () => {
+    render(RELEASE);
+    scrollIntoView();
+    const pane = Object.assign(document.createElement("aside"), { className: "show-pane" });
+    document.body.append(pane);
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    pane.remove();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("ignores Escape while offscreen", () => {
     render(RELEASE);
     act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
@@ -167,6 +179,24 @@ describe("whats new card", () => {
     expect(listed).toBe("t-atlas");
     expect(tile.textContent).toBe(text);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("opens this chat's Timeline tab from its Show me", () => {
+    const { tile, text } = showMe("1.0.282", "Your bot's decisions, on a Timeline");
+    let opened: string | null = null;
+    const probe = createRoot(document.createElement("div"));
+    act(() => probe.render(createElement(() => ((opened = useTimelineThread()), null))));
+    act(() => probe.unmount());
+    closeShow();
+    expect(opened).toBe("t-atlas");
+    expect(tile.textContent).toBe(text);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("opens the Forum from its Show me", () => {
+    const { tile, text } = showMe("1.0.282", "Bots help each other in the Forum");
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "select", id: FORUM_SELECTION, reveal: true });
+    expect(tile.textContent).toBe(text);
   });
 
   it("opens the model picker from the Gemini tile's Show me", () => {
@@ -256,6 +286,36 @@ describe("whats new card", () => {
     }
     expect(entry.tiles[0].title.en).toContain("Map");
     for (const locale of ["en", "ko"] as const) expect(entry.tiles[1]!.title[locale]).toContain("Gemini 4 Carbon + Hydrogen");
+  });
+
+  it("shows the Timeline on the left and the Forum on the right in 1.0.282, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.282"];
+    expect(entry.tiles.map((tile) => "show" in tile && tile.show)).toEqual(["timeline", "forum"]);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.282");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles.map((tile) => tile.querySelector(".whats-new-tile-title")?.textContent)).toEqual(entry.tiles.map((tile) => tile.title[locale]));
+      for (const [i, tile] of entry.tiles.entries()) expect(tiles[i].textContent).toContain(tile.line[locale]);
+    }
+    expect(entry.tiles.every((tile) => tile.lightClip)).toBe(true);
+  });
+
+  it("shows the Timeline picks and the Forum check in 1.0.287, each with Show me, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.287"];
+    expect(entry.tiles.map((tile) => "show" in tile && tile.show)).toEqual(["timeline", "forum"]);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.287");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles.map((tile) => tile.querySelector(".whats-new-tile-title")?.textContent)).toEqual(entry.tiles.map((tile) => tile.title[locale]));
+      for (const [i, tile] of entry.tiles.entries()) expect(tiles[i].textContent).toContain(tile.line[locale]);
+    }
+    expect(entry.tiles.every((tile) => !tile.still)).toBe(true);
   });
 
   it("shows the four new themes as one tile in 1.0.273, in English and Korean", () => {
@@ -466,6 +526,39 @@ describe("whats new card", () => {
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
-    expect(bytes).toBeLessThan(1.6 * 1024 * 1024);
+    expect(bytes).toBeLessThan(3.5 * 1024 * 1024);
+  });
+
+  it("keeps animated previews moving smoothly", () => {
+    const dir = "src/assets/whats-new";
+    const failures: string[] = [];
+    for (const file of readdirSync(dir).filter((name) => name.endsWith(".webp"))) {
+      const durations = frameDurations(join(dir, file));
+      if (durations.length === 0) continue;
+      const motion = durations.slice(1, -1);
+      const ms = motion.reduce((sum, duration) => sum + duration, 0);
+      if (motion.length < 2 || motion.length * 1000 < ms * 6 || motion.some((duration) => duration > 1000)) failures.push(file);
+    }
+    expect(failures, "re-encode at a steady frame rate, no dropped frames").toEqual([]);
+  });
+
+  it("plays previews from 1.0.282 on at 20 fps or faster", () => {
+    const dir = "src/assets/whats-new";
+    const slow = readdirSync(dir).filter((file) => {
+      const durations = frameDurations(join(dir, file));
+      return durations.length > 0 && !newerRelease("1.0.282", file.split("-")[0]) && Math.min(...durations) > 50;
+    });
+    expect(slow, "a pan or zoom under 20 fps reads as lag: re-encode from the capture at 50 ms frames").toEqual([]);
   });
 });
+
+function frameDurations(path: string): number[] {
+  const data = readFileSync(path);
+  const durations: number[] = [];
+  for (let offset = 12; offset + 8 <= data.length; ) {
+    const size = data.readUInt32LE(offset + 4);
+    if (data.toString("ascii", offset, offset + 4) === "ANMF" && offset + 23 <= data.length) durations.push(data.readUIntLE(offset + 20, 3));
+    offset += 8 + size + (size % 2);
+  }
+  return durations;
+}

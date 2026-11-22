@@ -23,7 +23,9 @@ import { buildResumeFallback, engineIsFresh } from "./turn-context.ts";
 import { workspaceDir } from "./workspace.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
 import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
+import { REPLACED_MODELS, replacedModelMoves, type ReplacedModel } from "../shared/replaced-models.ts";
 import { reactionMarkKeys } from "../shared/reactions.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -51,7 +53,7 @@ const taskPacket = (
 
 describe("Store", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("tool detail survives completion folding and a database restart without a planted key", async () => {
@@ -1128,6 +1130,34 @@ describe("Store", () => {
     expect(reloaded.bot(other.id)?.modelSelection.model).toBe("gemini-3.7-flash-high");
   });
 
+  const moveReplaced = (store: Store, engine: ReplacedModel["engine"], instanceId: string) => {
+    for (const { from, to, resetSession } of replacedModelMoves(engine)) store.renameModel([instanceId], from, to, resetSession ? { resetSession } : {});
+  };
+
+  it("moves a bot saved on any replaced Codex model to its current one and keeps its effort", () => {
+    const store = new Store(selection);
+    const saved = [["gpt-6-sol", "gpt-6.2-sol", "low"], ["gpt-6.1-sol", "gpt-6.2-sol", "high"], ["gpt-6-astra", "gpt-6.2-astra", "xhigh"], ["gpt-5.6-terra", "gpt-6.1-terra", "medium"]] as const;
+    const bots = saved.map(([model, , effort]) => store.createBot({ modelSelection: { instanceId: "codex", model, effort } }));
+
+    moveReplaced(store, "codex", "codex");
+
+    const reloaded = new Store(selection);
+    expect(bots.map((bot) => reloaded.bot(bot.id)?.modelSelection)).toEqual(saved.map(([, model, effort]) => ({ instanceId: "codex", model, effort })));
+  });
+
+  it("a new replaced-models row moves a saved bot with no other code change", () => {
+    const rows = REPLACED_MODELS as ReplacedModel[];
+    rows.push({ engine: "codex", from: "old-x", to: "new-x", fromLabel: "Old X", toLabel: "New X" });
+    try {
+      const store = new Store(selection);
+      const bot = store.createBot({ modelSelection: { instanceId: "codex", model: "old-x", effort: "high" } });
+      moveReplaced(store, "codex", "codex");
+      expect(new Store(selection).bot(bot.id)?.modelSelection).toEqual({ instanceId: "codex", model: "new-x", effort: "high" });
+    } finally {
+      rows.pop();
+    }
+  });
+
   it("renameModel resets migrated Codex sessions and keeps Claude sessions", () => {
     const store = new Store(selection);
     const codex = store.createBot({ modelSelection: { instanceId: "codex", model: "gpt-5.6-terra" } });
@@ -1547,7 +1577,7 @@ describe("Store", () => {
 
 describe("Store change stream", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   const record = (store: Store) => {
@@ -1696,7 +1726,7 @@ describe("Store change stream", () => {
 
 describe("Store bot activity state", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("derives busy from activity, so every existing busy reader keeps working", () => {
@@ -1742,7 +1772,7 @@ describe("Store model picked mid-reply", () => {
   const next: ModelSelection = { instanceId: "codex", model: "gpt-6-sol", mode: "pinned" };
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetSteerQueue();
   });
 
@@ -1805,7 +1835,7 @@ describe("Store model picked mid-reply", () => {
 
 describe("Store redacts bot-authored secrets on write", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("masks a key in bot text, tools and cards — but never in what the user typed", () => {
@@ -1960,7 +1990,7 @@ describe("Store redacts bot-authored secrets on write", () => {
 
 describe("Store task usage", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("banks each turn's tokens and cost on the task, counting turns", () => {
@@ -2012,7 +2042,7 @@ describe("Store task usage", () => {
 
 describe("Store task working folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("pins the bot's folder onto a task on its first turn, and never again", () => {
@@ -2122,7 +2152,7 @@ describe("Store task working folder", () => {
 
 describe("Store remembered project folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("remembers a resolved project per bot without turning it into a pin", () => {
@@ -2254,7 +2284,7 @@ describe("Store remembered project folder", () => {
 
 describe("Store room working folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("pins the room's folder on its first turn, and never again", () => {
@@ -2289,7 +2319,7 @@ describe("Store room working folder", () => {
 
 describe("Store task working folder — cloud runs", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
   it("a cloud run pins the default so the bot's host folder never shows for that task", () => {
     const store = new Store(selection);

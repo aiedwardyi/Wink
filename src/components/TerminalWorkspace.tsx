@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from "react";
-import { ArrowLeft, ChevronDown, FolderOpen, SquareX, TerminalSquare, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderOpen, PanelRightClose, SquareX, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -28,6 +28,7 @@ type BotPane = { id: string; label: string | null; exited?: boolean; changedAt?:
 const TERMINAL_FONT_MIN = 8;
 const TERMINAL_FONT_MAX = 128;
 const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink";
+const HEADER_ICON = `flex shrink-0 items-center justify-center rounded-md p-1.5 ${HEADER_CONTROL}`;
 
 function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a && !b) return true;
@@ -84,7 +85,7 @@ export function TerminalWorkspace({
   const botIdRef = useRef(bot.id);
   const blockedRef = useRef(focusBlocked || !visible);
   const openShellRef = useRef<((restart: boolean) => void) | null>(null);
-  const resizeRef = useRef<(() => void) | null>(null);
+  const resizeRef = useRef<((reopen?: boolean) => void) | null>(null);
   const dropPendingReplayRef = useRef<(() => void) | null>(null);
   const replacingRef = useRef(false);
   const forwardInputRef = useRef<(data: string) => void>(() => {});
@@ -126,6 +127,10 @@ export function TerminalWorkspace({
   };
   const panesRef = useRef(panes);
   panesRef.current = panes;
+  const paneRef = useRef(pane);
+  paneRef.current = pane;
+  // A pane the host closes hands the view to Main; the keyboard follows only if it was in the terminal.
+  const quietAttachRef = useRef(false);
 
   const projectMismatch = Boolean(session && !samePath(bot.cwd ?? null, launchProject));
   const showProjectBanner = projectMismatch && !bannerDismissed && !webBridge;
@@ -161,6 +166,7 @@ export function TerminalWorkspace({
       if (event.botId !== bot.id) return;
       closed.add(event.id);
       if (lastViewedPanes.get(bot.id) === event.id) lastViewedPanes.set(bot.id, null);
+      if (paneRef.current === event.id && !hostRef.current?.contains(document.activeElement)) quietAttachRef.current = true;
       setPanes((list) => list.filter((item) => item.id !== event.id));
       setPane((current) => current === event.id ? null : current);
     });
@@ -186,6 +192,8 @@ export function TerminalWorkspace({
     let replayComplete = false;
     let replaying = false;
     let seen: IntersectionObserver | null = null;
+    let quiet = quietAttachRef.current;
+    quietAttachRef.current = false;
     const liveQueue: OutputEvent[] = [];
     terminalLiveQueues.push(liveQueue);
     const exits = new Map<string, number>();
@@ -234,6 +242,36 @@ export function TerminalWorkspace({
     };
     terminal.open(host);
     const report = (cause: unknown) => { if (alive) setError(cause instanceof Error ? cause.message : String(cause)); };
+    let requestedSize: { id: string; cols: number; rows: number } | null = null;
+    let repaintAt: { cols: number; rows: number } | null = null;
+    const syncSize = (refresh = false) => {
+      if (!alive || !visibleRef.current || replaying || !host.clientWidth || !host.clientHeight) return;
+      fit.fit();
+      const { cols, rows } = terminal;
+      if (refresh) terminal.refresh(0, Math.max(0, rows - 1));
+      if (!id || exits.has(id)) return;
+      // A different size already repaints an alternate screen. Bounce only at the same size.
+      const bounce = repaintAt?.cols === cols && repaintAt.rows === rows && rows > 1;
+      repaintAt = null;
+      if (!bounce && requestedSize?.id === id && requestedSize.cols === cols && requestedSize.rows === rows) return;
+      const size = { id, cols, rows };
+      requestedSize = size;
+      const failed = (cause: unknown) => {
+        if (requestedSize === size) requestedSize = null;
+        report(cause);
+      };
+      try {
+        // Resize and input share the PTY channel, including both halves of a repaint.
+        if (bounce) void Promise.resolve(bridge.resize(size.id, cols, rows - 1)).catch(failed);
+        void Promise.resolve(bridge.resize(size.id, cols, rows)).catch(failed);
+      } catch (cause) {
+        failed(cause);
+      }
+    };
+    const resize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => { syncSize(true); });
+    };
     const defaultFont = webBridge ? webTerminalFonts(terminal.options.fontFamily ?? "") : terminal.options.fontFamily;
     const theme = async () => {
       const request = ++appearanceRequest;
@@ -249,12 +287,7 @@ export function TerminalWorkspace({
       // Imported schemes and truecolor prompts bypass the readable palette.
       terminal.options.minimumContrastRatio = 4.5;
       if (host.parentElement) host.parentElement.style.backgroundColor = imported?.theme.background ?? "";
-      if (replaying) return;
-      fit.fit();
-      if (id) {
-        const sessionId = id;
-        void Promise.resolve().then(() => bridge.resize(sessionId, terminal.cols, terminal.rows)).catch(report);
-      }
+      syncSize();
     };
     void theme();
     fit.fit();
@@ -307,14 +340,15 @@ export function TerminalWorkspace({
       }
       const afterMessageId = submitted ? latestPaneRun(workersRef.current, sessionId)?.messageIds.at(-1) : undefined;
       const typedAt = Date.now();
-      const send = () => Promise.resolve(bridge.write(sessionId, data)).then(() => {
+      const send = async () => {
+        if (!alive || id !== sessionId || exits.has(sessionId)) return;
+        if (/[\r\n]/.test(data)) syncSize();
+        await bridge.write(sessionId, data);
         if (submitted) void Promise.resolve(api(`/api/bots/${encodeURIComponent(bot.id)}/terminal/resume`, {
           method: "POST", body: JSON.stringify({ sessionId, afterMessageId, submittedAgo: Date.now() - typedAt }),
         })).catch(() => {});
-      }).catch(report);
-      // Submit keys skip the microtask queue so they cannot stall behind DA/mouse replies.
-      if (/[\r\n]/.test(data)) void send();
-      else void Promise.resolve().then(send);
+      };
+      void send().catch(report);
     };
     forwardInputRef.current = forwardInput;
     const input = terminal.onData((data) => forwardInput(data));
@@ -378,19 +412,10 @@ export function TerminalWorkspace({
       }
       return true;
     });
-    const resize = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (!alive || replaying || !host.clientWidth || !host.clientHeight) return;
-        fit.fit();
-        terminal.refresh(0, Math.max(0, terminal.rows - 1));
-        if (id) {
-          const sessionId = id;
-          void Promise.resolve().then(() => bridge.resize(sessionId, terminal.cols, terminal.rows)).catch(report);
-        }
-      });
+    resizeRef.current = (reopen) => {
+      if (reopen) requestedSize = null;
+      resize();
     };
-    resizeRef.current = resize;
     const observer = new ResizeObserver(resize);
     observer.observe(host);
     const updateAppearance = () => { void theme(); };
@@ -436,19 +461,14 @@ export function TerminalWorkspace({
       setBannerDismissed(false);
       setReplacing(false);
       replacingRef.current = false;
-      resize();
-      // Diff-rendering TUIs cannot be rebuilt from replayed history alone; a size
-      // bounce forces the app to repaint from live state (same trio a manual resize runs).
-      if (snapshot.alternate === true && code === null && terminal.rows > 1) {
-        const repaintId = snapshot.id;
-        const repaintCols = terminal.cols;
-        const repaintRows = terminal.rows;
-        void Promise.resolve()
-          .then(() => bridge.resize(repaintId, repaintCols, repaintRows - 1))
-          .then(() => bridge.resize(repaintId, repaintCols, repaintRows))
-          .catch(report);
+      repaintAt = snapshot.alternate === true && code === null
+        ? { cols: snapshot.cols ?? terminal.cols, rows: snapshot.rows ?? terminal.rows }
+        : null;
+      if (visibleRef.current) {
+        resize();
       }
-      if (!blockedRef.current) terminal.focus();
+      if (!blockedRef.current && !quiet) terminal.focus();
+      quiet = false;
     };
     // A replay that never reached the screen is stale: reset the attach so the
     // next show opens fresh instead of queueing output while hidden.
@@ -523,6 +543,7 @@ export function TerminalWorkspace({
       liveQueue.length = 0;
       replayComplete = false;
       terminal.options.disableStdin = true;
+      fit.fit();
       const openInput: Parameters<typeof bridge.open>[0] = { botId: expectedBotId, cols: terminal.cols, rows: terminal.rows, restart, projectCwd: expectedProject };
       if (pane) openInput.sessionId = pane;
       void Promise.resolve().then(() => bridge.open(openInput)).then(async (result) => {
@@ -604,7 +625,8 @@ export function TerminalWorkspace({
       });
     };
     openShellRef.current = openShell;
-    if (visibleRef.current) openShell(generation > 0);
+    // Retry and a folder pick remount to reattach; only Restart passes restart, so no pane switch kills Main.
+    if (visibleRef.current) openShell(false);
 
     return () => {
       alive = false;
@@ -641,7 +663,7 @@ export function TerminalWorkspace({
       openShellRef.current?.(false);
       // The overlay keeps layout size while hidden, so no ResizeObserver fires on
       // return; run the resize trio (fit + refresh + PTY sync) explicitly.
-      resizeRef.current?.();
+      resizeRef.current?.(true);
     } else {
       dropPendingReplayRef.current?.();
     }
@@ -714,8 +736,7 @@ export function TerminalWorkspace({
     else {
       setBannerDismissed(false);
       // Dead/missing session: in-place restart (restart:true). openShell(false) would early-return while id is still set.
-      if (openShellRef.current) openShellRef.current(true);
-      else setGeneration((value) => value + 1);
+      openShellRef.current?.(true);
     }
   };
 
@@ -742,6 +763,7 @@ export function TerminalWorkspace({
     return () => onPaneOrder?.(bot.id, null);
   }, [bot.id, visible, onPaneOrder, paneOrder]);
   const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
+  const leaveLabel = phone ? t("terminal.chat") : `${t("terminal.closeDocked")} (${window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}\`)`;
   const hotkeyOf = (sessionId: string | null) => {
     if (sessionId === null) return undefined;
     const index = paneOrder.indexOf(sessionId);
@@ -751,11 +773,10 @@ export function TerminalWorkspace({
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-inset text-ink" aria-label={t("terminal.title")}>
       <header className={`@container/chathead flex h-[72px] shrink-0 items-center gap-3 border-b border-hairline bg-panel px-5 max-md:h-[60px] ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
-        <button type="button" onClick={onClose} className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] ${HEADER_CONTROL}`}>
-          {phone ? <><ArrowLeft size={15} /> {t("terminal.chat")}</> : t("terminal.closeDocked")} <kbd className="text-[10px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>
+        <button type="button" onClick={onClose} aria-label={leaveLabel} title={leaveLabel} className={HEADER_ICON}>
+          {phone ? <ArrowLeft size={18} /> : <PanelRightClose size={18} />}
         </button>
         <span className="h-5 border-l border-hairline" aria-hidden />
-        <TerminalSquare size={16} className="shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {pane !== null && <WorkerMark compact provider={paneProvider(workers, pane, panes.find((item) => item.id === pane)?.label)} />}{watched ?? bot.name}</span></h1>
           <div className="mt-0.5 flex min-w-0 items-center gap-2">
@@ -785,12 +806,12 @@ export function TerminalWorkspace({
         </div>
         {bot.busy && <span className="shrink-0 text-[11px] text-accent-text" role="status">{t("terminal.agentWorking")}</span>}
         {pane !== null && !webBridge && (
-          <button type="button" onClick={() => requestClosePane(pane)} aria-label={t("terminal.closePane")} title={t("terminal.closePane")} className={`flex shrink-0 items-center justify-center rounded-md p-1.5 ${HEADER_CONTROL}`}>
-            <SquareX size={16} />
+          <button type="button" onClick={() => requestClosePane(pane)} aria-label={t("terminal.closePane")} title={t("terminal.closePane")} className={HEADER_ICON}>
+            <SquareX size={18} />
           </button>
         )}
         {/* A docked terminal hides without the close broadcast, which would also shut the Workers pane taking its spot. */}
-        <WorkerChip key={String(visible)} name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
+        <WorkerChip key={String(visible)} name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`h-7.5 rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
       </header>
       {showProjectBanner && (
         <div role="status" className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline bg-inset px-5 py-1.5 text-[12px] text-ink">
@@ -892,8 +913,7 @@ export function TerminalWorkspace({
               setConfirmRestart(false);
               setBannerDismissed(false);
               // In-place restart keeps painted scrollback; fallback can skip re-dump when session id matches.
-              if (openShellRef.current) openShellRef.current(true);
-              else setGeneration((value) => value + 1);
+              openShellRef.current?.(true);
             }}
           />
         )}

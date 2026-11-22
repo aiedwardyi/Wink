@@ -54,6 +54,7 @@ const ENTRY_POINTS = [
   "drivers/dweb-proxy.ts",
   "drivers/phone-proxy.ts",
   "drivers/terminal-proxy.ts",
+  "drivers/antigravity-auth-cli.ts",
 ];
 
 await build({

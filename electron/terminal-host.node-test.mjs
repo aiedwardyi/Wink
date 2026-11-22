@@ -81,6 +81,34 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+test("desktop input reclaims its size from a browser on the same PTY without waiting for the resize reply", async (t) => {
+  const f = fixture();
+  t.after(() => f.host.dispose());
+  const { id, generation } = await f.host.open(f.event, f.input);
+  await f.host.resize(f.event, id, 85, 34);
+  const remote = { sessionId: id, generation, cols: 47, rows: 25 };
+  await f.host.resizeBot("bot-1", remote);
+  await f.host.inputBot("bot-1", { ...remote, data: "remote" });
+
+  const calls = [];
+  let ack;
+  f.children[0].resize = (...size) => {
+    calls.push(["size", ...size]);
+    return new Promise((resolve) => { ack = resolve; });
+  };
+  f.children[0].write = (data) => calls.push(["input", data]);
+  try {
+    await f.host.write(f.event, id, "\x1b[?1;2c");
+    await f.host.write(f.event, id, "ls\r");
+    await f.host.write(f.event, id, "pwd\r");
+    assert.deepEqual(calls, [["input", "\x1b[?1;2c"], ["size", 85, 34], ["input", "ls\r"], ["input", "pwd\r"]]);
+    assert.equal(f.host.read(f.event, id).cols, 85);
+    assert.equal(f.host.read(f.event, id).rows, 34);
+  } finally {
+    ack?.();
+  }
+});
+
 test("retired panes leave one owner listener and destruction closes every live pane", async (t) => {
   let owner;
   const f = fixture({ owner: () => owner });
@@ -4974,6 +5002,86 @@ test("the compact hook signals only a confirmed compact SessionStart",{ skip: pr
   }
 });
 
+describe("ConPTY start", () => {
+  function winFixture(t) {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "wink-conpty-pwsh-"));
+    fs.mkdirSync(path.join(programFiles, "PowerShell", "7"), { recursive: true });
+    fs.writeFileSync(path.join(programFiles, "PowerShell", "7", "pwsh.exe"), "");
+    t.after(() => fs.rmSync(programFiles, { recursive: true, force: true }));
+    const f = fixture({ platform: "win32", env: { ProgramFiles: programFiles } });
+    t.after(() => f.host.dispose());
+    return f;
+  }
+
+  test("answers the shell's startup device query before any panel is attached", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[1t");
+    f.children[0].data("\x1b[c\x1b[?1004h\x1b[?9001h");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
+  test("answers a pre-started shell with no panel at all", async (t) => {
+    const f = winFixture(t);
+    assert.equal(await f.host.prestart(f.event, f.input), true);
+    f.children[0].data("\x1b[c");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
+  test("answers a device query split across two chunks", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[");
+    f.children[0].data("c\x1b[?1004h");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
+  test("leaves device queries after the prompt to the panel", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[c");
+    f.children[0].data("PS C:\\> ");
+    f.children[0].data("\x1b[c");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+    const late = winFixture(t);
+    await late.host.open(late.event, late.input);
+    late.children[0].data("PS C:\\> ");
+    late.children[0].data("\x1b[c");
+    assert.deepEqual(late.children[0].writes, []);
+  });
+
+  test("keeps the device query it answered from the panel, whole or split", async (t) => {
+    const shown = (f) => f.events.filter(([channel]) => channel === "terminal:data").map(([, event]) => event.data).join("");
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[1t");
+    f.children[0].data("\x1b[c\x1b[?1004h");
+    assert.equal(shown(f), "\x1b[1t\x1b[?1004h");
+    const split = winFixture(t);
+    await split.host.open(split.event, split.input);
+    split.children[0].data("\x1b[1t\x1b[");
+    split.children[0].data("c\x1b[?1004h");
+    assert.equal(shown(split), "\x1b[1t\x1b[?1004h");
+  });
+
+  test("answers a replacement shell's device query sent before it is ready", async (t) => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "wink-conpty-pwsh-"));
+    fs.mkdirSync(path.join(programFiles, "PowerShell", "7"), { recursive: true });
+    fs.writeFileSync(path.join(programFiles, "PowerShell", "7", "pwsh.exe"), "");
+    t.after(() => fs.rmSync(programFiles, { recursive: true, force: true }));
+    const f = slowRespawnFixture({ platform: "win32", env: { ProgramFiles: programFiles } });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "AGENT", command: "codex go" });
+    f.children[0].exit({ exitCode: DLL_INIT_FAILED });
+    await f.settle();
+    f.children[1].data("\x1b[c");
+    f.release();
+    await f.settle();
+    assert.deepEqual(f.children[1].writes, ["\x1b[?1;2c", "codex go\r"]);
+    assert.equal(f.host.readBot("bot-1", { sessionId: pane.sessionId }).exited, false);
+  });
+});
+
 describe("remote panes", () => {
   const GB = 1024 ** 3;
   const HOSTS = { work: { ssh: "work", root: "D:/wink-remote", account: "me@example.com", enabled: true }, far: { ssh: "far", root: "D:/wink-remote", account: "me@example.com", enabled: true }, dad: { ssh: "dad", root: "D:/wink-remote", account: "me@example.com", enabled: false } };
@@ -5017,7 +5125,7 @@ describe("remote panes", () => {
     child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST_YES.replaceAll("\n", "\r\n"));
     t.mock.timers.tick(500);
     await Promise.resolve();
-    assert.deepEqual(child.writes.slice(1), ["\x1b[B", "\r"]);
+    assert.deepEqual(child.writes.slice(1), ["\x1b[?1;2c", "\x1b[B", "\r"]);
   });
 
   test("needs only a shell's memory at home", async (t) => {

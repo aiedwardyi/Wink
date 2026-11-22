@@ -112,7 +112,10 @@ declare global {
         signOut(): Promise<CompanionAccountState>;
       };
       googleAccount?: {
-        signIn(): Promise<{ ok: true; email: string } | { ok: false; error: import("@/lib/google-signin-error").GoogleSignInCode }>;
+        /** `hold` keeps the signed-in tab waiting until `finish`. */
+        signIn(options?: { hold?: true }): Promise<{ ok: true; email: string } | { ok: false; error: import("@/lib/google-signin-error").GoogleSignInCode }>;
+        /** Sends the held tab to the dashboard at this relay base, or leaves it signed in. */
+        finish(base: string | null): Promise<void>;
         cancel(): Promise<void>;
         signOut(): Promise<{ ok: true }>;
       };
@@ -201,7 +204,7 @@ declare global {
       }) => void): () => void;
       /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
       deviceWindow?: {
-        open(host: string, name: string): Promise<boolean>;
+        open(host: string, name: string, relayHost?: string): Promise<boolean>;
       };
       /** Native folder picker; resolves null when the user cancels. */
       pickFolder?(current?: string): Promise<string | null>;

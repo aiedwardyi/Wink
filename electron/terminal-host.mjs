@@ -87,6 +87,9 @@ export const PRESTART_LIMIT = 3;
 export const PRESTART_IDLE_MS = 10 * 60_000;
 // A stray Enter on an empty Claude prompt submits its suggestion as a real turn.
 const BOT_PANE_ENV = { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: "false" };
+// conpty.dll asks once at start and holds the shell about 3 s for the answer; a panel only replays it, so the host answers as xterm.js would.
+const CONPTY_DEVICE_QUERY = "\x1b[c";
+const DEVICE_ATTRIBUTES = "\x1b[?1;2c";
 // Same rule as pane-cleanup's nick, so the ledger finds the folder this makes.
 const NICK_RE = /^[A-Z0-9][A-Z0-9-]{0,63}$/;
 // Survivors of a closed pane get this long to exit on their own.
@@ -1068,10 +1071,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     reportExit(session, 1);
     retireQuietly(session, true, true);
   };
-  const attach = (session) => {
-    const { pty } = session;
+  const attach = (session, pty = session.pty) => {
+    let handshake = platform === "win32";
+    // A query prefix at a chunk end, kept from the panel until the next chunk shows whether it is the answered query.
+    let held = "";
     pty.onData((data) => {
-      if (session.retired || session.pty !== pty) return;
+      if (session.retired || (session.pty !== pty && session.replacement !== pty)) return;
       session.output += data;
       if (session.output.length > OUTPUT_LIMIT) {
         session.output = session.output.slice(-OUTPUT_LIMIT);
@@ -1084,6 +1089,26 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       try {
         session.screen.consume(data);
       } catch {}
+      let shown = data;
+      if (handshake && !session.adopting) {
+        const window = held + data;
+        const at = window.indexOf(CONPTY_DEVICE_QUERY);
+        held = "";
+        if (at !== -1) {
+          handshake = false;
+          try { void Promise.resolve(pty.write(DEVICE_ATTRIBUTES)).catch(() => {}); } catch {}
+          // The panel's emulator would answer it again, and the spare reply reaches the shell as input.
+          shown = window.slice(0, at) + window.slice(at + CONPTY_DEVICE_QUERY.length);
+        } else {
+          held = [2, 1].map((length) => CONPTY_DEVICE_QUERY.slice(0, length)).find((prefix) => window.endsWith(prefix)) ?? "";
+          shown = window.slice(0, window.length - held.length);
+        }
+      }
+      if (parsed.text.trim() && handshake) {
+        handshake = false;
+        shown += held;
+        held = "";
+      }
       cancelClaudeStartup(session);
       if (session.worker && session.exitCode === null && session.botPane
         && (session.claudeOnboarding?.active || (session.claudeTrust && !session.claudeTrustAnswered))) {
@@ -1158,9 +1183,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (parsed.bell && session.activityArmed) reportAttention(session, "bell");
       if (!parsed.bell && echo.text.trim()) scheduleActivity(session);
       const seq = ++session.seq;
-      if (!session.adopting) emit(session, "terminal:data", { id: session.id, data, seq });
-      if (session.viewers.size) fanOut(session, { seq, data });
+      if (shown && !session.adopting) emit(session, "terminal:data", { id: session.id, data: shown, seq });
+      if (shown && session.viewers.size) fanOut(session, { seq, data: shown });
     });
+  };
+  const watchExit = (session) => {
+    const { pty } = session;
     pty.onExit(({ exitCode }) => { if (session.pty === pty) reportExit(session, exitCode); });
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The test adapter predates worker error events.
     if (typeof pty.onError === "function") pty.onError((error) => { if (session.pty === pty) fail(session, error); });
@@ -1189,11 +1217,14 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     let replacementExit = null;
     try {
       pty = await session.spawn();
+      session.replacement = pty;
+      attach(session, pty);
       pty.onExit(({ exitCode: code }) => { replacementExit ??= code; });
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may expose readiness only when worker-backed.
       if (pty.ready && typeof pty.ready.then === "function") await timeout(pty.ready, readyTimeoutMs, "Terminal worker did not become ready");
     } catch {
       session.respawn = null;
+      session.replacement = null;
       if (pty) stopReplacement(pty);
       if (session.retired) paneRuns?.ended(session.id);
       reportExit(session, replacementExit ?? exitCode);
@@ -1201,13 +1232,14 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     const queued = session.respawn;
     session.respawn = null;
+    session.replacement = null;
     if (session.retired) {
       paneRuns?.ended(session.id);
       stopReplacement(pty);
       return;
     }
     session.pty = pty;
-    attach(session);
+    watchExit(session);
     if (Number.isInteger(pty.pid)) {
       try { setPriority(pty.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
     }
@@ -1254,11 +1286,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   };
   const createSession = ({ id, key, event, input, folder, cwd, botPane, worker, managed, workerSession, baseHead, paneEnv, shell, pty, spawn, mail }) => {
     const session = {
-      id, key, botId: input.botId, botPane, workerSession, baseHead, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0, viewers: new Set(),
+      id, key, botId: input.botId, botPane, workerSession, baseHead, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, replacement: null, command: null, output: "", exitCode: null, seq: 0, viewers: new Set(),
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerEngine: managed ? worker.executable : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
-      outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
+      outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, rows: input.rows ?? 24, desktopSize: null, pendingInputEcho: "", truncated: false,
       workerReady: false, mail, compactSignal: paneEnv.ORBIT_COMPACT_SIGNAL ?? null, reportSignal: paneEnv.ORBIT_REPORT_SIGNAL ?? null, reportLost: null, teacher: folder.teacher ?? input.botId, worker: false, engine: null, stallArmedAt: 0, stallChangedAt: 0, stallScreenAt: 0, stallText: null,
       stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, blipNudge: null, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
       commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, idleCompacting: false, agentSeen: false, contextNote: null, contextCompactPending: false,
@@ -1302,6 +1334,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     sessions.set(session.id, session);
     watchOwner(event.sender);
     attach(session);
+    watchExit(session);
     return session;
   };
   const awaitSession = async (session, cancelPromise) => {
@@ -1481,12 +1514,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (pending.get(key) === operation) pending.delete(key);
     }
   };
-  const writeInput = (session, data) => {
+  const writeInput = (session, data, desktop = false) => {
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Reject non-text IPC payloads before passing them to the PTY.
     if (typeof data !== "string" || data.length > 64 * 1024) throw new Error("Invalid terminal input");
     if (session.exitCode !== null) throw new Error("Terminal has exited");
     const mouse = isMouseReport(data);
-    if (!mouse && !isTerminalReply(data)) cancelClaudeStartup(session);
+    const userInput = !mouse && !isTerminalReply(data);
+    if (userInput) cancelClaudeStartup(session);
     const echo = mouse ? "" : inputEchoText(data);
     const submit = mouse ? false : isSubmitInput(data);
     // Mouse and focus reports from a TUI are not the user taking over.
@@ -1513,6 +1547,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (!mouse) session.respawn.push(data);
       return undefined;
     }
+    const size = desktop && userInput && session.desktopSize;
+    if (size && (size.cols !== session.cols || size.rows !== session.rows)) {
+      // The typer reclaims its dimensions on the same ordered channel as input.
+      try { void Promise.resolve(resizePane(session, size.cols, size.rows)).catch(() => {}); } catch {}
+    }
     try {
       const result = session.pty.write(payload);
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
@@ -1530,6 +1569,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const result = session.pty.resize(cols, rows);
       session.screen.resize(cols, rows);
       session.cols = cols;
+      session.rows = rows;
       if (session.viewers.size) fanOut(session, { cols, rows });
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
       return result && typeof result.then === "function" ? result.catch((cause) => { fail(session, cause); throw cause; }) : result;
@@ -1585,7 +1625,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       return true;
     },
     write(event, id, data) {
-      return writeInput(owned(event, id), data);
+      return writeInput(owned(event, id), data, true);
     },
     acknowledge(event, id) {
       const session = owned(event, id);
@@ -1595,7 +1635,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.activityCooldownUntil = now() + attentionCooldownMs;
     },
     resize(event, id, cols, rows) {
-      return resizePane(owned(event, id), cols, rows);
+      const session = owned(event, id);
+      const resized = resizePane(session, cols, rows);
+      session.desktopSize = { cols, rows };
+      return resized;
     },
     read(event, id, options = {}) {
       const session = owned(event, id);
@@ -1844,6 +1887,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (slot) remoteOpens.add(slot);
       let session;
       let worker;
+      let commandText = input.command;
       let remoteLine;
       let claimed = false;
       try {
@@ -1853,10 +1897,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
         const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
         if (recovery) launchInput.resume = recovery.blocked ? { ...recovery.session, blocked: recovery.blocked } : recovery.session;
-        // Capture is best effort here: any failure leaves the launch exactly as it was without accounts.
-        else if (!workerAccountsEnabled && workerLaunch && platform === "win32" && input.command) launchInput.unrouted = true;
+        else if (!workerAccountsEnabled && workerLaunch && input.command) launchInput.unrouted = true;
         if (slot) remoteLine = await remote.open({ name: input.host, command: input.command, cwd: input.cwd, slot });
-        else if (launchInput.unrouted) worker = await Promise.resolve(launchInput).then(workerLaunch).then((launch) => launch?.kind === "unrouted" ? launch : null, () => null);
+        else if (launchInput.unrouted) {
+          const launch = await Promise.resolve(launchInput).then(workerLaunch).then((result) => result?.kind === "unrouted" ? result : null, () => null);
+          commandText = launch?.command ?? commandText;
+          if (platform === "win32" && launch?.session) worker = launch;
+        }
         else worker = (workerAccountsEnabled || recovery) && workerLaunch ? await workerLaunch(launchInput) : null;
         if (worker?.kind === "hold") return { hold: worker.hold };
         if (recovery && worker?.kind !== "managed" && worker?.kind !== "unrouted") throw new Error("Worker resume service is unavailable");
@@ -1897,10 +1944,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       emit(session, "terminal:opened", { id: session.id, botId, label: label ?? null, generation: session.generation });
       if (input.command) {
-        // A fresh unrouted pane types the bot's own text; every other worker types its rendered argv.
         const rendered = worker?.kind === "managed" || (recovery && worker?.kind === "unrouted") ? worker : null;
         const command = normalizeTerminalText(slot ? remoteLine : rendered ? managedWorkerCommand(rendered, session.workerEnvironment, platform, session.mail?.binDir)
-          : worker?.kind === "unrouted" ? unroutedWorkerCommand(worker, input.command, session.mail?.binDir) : input.command);
+          : worker?.kind === "unrouted" ? unroutedWorkerCommand(worker, commandText, session.mail?.binDir) : commandText);
         session.command = command.endsWith("\r") ? command : `${command}\r`;
         await botWrite(session, session.command, rendered, slot && input.command);
       }

@@ -10,7 +10,7 @@
       "effort": "max",
       "value": 42.4242424242424,
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5",
-      "retrieved_at": "2026-11-14T12:16:45.451Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -21,7 +21,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-1-low",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-1-low",
-      "retrieved_at": "2026-11-14T12:09:01.966Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -32,7 +32,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-1-medium",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-1-medium",
-      "retrieved_at": "2026-11-14T12:09:03.372Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -43,7 +43,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-1-high",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-1-high",
-      "retrieved_at": "2026-11-14T12:09:00.560Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -54,7 +54,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-1-xhigh",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-1-xhigh",
-      "retrieved_at": "2026-11-14T12:09:04.896Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -65,7 +65,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-1",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-1",
-      "retrieved_at": "2026-11-14T12:08:59.050Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -76,7 +76,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
-      "retrieved_at": "2026-11-14T12:09:08.944Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -87,7 +87,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
-      "retrieved_at": "2026-11-14T12:09:10.418Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -98,7 +98,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
-      "retrieved_at": "2026-11-14T12:09:07.516Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -109,7 +109,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
-      "retrieved_at": "2026-11-14T12:09:12.326Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -120,7 +120,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2",
-      "retrieved_at": "2026-11-14T12:09:06.087Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -131,7 +131,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
       "source_url": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
-      "retrieved_at": "2026-11-14T12:09:27.759Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -142,7 +142,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
       "source_url": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
-      "retrieved_at": "2026-11-14T12:09:29.187Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -153,7 +153,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
       "source_url": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
-      "retrieved_at": "2026-11-14T12:09:25.807Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -164,7 +164,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
       "source_url": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
-      "retrieved_at": "2026-11-14T12:09:30.594Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -175,7 +175,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-opus-5-5",
       "source_url": "https://artificialanalysis.ai/models/claude-opus-5-5",
-      "retrieved_at": "2026-11-14T12:09:23.652Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -186,7 +186,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
       "source_url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
-      "retrieved_at": "2026-11-14T12:09:35.732Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -197,7 +197,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
       "source_url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
-      "retrieved_at": "2026-11-14T12:09:37.927Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -208,7 +208,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
       "source_url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
-      "retrieved_at": "2026-11-14T12:09:33.952Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -219,7 +219,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
       "source_url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
-      "retrieved_at": "2026-11-14T12:09:39.911Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -230,7 +230,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
       "source_url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
-      "retrieved_at": "2026-11-14T12:09:31.783Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -241,7 +241,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
       "source_url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
-      "retrieved_at": "2026-11-14T12:09:18.008Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -252,7 +252,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
       "source_url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
-      "retrieved_at": "2026-11-14T12:09:20.171Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -263,7 +263,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
       "source_url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
-      "retrieved_at": "2026-11-14T12:09:15.789Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -274,7 +274,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
       "source_url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
-      "retrieved_at": "2026-11-14T12:09:22.213Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -285,62 +285,106 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/claude-haiku-5-5",
       "source_url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
-      "retrieved_at": "2026-11-14T12:09:13.706Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
       "model": "gemini-4-carbon",
       "effort": "low",
       "value": 62.6262626262626,
-      "cost_per_task": 6.054520229204888,
+      "cost_per_task": 8.56627842224004,
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-carbon-low",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-carbon-low",
-      "retrieved_at": "2026-11-14T12:09:50.383Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
       "model": "gemini-4-carbon",
       "effort": "medium",
       "value": 60.6060606060606,
-      "cost_per_task": 6.235858764113193,
+      "cost_per_task": 8.820361115926918,
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-carbon-medium",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-carbon-medium",
-      "retrieved_at": "2026-11-14T12:09:52.238Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
       "model": "gemini-4-carbon",
       "effort": "high",
       "value": 65.1515151515151,
-      "cost_per_task": 7.113908956231779,
+      "cost_per_task": 10.05298420599429,
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-carbon",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-carbon",
-      "retrieved_at": "2026-11-14T12:09:48.928Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-neon",
+      "effort": "low",
+      "value": 32.8282828282828,
+      "cost_per_task": 1.283828678883681,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gemini-4-neon-low",
+      "source_url": "https://artificialanalysis.ai/models/gemini-4-neon-low",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-neon",
+      "effort": "medium",
+      "value": 54.5454545454545,
+      "cost_per_task": 2.924153422010316,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gemini-4-neon-medium",
+      "source_url": "https://artificialanalysis.ai/models/gemini-4-neon-medium",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-neon",
+      "effort": "high",
+      "value": 61.6161616161616,
+      "cost_per_task": 4.919710166220768,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gemini-4-neon-high",
+      "source_url": "https://artificialanalysis.ai/models/gemini-4-neon-high",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "value": 63.6363636363636,
+      "cost_per_task": 6.696523326075095,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gemini-4-neon",
+      "source_url": "https://artificialanalysis.ai/models/gemini-4-neon",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
       "model": "gemini-4-argon",
       "effort": "medium",
       "value": 55.050505050505,
-      "cost_per_task": 6.424922769986513,
+      "cost_per_task": 12.849845539973026,
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-argon-medium",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-argon-medium",
-      "retrieved_at": "2026-11-14T12:09:47.431Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
       "model": "gemini-4-argon",
       "effort": "high",
       "value": 57.0707070707071,
-      "cost_per_task": 6.780140181187823,
+      "cost_per_task": 13.560280362375645,
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-argon",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-argon",
-      "retrieved_at": "2026-11-14T12:09:46.025Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -351,7 +395,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-hydrogen-low",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-low",
-      "retrieved_at": "2026-11-14T12:09:56.386Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -362,7 +406,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-hydrogen-medium",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-medium",
-      "retrieved_at": "2026-11-14T12:09:57.845Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -373,7 +417,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-hydrogen-high",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-high",
-      "retrieved_at": "2026-11-14T12:09:54.976Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -384,7 +428,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-4-hydrogen",
       "source_url": "https://artificialanalysis.ai/models/gemini-4-hydrogen",
-      "retrieved_at": "2026-11-14T12:09:53.416Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -392,7 +436,7 @@
       "effort": "low",
       "value": 10.1010101010101,
       "source_url": "https://artificialanalysis.ai/models/gemini-3-8-flash-low",
-      "retrieved_at": "2026-11-14T12:09:43.411Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -403,7 +447,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-3-8-flash-medium",
       "source_url": "https://artificialanalysis.ai/models/gemini-3-8-flash-medium",
-      "retrieved_at": "2026-11-14T12:09:44.853Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -414,7 +458,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gemini-3-8-flash",
       "source_url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
-      "retrieved_at": "2026-11-14T12:09:41.276Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -422,7 +466,7 @@
       "effort": "xhigh",
       "value": 16.6666666666667,
       "source_url": "https://artificialanalysis.ai/models/muse-spark-1-3-xhigh",
-      "retrieved_at": "2026-11-14T12:10:51.056Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -433,7 +477,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/muse-spark-1-3",
       "source_url": "https://artificialanalysis.ai/models/muse-spark-1-3",
-      "retrieved_at": "2026-11-14T12:10:49.542Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -441,7 +485,7 @@
       "effort": "low",
       "value": 1.51515151515152,
       "source_url": "https://artificialanalysis.ai/models/gpt-5-6-terra-low",
-      "retrieved_at": "2026-11-14T12:16:48.220Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -449,7 +493,7 @@
       "effort": "medium",
       "value": 1.01010101010101,
       "source_url": "https://artificialanalysis.ai/models/gpt-5-6-terra-medium",
-      "retrieved_at": "2026-11-14T12:16:49.615Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -457,7 +501,7 @@
       "effort": "high",
       "value": 1.51515151515152,
       "source_url": "https://artificialanalysis.ai/models/gpt-5-6-terra-high",
-      "retrieved_at": "2026-11-14T12:16:51.082Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -465,7 +509,7 @@
       "effort": "xhigh",
       "value": 10.1010101010101,
       "source_url": "https://artificialanalysis.ai/models/gpt-5-6-terra-xhigh",
-      "retrieved_at": "2026-11-14T12:16:52.509Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -476,7 +520,117 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-5-6-terra",
       "source_url": "https://artificialanalysis.ai/models/gpt-5-6-terra",
-      "retrieved_at": "2026-11-14T12:16:46.794Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "low",
+      "value": 51.010101010101,
+      "cost_per_task": 0.795390170444278,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra-low",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-low",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "medium",
+      "value": 58.5858585858586,
+      "cost_per_task": 1.754899184127889,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra-medium",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-medium",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "high",
+      "value": 60.1010101010101,
+      "cost_per_task": 2.499368722692741,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra-high",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-high",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "xhigh",
+      "value": 64.1414141414141,
+      "cost_per_task": 2.880790520204879,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra-xhigh",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra-xhigh",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "effort": "max",
+      "value": 64.1414141414141,
+      "cost_per_task": 4.657998705285525,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-astra",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-astra",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "low",
+      "value": 37.8787878787879,
+      "cost_per_task": 0.3500387744101477,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol-low",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-low",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "medium",
+      "value": 56.0606060606061,
+      "cost_per_task": 0.6774887038171429,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol-medium",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-medium",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "high",
+      "value": 58.5858585858586,
+      "cost_per_task": 0.770567311826925,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol-high",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-high",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "xhigh",
+      "value": 56.0606060606061,
+      "cost_per_task": 0.9338873442079093,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol-xhigh",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol-xhigh",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "effort": "max",
+      "value": 60.1010101010101,
+      "cost_per_task": 1.293535836052996,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/gpt-6-2-sol",
+      "source_url": "https://artificialanalysis.ai/models/gpt-6-2-sol",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -487,7 +641,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-astra-low",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-astra-low",
-      "retrieved_at": "2026-11-14T12:10:18.232Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -498,7 +652,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-astra-medium",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-astra-medium",
-      "retrieved_at": "2026-11-14T12:10:19.644Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -509,7 +663,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-astra-high",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-astra-high",
-      "retrieved_at": "2026-11-14T12:10:16.807Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -520,7 +674,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-astra-xhigh",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-astra-xhigh",
-      "retrieved_at": "2026-11-14T12:10:21.038Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -531,7 +685,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-astra",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-astra",
-      "retrieved_at": "2026-11-14T12:10:15.375Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -542,7 +696,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-luna-low",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-luna-low",
-      "retrieved_at": "2026-11-14T12:10:25.967Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -553,7 +707,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-luna-medium",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-luna-medium",
-      "retrieved_at": "2026-11-14T12:10:28.114Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -564,7 +718,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-luna-high",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-luna-high",
-      "retrieved_at": "2026-11-14T12:10:24.496Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -575,7 +729,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-luna-xhigh",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-luna-xhigh",
-      "retrieved_at": "2026-11-14T12:10:30.174Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -586,7 +740,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-luna",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-luna",
-      "retrieved_at": "2026-11-14T12:10:22.437Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -597,7 +751,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-sol-low",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-sol-low",
-      "retrieved_at": "2026-11-14T12:10:03.618Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -608,7 +762,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
-      "retrieved_at": "2026-11-14T12:10:05.083Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -619,7 +773,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
-      "retrieved_at": "2026-11-14T12:10:01.497Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -630,7 +784,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-sol-xhigh",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-sol-xhigh",
-      "retrieved_at": "2026-11-14T12:10:06.588Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -641,7 +795,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-sol",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
-      "retrieved_at": "2026-11-14T12:09:59.176Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -649,7 +803,7 @@
       "effort": "low",
       "value": 3.03030303030303,
       "source_url": "https://artificialanalysis.ai/models/grok-4-6-low",
-      "retrieved_at": "2026-11-14T12:10:34.862Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -657,7 +811,7 @@
       "effort": "medium",
       "value": 13.1313131313131,
       "source_url": "https://artificialanalysis.ai/models/grok-4-6-medium",
-      "retrieved_at": "2026-11-14T12:10:37.092Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -665,7 +819,7 @@
       "effort": "high",
       "value": 21.2121212121212,
       "source_url": "https://artificialanalysis.ai/models/grok-4-6",
-      "retrieved_at": "2026-11-14T12:10:31.544Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -676,7 +830,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/grok-4-6-xhigh",
       "source_url": "https://artificialanalysis.ai/models/grok-4-6-xhigh",
-      "retrieved_at": "2026-11-14T12:10:39.252Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -687,7 +841,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/grok-4-7-low",
       "source_url": "https://artificialanalysis.ai/models/grok-4-7-low",
-      "retrieved_at": "2026-11-14T12:10:44.673Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -698,7 +852,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/grok-4-7-high",
       "source_url": "https://artificialanalysis.ai/models/grok-4-7-high",
-      "retrieved_at": "2026-11-14T12:10:42.699Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -709,7 +863,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/grok-4-7",
       "source_url": "https://artificialanalysis.ai/models/grok-4-7",
-      "retrieved_at": "2026-11-14T12:10:40.613Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -720,7 +874,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/muse-ember-xhigh",
       "source_url": "https://artificialanalysis.ai/models/muse-ember-xhigh",
-      "retrieved_at": "2026-11-14T12:10:48.011Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -731,7 +885,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/muse-ember",
       "source_url": "https://artificialanalysis.ai/models/muse-ember",
-      "retrieved_at": "2026-11-14T12:10:45.830Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -742,7 +896,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-terra-low",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-terra-low",
-      "retrieved_at": "2026-11-14T12:10:11.070Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -753,7 +907,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-terra-medium",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-terra-medium",
-      "retrieved_at": "2026-11-14T12:10:12.577Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -764,7 +918,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-terra-high",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-terra-high",
-      "retrieved_at": "2026-11-14T12:10:09.578Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -775,7 +929,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-terra-xhigh",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-terra-xhigh",
-      "retrieved_at": "2026-11-14T12:10:14.013Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {
@@ -786,7 +940,7 @@
       "cost_benchmark": "aa-terminal-bench",
       "cost_source": "https://artificialanalysis.ai/models/gpt-6-1-terra",
       "source_url": "https://artificialanalysis.ai/models/gpt-6-1-terra",
-      "retrieved_at": "2026-11-14T12:10:08.145Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     }
   ]

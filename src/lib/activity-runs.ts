@@ -90,7 +90,7 @@ interface ServerLine {
   re: RegExp;
   pick: (m: RegExpExecArray) => [MessageKey, Record<string, string | number>];
   /** fixed English the server must keep writing, in `file`; the drift guard scans for it */
-  file: "comms-notice.ts" | "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "one-mind.ts" | "drivers/antigravity.ts" | "drivers/retry.ts";
+  file: "comms-notice.ts" | "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "one-mind.ts" | "drivers/antigravity.ts" | "drivers/retry.ts" | "../shared/replaced-models.ts";
   needles: string[];
 }
 
@@ -201,6 +201,12 @@ export const SERVER_LINES: ServerLine[] = [
     pick: () => ["chat.comms.unavailable", {}],
     file: "comms-notice.ts",
     needles: ["Bot messaging paused. Send a message to reset it."],
+  },
+  {
+    re: /^(\S.*?) was replaced by (\S.*)$/,
+    pick: (m) => ["chat.modelReplaced", { from: m[1], to: m[2] }],
+    file: "../shared/replaced-models.ts",
+    needles: [" was replaced by "],
   },
 ];
 

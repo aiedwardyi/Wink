@@ -19,6 +19,7 @@ vi.mock("@/lib/usage-auto-refresh", async (original) => ({ ...await original<typ
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { LIFT_SCALE } from "@/lib/use-touch-drag";
+import { landFold, spyReveal } from "./Fold.test-land";
 import { UsageDesk } from "./UsageDesk";
 import { ChatPlanMeters } from "./ChatPlanMeters";
 import { AccountPicker } from "./UsageAccounts";
@@ -326,8 +327,8 @@ it("refreshes through the existing refresh API, including Muse", async () => {
   h.instances.push({ ...h.instances[0], instanceId: "muse", driverKind: "museAgent" });
   await mount();
   await click("[data-usage-refresh]");
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/muse", { method: "POST" });
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/claude", { method: "POST" });
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/muse?fresh=1", expect.objectContaining({ method: "POST" }));
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/claude?fresh=1", expect.objectContaining({ method: "POST" }));
 });
 
 it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", async (locale) => {
@@ -339,7 +340,7 @@ it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", asy
   await mount();
   expect(q('[data-usage-engine="gemini"] [data-account-row="gemini"]')).not.toBeNull();
   await click("[data-usage-refresh]");
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini?fresh=1", expect.objectContaining({ method: "POST" }));
   expect(h.dispatch).toHaveBeenCalledWith({ type: "rateLimits", instanceId: "gemini", report, identity: instance.snapshot.account });
 });
 
@@ -351,7 +352,7 @@ it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh wh
   if (state === "unsupported") instance.canRefreshUsage = false;
   await mount();
   await click("[data-usage-refresh]");
-  expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
+  expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini?fresh=1", expect.objectContaining({ method: "POST" }));
 });
 
 it.each(["en", "ko"] as const)("toggles the chat card on click and preserves both Alt+U presses (%s)", async (locale) => {
@@ -398,7 +399,7 @@ it.each(["en", "ko"] as const)("refreshes the open quick view's accounts on Alt+
   }
   expect(posts()).toEqual([]);
   expect(await altR()).toBe(true);
-  const claude = h.board!.engines.find((each) => each.engine === "claude")!.accounts.map((each) => `/api/usage/refresh/${each.id}`);
+  const claude = h.board!.engines.find((each) => each.engine === "claude")!.accounts.map((each) => `/api/usage/refresh/${each.id}?fresh=1`);
   expect(posts().sort()).toEqual([...claude].sort());
   expect(button.hasAttribute("disabled")).toBe(true);
   expect(await altR(), "ignored while pending").toBe(false);
@@ -798,4 +799,27 @@ it("holds the quick view on screen, inert and fading, until its exit has run", a
   expect(view()?.hasAttribute("inert")).toBe(true);
   await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
   expect(view()).toBeNull();
+});
+
+it("brings the first account into view once a pressed engine has opened, never for Expand all or closing", async () => {
+  await mount();
+  const scrolled = spyReveal();
+  try {
+    const fold = '[data-usage-engine="claude"] [data-engine-fold]';
+    await click(fold);
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    await click(fold);
+    expect(scrolled).not.toHaveBeenCalled();
+    await landFold(q('[data-usage-engine="claude"] [data-account-row]')!);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(q('[data-usage-engine="claude"] [data-account-row]'));
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    await click("[data-fold-all]");
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    await click("[data-fold-all]");
+    for (const each of host.querySelectorAll("[data-usage-engine] [data-fold-soft]")) await landFold(each);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  } finally {
+    scrolled.mockRestore();
+  }
 });

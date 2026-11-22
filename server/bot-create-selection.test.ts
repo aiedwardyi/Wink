@@ -5,15 +5,15 @@
 // not. Same spawn shape as the other route tests (spawnHarness +
 // harnessFetch); the transform flag only lets plain node load this tree.
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_MSP_CLI = join(SERVER_DIR, "testing", "fake-msp-cli.ts");
@@ -39,7 +39,7 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1], 24_100, 2_000);
-  home = mkdtempSync(join(tmpdir(), "omb-bot-create-test-"));
+  home = createFixtureHome("omb-bot-create-test-");
   const staticDir = join(home, "static");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   mkdirSync(join(staticDir, "assets"), { recursive: true });
@@ -86,7 +86,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("POST /api/bots engine discovery", () => {

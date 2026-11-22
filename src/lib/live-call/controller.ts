@@ -828,9 +828,18 @@ export class LiveCall {
   }
 
   private runTool(call: LiveToolCall) {
+    if (call.name === "task_context") return void this.readTaskContext(call.id);
     const run = TOOLS[call.name];
     if (run) run(this, call.args, call.id);
     else this.engine?.sendToolResult([call.id], call.name, "unknown tool");
+  }
+
+  private async readTaskContext(id: string) {
+    const engine = this.engine;
+    const posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/task-context`, {}).catch(() => null);
+    if (!engine || this.ended || engine !== this.engine || this.cancelled.has(id)) return;
+    const text = posted?.status === 200 ? posted.data.taskContext : undefined;
+    engine.sendToolResult([id], "task_context", typeof text === "string" ? text : "TASK RECORD: unavailable.");
   }
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
@@ -841,7 +850,7 @@ export class LiveCall {
       this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
     }
     const engine = this.engine;
-    const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
+    const live = this.liveTools(ids);
     const heard = UNANSWERED[result] ?? result;
     if (live.length) {
       this.carry();
@@ -854,6 +863,11 @@ export class LiveCall {
     const answered = note === HEARD && said !== undefined;
     this.held.push(answered ? { text: line, valid: () => this.stats.voiceLines === said, kept: `[Wink] Already answered aloud. Context only, do not read it out.\n${told(heard, subject)}` } : { text: line });
     this.release();
+  }
+
+  private liveTools(ids: string[]) {
+    const engine = this.engine;
+    return ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
   }
 
   private notSent(subject: string, why?: string) {
@@ -950,11 +964,14 @@ export class LiveCall {
     // Tapped too: a yes said as it is tapped, heard late, must not get a second ack.
     this.acked = "armed";
     const said = this.stats.voiceLines;
+    // An answer heard on the silence timer has no voice turn: its blocking tool call waits on this result to speak.
+    const turn = this.generating;
+    const hush = () => spoken && (turn || !this.liveTools(pending.toolIds).length);
     if (!yes) {
       this.stats.orders.declined += 1;
       pending.req.accounted = false;
       this.open.settle(this.stats.userLines);
-      return this.answerTool("declined", spoken ? HEARD : undefined, said);
+      return this.answerTool("declined", hush() ? HEARD : undefined, said);
     }
     this.clearPending();
     this.stats.orders.confirmed += 1;
@@ -971,7 +988,7 @@ export class LiveCall {
       req.asked = req.asked.filter((asked) => asked !== pending.order);
       this.postLines([{ who: "notice", text: told(result, pending.order), at: this.now() }]);
     }
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (spoken || this.stats.voiceLines > said) ? HEARD : undefined, said);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (hush() || this.stats.voiceLines > said) ? HEARD : undefined, said);
   }
 
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */

@@ -409,7 +409,8 @@ export function routineCardsSinceLastUserTurn(messages: Message[], excludeIds: R
   }
   if (since === undefined) return lines;
   const late: string[] = [];
-  for (const message of messages.slice(0, index)) {
+  for (let earlier = 0; earlier < index; earlier++) {
+    const message = messages[earlier]!;
     const card = message.kind === "routine.run" && !excludeIds.has(message.id) ? message.routineRun : undefined;
     if (!card || !routineCardLanded(card) || (card.finishedAt ?? 0) <= since) continue;
     const text = routineRunText(card);
@@ -693,34 +694,38 @@ function compactionAt(
   return { messageId: message.id, pathIndex, coveredIndex, value: parsed.value };
 }
 
+/** A row's index by id, read back from `from`: ids are unique on a path and a summary's bounds sit just before it, so this finds what findIndex would without reading a long chat from its start. */
+function indexNear(messages: readonly Message[], id: string, from: number): number {
+  for (let index = from - 1; index >= 0; index--) if (messages[index]!.id === id) return index;
+  for (let index = from; index < messages.length; index++) if (messages[index]!.id === id) return index;
+  return -1;
+}
+
 export function applicableCompaction(
   messages: Message[],
 ): ApplicableCompaction | { unsupported: true; messageId: string; version: number } | null {
   for (let pathIndex = messages.length - 1; pathIndex >= 0; pathIndex--) {
-    const found = compactionAt(messages, pathIndex, (id) => messages.findIndex((candidate) => candidate.id === id));
+    const found = compactionAt(messages, pathIndex, (id) => indexNear(messages, id, pathIndex));
     if (found) return found;
   }
   return null;
 }
 
-function pathCompactions(
-  messages: Message[],
-): Array<ApplicableCompaction | { unsupported: true; messageId: string; version: number }> {
-  const at: number[] = [];
-  const wanted = new Set<string>();
-  messages.forEach((message, pathIndex) => {
-    if (message.kind !== "compaction") return;
-    at.push(pathIndex);
-    const parsed = readContextCompaction({ value: message.compaction });
-    if (parsed.status !== "valid") return;
-    wanted.add(parsed.value.coveredThroughId);
-    if (parsed.value.firstKeptId !== null) wanted.add(parsed.value.firstKeptId);
-  });
-  const indexes = new Map<string, number>();
-  messages.forEach((message, pathIndex) => {
-    if (wanted.has(message.id) && !indexes.has(message.id)) indexes.set(message.id, pathIndex);
-  });
-  return at.flatMap((pathIndex) => compactionAt(messages, pathIndex, (id) => indexes.get(id) ?? -1) ?? []);
+type PathCompaction = ApplicableCompaction | { unsupported: true; messageId: string; version: number };
+// a turn and its summary check read the same frozen path more than once
+const compactionsByPath = new WeakMap<readonly Message[], readonly PathCompaction[]>();
+
+function pathCompactions(messages: Message[]): readonly PathCompaction[] {
+  const known = compactionsByPath.get(messages);
+  if (known) return known;
+  const found: PathCompaction[] = [];
+  for (let pathIndex = 0; pathIndex < messages.length; pathIndex++) {
+    if (messages[pathIndex]!.kind !== "compaction") continue;
+    const row = compactionAt(messages, pathIndex, (id) => indexNear(messages, id, pathIndex));
+    if (row) found.push(row);
+  }
+  if (Object.isFrozen(messages)) compactionsByPath.set(messages, found);
+  return found;
 }
 
 function validCompactions(found: ReturnType<typeof pathCompactions>): ApplicableCompaction[] {

@@ -36,10 +36,10 @@
 /* a docked panel's shell is opaque from the first frame and lands with the bot-list fold; only its content fades.
    translate, not transform: the fold moves it by transform too, and two on one element both leave the compositor */
 @keyframes panel-slide {
-  from { translate: 28px 0; }
+  from { translate: var(--panel-dx, 28px) 0; }
 }
 @keyframes panel-out {
-  to { transform: translateX(28px); opacity: 0; }
+  to { transform: translateX(var(--panel-dx, 28px)); opacity: 0; }
 }
 @keyframes pop-in {
   from { transform: scale(0.96) translateY(6px); opacity: 0; }
@@ -64,6 +64,10 @@
    first frame (its own data-closing margin), so the chat re-widens at once
    and never waits on the slide. */
 [data-side-panel][data-closing] {
+  animation-name: panel-out;
+}
+/* the Forum is a view, not a panel, but leaves the same way */
+[data-board-view][data-closing] {
   animation-name: panel-out;
 }
 /* useCoverChat scales this backdrop instead of the panel, so the content never stretches */

@@ -11,6 +11,7 @@ import {
   FolderMinus,
   FolderPlus,
   Loader2,
+  LogOut,
   Pencil,
   PanelLeftClose,
   PanelLeftOpen,
@@ -23,6 +24,7 @@ import {
   Search,
   Settings,
   Trash2,
+  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -62,6 +64,9 @@ import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./Sideba
 import { confirmRoomDelete, TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
+import { relaySignInSite } from "@/lib/devices-setup";
+import { leaveSignedOut, sessionState, sessionStreamLive, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -123,6 +128,8 @@ import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
+/** The profile menu's w-52. */
+const PROFILE_MENU_WIDTH = 208;
 
 export { compactSidebarModelLabel } from "./SidebarConversations";
 
@@ -588,6 +595,8 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useSidebarRooms();
+  const { reconnectLive } = useStore();
+  const signingOut = useRef(false);
   const profile = shownProfile(state);
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
@@ -611,6 +620,12 @@ export function Sidebar({
   const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   useEffect(() => { if (plusOpen) trackScreen("new-menu"); }, [plusOpen]);
+  const [signInSite] = useState(relaySignInSite);
+  const [profileMenu, setProfileMenu] = useState<{ left: number; bottom: number } | null>(null);
+  const profileMenuPresence = usePresence(profileMenu);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const closeProfileMenu = useCallback(() => setProfileMenu(null), []);
+  useListMenuDismiss("[data-profile-menu]", "[data-sidebar-list]", !profileMenu, closeProfileMenu);
   const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   useEffect(() => { if (teamLibraryOpen) trackScreen("teams-library"); }, [teamLibraryOpen]);
@@ -669,7 +684,7 @@ export function Sidebar({
   const density: SidebarDensity = sidebarCollapsed ? "icons" : "comfortable";
   const backOverlay = deleteTarget ? "delete" : sectionPicker ? "section" : roomSectionPicker ? "room-section"
     : menu ? "menu" : roomMenu ? "room-menu" : wizard ? "wizard" : archivedBotsOpen ? "archived"
-    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
+    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : profileMenu ? "profile-menu" : null;
   useEffect(() => {
     onOverlayChange?.(backOverlay);
   }, [backOverlay, onOverlayChange]);
@@ -685,6 +700,7 @@ export function Sidebar({
       else if (trashOpen) setTrashOpen(false);
       else if (teamLibraryOpen) { setTeamLibraryOpen(false); setTeamInstallUrl(null); }
       else if (plusOpen) setPlusOpen(false);
+      else if (profileMenu) setProfileMenu(null);
     };
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
@@ -964,6 +980,34 @@ export function Sidebar({
       refreshTrash();
     } catch (cause) {
       setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
+
+  const signOut = async (site: string) => {
+    if (signingOut.current) return;
+    signingOut.current = true;
+    setTeamFeedback(null);
+    signedOutLanding(`${site}/?signedout=1`);
+    const confirmation = new AbortController();
+    try {
+      await api("/api/phone/sign-out", { method: "POST" });
+      return leaveSignedOut(true);
+    } catch {
+      const live = sessionStreamLive(confirmation.signal);
+      const probe = new AbortController();
+      const state = await Promise.race([sessionState(probe), live]);
+      probe.abort();
+      if (state === "gone") return leaveSignedOut();
+      if (state === "unknown") {
+        // The old stream can outlive a revoke or a gateway outage on new requests.
+        reconnectLive();
+        await live;
+      }
+      signedOutLanding();
+      setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
+    } finally {
+      confirmation.abort();
+      signingOut.current = false;
     }
   };
 
@@ -1540,6 +1584,47 @@ export function Sidebar({
     />
   );
 
+  const sidebarToggle = (!phone || showPhoneDrawerCollapse()) && (
+    <button
+      type="button"
+      onClick={toggleCollapsed}
+      aria-label={
+        density === "icons"
+          ? collapsedQuestion
+            ? t("ask.expandSidebar")
+            : collapsedRoutine
+              ? t("routine.expandSidebar")
+              : collapsedUnreadBadge != null
+                ? t("chrome.expandSidebarUnread", { count: collapsedUnreadBadge })
+                : t("chrome.expandSidebar")
+          : t("chrome.collapseSidebar")
+      }
+      data-sidebar-needs-you={collapsedAsking || undefined}
+      data-arrival-glow={collapsedArrival.playing || undefined}
+      onAnimationEnd={collapsedArrival.onAnimationEnd}
+      className={cn(
+        "relative flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink md:shrink-0",
+        collapsedAsking && "needs-you-glow",
+        collapsedArrival.playing && "arrival-glow",
+      )}
+      title={density === "icons" ? t("chrome.expandSidebar") : t("chrome.collapseSidebar")}
+    >
+      {density === "icons"
+        ? sidebarOnRight ? <PanelRightOpen size={20} /> : <PanelLeftOpen size={20} />
+        : sidebarOnRight ? <PanelRightClose size={20} /> : <PanelLeftClose size={20} />}
+      {sidebarCollapsed && collapsedUnreadBadge != null && (
+        <span
+          ref={collapsedBadgeRef}
+          data-sidebar-collapsed-unread
+          aria-hidden="true"
+          className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-accent-ink"
+        >
+          {collapsedUnreadBadge}
+        </span>
+      )}
+    </button>
+  );
+
   return (
     <aside
       ref={asideRef}
@@ -1597,7 +1682,7 @@ export function Sidebar({
       />
       {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
-        className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-4")}
+        className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : phone ? "justify-between px-4" : "justify-start px-2")}
         style={windowDragStyle}
       >
         {macInset ? (
@@ -1607,55 +1692,18 @@ export function Sidebar({
             <DeviceSwitcher labeled iconOnly={density === "icons"} drawerOpen={open} />
             <BoardButton onOpen={onClose} />
           </div>
-        ) : density === "icons" ? (
-          <div />
-        ) : (
-          <BrandMark />
-        )}
+        ) : phone ? (
+          density === "icons" ? <div /> : <BrandMark />
+        ) : null}
         <div
-          className={cn("relative flex items-center", density === "icons" ? "flex-col gap-1" : "gap-1")}
+          className={cn("relative flex items-center md:min-w-0", density === "icons" ? "flex-col gap-1" : "gap-1")}
           style={windowNoDragStyle}
         >
+          {!phone && sidebarToggle}
+          {!phone && !macInset && density !== "icons" && <BrandMark omitEmpty />}
           {density !== "icons" && <DeviceSwitcher />}
           {!(isPhone() && !window.ogb) && <BoardButton />}
-          {(!isPhone() || showPhoneDrawerCollapse()) && <button
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label={
-              density === "icons"
-                ? collapsedQuestion
-                  ? t("ask.expandSidebar")
-                  : collapsedRoutine
-                    ? t("routine.expandSidebar")
-                    : collapsedUnreadBadge != null
-                      ? t("chrome.expandSidebarUnread", { count: collapsedUnreadBadge })
-                      : t("chrome.expandSidebar")
-                : t("chrome.collapseSidebar")
-            }
-            data-sidebar-needs-you={collapsedAsking || undefined}
-            data-arrival-glow={collapsedArrival.playing || undefined}
-            onAnimationEnd={collapsedArrival.onAnimationEnd}
-            className={cn(
-              "relative flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink",
-              collapsedAsking && "needs-you-glow",
-              collapsedArrival.playing && "arrival-glow",
-            )}
-            title={density === "icons" ? t("chrome.expandSidebar") : t("chrome.collapseSidebar")}
-          >
-            {density === "icons"
-              ? sidebarOnRight ? <PanelRightOpen size={20} /> : <PanelLeftOpen size={20} />
-              : sidebarOnRight ? <PanelRightClose size={20} /> : <PanelLeftClose size={20} />}
-            {sidebarCollapsed && collapsedUnreadBadge != null && (
-              <span
-                ref={collapsedBadgeRef}
-                data-sidebar-collapsed-unread
-                aria-hidden="true"
-                className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-accent-ink"
-              >
-                {collapsedUnreadBadge}
-              </span>
-            )}
-          </button>}
+          {phone && sidebarToggle}
 
           <button
             ref={importReturnRef}
@@ -1670,9 +1718,9 @@ export function Sidebar({
             {(closing) => (
               <>
                 {!closing && <div className="fixed inset-0 z-30" onMouseDown={() => setPlusOpen(false)} />}
-                <div data-closing={closing || undefined} inert={closing} className={cn(
+                <div data-new-menu data-closing={closing || undefined} inert={closing} className={cn(
                   "animate-pop-in absolute top-full z-40 mt-1 w-52 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
-                  density === "icons" && !sidebarOnRight ? "left-0" : "right-0",
+                  (density === "icons" ? !sidebarOnRight : !phone) ? "left-0" : "right-0",
                 )}>
                   <button
                     onClick={() => {
@@ -1874,7 +1922,14 @@ export function Sidebar({
         <CallWidgetSlot narrow={density === "icons"} className="mb-2 max-md:hidden" />
         <div className={cn("flex min-w-0 items-center", density === "icons" && "justify-center")} data-sidebar-profile-row>
           <button
-            onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "account" })}
+            onClick={(event) => {
+              if (!signInSite) return dispatch({ type: "toggleAppSettings", open: true, section: "account" });
+              const rect = event.currentTarget.getBoundingClientRect();
+              const left = Math.max(8, Math.min(rect.left, window.innerWidth - PROFILE_MENU_WIDTH - 8));
+              setProfileMenu(profileMenu ? null : { left, bottom: window.innerHeight - rect.top + 4 });
+            }}
+            aria-haspopup={signInSite ? "menu" : undefined}
+            aria-expanded={signInSite ? Boolean(profileMenu) : undefined}
             className={cn("flex min-w-0 items-center rounded-xl py-2 text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-3")}
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
@@ -1910,6 +1965,50 @@ export function Sidebar({
         </div>
       </div>
 
+      {profileMenuPresence.value && signInSite && createPortal(
+        <>
+          {!profileMenuPresence.closing && <div className="fixed inset-0 z-50" onMouseDown={() => setProfileMenu(null)} />}
+          <div
+            ref={profileMenuRef}
+            role="menu"
+            aria-label={t("settings.section.account")}
+            data-profile-menu
+            data-closing={profileMenuPresence.closing || undefined}
+            inert={profileMenuPresence.closing}
+            style={profileMenuPresence.value}
+            onKeyDown={(event) => menuKeyDown(profileMenuRef, event)}
+            className={cn(MENU_CLASS, "z-50 w-52 overflow-hidden")}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              autoFocus
+              onClick={() => {
+                setProfileMenu(null);
+                dispatch({ type: "toggleAppSettings", open: true, section: "account" });
+              }}
+              className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
+            >
+              <UserRound size={16} className="text-ink-secondary" />
+              {t("settings.section.account")}
+            </button>
+            <div className="mx-2 my-1 border-t border-hairline/40" />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setProfileMenu(null);
+                void signOut(signInSite);
+              }}
+              className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
+            >
+              <LogOut size={16} className="text-ink-secondary" />
+              {t("chrome.signOut")}
+            </button>
+          </div>
+        </>,
+        document.body,
+      )}
       {menuPresence.value && (
         <BotContextMenu
           menu={menuPresence.value}

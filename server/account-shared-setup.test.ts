@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { shareUserSetup } from "./account-shared-setup.ts";
 import { DATA_DIR } from "./config.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
@@ -68,6 +69,30 @@ function tree(path: string): unknown {
 }
 
 describe("Claude user setup", () => {
+  it("writes nothing when the account home is gone", () => {
+    const f = fixture();
+    f.write(join(f.base, "CLAUDE.md"));
+    f.write(join(f.base, "rules", "fixture.md"));
+    f.write(join(f.base, "skills", "fixture", "SKILL.md"));
+    fs.rmSync(f.home, { recursive: true });
+    f.share();
+    expect(fs.existsSync(f.home)).toBe(false);
+  });
+
+  it.each(["claudeAgent", "codex", "grokAgent"])("does not bring back a %s home that goes missing while setup runs", (driver) => {
+    const f = fixture();
+    f.write(join(f.base, "rules", "fixture.md"));
+    f.write(join(f.base, "skills", "fixture", "SKILL.md"));
+    const base = resolve(f.base).toLowerCase();
+    let archived = false;
+    vi.spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, ...rest: any[]) => {
+      if (!archived && resolve(String(path)).toLowerCase().startsWith(base)) { archived = true; actual.rmSync(f.home, { recursive: true }); }
+      return Reflect.apply(actual.statSync, actual, [path, ...rest]);
+    }) as typeof fs.statSync);
+    f.share(driver);
+    expect(fs.existsSync(f.home)).toBe(false);
+  });
+
   it("writes the default pointer using the mocked home", () => {
     const f = fixture("profile/.claude");
     vi.spyOn(os, "homedir").mockReturnValue(join(f.root, "profile"));
@@ -235,7 +260,7 @@ describe.each(["claudeAgent", "codex"])("%s setup safety", (driver) => {
     f.share(driver);
     expect(tree(f.home)).toEqual(first);
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
-    fs.rmSync(f.home, { recursive: true });
+    removeTestData(f.home);
     expect(tree(f.base)).toEqual(before);
   });
 

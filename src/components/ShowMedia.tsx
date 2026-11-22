@@ -70,6 +70,7 @@ export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.
   const at = openKey === null ? -1 : images.findIndex((file) => file.key === openKey);
   const open = at >= 0 ? images[at]! : null;
   const openFile = useCallback((file: MediaFile) => setOpenKey(file.key), []);
+  const keepFiles = useCallback(() => pickKind(pickFor, roomId, "files"), [pickFor, roomId]);
   const scroller = useRef<HTMLDivElement>(null);
   const { layout, viewport, from, to } = useMediaGrid(scroller, months);
   const choose = (next: MediaKind) => {
@@ -93,7 +94,7 @@ export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.
           {layout.height > 0 && (
             <div data-media-grid style={{ height: layout.height }}>
               {layout.months.map((month) => month.top < to && month.top + month.height > from && (
-                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} day={day} onOpen={openFile} />
+                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} day={day} onOpen={openFile} onPlay={keepFiles} />
               ))}
             </div>
           )}
@@ -111,7 +112,7 @@ export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.
   );
 }
 
-const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, day, onOpen }: { month: GridMonth; layout: GridLayout; from: number; to: number; day: Intl.DateTimeFormat; onOpen: (file: MediaFile) => void }) {
+const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, day, onOpen, onPlay }: { month: GridMonth; layout: GridLayout; from: number; to: number; day: Intl.DateTimeFormat; onOpen: (file: MediaFile) => void; onPlay: () => void }) {
   const { columns, cell } = layout;
   const pitch = cell + GAP;
   const rows = Math.ceil(month.images.length / columns);
@@ -128,7 +129,7 @@ const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, d
         const left = ((firstCell + n) % columns) * pitch;
         return file.video ? <MediaVideo key={file.key} file={file} top={top} left={left} size={cell} onOpen={onOpen} /> : <MediaCell key={file.key} file={file} top={top} left={left} size={cell} onOpen={onOpen} />;
       })}
-      {month.files.slice(firstFile, Math.max(firstFile, endFile)).map((file, n) => <MediaRow key={file.key} file={file} top={filesTop + (firstFile + n) * FILE_ROW} day={day} />)}
+      {month.files.slice(firstFile, Math.max(firstFile, endFile)).map((file, n) => <MediaRow key={file.key} file={file} top={filesTop + (firstFile + n) * FILE_ROW} day={day} onPlay={onPlay} />)}
     </section>
   );
 });
@@ -217,11 +218,11 @@ function MediaVideo({ file, top, left, size, onOpen }: { file: MediaFile; top: n
   );
 }
 
-function MediaRow({ file, top, day }: { file: MediaFile; top: number; day: Intl.DateTimeFormat }) {
+function MediaRow({ file, top, day, onPlay }: { file: MediaFile; top: number; day: Intl.DateTimeFormat; onPlay: () => void }) {
   const Icon = ICONS.find(([type]) => type.test(file.name))?.[1] ?? FileIcon;
   const about = [file.size !== undefined && formatSize(file.size), file.sender, day.format(file.at)].filter(Boolean).join(" · ");
   return (
-    <MediaOpen file={file} style={{ top }} className={ROW} row>
+    <MediaOpen file={file} style={{ top }} className={ROW} row onPlay={onPlay}>
       <Icon aria-hidden="true" className="size-8 shrink-0 rounded-md bg-raised p-2 text-ink-secondary" />
       <span className="min-w-0 flex-1">
         <span className="block truncate">{file.name}</span>
@@ -232,11 +233,12 @@ function MediaRow({ file, top, day }: { file: MediaFile; top: number; day: Intl.
 }
 
 /** A tap opens the file by the one rule: a clip in this list's viewer, audio in its row. A room's whole clip or audio could not seek, so it downloads. */
-function MediaOpen({ file, style, className, row, view, children }: { file: MediaFile; style: CSSProperties; className: string; row?: boolean; view?: () => void; children: ReactNode }) {
+function MediaOpen({ file, style, className, row, view, onPlay, children }: { file: MediaFile; style: CSSProperties; className: string; row?: boolean; view?: () => void; onPlay?: () => void; children: ReactNode }) {
   const [playing, setPlaying] = useState("");
   const props = { "data-media-file": row || undefined, "data-media-key": file.key, style, className };
   const tap = file.tap;
   if (playing) return <div {...props} title={file.name}><InlineAudio src={playing} autoPlay /></div>;
   if (!tap) return <div {...props} title={file.name}>{children}</div>;
-  return <button type="button" {...props} title={window.ogb && !tap.src ? file.path : file.name} onClick={() => openFile(tap, { view, play: file.whole ? undefined : setPlaying })}>{children}</button>;
+  const play = file.whole ? undefined : (src: string) => { onPlay?.(); setPlaying(src); };
+  return <button type="button" {...props} title={window.ogb && !tap.src ? file.path : file.name} onClick={() => openFile(tap, { view, play })}>{children}</button>;
 }

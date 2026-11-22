@@ -160,12 +160,13 @@ export function closeShow() {
 
 export const lastShown = (threadId: string) => last.get(threadId);
 
-/** The header button: shuts this chat's pane, or opens Workers while the chat lists any, else the tab last picked in it, else Map while a worker is live, else Media. Only a bot chat has a `map`; a room's runs on each person's own PC. */
-export function togglePane(threadId: string, map?: "idle" | "live", workers = false) {
+/** The header button: shuts this chat's pane, or opens Workers while the chat lists any, else the tab last picked in it, else Map while a worker is live, else Media. Only a bot chat has a `map` and a Workers tab; a room's runs on each person's own PC. */
+export function togglePane(threadId: string, map?: "idle" | "live", workers?: "listed" | "tab") {
   if (showing?.threadId === threadId || media === threadId || mapping === threadId || working === threadId || timeline === threadId) return closeShow();
-  if (workers) return openWorkers(threadId);
+  if (workers === "listed") return openWorkers(threadId);
   const tab = picked.get(threadId) ?? picks()[threadId] ?? (map === "live" ? "map" : "media");
-  if (tab === "map" && map) openMap(threadId);
+  if (tab === "workers" && workers) openWorkers(threadId);
+  else if (tab === "map" && map) openMap(threadId);
   else if (tab === "timeline" && map) openTimeline(threadId);
   else if (tab === "map" || tab === "workers" || tab === "timeline") openMedia(threadId);
   else if (tab === "media") openMedia(threadId);
@@ -247,8 +248,8 @@ export function useTimelineThread(): string | null {
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));
 
-/** Replies in a turn whose bot already put a picture in the chat, so their file links don't draw it again. */
-export function picturedReplies(messages: readonly Message[]): Set<string> {
+/** Replies and current speakers whose pictures are already in the chat. */
+export function picturedReplies(messages: readonly Message[]) {
   const pictured = new Set<string>();
   let shown = new Set<string>();
   let replies: Message[] = [];
@@ -259,11 +260,12 @@ export function picturedReplies(messages: readonly Message[]): Set<string> {
   };
   for (const message of messages) {
     if (message.role === "user") close();
-    else if (message.kind === "screen" && message.image) shown.add(message.from?.botId ?? "");
+    else if (message.kind === "screen" && (message.image || message.roomFiles?.length)) shown.add(message.from?.botId ?? "");
     else if (message.kind === "text") replies.push(message);
   }
+  const tailPictures = shown;
   close();
-  return pictured;
+  return { pictured, tailPictures };
 }
 
 export interface AutoShow {

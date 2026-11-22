@@ -144,7 +144,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         aria-modal="true"
         aria-labelledby="onboarding-title"
         className={`flex max-h-full w-full flex-col overflow-hidden rounded-[24px] border border-hairline/50 bg-panel shadow-2xl shadow-black/60 ${
-          step === 1 ? "max-w-[680px]" : "max-w-[560px]"
+          step === 1 ? "max-w-[460px]" : "max-w-[560px]"
         }`}
       >
         {signedOut ? (
@@ -197,12 +197,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           </div>
         ) : (
           <div className="flex min-h-0 flex-col p-7">
-            <div className="flex items-center gap-3">
-              <OrbitMark size={38} />
-              <div>
-                <h1 id="onboarding-title" className="text-[18px] font-semibold text-ink">{emptyConnect ? t("noEngines.title") : t("onboarding.enginesTitle")}</h1>
-                <p className="mt-0.5 text-[12.5px] text-ink-secondary">{emptyConnect ? t("noEngines.body") : t("onboarding.enginesFound")}</p>
-              </div>
+            <div className="flex flex-col items-center text-center">
+              <OrbitMark size={48} />
+              <h1 id="onboarding-title" className="mt-4 text-[20px] font-semibold tracking-[-0.02em] text-ink">{emptyConnect ? t("noEngines.title") : t("onboarding.enginesTitle")}</h1>
+              <p className="mt-1 break-keep text-[13px] leading-relaxed text-ink-secondary">{emptyConnect ? t("noEngines.body") : t("onboarding.enginesFound")}</p>
             </div>
             {emptyConnect && instances ? <div className="mt-5 flex min-h-0 flex-col">
               <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false} footer={{ back: () => { setConnectSession(false); setStep(0); }, open: finish }} />
@@ -219,7 +217,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               ) : (
                 <>
                   <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
-                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue", disabled: !hasReadyEngine, skip: hasReadyEngine ? undefined : onDone }} />
+                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue" }} />
                   <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>
                 </>
               )}

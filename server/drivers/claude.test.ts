@@ -32,6 +32,8 @@ import { createQuietEnd } from "../quiet-end.ts";
 import { inputDigest } from "../repeat-detector.ts";
 import type { Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
+import { spawnTestNode } from "../testing/harness-auth.ts";
+import { removeTestData } from "../testing/test-home.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
@@ -1243,7 +1245,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1].split(",")).toContain("AskUserQuestion");
 
     const server = seen.mcpConfig.mcpServers.agents;
-    const child = spawnChild(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
+    const child = spawnTestNode(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     const listed = new Promise<{ name: string; description: string; inputSchema: object; _meta?: Record<string, unknown> }[]>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("agents proxy never answered tools/list")), 10_000);
@@ -2197,6 +2199,22 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
     await create();
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-signed-out-flag", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
+      expect.objectContaining({ turnId, message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true }),
+    ]);
+  });
+
+  it.each([
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs",
+    "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+  ])("marks an expired login result as a sign-out: %s", async (result) => {
+    const fixture = join(scratch, "expired-login.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-expired-login", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
       expect.objectContaining({ turnId, message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true }),
@@ -4119,7 +4137,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
   it("creates the lean helper folder when it is missing", async () => {
     await create();
-    rmSync(join(DATA_DIR, "helper"), { recursive: true, force: true });
+    removeTestData(join(DATA_DIR, "helper"));
     await instance.generateText?.("notes prompt", { ephemeral: true, lean: true });
     expect(readdirSync(join(DATA_DIR, "helper"))).toEqual([]);
   });

@@ -791,7 +791,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     needsNode: true,
     docsUrl: "https://claude.com/claude-code",
     signInCommand: "claude auth login",
-    login: { args: ["auth", "login"] },
+    // --claudeai is the CLI's default; BROWSER=true is its own "open nothing" value, so a phone gets the link and paste prompt.
+    login: { args: ["auth", "login"], deviceArgs: ["auth", "login", "--claudeai"], deviceEnv: { BROWSER: "true" } },
     logout: ["auth", "logout"],
   },
   models: STATIC_CLAUDE_MODELS,
@@ -2352,7 +2353,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
     };
 
-    if (input.account) admitted = (await authStatus(true)).signedIn === true;
+    if (input.account && !input.deferAccountAuth) admitted = (await authStatus(true)).signedIn === true;
     return {
       instanceId,
       ...(input.account ? { account: input.account } : {}),

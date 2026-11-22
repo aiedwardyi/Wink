@@ -18,6 +18,8 @@ export type BotCallDeps = {
   /** A call is the bot's own voice on its own thread, so a room's blocker keeps its normal alert. */
   chat: (threadId: string) => string | undefined;
   skip: (threadId: string) => boolean;
+  /** False sends one plain alert per blocker and never rings; read per blocker so a team enrolment applies at once. */
+  calls: () => boolean;
   /** The first ring of a call went out. */
   called?: (botId: string, threadId: string, blocker: Blocker) => void;
 };
@@ -41,13 +43,14 @@ export function createBotCalls(deps: BotCallDeps) {
   const threads = new Map<string, Map<string, Ringing>>();
 
   const ring = (ringing: Ringing, bot: NotifyBot, threadId: string, blocker: Blocker, n: number) => {
+    const rings = deps.calls();
     const key = keyOf(blocker);
     if (n > 1 && !deps.current(threadId).some((held) => keyOf(held) === key)) return forget(threadId, key);
-    const payload = botCallPayload(bot, threadId, blocker.note, { id: ringing.id, ring: n });
+    const payload = botCallPayload(bot, threadId, blocker.note, { id: ringing.id, ring: rings ? n : CALL_RINGS + 1 });
     if (!payload) return;
     deps.send(payload);
     if (n === 1) deps.called?.(bot.id, threadId, blocker);
-    ringing.timer = n <= CALL_RINGS ? setTimeout(() => ring(ringing, bot, threadId, blocker, n + 1), CALL_RING_GAP_MS) : undefined;
+    ringing.timer = rings && n <= CALL_RINGS ? setTimeout(() => ring(ringing, bot, threadId, blocker, n + 1), CALL_RING_GAP_MS) : undefined;
   };
 
   const forget = (threadId: string, key: string) => {

@@ -16,4 +16,6 @@ export interface RoutineRunCardData {
   executionThreadId?: string;
   summary?: string;
   error?: string;
+  /** A bot's own wake_me or ask-due reminder: the bot hears it, the chat does not show it. */
+  wake?: true;
 }
