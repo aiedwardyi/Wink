@@ -22,8 +22,8 @@ type Deps = {
   engine: () => LiveEngine;
   audio: CallAudioPort;
   post: (path: string, body: object) => Promise<Posted>;
-  /** The same send a typed message takes; onError runs when it never reached the bot. */
-  send: (text: string, sendId: string, onError: () => void) => void;
+  /** The same send a typed message takes; unsent runs once when the bot never gets it, stopped when Stop took it back. */
+  send: (text: string, sendId: string, unsent: (stopped?: boolean) => void) => void;
   prefs?: CallPrefs;
   now?: () => number;
 };
@@ -247,13 +247,14 @@ export class SameBotCall {
     this.waiting.add(sendId);
     this.spokeAt = this.loudAt;
     if (this.snapshot.notice) this.set({ notice: undefined });
-    this.deps.send(text, sendId, () => this.unsent(sendId, text));
+    this.deps.send(text, sendId, (stopped) => this.unsent(sendId, text, stopped));
   }
 
-  /** A send the bot never got: the call stops working on it and says so, as a Gemini call does. */
-  private unsent(sendId: string, text: string) {
-    if (this.ended || !this.waiting.delete(sendId)) return;
-    this.set({ notice: { kind: "notSent", text } });
+  /** A send the bot never got: the call stops working on it and, unless Stop took it back, says so, as a Gemini call does. Its row may already have settled it. */
+  private unsent(sendId: string, text: string, stopped?: boolean) {
+    this.waiting.delete(sendId);
+    if (this.ended || !this.sends.delete(sendId)) return;
+    if (!stopped) this.set({ notice: { kind: "notSent", text } });
     this.refresh();
   }
 

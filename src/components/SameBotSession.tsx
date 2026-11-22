@@ -28,9 +28,9 @@ export function SameBotSession({ active, bot }: { active: ActiveCall; bot: Bot }
       audio,
       post,
       prefs: bot.call,
-      send: (text, sendId, onError) => {
+      send: (text, sendId, unsent) => {
         sendInput("call");
-        dispatch({ type: "send", botId: target.current.id, text, threadId: target.current.threadId, sendId, onError });
+        dispatch({ type: "send", botId: target.current.id, text, threadId: target.current.threadId, sendId, onError: unsent, onRejected: unsent });
       },
     });
     return { call, level: (mic: boolean) => audio.level(mic) };

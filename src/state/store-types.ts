@@ -667,6 +667,8 @@ export type Action =
       sendSeq?: number;
       sentAfterId?: string | null;
       onError?: () => void;
+      /** The send will never run though nothing threw: Stop took it back (stopped), or its turn could not start. */
+      onRejected?: (stopped: boolean) => void;
     }
   | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }
   | { type: "sendQueuedNow"; botId: string; threadId: string; queueId: string }

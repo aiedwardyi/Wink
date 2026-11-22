@@ -51,7 +51,7 @@ function setup(token: Posted = { status: 200, data: { callId: "c-0123456789ab", 
   const posts: Array<{ path: string; body: any }> = [];
   const sent: string[] = [];
   const ids: string[] = [];
-  const rejects: Array<() => void> = [];
+  const rejects: Array<(stopped?: boolean) => void> = [];
   const audio = fakeAudio();
   let clock = 1_000;
   const call = new SameBotCall({
@@ -241,6 +241,25 @@ describe("same-bot call", () => {
     expect(s.call.state().status).toBe("working");
     s.rejects[0]!();
     expect(s.call.state()).toMatchObject({ status: "listening", notice: { kind: "notSent", text: "check the blocked build" } });
+  });
+
+  it("leaves Working quietly when Stop took the send back before it ran", async () => {
+    const s = await started();
+    say(s, "check the blocked build");
+    expect(s.call.state().status).toBe("working");
+    s.rejects[0]!(true);
+    expect(s.call.state().status).toBe("listening");
+    expect(s.call.state().notice).toBeUndefined();
+  });
+
+  it("says the line was not sent even when its failure row settled the turn first", async () => {
+    const s = await started();
+    say(s, "check the restored task");
+    s.call.observe({ busy: false, messages: [user("u1", "check the restored task", s.ids[0]), { id: "f1", parentId: "u1", role: "bot", kind: "activity", tool: { name: "error: context summary version 99", ok: false }, at: 2_001 } as Message] });
+    s.rejects[0]!();
+    expect(s.call.state()).toMatchObject({ status: "listening", notice: { kind: "notSent", text: "check the restored task" } });
+    s.rejects[0]!();
+    expect(s.engine().texts).toEqual([]);
   });
 
   it("drops a socket that never gets ready on the Gemini call's timer", async () => {

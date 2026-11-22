@@ -179,4 +179,62 @@ describe("who answers a call", () => {
     expect(posts.filter(({ path }) => path.endsWith("/messages"))).toHaveLength(1);
     expect(engine.texts).toEqual([]);
   });
+
+  it("Same bot says Not sent when the send's turn could not start", async () => {
+    await mount("bot");
+    const engine = await call();
+    const line = "Check the restored fixture after the update.";
+    const failed = "This conversation uses context summary version 99. Update Wink before continuing.";
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/messages") && init?.method === "POST") {
+        const { sendId } = JSON.parse(String(init.body));
+        return Response.json({ ok: true, threadId: atlas.threadId, dispatchFailed: true, error: failed, message: { id: "failed-user", role: "user", kind: "text", sendId, text: line, at: 10 } }, { status: 202 });
+      }
+      return original(input, init);
+    });
+    await act(async () => {
+      engine.events.heard(line);
+      engine.events.answering();
+      engine.events.turnDone();
+    });
+    await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({
+      kind: "message", threadId: atlas.threadId, cursor: "qa:3",
+      message: { id: "failed-activity", parentId: "failed-user", role: "bot", kind: "activity", tool: { name: `error: ${failed}`, ok: false }, at: 11 },
+    }), lastEventId: "qa:3" }));
+    await vi.waitFor(() => expect(host.textContent).toContain(`Not sent: ${line}`));
+    expect(host.querySelector("[data-call-box]")?.getAttribute("data-call-box")).toBe("listening");
+    expect(engine.texts).toEqual([]);
+  });
+
+  it("Same bot leaves Working when Stop this turn cancels a pending send", async () => {
+    await mount("bot");
+    const engine = await call();
+    const line = "Stop this pending browser fixture turn.";
+    let release: undefined | (() => void);
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith("/messages") && init?.method === "POST") {
+        await new Promise<void>((resolve) => { release = resolve; });
+        return Response.json({ ok: true, threadId: atlas.threadId, cancelled: true }, { status: 202 });
+      }
+      if (path.includes("/queue/")) return Response.json({ cancelled: true });
+      if (path.endsWith("/interrupt")) return Response.json({ stopped: true, returned: [] });
+      return original(input, init);
+    });
+    await act(async () => {
+      engine.events.heard(line);
+      engine.events.answering();
+      engine.events.turnDone();
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    expect(host.querySelector("[data-call-box]")?.getAttribute("data-call-box")).toBe("working");
+    await act(async () => dispatch({ type: "interrupt", botId: atlas.id }));
+    await act(async () => release!());
+    await vi.waitFor(() => expect(host.querySelector("[data-call-box]")?.getAttribute("data-call-box")).toBe("listening"));
+    expect(host.querySelector("textarea")?.value).toBe(line);
+    expect(host.textContent).not.toContain("Not sent");
+    expect(engine.texts).toEqual([]);
+  });
 });
