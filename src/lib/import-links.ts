@@ -7,6 +7,8 @@ export const IMPORT_PROVIDERS = [
   { name: "Grok", url: "https://grok.com/?q=" },
 ] as const;
 
+export const DESKTOP_LINK_LIMIT = 2081;
+
 export const IMPORT_OFFER = {
   en: [
     "Want me to know what ChatGPT, Claude, Gemini, Grok or Muse already knows about you? It takes a minute:",
@@ -24,7 +26,15 @@ export const IMPORT_OFFER = {
 
 export const isImportPrompt = (code: string): boolean => code === catalogs.en["aboutYou.prompt"] || code === catalogs.ko["aboutYou.prompt"];
 
-export const importLink = (provider: (typeof IMPORT_PROVIDERS)[number], prompt: string): string => provider.url + encodeURIComponent(prompt);
+/**
+ * Opens with the prompt typed in. On desktop, Electron's shell.openExternal rejects a link over DESKTOP_LINK_LIMIT on Windows, measured after the main
+ * process normalises it; a Korean prompt is over it with %20 for each space, so then a space is sent as "+" (the same space in a query), which fits.
+ */
+export function importLink(provider: (typeof IMPORT_PROVIDERS)[number], prompt: string, desktop = false): string {
+  const encoded = encodeURIComponent(prompt);
+  const link = provider.url + encoded;
+  return desktop && new URL(link).href.length > DESKTOP_LINK_LIMIT ? provider.url + encoded.replaceAll("%20", "+") : link;
+}
 
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // The block the offer note asks for: the offer word for word, then the prompt fenced as text. The prompt quoted anywhere else never matches.

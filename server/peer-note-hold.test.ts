@@ -269,7 +269,7 @@ describe("worker notes while a bot answers a bot", () => {
       "    return steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));",
       "  const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;",
       "  const messagesBeforeSummary = store.activePath(threadId);\n  holdNotes?.(messagesBeforeSummary);\n",
-      "  const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);\n  holdNotes?.(activeMessages);\n",
+      "  const activeMessages = usePlannedContext ? messagesBeforeSummary : store.activePath(threadId);\n  holdNotes?.(activeMessages);\n",
       "skipTranscript.add(message.id);\n            holdNotes?.(messages);\n            const refreshedNotes = paneNotesForTurn(messages, skipTranscript,",
       "      if (holdNotes) newestPaneNoteId = undefined;\n      // a deferred recycle's live session",
       "      store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);",

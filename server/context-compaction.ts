@@ -5,9 +5,9 @@ import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
-import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
+import { TYPED_VALUES_HEADER, typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
-import type { ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
+import type { NativePrompt, ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
   CONTEXT_COMPACTION_VERSION,
   readContextCompaction,
@@ -89,6 +89,8 @@ export interface ApplicableCompaction {
   value: ContextCompactionV1;
 }
 
+type ReplaySummaryPatch = { compaction: ContextCompactionV1 };
+
 export type PreparedModelContext =
   | {
       status: "ready";
@@ -99,6 +101,7 @@ export type PreparedModelContext =
       compaction?: ContextCompactionV1;
       /** message id of the reused summary; absent when `compaction` is new */
       compactionId?: string;
+      replaySummary?: ReplaySummaryPatch;
       /** the window grew past the summary's, so the original history replaced it */
       expanded?: boolean;
     }
@@ -198,6 +201,22 @@ function contextBudget(contextWindow: number): number {
 
 export function estimateContextTokens(messages: Array<{ text: string }>): number {
   return messages.reduce((total, message) => total + messageTokens(message), 0);
+}
+
+export function nativeReplayBudget(contextWindow: number): number {
+  return Math.floor(contextWindow * SUMMARY_GRACE_INPUT_SHARE);
+}
+
+export function codexResumeReplayRoom(
+  task: { resumeCursors: Record<string, unknown>; resumeSeed?: ResumeSeed; nativePrompt?: NativePrompt },
+  instanceId: string,
+  model: string,
+): number {
+  const cursor = task.resumeCursors[instanceId];
+  const { resumeSeed: seed, nativePrompt: prompt } = task;
+  if (cursor === undefined || !seed?.nativeReplay || seed.instanceId !== instanceId || seed.cursor !== cursor ||
+      prompt?.cursor !== cursor || prompt.window?.model !== model) return 0;
+  return Math.max(0, nativeReplayBudget(prompt.window.tokens) - prompt.last - Math.max(0, prompt.growth ?? 0));
 }
 
 /** Longest prefix that fits, ending at a line end, else at whitespace, else anywhere. */
@@ -1041,6 +1060,8 @@ export type CompactionPlan =
       transcript: ModelContextMessage[];
       budgetTokens: number;
       estimatedTokens: number;
+      nativeReplay?: true;
+      replaySummary?: ReplaySummaryPatch;
     }
   | { needed: false; status: "unsupported"; messageId: string; version: number }
   | { needed: false; status: "failed"; error: string };
@@ -1062,6 +1083,7 @@ export function planCompaction(input: {
   nativePrompt?: NativePromptSize;
   /** this native cycle already has its summary */
   nativeCycleBuilt?: boolean;
+  resumeNativeReplay?: { compactionId: string | null; budgetTokens: number };
 }): CompactionPlan {
   const window = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
     ? input.contextWindow
@@ -1105,11 +1127,18 @@ export function planCompaction(input: {
   const near = real && !input.nativeCycleBuilt && nearNativeCompact({ ...real, nativeAt: input.nativeAt ?? null }) ? real : undefined;
   const fits: CompactionPlan = { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
   if ((real ? !near : currentTokens <= budgetTokens) && currentTurns <= MAX_CONTEXT_MESSAGES) return fits;
+  const typedLines = typedValueLines(input.messages, input.excludeIds);
+  const replay = input.resumeNativeReplay;
+  if (replay && replay.compactionId === (previous?.messageId ?? null) && currentTokens <= replay.budgetTokens) {
+    const projection = replayWithTypedValues(currentTranscript, currentTokens, previous, typedLines);
+    if (projection && projection.estimatedTokens <= replay.budgetTokens) {
+      return { ...fits, ...projection, budgetTokens: replay.budgetTokens, nativeReplay: true };
+    }
+  }
   const summaryBudget = Math.max(
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
   );
-  const typedLines = typedValueLines(input.messages, input.excludeIds);
   const valuesRoom = valuesRoomFor(typedLines, budgetTokens);
   const tailBudget = budgetTokens - summaryBudget - valuesRoom;
   let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : Math.floor(tailBudget * TAIL_FILL_SHARE));
@@ -1224,6 +1253,50 @@ function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, s
   return [...head, ...transcript.slice(start)];
 }
 
+function replayWithTypedValues(
+  transcript: ModelContextMessage[], estimatedTokens: number, previous: ApplicableCompaction | null, lines: readonly TypedLine[],
+): { transcript: ModelContextMessage[]; estimatedTokens: number; replaySummary?: ReplaySummaryPatch } | undefined {
+  // Rooms skip fallback rows and older Wink reads only the summary field, so skipping the summarizer needs a model summary that holds the values.
+  if (!previous || isFallbackSummary(previous.value.summary)) return undefined;
+  const summary = transcript[0];
+  const stored = redactSecretsInText(previous.value.summary);
+  const text = withoutTypedValues(stored);
+  const room = Math.min(VALUES_CAP_TOKENS * 3, SUMMARY_MAX_CHARS - text.length - 2);
+  const covered = typedValuesBlock(lines.filter(({ index }) => index <= previous.coveredIndex), VALUES_CAP_TOKENS * 3);
+  if (covered && Buffer.byteLength(covered, "utf8") > room) return undefined;
+  const head = covered || TYPED_VALUES_HEADER;
+  const kept = new Set(head.split("\n"));
+  const newer = lines.filter(({ index }) => index > previous.coveredIndex);
+  const fitted = typedValuesBlock(newer, room - Buffer.byteLength(head, "utf8") + Buffer.byteLength(TYPED_VALUES_HEADER, "utf8"));
+  // Rooms read only this field, so a newer value with no room sends the turn down the summarizer path.
+  if (fitted !== typedValuesBlock(newer, Infinity)) return undefined;
+  const later = fitted.split("\n").filter((line) => line.startsWith("- ") && !kept.has(line));
+  const block = later.length ? [head, ...later].join("\n") : covered;
+  const next = `${text}\n\n${block}`;
+  if (!summary || !block || next === stored) return { transcript, estimatedTokens };
+  const enriched = { ...summary, text: summary.text.slice(0, summary.text.length - stored.length) + next };
+  return {
+    transcript: [enriched, ...transcript.slice(1)],
+    estimatedTokens: estimatedTokens + messageTokens(enriched) - messageTokens(summary),
+    replaySummary: { compaction: { ...previous.value, summary: next } },
+  };
+}
+
+export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number): Extract<PreparedModelContext, { status: "ready" }> | undefined {
+  if (plan.estimatedTokensBefore > budgetTokens) return undefined;
+  const previous = plan.previous;
+  const projection = replayWithTypedValues(plan.transcript, plan.estimatedTokensBefore, previous, plan.typedLines);
+  if (!projection || projection.estimatedTokens > budgetTokens) return undefined;
+  const prepared: Extract<PreparedModelContext, { status: "ready" }> = {
+    status: "ready",
+    ...projection,
+    budgetTokens,
+    compacted: Boolean(previous),
+  };
+  if (previous) prepared.compactionId = previous.messageId;
+  return prepared;
+}
+
 function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
@@ -1268,6 +1341,7 @@ export async function prepareModelContext(input: {
       estimatedTokens: plan.needed ? plan.estimatedTokensBefore : plan.estimatedTokens,
       compacted: Boolean(plan.previous),
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+      ...(!plan.needed && plan.replaySummary ? { replaySummary: plan.replaySummary } : {}),
     };
   }
   if (!plan.needed) {
@@ -1280,6 +1354,7 @@ export async function prepareModelContext(input: {
       estimatedTokens: plan.estimatedTokens,
       compacted: Boolean(plan.previous),
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+      ...(plan.replaySummary ? { replaySummary: plan.replaySummary } : {}),
     };
   }
   const { previous, previousSummary, old, tail, coveredThrough, budgetTokens, summaryBudget, contextWindow, typedLines, valuesRoom } = plan;
