@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +22,7 @@ const CLAUDE = {
   gitDns: ["git push origin main", "Exit code 128\nfatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com", "fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com"],
   rustBorrow: ["cargo build", "Exit code 101\n   Compiling app v0.1.0 (D:\\proj)\nerror[E0382]: borrow of moved value: `config`\n --> src/main.rs:9:13\n\nerror: could not compile `app` (bin \"app\") due to 1 previous error", "error[E0382]: borrow of moved value: `config`"],
   syntax: ["node build.js", "Exit code 1\nD:\\proj\\build.js:4\n}\n^\n\nSyntaxError: Unexpected token '}'\n    at wrapSafe (node:internal/modules/cjs/loader:1378:20)\n\nNode.js v22.11.0", "SyntaxError: Unexpected token '}'"],
-  socket: ["npm run sync", "Exit code 1\nError: socket hang up\n    at connResetException (node:internal/errors:720:14)", "Error: socket hang up"],
+  socket: ["cargo run --bin sync", "Exit code 101\nthread 'main' panicked at src/sync.rs:30:9:\nsocket hang up\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace", "socket hang up"],
 } as const;
 const CODEX = {
   connRefused: ["python scripts/sync.py", "Traceback (most recent call last):\n  File \"sync.py\", line 88, in push\nConnectionRefusedError: [WinError 10061]"],
@@ -99,13 +100,14 @@ describe("forum loop error signatures", () => {
     const sigs = Object.values(CLAUDE).map(([command, output]) => toolRun(command, output, true).sig);
     expect(sigs.every(Boolean)).toBe(true);
     expect(new Set(sigs).size).toBe(6);
-    expect(runSig("KeyError: 'email'")).not.toBe(runSig("KeyError: 'name'"));
+    expect(runSig("KeyError: 'email'", "", "loader.py:12")).not.toBe(runSig("KeyError: 'name'", "", "loader.py:12"));
     expect(runSig("src/app.ts(3,1): error TS2307: Cannot find name 'foo'.")).not.toBe(runSig(CLAUDE.ts2304[2]));
   });
 
   it("sign Codex output by its error and failing test, whatever the path", () => {
     const sig = (key: keyof typeof CODEX) => toolRun(CODEX[key][0], CODEX[key][1], true).sig;
-    expect(sig("tsShort")).toBe(sig("tsLong"));
+    // fail closed: one message raised in another file is another failure
+    expect(sig("tsShort")).not.toBe(sig("tsLong"));
     expect(sig("vitestA")).not.toBe(sig("vitestB"));
     expect(sig("connRefused")).not.toBe(toolRun(...CLAUDE.keyError.slice(0, 2) as [string, string], true).sig);
     expect(sig("vitestAElsewhere")).toBe(sig("vitestA"));
@@ -281,7 +283,7 @@ describe("forum loop proven fixes", () => {
   it("redacts secrets in the error it quotes", async () => {
     const { steer, loop } = setup();
     const key = `sk-ant-api03-${"Q7x".repeat(30)}AA`;
-    loop.event(bash("ta", "node call.js", `Exit code 1\nError: 401 invalid x-api-key ${key}`));
+    loop.event(bash("ta", "node call.js", `Exit code 1\nD:\\proj\\call.js:12\n  throw new Error(text);\n  ^\n\nError: 401 invalid x-api-key ${key}\n    at main (D:\\proj\\call.js:12:9)`));
     loop.event(edit("ta"));
     loop.event(bash("ta", "node call.js", "ok", false));
     loop.event(shell("ta"));
@@ -444,7 +446,6 @@ describe("errors that differ only by a test name or a path", () => {
     expect(sig("python a.py", pyErr("data/a.csv"))).toBe(sig("python b.py", pyErr("D:\\other\\data\\a.csv")));
     expect(sig("npx playwright test", pwProject("save.spec.ts", "saves the form", "x"))).toBe(sig("npx playwright test", pwProject("e2e/save.spec.ts", "saves the form", "y")));
     expect(sig("pnpm vitest run", vitest("|unit| src/cart.test.ts", "applies a coupon"))).toBe(sig("pnpm vitest run", vitest("|unit| web/src/cart.test.ts", "applies a coupon")));
-    expect(sig(CLAUDE.ts2304[0], CLAUDE.ts2304[1])).toBe(sig("pnpm tsc", "Exit code 2\npackages/web/src/deep/app.tsx(214,17): error TS2304: Cannot find name 'foo'."));
   });
 
   it.each(COLLIDED.filter(([, a, b]) => toolRun(...a, true).sig && toolRun(...b, true).sig))("%s: bot B never gets A's fix, and each proven fix gets its own post", async (_name, a, b) => {
@@ -536,5 +537,132 @@ describe("forum loop off", () => {
     expect(w.rows.every((row) => row.shadow)).toBe(true);
     expect(forumPostRule(false)).toBe("After something took 2+ tries, board_post kind fix: the error and the line that fixed it. ");
     expect(forumPostRule(true)).toBe("");
+  });
+});
+
+// Fail closed: a fix is handed over only when the signature says which failure this is. Every failure from review
+// rounds A-D, round D's 40 pairs of two different failures, and generated ones: unknown runners and bare file names.
+type ReviewedFailure = { round: string; label: string; group: string; command: string; output: string };
+// SAFETY: forum-loop-failures.json is the checked-in fixture written with exactly this layout.
+const REVIEWED = JSON.parse(readFileSync(join(import.meta.dirname, "testing", "forum-loop-failures.json"), "utf8")) as { cases: ReviewedFailure[]; pairs: Array<[string, string, string]> };
+const failure = (label: string) => REVIEWED.cases.find((entry) => entry.label === label)!;
+const sigOf = (entry: { command: string; output: string }) => toolRun(entry.command, entry.output, true).sig;
+const sigOfRun = ([command, output]: [string, string]) => toolRun(command, output, true).sig;
+// a small seeded generator, so a failure names the case that broke the rule
+const pick = (seed: number) => <T>(items: readonly T[]) => items[(seed = (seed * 1103515245 + 12345) % 2147483648) % items.length]!;
+const FILES = ["cart", "auth", "orders", "billing", "profile", "search", "token", "invoice"];
+const TESTS = ["applies a coupon", "rejects an expired token", "renders without crashing", "returns the list", "rounds the total"];
+const ASSERTIONS = ["AssertionError: expected false to be true", "Error: Expected false to be true.", "expected: <true> but was: <false>", "assert False", "Failure/Error: expect(result).to eq(true)", "TypeError: Cannot read properties of undefined (reading 'map')"];
+// runners the parser knows: two different tests on one assertion line sign apart (or not at all), the same test in another checkout alike
+const KNOWN = {
+  vitest: (folder, file, test, assertion) => ["pnpm vitest run", `Exit code 1\n FAIL  ${folder}/${file}.test.ts > ${test}\n${assertion}\n\n Test Files  1 failed (1)`],
+  pytest: (folder, file, test, assertion) => ["python -m pytest", `Exit code 1\n${folder}/test_${file}.py F\nE       ${assertion}\nFAILED ${folder}/test_${file}.py::test_${test.replace(/ /g, "_")} - ${assertion}`],
+  playwright: (folder, file, test, assertion) => ["npx playwright test", `Exit code 1\n  1) [chromium] › ${folder}/${file}.spec.ts:5:1 › ${test}\n\n    ${assertion}\n\n  1 failed`],
+  jest: (folder, file, test, assertion) => ["npx jest", `Exit code 1\nFAIL ${folder}/${file}.test.js\n  ● ${test}\n\n    ${assertion}\n\nTests:       1 failed, 1 total`],
+  cargo: (folder, file, test, assertion) => ["cargo test", `Exit code 101\n---- tests::${test.replace(/ /g, "_")} stdout ----\nthread 'tests::${test.replace(/ /g, "_")}' (4242) panicked at ${folder}/${file}.rs:10:9:\n${assertion}\n\ntest result: FAILED. 0 passed; 1 failed\n\nerror: test failed, to rerun pass \`--lib\``],
+} satisfies Record<string, (folder: string, file: string, test: string, assertion: string) => [string, string]>;
+// runners it does not know, and shapes nobody listed: never signed
+const UNKNOWN: Array<(file: string, test: string, assertion: string) => [string, string]> = [
+  (file, _test, assertion) => ["go test ./...", `--- FAIL: Test${file} (0.00s)\n    ${file}_test.go:12: ${assertion}\nFAIL\nFAIL\texample.com/shop/${file}\t0.01s`],
+  (file, test, assertion) => ["bundle exec rspec", `Failures:\n\n  1) ${test}\n     ${assertion}\n     # ./spec/${file}_spec.rb:9\n\n1 example, 1 failure`],
+  (file, _test, assertion) => ["mvn test", `[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0\n${assertion}\n\tat com.shop.${file}Test.check(${file}Test.java:12)`],
+  (file, _test, assertion) => ["./gradlew test", `${file}Test > check() FAILED\n    ${assertion} at ${file}Test.java:12\n\n2 tests completed, 1 failed`],
+  (file, test, assertion) => ["bun test", `${file}.test.ts:\nerror: ${assertion}\n(fail) ${test} [0.12ms]\n\n 0 pass\n 1 fail`],
+  (file, test, assertion) => ["npx karma start", `Chrome Headless ${file} ${test} FAILED\n\t${assertion}\nExecuted 3 of 3 (1 FAILED)`],
+  (_file, test, assertion) => ["node --test", `TAP version 13\nnot ok 1 - ${test}\n  error: |-\n    ${assertion}\n# fail 1`],
+  (file, test, assertion) => ["npx zest", `✗ ${test}\n    ${assertion}\n      at Object.<anonymous> (src/${file}.zest.js:3:9)`],
+  (file, test, assertion) => ["./run-checks", `[${file}] ${test} ... ${assertion}`],
+  (file, test, assertion) => ["python tools/check.py", `Traceback (most recent call last):\n  File "tests/test_${file}.py", line 9, in ${test.replace(/ /g, "_")}\nAssertionError: ${assertion}`],
+  (file, test, assertion) => ["swift test", `/home/u/shop/Tests/${file}Tests.swift:12: error: -[ShopTests ${test}] : ${assertion}\n\t Executed 1 test, with 1 failure (0 unexpected)`],
+  (file, test, assertion) => ["mix test", `  1) test ${test} (${file}Test)\n     test/${file}_test.exs:5\n     ${assertion}\n\n2 tests, 1 failure`],
+];
+// a missing or locked file named with no folder: which one depends on where the bot stood, so never signed
+const BARE: Array<(name: string) => [string, string]> = [
+  (name) => [`cat ${name}`, `Exit code 1\ncat: ${name}: No such file or directory`],
+  (name) => ["node index.mjs", `Exit code 1\nError: ENOENT: no such file or directory, open '${name}'\n    at Object.openSync (node:fs:562:18)`],
+  (name) => ["python load.py", `Exit code 1\nTraceback (most recent call last):\n  File "load.py", line 3, in <module>\nFileNotFoundError: [Errno 2] No such file or directory: '${name}'`],
+  (name) => ["ruby app.rb", `Exit code 1\napp.rb:3:in 'File#initialize': No such file or directory @ rb_sysopen - ${name} (Errno::ENOENT)`],
+  (name) => ["java -jar app.jar", `Exit code 1\nException in thread "main" java.io.FileNotFoundException: ${name} (No such file or directory)`],
+  (name) => ["go run .", `Exit code 1\n2026/11/22 10:00:00 open ${name}: no such file or directory`],
+  (name) => [`bash ./${name}`, `Exit code 127\nbash: ./${name}: No such file or directory`],
+  (name) => [`./${name}`, `Exit code 126\n/usr/bin/bash: line 1: ./${name}: Permission denied`],
+  (name) => [`mkdir ${name}`, `Exit code 1\nmkdir: cannot create directory ‘${name}’: Permission denied`],
+  (name) => [`Get-Content ${name}`, `Exit code 1\nGet-Content: Cannot find path '${name}' because it does not exist.`],
+  (name) => ["node build.js", `Exit code 1\nError: Could not read ${name}`],
+  (name) => ["python app.py", `Exit code 1\nTraceback (most recent call last):\n  File "app.py", line 8, in <module>\njson.decoder.JSONDecodeError: Expecting value in ${name.includes(".") ? name : `${name}.json`}: line 1 column 1 (char 0)`],
+  () => ["cargo run", `Exit code 101\nthread 'main' panicked at src/main.rs:5:44:\ncalled \`Result::unwrap()\` on an \`Err\` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }`],
+];
+const BARE_NAMES = ["config.yaml", "settings.toml", "package.json", "tsconfig.json", "seed.sql", "users.csv", ".env.example", "Makefile", "deploy.sh", "out"];
+
+describe("fail closed: a fix is handed only when the signature says which failure it is", () => {
+  it("no two different failures from review rounds A-D share a signature", () => {
+    const signed = REVIEWED.cases.map((entry) => ({ ...entry, sig: sigOf(entry) })).filter((entry) => entry.sig);
+    const shared = signed.flatMap((a, at) => signed.slice(at + 1).filter((b) => b.sig === a.sig && b.group !== a.group).map((b) => `${a.label} ~ ${b.label}`));
+    expect(shared).toEqual([]);
+    expect(REVIEWED.cases).toHaveLength(157);
+  });
+
+  it.each(REVIEWED.pairs)("round D %s: bot B, failing otherwise, is never handed bot A's fix", async (_name, labelA, labelB) => {
+    const [a, b] = [failure(labelA), failure(labelB)];
+    const w = setup();
+    const sigA = sigOf(a);
+    await w.prove("ta", [a.command, a.output], toolRun(a.command, a.output, true).error ?? "the error", "Fix for A.");
+    w.loop.event(bash("tb", b.command, b.output));
+    w.loop.event(shell("tb"));
+    w.loop.event(done("tb"));
+    expect(w.handed()).toEqual([]);
+    expect(w.loop.next("tb")).not.toContain("<forum-note>");
+    expect(sigA === undefined || sigA !== sigOf(b)).toBe(true);
+  });
+
+  it("known runners: two tests on one assertion line sign apart, one test in another checkout alike", () => {
+    const signedBy = new Set<string>();
+    for (let seed = 1; seed <= 200; seed++) {
+      const any = pick(seed);
+      // SAFETY: Object.keys of a literal object returns exactly its keys
+      const known = any(Object.keys(KNOWN) as Array<keyof typeof KNOWN>);
+      const runner = KNOWN[known]!;
+      const [fileA, fileB] = [any(FILES), any(FILES)];
+      const [testA, testB] = [any(TESTS), any(TESTS)];
+      const assertion = any(ASSERTIONS);
+      const sigA = sigOfRun(runner("src", fileA, testA, assertion));
+      const sigB = sigOfRun(runner("packages/web/lib", fileB, testB, assertion));
+      const label = `seed ${seed} ${known}: ${fileA}/${testA} vs ${fileB}/${testB}`;
+      if (sigA) signedBy.add(known);
+      if (fileA === fileB && testA === testB) expect.soft(sigA, label).toBe(sigB);
+      else expect.soft(sigA === undefined || sigA !== sigB, label).toBe(true);
+    }
+    expect(signedBy).toEqual(new Set(Object.keys(KNOWN)));
+  });
+
+  it("runners the parser does not know stay silent", () => {
+    for (let seed = 1; seed <= 200; seed++) {
+      const any = pick(seed);
+      const [command, output] = any(UNKNOWN)(any(FILES), any(TESTS), any(ASSERTIONS));
+      expect.soft(sigOfRun([command, `Exit code 1\n${output}`]), `seed ${seed}: ${output}`).toBeUndefined();
+    }
+  });
+
+  it("an error about a file named with no folder stays silent; with a folder it signs per file", () => {
+    for (const make of BARE) for (const name of BARE_NAMES) {
+      expect.soft(sigOfRun(make(name)), make(name)[1]).toBeUndefined();
+    }
+    const missing = (path: string) => ({ command: "node index.mjs", output: `Exit code 1\nError: ENOENT: no such file or directory, open '${path}'` });
+    expect(sigOf(missing("config/settings.json"))).toBeTruthy();
+    expect(sigOf(missing("config/settings.json"))).not.toBe(sigOf(missing("config/users.csv")));
+    expect(sigOf(missing("C:\\wt\\a\\config\\settings.json"))).toBe(sigOf(missing("/home/u/wt-b/config/settings.json")));
+  });
+
+  it("a real repeat still signs alike: pytest from another checkout, cargo with another thread id and path, a KeyError", () => {
+    const pytestAuth = failure("pytest auth (real)");
+    const otherCheckout = pytestAuth.output.split("tests\\test_auth.py").join("services\\api\\tests\\test_auth.py").split("tests/test_auth.py").join("services/api/tests/test_auth.py");
+    expect(otherCheckout).not.toBe(pytestAuth.output);
+    expect(sigOf({ ...pytestAuth, output: otherCheckout })).toBe(sigOf(pytestAuth));
+    const coupon = failure("cargo test coupon (real)");
+    const otherPath = coupon.output.replace(/\(\d+\) panicked at src\\lib\.rs/, "(2231) panicked at src/lib.rs");
+    expect(otherPath).not.toBe(coupon.output);
+    expect(sigOf({ ...coupon, output: otherPath })).toBe(sigOf(coupon));
+    expect(sigOf(failure("claude: KeyError"))).toBe(sigOf(failure("codex: KeyError")));
+    expect(sigOf(failure("claude: KeyError"))).toBeTruthy();
   });
 });

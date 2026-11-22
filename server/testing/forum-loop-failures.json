@@ -1,0 +1,1306 @@
+{
+ "note": "Failure shapes from review rounds A-D of the Forum loop (PR 2113): label, group (two cases of one group are the same failure), command, tool output. pairs: round D's 40 pairs of two different failures.",
+ "cases": [
+  {
+   "round": "A",
+   "label": "claude: KeyError",
+   "group": "keyerror-name",
+   "command": "python -m pytest tests/test_loader.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"loader.py\", line 12, in load\nKeyError: 'name'"
+  },
+  {
+   "round": "A",
+   "label": "claude: TS2304",
+   "group": "ts2304-foo",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/app.ts(3,1): error TS2304: Cannot find name 'foo'."
+  },
+  {
+   "round": "A",
+   "label": "claude: git dns",
+   "group": "git-dns",
+   "command": "git push origin main",
+   "output": "Exit code 128\nfatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com"
+  },
+  {
+   "round": "A",
+   "label": "claude: rust borrow",
+   "group": "rust-e0382",
+   "command": "cargo build",
+   "output": "Exit code 101\nerror[E0382]: borrow of moved value: `config`"
+  },
+  {
+   "round": "A",
+   "label": "claude: syntax",
+   "group": "node-syntax",
+   "command": "node build.js",
+   "output": "Exit code 1\nSyntaxError: Unexpected token '}'"
+  },
+  {
+   "round": "A",
+   "label": "codex: KeyError",
+   "group": "keyerror-name",
+   "command": "python -m pytest tests/test_loader.py",
+   "output": "Traceback (most recent call last):\n  File \"loader.py\", line 12, in load\nKeyError: 'name'"
+  },
+  {
+   "round": "A",
+   "label": "codex: conn refused",
+   "group": "a-conn refused",
+   "command": "python scripts/sync.py",
+   "output": "Traceback (most recent call last):\n  File \"sync.py\", line 88, in push\nConnectionRefusedError: [WinError 10061]"
+  },
+  {
+   "round": "A",
+   "label": "codex: vitest a",
+   "group": "a-vitest a",
+   "command": "npx vitest run server/a.test.ts",
+   "output": " RUN  v4.1.10 D:/proj\n\n FAIL  server/a.test.ts > adds\nAssertionError: expected 1 to be 2"
+  },
+  {
+   "round": "A",
+   "label": "codex: vitest b",
+   "group": "a-vitest b",
+   "command": "npx vitest run src/b.test.ts",
+   "output": " RUN  v4.1.10 D:/proj\n\n FAIL  src/b.test.ts > renders\nTypeError: x is not a function"
+  },
+  {
+   "round": "A",
+   "label": "codex: pnpm banner",
+   "group": "a-pnpm banner",
+   "command": "pnpm test",
+   "output": "\n> app@1.0.0 test D:\\proj\n> vitest run\n\nAssertionError: expected 1 to be 2"
+  },
+  {
+   "round": "A",
+   "label": "codex: TS2322 short path",
+   "group": "ts2322-loader",
+   "command": "pnpm tsc --noEmit",
+   "output": "src/a.ts(3,1): error TS2322: Type 'string' is not assignable to type 'number' because the loader returns raw text."
+  },
+  {
+   "round": "A",
+   "label": "codex: TS2322 long path",
+   "group": "ts2322-loader",
+   "command": "pnpm tsc --noEmit",
+   "output": "packages/web/src/components/settings/panels/AdvancedPanel.tsx(214,17): error TS2322: Type 'string' is not assignable to type 'number' because the loader returns raw text."
+  },
+  {
+   "round": "A",
+   "label": "codex: npm eresolve",
+   "group": "a-npm eresolve",
+   "command": "npm install",
+   "output": "npm error code ERESOLVE\nnpm error ERESOLVE unable to resolve dependency tree"
+  },
+  {
+   "round": "A",
+   "label": "codex: npm lifecycle",
+   "group": "a-npm lifecycle",
+   "command": "npm run build",
+   "output": "npm error code ELIFECYCLE\nnpm error errno 1"
+  },
+  {
+   "round": "B",
+   "label": "py KeyError name",
+   "group": "keyerror-name",
+   "command": "python -m pytest tests/test_loader.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"/home/u/app/loader.py\", line 12, in load\n    name = cfg['name']\nKeyError: 'name'"
+  },
+  {
+   "round": "B",
+   "label": "py KeyError name, other path",
+   "group": "keyerror-name",
+   "command": "python run.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\work\\svc\\loader.py\", line 88, in load\n    name = cfg['name']\nKeyError: 'name'"
+  },
+  {
+   "round": "B",
+   "label": "py KeyError email",
+   "group": "keyerror-email",
+   "command": "python run.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"/home/u/app/loader.py\", line 12, in load\nKeyError: 'email'"
+  },
+  {
+   "round": "B",
+   "label": "tsc TS2304 foo",
+   "group": "ts2304-foo",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/app.ts(3,1): error TS2304: Cannot find name 'foo'."
+  },
+  {
+   "round": "B",
+   "label": "tsc TS2304 foo, long path",
+   "group": "ts2304-foo",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\npackages/web/src/components/settings/panels/AdvancedPanel.tsx(214,17): error TS2304: Cannot find name 'foo'."
+  },
+  {
+   "round": "B",
+   "label": "tsc TS2304 bar",
+   "group": "ts2304-bar",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/app.ts(3,1): error TS2304: Cannot find name 'bar'."
+  },
+  {
+   "round": "B",
+   "label": "tsc TS2322",
+   "group": "ts2322",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/a.ts(3,1): error TS2322: Type 'string' is not assignable to type 'number'."
+  },
+  {
+   "round": "B",
+   "label": "node ENOENT settings.json",
+   "group": "enoent-settings",
+   "command": "node index.mjs",
+   "output": "Exit code 1\nnode:fs:562\n  return binding.open(\n                 ^\n\nError: ENOENT: no such file or directory, open 'C:\\proj\\config\\settings.json'\n    at Object.openSync (node:fs:562:18)\n    at readFileSync (node:fs:446:35)\n    at main (file:///srv/app/index.mjs:4:14) {\n  errno: -2,\n  syscall: 'open'\n}\n\nNode.js v24.14.1"
+  },
+  {
+   "round": "B",
+   "label": "node ENOENT users.csv",
+   "group": "enoent-users",
+   "command": "node import.mjs",
+   "output": "Exit code 1\nnode:fs:562\n  return binding.open(\n                 ^\n\nError: ENOENT: no such file or directory, open '/srv/app/data/users.csv'\n    at Object.openSync (node:fs:562:18)\n    at readFileSync (node:fs:446:35)\n    at main (file:///srv/app/index.mjs:4:14) {\n  errno: -2,\n  syscall: 'open'\n}\n\nNode.js v24.14.1"
+  },
+  {
+   "round": "B",
+   "label": "node EACCES secret.key",
+   "group": "eacces-secret",
+   "command": "node index.mjs",
+   "output": "Exit code 1\nnode:fs:562\n  return binding.open(\n                 ^\n\nError: EACCES: permission denied, open '/etc/app/secret.key'\n    at Object.openSync (node:fs:562:18)\n    at readFileSync (node:fs:446:35)\n    at main (file:///srv/app/index.mjs:4:14) {\n  errno: -2,\n  syscall: 'open'\n}\n\nNode.js v24.14.1"
+  },
+  {
+   "round": "B",
+   "label": "vitest cart > applies a coupon (false to be true)",
+   "group": "test-cart-coupon",
+   "command": "pnpm vitest run src/cart.test.ts",
+   "output": "Exit code 1\n RUN  v4.1.10 D:/proj\n\n ❯ src/cart.test.ts (3 tests | 1 failed) 12ms\n   ✓ loads 2ms\n   × applies a coupon 6ms\n     → expected false to be true // Object.is equality\n   ✓ clears 1ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/cart.test.ts > applies a coupon\nAssertionError: expected false to be true // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ src/cart.test.ts:14:27\n     12|   const subject = make();\n     13|   const got = subject.run();\n     14|   expect(applied).toBe(true);\n       |                           ^\n     15| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n   Start at  10:12:01\n   Duration  412ms"
+  },
+  {
+   "round": "B",
+   "label": "vitest auth > rejects an expired token (false to be true)",
+   "group": "test-auth-expiry",
+   "command": "pnpm vitest run src/auth.test.ts",
+   "output": "Exit code 1\n RUN  v4.1.10 D:/proj\n\n ❯ src/auth.test.ts (3 tests | 1 failed) 12ms\n   ✓ loads 2ms\n   × rejects an expired token 6ms\n     → expected false to be true // Object.is equality\n   ✓ clears 1ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/auth.test.ts > rejects an expired token\nAssertionError: expected false to be true // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ src/auth.test.ts:14:27\n     12|   const subject = make();\n     13|   const got = subject.run();\n     14|   expect(rejected).toBe(true);\n       |                           ^\n     15| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n   Start at  10:12:01\n   Duration  412ms"
+  },
+  {
+   "round": "B",
+   "label": "vitest math > adds (3 to be 4)",
+   "group": "test-math-adds",
+   "command": "pnpm vitest run src/math.test.ts",
+   "output": "Exit code 1\n RUN  v4.1.10 D:/proj\n\n ❯ src/math.test.ts (3 tests | 1 failed) 12ms\n   ✓ loads 2ms\n   × adds 6ms\n     → expected 3 to be 4 // Object.is equality\n   ✓ clears 1ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/math.test.ts > adds\nAssertionError: expected 3 to be 4 // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ src/math.test.ts:14:27\n     12|   const subject = make();\n     13|   const got = subject.run();\n     14|   expect(sum).toBe(4);\n       |                           ^\n     15| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n   Start at  10:12:01\n   Duration  412ms"
+  },
+  {
+   "round": "B",
+   "label": "vitest tax > rounds (10 to be 12)",
+   "group": "test-tax-rounds",
+   "command": "pnpm vitest run src/tax.test.ts",
+   "output": "Exit code 1\n RUN  v4.1.10 D:/proj\n\n ❯ src/tax.test.ts (3 tests | 1 failed) 12ms\n   ✓ loads 2ms\n   × rounds 6ms\n     → expected 10 to be 12 // Object.is equality\n   ✓ clears 1ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/tax.test.ts > rounds\nAssertionError: expected 10 to be 12 // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ src/tax.test.ts:14:27\n     12|   const subject = make();\n     13|   const got = subject.run();\n     14|   expect(total).toBe(12);\n       |                           ^\n     15| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n   Start at  10:12:01\n   Duration  412ms"
+  },
+  {
+   "round": "B",
+   "label": "vitest list > renders (reading 'map')",
+   "group": "test-list-map",
+   "command": "pnpm vitest run src/list.test.ts",
+   "output": "Exit code 1\n RUN  v4.1.10 D:/proj\n\n ❯ src/list.test.ts (3 tests | 1 failed) 12ms\n   ✓ loads 2ms\n   × renders 6ms\n     → Cannot read properties of undefined (reading 'map')\n   ✓ clears 1ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  src/list.test.ts > renders\nTypeError: Cannot read properties of undefined (reading 'map')\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ src/list.test.ts:14:27\n     12|   const subject = make();\n     13|   const got = subject.run();\n     14|   expect(render(rows)).toBe(true);\n       |                           ^\n     15| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n   Start at  10:12:01\n   Duration  412ms"
+  },
+  {
+   "round": "B",
+   "label": "pytest test_apply_coupon (assert 3 == 4)",
+   "group": "pytest-coupon",
+   "command": "python -m pytest tests/test_cart.py",
+   "output": "Exit code 1\n============================= test session starts =============================\ncollected 3 items\n\ntests/test_cart.py .F.                                                   [100%]\n\n================================== FAILURES ===================================\n______________________________ test_apply_coupon ______________________________\n\n    def test_apply_coupon():\n>       assert cart.total() == 4\nE       assert 3 == 4\nE        +  where 3 = total()\n\ntests/test_cart.py:14: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_cart.py::test_apply_coupon - assert 3 == 4\n========================= 1 failed, 2 passed in 0.12s ========================="
+  },
+  {
+   "round": "B",
+   "label": "pytest test_tax_rounds (assert 10 == 12)",
+   "group": "pytest-tax",
+   "command": "python -m pytest tests/test_tax.py",
+   "output": "Exit code 1\n============================= test session starts =============================\ncollected 3 items\n\ntests/test_tax.py .F.                                                   [100%]\n\n================================== FAILURES ===================================\n______________________________ test_tax_rounds ______________________________\n\n    def test_tax_rounds():\n>       assert tax.round(9.5) == 12\nE       assert 10 == 12\nE        +  where 10 = round(9.5)\n\ntests/test_tax.py:14: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_tax.py::test_tax_rounds - assert 10 == 12\n========================= 1 failed, 2 passed in 0.12s ========================="
+  },
+  {
+   "round": "B",
+   "label": "pytest test_token (assert False)",
+   "group": "pytest-token",
+   "command": "python -m pytest tests/test_auth.py",
+   "output": "Exit code 1\n============================= test session starts =============================\ncollected 3 items\n\ntests/test_auth.py .F.                                                   [100%]\n\n================================== FAILURES ===================================\n______________________________ test_token_expiry ______________________________\n\n    def test_token_expiry():\n>       assert is_valid(token)\nE       assert False\nE        +  where False = is_valid('abc')\n\ntests/test_auth.py:14: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_auth.py::test_token_expiry - assert False\n========================= 1 failed, 2 passed in 0.12s ========================="
+  },
+  {
+   "round": "B",
+   "label": "pytest test_flag (assert False)",
+   "group": "pytest-flag",
+   "command": "python -m pytest tests/test_flags.py",
+   "output": "Exit code 1\n============================= test session starts =============================\ncollected 3 items\n\ntests/test_flags.py .F.                                                   [100%]\n\n================================== FAILURES ===================================\n______________________________ test_flag_default ______________________________\n\n    def test_flag_default():\n>       assert flags.enabled('beta')\nE       assert False\nE        +  where False = enabled('beta')\n\ntests/test_flags.py:14: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_flags.py::test_flag_default - assert False\n========================= 1 failed, 2 passed in 0.12s ========================="
+  },
+  {
+   "round": "B",
+   "label": "jest cart (toBe)",
+   "group": "jest-cart",
+   "command": "npx jest src/cart.test.js",
+   "output": "Exit code 1\nFAIL src/cart.test.js\n  ● Cart › applies a coupon\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: true\n    Received: false\n\n      at Object.<anonymous> (src/cart.test.js:13:19)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 2 passed, 3 total"
+  },
+  {
+   "round": "B",
+   "label": "bash jq: command not found",
+   "group": "nocmd-jq",
+   "command": "jq . package.json",
+   "output": "Exit code 127\n/usr/bin/bash: line 1: jq: command not found"
+  },
+  {
+   "round": "B",
+   "label": "bash rg: command not found",
+   "group": "nocmd-rg",
+   "command": "rg TODO src",
+   "output": "Exit code 127\n/usr/bin/bash: line 1: rg: command not found"
+  },
+  {
+   "round": "B",
+   "label": "git DNS",
+   "group": "git-dns",
+   "command": "git push origin main",
+   "output": "Exit code 128\nfatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com"
+  },
+  {
+   "round": "B",
+   "label": "git push rejected",
+   "group": "git-rejected",
+   "command": "git push origin main",
+   "output": "Exit code 1\nTo https://github.com/x/y.git\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs to 'https://github.com/x/y.git'\nhint: Updates were rejected because the remote contains work that you do not have locally."
+  },
+  {
+   "round": "B",
+   "label": "rust E0382",
+   "group": "rust-e0382",
+   "command": "cargo build",
+   "output": "Exit code 101\n   Compiling app v0.1.0 (/home/u/app)\nerror[E0382]: borrow of moved value: `config`\n  --> src/main.rs:12:20\nerror: could not compile `app` (bin \"app\") due to 1 previous error"
+  },
+  {
+   "round": "B",
+   "label": "rust E0308",
+   "group": "rust-e0308",
+   "command": "cargo build",
+   "output": "Exit code 101\n   Compiling app v0.1.0 (/home/u/app)\nerror[E0308]: mismatched types\n  --> src/main.rs:4:18\nerror: could not compile `app` (bin \"app\") due to 1 previous error"
+  },
+  {
+   "round": "B",
+   "label": "cargo test adds panicked",
+   "group": "cargo-test-adds",
+   "command": "cargo test",
+   "output": "Exit code 101\nrunning 2 tests\ntest tests::adds ... FAILED\ntest tests::loads ... ok\n\nfailures:\n\n---- tests::adds stdout ----\nthread 'tests::adds' panicked at src/lib.rs:10:5:\nassertion `left == right` failed\n  left: 3\n right: 4\n\nfailures:\n    tests::adds\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`"
+  },
+  {
+   "round": "B",
+   "label": "cargo test parses panicked",
+   "group": "cargo-test-parses",
+   "command": "cargo test",
+   "output": "Exit code 101\nrunning 2 tests\ntest tests::parses ... FAILED\ntest tests::loads ... ok\n\nfailures:\n\n---- tests::parses stdout ----\nthread 'tests::parses' panicked at src/parse.rs:44:9:\ncalled `Option::unwrap()` on a `None` value\n\nfailures:\n    tests::parses\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`"
+  },
+  {
+   "round": "B",
+   "label": "node SyntaxError",
+   "group": "node-syntax",
+   "command": "node build.js",
+   "output": "Exit code 1\n/home/u/app/build.js:9\n  }\n  ^\n\nSyntaxError: Unexpected token '}'\n    at wrapSafe (node:internal/modules/cjs/loader:1469:18)\n\nNode.js v24.14.1"
+  },
+  {
+   "round": "B",
+   "label": "socket hang up",
+   "group": "socket-hang-up",
+   "command": "npm run flaky",
+   "output": "Exit code 1\nError: socket hang up\n    at connResetException (node:internal/errors:720:14)"
+  },
+  {
+   "round": "B",
+   "label": "EADDRINUSE 5173",
+   "group": "eaddrinuse",
+   "command": "pnpm dev",
+   "output": "Exit code 1\nError: listen EADDRINUSE: address already in use :::5173"
+  },
+  {
+   "round": "B",
+   "label": "py FileNotFoundError a.csv",
+   "group": "py-fnf-a",
+   "command": "python load.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"load.py\", line 3, in <module>\n    open('data/a.csv')\nFileNotFoundError: [Errno 2] No such file or directory: 'data/a.csv'"
+  },
+  {
+   "round": "B",
+   "label": "py FileNotFoundError model.bin",
+   "group": "py-fnf-model",
+   "command": "python infer.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"infer.py\", line 9, in <module>\n    open('weights/model.bin')\nFileNotFoundError: [Errno 2] No such file or directory: 'weights/model.bin'"
+  },
+  {
+   "round": "B",
+   "label": "Cannot find module './routes/users'",
+   "group": "nomod-users",
+   "command": "node server.js",
+   "output": "Exit code 1\nnode:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module './routes/users'\nRequire stack:\n- /srv/app/server.js\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15) {\n  code: 'MODULE_NOT_FOUND'\n}"
+  },
+  {
+   "round": "B",
+   "label": "Cannot find module '../lib/db'",
+   "group": "nomod-db",
+   "command": "node worker.js",
+   "output": "Exit code 1\nnode:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module '../lib/db'\nRequire stack:\n- /srv/app/jobs/worker.js\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15) {\n  code: 'MODULE_NOT_FOUND'\n}"
+  },
+  {
+   "round": "B",
+   "label": "Cannot find module 'lodash'",
+   "group": "nomod-lodash",
+   "command": "node a.js",
+   "output": "Exit code 1\nnode:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module 'lodash'\nRequire stack:\n- /srv/app/a.js\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15) {\n  code: 'MODULE_NOT_FOUND'\n}"
+  },
+  {
+   "round": "B",
+   "label": "playwright toBeVisible timeout (Save button)",
+   "group": "pw-save",
+   "command": "npx playwright test save.spec.ts",
+   "output": "Exit code 1\n  1) save.spec.ts:5:1 › saves the form\n\n    Error: Timed out 5000ms waiting for expect(locator).toBeVisible()\n\n    Locator: getByRole('button', { name: 'Save' })\n    Expected: visible\n    Received: <element(s) not found>\n\n  1 failed"
+  },
+  {
+   "round": "B",
+   "label": "playwright toBeVisible timeout (Login heading)",
+   "group": "pw-login",
+   "command": "npx playwright test login.spec.ts",
+   "output": "Exit code 1\n  1) login.spec.ts:5:1 › shows the login page\n\n    Error: Timed out 5000ms waiting for expect(locator).toBeVisible()\n\n    Locator: getByRole('heading', { name: 'Log in' })\n    Expected: visible\n    Received: <element(s) not found>\n\n  1 failed"
+  },
+  {
+   "round": "B",
+   "label": "npm 404 left-padx",
+   "group": "npm404-a",
+   "command": "npm install left-padx",
+   "output": "Exit code 1\nnpm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-padx - Not found\nnpm error 404\nnpm error 404  'left-padx@*' is not in this registry."
+  },
+  {
+   "round": "B",
+   "label": "npm 404 @acme/ui",
+   "group": "npm404-b",
+   "command": "npm install @acme/ui",
+   "output": "Exit code 1\nnpm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@acme%2fui - Not found\nnpm error 404\nnpm error 404  '@acme/ui@*' is not in this registry."
+  },
+  {
+   "round": "B",
+   "label": "eslint no-unused-vars x",
+   "group": "eslint-x",
+   "command": "pnpm eslint src",
+   "output": "Exit code 1\n/home/u/proj/src/a.ts\n  3:7  error  'x' is assigned a value but never used  @typescript-eslint/no-unused-vars\n\n✖ 1 problem (1 error, 0 warnings)"
+  },
+  {
+   "round": "B",
+   "label": "Exit code 1 alone",
+   "group": "none-exit-only",
+   "command": "make build",
+   "output": "Exit code 1"
+  },
+  {
+   "round": "B",
+   "label": "Exit code 2 and a make banner",
+   "group": "none-make",
+   "command": "make build",
+   "output": "Exit code 2\nmake: *** [Makefile:12: build] Error 2"
+  },
+  {
+   "round": "B",
+   "label": "Exit code 1 and plain stdout",
+   "group": "none-plain",
+   "command": "./scripts/check.sh",
+   "output": "Exit code 1\nstep 1 done\nstep 2 done\n3 files checked"
+  },
+  {
+   "round": "C",
+   "label": "playwright project (Save button)",
+   "group": "pw-save",
+   "command": "npx playwright test",
+   "output": "Exit code 1\n  1) [chromium] › tests/save.spec.ts:5:1 › saves the form ──────────────\n\n    Error: Timed out 5000ms waiting for expect(locator).toBeVisible()\n\n    Locator: getByRole('button', { name: 'Save' })\n\n  1 failed\n    [chromium] › tests/save.spec.ts:5:1 › saves the form"
+  },
+  {
+   "round": "C",
+   "label": "playwright project (Login heading)",
+   "group": "pw-login",
+   "command": "npx playwright test",
+   "output": "Exit code 1\n  1) [chromium] › tests/login.spec.ts:5:1 › shows the login page ───────\n\n    Error: Timed out 5000ms waiting for expect(locator).toBeVisible()\n\n    Locator: getByRole('heading', { name: 'Log in' })\n\n  1 failed\n    [chromium] › tests/login.spec.ts:5:1 › shows the login page"
+  },
+  {
+   "round": "C",
+   "label": "vitest project label cart",
+   "group": "test-cart-coupon",
+   "command": "pnpm vitest run",
+   "output": "Exit code 1\n RUN  v4.1.10 D:/proj\n\n ❯ |unit| src/cart.test.ts (3 tests | 1 failed) 12ms\n   ✓ loads 2ms\n   × applies a coupon 6ms\n     → expected false to be true // Object.is equality\n   ✓ clears 1ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  |unit| src/cart.test.ts > applies a coupon\nAssertionError: expected false to be true // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ |unit| src/cart.test.ts:14:27\n     12|   const subject = make();\n     13|   const got = subject.run();\n     14|   expect(applied).toBe(true);\n       |                           ^\n     15| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n   Start at  10:12:01\n   Duration  412ms"
+  },
+  {
+   "round": "C",
+   "label": "vitest project label auth",
+   "group": "test-auth-expiry",
+   "command": "pnpm vitest run",
+   "output": "Exit code 1\n RUN  v4.1.10 D:/proj\n\n ❯ |unit| src/auth.test.ts (3 tests | 1 failed) 12ms\n   ✓ loads 2ms\n   × rejects an expired token 6ms\n     → expected false to be true // Object.is equality\n   ✓ clears 1ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  |unit| src/auth.test.ts > rejects an expired token\nAssertionError: expected false to be true // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ |unit| src/auth.test.ts:14:27\n     12|   const subject = make();\n     13|   const got = subject.run();\n     14|   expect(rejected).toBe(true);\n       |                           ^\n     15| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n   Start at  10:12:01\n   Duration  412ms"
+  },
+  {
+   "round": "C",
+   "label": "jest console block cart",
+   "group": "jestc-cart",
+   "command": "npx jest",
+   "output": "Exit code 1\nFAIL src/cart.test.js\n  ● Console\n\n    console.log\n      loading fixtures\n\n      at Object.<anonymous> (src/setup.js:3:9)\n\n  ● Cart › applies a coupon\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: true\n    Received: false\n\nTests:       1 failed, 2 passed, 3 total"
+  },
+  {
+   "round": "C",
+   "label": "jest console block auth",
+   "group": "jestc-auth",
+   "command": "npx jest",
+   "output": "Exit code 1\nFAIL src/auth.test.js\n  ● Console\n\n    console.log\n      loading fixtures\n\n      at Object.<anonymous> (src/setup.js:3:9)\n\n  ● Auth › rejects an expired token\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: true\n    Received: false\n\nTests:       1 failed, 2 passed, 3 total"
+  },
+  {
+   "round": "C",
+   "label": "jest plain auth",
+   "group": "jest-auth",
+   "command": "npx jest src/auth.test.js",
+   "output": "Exit code 1\nFAIL src/auth.test.js\n  ● Auth › rejects an expired token\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: true\n    Received: false\n\n      at Object.<anonymous> (src/auth.test.js:13:19)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 2 passed, 3 total"
+  },
+  {
+   "round": "C",
+   "label": "mocha cart",
+   "group": "mocha-cart",
+   "command": "npx mocha",
+   "output": "Exit code 1\n  Cart\n    1) applies a coupon\n\n  0 passing (9ms)\n  1 failing\n\n  1) Cart\n       applies a coupon:\n\n      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\nfalse !== true\n\n      at Context.<anonymous> (test/cart.js:9:12)"
+  },
+  {
+   "round": "C",
+   "label": "mocha auth",
+   "group": "mocha-auth",
+   "command": "npx mocha",
+   "output": "Exit code 1\n  Auth\n    1) rejects an expired token\n\n  0 passing (9ms)\n  1 failing\n\n  1) Auth\n       rejects an expired token:\n\n      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\nfalse !== true\n\n      at Context.<anonymous> (test/auth.js:9:12)"
+  },
+  {
+   "round": "C",
+   "label": "node:test cart",
+   "group": "nodetest-cart",
+   "command": "node --test",
+   "output": "Exit code 1\n✖ applies a coupon (1.2ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n  false !== true\n\n      at TestContext.<anonymous> (file:///srv/app/test/cart.test.mjs:6:10)\nℹ tests 1\nℹ fail 1"
+  },
+  {
+   "round": "C",
+   "label": "node:test auth",
+   "group": "nodetest-auth",
+   "command": "node --test",
+   "output": "Exit code 1\n✖ rejects an expired token (1.1ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n  false !== true\n\n      at TestContext.<anonymous> (file:///srv/app/test/auth.test.mjs:6:10)\nℹ tests 1\nℹ fail 1"
+  },
+  {
+   "round": "C",
+   "label": "go test cart",
+   "group": "go-cart",
+   "command": "go test ./...",
+   "output": "Exit code 1\n--- FAIL: TestCartCoupon (0.00s)\n    cart_test.go:12: unexpected result: got false, want true\nFAIL\nexit status 1\nFAIL\texample.com/app/cart\t0.012s"
+  },
+  {
+   "round": "C",
+   "label": "go test auth",
+   "group": "go-auth",
+   "command": "go test ./...",
+   "output": "Exit code 1\n--- FAIL: TestAuthExpiry (0.00s)\n    auth_test.go:12: unexpected result: got false, want true\nFAIL\nexit status 1\nFAIL\texample.com/app/auth\t0.012s"
+  },
+  {
+   "round": "C",
+   "label": "vitest cart, other checkout",
+   "group": "test-cart-coupon",
+   "command": "pnpm vitest run packages/shop/src/cart.test.ts",
+   "output": "Exit code 1\n RUN  v4.1.10 D:/proj\n\n ❯ packages/shop/src/cart.test.ts (3 tests | 1 failed) 12ms\n   ✓ loads 2ms\n   × applies a coupon 6ms\n     → expected false to be true // Object.is equality\n   ✓ clears 1ms\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  packages/shop/src/cart.test.ts > applies a coupon\nAssertionError: expected false to be true // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ packages/shop/src/cart.test.ts:14:27\n     12|   const subject = make();\n     13|   const got = subject.run();\n     14|   expect(applied).toBe(true);\n       |                           ^\n     15| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n   Start at  10:12:01\n   Duration  412ms"
+  },
+  {
+   "round": "C",
+   "label": "pytest test_token, other checkout",
+   "group": "pytest-token",
+   "command": "python -m pytest",
+   "output": "Exit code 1\n============================= test session starts =============================\ncollected 3 items\n\nservices/api/tests/test_auth.py .F.                                                   [100%]\n\n================================== FAILURES ===================================\n______________________________ test_token_expiry ______________________________\n\n    def test_token_expiry():\n>       assert is_valid(token)\nE       assert False\nE        +  where False = is_valid('abc')\n\nservices/api/tests/test_auth.py:14: AssertionError\n=========================== short test summary info ===========================\nFAILED services/api/tests/test_auth.py::test_token_expiry - assert False\n========================= 1 failed, 2 passed in 0.12s ========================="
+  },
+  {
+   "round": "D",
+   "label": "node:test spec cart (real)",
+   "group": "d-nt-cart",
+   "command": "node --test test/cart.test.mjs",
+   "output": "Exit code 1\n✖ applies a coupon (1.1185ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 69.7773\n\n✖ failing tests:\n\ntest at test\\cart.test.mjs:4:1\n✖ applies a coupon (1.1185ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  false !== true\n  \n      at TestContext.<anonymous> (file:///C:/Users/dev/AppData/Local/Temp/runner/runners/node/test/cart.test.mjs:6:10)\n      at Test.runInAsyncScope (node:async_hooks:228:14)\n      at Test.run (node:internal/test_runner/test:1118:25)\n      at Test.start (node:internal/test_runner/test:1015:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: false,\n    expected: true,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }"
+  },
+  {
+   "round": "D",
+   "label": "node:test spec auth (real)",
+   "group": "d-nt-auth",
+   "command": "node --test test/auth.test.mjs",
+   "output": "Exit code 1\n✖ rejects an expired token (1.113ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 67.543\n\n✖ failing tests:\n\ntest at test\\auth.test.mjs:4:1\n✖ rejects an expired token (1.113ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  false !== true\n  \n      at TestContext.<anonymous> (file:///C:/Users/dev/AppData/Local/Temp/runner/runners/node/test/auth.test.mjs:6:10)\n      at Test.runInAsyncScope (node:async_hooks:228:14)\n      at Test.run (node:internal/test_runner/test:1118:25)\n      at Test.start (node:internal/test_runner/test:1015:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: false,\n    expected: true,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }"
+  },
+  {
+   "round": "D",
+   "label": "node:test tap cart (real)",
+   "group": "d-nt-cart",
+   "command": "node --test --test-reporter=tap test/cart.test.mjs",
+   "output": "Exit code 1\nTAP version 13\n# Subtest: applies a coupon\nnot ok 1 - applies a coupon\n  ---\n  duration_ms: 1.1071\n  type: 'test'\n  location: 'C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\Temp\\\\runner\\\\runners\\\\node\\\\test\\\\cart.test.mjs:4:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    Expected values to be strictly equal:\n    \n    false !== true\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: true\n  actual: false\n  operator: 'strictEqual'\n  stack: |-\n    TestContext.<anonymous> (file:///C:/Users/dev/AppData/Local/Temp/runner/runners/node/test/cart.test.mjs:6:10)\n    Test.runInAsyncScope (node:async_hooks:228:14)\n    Test.run (node:internal/test_runner/test:1118:25)\n    Test.start (node:internal/test_runner/test:1015:17)\n    startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17)\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 85.7734"
+  },
+  {
+   "round": "D",
+   "label": "node:test tap auth (real)",
+   "group": "d-nt-auth",
+   "command": "node --test --test-reporter=tap test/auth.test.mjs",
+   "output": "Exit code 1\nTAP version 13\n# Subtest: rejects an expired token\nnot ok 1 - rejects an expired token\n  ---\n  duration_ms: 1.0998\n  type: 'test'\n  location: 'C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\Temp\\\\runner\\\\runners\\\\node\\\\test\\\\auth.test.mjs:4:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    Expected values to be strictly equal:\n    \n    false !== true\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: true\n  actual: false\n  operator: 'strictEqual'\n  stack: |-\n    TestContext.<anonymous> (file:///C:/Users/dev/AppData/Local/Temp/runner/runners/node/test/auth.test.mjs:6:10)\n    Test.runInAsyncScope (node:async_hooks:228:14)\n    Test.run (node:internal/test_runner/test:1118:25)\n    Test.start (node:internal/test_runner/test:1015:17)\n    startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17)\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 74.3079"
+  },
+  {
+   "round": "D",
+   "label": "node:test dot cart (real)",
+   "group": "d-nt-cart",
+   "command": "node --test --test-reporter=dot test/cart.test.mjs",
+   "output": "Exit code 1\nX\n\nFailed tests:\n\n✖ applies a coupon (1.0547ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  false !== true\n  \n      at TestContext.<anonymous> (file:///C:/Users/dev/AppData/Local/Temp/runner/runners/node/test/cart.test.mjs:6:10)\n      at Test.runInAsyncScope (node:async_hooks:228:14)\n      at Test.run (node:internal/test_runner/test:1118:25)\n      at Test.start (node:internal/test_runner/test:1015:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: false,\n    expected: true,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }"
+  },
+  {
+   "round": "D",
+   "label": "pytest auth (real)",
+   "group": "d-py-auth",
+   "command": "python -m pytest tests/test_auth.py",
+   "output": "Exit code 1\n============================= test session starts =============================\nplatform win32 -- Python 3.12.9, pytest-9.0.2, pluggy-1.6.0\nrootdir: C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\nplugins: anyio-4.13.0, flaky-3.8.1, hypothesis-6.165.2, asyncio-1.4.0, cov-7.1.0, httpx-0.36.0, typeguard-4.6.0\nasyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollected 1 item\n\ntests\\test_auth.py F                                                     [100%]\n\n================================== FAILURES ===================================\n______________________________ test_token_expiry ______________________________\n\n    def test_token_expiry():\n>       assert is_valid('abc')\nE       AssertionError: assert False\nE        +  where False = is_valid('abc')\n\ntests\\test_auth.py:4: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_auth.py::test_token_expiry - AssertionError: assert False\n============================== 1 failed in 0.41s =============================="
+  },
+  {
+   "round": "D",
+   "label": "pytest flags (real)",
+   "group": "d-py-flags",
+   "command": "python -m pytest tests/test_flags.py",
+   "output": "Exit code 1\n============================= test session starts =============================\nplatform win32 -- Python 3.12.9, pytest-9.0.2, pluggy-1.6.0\nrootdir: C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\nplugins: anyio-4.13.0, flaky-3.8.1, hypothesis-6.165.2, asyncio-1.4.0, cov-7.1.0, httpx-0.36.0, typeguard-4.6.0\nasyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollected 1 item\n\ntests\\test_flags.py F                                                    [100%]\n\n================================== FAILURES ===================================\n______________________________ test_flag_default ______________________________\n\n    def test_flag_default():\n>       assert enabled('beta')\nE       AssertionError: assert False\nE        +  where False = enabled('beta')\n\ntests\\test_flags.py:4: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_flags.py::test_flag_default - AssertionError: assert False\n============================== 1 failed in 0.29s =============================="
+  },
+  {
+   "round": "D",
+   "label": "pytest -q auth (real)",
+   "group": "d-py-auth",
+   "command": "python -m pytest -q tests/test_auth.py",
+   "output": "Exit code 1\nF                                                                        [100%]\n================================== FAILURES ===================================\n______________________________ test_token_expiry ______________________________\n\n    def test_token_expiry():\n>       assert is_valid('abc')\nE       AssertionError: assert False\nE        +  where False = is_valid('abc')\n\ntests\\test_auth.py:4: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_auth.py::test_token_expiry - AssertionError: assert False\n1 failed in 0.28s"
+  },
+  {
+   "round": "D",
+   "label": "pytest -q -rN auth (real)",
+   "group": "d-py-auth",
+   "command": "python -m pytest -q -rN tests/test_auth.py",
+   "output": "Exit code 1\nF                                                                        [100%]\n================================== FAILURES ===================================\n______________________________ test_token_expiry ______________________________\n\n    def test_token_expiry():\n>       assert is_valid('abc')\nE       AssertionError: assert False\nE        +  where False = is_valid('abc')\n\ntests\\test_auth.py:4: AssertionError\n1 failed in 0.28s"
+  },
+  {
+   "round": "D",
+   "label": "pytest -q -rN flags (real)",
+   "group": "d-py-flags",
+   "command": "python -m pytest -q -rN tests/test_flags.py",
+   "output": "Exit code 1\nF                                                                        [100%]\n================================== FAILURES ===================================\n______________________________ test_flag_default ______________________________\n\n    def test_flag_default():\n>       assert enabled('beta')\nE       AssertionError: assert False\nE        +  where False = enabled('beta')\n\ntests\\test_flags.py:4: AssertionError\n1 failed in 0.28s"
+  },
+  {
+   "round": "D",
+   "label": "pytest --tb=line auth (real)",
+   "group": "d-py-auth",
+   "command": "python -m pytest -q --tb=line -rN tests/test_auth.py",
+   "output": "Exit code 1\nF                                                                        [100%]\n================================== FAILURES ===================================\nE   AssertionError: assert False\n     +  where False = is_valid('abc')\nC:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\tests\\test_auth.py:4: AssertionError: assert False\n1 failed in 0.18s"
+  },
+  {
+   "round": "D",
+   "label": "unittest token (real)",
+   "group": "d-ut-token",
+   "command": "python -m unittest tests.test_unit_cart.TestCart",
+   "output": "Exit code 1\nF\n======================================================================\nFAIL: test_token (tests.test_unit_cart.TestCart.test_token)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\tests\\test_unit_cart.py\", line 6, in test_token\n    self.assertTrue(is_valid('abc'))\nAssertionError: False is not true\n\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nFAILED (failures=1)"
+  },
+  {
+   "round": "D",
+   "label": "unittest flag (real)",
+   "group": "d-ut-flag",
+   "command": "python -m unittest tests.test_unit_cart.TestFlags",
+   "output": "Exit code 1\nF\n======================================================================\nFAIL: test_flag (tests.test_unit_cart.TestFlags.test_flag)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\tests\\test_unit_cart.py\", line 10, in test_flag\n    self.assertTrue(enabled('beta'))\nAssertionError: False is not true\n\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nFAILED (failures=1)"
+  },
+  {
+   "round": "D",
+   "label": "cargo test coupon (real)",
+   "group": "d-cg-coupon",
+   "command": "cargo test applies_coupon",
+   "output": "Exit code 101\n   Compiling shop v0.1.0 (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\rs\\one)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.99s\n     Running unittests src\\lib.rs (C:/Users/dev/AppData/Local/Temp/runner/runners/rs-target\\debug\\deps\\shop-9d1490c2703623bd.exe)\n\nrunning 1 test\ntest tests::applies_coupon ... FAILED\n\nfailures:\n\n---- tests::applies_coupon stdout ----\n\nthread 'tests::applies_coupon' (10700) panicked at src\\lib.rs:10:9:\nassertion failed: valid(\"SAVE10\")\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    tests::applies_coupon\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`"
+  },
+  {
+   "round": "D",
+   "label": "cargo test all (real)",
+   "group": "d-cg-coupon",
+   "command": "cargo test",
+   "output": "Exit code 101\n   Compiling shop v0.1.0 (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\rs\\one)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src\\lib.rs (C:/Users/dev/AppData/Local/Temp/runner/runners/rs-target\\debug\\deps\\shop-9d1490c2703623bd.exe)\n\nrunning 3 tests\ntest tests::adds ... ok\ntest tests::applies_coupon ... FAILED\ntest tests::rejects_expired_token ... FAILED\n\nfailures:\n\n---- tests::applies_coupon stdout ----\n\nthread 'tests::applies_coupon' (26700) panicked at src\\lib.rs:10:9:\nassertion failed: valid(\"SAVE10\")\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n---- tests::rejects_expired_token stdout ----\n\nthread 'tests::rejects_expired_token' (27360) panicked at src\\lib.rs:15:9:\nassertion failed: valid(\"abc\")\n\n\nfailures:\n    tests::applies_coupon\n    tests::rejects_expired_token\n\ntest result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`"
+  },
+  {
+   "round": "D",
+   "label": "cargo ws cart it_works (real)",
+   "group": "d-cg-ws-cart",
+   "command": "cargo test -p cart",
+   "output": "Exit code 101\n   Compiling cart v0.1.0 (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\rs\\ws\\cart)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s\n     Running unittests src\\lib.rs (C:/Users/dev/AppData/Local/Temp/runner/runners/rs-target\\debug\\deps\\cart-b744fe8d718df774.exe)\n\nrunning 1 test\ntest tests::it_works ... FAILED\n\nfailures:\n\n---- tests::it_works stdout ----\n\nthread 'tests::it_works' (10076) panicked at cart\\src\\lib.rs:12:9:\nassertion `left == right` failed\n  left: 5\n right: 4\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    tests::it_works\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p cart --lib`"
+  },
+  {
+   "round": "D",
+   "label": "cargo ws auth it_works (real)",
+   "group": "d-cg-ws-auth",
+   "command": "cargo test -p auth",
+   "output": "Exit code 101\n   Compiling auth v0.1.0 (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\rs\\ws\\auth)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n     Running unittests src\\lib.rs (C:/Users/dev/AppData/Local/Temp/runner/runners/rs-target\\debug\\deps\\auth-0ba878485f932b13.exe)\n\nrunning 1 test\ntest tests::it_works ... FAILED\n\nfailures:\n\n---- tests::it_works stdout ----\n\nthread 'tests::it_works' (32516) panicked at auth\\src\\lib.rs:12:9:\nassertion `left == right` failed\n  left: 6\n right: 4\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    tests::it_works\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p auth --lib`"
+  },
+  {
+   "round": "D",
+   "label": "jest same title, Cart file",
+   "group": "d-jest-cart",
+   "command": "npx jest Cart",
+   "output": "Exit code 1\nFAIL src/components/Cart.test.js\n  ● renders without crashing\n\n    TypeError: Cannot read properties of undefined (reading 'map')\n\n      10 |   return (\n      11 |     <ul>\n    > 12 |       {items.map((item) => <li key={item.id}>{item.name}</li>)}\n         |              ^\n      13 |     </ul>\n      14 |   );\n\n      at Cart (src/components/Cart.js:12:14)\n      at renderWithHooks (node_modules/react-dom/cjs/react-dom.development.js:15486:18)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 total\nSnapshots:   0 total\nTime:        1.204 s\nRan all test suites matching /Cart/i."
+  },
+  {
+   "round": "D",
+   "label": "jest same title, Orders file",
+   "group": "d-jest-orders",
+   "command": "npx jest Orders",
+   "output": "Exit code 1\nFAIL src/components/Orders.test.js\n  ● renders without crashing\n\n    TypeError: Cannot read properties of undefined (reading 'map')\n\n      10 |   return (\n      11 |     <ul>\n    > 12 |       {orders.map((item) => <li key={item.id}>{item.name}</li>)}\n         |              ^\n      13 |     </ul>\n      14 |   );\n\n      at Orders (src/components/Orders.js:12:14)\n      at renderWithHooks (node_modules/react-dom/cjs/react-dom.development.js:15486:18)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 total\nSnapshots:   0 total\nTime:        1.204 s\nRan all test suites matching /Orders/i."
+  },
+  {
+   "round": "D",
+   "label": "jest suite failed to run, cart",
+   "group": "d-jests-cart",
+   "command": "npx jest cart",
+   "output": "Exit code 1\nFAIL src/cart.test.js\n  ● Test suite failed to run\n\n    SyntaxError: /home/u/shop/src/cart.js: Unexpected token (14:11)\n\n      12 |   const total = items.reduce((sum, item) => sum + item.price, 0);\n      13 |   return {\n    > 14 |     total,,\n         |           ^\n\n      at toParseError (node_modules/@babel/parser/src/parse-error.ts:95:45)\n\nTest Suites: 1 failed, 1 total\nTests:       0 total\nSnapshots:   0 total\nTime:        0.612 s"
+  },
+  {
+   "round": "D",
+   "label": "jest suite failed to run, auth",
+   "group": "d-jests-auth",
+   "command": "npx jest auth",
+   "output": "Exit code 1\nFAIL src/auth.test.js\n  ● Test suite failed to run\n\n    SyntaxError: /home/u/shop/src/auth.js: Unexpected token (30:2)\n\n      28 |   if (!token) return null;\n      29 |   return verify(token\n    > 30 | }\n         |  ^\n\n      at toParseError (node_modules/@babel/parser/src/parse-error.ts:95:45)\n\nTest Suites: 1 failed, 1 total\nTests:       0 total\nSnapshots:   0 total\nTime:        0.612 s"
+  },
+  {
+   "round": "D",
+   "label": "go TestNew in cart pkg",
+   "group": "d-go-cart",
+   "command": "go test ./cart/...",
+   "output": "Exit code 1\n--- FAIL: TestNew (0.00s)\n    cart_test.go:12: unexpected result: got false, want true\nFAIL\nexit status 1\nFAIL\texample.com/shop/cart\t0.012s"
+  },
+  {
+   "round": "D",
+   "label": "go TestNew in auth pkg",
+   "group": "d-go-auth",
+   "command": "go test ./auth/...",
+   "output": "Exit code 1\n--- FAIL: TestNew (0.00s)\n    auth_test.go:12: unexpected result: got false, want true\nFAIL\nexit status 1\nFAIL\texample.com/shop/auth\t0.012s"
+  },
+  {
+   "round": "D",
+   "label": "go TestParse/empty_input",
+   "group": "d-go-sub-empty",
+   "command": "go test ./parse/...",
+   "output": "Exit code 1\n--- FAIL: TestParse (0.00s)\n    --- FAIL: TestParse/empty_input (0.00s)\n        parse_test.go:31: unexpected error: invalid syntax\nFAIL\nexit status 1\nFAIL\texample.com/shop/parse\t0.004s"
+  },
+  {
+   "round": "D",
+   "label": "go TestParse/unicode_name",
+   "group": "d-go-sub-unicode",
+   "command": "go test ./parse/...",
+   "output": "Exit code 1\n--- FAIL: TestParse (0.00s)\n    --- FAIL: TestParse/unicode_name (0.00s)\n        parse_test.go:31: unexpected error: invalid syntax\nFAIL\nexit status 1\nFAIL\texample.com/shop/parse\t0.004s"
+  },
+  {
+   "round": "D",
+   "label": "rspec orders have_http_status",
+   "group": "d-rs-orders",
+   "command": "bundle exec rspec spec/requests/orders_spec.rb",
+   "output": "Exit code 1\n\nFailures:\n\n  1) Orders GET /orders returns the list\n     Failure/Error: expect(response).to have_http_status(:ok)\n       expected the response to have status code :ok (200) but it was :found (302)\n     # ./spec/requests/orders_spec.rb:9:in `block (3 levels) in <top (required)>'\n\nFinished in 0.21 seconds (files took 1.4 seconds to load)\n1 example, 1 failure\n\nFailed examples:\n\nrspec ./spec/requests/orders_spec.rb:7 # Orders GET /orders returns the list"
+  },
+  {
+   "round": "D",
+   "label": "rspec profile have_http_status",
+   "group": "d-rs-profile",
+   "command": "bundle exec rspec spec/requests/profile_spec.rb",
+   "output": "Exit code 1\n\nFailures:\n\n  1) Profile GET /profile shows the page\n     Failure/Error: expect(response).to have_http_status(:ok)\n       expected the response to have status code :ok (200) but it was :internal_server_error (500)\n     # ./spec/requests/profile_spec.rb:9:in `block (3 levels) in <top (required)>'\n\nFinished in 0.21 seconds (files took 1.4 seconds to load)\n1 example, 1 failure\n\nFailed examples:\n\nrspec ./spec/requests/profile_spec.rb:7 # Profile GET /profile shows the page"
+  },
+  {
+   "round": "D",
+   "label": "rspec cart eq(true)",
+   "group": "d-rs-cart",
+   "command": "bundle exec rspec spec/models/cart_spec.rb",
+   "output": "Exit code 1\n\nFailures:\n\n  1) Cart applies a coupon\n     Failure/Error: expect(result).to eq(true)\n\n       expected: true\n            got: false\n\n       (compared using ==)\n     # ./spec/models/cart_spec.rb:9:in `block (2 levels) in <top (required)>'\n\nFinished in 0.02 seconds (files took 0.4 seconds to load)\n1 example, 1 failure\n\nFailed examples:\n\nrspec ./spec/models/cart_spec.rb:7 # Cart applies a coupon"
+  },
+  {
+   "round": "D",
+   "label": "rspec token eq(true)",
+   "group": "d-rs-token",
+   "command": "bundle exec rspec spec/models/session_spec.rb",
+   "output": "Exit code 1\n\nFailures:\n\n  1) Session rejects an expired login\n     Failure/Error: expect(result).to eq(true)\n\n       expected: true\n            got: false\n\n       (compared using ==)\n     # ./spec/models/session_spec.rb:9:in `block (2 levels) in <top (required)>'\n\nFinished in 0.02 seconds (files took 0.4 seconds to load)\n1 example, 1 failure\n\nFailed examples:\n\nrspec ./spec/models/session_spec.rb:7 # Session rejects an expired login"
+  },
+  {
+   "round": "D",
+   "label": "minitest cart",
+   "group": "d-mt-cart",
+   "command": "bin/rails test test/models/cart_test.rb",
+   "output": "Exit code 1\nRun options: --seed 4242\n\n# Running:\n\nF\n\nFailure:\nCartTest#test_applies_coupon [test/models/cart_test.rb:7]:\nExpected false to be truthy.\n\nbin/rails test test/models/cart_test.rb:5\n\n\nFinished in 0.012s, 83.3 runs/s, 83.3 assertions/s.\n1 runs, 1 assertions, 1 failures, 0 errors, 0 skips"
+  },
+  {
+   "round": "D",
+   "label": "minitest token",
+   "group": "d-mt-token",
+   "command": "bin/rails test test/models/session_test.rb",
+   "output": "Exit code 1\nRun options: --seed 4242\n\n# Running:\n\nF\n\nFailure:\nSessionTest#test_rejects_expired [test/models/session_test.rb:7]:\nExpected false to be truthy.\n\nbin/rails test test/models/session_test.rb:5\n\n\nFinished in 0.012s, 83.3 runs/s, 83.3 assertions/s.\n1 runs, 1 assertions, 1 failures, 0 errors, 0 skips"
+  },
+  {
+   "round": "D",
+   "label": "dotnet test cart",
+   "group": "d-dn-cart",
+   "command": "dotnet test",
+   "output": "Exit code 1\n  Determining projects to restore...\n  All projects are up-to-date for restore.\n  Shop.Tests -> /home/u/shop/tests/bin/Debug/net8.0/Shop.Tests.dll\nTest run for /home/u/shop/tests/bin/Debug/net8.0/Shop.Tests.dll (.NETCoreApp,Version=v8.0)\nStarting test execution, please wait...\nA total of 1 test files matched the specified pattern.\n[xUnit.net 00:00:00.52]     Shop.Tests.CartTests.AppliesCoupon [FAIL]\n  Failed Shop.Tests.CartTests.AppliesCoupon [12 ms]\n  Error Message:\n   Assert.True() Failure\nExpected: True\nActual:   False\n  Stack Trace:\n     at Shop.Tests.CartTests.AppliesCoupon() in /home/u/shop/tests/CartTests.cs:line 12\n\nFailed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 15 ms - Shop.Tests.dll (net8.0)"
+  },
+  {
+   "round": "D",
+   "label": "dotnet test token",
+   "group": "d-dn-token",
+   "command": "dotnet test",
+   "output": "Exit code 1\n  Determining projects to restore...\n  All projects are up-to-date for restore.\n  Shop.Tests -> /home/u/shop/tests/bin/Debug/net8.0/Shop.Tests.dll\nTest run for /home/u/shop/tests/bin/Debug/net8.0/Shop.Tests.dll (.NETCoreApp,Version=v8.0)\nStarting test execution, please wait...\nA total of 1 test files matched the specified pattern.\n[xUnit.net 00:00:00.52]     Shop.Tests.TokenTests.RejectsExpired [FAIL]\n  Failed Shop.Tests.TokenTests.RejectsExpired [12 ms]\n  Error Message:\n   Assert.True() Failure\nExpected: True\nActual:   False\n  Stack Trace:\n     at Shop.Tests.TokenTests.RejectsExpired() in /home/u/shop/tests/TokenTests.cs:line 12\n\nFailed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 15 ms - Shop.Tests.dll (net8.0)"
+  },
+  {
+   "round": "D",
+   "label": "phpunit cart",
+   "group": "d-pu-cart",
+   "command": "vendor/bin/phpunit",
+   "output": "Exit code 1\nPHPUnit 10.5.9 by Sebastian Bergmann and contributors.\n\nF..                                                                 3 / 3 (100%)\n\nTime: 00:00.012, Memory: 8.00 MB\n\nThere was 1 failure:\n\n1) Tests\\CartTest::testAppliesCoupon\nFailed asserting that false is true.\n\n/home/u/shop/tests/CartTest.php:12\n\nFAILURES!\nTests: 3, Assertions: 3, Failures: 1."
+  },
+  {
+   "round": "D",
+   "label": "phpunit token",
+   "group": "d-pu-token",
+   "command": "vendor/bin/phpunit",
+   "output": "Exit code 1\nPHPUnit 10.5.9 by Sebastian Bergmann and contributors.\n\nF..                                                                 3 / 3 (100%)\n\nTime: 00:00.012, Memory: 8.00 MB\n\nThere was 1 failure:\n\n1) Tests\\TokenTest::testRejectsExpired\nFailed asserting that false is true.\n\n/home/u/shop/tests/TokenTest.php:12\n\nFAILURES!\nTests: 3, Assertions: 3, Failures: 1."
+  },
+  {
+   "round": "D",
+   "label": "maven surefire cart",
+   "group": "d-mv-cart",
+   "command": "mvn -q test",
+   "output": "Exit code 1\n[INFO] -------------------------------------------------------\n[INFO]  T E S T S\n[INFO] -------------------------------------------------------\n[INFO] Running com.shop.CartTest\n[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.034 s <<< FAILURE! -- in com.shop.CartTest\n[ERROR] com.shop.CartTest.appliesCoupon -- Time elapsed: 0.012 s <<< FAILURE!\norg.opentest4j.AssertionFailedError: expected: <true> but was: <false>\n\tat org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)\n\tat org.junit.jupiter.api.AssertTrue.failNotTrue(AssertTrue.java:63)\n\tat org.junit.jupiter.api.Assertions.assertTrue(Assertions.java:183)\n\tat com.shop.CartTest.appliesCoupon(CartTest.java:12)\n\tat java.base/java.lang.reflect.Method.invoke(Method.java:580)\n\n[INFO] \n[INFO] Results:\n[INFO] \n[ERROR] Failures: \n[ERROR]   CartTest.appliesCoupon:12 expected: <true> but was: <false>\n[INFO] \n[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0\n[INFO] \n[INFO] ------------------------------------------------------------------------\n[INFO] BUILD FAILURE\n[INFO] ------------------------------------------------------------------------\n[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.2.5:test (default-test) on project shop: There are test failures.\n[ERROR] -> [Help 1]"
+  },
+  {
+   "round": "D",
+   "label": "maven surefire token",
+   "group": "d-mv-token",
+   "command": "mvn -q test",
+   "output": "Exit code 1\n[INFO] -------------------------------------------------------\n[INFO]  T E S T S\n[INFO] -------------------------------------------------------\n[INFO] Running com.shop.TokenTest\n[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.034 s <<< FAILURE! -- in com.shop.TokenTest\n[ERROR] com.shop.TokenTest.rejectsExpired -- Time elapsed: 0.012 s <<< FAILURE!\norg.opentest4j.AssertionFailedError: expected: <true> but was: <false>\n\tat org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)\n\tat org.junit.jupiter.api.AssertTrue.failNotTrue(AssertTrue.java:63)\n\tat org.junit.jupiter.api.Assertions.assertTrue(Assertions.java:183)\n\tat com.shop.TokenTest.rejectsExpired(TokenTest.java:12)\n\tat java.base/java.lang.reflect.Method.invoke(Method.java:580)\n\n[INFO] \n[INFO] Results:\n[INFO] \n[ERROR] Failures: \n[ERROR]   TokenTest.rejectsExpired:12 expected: <true> but was: <false>\n[INFO] \n[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0\n[INFO] \n[INFO] ------------------------------------------------------------------------\n[INFO] BUILD FAILURE\n[INFO] ------------------------------------------------------------------------\n[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.2.5:test (default-test) on project shop: There are test failures.\n[ERROR] -> [Help 1]"
+  },
+  {
+   "round": "D",
+   "label": "gradle test cart",
+   "group": "d-gr-cart",
+   "command": "./gradlew test",
+   "output": "Exit code 1\n\n> Task :test FAILED\n\nCartTest > appliesCoupon() FAILED\n    org.opentest4j.AssertionFailedError at CartTest.java:12\n\n2 tests completed, 1 failed\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':test'.\n> There were failing tests. See the report at: file:///home/u/shop/build/reports/tests/test/index.html\n\n* Try:\n> Run with --scan to get full insights.\n\nBUILD FAILED in 1s\n3 actionable tasks: 2 executed, 1 up-to-date"
+  },
+  {
+   "round": "D",
+   "label": "gradle test token",
+   "group": "d-gr-token",
+   "command": "./gradlew test",
+   "output": "Exit code 1\n\n> Task :test FAILED\n\nTokenTest > rejectsExpired() FAILED\n    org.opentest4j.AssertionFailedError at TokenTest.java:30\n\n2 tests completed, 1 failed\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':test'.\n> There were failing tests. See the report at: file:///home/u/shop/build/reports/tests/test/index.html\n\n* Try:\n> Run with --scan to get full insights.\n\nBUILD FAILED in 1s\n3 actionable tasks: 2 executed, 1 up-to-date"
+  },
+  {
+   "round": "D",
+   "label": "bun test cart",
+   "group": "d-bun-cart",
+   "command": "bun test cart",
+   "output": "Exit code 1\nbun test v1.1.34 (5e5e7c60)\n\ncart.test.ts:\n1 | import { expect, test } from \"bun:test\";\n2 | test(\"applies a coupon\", () => {\n3 |   expect(applied).toBe(true);\n                   ^\nerror: expect(received).toBe(expected)\n\nExpected: true\nReceived: false\n\n      at /home/u/shop/cart.test.ts:3:19\n(fail) applies a coupon [0.12ms]\n\n 0 pass\n 1 fail\n 1 expect() calls\nRan 1 tests across 1 files. [10.00ms]"
+  },
+  {
+   "round": "D",
+   "label": "bun test auth",
+   "group": "d-bun-auth",
+   "command": "bun test auth",
+   "output": "Exit code 1\nbun test v1.1.34 (5e5e7c60)\n\nauth.test.ts:\n1 | import { expect, test } from \"bun:test\";\n2 | test(\"rejects an expired token\", () => {\n3 |   expect(rejected).toBe(true);\n                   ^\nerror: expect(received).toBe(expected)\n\nExpected: true\nReceived: false\n\n      at /home/u/shop/auth.test.ts:3:19\n(fail) rejects an expired token [0.12ms]\n\n 0 pass\n 1 fail\n 1 expect() calls\nRan 1 tests across 1 files. [10.00ms]"
+  },
+  {
+   "round": "D",
+   "label": "deno test cart",
+   "group": "d-deno-cart",
+   "command": "deno test cart_test.ts",
+   "output": "Exit code 1\nrunning 1 test from ./cart_test.ts\napplies a coupon ... FAILED (2ms)\n\n ERRORS \n\napplies a coupon => ./cart_test.ts:3:6\nerror: AssertionError: Values are not equal.\n\n\n    [Diff] Actual / Expected\n\n\n-   false\n+   true\n\n  throw new AssertionError(message);\n        ^\n    at assertEquals (https://deno.land/std@0.220.0/assert/assert_equals.ts:53:9)\n    at file:///home/u/shop/cart_test.ts:4:3\n\n FAILURES \n\napplies a coupon => ./cart_test.ts:3:6\n\nFAILED | 0 passed | 1 failed (5ms)\n\nerror: Test failed"
+  },
+  {
+   "round": "D",
+   "label": "deno test auth",
+   "group": "d-deno-auth",
+   "command": "deno test auth_test.ts",
+   "output": "Exit code 1\nrunning 1 test from ./auth_test.ts\nrejects an expired token ... FAILED (2ms)\n\n ERRORS \n\nrejects an expired token => ./auth_test.ts:3:6\nerror: AssertionError: Values are not equal.\n\n\n    [Diff] Actual / Expected\n\n\n-   false\n+   true\n\n  throw new AssertionError(message);\n        ^\n    at assertEquals (https://deno.land/std@0.220.0/assert/assert_equals.ts:53:9)\n    at file:///home/u/shop/auth_test.ts:4:3\n\n FAILURES \n\nrejects an expired token => ./auth_test.ts:3:6\n\nFAILED | 0 passed | 1 failed (5ms)\n\nerror: Test failed"
+  },
+  {
+   "round": "D",
+   "label": "mix test cart",
+   "group": "d-mix-cart",
+   "command": "mix test test/cart_test.exs",
+   "output": "Exit code 1\n\n\n  1) test applies a coupon (ShopCartTest)\n     test/cart_test.exs:5\n     Assertion with == failed\n     code:  assert Cart.applied?(cart) == true\n     left:  false\n     right: true\n     stacktrace:\n       test/cart_test.exs:7: (test)\n\n\n\nFinished in 0.02 seconds (0.00s async, 0.02s sync)\n1 test, 1 failure\n\nRandomized with seed 4242"
+  },
+  {
+   "round": "D",
+   "label": "mix test token",
+   "group": "d-mix-token",
+   "command": "mix test test/session_test.exs",
+   "output": "Exit code 1\n\n\n  1) test rejects an expired login (ShopSessionTest)\n     test/session_test.exs:5\n     Assertion with == failed\n     code:  assert Session.rejected?(session) == true\n     left:  false\n     right: true\n     stacktrace:\n       test/session_test.exs:7: (test)\n\n\n\nFinished in 0.02 seconds (0.00s async, 0.02s sync)\n1 test, 1 failure\n\nRandomized with seed 4242"
+  },
+  {
+   "round": "D",
+   "label": "nextest coupon",
+   "group": "d-nx-coupon",
+   "command": "cargo nextest run",
+   "output": "Exit code 100\n    Starting 2 tests across 1 binary\n        FAIL [   0.004s] shop tests::applies_coupon\n\n--- STDOUT:              shop tests::applies_coupon ---\n\nrunning 1 test\ntest tests::applies_coupon ... FAILED\n\n--- STDERR:              shop tests::applies_coupon ---\nthread 'tests::applies_coupon' panicked at src/lib.rs:10:9:\nassertion failed: valid(\"x\")\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n------------\n     Summary [   0.005s] 2 tests run: 1 passed, 1 failed, 0 skipped\n        FAIL [   0.004s] shop tests::applies_coupon\nerror: test run failed"
+  },
+  {
+   "round": "D",
+   "label": "nextest token",
+   "group": "d-nx-token",
+   "command": "cargo nextest run",
+   "output": "Exit code 100\n    Starting 2 tests across 1 binary\n        FAIL [   0.004s] shop tests::rejects_expired_token\n\n--- STDOUT:              shop tests::rejects_expired_token ---\n\nrunning 1 test\ntest tests::rejects_expired_token ... FAILED\n\n--- STDERR:              shop tests::rejects_expired_token ---\nthread 'tests::rejects_expired_token' panicked at src/lib.rs:10:9:\nassertion failed: valid(\"x\")\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n------------\n     Summary [   0.005s] 2 tests run: 1 passed, 1 failed, 0 skipped\n        FAIL [   0.004s] shop tests::rejects_expired_token\nerror: test run failed"
+  },
+  {
+   "round": "D",
+   "label": "swift test cart",
+   "group": "d-sw-cart",
+   "command": "swift test",
+   "output": "Exit code 1\nTest Suite 'All tests' started at 2026-11-22 10:00:00.000.\nTest Case '-[ShopTests.CartTests testAppliesCoupon]' started.\n/home/u/shop/Tests/ShopTests/CartTests.swift:12: error: -[ShopTests.CartTests testAppliesCoupon] : XCTAssertTrue failed\nTest Case '-[ShopTests.CartTests testAppliesCoupon]' failed (0.001 seconds).\nTest Suite 'All tests' failed at 2026-11-22 10:00:00.010.\n\t Executed 1 test, with 1 failure (0 unexpected) in 0.001 (0.010) seconds\nerror: fatalError"
+  },
+  {
+   "round": "D",
+   "label": "swift test token",
+   "group": "d-sw-token",
+   "command": "swift test",
+   "output": "Exit code 1\nTest Suite 'All tests' started at 2026-11-22 10:00:00.000.\nTest Case '-[ShopTests.TokenTests testRejectsExpired]' started.\n/home/u/shop/Tests/ShopTests/TokenTests.swift:12: error: -[ShopTests.TokenTests testRejectsExpired] : XCTAssertTrue failed\nTest Case '-[ShopTests.TokenTests testRejectsExpired]' failed (0.001 seconds).\nTest Suite 'All tests' failed at 2026-11-22 10:00:00.010.\n\t Executed 1 test, with 1 failure (0 unexpected) in 0.001 (0.010) seconds\nerror: fatalError"
+  },
+  {
+   "round": "D",
+   "label": "karma cart",
+   "group": "d-ka-cart",
+   "command": "npx ng test --watch=false",
+   "output": "Exit code 1\nChrome Headless 126.0.0.0 (Linux x86_64) CartComponent should apply a coupon FAILED\n\tError: Expected false to be true.\n\t    at <Jasmine>\n\t    at UserContext.<anonymous> (src/app/cart.component.spec.ts:21:31)\nChrome Headless 126.0.0.0 (Linux x86_64): Executed 3 of 3 (1 FAILED) (0.05 secs / 0.03 secs)\nTOTAL: 1 FAILED, 2 SUCCESS"
+  },
+  {
+   "round": "D",
+   "label": "karma login",
+   "group": "d-ka-login",
+   "command": "npx ng test --watch=false",
+   "output": "Exit code 1\nChrome Headless 126.0.0.0 (Linux x86_64) LoginComponent should reject an expired token FAILED\n\tError: Expected false to be true.\n\t    at <Jasmine>\n\t    at UserContext.<anonymous> (src/app/login.component.spec.ts:21:31)\nChrome Headless 126.0.0.0 (Linux x86_64): Executed 3 of 3 (1 FAILED) (0.05 secs / 0.03 secs)\nTOTAL: 1 FAILED, 2 SUCCESS"
+  },
+  {
+   "round": "D",
+   "label": "go open app.yaml",
+   "group": "d-goo-app",
+   "command": "go run ./cmd/server",
+   "output": "Exit code 1\n2026/11/22 10:00:00 open config/app.yaml: no such file or directory\nexit status 1"
+  },
+  {
+   "round": "D",
+   "label": "go open seed.sql",
+   "group": "d-goo-seed",
+   "command": "go run ./cmd/seed",
+   "output": "Exit code 1\n2026/11/22 10:00:00 open data/seed.sql: no such file or directory\nexit status 1"
+  },
+  {
+   "round": "D",
+   "label": "java FileNotFound app.properties",
+   "group": "d-jv-props",
+   "command": "java -cp out com.shop.Main",
+   "output": "Exit code 1\nException in thread \"main\" java.io.FileNotFoundException: config/app.properties (No such file or directory)\n\tat java.base/java.io.FileInputStream.open0(Native Method)\n\tat com.shop.Main.main(Main.java:9)"
+  },
+  {
+   "round": "D",
+   "label": "java FileNotFound seed.sql",
+   "group": "d-jv-seed",
+   "command": "java -cp out com.shop.Seed",
+   "output": "Exit code 1\nException in thread \"main\" java.io.FileNotFoundException: data/seed.sql (No such file or directory)\n\tat java.base/java.io.FileInputStream.open0(Native Method)\n\tat com.shop.Seed.main(Seed.java:14)"
+  },
+  {
+   "round": "D",
+   "label": "ruby ENOENT database.yml",
+   "group": "d-rb-db",
+   "command": "ruby app.rb",
+   "output": "Exit code 1\napp.rb:3:in 'File#initialize': No such file or directory @ rb_sysopen - config/database.yml (Errno::ENOENT)"
+  },
+  {
+   "round": "D",
+   "label": "ruby ENOENT seed.json",
+   "group": "d-rb-seed",
+   "command": "ruby seed.rb",
+   "output": "Exit code 1\nseed.rb:8:in 'File#initialize': No such file or directory @ rb_sysopen - storage/seed.json (Errno::ENOENT)"
+  },
+  {
+   "round": "D",
+   "label": "mkdir build/out (curly quotes)",
+   "group": "d-mk-build",
+   "command": "mkdir build/out",
+   "output": "Exit code 1\nmkdir: cannot create directory ‘build/out’: No such file or directory"
+  },
+  {
+   "round": "D",
+   "label": "mkdir dist/assets (curly quotes)",
+   "group": "d-mk-dist",
+   "command": "mkdir dist/assets",
+   "output": "Exit code 1\nmkdir: cannot create directory ‘dist/assets’: No such file or directory"
+  },
+  {
+   "round": "D",
+   "label": "node ENOENT settings.json (bare name)",
+   "group": "d-nb-settings",
+   "command": "node index.mjs",
+   "output": "Exit code 1\nnode:fs:562\n  return binding.open(\n                 ^\n\nError: ENOENT: no such file or directory, open 'settings.json'\n    at Object.openSync (node:fs:562:18)\n    at readFileSync (node:fs:446:35) {\n  errno: -2,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: 'settings.json'\n}\n\nNode.js v24.14.1"
+  },
+  {
+   "round": "D",
+   "label": "node ENOENT tsconfig.json (bare name)",
+   "group": "d-nb-tsconfig",
+   "command": "node build.mjs",
+   "output": "Exit code 1\nnode:fs:562\n  return binding.open(\n                 ^\n\nError: ENOENT: no such file or directory, open 'tsconfig.json'\n    at Object.openSync (node:fs:562:18)\n    at readFileSync (node:fs:446:35) {\n  errno: -2,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: 'tsconfig.json'\n}\n\nNode.js v24.14.1"
+  },
+  {
+   "round": "D",
+   "label": "py FileNotFound config.yaml (bare name)",
+   "group": "d-pb-config",
+   "command": "python load.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"load.py\", line 3, in <module>\n    open('config.yaml')\nFileNotFoundError: [Errno 2] No such file or directory: 'config.yaml'"
+  },
+  {
+   "round": "D",
+   "label": "py FileNotFound settings.toml (bare name)",
+   "group": "d-pb-settings",
+   "command": "python boot.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"boot.py\", line 3, in <module>\n    open('settings.toml')\nFileNotFoundError: [Errno 2] No such file or directory: 'settings.toml'"
+  },
+  {
+   "round": "D",
+   "label": "rust unwrap NotFound main.rs",
+   "group": "d-ru-a",
+   "command": "cargo run",
+   "output": "Exit code 101\nthread 'main' panicked at src/main.rs:5:44:\ncalled `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: \"No such file or directory\" }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+  },
+  {
+   "round": "D",
+   "label": "rust unwrap NotFound seed.rs",
+   "group": "d-ru-b",
+   "command": "cargo run --bin seed",
+   "output": "Exit code 101\nthread 'main' panicked at src/bin/seed.rs:19:51:\ncalled `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: \"No such file or directory\" }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+  },
+  {
+   "round": "D",
+   "label": "tsc TS2322 cart.ts",
+   "group": "d-ts2322-a",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/cart.ts(14,7): error TS2322: Type 'string' is not assignable to type 'number'."
+  },
+  {
+   "round": "D",
+   "label": "tsc TS2322 token.ts",
+   "group": "d-ts2322-b",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/auth/token.ts(88,3): error TS2322: Type 'string' is not assignable to type 'number'."
+  },
+  {
+   "round": "D",
+   "label": "tsc TS2307 ./cart",
+   "group": "d-ts2307-a",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/app.ts(1,22): error TS2307: Cannot find module './cart' or its corresponding type declarations."
+  },
+  {
+   "round": "D",
+   "label": "tsc TS2307 ./auth",
+   "group": "d-ts2307-b",
+   "command": "pnpm tsc --noEmit",
+   "output": "Exit code 2\nsrc/app.ts(2,22): error TS2307: Cannot find module './auth' or its corresponding type declarations."
+  },
+  {
+   "round": "D",
+   "label": "py No module named requests",
+   "group": "d-pm-requests",
+   "command": "python app.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"app.py\", line 1, in <module>\n    import requests\nModuleNotFoundError: No module named 'requests'"
+  },
+  {
+   "round": "D",
+   "label": "py No module named numpy",
+   "group": "d-pm-numpy",
+   "command": "python train.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"train.py\", line 1, in <module>\n    import numpy\nModuleNotFoundError: No module named 'numpy'"
+  },
+  {
+   "round": "D",
+   "label": "cargo test login (real)",
+   "group": "d-cg-login",
+   "command": "cargo test rejects_expired_login",
+   "output": "Exit code 101\n   Compiling shop v0.1.0 (C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\rs\\one)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s\n     Running unittests src\\lib.rs (C:/Users/dev/AppData/Local/Temp/runner/runners/rs-target\\debug\\deps\\shop-9d1490c2703623bd.exe)\n\nrunning 1 test\ntest tests::rejects_expired_login ... FAILED\n\nfailures:\n\n---- tests::rejects_expired_login stdout ----\n\nthread 'tests::rejects_expired_login' (22984) panicked at src\\lib.rs:15:9:\nassertion failed: valid(\"abc\")\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    tests::rejects_expired_login\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`"
+  },
+  {
+   "round": "D",
+   "label": "py FileNotFound config.yaml (real)",
+   "group": "d-pr-config",
+   "command": "python load.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\load.py\", line 2, in <module>\n    with open('config.yaml') as handle:\n         ^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: 'config.yaml'"
+  },
+  {
+   "round": "D",
+   "label": "py FileNotFound settings.toml (real)",
+   "group": "d-pr-settings",
+   "command": "python boot.py",
+   "output": "Exit code 1\nTraceback (most recent call last):\n  File \"C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\py\\boot.py\", line 1, in <module>\n    with open('settings.toml') as handle:\n         ^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: 'settings.toml'"
+  },
+  {
+   "round": "D",
+   "label": "bash build.sh missing (real)",
+   "group": "d-sh-build",
+   "command": "./scripts/build.sh",
+   "output": "Exit code 127\n/usr/bin/bash: line 1: ./scripts/build.sh: No such file or directory"
+  },
+  {
+   "round": "D",
+   "label": "bash deploy.sh missing (real)",
+   "group": "d-sh-deploy",
+   "command": "./bin/deploy.sh",
+   "output": "Exit code 127\n/usr/bin/bash: line 1: ./bin/deploy.sh: No such file or directory"
+  },
+  {
+   "round": "D",
+   "label": "cat config/settings.json (real)",
+   "group": "d-cat-settings",
+   "command": "cat config/settings.json",
+   "output": "Exit code 1\ncat: config/settings.json: No such file or directory"
+  },
+  {
+   "round": "D",
+   "label": "cat data/users.csv (real)",
+   "group": "d-cat-users",
+   "command": "cat data/users.csv",
+   "output": "Exit code 1\ncat: data/users.csv: No such file or directory"
+  },
+  {
+   "round": "D",
+   "label": "cat package.json (real)",
+   "group": "d-catb-package",
+   "command": "cat package.json",
+   "output": "Exit code 1\ncat: package.json: No such file or directory"
+  },
+  {
+   "round": "D",
+   "label": "cat tsconfig.json (real)",
+   "group": "d-catb-tsconfig",
+   "command": "cat tsconfig.json",
+   "output": "Exit code 1\ncat: tsconfig.json: No such file or directory"
+  },
+  {
+   "round": "D",
+   "label": "node ENOENT settings.json, Windows full path (real)",
+   "group": "enoent-settings",
+   "command": "node index.mjs",
+   "output": "Exit code 1\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: ENOENT: no such file or directory, open 'C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\node\\settings.json'\n    at readFileSync (node:fs:440:20)\n    at file:///C:/Users/dev/AppData/Local/Temp/runner/runners/node/index.mjs:2:13\n    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {\n  errno: -4058,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: 'C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\Temp\\\\runner\\\\runners\\\\node\\\\settings.json'\n}\n\nNode.js v24.14.1"
+  },
+  {
+   "round": "D",
+   "label": "node ENOENT tsconfig.json, Windows full path (real)",
+   "group": "d-nw-tsconfig",
+   "command": "node build.mjs",
+   "output": "Exit code 1\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: ENOENT: no such file or directory, open 'C:\\Users\\dev\\AppData\\Local\\Temp\\runner\\runners\\node\\tsconfig.json'\n    at readFileSync (node:fs:440:20)\n    at file:///C:/Users/dev/AppData/Local/Temp/runner/runners/node/build.mjs:2:13\n    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {\n  errno: -4058,\n  code: 'ENOENT',\n  syscall: 'open',\n  path: 'C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\Temp\\\\runner\\\\runners\\\\node\\\\tsconfig.json'\n}\n\nNode.js v24.14.1"
+  },
+  {
+   "round": "D",
+   "label": "jest cart (real)",
+   "group": "d-jest-cart",
+   "command": "npx jest src/cart.test.js",
+   "output": "Exit code 1\nFAIL src/cart.test.js\n  × renders without crashing (1 ms)\n\n  ● renders without crashing\n\n    TypeError: Cannot read properties of undefined (reading 'map')\n\n    \u001b[0m\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 1 |\u001b[39m exports\u001b[33m.\u001b[39mrenderCart \u001b[33m=\u001b[39m (data) \u001b[33m=>\u001b[39m data\u001b[33m.\u001b[39mitems\u001b[33m.\u001b[39mmap((item) \u001b[33m=>\u001b[39m item\u001b[33m.\u001b[39mname)\u001b[33m.\u001b[39mjoin(\u001b[32m', '\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m   |\u001b[39m                                                                              \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 2 |\u001b[39m\u001b[0m\n\n      at Object.<anonymous>.exports.renderCart (src/cart.js:1:78)\n      at Object.renderCart (src/cart.test.js:4:10)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 total\nSnapshots:   0 total\nTime:        0.596 s\nRan all test suites matching /src\\\\cart.test.js/i."
+  },
+  {
+   "round": "D",
+   "label": "jest orders (real)",
+   "group": "d-jest-orders",
+   "command": "npx jest src/orders.test.js",
+   "output": "Exit code 1\nFAIL src/orders.test.js\n  × renders without crashing (1 ms)\n\n  ● renders without crashing\n\n    TypeError: Cannot read properties of undefined (reading 'map')\n\n    \u001b[0m\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 1 |\u001b[39m exports\u001b[33m.\u001b[39mrenderOrders \u001b[33m=\u001b[39m (data) \u001b[33m=>\u001b[39m data\u001b[33m.\u001b[39mrows\u001b[33m.\u001b[39mmap((row) \u001b[33m=>\u001b[39m row\u001b[33m.\u001b[39mid)\u001b[33m.\u001b[39mjoin(\u001b[32m', '\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m   |\u001b[39m                                                                           \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 2 |\u001b[39m\u001b[0m\n\n      at Object.<anonymous>.exports.renderOrders (src/orders.js:1:75)\n      at Object.renderOrders (src/orders.test.js:4:10)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 total\nSnapshots:   0 total\nTime:        0.589 s\nRan all test suites matching /src\\\\orders.test.js/i."
+  }
+ ],
+ "pairs": [
+  [
+   "node:test spec (real)",
+   "node:test spec cart (real)",
+   "node:test spec auth (real)"
+  ],
+  [
+   "node:test tap (real)",
+   "node:test tap cart (real)",
+   "node:test tap auth (real)"
+  ],
+  [
+   "pytest (real)",
+   "pytest auth (real)",
+   "pytest flags (real)"
+  ],
+  [
+   "pytest no summary (real)",
+   "pytest -q -rN auth (real)",
+   "pytest -q -rN flags (real)"
+  ],
+  [
+   "unittest (real)",
+   "unittest token (real)",
+   "unittest flag (real)"
+  ],
+  [
+   "cargo test, one crate (real)",
+   "cargo test coupon (real)",
+   "cargo test login (real)"
+  ],
+  [
+   "cargo test, scaffold name in two crates (real)",
+   "cargo ws cart it_works (real)",
+   "cargo ws auth it_works (real)"
+  ],
+  [
+   "jest, one title in two files",
+   "jest same title, Cart file",
+   "jest same title, Orders file"
+  ],
+  [
+   "jest, suite failed to run",
+   "jest suite failed to run, cart",
+   "jest suite failed to run, auth"
+  ],
+  [
+   "go, one test name in two packages",
+   "go TestNew in cart pkg",
+   "go TestNew in auth pkg"
+  ],
+  [
+   "go, two rows of one table test",
+   "go TestParse/empty_input",
+   "go TestParse/unicode_name"
+  ],
+  [
+   "rspec have_http_status",
+   "rspec orders have_http_status",
+   "rspec profile have_http_status"
+  ],
+  [
+   "rspec eq(true)",
+   "rspec cart eq(true)",
+   "rspec token eq(true)"
+  ],
+  [
+   "minitest",
+   "minitest cart",
+   "minitest token"
+  ],
+  [
+   "dotnet test",
+   "dotnet test cart",
+   "dotnet test token"
+  ],
+  [
+   "phpunit",
+   "phpunit cart",
+   "phpunit token"
+  ],
+  [
+   "maven surefire",
+   "maven surefire cart",
+   "maven surefire token"
+  ],
+  [
+   "gradle test",
+   "gradle test cart",
+   "gradle test token"
+  ],
+  [
+   "bun test",
+   "bun test cart",
+   "bun test auth"
+  ],
+  [
+   "deno test",
+   "deno test cart",
+   "deno test auth"
+  ],
+  [
+   "mix test",
+   "mix test cart",
+   "mix test token"
+  ],
+  [
+   "cargo nextest",
+   "nextest coupon",
+   "nextest token"
+  ],
+  [
+   "swift test",
+   "swift test cart",
+   "swift test token"
+  ],
+  [
+   "karma",
+   "karma cart",
+   "karma login"
+  ],
+  [
+   "go open",
+   "go open app.yaml",
+   "go open seed.sql"
+  ],
+  [
+   "java FileNotFoundException",
+   "java FileNotFound app.properties",
+   "java FileNotFound seed.sql"
+  ],
+  [
+   "ruby ENOENT",
+   "ruby ENOENT database.yml",
+   "ruby ENOENT seed.json"
+  ],
+  [
+   "mkdir, curly quotes",
+   "mkdir build/out (curly quotes)",
+   "mkdir dist/assets (curly quotes)"
+  ],
+  [
+   "node ENOENT, bare file name",
+   "node ENOENT settings.json (bare name)",
+   "node ENOENT tsconfig.json (bare name)"
+  ],
+  [
+   "py FileNotFoundError, bare file name",
+   "py FileNotFound config.yaml (bare name)",
+   "py FileNotFound settings.toml (bare name)"
+  ],
+  [
+   "rust unwrap NotFound",
+   "rust unwrap NotFound main.rs",
+   "rust unwrap NotFound seed.rs"
+  ],
+  [
+   "tsc TS2322 in two files",
+   "tsc TS2322 cart.ts",
+   "tsc TS2322 token.ts"
+  ],
+  [
+   "tsc TS2307",
+   "tsc TS2307 ./cart",
+   "tsc TS2307 ./auth"
+  ],
+  [
+   "py No module named",
+   "py No module named requests",
+   "py No module named numpy"
+  ],
+  [
+   "py FileNotFoundError, bare file name (real)",
+   "py FileNotFound config.yaml (real)",
+   "py FileNotFound settings.toml (real)"
+  ],
+  [
+   "bash, script missing (real)",
+   "bash build.sh missing (real)",
+   "bash deploy.sh missing (real)"
+  ],
+  [
+   "cat, path with folder (real)",
+   "cat config/settings.json (real)",
+   "cat data/users.csv (real)"
+  ],
+  [
+   "cat, bare file name (real)",
+   "cat package.json (real)",
+   "cat tsconfig.json (real)"
+  ],
+  [
+   "node ENOENT, Windows full path (real)",
+   "node ENOENT settings.json, Windows full path (real)",
+   "node ENOENT tsconfig.json, Windows full path (real)"
+  ],
+  [
+   "jest 29, one title in two files (real)",
+   "jest cart (real)",
+   "jest orders (real)"
+  ]
+ ]
+}

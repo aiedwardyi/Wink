@@ -232,7 +232,7 @@ describe.each(engines)("$name tool detail", ({ name, driver, cli, fixtureEnv }) 
     ]);
     await create();
     const [fail, pass] = await run();
-    expect(fail).toMatchObject({ ok: false, run: { shown: "python -m pytest tests/test_loader.py", error: "KeyError: 'name'", sig: runSig("KeyError: 'name'") } });
+    expect(fail).toMatchObject({ ok: false, run: { shown: "python -m pytest tests/test_loader.py", error: "KeyError: 'name'", sig: runSig("KeyError: 'name'", "", "loader.py:12") } });
     expect(pass).toMatchObject({ ok: true, run: { cmd: (fail as { run: { cmd: string } }).run.cmd } });
     expect(pass).not.toHaveProperty("run.sig");
     expect(recorder.events.some((event) => "detail" in event)).toBe(false);
