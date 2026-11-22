@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { z } from "zod";
 
-import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, REPLY_REF, ROOM_REF, type Board } from "./board.ts";
+import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, REPLY_REF, ROOM_REF, type Board, type BoardPost } from "./board.ts";
 import { json, readBody } from "./http-helpers.ts";
 
 export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply", remove: "/api/board/delete" } as const;
@@ -27,6 +27,9 @@ export interface BoardRouteDeps {
   projectOf(threadId: string): string;
   /** "read-only" while someone without "Can make bots work" asked for the caller's turn; "room" on any other team room turn. */
   roomTurn(from: { botId: string; threadId: string }): "read-only" | "room" | null;
+  /** The error signature of a fix this thread just proved; a kind fix post carries it, and merges into a post that holds it. */
+  proven?(threadId: string): string | undefined;
+  fixFor?(sig: string, projectId: string): BoardPost | undefined;
 }
 
 export function createBoardRoutes(deps: BoardRouteDeps) {
@@ -54,6 +57,13 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       const { kind, title, body: text, parent_id, helped } = body.data;
       const parent = parent_id ? deps.board.get(parent_id) : undefined;
       if (parent_id && !parent) return json(res, 404, { error: `no Board post ${parent_id}` });
+      const sig = kind === "fix" && !parent && !room ? deps.proven?.(from.threadId) : undefined;
+      const project = parent?.project_id ?? deps.projectOf(from.threadId);
+      const known = sig ? deps.fixFor?.(sig, project) : undefined;
+      if (known) {
+        deps.board.bump(known.id, from.botId);
+        return json(res, 200, { id: known.id, text: `The Board already had this fix as ${known.id}; it moved up instead of posting twice.` });
+      }
       const event = createHash("sha256").update(JSON.stringify([kind, title, text, parent_id ?? ""])).digest("hex").slice(0, 16);
       const post = deps.board.post({
         author_bot_id: from.botId,
@@ -61,8 +71,8 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         title,
         body: text,
         parent_id: parent?.id ?? null,
-        project_id: parent?.project_id ?? deps.projectOf(from.threadId),
-        error_sig: parent?.error_sig,
+        project_id: project,
+        error_sig: parent?.error_sig ?? sig,
         fix: kind === "fix" ? text : undefined,
         source_ref: `${room ? ROOM_REF : "tool:"}${from.threadId}:${event}`,
       });

@@ -133,6 +133,7 @@ import { createBotCalls } from "./bot-call.ts";
 import { BOARD_DIR, createBoard, projectIdOf } from "./board.ts";
 import { createForumLessons } from "./forum-lessons.ts";
 import { createBoardCalls, FORUM_HOLDS_FILE } from "./board-calls.ts";
+import { createForumLoop, FORUM_LOOP_FILE } from "./forum-loop.ts";
 import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -3284,6 +3285,27 @@ const boardCalls = createBoardCalls({
   },
 });
 
+const forumLoop = createForumLoop({
+  board,
+  botOf: (threadId) => store.botByThread(threadId)?.id,
+  projectOf: boardProject,
+  room: forumRoom,
+  steer: async (threadId, text) => {
+    const bot = store.botByThread(threadId);
+    const adapter = bot ? botAccounts.instance(bot, threadId)?.adapter : undefined;
+    if (!adapter?.capabilities.queueing || !adapter.steer) return false;
+    return steerUntilTaken(adapter, threadId, text) ?? adapter.steer(threadId, text);
+  },
+  log: (row) => {
+    try {
+      appendRotatingLog(join(DATA_DIR, FORUM_LOOP_FILE), `${JSON.stringify({ at: Date.now(), ...row })}\n`);
+    } catch (cause) {
+      console.warn(`forum loop: ${cause}`);
+    }
+  },
+  enabled: process.env.OMB_FORUM_LOOP !== "off",
+});
+
 const botCalls = createBotCalls({
   send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject(), phoneSignedIn).catch((cause) => console.warn(`web-push: ${cause}`)),
   current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
@@ -4654,6 +4676,8 @@ bus.subscribe((event: RuntimeEvent) => {
   });
 });
 
+bus.subscribe((event: RuntimeEvent) => forumLoop.event(event));
+
 // ask_user cards wait for the asking turn's reply.
 const askHold = watchAskHold(store, bus);
 watchSkippedQuestions(store, (threadId, change) => {
@@ -5073,7 +5097,7 @@ const PLAIN_WORDS_INSTRUCTIONS =
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
-  ` After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
+  ` Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
 const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
 
@@ -6325,9 +6349,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           const project = boardProjectFolder(threadId);
           if (project === cwd) forumOffer = forumLessons.take({ botId: bot.id, model, project, text: requestText, room: forumRoom(threadId) });
         }
-        const withLesson = (prompt: string) => forumOffer ? `${forumOffer.text}\n\n${prompt}` : prompt;
-        timedLesson?.(forumOffer ? "offered" : "none");
-        trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice, ...(forumOffer ? [forumOffer.text] : [])], durableTaskRecordText, systemUpdate);
+        const handoff = [forumOffer?.text, readOnly ? "" : forumLoop.next(threadId)].filter(Boolean).join("\n\n");
+        const withLesson = (prompt: string) => handoff ? `${handoff}\n\n${prompt}` : prompt;
+        timedLesson?.(handoff ? "offered" : "none");
+        trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice, ...(handoff ? [handoff] : [])], durableTaskRecordText, systemUpdate);
         trace?.assembled(system, withLesson(text));
         if (cwd) turnCwdByThread.set(threadId, cwd);
         else turnCwdByThread.delete(threadId);
@@ -8080,6 +8105,11 @@ const boardRoutes = createBoardRoutes({
   caller: (header) => commsCallers.resolve(header),
   known: (botId) => Boolean(store.bot(botId)),
   projectOf: boardProject,
+  proven: (threadId) => forumLoop.claim(threadId),
+  fixFor: (sig, projectId) => {
+    const post = forumLoop.knownFix(sig, projectId);
+    return post?.project_id === projectId ? post : undefined;
+  },
   roomTurn: ({ botId, threadId }) => {
     if (readOnlyRoomTurn(botId, threadId)) return "read-only";
     return store.groupByThread(threadId)?.hosted || joinedRoomThreads.has(threadId) ? "room" : null;

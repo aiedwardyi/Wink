@@ -311,6 +311,16 @@ export function createBoard(options: BoardOptions) {
       notifyChanged();
       return true;
     },
+    /** A second proof of a fix already posted: the post moves up, and the bot that proved it again counts as helped. */
+    bump(id: string, botId: string): BoardPost | undefined {
+      const held = posts().get(id);
+      if (!held) return undefined;
+      const helped = held.author_bot_id === botId ? held.helped_bot_ids : [...new Set([...held.helped_bot_ids, botId])].sort();
+      const next = { ...held, helped_bot_ids: helped, updated_at: now(), pc_id: options.pcId() };
+      write(next);
+      notifyChanged();
+      return next;
+    },
     helped(ids: readonly string[], botId: string): void {
       let changed = false;
       for (const id of ids) {

@@ -209,7 +209,7 @@ describe("summary grace dispatch", () => {
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
-        leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false, forumOffer: undefined,
+        leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false, forumOffer: undefined, forumLoop: { next: () => "" },
       };
       const dispatched = runDispatch(scope);
       await vi.advanceTimersByTimeAsync(0);
