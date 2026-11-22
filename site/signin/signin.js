@@ -136,6 +136,11 @@
     if (pairPage) $("code").hidden = false;
   }
 
+  function pairPageFor(pc) {
+    pairPage = `https://${pc}.${config.base}/pair`;
+    $("usecode").addEventListener("click", () => location.assign(pairPage));
+  }
+
   function opening(name) {
     $("title").replaceChildren(spinner(), `Opening ${name || "Wink"}…`);
   }
@@ -643,8 +648,7 @@
       say(BAD_LINK, "error");
       return;
     }
-    pairPage = `https://${pc}.${config.base}/pair`;
-    $("usecode").addEventListener("click", () => location.assign(pairPage));
+    pairPageFor(pc);
     void returnLeg(pc, m).catch(() => {
       say(GOOGLE_DOWN, "error");
       offerCode();
@@ -661,5 +665,16 @@
 
   const ready = googleId();
   if (ready) run(ready);
-  else void whenGoogle().then(run).catch(() => say(GOOGLE_DOWN, "error"));
+  else
+    void whenGoogle()
+      .then(run)
+      .catch(() => {
+        say(GOOGLE_DOWN, "error");
+        // The PC's code form needs no Google, so a return leg still has it.
+        config = readConfig();
+        if (config && LABEL_RE.test(leg.get("pc") || "") && M_RE.test(leg.get("m") || "")) {
+          pairPageFor(leg.get("pc"));
+          offerCode();
+        }
+      });
 })();

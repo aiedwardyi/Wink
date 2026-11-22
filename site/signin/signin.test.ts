@@ -792,6 +792,20 @@ describe("entering a PC's code", () => {
     expect(location.href).toBe(pair(LABEL_A, ""));
   });
 
+  it("offers the PC's code form on a return leg whose Google script never loads", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = MARKUP;
+    history.replaceState(null, "", `/signin?pc=${LABEL_A}&m=${M}`);
+    vi.stubGlobal("WINK_SIGNIN", { clientId: CLIENT, base: BASE });
+    vi.stubGlobal("google", undefined);
+    runInThisContext(SCRIPT);
+    await vi.advanceTimersByTimeAsync(15_100);
+    expect(status().textContent).toBe(GOOGLE_DOWN);
+    expect(document.getElementById("code")?.hidden).toBe(false);
+    link().click();
+    expect(location.href).toBe(pair(LABEL_A, ""));
+  });
+
   it("offers the code on a cold start only", () => {
     open("/signin", []);
     expect(document.getElementById("code")?.hidden).toBe(false);
