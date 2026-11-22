@@ -43,10 +43,17 @@ describe("glasses keys", () => {
     expect(glassKey("chat", "speak", "ArrowDown")).toEqual({ type: "reply", dir: 1 });
   });
 
-  it("Enter on the header asks for the chat menu; ArrowDown goes back to the messages", () => {
-    expect(glassKey("chat", "header", "Enter")).toEqual({ type: "menu" });
+  it("Enter on the model chip opens the model list; ArrowDown goes back to the messages", () => {
+    expect(glassKey("chat", "header", "Enter")).toEqual({ type: "models" });
     expect(glassKey("chat", "header", "ArrowDown")).toEqual({ type: "messages" });
     expect(glassKey("chat", "header", "ArrowUp")).toBeNull();
+  });
+
+  it("Read aloud sits under the newest reply: Enter reads it, ArrowUp returns to Speak", () => {
+    expect(glassKey("chat", "listen", "Enter")).toEqual({ type: "listen" });
+    expect(glassKey("chat", "listen", "ArrowUp")).toEqual({ type: "messages" });
+    expect(glassKey("chat", "listen", "ArrowDown")).toBeNull();
+    expect(glassKey("chat", "listen", "ArrowLeft")).toEqual({ type: "chat", step: -1 });
   });
 
   it("Enter on an empty Speak leaves the field to open the system composer; with text it goes to Check", () => {
@@ -56,8 +63,8 @@ describe("glasses keys", () => {
 
   it("only Enter on Send in Check sends", () => {
     const sends: string[] = [];
-    for (const screen of ["chat", "check"] as const) {
-      for (const focus of ["speak", "header", "send", "again", "other"] as const) {
+    for (const screen of ["chat", "check", "models"] as const) {
+      for (const focus of ["speak", "header", "listen", "send", "again", "other"] as const) {
         for (const key of KEYS) {
           for (const text of [false, true]) {
             const action: GlassAction = glassKey(screen, focus, key, text);
@@ -69,12 +76,20 @@ describe("glasses keys", () => {
     expect([...new Set(sends)]).toEqual(["check/send/Enter"]);
   });
 
-  it("Check: ArrowDown speaks again, ArrowUp returns to Send, a new draft replaces the old one", () => {
+  it("Check: Redo sits left of Send, a new draft replaces the old one", () => {
+    expect(glassKey("check", "send", "ArrowLeft")).toEqual({ type: "again" });
+    expect(glassKey("check", "again", "ArrowRight")).toEqual({ type: "toSend" });
     expect(glassKey("check", "send", "ArrowDown")).toEqual({ type: "again" });
     expect(glassKey("check", "again", "ArrowUp")).toEqual({ type: "toSend" });
     expect(glassKey("check", "again", "Enter")).toEqual({ type: "composer" });
     expect(glassKey("check", "again", "Enter", true)).toEqual({ type: "check" });
-    expect(glassKey("check", "send", "ArrowLeft")).toBeNull();
+  });
+
+  it("the model list moves with ArrowUp and ArrowDown and picks with Enter", () => {
+    expect(glassKey("models", "other", "ArrowUp")).toEqual({ type: "model", dir: -1 });
+    expect(glassKey("models", "other", "ArrowDown")).toEqual({ type: "model", dir: 1 });
+    expect(glassKey("models", "other", "Enter")).toEqual({ type: "pick" });
+    expect(glassKey("models", "other", "ArrowLeft")).toBeNull();
   });
 
   it("ArrowUp past the top of a reply steps to older messages, then to the header", () => {
