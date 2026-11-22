@@ -7,9 +7,6 @@ import { cachedSignIn } from "./auth-status.ts";
 
 type KeyringExec = (file: string, args: string[], options: ExecFileOptionsWithStringEncoding, done: (error: ExecFileException | null, stdout: string) => void) => void;
 
-/** Where agy saves its sign-in: the OS keyring entry service "gemini", account "antigravity". */
-export const ANTIGRAVITY_KEYRING = "gemini:antigravity";
-
 export function probeAntigravitySignIn(platform = process.platform, run: KeyringExec = execFile): Promise<boolean | undefined> {
   if (platform !== "win32" && platform !== "darwin") return Promise.resolve(undefined);
   const file = platform === "win32" ? "cmdkey.exe" : "security";
@@ -22,17 +19,6 @@ export function probeAntigravitySignIn(platform = process.platform, run: Keyring
       }
       resolve(platform === "darwin" || /(?:^|\s)LegacyGeneric:target=gemini:antigravity\s*$/m.test(stdout));
     });
-  });
-}
-
-/** Deletes a saved agy sign-in (service:account) from the OS keyring; false where there is none to delete or it fails. */
-export function forgetAntigravitySignIn(target: string, platform = process.platform, run: KeyringExec = execFile): Promise<boolean> {
-  const split = target.indexOf(":");
-  if (split < 1 || split === target.length - 1 || (platform !== "win32" && platform !== "darwin")) return Promise.resolve(false);
-  const file = platform === "win32" ? "cmdkey.exe" : "security";
-  const args = platform === "win32" ? [`/delete:${target}`] : ["delete-generic-password", "-s", target.slice(0, split), "-a", target.slice(split + 1)];
-  return new Promise((resolve) => {
-    run(file, args, { windowsHide: true, timeout: 5000, encoding: "utf8" }, (error) => resolve(!error));
   });
 }
 

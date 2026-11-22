@@ -1182,6 +1182,52 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     }
   });
 
+  it("updates an agy without ACP (1.3.0) so a signed-out Sign in completes, and Sign out works the same way", async () => {
+    const noAcp = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/acp-unsupported.json", import.meta.url), "utf8")).reply;
+    const update = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/update.json", import.meta.url), "utf8")).reply;
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-old-"));
+    const flag = join(dir, "signed-in");
+    const updated = join(dir, "updated");
+    const calls = join(dir, "calls.txt");
+    const fake = join(dir, "fake-agy.cjs");
+    writeFileSync(fake, `
+const fs = require("node:fs");
+const updated = fs.existsSync(${JSON.stringify(updated)});
+if (process.argv.includes("--version")) { console.log(updated ? "1.5.14" : "1.3.0"); process.exit(0); }
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+if (process.argv.includes("update")) {
+  fs.writeFileSync(${JSON.stringify(updated)}, "");
+  process.stdout.write(${JSON.stringify(update.stdout)}, () => process.exit(${update.exitCode}));
+} else if (!updated) process.stderr.write(${JSON.stringify(noAcp.stderr)}, () => process.exit(${noAcp.exitCode}));
+else require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "logout") fs.rmSync(${JSON.stringify(flag)}, { force: true });
+  if (method === "authenticate") fs.writeFileSync(${JSON.stringify(flag)}, "");
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => existsSync(flag)));
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      expect((await registry.get("agy-old")!.snapshot()).authenticated).toBe(false);
+      await registry.startSignIn("agy-old");
+      await registry.logins.wait("agy-old");
+      expect(registry.logins.state("agy-old")).toBe("complete");
+      expect((await registry.get("agy-old")!.snapshot({ refresh: true })).authenticated).toBe(true);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update", "acp"]);
+
+      rmSync(updated);
+      writeFileSync(calls, "");
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(existsSync(flag)).toBe(false);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update", "acp"]);
+    } finally {
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("re-checks sign-in on a refresh instead of reusing a recent signed-in answer", async () => {
     chmodSync(FAKE_CLI, 0o755);
     let signedIn = true;

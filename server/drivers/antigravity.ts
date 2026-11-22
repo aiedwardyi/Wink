@@ -49,7 +49,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { ANTIGRAVITY_KEYRING, antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
 import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
@@ -1164,7 +1164,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       snapshot,
       loginConfig: () => ({
         cli: `"${process.execPath}" "${SPAWNED_PROXIES.antigravityAuth}"`,
-        env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli, OMB_AGY_KEYRING: ANTIGRAVITY_KEYRING },
+        env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli },
       }),
       adapter: {
         provider: DRIVER_KIND,
