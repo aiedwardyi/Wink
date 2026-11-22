@@ -1005,9 +1005,9 @@ describe("phone management", () => {
   });
 
   it.each([
-    ["registry", PHONES_FILE, 1],
-    ["push subscriptions", WEB_PUSH_SUBS_FILE, 0],
-  ])("keeps the push subscription when the %s write fails, and drops it on retry", async (_file, failing, paired) => {
+    ["registry", PHONES_FILE, 1, 500],
+    ["push subscriptions", WEB_PUSH_SUBS_FILE, 0, 200],
+  ])("keeps the push subscription when the %s write fails, and drops it on retry", async (_file, failing, paired, status) => {
     const w = await world();
     const session = await pairPhone(w, "Lost phone");
     const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
@@ -1023,7 +1023,10 @@ describe("phone management", () => {
     });
     const signOut = () => viaRelay(w.r, "/api/phone/sign-out", { method: "POST", headers: { cookie: session, origin: w.origin } });
 
-    expect((await signOut()).status).toBe(500);
+    const first = await signOut();
+    expect(first.status).toBe(status);
+    // A saved sign-out still clears the browser, whatever the push write did.
+    expect(first.headers["clear-site-data"]).toBe(paired ? undefined : '"cache", "storage"');
     expect(new PhoneDevices(w.r.dataDir).list()).toHaveLength(paired);
     expect(loadPushSubscriptions(w.r.dataDir)).toHaveLength(1);
 

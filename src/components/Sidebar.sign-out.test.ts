@@ -79,6 +79,14 @@ const settle = () => act(async () => {
   for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 });
 const signOutCalls = () => vi.mocked(fetch).mock.calls.filter(([path]) => String(path).includes("/api/phone/sign-out"));
+// A lost reply lost its Clear-Site-Data, so the page asks again before it leaves.
+function postsWhenLeaving(replace: ReturnType<typeof vi.fn>) {
+  let posts = 0;
+  replace.mockImplementation(() => {
+    posts = signOutCalls().length;
+  });
+  return () => posts;
+}
 
 describe("signing a browser out from the avatar", () => {
   it.each([
@@ -94,6 +102,24 @@ describe("signing a browser out from the avatar", () => {
     await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
     expect(signOutCalls()).toHaveLength(1);
     expect(signOutCalls()[0]?.[1]).toMatchObject({ method: "POST" });
+  });
+
+  it.each([
+    ["near the right edge", window.innerWidth - 56, window.innerWidth - 216],
+    ["with room", 12, 12],
+  ])("keeps the avatar menu on screen %s", async (_case, avatarLeft, menuLeft) => {
+    await renderSidebar(RELAY);
+    vi.spyOn(avatar()!, "getBoundingClientRect").mockReturnValue(new DOMRect(avatarLeft, 800, 40, 40));
+    await click(avatar());
+    expect(document.querySelector<HTMLElement>("[data-profile-menu]")?.style.left).toBe(`${menuLeft}px`);
+  });
+
+  it("closes the avatar menu on Escape in the wide layout", async () => {
+    await renderSidebar(RELAY);
+    await click(avatar());
+    expect(avatar()?.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(avatar()?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("keeps the page and says so when the PC can't be reached", async () => {
@@ -113,10 +139,12 @@ describe("signing a browser out from the avatar", () => {
     };
     events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
     const replace = await renderSidebar(RELAY);
+    const postsAtLeave = postsWhenLeaving(replace);
     await click(avatar());
     await click(menuItems().at(-1));
     await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
     expect(replace).toHaveBeenCalledTimes(1);
+    expect(postsAtLeave()).toBe(2);
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 
@@ -156,6 +184,7 @@ describe("signing a browser out from the avatar", () => {
     };
     events = gone;
     const replace = await renderSidebar(RELAY);
+    const postsAtLeave = postsWhenLeaving(replace);
     await act(async () => streams.at(-1)?.onopen?.());
     await click(avatar());
     await click(menuItems().at(-1));
@@ -167,6 +196,7 @@ describe("signing a browser out from the avatar", () => {
     await act(async () => streams.at(-1)?.onerror?.());
     await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
     expect(replace).toHaveBeenCalledTimes(1);
+    expect(postsAtLeave()).toBe(2);
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 

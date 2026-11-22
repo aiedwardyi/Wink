@@ -1,3 +1,5 @@
+import { dropSnapshotCache } from "@/state/snapshot-cache";
+
 import { LIVE_EVENTS_PATH } from "./live-events";
 
 /** The relay gate's 401 code once this browser's session is gone (server/phone-access.ts). */
@@ -10,9 +12,13 @@ export function signedOutLanding(url?: string): void {
   landing = url ?? "/pair";
 }
 
-/** Opening the landing page offline would strand the tab on the browser's error page; the live stream's next refusal tries again. */
-export async function leaveSignedOut(): Promise<void> {
-  if (await reachable(landing)) location.replace(landing);
+/** Opening the landing page offline would strand the tab on the browser's error page; the live stream's next refusal tries again. `cleared`: the Sign Out reply itself arrived. */
+export async function leaveSignedOut(cleared = false): Promise<void> {
+  dropSnapshotCache();
+  if (!(await reachable(landing))) return;
+  // A lost Sign Out reply lost its Clear-Site-Data too; sign-out answers a gone session the same way, so ask again.
+  if (!cleared && landing !== "/pair") await fetch("/api/phone/sign-out", { method: "POST", cache: "no-store" }).catch(() => null);
+  location.replace(landing);
 }
 
 /** Whether `url` answers at all. */

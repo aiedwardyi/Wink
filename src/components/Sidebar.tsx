@@ -128,6 +128,8 @@ import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
+/** The profile menu's w-52. */
+const PROFILE_MENU_WIDTH = 208;
 
 export { compactSidebarModelLabel } from "./SidebarConversations";
 
@@ -622,6 +624,8 @@ export function Sidebar({
   const [profileMenu, setProfileMenu] = useState<{ left: number; bottom: number } | null>(null);
   const profileMenuPresence = usePresence(profileMenu);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+  const closeProfileMenu = useCallback(() => setProfileMenu(null), []);
+  useListMenuDismiss("[data-profile-menu]", "[data-sidebar-list]", !profileMenu, closeProfileMenu);
   const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   useEffect(() => { if (teamLibraryOpen) trackScreen("teams-library"); }, [teamLibraryOpen]);
@@ -987,7 +991,7 @@ export function Sidebar({
     const confirmation = new AbortController();
     try {
       await api("/api/phone/sign-out", { method: "POST" });
-      return leaveSignedOut();
+      return leaveSignedOut(true);
     } catch {
       const live = sessionStreamLive(confirmation.signal);
       const probe = new AbortController();
@@ -1921,7 +1925,8 @@ export function Sidebar({
             onClick={(event) => {
               if (!signInSite) return dispatch({ type: "toggleAppSettings", open: true, section: "account" });
               const rect = event.currentTarget.getBoundingClientRect();
-              setProfileMenu(profileMenu ? null : { left: rect.left, bottom: window.innerHeight - rect.top + 4 });
+              const left = Math.max(8, Math.min(rect.left, window.innerWidth - PROFILE_MENU_WIDTH - 8));
+              setProfileMenu(profileMenu ? null : { left, bottom: window.innerHeight - rect.top + 4 });
             }}
             aria-haspopup={signInSite ? "menu" : undefined}
             aria-expanded={signInSite ? Boolean(profileMenu) : undefined}

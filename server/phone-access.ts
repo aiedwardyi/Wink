@@ -495,13 +495,18 @@ export class PhoneAccess {
 
   /** A browser's own Sign Out: it stays signed in until the file drops it, then loses this site's cookie, storage and cache. */
   private signOut(req: IncomingMessage, res: ServerResponse): void {
+    let id: string | null;
     try {
-      const id = this.phones.signOut(phoneCookieToken(req.headers.cookie));
-      if (id) this.cut(id, req.socket);
-      // Push records follow the file, so a retry after a failed push write still clears what it left.
-      removeSignedOutPushSubscriptions(this.options.dataDir, (phone) => this.phones.paired(phone));
+      id = this.phones.signOut(phoneCookieToken(req.headers.cookie));
     } catch {
       return send(res, 500, { error: "save-failed" });
+    }
+    try {
+      if (id) this.cut(id, req.socket);
+      // Push records follow the file, so the next sign-out or push send drops what a failed push write left.
+      removeSignedOutPushSubscriptions(this.options.dataDir, (phone) => this.phones.paired(phone));
+    } catch {
+      // The file already dropped this browser, so it still gets its clearing reply.
     }
     // "cookies" would clear every PC host under the shared base, not just this one.
     send(res, 200, { ok: true }, { "set-cookie": PHONE_CLEAR_COOKIE, "clear-site-data": '"cache", "storage"', connection: "close" });
