@@ -31,6 +31,8 @@ interface StaleBranch {
   tip: string;
   missed: number;
   reason?: string;
+  /** The main head is a peer's question its own turn has not answered yet: wait for that answer instead of joining under the question. */
+  waiting?: boolean;
 }
 
 const storedTaskSchema = z.object({
@@ -541,7 +543,13 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
     if (!resolve && !changed) return;
     const value = z.string().nullable().parse(heads[0].version.value);
-    const stale = own && value ? staleBranch(task, value, own) : undefined;
+    const stale = own && value ? staleBranch(task, value, own, heads[0]) : undefined;
+    // Resolving now would drop this PC's pick, and with it the join once the peer's answer lands. Until then this PC keeps
+    // showing its own reply, not the peer's question with that reply hidden.
+    if (stale?.waiting) {
+      if (changed) applyChanges(task, [{ cursor: 0, kind: "head", rowId: "", value: stale.tip, conflict: false }]);
+      return;
+    }
     if (stale && !stale.reason) return joinStale(task, stale);
     if (resolve) {
       // One head that has seen every head lets older builds, which pick by writer id, converge too.
@@ -563,7 +571,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   /** The branch this PC last picked, once `main` hid it, with the reason it stays split if it can't join. */
-  function staleBranch(task: StoredTask, main: string, own: string): StaleBranch | undefined {
+  function staleBranch(task: StoredTask, main: string, own: string, head: { writerId: string; version: { seen: Record<string, number> } }): StaleBranch | undefined {
     const picks = withMessageTransaction((db) => db.prepare(`SELECT json FROM sync_v2_packets WHERE thread = ? AND writer = ?
       AND json_extract(json, '$.kind') = 'head' AND json_extract(json, '$.legacy') IS NULL ORDER BY seq DESC LIMIT 8`).all(task.threadId, writer));
     const pick = picks.map((row) => ({ writerId: writer, version: JSON.parse(String(row.json)) })).find((item) => !engine.automatic(task, item));
@@ -636,7 +644,10 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       : rows.some((row) => row.kind === "compaction") ? "compaction"
       : duplicate ? "duplicate user text"
       : pending.some((row) => row.role === "bot") && !final ? "unfinished bot turn" : undefined;
-    return { first: { ...rows[0], parentId: main }, tip, missed: trunk.slice(at).filter((id) => byId.get(id)!.kind === "text").length, reason };
+    // A peer that picked its own question before it saw this PC's pick may still be answering it; once it answers, or picks again
+    // after seeing this pick (it resolves only between turns), the join runs.
+    const waiting = !reason && head.writerId !== writer && byId.get(main)!.role === "user" && (head.version.seen[writer] ?? 0) < pick.version.seq;
+    return { first: { ...rows[0], parentId: main }, tip, missed: trunk.slice(at).filter((id) => byId.get(id)!.kind === "text").length, reason, waiting };
   }
 
   function joinStale(task: StoredTask, stale: StaleBranch): void {

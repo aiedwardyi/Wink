@@ -728,6 +728,62 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     }
   });
 
+  // F5: a mid-turn publish lets this PC see the other PC's question before that PC has answered it.
+  async function replyBesidePeerQuestion() {
+    const folder = temp();
+    const a = pc(folder, "home", true, false, false, LOW);
+    const c = pc(folder, "laptop", true, false, false, HIGH);
+    await a.call("append", { text: "base" });
+    await a.call("flush");
+    await c.call("pull");
+    const asked = await a.call<Message>("append", { text: "home asks" });
+    await a.call("saved");
+    await c.call("pull");
+    const answered = await a.call<Message>("append", { role: "bot", text: "re: home asks" });
+    await a.call("settle");
+    const question = await c.call<Message>("append", { text: "laptop asks" });
+    await c.call("live", { value: true });
+    expect(await c.call("saved")).toBe("written");
+    await a.call("pull");
+    return { a, c, asked, answered, question };
+  }
+
+  it("keeps a reply under its own question while the other PC is still answering a question it sent beside it", async () => {
+    const { a, c, asked, answered, question } = await replyBesidePeerQuestion();
+    const waiting = await a.snapshot();
+    expect(tip(waiting)).toBe(answered.id);
+    expect(waiting.rows.find((row) => row.id === answered.id)?.parentId).toBe(asked.id);
+    expect(waiting.rows.find((row) => row.id === question.id)?.parentId).toBe(asked.id);
+    expect(waiting.rows.filter(isConflictNotice)).toHaveLength(0);
+    const reply = await c.call<Message>("append", { role: "bot", text: "re: laptop asks" });
+    await c.call("live", { value: false });
+    await c.call("settle");
+    await exchange(a, c);
+    for (const peer of [a, c]) {
+      const snapshot = await peer.snapshot();
+      expect(snapshot.rows.filter(isConflictNotice)).toHaveLength(0);
+      expect(path(snapshot)).toHaveLength(snapshot.rows.length);
+      expect(path(snapshot).slice(-4)).toEqual([asked.id, question.id, reply.id, answered.id]);
+      expect(snapshot.logs.filter((line) => line.includes("split"))).toEqual([]);
+    }
+  });
+
+  it("joins a reply under the other PC's question once that PC settles without answering it", async () => {
+    const { a, c, asked, answered, question } = await replyBesidePeerQuestion();
+    await c.call("live", { value: false });
+    await c.call("settle");
+    // the laptop picks its question again only after it has seen the reply; the next round joins the reply and brings it back
+    await exchange(a, c);
+    await a.call("flush");
+    await c.call("pull");
+    for (const peer of [a, c]) {
+      const snapshot = await peer.snapshot();
+      expect(snapshot.rows.filter(isConflictNotice)).toHaveLength(0);
+      expect(path(snapshot)).toHaveLength(snapshot.rows.length);
+      expect(path(snapshot).slice(-3)).toEqual([asked.id, question.id, answered.id]);
+    }
+  });
+
   it("joins completed Claude narration, tools and final without changing output", async () => {
     const { a, c, main } = await behind();
     const sent = await c.call<Message>("append", { text: "A distinct request" });

@@ -436,6 +436,8 @@ export function createGoogleSync(options: Options) {
       if (!listed) syncHold.google(bound.mirrorPath);
     } catch (error) {
       if (!listed) syncHold.google(bound.mirrorPath);
+      // A 429 on the first folder lookup, before the mirror runs, holds pokes off like one inside it.
+      rateLimited = error instanceof DriveClientError && error.rateLimited;
       const offline = error instanceof GoogleAccountError || (error instanceof DriveClientError && (error.status === 0 || error.status >= 500 || error.status === 429));
       problem = offline ? "offline" : "error";
       if (!offline) log(`[google-sync] pass stopped: ${error instanceof DriveMirrorError ? error.problem : error instanceof Error ? error.message : String(error)}`);

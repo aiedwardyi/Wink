@@ -752,6 +752,29 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     }
   });
 
+  it("leaves a rate-limit wait standing when poked after the first folder lookup was rate limited", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    await settle(home);
+    const drive = driveA();
+    const fetch = drive.fetch;
+    const lookup = (input: string | URL | Request) => new URL(input instanceof Request ? input.url : String(input)).searchParams.get("q")?.includes("winkRoot") ?? false;
+    const requests = vi.spyOn(drive, "fetch").mockImplementation((input, init) =>
+      lookup(input) ? Promise.resolve(new Response(null, { status: 429, headers: { "retry-after": "6" } })) : fetch(input, init));
+    try {
+      // a fresh session catches up, and a catch-up counts the folder first
+      home.account.setSession(A);
+      await home.sync.idle();
+      expect(requests.mock.calls.filter(([input]) => lookup(input))).toHaveLength(1);
+      const sent = requests.mock.calls.length;
+      home.sync.poked();
+      await home.sync.idle();
+      expect(requests.mock.calls.length).toBe(sent);
+    } finally {
+      requests.mockRestore();
+    }
+  });
+
   it("leaves a rate-limit wait standing when this PC publishes a chat", async () => {
     const home = makePC("home");
     await startOn(home);
