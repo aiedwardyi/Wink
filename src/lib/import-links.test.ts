@@ -1,10 +1,31 @@
 import { describe, expect, it } from "vitest";
 
 import { catalogs } from "./i18n-catalog";
-import { IMPORT_OFFER, importOfferFence, importOfferId } from "./import-links";
+import { DESKTOP_LINK_LIMIT, IMPORT_OFFER, IMPORT_PROVIDERS, importLink, importOfferFence, importOfferId } from "./import-links";
 
 const fence = (locale: "en" | "ko") => `\`\`\`text\n${catalogs[locale]["aboutYou.prompt"]}\n\`\`\``;
 const offer = (locale: "en" | "ko") => `Hi!\n\n${IMPORT_OFFER[locale].join("\n")}\n\n${fence(locale)}`;
+
+describe("importLink on desktop", () => {
+  // Electron's shell.openExternal rejects anything over 2081 characters on Windows, after the URL is normalised the way the main process does.
+  it.each(Object.entries(catalogs))("keeps every %s link under the Windows limit with the whole prompt in it", (_locale, catalog) => {
+    const prompt = catalog["aboutYou.prompt"];
+    for (const provider of IMPORT_PROVIDERS) {
+      const link = importLink(provider, prompt, true);
+      const url = new URL(link);
+      expect(url.href.length, provider.name).toBeLessThanOrEqual(DESKTOP_LINK_LIMIT);
+      expect(url.searchParams.get("q"), provider.name).toBe(prompt);
+    }
+  });
+
+  it("leaves a link that already fits, and the web link, as encodeURIComponent wrote it", () => {
+    const prompt = catalogs.en["aboutYou.prompt"];
+    for (const provider of IMPORT_PROVIDERS) {
+      expect(importLink(provider, prompt, true)).toBe(provider.url + encodeURIComponent(prompt));
+      expect(importLink(provider, catalogs.ko["aboutYou.prompt"])).toBe(provider.url + encodeURIComponent(catalogs.ko["aboutYou.prompt"]));
+    }
+  });
+});
 
 describe("importOfferFence", () => {
   it.each(["en", "ko"] as const)("finds the %s offer's own box, past a quote of the prompt", (locale) => {
