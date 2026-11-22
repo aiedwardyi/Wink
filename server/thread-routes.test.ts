@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,12 +7,13 @@ import { DATA_DIR } from "./config.ts";
 import { RoutineManager } from "./routines.ts";
 import { Store } from "./store.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 function pager() {
   vi.useFakeTimers();
   const messagePage = vi.fn(() => ({ messages: [], hasMore: true }));
   const route = createThreadRoutes({
-    dataDir: DATA_DIR, store: { botByThread: () => ({}), messagesFor: () => [{ id: "cursor" }] },
+    dataDir: DATA_DIR, store: { botByThread: () => ({}), loaded: () => true, messagesFor: () => [{ id: "cursor" }] },
     threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn(), DEFAULT_PAGE: 50,
     pageSize: (raw: string | null) => raw === null ? undefined : Math.min(Number(raw), 200), messagePage, messageWindow: vi.fn(() => ({ messages: [], hasMore: false })),
   } as unknown as Parameters<typeof createThreadRoutes>[0]);
@@ -55,9 +55,62 @@ describe("older message batches", () => {
   });
 });
 
+describe("older pages of an unloaded chat", () => {
+  it("pages off disk without loading the whole chat", async () => {
+    const writer = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = writer.createBot({ name: "Long" }, { seedMessages: false });
+    for (let i = 0; i < 300; i++) writer.appendMessage(bot.threadId, { role: i % 30 ? "bot" : "user", kind: "text", text: `line ${i}`, at: i });
+    const ids = writer.messagesFor(bot.threadId).map((message) => message.id);
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const messagePage = (threadId: string, limit: number, before: string) => {
+      const all = store.messagesFor(threadId);
+      const stop = all.findIndex((message) => message.id === before);
+      return { messages: all.slice(Math.max(0, stop - limit), stop), hasMore: stop > limit };
+    };
+    const route = createThreadRoutes({
+      dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn(), DEFAULT_PAGE: 50,
+      pageSize: (raw: string | null) => raw === null ? undefined : Math.min(Number(raw), 200), slimMessage: (message: unknown) => message, messagePage,
+    } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+
+    await route.listMessages(res, ["", bot.threadId] as RegExpMatchArray, new URL(`http://localhost/messages?limit=50&before=${ids[250]}&pages=2`));
+
+    expect(store.loaded(bot.threadId)).toBe(false);
+    const page = JSON.parse(body);
+    expect(page.messages.map((message: { id: string }) => message.id)).toEqual(ids.slice(150, 250));
+    expect(page.hasMore).toBe(true);
+  });
+});
+
+describe("turn index of an unloaded chat", () => {
+  async function turnsOf(store: Store, threadId: string) {
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+    const answered = route.turns(res, ["", threadId] as RegExpMatchArray);
+    const loadedAtOnce = store.loaded(threadId);
+    await answered;
+    return { loadedAtOnce, turns: JSON.parse(body) };
+  }
+
+  it("loads the chat without holding other requests", async () => {
+    const writer = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = writer.createBot({ name: "Long" }, { seedMessages: false });
+    for (let i = 0; i < 300; i++) writer.appendMessage(bot.threadId, { role: i % 3 ? "bot" : "user", kind: "text", text: `line ${i}`, at: i * 1000 });
+    const loaded = await turnsOf(writer, bot.threadId);
+
+    const cold = await turnsOf(new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" })), bot.threadId);
+
+    expect(cold.loadedAtOnce).toBe(false);
+    expect(loaded.turns.ids).toHaveLength(100);
+    expect(cold.turns).toEqual(loaded.turns);
+  });
+});
+
 describe("search", () => {
   it("returns live hits past a trashed bot's", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const routines = new RoutineManager({
       file: join(DATA_DIR, "routines.json"),
@@ -81,7 +134,7 @@ describe("search", () => {
   });
 
   it("leaves out the threads it is told to hide", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const bot = store.createBot({ name: "Live" }, { seedMessages: false });
     const room = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: "r1" });
@@ -99,7 +152,7 @@ describe("search", () => {
 
 describe("media", () => {
   it("lists a chat's files in one answer, then the version alone, and 404s an unknown chat", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const bot = store.createBot({ name: "Live" }, { seedMessages: false });
     const sent = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "[a.png](C:\\w\\a.png)", at: 1_000 });

@@ -34,7 +34,7 @@ function completionFixture() {
   let complete;
   runInNewContext(main.slice(start, end), {
     devices: { webRequest: { onCompleted: (_filter, listener) => { complete = listener; } } },
-    deviceWindows, deviceLinkPages, deviceLoads, sameDesktopViewerOrigin,
+    deviceWindows, deviceLinkPages, devicePairing: new WeakMap(), deviceLoads, sameDesktopViewerOrigin,
     url: new URL(`${OTHER}/`),
   });
   return { complete, windows, deviceLoads };

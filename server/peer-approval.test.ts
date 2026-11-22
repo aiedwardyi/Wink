@@ -2,7 +2,6 @@
 // raised but never settled keeps matching the client's "unanswered" filter,
 // and the composer stays disabled behind it — so a gate that works
 // perfectly can still make a thread unusable. These tests pin the settle.
-import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
@@ -19,6 +18,7 @@ import {
 import { closeMessageDb } from "./message-db.ts";
 import { bootRowsNow } from "./testing/boot-rows.ts";
 import { Store, type BotRecord } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "fake-model" });
 
@@ -43,7 +43,7 @@ describe("peer approval card lifecycle", () => {
 
   afterEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("settles the card when the user allows, so the composer unblocks", async () => {

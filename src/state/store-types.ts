@@ -105,6 +105,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** The new-bot offer reply that carries the Import Memory prompt. */
+  importOffer?: true;
   call?: import("../../shared/live-call").CallTag;
   /** Client-only accepted send; replaced by the canonical transcript row. */
   placeholder?: true;
@@ -418,7 +420,7 @@ export interface EngineInstall {
   command?: Partial<Record<"darwin" | "win32" | "linux", string>>;
   docsUrl?: string;
   signInCommand?: string;
-  login?: { args: string[]; deviceArgs?: string[]; env?: Record<string, string>; authHosts?: string[] };
+  login?: { args: string[]; deviceArgs?: string[]; deviceEnv?: Record<string, string>; env?: Record<string, string>; authHosts?: string[] };
   logout?: string[];
   needsNode?: boolean;
 }

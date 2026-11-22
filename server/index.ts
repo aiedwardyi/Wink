@@ -138,7 +138,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
-import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
+import { LoginBusyError, logSignInRefusal, signInOwner, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -337,7 +337,7 @@ import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer, noteOfferTurn, takeImportOffer } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -3933,7 +3933,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
-            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}) },
+            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}), ...takeImportOffer(event.threadId, event.text) },
         );
         markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "assistant.persisted", {
           turnId: event.turnId,
@@ -4403,6 +4403,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
+      noteOfferTurn(event.threadId, false);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
       for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
       const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
@@ -5698,6 +5699,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? importMemoryTurn(activeMessages, 0, threadId)
     : { offer: false, tool: false };
   if (importMemory.offer) noteImportOffer(threadId);
+  noteOfferTurn(threadId, importMemory.offer);
   const currentPrompt = [
     ...(importMemory.offer ? [importOfferNote()] : []),
     composeUserTurnPrompt(text, turnOpts),
@@ -8250,6 +8252,7 @@ const threadRoutes = createThreadRoutes({
   DEFAULT_PAGE,
   pageSize,
   clientMessage,
+  slimMessage,
   messagePage,
   messageWindow,
   answerRequest,
@@ -8706,7 +8709,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
         setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
-        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : []) } : {}),
+        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [], teamRelayBase(googleEnv.teamRelay)) } : {}),
         phones: phoneVisits.list(),
       });
     }
@@ -8727,7 +8730,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "POST" && path === BOARD_ROUTES.remove) return await boardRoutes.remove(req, res);
     if (method === "GET" && path === "/api/devices") {
       const listed = syncedDevices();
-      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay), Date.now(), !relay && isLoopbackHost(req.headers.host));
       return json(res, 200, { devices });
     }
     if (method === "DELETE" && path.startsWith("/api/devices/")) {
@@ -9278,7 +9281,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
     if (method === "POST" && path === "/api/accounts") await enableWorkerAccounts(terminalBridgeAccess);
-    if (await accountRoutes(req, res, method, path)) return;
+    if (await accountRoutes(req, res, method, path, signInOwner(req.headers, phone?.id))) return;
     m = path.match(/^\/api\/usage\/(refresh|check)\/([^/]+)$/);
     if (m && method === "POST") {
       const instanceId = m[2];
@@ -9338,9 +9341,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
           const body = await readBody(req);
           if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
-          const capture = await registry.startSignIn(id, body?.device === true);
+          const capture = await registry.startSignIn(id, body?.device === true, signInOwner(req.headers, phone?.id));
           return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         }
+        if (method === "DELETE" && !registry.logins.owns(id, signInOwner(req.headers, phone?.id))) return refuse(403, SIGNED_IN_ELSEWHERE, "sign-in-elsewhere");
         if (method === "DELETE") return await registry.cancelSignIn(id)
           ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         if (method === "GET") {
@@ -9359,6 +9363,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
+      // Owner check and sign-out's cancel run in this one turn, so no newer sign-in can slip between them.
+      if (!registry.logins.owns(engineSignOut[1], signInOwner(req.headers, phone?.id))) return json(res, 403, { error: SIGNED_IN_ELSEWHERE, code: "sign-in-elsewhere" });
       const signedOut = await registry.signOut(engineSignOut[1]);
       return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
         : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });

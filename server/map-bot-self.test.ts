@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -22,6 +22,7 @@ import { messageDatabase, withMessageTransaction } from "./message-db.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { completedTool } from "./tool-activity.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -111,7 +112,7 @@ it("shows the bot as a row with the files its own turn edited in a git folder", 
 
 it("reads only the rows that wrote files, then loads a long chat off the server thread", async () => {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const write = (store: Store, threadId: string, path: string) => {
     const { id: _id, at: _at, ...row } = edited([join(root, path)]);
     store.appendMessage(threadId, row);
@@ -189,7 +190,7 @@ it("releases every held chat page in request order", async () => {
 // A chat longer than one page, open in Map with its first load request held.
 async function loadingChat(more?: (setup: Store, bot: BotRecord) => void) {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   writeFileSync(join(root, "file.ts"), "const first = 2;\n");
@@ -307,7 +308,7 @@ it("answers a slim switch back to a chat Map is loading without reading it, and 
 
 it("reads an unloaded chat's write rows on a worker before the chat loads", async () => {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   writeFileSync(join(root, "file.ts"), "const first = 2;\n");
@@ -325,7 +326,7 @@ it("reads an unloaded chat's write rows on a worker before the chat loads", asyn
 
 it("reads no note for panes edited after every note of an unloaded chat", async () => {
   const folders = [repo().root, repo().root];
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   for (let n = 0; n < 200; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "note", text: `done ${n}`, at: Date.now() - 60_000 });
@@ -350,7 +351,7 @@ it("reads no note for panes edited after every note of an unloaded chat", async 
 // Two rows whose edits left no change, so each reason reads every note since 0, and `count` notes about other panes.
 function cleanPanes(count: number) {
   const folders = [repo().root, repo().root];
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   for (const root of folders) {
@@ -405,7 +406,7 @@ const selfRow = (root: string) => `self-${createHash("sha256").update(root).dige
 
 it("moves the bot's row when a synced patch moves its write to another checkout of an unloaded chat", async () => {
   const [a, b] = [repo().root, repo().root];
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   for (const root of [a, b]) writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
@@ -421,7 +422,7 @@ it("moves the bot's row when a synced patch moves its write to another checkout 
 
 it("shows the bot's row once a synced completion gives a pending tool of an unloaded chat its write", async () => {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
@@ -436,7 +437,7 @@ it("shows the bot's row once a synced completion gives a pending tool of an unlo
 
 it("follows the bot to a new task mid-turn, and back to the chat whose tool completed meanwhile", async () => {
   const [a, b] = [repo().root, repo().root];
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   for (const root of [a, b]) writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
@@ -457,7 +458,7 @@ it("follows the bot to a new task mid-turn, and back to the chat whose tool comp
 
 it("shows a write a sync pull commits after the Map refresh it set off inside its transaction", async () => {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
@@ -488,7 +489,7 @@ it("shows a write a sync pull commits after the Map refresh it set off inside it
 });
 
 it("reads nothing off the server thread for a bot on a brand-new task", async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   const store = new Store(() => ({ instanceId: "claude", model: "opus" }));

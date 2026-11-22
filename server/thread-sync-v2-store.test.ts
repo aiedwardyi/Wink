@@ -1,5 +1,4 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
@@ -15,13 +14,14 @@ import { writeDeviceRecord } from "./device-sync.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import type { Snapshot, TestArgs, TestResult } from "./testing/thread-sync-v2-pc.ts";
 import { bootRowsNow, testBootReads } from "./testing/boot-rows.ts";
+import { testHome } from "./testing/test-home.ts";
 
 const roots: string[] = [];
 const peers: Array<{ close(): Promise<void> }> = [];
 const CONFLICT_NOTICE_V2 = "This chat also changed on another PC. Both versions were kept.";
 const isConflictNotice = (message: Message) => [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].some((notice) => message.tool?.name === `error: ${notice}`);
 const temp = () => {
-  const root = mkdtempSync(join(tmpdir(), "sync-v2-store-"));
+  const root = mkdtempSync(join(testHome(), "sync-v2-store-"));
   roots.push(root);
   return root;
 };

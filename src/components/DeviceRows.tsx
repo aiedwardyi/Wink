@@ -65,10 +65,10 @@ export function YourPcs() {
   const others = devices.filter((device) => !device.current);
   if (!known) return <DevicesSection title={t("chrome.devices")} data-your-pcs=""><PendingRow /></DevicesSection>;
   const deviceWindow = window.ogb?.deviceWindow;
-  const open = (host: string, name: string) => {
+  const open = (host: string, name: string, relayHost?: string) => {
     if (!deviceWindow) return leaveFor(`https://${host}/`);
     setOpening(host);
-    void deviceWindow.open(host, name).then((opened) => {
+    void deviceWindow.open(host, name, relayHost).then((opened) => {
       if (!opened) void reload();
     }, () => void reload()).finally(() => setOpening(null));
   };
@@ -102,7 +102,7 @@ export function YourPcs() {
         const online = !device.offline && !device.checking;
         const sub = device.checking ? t("chrome.deviceChecking") : device.offline ? t("chrome.deviceOffline") : undefined;
         return <DeviceRow key={device.deviceId} name={device.name} sub={sub} ready={online ? t("settings.devices.online") : undefined}
-          control={online ? <button type="button" disabled={opening === device.host} onClick={() => open(device.host, device.name)} className={OPEN_BUTTON}>{t("settings.devices.openButton")}</button>
+          control={online ? <button type="button" disabled={opening === device.host} onClick={() => open(device.host, device.name, device.relayHost)} className={OPEN_BUTTON}>{t("settings.devices.openButton")}</button>
             : device.offline ? <button type="button" onClick={() => {
               setRemoving(device);
               setAsking(true);

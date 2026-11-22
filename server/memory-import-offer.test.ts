@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -9,6 +9,7 @@ import { DATA_DIR } from "./config.ts";
 import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
 import type { Message } from "./store.ts";
 import { en, ko } from "../src/lib/i18n-catalog.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const dir = join(DATA_DIR, "about-you");
 const typed = (text: string) => ({ role: "user", kind: "text", text }) as Message;
@@ -30,10 +31,10 @@ async function call(body: object, chat: Message[], ownerChat = true) {
 }
 
 beforeEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  removeTestData(dir);
   noteSendLocale("en");
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => removeTestData(dir));
 
 describe("new bot import offer", () => {
   it("offers on a new chat's first typed message while Import Memory is empty", () => {

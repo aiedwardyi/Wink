@@ -536,7 +536,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     docsUrl: "https://github.com/google-antigravity/antigravity-cli#installation",
     signInCommand: "agy",
     // agy has no login or logout subcommand: a helper runs them over agy's ACP server (see loginConfig).
-    login: { args: ["login"], authHosts: ["accounts.google.com"] },
+    // agy opens no browser over SSH, so a phone gets the link and paste prompt.
+    login: { args: ["login"], deviceArgs: ["login", "--paste"], deviceEnv: { SSH_CONNECTION: "127.0.0.1 50000 127.0.0.1 22" }, authHosts: ["accounts.google.com"] },
     logout: ["logout"],
   },
   models: STATIC_ANTIGRAVITY_MODELS,

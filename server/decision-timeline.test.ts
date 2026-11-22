@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import type { GroupRecord, Message, StoreChange } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 import { timelinePicks } from "./timeline-picks.ts";
 import { memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 vi.mock("node:fs", async (original) => {
   const actual = await original<typeof import("node:fs")>();
@@ -682,7 +683,7 @@ describe("decision timeline", () => {
     dataDir = temps.make(join(tmpdir(), "decision-timeline-"));
     generate = vi.fn<NoteGenerator>(async () => "[]");
     writeMemoryFile(BOT, "");
-    rmSync(join(workspaceDir(BOT), "memory"), { recursive: true, force: true });
+    removeTestData(join(workspaceDir(BOT), "memory"));
     pass = start();
   });
 
