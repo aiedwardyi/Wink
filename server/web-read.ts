@@ -7,7 +7,7 @@ import { markPage, WEB_READ_OWN_TOOL, WEB_READ_SEARCH_ONLY, WEB_READ_STOP, type 
 import { json, readBody } from "./http-helpers.ts";
 import { nodeTransport, refusedTarget, type Hop, type Transport } from "./web-read-net.ts";
 import { parseRobots, robotsAllows, type RobotsRule } from "./web-read-robots.ts";
-import { bodyText, capText, challengeReason, htmlToText, isPlaceholder, pdfToText } from "./web-read-text.ts";
+import { bodyText, capText, challengeReason, htmlToText, pdfToText } from "./web-read-text.ts";
 
 export const BROWSER_HEADERS: Readonly<Record<string, string>> = {
   "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
@@ -289,20 +289,19 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     if (hop.status < 200 || hop.status >= 300) return { ok: false, route: "fetch", text: "", tried: tried(`HTTP ${hop.status}`), keep: hop.status < 500 };
     if (page) {
       const heading = page.title ? `# ${page.title}\n\n` : "";
-      // "Loading…" alone is what the page shows until its scripts run, not its text.
-      const text = isPlaceholder(page.text) ? "" : page.text;
-      // A page that runs no script can't build more text, so short text is the whole page.
-      const scripted = /<script\b(?![^>]*\btype\s*=\s*["']?application\/(?:ld\+)?json)/i.test(body);
-      if (text.length >= 200 || (text && !scripted)) return { ok: true, route: "fetch", text: heading + text, tried: tried(`ok, ${text.length.toLocaleString("en-US")} chars`), keep: true };
-      // Whatever was found is kept, labeled partial (a title and summary may be the site's, not this page's), and the ladder goes on.
+      const { text } = page;
+      if (text.length >= 200) return { ok: true, route: "fetch", text: heading + text, tried: tried(`ok, ${text.length.toLocaleString("en-US")} chars`), keep: true };
+      // Short text may be the whole page or what it shows until the real page loads ("Loading", "Please stand by."), with
+      // or without scripts, and its words can't tell which. So whatever was found is kept, labeled partial (a title and
+      // summary may be the site's, not this page's), and the ladder goes on.
       const found = [page.title && `# ${page.title}`, text, page.description].filter(Boolean).join("\n\n");
       if (found) {
         const [what, note] = text
-          ? ["what the page shows before its scripts run was", `${text.length.toLocaleString("en-US")} chars before scripts run`]
+          ? ["a short text, the whole page or what it shows before it loads, was", `only ${text.length.toLocaleString("en-US")} chars`]
           : page.description ? ["the page's title and summary were", "title and summary only"] : ["the page's title was", "title only"];
         return { ok: false, route: "fetch:meta", text: `[Partial: only ${what} readable.]\n\n${markPage(found)}`, tried: tried(note), keep: true };
       }
-      return { ok: false, route: "fetch", text: "", tried: tried(page.text ? "only a loading message (no readable text without a browser)" : "empty JavaScript page (no readable text without a browser)"), keep: true };
+      return { ok: false, route: "fetch", text: "", tried: tried("empty JavaScript page (no readable text without a browser)"), keep: true };
     }
     if (type === "application/pdf" || sniff.startsWith("%PDF")) {
       const text = await pdfToText(hop.body);

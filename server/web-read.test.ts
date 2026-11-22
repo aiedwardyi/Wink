@@ -81,9 +81,9 @@ const CASES: Case[] = [
   { name: "thread with only the site's summary", url: "https://forum.example.org/thread/8", routes: { "https://forum.example.org/thread/8": { html: page("Forum", '<div id="app"></div><script src="/app.js"></script>', '<meta name="description" content="An independent discussion forum for open source software and documentation.">') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*independent discussion forum/, next: true },
   { name: "short page summary", url: "https://market.example.org/hours", routes: { "https://market.example.org/hours": { html: page("Market hours", "", '<meta name="description" content="The market opens at 8 on Sundays.">') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*# Market hours\n\nThe market opens at 8 on Sundays\./, next: true },
   { name: "short text on a scripted page", url: "https://ferry.example.org/times", routes: { "https://ferry.example.org/times": { html: page("Ferry timetable", '<p>Last ferry at 18:15.</p><script defer src="/visits.js"></script>', '<meta name="description" content="Ferries across the bay, every day of the year.">') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*Last ferry at 18:15\.[\s\S]*Ferries across the bay/, next: true },
-  { name: "loading placeholder with no script", url: "https://bridge.example.org/", routes: { "https://bridge.example.org/": { html: page("Bridge bulletin", '<div id="root">Loading…</div>') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*# Bridge bulletin$/, next: true },
-  { name: "JavaScript notice only", url: "https://notice.example.org/", routes: { "https://notice.example.org/": { html: "<html><body><p>Please enable JavaScript.</p><p>Loading...</p></body></html>" } }, status: "blocked", route: "fetch", tried: /only a loading message/, next: true },
-  { name: "short static post", url: "https://library.example.org/meeting", routes: { "https://library.example.org/meeting": { html: page("Hours", "<article>Library hours change on Saturday. Doors open at nine and close at noon.</article>") } }, status: "ok", route: "fetch", text: /Doors open at nine and close at noon/ },
+  { name: "loading placeholder with no script", url: "https://bridge.example.org/", routes: { "https://bridge.example.org/": { html: page("Bridge bulletin", '<div id="root">Loading…</div>') } }, status: "blocked", route: "fetch:meta", text: /Partial[\s\S]*# Bridge bulletin\n\nLoading…$/, next: true },
+  { name: "JavaScript notice only", url: "https://notice.example.org/", routes: { "https://notice.example.org/": { html: "<html><body><p>Please enable JavaScript.</p><p>Loading...</p></body></html>" } }, status: "blocked", route: "fetch:meta", text: /^\[Partial: [\s\S]*Please enable JavaScript\.\n\nLoading\.\.\.$/, next: true },
+  { name: "short static post", url: "https://library.example.org/meeting", routes: { "https://library.example.org/meeting": { html: page("Hours", "<article>Library hours change on Saturday. Doors open at nine and close at noon.</article>") } }, status: "blocked", route: "fetch:meta", text: /^\[Partial: [\s\S]*Doors open at nine and close at noon/, next: true },
   { name: "quoted > in an attribute", url: "https://grammar.example.org/compare", routes: { "https://grammar.example.org/compare": { html: page("Compare", `<p title="upper > lower">Opening paragraph.</p>${paras(5, "Grammar")}`) } }, status: "ok", route: "fetch", text: /\n# Compare\n\nOpening paragraph\./ },
   { name: "article quoting a bot check's words", url: "https://access.example.org/buttons", routes: { "https://access.example.org/buttons": { html: page("Accessible buttons", `<main>${paras(24, "Access")} The sign tells visitors to press &amp; hold the button.</main>`) } }, status: "ok", route: "fetch", text: /press & hold the button/ },
   { name: "Cloudflare challenge", url: "https://shop.example.com/item", routes: { "https://shop.example.com/item": { status: 403, html: "<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>" } }, status: "blocked", route: "fetch", tried: /Cloudflare bot check \(Just a moment\) \(HTTP 403\)/, next: true },
@@ -792,8 +792,57 @@ describe("web_read gate follow-up (2123D)", () => {
     expect(last.tried.at(-1)).toMatch(/step 4-5 @Coder \(codex\): offline test peer unavailable/);
   });
 
-  it("a placeholder is judged on what it says: a short real line on a page with no script is still the page", async () => {
+  it("a short real line on a page with no script is kept, labeled partial, whatever its words", async () => {
     const reader = createWebReader({ transport: fake({ "https://dock.example.org/": { html: page("Dock", "<p>Loading dock opens at 6.</p>") } }).transport });
-    expect(await reader.read("https://dock.example.org/")).toMatchObject({ status: "ok", text: expect.stringContaining("Loading dock opens at 6.") });
+    expect(await reader.read("https://dock.example.org/")).toMatchObject({ status: "blocked", text: expect.stringMatching(/^\[Partial: [\s\S]*Loading dock opens at 6\.$/) });
+  });
+});
+
+describe("web_read gate follow-up (2123E)", () => {
+  // Nothing is decided from wording: the same short markup is a status line on one site and a loading screen on another.
+  it.each([
+    ["a waiting line on a page with no script", page("Portal", "<main><p>Please stand by.</p></main>"), "Please stand by."],
+    ["a Korean waiting line", page("포털", "<main><p>화면을 준비하고 있어요. 곧 표시됩니다.</p></main>"), "화면을 준비하고 있어요. 곧 표시됩니다."],
+    ["a live status line", page("Dashboard", '<main><p aria-live="polite">Fetching your dashboard</p></main>'), "Fetching your dashboard"],
+    ["a real short fact", page("Freight lift capacity", "<main><p>Loading limit: 900 kg.</p></main>"), "Loading limit: 900 kg."],
+    ["a real one-word status", "<title>Shipment 842 freight status</title><main>Loading</main>", "Loading"],
+  ])("keeps %s as labeled partial and goes on down the ladder", async (_name, html, words) => {
+    const reader = createWebReader({ transport: fake({ "https://short.example.org/": { html } }).transport });
+    const r = await reader.read("https://short.example.org/");
+    expect(r).toMatchObject({ status: "blocked", route: "fetch:meta", next: WEB_READ_OWN_TOOL });
+    expect(r.text).toMatch(/^\[Partial: /);
+    expect(r.text).toContain(words);
+  });
+
+  describe("a later step that succeeds keeps what the first read found", () => {
+    const hours = "The side entrance opens at 06:40.";
+    const gate = "Use the lower south gate.";
+    const routes = { "https://terminal.example/times": { html: `<title>Ferry terminal</title><meta name="description" content="${gate}"><main>${hours}</main><script defer src="/dashboard.js"></script>` } };
+    const peerText = "Public ferry schedules are posted in the main terminal each weekday morning.";
+    it.each([
+      ["the borrowed reader opens the page", peerText, "reader:codex"],
+      ["the borrowed reader finds search snippets", `SEARCH: ${peerText}`, "search:codex"],
+    ])("when %s", async (_name, reply, route) => {
+      const reader = createWebReader({ transport: fake(routes).transport, readers: () => [{ botId: "c1", name: "Coder", engine: "codex", busy: false }] });
+      const remembered: string[] = [];
+      const api = async (_path: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        if (body.remember) remembered.push(body.remember.text);
+        return (body.remember ? {} : await reader.read(body.url, { ownToolFailed: body.own_tool_failed, callerBotId: "me" })) as unknown as Record<string, unknown>;
+      };
+      const askBot = async () => ({ text: reply });
+      const first = JSON.parse((await webRead({ url: "https://terminal.example/times" }, api, askBot)).text);
+      expect(first.text).toContain(hours);
+      const last = JSON.parse((await webRead({ url: "https://terminal.example/times", own_tool_failed: true }, api, askBot)).text);
+      expect(last).toMatchObject({ status: "ok", route });
+      expect(last.text.startsWith(`${WEB_READ_PAGE_MARK}\n`)).toBe(true);
+      expect(last.text).toContain(peerText);
+      const firstRead = last.text.slice(last.text.indexOf("[Also found by Wink's own first read:]"));
+      expect(firstRead).toMatch(/^\[Also found by Wink's own first read:\]\n\[Partial: /);
+      expect(firstRead).toContain(hours);
+      expect(firstRead).toContain(gate);
+      expect(remembered).toHaveLength(1);
+      expect(remembered[0]).toContain(hours);
+    });
   });
 });

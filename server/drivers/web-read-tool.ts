@@ -59,10 +59,12 @@ export async function webRead(args: Json, api: Api, askBot: AskBot, guestTurn = 
     const search = /^SEARCH:/i.test(answer);
     const route = `${search ? "search" : "reader"}:${reader.engine}`;
     const text = search ? `From search results, not the page:\n${answer.replace(/^SEARCH:\s*/i, "")}` : answer;
+    // The partial text Wink's own read found stays too: the reader's answer may leave it out.
+    const first = r.text ? `\n\n[Also found by Wink's own first read:]\n${r.text}` : "";
     if (search) tried.push(`step 4 ${who}: could not open the page`, `step 5 search snippets via ${who}: ok`);
     else tried.push(`step 4 ${who}: ok`);
-    await within(api(WEB_READ_ROUTE, { method: "POST", signal: deadline, body: JSON.stringify({ url: r.url, remember: { route, text } }) }).catch(() => undefined));
-    return { text: shown({ status: "ok", route, tried, text: capText(markPage(text)) }) };
+    await within(api(WEB_READ_ROUTE, { method: "POST", signal: deadline, body: JSON.stringify({ url: r.url, remember: { route, text: text + first } }) }).catch(() => undefined));
+    return { text: shown({ status: "ok", route, tried, text: capText(markPage(text)) + first }) };
   }
   const why = failed ? String(failed) : answer.replace(/^BLOCKED:?\s*/i, "").split("\n")[0] || "no reply";
   tried.push(`step 4-5 ${who}: ${why}`);

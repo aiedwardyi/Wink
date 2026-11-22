@@ -164,12 +164,6 @@ const SHORT_CHALLENGES: Array<[RegExp, string]> = [
   // An article may quote it; PerimeterX's own page says little else.
   [/press (?:&amp;|&) hold/i, "PerimeterX bot check"],
 ];
-// What a page shows until its scripts run (a spinner line, a "turn on JavaScript" note), not the page's own text.
-const PLACEHOLDER = /^(?:(?:loading|please wait|one moment(?: please)?|redirecting|(?:please )?(?:enable|turn on) javascript(?: (?:in your browser|to (?:continue|run this app|view this page|use this site)))?|javascript is (?:required|disabled)|you need to enable javascript to run this app|로딩 ?중|読み込み中|加载中)[\s.,…!·*-]*)+$/i;
-
-/** True when all of a page's text is a loading or placeholder message. */
-export const isPlaceholder = (text: string): boolean => text.length <= 200 && PLACEHOLDER.test(text);
-
 const AUTH_PATH = /\/(login|signin|sign-in|sign_in|authwall|checkpoint|uas\/login|accounts\/login|i\/flow\/login)(\/|\?|$)/i;
 
 /** A page that is a bot check, CAPTCHA or login wall rather than the content; null when it looks real. A sign-in address counts only when a redirect led there (a page about signing in is a page). */
