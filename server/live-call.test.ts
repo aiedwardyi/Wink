@@ -170,6 +170,29 @@ describe("call token", () => {
     await h.post("lines", { callId: data.callId, lines: [{ who: "voice", text: "Anything else?" }, { who: "user", text: " " }] });
     expect(settled).toHaveBeenCalledTimes(1);
   });
+  it("gives a same-bot call a voice that only reads: no brief, no tools, the picked voice", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam" } });
+    const { status, data } = await h.post("token", { mode: "bot" });
+    expect(status).toBe(200);
+    expect(data).toMatchObject({ callId: expect.stringMatching(CALL_ID), engine: "gemini", voice: "Alnilam", locale: "en" });
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(setup.tools).toBeUndefined();
+    expect(setup).toMatchObject({ model: `models/${LIVE_MODEL}`, inputAudioTranscription: {}, outputAudioTranscription: {}, sessionResumption: {} });
+    const text = setup.systemInstruction.parts[0].text as string;
+    expect(text).toContain("You are only the voice of Juno");
+    expect(text).toContain("[READ]");
+    expect(text).not.toContain("fix the login page");
+    expect(text).not.toContain("STATUS:");
+  });
+
+  it("keeps the Gemini brief for a room call even when asked for the same bot", async () => {
+    const roomTail = vi.fn(() => ({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" }));
+    const h = harness({ roomTail });
+    expect((await h.post("token", { mode: "bot", room: { id: "launch", kind: "host" } })).status).toBe(200);
+    expect(h.sent().bidiGenerateContentSetup.tools).toEqual([{ functionDeclarations: LIVE_TOOLS }]);
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Minji: Safari broke");
+  });
+
   it("uses one room snapshot for validation and the brief", async () => {
     const roomTail = vi.fn().mockReturnValueOnce({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" });
     const h = harness({ roomTail });

@@ -4,7 +4,7 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
-import type { CallPrefs, LiveVoice } from "../../shared/live-call";
+import type { CallAnswer, CallPrefs, LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
@@ -388,7 +388,7 @@ export type TerminalAttentionMap = Record<string, TerminalAttention>;
 export interface ConfigStatus {
   xai?: { configured: boolean };
   gemini?: { configured: boolean; introSeen?: boolean };
-  liveCall?: { voice: LiveVoice };
+  liveCall?: { voice: LiveVoice; answer?: CallAnswer };
   openaiCompat?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };

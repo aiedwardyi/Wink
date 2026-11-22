@@ -16,6 +16,7 @@ import { aboutYouFacts } from "./about-you.ts";
 import { estimateContextTokens, fittingHead, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { RoomVoiceTail } from "./rooms/voice-tail.ts";
+import { sameBotSetup } from "./same-bot-call.ts";
 import { hasQueuedSends } from "./steer-queue.ts";
 import type { BotRecord, Message, SecretRequestCardData, Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
@@ -311,7 +312,11 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     // A swap or a new call carries the picks; a resume keeps the call's own, even when its brief is gone.
     const own = savedPicks()[callId];
     const picks = swap || body.callId === undefined ? callPrefsSchema.safeParse(body.call).data ?? bot.call : own?.botId === bot.id ? own.picks : bot.call;
-    const { brief, locale, voice, style } = await briefFor(bot, callId, body.locale, swap, picks, room, tail);
+    // A same-bot call sends no brief: the voice only hears him and reads the bot's replies.
+    const sameBot = body.mode === "bot" && !room;
+    const { brief, locale, voice, style } = sameBot
+      ? { brief: "", locale: picks?.language ?? (body.locale === "ko" ? "ko" : "en"), voice: picks?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE, style: picks?.style ?? "normal" }
+      : await briefFor(bot, callId, body.locale, swap, picks, room, tail);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;
@@ -324,7 +329,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
           expireTime: new Date(expiresAt).toISOString(),
           newSessionExpireTime: new Date(at + NEW_SESSION_MS).toISOString(),
           // REST takes the SDK's liveConnectConstraints as bidiGenerateContentSetup.
-          bidiGenerateContentSetup: liveSetup(`${brief}\n\n${taskContext(bot)}`, locale, voice, style),
+          bidiGenerateContentSetup: sameBot ? sameBotSetup(bot.name, locale, voice) : liveSetup(`${brief}\n\n${taskContext(bot)}`, locale, voice, style),
         }),
         signal: AbortSignal.timeout(15_000),
       });

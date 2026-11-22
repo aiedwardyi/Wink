@@ -328,3 +328,18 @@ it("labels the panel in Korean", async () => {
   expect(button(host, "Jenn 들어보기")).not.toBeNull();
   expect(host.querySelector('[role="radiogroup"][aria-label="목소리"]')).not.toBeNull();
 });
+
+it("picks who answers calls for the whole app, Gemini voice until he flips it", async () => {
+  const fetch = vi.fn(async (_path: string, _init?: RequestInit) => Response.json({ liveCall: { voice: "Aoede", answer: "bot" } }));
+  vi.stubGlobal("fetch", fetch);
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const group = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Answered by"]')!;
+  const radios = [...group.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+  expect(radios.map((radio) => [radio.textContent, radio.getAttribute("aria-checked")])).toEqual([["Same bot", "false"], ["Gemini voice", "true"]]);
+  await act(async () => radios[0]!.click());
+  const [path, init] = fetch.mock.calls[0]!;
+  expect(path).toBe("/api/config");
+  expect(init).toMatchObject({ method: "PATCH" });
+  expect(JSON.parse(String(init!.body))).toEqual({ liveCall: { answer: "bot" } });
+  await vi.waitFor(() => expect(store.dispatch).toHaveBeenCalledWith({ type: "configStatus", config: { liveCall: { voice: "Aoede", answer: "bot" } } }));
+});
