@@ -153,7 +153,8 @@ import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { codexResumeReplayRoom, contextWindowFor, estimateContextTokens, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nativeReplayBudget, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, prepareNativeReplay, routineCardsSinceLastUserTurn, summarizesOnEstimate, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { decodeCodexSelection, OFFICIAL_CODEX_PROVIDER } from "./drivers/codex-catalog.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -3055,6 +3056,7 @@ const summaryBuild = createSummaryBuild({
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
     if (!instance?.generateText) return null;
+    if (instance.driverKind === "codex" && codexResumeReplayRoom(task, selection.instanceId, selection.model) > 0) return null;
     const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
@@ -4483,6 +4485,7 @@ bus.subscribe((event: RuntimeEvent) => {
               instanceId: seed.instanceId,
               cursor: seed.cursor,
               compactionId: seed.compactionId,
+              ...(seed.nativeReplay ? { nativeReplay: true } : {}),
             });
           }
           const systemSeed = systemSeeds.take(event.threadId, event.turnId);
@@ -5457,6 +5460,21 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const notesBeforeSummary = instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(messagesBeforeSummary, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
+  const reactions = { delivered: task.reactionsDelivered };
+  const requestText = composeUserTurnPrompt(text, {
+    replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
+  });
+  const codexReplayEligible = instance.driverKind === "codex" && !rewound && !recovering &&
+    decodeCodexSelection(model).modelProvider === OFFICIAL_CODEX_PROVIDER;
+  const replayRoom = codexReplayEligible ? codexResumeReplayRoom(task, instanceId, model) : 0;
+  const requestTokens = codexReplayEligible
+    ? estimateContextTokens([{ text: requestText }, { text: durableTaskRecordText }]) + (notesBeforeSummary?.tokens ?? 0)
+    : 0;
+  const resumeNativeReplay = replayRoom > 0 && replayRoom >= requestTokens && task.resumeSeed &&
+    task.lastInstanceId === instanceId && !selectionChanged && sessionPrompt &&
+    !shouldRecycleProviderSession({ compacted: false, sessionPrompt }) && !instance.adapter.hasBackgroundWork?.(threadId)
+    ? { compactionId: task.resumeSeed.compactionId, budgetTokens: nativeReplayBudget(modelContextWindow) - requestTokens }
+    : undefined;
   const planBeforeSummary = planCompaction({
     messages: messagesBeforeSummary,
     contextWindow: modelContextWindow,
@@ -5464,15 +5482,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     reserveTokens: notesBeforeSummary?.tokens,
     nativeAt,
     ...nativeCycle,
+    resumeNativeReplay,
     userName: cfg.profile?.name?.trim() || "User",
     referenceMessages: store.messagesFor(threadId),
   });
-  const reactions = { delivered: task.reactionsDelivered };
   const summaryGrace: SummaryGrace = {
     knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
-    requestText: composeUserTurnPrompt(text, {
-      replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
-    }),
+    requestText,
     fresh: selectionChanged || engineIsFresh({
       instanceId, model, lastInstanceId: task.lastInstanceId, lastModel: task.lastModel,
       sessionModelSwitch: instance.adapter.capabilities.sessionModelSwitch, resumeCursors: task.resumeCursors,
@@ -5500,18 +5516,27 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const graceInputs = { plan: planBeforeSummary, grace: summaryGrace, taskRecordText: durableTaskRecordText || "No durable task record is available.", reserveTokens: notesBeforeSummary?.tokens };
   const sessionResumes = planSummaryGrace(graceInputs).safe;
+  const nativeReplay = planBeforeSummary.needed && codexReplayEligible &&
+    (summaryGrace.fresh || (!summaryGrace.recycle &&
+      task.resumeSeed?.compactionId === (planBeforeSummary.previous?.messageId ?? null) &&
+      replayRoom >= requestTokens))
+    ? prepareNativeReplay(planBeforeSummary, nativeReplayBudget(modelContextWindow) - requestTokens)
+    : undefined;
+  const codexHistory = nativeReplay !== undefined ||
+    (!planBeforeSummary.needed && planBeforeSummary.status === "fits" && planBeforeSummary.nativeReplay === true);
   const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));
+  const usePlannedContext = summarySkipped || codexHistory;
   let summaryWait: SummaryWait | undefined;
   const onSummaryWait = (wait: SummaryWait) => { summaryWait = { ...wait, waitedMs: (summaryWait?.waitedMs ?? 0) + wait.waitedMs }; };
   const logSummaryWait = () => {
     if (summaryWait) console.info(`[summary-wait] ${JSON.stringify(summaryWait)}`);
     summaryWait = undefined;
   };
-  const summaryWaitMs = await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
-  const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);
+  const summaryWaitMs = codexHistory ? 0 : await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
+  const activeMessages = usePlannedContext ? messagesBeforeSummary : store.activePath(threadId);
   holdNotes?.(activeMessages);
   // Inline replay carries this turn's notes after the reply marker, so they leave history and claim their room first.
-  let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
+  let inlineNotes = usePlannedContext ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
   const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle) => {
@@ -5565,7 +5590,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       } : undefined,
     });
   };
-  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);
+  const prepared = nativeReplay ?? await prepareContext(activeMessages, summaryWaitMs, usePlannedContext ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);
   if (prepared.status !== "ready") {
     const detail = prepared.status === "unsupported"
       ? `This conversation uses context summary version ${String(prepared.version)}. Update Wink before continuing.`
@@ -5581,9 +5606,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
   let latestCompactionId = prepared.compactionId ?? null;
-  if (prepared.compaction) {
+  if (prepared.compaction || prepared.replaySummary) {
     try {
-      latestCompactionId = store.appendCompaction(threadId, prepared.compaction).id;
+      if (prepared.compaction) {
+        latestCompactionId = store.appendCompaction(threadId, prepared.compaction).id;
+      } else if (prepared.replaySummary && prepared.compactionId &&
+        !store.patchMessage(threadId, prepared.compactionId, prepared.replaySummary)) {
+        throw new Error("the reused context summary is missing");
+      }
     } catch (error) {
       const detail = `The context summary could not be saved. Earlier messages and the last valid summary remain intact; retry this turn. ${error instanceof Error ? error.message : String(error)}`;
       store.appendMessage(threadId, {
@@ -5596,7 +5626,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       store.settleTaskPacket(threadId);
       return startedTurn(userMessage, { dispatchFailed: true, error: detail });
     }
-    if (nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
+    if (prepared.compaction && nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
   }
   ensureChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id });
   trace?.identify({ messageId: userMessage.id });
@@ -5756,7 +5786,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
-  const { turnText, resume } = buildTurnContext({
+  const { turnText, resume, nativeReplayPrefix } = buildTurnContext({
     driverKind: instance.driverKind,
     model,
     text: turnPrompt,
@@ -5766,6 +5796,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recycled,
     recycleReason,
     replaysNatively,
+    nativeReplay: codexHistory && summaryGrace.fresh,
     taskRecord: taskRecord ?? undefined,
     taskRecordText: durableTaskRecordText || undefined,
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
@@ -5858,6 +5889,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     }),
     instanceId,
     cursor: resume ? task.resumeCursors[instanceId] : undefined,
+    ...(codexHistory ? { nativeReplay: true } : {}),
   });
 
   const settleTrace = holdTurnTrace(trace);
@@ -6293,10 +6325,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         const finalGraceInputs = { ...graceInputs, grace: { ...summaryGrace, requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle } };
         const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;
-        if (systemRecycle || (finalGrace && !finalGrace.safe)) {
+        // Native history was sized before late sends folded in; past its room the turn summarizes like base.
+        const replayOverflow = codexHistory && estimateContextTokens([{ text: systemUpdate + text }]) > (replaysTranscript ? nativeReplayBudget(modelContextWindow) : replayRoom);
+        if (systemRecycle || replayOverflow || (finalGrace && !finalGrace.safe)) {
           const lateCount = late.length;
-          if (summarySkipped) {
-            onSummaryWait({ threadId, sendId: latencySendId, mode: "waited", waitedMs: 0, reason: finalGrace && !finalGrace.safe ? finalGrace.reason : "session-recycle" });
+          if (summarySkipped || replayOverflow) {
+            onSummaryWait({ threadId, sendId: latencySendId, mode: "waited", waitedMs: 0, reason: finalGrace && !finalGrace.safe ? finalGrace.reason : replayOverflow ? "headroom" : "session-recycle" });
             const waitedMs = await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), {
               sendId: latencySendId, grace: finalGraceInputs, onWait: onSummaryWait,
             });
@@ -6323,6 +6357,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
             seed.compactionId = compacted.expanded ? null : latestCompactionId;
+            delete seed.nativeReplay;
             if (currentTurnEpoch(bot.id) !== epoch || (opts?.sendId && isSendCancelled(opts.sendId))) {
               throw Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true });
             }
@@ -6366,6 +6401,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         leanStartup,
         resumeCursor,
         resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
+        ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,
