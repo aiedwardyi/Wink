@@ -88,7 +88,7 @@ function acpToolRun(call: z.infer<typeof toolCallSchema>, ok: boolean, folder: s
   const command = z.string().safeParse(call.rawInput).data ?? commandInput.safeParse(call.rawInput).data?.command ?? call.title;
   if (!command) return undefined;
   const text = (call.content ?? []).flatMap((block) => block.type === "content" && block.content.type === "text" ? [block.content.text ?? ""] : []).join("\n");
-  return toolRun(command, text || z.string().safeParse(call.rawOutput).data, !ok, shellPlace(command, folder));
+  return toolRun(command, text || z.string().safeParse(call.rawOutput).data, !ok, ok ? undefined : shellPlace(command, folder));
 }
 
 /**

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { createBoardRoutes } from "./board-routes.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { createForumLoop, type ForumLoopRow } from "./forum-loop.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
-import { errorLine, runSig, shellFolders, toolRun as runAt, type ShellPlace } from "./tool-run.ts";
+import { errorLine, runSig, shellFolders, shellPlace, toolRun as runAt, type ShellPlace } from "./tool-run.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -67,10 +67,7 @@ function setup(options: { taken?: boolean; room?: boolean; enabled?: boolean; pr
   const routes = (threadId: string) => createBoardRoutes({
     board, caller: () => ({ botId: BOTS[threadId]!, threadId }), known: () => true, projectOf, roomTurn: () => null,
     proven: (id, text) => loop.claim(id, text),
-    fixFor: (sig, projectId) => {
-      const post = loop.knownFix(sig, projectId);
-      return post?.project_id === projectId ? post : undefined;
-    },
+    fixFor: loop.knownFix,
   });
   const post = async (threadId: string, body: unknown) => {
     let reply = "";
@@ -741,6 +738,72 @@ describe("a signature names where the failure happened", () => {
     w.loop.event(done("tb"));
     expect(w.handed()).toEqual([]);
     expect(w.loop.next("tb")).toBe("");
+  });
+
+  it.each([
+    ["pnpm --filter=web exec tsc --noEmit", "pnpm --filter=admin exec tsc --noEmit"],
+    ["cargo test --manifest-path=crates/cart/Cargo.toml", "cargo test --manifest-path=crates/orders/Cargo.toml"],
+    ["python tools/etl.py --table=users", "python tools/etl.py --table=prices"],
+    ["python tools/etl.py -tusers", "python tools/etl.py -tprices"],
+    ["npm run etl -- --table=users", "npm run etl -- --table=prices"],
+    ["node scripts/migrate.cjs --env=staging", "node scripts/migrate.cjs --env=production"],
+    ["cargo run -- --input=config.toml", "cargo run -- --input=users.csv"],
+    ["python tools/etl.py --table=Users", "python tools/etl.py --table=users"],
+  ])("keeps the arguments of %s distinct from %s", (a, b) => {
+    const output = CLAUDE.keyError[1];
+    expect(toolRun(a, output, true).sig).toBeTruthy();
+    expect(toolRun(a, output, true).sig).not.toBe(toolRun(b, output, true).sig);
+  });
+
+  it("keeps the working folder inside a project without .git", () => {
+    const root = temps.make(join(tmpdir(), "orbit-forum-place-"));
+    for (const dir of ["apps/web", "apps/admin"]) mkdirSync(join(root, dir), { recursive: true });
+    const command = "pnpm vitest run";
+    const web = shellFolders("cd apps/web", root).after;
+    const admin = shellFolders("cd apps/admin", root).after;
+    const a = shellPlace(command, web, root);
+    const b = shellPlace(command, admin, root);
+    expect(a).toMatchObject({ root, cwd: web });
+    expect(b).toMatchObject({ root, cwd: admin });
+    expect(runAt(command, CART[1], true, a).sig).not.toBe(runAt(command, CART[1], true, b).sig);
+  });
+
+  it("uses a project source location printed inside a stack frame", () => {
+    const output = (file: string) => "SyntaxError: Unexpected end of JSON input\n    at parse (<anonymous>)\n    at read (" + file + ":4:20)";
+    const sig = (file: string, place = HERE) => toolRun("node read.cjs", output(file), true, place).sig;
+    const source = sig("D:/proj/src/read.cjs");
+    expect(source).toBeTruthy();
+    expect(sig("E:/wt/src/read.cjs", THERE)).toBe(source);
+    expect(sig("D:/proj/src/other.cjs")).not.toBe(source);
+    expect(sig("D:/outside/src/read.cjs")).toBeUndefined();
+    expect(sig("D:/proj/node_modules/dep/read.cjs")).toBeUndefined();
+  });
+
+  it.runIf(process.platform === "win32")("follows a quoted Git Bash drive path", () => {
+    const root = temps.make(join(tmpdir(), "orbit-forum-gitbash-"));
+    const child = join(root, "service one");
+    mkdirSync(child);
+    const bashPath = `/${child[0]!.toLowerCase()}${child.slice(2).replaceAll("\\", "/")}`;
+    expect(shellFolders(`cd "${bashPath}"`, root).after).toBe(child);
+  });
+
+  it("hands a fix across linked worktrees without trusting their folder names", async () => {
+    const root = temps.make(join(tmpdir(), "orbit-forum-worktrees-"));
+    const repo = join(root, "main");
+    const linked = join(root, "linked");
+    const gitdir = join(repo, ".git", "worktrees", "linked");
+    const unrelated = join(root, "unrelated", "main");
+    for (const dir of [gitdir, linked, unrelated]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(linked, ".git"), `gitdir: ${gitdir}\n`);
+    writeFileSync(join(gitdir, "commondir"), "../..\n");
+    const w = setup({ project: (threadId) => (threadId === "tb" ? "linked" : "main") });
+    await w.prove("ta", CART, "expected false to be true in cart coupon test", "Uppercase the coupon code.", shellPlace(CART[0], repo));
+    w.loop.event(bash("tc", ...CART, true, shellPlace(CART[0], unrelated)));
+    w.loop.event(done("tc"));
+    expect(w.loop.next("tc")).toBe("");
+    w.loop.event(bash("tb", ...CART, true, shellPlace(CART[0], linked)));
+    w.loop.event(done("tb"));
+    expect(w.loop.next("tb")).toContain("Uppercase the coupon code.");
   });
 
   it("follows the shell's folder through cd steps, and gives up when a step's folder is unknown", () => {

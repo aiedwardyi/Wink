@@ -35,10 +35,9 @@ describe("forum loop on a default install", () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   };
-  const newBot = async (instanceId: string) => {
+  const newBot = async (instanceId: string, folder = true) => {
     const created = (await api("POST", "/api/bots")).body.bot;
-    // one project folder: a bot with no folder works in a project of its own, and a fix never crosses projects
-    await api("PATCH", `/api/bots/${created.id}`, { name: instanceId, modelSelection: { instanceId, model: "claude-fake" }, cwd: join(home, "shop") });
+    await api("PATCH", `/api/bots/${created.id}`, { name: instanceId, modelSelection: { instanceId, model: "claude-fake" }, cwd: folder ? join(home, "shop") : undefined });
     return created.id as string;
   };
   const say = async (id: string, text: string) => {
@@ -68,8 +67,10 @@ describe("forum loop on a default install", () => {
     };
     writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
       instances: Object.fromEntries([
-        instance("astra", [bash("python -m pytest tests/test_loader.py", KEY_ERROR, true), edit, bash("python -m pytest tests/test_loader.py", "1 passed")]),
-        instance("nova", [bash("python -m pytest tests/test_loader.py", KEY_ERROR, true)]),
+        ...["project", "default"].flatMap((scope) => [
+          instance(`astra-${scope}`, [bash("python -m pytest tests/test_loader.py", KEY_ERROR, true), edit, bash("python -m pytest tests/test_loader.py", "1 passed")]),
+          instance(`nova-${scope}`, [bash("python -m pytest tests/test_loader.py", KEY_ERROR, true)]),
+        ]),
         instance("sol", [bash("pnpm tsc --noEmit", "Exit code 2\nsrc/app.ts(3,1): error TS2304: Cannot find name 'foo'.", true)]),
         instance("vault", [bash("cat .env.local", `Exit code 1\nError: ${SECRET} is not a valid key`, true)]),
       ]),
@@ -91,26 +92,30 @@ describe("forum loop on a default install", () => {
     removeTestData(home);
   });
 
-  it("hands bot B the fix bot A proved, once, and bot C nothing", async () => {
-    const astra = await newBot("astra");
+  it.each(["project", "default"])("hands bot B the fix bot A proved in the %s folder, once", async (scope) => {
+    const astraName = `astra-${scope}`;
+    const novaName = `nova-${scope}`;
+    const astra = await newBot(astraName, scope === "project");
     await say(astra, "fix the loader");
     await waitFor(() => rows().some((row) => row.kind === "proven" && row.botId === astra), "the proven row");
     // the nudge comes after the turn's last shell call, so it waits for the next turn instead of a second reply
     expect(await replies(astra)).toBe(1);
-    const token = JSON.parse(readFileSync(join(home, "astra-dump.json"), "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+    const token = JSON.parse(readFileSync(join(home, `${astraName}-dump.json`), "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
     const posted = await api("POST", "/api/internal/board-post", { kind: "fix", title: "KeyError 'name' in loader", body: "Use cfg.get('name'); the key is optional." }, { authorization: `Bearer ${token}` });
     expect(posted.status).toBe(200);
 
-    const nova = await newBot("nova");
+    const nova = await newBot(novaName, scope === "project");
     await say(nova, "run the loader tests");
     expect(await replies(nova)).toBe(1);
     await say(nova, "and once more");
     expect(await replies(nova)).toBe(2);
-    expect(sent("nova").split("<forum-note>")).toHaveLength(2);
-    expect(sent("nova")).toContain(`Forum ${posted.body.id}`);
-    expect(sent("nova")).toContain("Use cfg.get('name')");
+    expect(sent(novaName).split("<forum-note>")).toHaveLength(2);
+    expect(sent(novaName)).toContain(`Forum ${posted.body.id}`);
+    expect(sent(novaName)).toContain("Use cfg.get('name')");
     expect(rows().filter((row) => row.botId === nova).map((row) => row.kind)).toEqual(["repeat", "again"]);
+  }, 90_000);
 
+  it("keeps a different failure quiet", async () => {
     const sol = await newBot("sol");
     await say(sol, "typecheck");
     expect(sent("sol")).not.toContain("<forum-note>");

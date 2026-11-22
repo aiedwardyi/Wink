@@ -781,7 +781,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               };
               const detail = parsed.success ? codexToolDetail(parsed.data, !ok) : undefined;
               if (detail) event.detail = detail;
-              if (parsed.success && parsed.data.type === "commandExecution" && parsed.data.command) event.run = toolRun(parsed.data.command, parsed.data.aggregatedOutput ?? undefined, !ok, shellPlace(parsed.data.command, parsed.data.cwd ?? turn.cwd ?? homedir()));
+              if (parsed.success && parsed.data.type === "commandExecution" && parsed.data.command) {
+                const { command, aggregatedOutput, cwd } = parsed.data;
+                event.run = toolRun(command, aggregatedOutput ?? undefined, !ok, ok ? undefined : shellPlace(command, cwd ?? turn.cwd ?? homedir(), turn.cwd));
+              }
               if (ok && parsed.success && parsed.data.type === "fileChange") event.writes = parsed.data.changes?.filter(change => change.kind.type !== "delete").map(change => change.path).slice(0, 32);
               emit(event);
             } else if (item.type === "reasoning") {

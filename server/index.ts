@@ -8211,10 +8211,7 @@ const boardRoutes = createBoardRoutes({
   known: (botId) => Boolean(store.bot(botId)),
   projectOf: boardProject,
   proven: (threadId, text) => forumLoop.claim(threadId, text),
-  fixFor: (sig, projectId) => {
-    const post = forumLoop.knownFix(sig, projectId);
-    return post?.project_id === projectId ? post : undefined;
-  },
+  fixFor: forumLoop.knownFix,
   roomTurn: ({ botId, threadId }) => {
     if (readOnlyRoomTurn(botId, threadId)) return "read-only";
     return store.groupByThread(threadId)?.hosted || joinedRoomThreads.has(threadId) ? "room" : null;

@@ -1933,7 +1933,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                 const shell = call?.name === "Bash" ? bashInput.safeParse(input) : undefined;
                 const folders = shell?.success ? shellFolders(shell.data.command, shellAt) : undefined;
                 if (folders) shellAt = folders.after;
-                const run = shell?.success && folders ? toolRun(shell.data.command, firstText(b.content), Boolean(b.is_error), placeAt(folders.runs)) : undefined;
+                const failed = Boolean(b.is_error);
+                const run = shell?.success && folders ? toolRun(shell.data.command, firstText(b.content), failed, failed ? placeAt(folders.runs, cwd) : undefined) : undefined;
                 emit({
                   ...base(threadId, currentTurnId()),
                   type: "item.completed",

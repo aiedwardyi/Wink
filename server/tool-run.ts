@@ -1,12 +1,13 @@
 // What the Forum loop reads from a shell call, whether or not toolDetailCapture is on: a digest of the whole command,
 // and when it failed, the line that names the error (not "Exit code 1" or a runner banner) and its signature.
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, posix, resolve } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
 import type { ToolRun } from "./contracts.ts";
+import { mapGitRefs } from "./map-bot-self.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { secretCommand } from "./tool-detail.ts";
 
@@ -39,8 +40,8 @@ const TEST_RUN = [
   /^(?:FAIL|FAILED|--- FAIL)\b|^not ok \d|^\(fail\) /,
   /\b\d+ (?:tests?|examples?|specs?|runs)\b.*\b\d+ fail|\btests run: \d+, failures: \d+|\(\d+ failed\)/i,
 ];
-// where an error was raised, for one whose line names no path: a Python frame (the last), a Rust panic or compile error, a Node file:line header
-const FRAME = [/^File "([^"]+)", line (\d+)/, /\bpanicked at (.+?):(\d+):\d+:?$/, /^--> (.+?):(\d+):\d+$/, /^(\S*[\\/][^\s:]+\.\w+):(\d+)$/];
+// Where the error was raised: Python traceback, Rust source location, or path:line in a diagnostic or stack frame.
+const FRAME = [/^File "([^"]+)", line (\d+)/, /\bpanicked at (.+?):(\d+):\d+:?$/, /^--> (.+?):(\d+):\d+$/, /(?:^|\((?=(?:[a-z]:)?[\\/]))([^\s()\\/]*[\\/][^():\r\n]+\.\w+):(\d+)(?::\d+)?\)?$/i];
 // a location in a test file: a test failed there, and only a runner read above says which test
 const TEST_SOURCE = /^(?:test_[^:]*|[^:]*[._-](?:test|spec)s?\.\w+):\d+$/;
 // an error about a file or command needs that path's folder to say which one
@@ -74,14 +75,14 @@ export function errorLine(output: string): string {
 }
 
 /** Where a shell call ran: the repo it ran in and the folder inside it. */
-export type ShellPlace = { root: string; cwd: string };
+export type ShellPlace = { root: string; cwd: string; project?: string };
 
-const roots = new Map<string, string>();
-/** The folder holding .git above this one, else the folder itself. */
-export function repoRoot(folder: string): string {
+const roots = new Map<string, string | null>();
+/** The folder holding .git above this one, else the starting project folder. */
+export function repoRoot(folder: string, fallback = folder): string {
   const held = roots.get(folder);
-  if (held !== undefined) return held;
-  let root = folder;
+  if (held !== undefined) return held ?? fallback;
+  let root = null;
   for (let dir = folder; ; dir = dirname(dir)) {
     if (existsSync(join(dir, ".git"))) {
       root = dir;
@@ -91,7 +92,7 @@ export function repoRoot(folder: string): string {
   }
   if (roots.size >= 256) roots.delete(roots.keys().next().value!);
   roots.set(folder, root);
-  return root;
+  return root ?? fallback;
 }
 
 // a command's steps: split at ;, newlines, && and || outside quotes
@@ -132,7 +133,8 @@ export function shellFolders(command: string, folder: string | undefined): Shell
       works.push(ANY_CD.test(step) ? undefined : at);
       continue;
     }
-    const target = (cd[1] ?? "~").replace(/^(["'])(.*)\1$/, "$2");
+    const raw = (cd[1] ?? "~").replace(/^(["'])(.*)\1$/, "$2");
+    const target = process.platform === "win32" ? raw.replace(/^\/([a-z])(?:\/|$)/i, (_, drive: string) => drive.toUpperCase() + ":/") : raw;
     const next = /[$%`]|^-$/.test(target) || /^popd$/i.test(step) ? undefined
       : target === "~" || /^~[\\/]/.test(target) ? join(homedir(), target.slice(1))
       : isAbsolute(target) ? resolve(target) : at === undefined ? undefined : resolve(at, target);
@@ -143,12 +145,33 @@ export function shellFolders(command: string, folder: string | undefined): Shell
   return { runs, after: at };
 }
 
-export const placeAt = (folder: string | undefined): ShellPlace | undefined => (folder === undefined ? undefined : { root: repoRoot(folder), cwd: folder });
+const projects = new Map<string, string>();
+function projectAt(root: string): string {
+  const held = projects.get(root);
+  if (held !== undefined) return held;
+  const git = join(root, ".git");
+  let path = mapGitRefs(root)?.dir ?? (existsSync(git) ? git : root);
+  try { path = realpathSync.native(path); } catch {}
+  const project = process.platform === "win32" ? path.toLowerCase() : path;
+  if (projects.size >= 256) projects.delete(projects.keys().next().value!);
+  projects.set(root, project);
+  return project;
+}
+
+export function placeAt(folder: string | undefined, projectFolder?: string): ShellPlace | undefined {
+  if (folder === undefined) return undefined;
+  const start = projectFolder ?? folder;
+  const fromStart = relative(start, folder);
+  const root = repoRoot(folder, isAbsolute(fromStart) || fromStart.split(sep, 1)[0] === ".." ? folder : start);
+  return { root, cwd: folder, project: projectAt(root) };
+}
 
 /** Where a command ran, from the folder the shell stood in. */
-export const shellPlace = (command: string, folder: string | undefined) => placeAt(shellFolders(command, folder).runs);
+export const shellPlace = (command: string, folder: string | undefined, projectFolder = folder) => placeAt(shellFolders(command, folder).runs, projectFolder);
 
 const slashed = (path: string) => path.replace(/\\/g, "/").toLowerCase().replace(/(?<=.)\/+$/, "");
+const PROJECT_SIG = "forum-v2:";
+export const isProjectRunSig = (sig: string) => sig.startsWith(PROJECT_SIG);
 /** A path as this place names it: repo-relative inside the repo, absolute outside it, so one file in two checkouts is one name. */
 const placed = (place: ShellPlace) => {
   const root = slashed(place.root);
@@ -252,9 +275,11 @@ export function runSig(line: string, where: { place: ShellPlace; command: string
     if ((pathError && !paths.length) || (!paths.length && !spots.length && !frame)) return "";
   }
   const what = test || [...paths, ...spots, ...loose].join(" ") || frame;
-  // options say how a command runs, its other words what it runs: --project=firefox and -x leave it the same command
-  const ran = (command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []).filter((word) => !word.startsWith("-")).map((word) => slashed(word).split(slashed(place.root)).join("<root>")).join(" ");
-  return digest(`forum-loop\n${at(place.cwd).name}\n${ran}\n${what}\n${stem}`);
+  const root = place.root.replace(/(?<=.)[\\/]+$/, "").split(/[\\/]/).map((part) => part.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&")).join("[\\\\/]");
+  const checkoutPath = new RegExp("(^|[\\s=\"'])" + root + "(?=[\\s\\\\/\"']|$)", /^[a-z]:/i.test(place.root) ? "gi" : "g");
+  const ran = command.replace(checkoutPath, "$1<root>");
+  const id = digest(JSON.stringify(["forum-loop", place.project, at(place.cwd).name, ran, what, stem]));
+  return place.project === undefined ? id : PROJECT_SIG + id;
 }
 
 /** With no place nothing says where a failure happened, so it is not signed. */

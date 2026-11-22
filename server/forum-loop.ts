@@ -2,6 +2,7 @@
 // then passed after an edit, is a proven fix its bot is asked to post. A plain retry or the user's words never post. No model calls.
 import { BOARD_USER, boardWords, fromRoom, type Board, type BoardPost } from "./board.ts";
 import type { RuntimeEvent, ToolRun } from "./contracts.ts";
+import { isProjectRunSig } from "./tool-run.ts";
 
 type Failure = { sig: string; error: string; shown: string; edits: number };
 type Turn = { failed: Map<string, Failure>; offered: Map<string, string>; edits: number; nudged: boolean };
@@ -92,7 +93,7 @@ export function createForumLoop(deps: ForumLoopDeps) {
   };
   /** A proven fix another bot posted for this signature in this project; never another project's. Only a proven post carries a loop signature. */
   const knownFix = (sig: string, project: string, botId?: string): BoardPost | undefined => deps.board.list().find((post) => post.error_sig === sig
-    && post.project_id === project && post.kind === "fix" && !post.parent_id && post.status === "solved" && post.fix
+    && (isProjectRunSig(sig) || post.project_id === project) && post.kind === "fix" && !post.parent_id && post.status === "solved" && post.fix
     && !post.lesson && !fromRoom(post) && post.author_bot_id !== BOARD_USER && post.author_bot_id !== botId);
 
   const failed = (threadId: string, botId: string, run: ToolRun, sig: string) => {
