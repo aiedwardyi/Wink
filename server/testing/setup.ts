@@ -8,6 +8,7 @@ import { afterAll, afterEach } from "vitest";
 
 import { removeTestData, startTestRun } from "../../companion/src/test-profile.ts";
 import { refusingKeyringTool, replaceKeyringTool } from "../drivers/os-keyring.ts";
+import { guardKeyringChildren } from "./keyring-child-guard.ts";
 import { scrubProfileEnv } from "./profile-env.ts";
 
 const home = startTestRun();
@@ -31,6 +32,8 @@ process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
 // says: no test runs its tool. os-keyring.ts already refuses in a test process (and in the servers tests spawn);
 // installed here as well so the refusal does not hang on that detection alone.
 replaceKeyringTool(refusingKeyringTool);
+// And no child a test starts can reach it: a node child running Wink's code without a test home fails to start.
+guardKeyringChildren();
 
 // SQLite keeps the database file open for the lifetime of its handle.
 // Windows will not remove a directory containing an open database, so close

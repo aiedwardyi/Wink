@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { runTestNode } from "../testing/harness-auth.ts";
+import { childUsesOsKeyring } from "../testing/keyring-child-guard.ts";
 import { createFixtureHome, removeTestData } from "../testing/test-home.ts";
 import { runKeyringTool, usesOsKeyringTool } from "./os-keyring.ts";
 
@@ -68,6 +69,31 @@ describe("the OS credential store in tests", () => {
     } finally {
       removeTestData(home);
     }
+  });
+
+  // Gate 2120E/F: three route tests started server/index.ts with a raw spawn and a minimal env, so the server chose
+  // the OS tool. Any such start now fails, however it is made; "-e" keeps a start that slipped through harmless.
+  it("refuses a server child a test starts without a test home, however it is started", async () => {
+    // Imported here: a test file importing child_process at the top and naming cmdkey fails the scan below.
+    const { execSync, fork, spawn, spawnSync } = await import("node:" + "child_process");
+    const server = join(ROOT, "server", "index.ts");
+    const env = { PATH: process.env.PATH, HOME: ROOT };
+    const refused = /would use the real OS credential store/;
+    expect(() => spawn(process.execPath, ["-e", "", server], { env, stdio: "ignore" })).toThrow(refused);
+    expect(() => spawnSync(process.execPath, ["-e", "", server], { env, stdio: "ignore" })).toThrow(refused);
+    expect(() => fork(server, [], { env, execArgv: ["-e", ""], stdio: "ignore" })).toThrow(refused);
+    expect(() => execSync(`"${process.execPath}" -e "" "${server}"`, { env, stdio: "ignore" })).toThrow(refused);
+  });
+
+  it("tells which children would use the OS tool", () => {
+    const server = join(ROOT, "server", "index.ts");
+    expect(childUsesOsKeyring(process.execPath, [server], {})).toBe(true);
+    expect(childUsesOsKeyring("node", ["server/index.ts"], { PATH: "x" })).toBe(true);
+    expect(childUsesOsKeyring(process.execPath, [server], { VITEST: "true" })).toBe(false);
+    expect(childUsesOsKeyring(process.execPath, ["--import", "file:///x/server/testing/harness-profile.ts", server], {})).toBe(false);
+    expect(childUsesOsKeyring(process.execPath, [join(ROOT, "server", "testing", "fake-agy-cli.ts")], {})).toBe(false);
+    expect(childUsesOsKeyring("powershell", [server], {})).toBe(false);
+    expect(childUsesOsKeyring(process.execPath, [join(ROOT, "companion", "src", "index.ts")], {})).toBe(false);
   });
 
   it("is never run by a test file directly", () => {

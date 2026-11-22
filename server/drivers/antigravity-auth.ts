@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -34,27 +34,71 @@ export function forgetAntigravitySignIn(target: typeof ANTIGRAVITY_KEYRING, plat
   });
 }
 
+/** Where "signed out by Wink" is kept, so it outlives a quit, crash or restart. */
+export interface SignedOutMark {
+  read(): boolean;
+  /** Throws when it cannot be saved. */
+  write(signedOut: boolean): void;
+}
+
+/** The mark as a file: there means signed out by Wink, with no sign-in since. */
+export function signedOutMarkFile(path: string): SignedOutMark {
+  return {
+    read: () => existsSync(path),
+    write: (signedOut) => {
+      if (!signedOut) rmSync(path, { force: true });
+      else {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, `${new Date().toISOString()}\n`);
+      }
+    },
+  };
+}
+
 /**
  * Signs agy out by deleting its saved sign-in, without cutting off a running turn: agy before 1.5 rereads that
  * sign-in on every request, so a delete under a running turn fails its reply. While turns run, sign-out reads as
- * done and no new turn starts; the delete lands when the last running turn ends.
+ * done and no new turn starts; the delete lands when the last running turn ends, or when Wink shuts down.
  *
  * Once sign-out has reported done, Wink reads signed out until a sign-in succeeds, whatever else fails: a refused
- * delete or a failed sign-in leaves the saved sign-in in place but never usable. A sign-in holds the delete off
- * while it runs (it may be saving a new sign-in); if it fails, the delete lands as soon as no turn runs.
+ * delete, a failed sign-in or a quit, crash or restart before the delete leaves the saved sign-in in place but never
+ * usable. That promise is kept in `mark`: read when the first instance attaches, which tries the delete again, and
+ * cleared by a delete that lands or a sign-in that succeeds. A sign-in holds the delete off while it runs (it may be
+ * saving a new sign-in); if it fails, the delete lands as soon as no turn runs.
+ *
+ * One delete at a time: a sign-out while a delete runs gets that delete's answer, and a delete finds out first
+ * whether there is still a saved sign-in (`present`), so a second sign-out never fails on the first one's delete.
  */
-export function antigravityKeyringSignOut(forget: () => Promise<boolean>) {
+export function antigravityKeyringSignOut(forget: () => Promise<boolean>, opts: {
+  present?: () => Promise<boolean | undefined>;
+  mark?: SignedOutMark;
+} = {}) {
   const running = new Set<string>();
   const signedOut = new Set<() => void>();
-  // Sign-out reported done, and no sign-in has succeeded since.
+  // Sign-out reported done, and no sign-in has succeeded since. In memory for this run, in `mark` for the next.
   let promised = false;
   let signIns = 0;
+  // Instances attached in this run; the last one to let go ends the run, and the next attach reads `mark` again.
+  let attached = 0;
+  let run = 0;
+  let loaded = false;
   let landing: Promise<boolean> | undefined;
+  const promise = (signedOutNow: boolean) => {
+    if (promised === signedOutNow) return;
+    try {
+      opts.mark?.write(signedOutNow);
+    } catch (error) {
+      if (signedOutNow) throw error;
+      // The next run reads signed out and deletes again: a sign-in that succeeded meanwhile would be lost.
+      console.warn("[antigravity] could not clear Wink's signed-out mark for agy", error);
+    }
+    promised = signedOutNow;
+  };
   const land = () => landing ??= (async () => {
     try {
-      const ok = await forget();
+      const ok = (await opts.present?.()) === false || await forget();
       if (ok) {
-        promised = false;
+        promise(false);
         for (const listener of signedOut) listener();
       }
       return ok;
@@ -65,13 +109,34 @@ export function antigravityKeyringSignOut(forget: () => Promise<boolean>) {
   const landWhenFree = () => {
     if (!promised || running.size || landing || signIns) return;
     void land().then((ok) => {
-      if (!ok) console.warn("[antigravity] could not delete agy's saved sign-in after its running turns ended; Wink keeps it signed out");
+      if (!ok) console.warn("[antigravity] could not delete agy's saved sign-in; Wink keeps it signed out");
     });
   };
   return {
     /** Signed out by Wink, or deleting: read as signed out, start no turn. */
     get waiting() {
       return promised || landing !== undefined;
+    },
+    /** An instance starts: the first one of a run reads the mark, and deletes what a past run promised to. */
+    attach() {
+      attached += 1;
+      if (loaded) return;
+      loaded = true;
+      promised = opts.mark?.read() ?? false;
+      landWhenFree();
+    },
+    /** An instance is gone and its turns stopped: a waiting delete lands now, before Wink can exit. */
+    async release(stopped: (turn: string) => boolean) {
+      for (const id of running) if (stopped(id)) running.delete(id);
+      landWhenFree();
+      await landing;
+      attached -= 1;
+      if (attached > 0) return;
+      running.clear();
+      promised = false;
+      signIns = 0;
+      loaded = false;
+      run += 1;
     },
     turnStarted(id: string) {
       running.add(id);
@@ -81,23 +146,33 @@ export function antigravityKeyringSignOut(forget: () => Promise<boolean>) {
     },
     /** True once signed out, or once the delete is waiting on running turns or a sign-in. */
     async signOut(): Promise<boolean> {
-      if (landing) await landing;
+      if (landing && await landing) return true;
       if (running.size || signIns) {
-        promised = true;
+        try {
+          promise(true);
+        } catch (error) {
+          console.warn("[antigravity] could not save Wink's signed-out mark for agy", error);
+          return false;
+        }
         return true;
       }
       return land();
     },
+    /** agy's own logout succeeded: its saved sign-in is gone, so nothing is left to delete. */
+    signedOutByAgy() {
+      promise(false);
+    },
     /** A sign-in is starting: once any delete in flight has finished, holds the delete off until `ended`. */
     async signingIn(): Promise<(succeeded: boolean) => void> {
       signIns += 1;
+      const started = run;
       await landing;
       let open = true;
       return (succeeded) => {
-        if (!open) return;
+        if (!open || started !== run) return;
         open = false;
         signIns -= 1;
-        if (succeeded) promised = false;
+        if (succeeded) promise(false);
         else landWhenFree();
       };
     },

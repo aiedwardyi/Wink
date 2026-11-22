@@ -425,7 +425,8 @@ export class ProviderRegistry {
       await this.logins.wait(instanceId);
       let success = this.logins.state(instanceId) === "complete";
       const signingOut = this.get(instanceId);
-      if (!success && !config.account && signingOut?.signOutWithoutCli) success = await signingOut.signOutWithoutCli(this.logins.capture(instanceId).error);
+      if (success && !config.account) signingOut?.signedOutByCli?.();
+      else if (!success && !config.account && signingOut?.signOutWithoutCli) success = await signingOut.signOutWithoutCli(this.logins.capture(instanceId).error);
       if (success || this.accounts.has(instanceId)) {
         if (success) this.logins.clear(instanceId);
         const previous = this.probed.get(instanceId);

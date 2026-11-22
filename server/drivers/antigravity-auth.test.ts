@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 
 const execFile = vi.fn();
 
@@ -220,6 +220,143 @@ describe("Antigravity keyring sign-out", () => {
     (await signingIn)(true);
     expect(started).toBe(true);
     expect(keyring.waiting).toBe(false);
+  });
+
+  const memoryMark = (signedOut = false) => {
+    const mark = { signedOut, read: () => mark.signedOut, write: (value: boolean) => { mark.signedOut = value; } };
+    return mark;
+  };
+
+  it("keeps a sign-out promised before a quit or crash: the next run reads signed out and deletes", async () => {
+    const mark = memoryMark();
+    const before = antigravityKeyringSignOut(vi.fn(async () => true), { mark });
+    before.attach();
+    before.turnStarted("a");
+    expect(await before.signOut()).toBe(true);
+    expect(mark.signedOut).toBe(true);
+
+    // The run ends with the turn still running; the next run starts from the mark alone.
+    const forget = vi.fn(async () => true);
+    const after = antigravityKeyringSignOut(forget, { mark });
+    after.attach();
+    expect(after.waiting).toBe(true);
+    await vi.waitFor(() => expect(after.waiting).toBe(false));
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(mark.signedOut).toBe(false);
+  });
+
+  it("keeps a refused delete signed out across runs, until a sign-in succeeds", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mark = memoryMark(true);
+    const forget = vi.fn(async () => false);
+    const keyring = antigravityKeyringSignOut(forget, { mark });
+    keyring.attach();
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
+    expect(keyring.waiting).toBe(true);
+    expect(mark.signedOut).toBe(true);
+    (await keyring.signingIn())(true);
+    expect(keyring.waiting).toBe(false);
+    expect(mark.signedOut).toBe(false);
+    warn.mockRestore();
+  });
+
+  it("lands a delete waiting on an instance's turns when that instance lets go, before release resolves", async () => {
+    const forget = vi.fn(async () => true);
+    const keyring = antigravityKeyringSignOut(forget, { mark: memoryMark() });
+    keyring.attach();
+    keyring.attach();
+    keyring.turnStarted("one\0a");
+    keyring.turnStarted("two\0b");
+    await keyring.signOut();
+    await keyring.release((turn) => turn.startsWith("one\0"));
+    expect(forget).not.toHaveBeenCalled();
+    await keyring.release((turn) => turn.startsWith("two\0"));
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(keyring.waiting).toBe(false);
+  });
+
+  it("forgets everything but the mark once the last instance lets go", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mark = memoryMark();
+    const forget = vi.fn(async () => false);
+    const keyring = antigravityKeyringSignOut(forget, { mark });
+    keyring.attach();
+    keyring.turnStarted("a");
+    await keyring.signOut();
+    const lateSignIn = await keyring.signingIn();
+    await keyring.release(() => true);
+    expect(keyring.waiting).toBe(false);
+    lateSignIn(true); // a sign-in from the run that ended changes nothing now
+    expect(mark.signedOut).toBe(true);
+    keyring.attach();
+    expect(keyring.waiting).toBe(true);
+    mark.signedOut = false;
+    await keyring.release(() => true);
+    keyring.attach();
+    expect(keyring.waiting).toBe(false);
+    warn.mockRestore();
+  });
+
+  it("answers a sign-out that comes while a delete runs with that delete: one delete, both done", async () => {
+    const pending = deferred();
+    const forget = vi.fn(() => pending.promise);
+    const keyring = antigravityKeyringSignOut(forget);
+    const first = keyring.signOut();
+    const second = keyring.signOut();
+    pending.resolve(true);
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(forget).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes nothing once the saved sign-in is already gone, and reads signed out", async () => {
+    const forget = vi.fn(async () => true);
+    const present = vi.fn(async (): Promise<boolean | undefined> => false);
+    const keyring = antigravityKeyringSignOut(forget, { present });
+    expect(await keyring.signOut()).toBe(true);
+    expect(forget).not.toHaveBeenCalled();
+    present.mockResolvedValue(undefined); // the store could not say: delete as before
+    expect(await keyring.signOut()).toBe(true);
+    expect(forget).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends a pending sign-out once agy's own logout succeeds", async () => {
+    const mark = memoryMark();
+    const forget = vi.fn(async () => true);
+    const keyring = antigravityKeyringSignOut(forget, { mark });
+    keyring.attach();
+    keyring.turnStarted("a");
+    await keyring.signOut();
+    keyring.signedOutByAgy();
+    expect(keyring.waiting).toBe(false);
+    expect(mark.signedOut).toBe(false);
+    keyring.turnEnded("a");
+    await Promise.resolve();
+    expect(forget).not.toHaveBeenCalled();
+  });
+
+  it("does not say done when the signed-out mark cannot be saved", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const keyring = antigravityKeyringSignOut(vi.fn(async () => true), { mark: { read: () => false, write: () => { throw new Error("disk full"); } } });
+    keyring.turnStarted("a");
+    expect(await keyring.signOut()).toBe(false);
+    expect(keyring.waiting).toBe(false);
+    warn.mockRestore();
+  });
+
+  it("keeps the mark as a file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-mark-"));
+    try {
+      const mark = signedOutMarkFile(join(dir, "data", "gemini-signed-out"));
+      expect(mark.read()).toBe(false);
+      mark.write(true);
+      expect(mark.read()).toBe(true);
+      mark.write(false);
+      mark.write(false);
+      expect(mark.read()).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -521,6 +521,8 @@ export interface ProviderInstance {
   /** A sign-in is starting. Resolves once it may proceed, with the call to make when it ends: a sign-out that
    * already reported done stays signed out until a sign-in succeeds. */
   signingIn?(): Promise<(succeeded: boolean) => void>;
+  /** Its logout command succeeded: whatever sign-out was still pending is done. */
+  signedOutByCli?(): void;
   readonly adapter: ProviderAdapter;
   /** `rescan` = the user asked (Check again, saved a CLI): probes that
    * would start WSL are allowed to, where a passive refresh may not.

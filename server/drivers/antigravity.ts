@@ -49,7 +49,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
@@ -532,7 +532,11 @@ export function measureAntigravityTransportLengths(opts: {
 }
 
 // agy's saved sign-in is one per machine, so every instance shares one keyring sign-out and its running turns.
-const keyringSignOut = antigravityKeyringSignOut(() => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING));
+// "Signed out by Wink" is kept in the data folder too, so a quit, crash or restart before the delete keeps it.
+const keyringSignOut = antigravityKeyringSignOut(() => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING), {
+  present: () => probeAntigravitySignIn(),
+  mark: signedOutMarkFile(join(DATA_DIR, "gemini-signed-out")),
+});
 
 export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
   driverKind: DRIVER_KIND,
@@ -559,6 +563,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const env = antigravityEnvironment(input.environment);
     const signIn = antigravitySignIn(undefined, () => readAntigravityLogSignIn(env));
     const forgetSignedOut = keyringSignOut.onSignedOut(() => signIn.record(false));
+    keyringSignOut.attach();
     const catalogEnv: Record<string, string | undefined> = env;
     let models = STATIC_ANTIGRAVITY_MODELS;
     const refreshModels = async () => {
@@ -1187,6 +1192,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         return signedOut;
       },
       signingIn: () => keyringSignOut.signingIn(),
+      signedOutByCli: () => keyringSignOut.signedOutByAgy(),
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {
@@ -1229,6 +1235,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       generateText: async (prompt, opts) => {
         const stopped = opts?.signal ?? new AbortController().signal;
         stopped.throwIfAborted();
+        // Signed out by Wink: the saved sign-in may still be there, but it is not Wink's to use.
+        if (keyringSignOut.waiting) throw new Error("Gemini is not signed in.");
         let cwd: string | null = null;
         try {
           const home = antigravityHelperHome(env);
@@ -1306,11 +1314,14 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         }
       },
       dispose: async () => {
+        if (disposed) return;
         disposed = true;
         forgetSignedOut();
         for (const { stop } of active.values()) stop();
         reapChildren(true); // escalate to SIGKILL — disposal must reap every child
         listeners.clear();
+        // Its turns are stopped: a delete waiting on them lands before Wink exits.
+        await keyringSignOut.release((turn) => turn.startsWith(`${instanceId}\0`));
       },
     };
   },
