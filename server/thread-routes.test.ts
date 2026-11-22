@@ -153,6 +153,26 @@ describe("search", () => {
 });
 
 describe("find in a chat not in memory", () => {
+  it("pages the newest hit, then the rest, the same as one page", async () => {
+    removeTestData(DATA_DIR);
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = store.createBot({ name: "Pages" }, { seedMessages: false });
+    for (let i = 0; i < 130; i++) store.appendMessage(bot.threadId, { role: i % 2 ? "bot" : "user", kind: "text", text: i % 3 ? `kiwi ${i} kiwi` : `row ${i}`, at: 1_000 + Math.floor(i / 4) });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    const page = async (query: string) => {
+      let body = "";
+      const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.search(res, new URL(`http://localhost/search?q=kiwi&threadId=${bot.threadId}&view=chips&${query}`));
+      return JSON.parse(body) as { hits: Array<{ messageId: string }>; more: boolean };
+    };
+    const whole = await page("limit=60");
+    const first = await page("limit=1");
+    const rest = await page(`limit=59&before=${first.hits[0]!.messageId}`);
+    expect(whole.hits).toHaveLength(60);
+    expect(first.more).toBe(true);
+    expect({ hits: [...first.hits, ...rest.hits], more: rest.more }).toEqual(whole);
+  });
+
   it("answers without loading the chat, and still marks the version an edit replaced", async () => {
     removeTestData(DATA_DIR);
     const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -199,7 +219,7 @@ describe("find in a chat not in memory", () => {
         await route.search(res, new URL(`http://localhost/search?q=kiwi&threadId=${threadId}`));
         return Object.fromEntries(JSON.parse(body).hits.map((hit: { messageId: string; onActivePath: boolean }) => [hit.messageId, hit.onActivePath]));
       };
-      return { sync: (changes: SyncChange[]) => store.applySyncChanges(bot.id, threadId, changes), find };
+      return { store, threadId, sync: (changes: SyncChange[]) => store.applySyncChanges(bot.id, threadId, changes), find };
     }
 
     it("a task deleted and re-created with the same ids and row count", async () => {
@@ -225,6 +245,34 @@ describe("find in a chat not in memory", () => {
       expect(await find()).toEqual({ root: true, child: true });
       sync([head(null)]);
       expect(await find()).toEqual({ root: false, child: false });
+    });
+
+    it("rows synced a page at a time before their head", async () => {
+      const { sync, find } = synced();
+      sync(rows(row("page-0", null), row("page-127", "page-0")));
+      expect(await find()).toEqual({ "page-0": true, "page-127": true });
+      // the loaded chat kept the newest row it saw as its head until a head came
+      sync(rows(row("page-128", "page-127"), row("page-255", "page-128")));
+      expect(await find()).toEqual({ "page-0": true, "page-127": true, "page-128": false, "page-255": false });
+      sync([head("page-255")]);
+      expect(await find()).toEqual({ "page-0": true, "page-127": true, "page-128": true, "page-255": true });
+    });
+
+    it("a legacy chat with a saved null head, then a row with a parent and no head", async () => {
+      const { sync, find } = synced();
+      sync([...rows(row("legacy-root"), row("legacy-flat")), head(null)]);
+      expect(await find()).toEqual({ "legacy-root": true, "legacy-flat": true });
+      sync(rows(row("legacy-appended", "legacy-flat")));
+      expect(await find()).toEqual({ "legacy-root": true, "legacy-flat": true, "legacy-appended": false });
+    });
+
+    it("a jump read from disk, then a null head", async () => {
+      const { store, threadId, sync, find } = synced();
+      sync([...rows(row("jump-root", null), row("jump-child", "jump-root")), head("jump-child")]);
+      expect(store.storedWindow(threadId, "jump-root", 200)?.messages.map((message) => message.id)).toEqual(["jump-root", "jump-child"]);
+      expect(store.loaded(threadId)).toBe(false);
+      sync([head(null)]);
+      expect(await find()).toEqual({ "jump-root": false, "jump-child": false });
     });
   });
 });

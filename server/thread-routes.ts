@@ -8,7 +8,7 @@ import { EVENTS_DIR, NATIVE_DIR, type AppConfig } from "./config.ts";
 import { paneNoteText } from "./context-compaction.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
-import { coldLoad, coldPageBefore } from "./cold-thread.ts";
+import { coldLoad, coldPageBefore, findInChat } from "./cold-thread.ts";
 import { createMediaIndex } from "./media-index.ts";
 import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -157,7 +157,9 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
         return json(res, 404, { error: "no such conversation" });
       }
       const needle = q.trim().toLowerCase();
-      const found = searchMessages(q, limit + 1, threadId, { before, chips, skip: new Set([...store.trash.threadIds(), ...hidden]) });
+      const skip = new Set([...store.trash.threadIds(), ...hidden]);
+      // one chat's find reads off the server thread: a long chat scans for seconds
+      const found = threadId ? await findInChat(threadId, q, limit + 1, { before, chips, skip }) : searchMessages(q, limit + 1, threadId, { before, chips, skip });
       const page = found.slice(0, limit);
       // whether each hit sits on its thread's visible branch - a click on
       // one that does not has to switch versions first (and only then).

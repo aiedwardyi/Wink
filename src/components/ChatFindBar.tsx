@@ -10,6 +10,8 @@ import { useI18n } from "@/lib/i18n";
 import { trackFeatureOnce } from "@/lib/usage-stats";
 
 const PAGE = 100;
+// the newest hit comes alone first: a page of a long chat reads every row, and the first highlight needs one
+const FIRST = 1;
 
 export function ChatFindBar({
   threadId,
@@ -49,8 +51,8 @@ export function ChatFindBar({
     };
   }, []);
 
-  const searchPath = (text: string, before?: string) =>
-    `/api/search?q=${encodeURIComponent(text)}&limit=${PAGE}&threadId=${encodeURIComponent(threadId)}${view}` +
+  const searchPath = (text: string, before?: string, limit = PAGE) =>
+    `/api/search?q=${encodeURIComponent(text)}&limit=${limit}&threadId=${encodeURIComponent(threadId)}${view}` +
     (before ? `&before=${encodeURIComponent(before)}` : "");
 
   useEffect(() => {
@@ -68,17 +70,31 @@ export function ChatFindBar({
     }
     setLoading(true);
     const timer = window.setTimeout(() => {
-      void api(searchPath(trimmed))
-        .then((body) => {
+      void api(searchPath(trimmed, undefined, FIRST))
+        .then(async (body) => {
           if (request !== requestRef.current) return;
+          let found: SearchHit[] = Array.isArray(body?.hits) ? body.hits : [];
+          let more = body?.more === true;
           hitsQueryRef.current = trimmed;
           freshRef.current = true;
-          setHits(Array.isArray(body?.hits) ? body.hits : []);
+          if (more && found.length) {
+            // land on the newest hit while the rest of the page is read; the count waits for it
+            pagingRef.current = true;
+            setHits(found);
+            setMore(false);
+            const rest = await api(searchPath(trimmed, found.at(-1)!.messageId, PAGE - found.length));
+            if (request !== requestRef.current) return;
+            pagingRef.current = false;
+            found = [...found, ...(Array.isArray(rest?.hits) ? rest.hits : [])];
+            more = rest?.more === true;
+          }
+          setHits(found);
           trackFeatureOnce("find.use");
-          setMore(body?.more === true);
+          setMore(more);
         })
         .catch((error) => {
           if (request !== requestRef.current) return;
+          pagingRef.current = false;
           setHits([]);
           setMore(false);
           dispatch({ type: "error", message: error instanceof Error ? error.message : "Search failed" });
@@ -136,10 +152,12 @@ export function ChatFindBar({
   // First result set starts on the clicked row, else the newest copy. Older pages keep the place.
   useEffect(() => {
     if (!freshRef.current || !stops.length || hitsQueryRef.current !== query.trim()) return;
-    freshRef.current = false;
     const wanted = query.trim() === anchorQueryRef.current.trim() ? anchorRef.current : null;
-    anchorRef.current = null;
     const next = findHitIndex(stops, wanted);
+    // the newest hit alone, and the clicked row is further back: wait for the rest of the page
+    if (next == null && pagingRef.current) return;
+    freshRef.current = false;
+    anchorRef.current = null;
     if (next == null) return;
     land(next);
     // `land` intentionally reads the state that produced this result set.

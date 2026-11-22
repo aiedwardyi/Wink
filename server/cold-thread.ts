@@ -4,7 +4,7 @@ import { Worker } from "node:worker_threads";
 
 import { offscreenLimit } from "./chat-tail.ts";
 import type { TailRead, TailReply, TailRequest } from "./cold-thread-worker.ts";
-import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowCursor, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
+import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowCursor, rowToMessage, scanThreadRows, searchMessages, storedHead, threadOver, threadVersion, type SearchHit, type ThreadRows } from "./message-db.ts";
 import { paneReason, type PaneLine } from "../shared/pane-note.ts";
 import type { Message, Store } from "./store.ts";
 import { rowChars } from "./thread-cache.ts";
@@ -142,6 +142,17 @@ export async function coldWriteRows(store: Pick<Store, "loaded">, threadId: stri
   }
   // a write during the read loaded the chat, and its newest rows may not be saved yet
   return store.loaded(threadId) ? null : rows;
+}
+
+/** searchMessages for one chat, read on the scan worker: a gigabyte chat's find held the thread that serves the app ~4 s, its jump to the first hit included. */
+export async function findInChat(threadId: string, query: string, limit: number, options: { before?: string; chips?: boolean; skip: ReadonlySet<string> }): Promise<SearchHit[]> {
+  await committed();
+  try {
+    return await (scans ??= startReader())({ threadId, find: { query, limit, before: options.before, chips: options.chips, skip: [...options.skip] } });
+  } catch (error) {
+    console.error("chat find read failed; the server thread reads it", threadId, error);
+    return searchMessages(query, limit, threadId, options);
+  }
 }
 
 /** A Map row's reason from an unloaded chat, or null when the store must answer (loaded, no rows here, or the read failed). */

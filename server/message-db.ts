@@ -141,14 +141,15 @@ export function readThread(threadId: string, legacyFile: string): ThreadRows & {
   return { ...legacy, chars: legacy.messages.reduce((sum, message) => sum + JSON.stringify(message).length, 0) };
 }
 
-/** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here. */
-export function storedHead(threadId: string): string | null | undefined {
+/** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here; `kept`, while that row exists, stands in for the newest row when no head is stored. */
+export function storedHead(threadId: string, kept?: string | null): string | null | undefined {
   // SAFETY: Each subquery selects one TEXT column, or NULL when it finds no row.
   const row = db().prepare(
     "SELECT (SELECT active_leaf_id FROM thread_state WHERE thread_id = ?1) AS leaf, " +
+      "(SELECT id FROM messages WHERE thread_id = ?1 AND id = ?2) AS kept, " +
       "(SELECT id FROM messages WHERE thread_id = ?1 ORDER BY rowid DESC LIMIT 1) AS last",
-  ).get(threadId) as { leaf: string | null; last: string | null };
-  return row.last === null ? undefined : row.leaf || row.last;
+  ).get(threadId, kept ?? null) as { leaf: string | null; kept: string | null; last: string | null };
+  return row.last === null ? undefined : row.leaf || row.kept || row.last;
 }
 
 /** A key that moves with every committed change to a thread's rows, or undefined when it has no rows here; key cached reads of a thread on it. */
@@ -398,9 +399,9 @@ export function readMessage(threadId: string, id: string): Message | undefined {
   return row && rowToMessage(row);
 }
 
-/** The active path newest first, one row at a time, or null when there are no stored rows. */
-export function activePathBack(threadId: string): Iterable<Message> | null {
-  const leaf = storedHead(threadId);
+/** The active path newest first, one row at a time, or null when there are no stored rows; `kept` as storedHead takes it. */
+export function activePathBack(threadId: string, kept?: string | null): Iterable<Message> | null {
+  const leaf = storedHead(threadId, kept);
   if (!leaf) return null;
   const database = db();
   const row = database.prepare("SELECT rowid AS position, json FROM messages WHERE thread_id = ? AND id = ?");
@@ -427,9 +428,9 @@ export function activePathBack(threadId: string): Iterable<Message> | null {
 /** The last thread whose stored active path was walked, keyed on its head and version so a search per keystroke walks it once. */
 let storedPath: { threadId: string; key: string; ids: Set<string> } | undefined;
 
-/** Which of `ids` sit on the stored active path, read from the parent and id indexes alone: the rows themselves (pictures and all) are never read. */
-export function onStoredPath(threadId: string, ids: readonly string[]): Set<string> {
-  const head = storedHead(threadId);
+/** Which of `ids` sit on the stored active path, read from the parent and id indexes alone: the rows themselves (pictures and all) are never read. `kept` as storedHead takes it. */
+export function onStoredPath(threadId: string, ids: readonly string[], kept?: string | null): Set<string> {
+  const head = storedHead(threadId, kept);
   if (!head) return new Set();
   const key = `${head}:${threadVersion(threadId)}`;
   if (storedPath?.threadId !== threadId || storedPath.key !== key) {
@@ -683,10 +684,22 @@ export function searchSnippet(haystack: string, needle: string): Pick<SearchHit,
  * ahead of tool rows so a real line is not crowded out by newer paths that
  * repeat it; inside one chat (find bar) it stays newest first, so next and
  * previous follow the transcript. One ordered LIKE scan, deliberately: local
- * transcripts are megabytes at most, a scan is milliseconds, and it needs
- * no FTS extension to exist. In one chat, `before` pages past that hit.
+ * transcripts are usually megabytes, and it needs no FTS extension to exist;
+ * a gigabyte chat scans for seconds, so an in-chat find runs off the server
+ * thread (searchMessagesOn). In one chat, `before` pages past that hit.
  * `skip` threads never count toward `limit`. */
 export function searchMessages(
+  query: string,
+  limit = 40,
+  threadId?: string,
+  options: { before?: string; chips?: boolean; skip?: ReadonlySet<string> } = {},
+): SearchHit[] {
+  return searchMessagesOn(db(), query, limit, threadId, options);
+}
+
+/** searchMessages on `handle`; cold-thread-worker.ts runs an in-chat find on its own handle, since a gigabyte chat scans for seconds. */
+export function searchMessagesOn(
+  handle: DatabaseSync,
   query: string,
   limit = 40,
   threadId?: string,
@@ -712,7 +725,7 @@ export function searchMessages(
     : "";
   // SAFETY: This projection selects at and SQLite's rowid.
   const cursor = threadId && before
-    ? db().prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined
+    ? handle.prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined
     : undefined;
   if (before && !cursor) return [];
   const scope = threadId ? `thread_id = ?3 AND ${cursor ? "(at < ?4 OR (at = ?4 AND rowid < ?5)) AND " : ""}` : "";
@@ -724,13 +737,13 @@ export function searchMessages(
     ? "(lower(ifnull(json_extract(json, '$.tool.name'), '')) LIKE ?1 ESCAPE '\\' OR lower(ifnull(json_extract(json, '$.tool.summary'), '')) LIKE ?1 ESCAPE '\\')"
     : `lower(json_extract(json, '$.tool.name', '$.tool.summary', '$.tool.detail.input', '$.tool.detail.output', '$.tool.detail.diff')) LIKE ?2 ESCAPE '\\'${decoded}`;
   // Sorts row ids only; the hit loop reads each row once it needs it.
-  const ordered = db().prepare(
+  const ordered = handle.prepare(
     "SELECT rowid AS row, thread_id FROM messages " +
       `WHERE ${scope}((kind = 'text' AND text IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\' AND json_extract(json, '$.summarized') IS NOT 1) ` +
       "   OR (kind = 'activity' AND ((text IS NOT NULL AND json_extract(json, '$.comm') IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\') " +
       `     OR (lower(json) LIKE ?2 ESCAPE '\\' AND ${gate})))) ORDER BY ${order}at DESC, rowid DESC`,
   );
-  const fetch = db().prepare(
+  const fetch = handle.prepare(
     "SELECT thread_id, id, at, role, kind, CASE WHEN kind != 'activity' OR json_extract(json, '$.comm') IS NOT NULL THEN text END AS text, " +
       "CASE WHEN kind = 'activity' THEN json_extract(json, '$.tool') END AS tool_json, json_extract(json, '$.from.name') AS from_name FROM messages WHERE rowid = ?",
   );
