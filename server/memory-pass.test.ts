@@ -26,6 +26,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import { AntigravityDriver } from "./drivers/antigravity.ts";
 import { createCliText } from "./drivers/cli-text.ts";
 import { CodexDriver } from "./drivers/codex.ts";
+import { antigravityRateLimitWindows } from "./drivers/rate-limits.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { replyTurns } from "./pick-sources.ts";
 import { loadProfileSyncSettings, saveProfileSyncSettings } from "./profile-sync.ts";
@@ -1342,6 +1343,31 @@ describe("note generator", () => {
       const report = (otherPoolLeft?: boolean) => usage({ windows: [{ ...spent, ...(otherPoolLeft && { otherPoolLeft }) }], observedAt: new Date(now).toISOString() });
       expect(noteGenerator([], undefined, own(), report())).toBeNull();
       expect(noteGenerator([], undefined, own(), report(true))).not.toBeNull();
+    });
+
+    it("helper's own Gemini Models pool spent, another pool free: helper stays off, 0 calls until reset", async () => {
+      const live = JSON.parse(readFileSync(new URL("./testing/fixtures/agy-usage-live.jsonl", import.meta.url), "utf8").split("\n")[0]!).command.data;
+      const reset = now + 72 * HOUR;
+      // a fresh usage report every hour replaces the whole entry, as the client's refresh does
+      const report = (at: number): RateLimitsReport => {
+        const data = structuredClone(live);
+        for (const group of data.groups) for (const bucket of group.buckets) {
+          bucket.reset_time = new Date(reset).toISOString();
+          if (at < reset && bucket.id === "gemini-weekly") bucket.remaining_fraction = 0;
+        }
+        return { windows: antigravityRateLimitWindows(data, at), observedAt: new Date(at).toISOString() };
+      };
+      const helper = { ...own(new Error("RESOURCE_EXHAUSTED (code 429): Quota exceeded")), driverKind: "antigravityAgent" };
+      const limits = usage();
+      for (let at = now; at < reset; at += HOUR) {
+        vi.spyOn(Date, "now").mockReturnValue(at);
+        limits.limits.set("grok", report(at));
+        await noteGenerator([], undefined, helper, limits)?.("notes", new AbortController().signal).catch(() => {});
+      }
+      expect(helper.generateText.mock.calls.length).toBe(0);
+      vi.spyOn(Date, "now").mockReturnValue(reset + 1);
+      limits.limits.set("grok", report(reset + 1));
+      expect(noteGenerator([], undefined, helper, limits)).not.toBeNull();
     });
   });
 });

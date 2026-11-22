@@ -314,6 +314,17 @@ describe("antigravityRateLimitWindows", () => {
     );
   });
 
+  it("leaves the helper's own Gemini Models pool unmarked when it is the spent one", () => {
+    const reset = now + 7 * 86_400_000;
+    const bucket = (id: string, remaining: number) => ({ id, name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: remaining, reset_time: new Date(reset).toISOString() });
+    expect(antigravityRateLimitWindows({ groups: [{ name: "Gemini Models", buckets: [bucket("gemini-weekly", 0)] }, { name: "Claude and GPT models", buckets: [bucket("3p-weekly", 1)] }] }, now)).toEqual([
+      { id: "seven_day", usedPercent: 100, resetsAt: reset, windowMinutes: 10_080 },
+    ]);
+    expect(antigravityRateLimitWindows({ groups: [{ name: "Gemini Models", buckets: [bucket("gemini-weekly", 0.5)] }, { name: "Claude and GPT models", buckets: [bucket("3p-weekly", 0)] }] }, now)).toEqual([
+      { id: "seven_day", usedPercent: 100, resetsAt: reset, windowMinutes: 10_080, otherPoolLeft: true },
+    ]);
+  });
+
   it("leaves a window spent in every pool unmarked", () => {
     const reset = now + 7 * 86_400_000;
     const spent = (id: string) => ({ id, name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: 0, reset_time: new Date(reset).toISOString() });
