@@ -1409,6 +1409,28 @@ describe("RemoteTerminalView", () => {
     }
   });
 
+  it("reads a tapped worker first, never Main before it", async () => {
+    const panes = [{ sessionId: "main", label: "Main", main: true }, { sessionId: "worker", label: "Worker", main: false }];
+    store.api.mockImplementation(async (path: string) => {
+      const sessionId = String(path).includes("sessionId=worker") ? "worker" : "main";
+      return { screenText: `${sessionId} screen`, sessionId, generation: 1, panes };
+    });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const shown: string[] = [];
+    const watch = new MutationObserver(() => shown.push(host.querySelector("pre")?.textContent ?? ""));
+    watch.observe(host, { subtree: true, childList: true, characterData: true });
+    try {
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneFocus: { sessionId: "worker" } }))));
+      await vi.waitFor(() => expect(host.querySelector("pre")?.textContent).toBe("worker screen"));
+      expect(store.api.mock.calls[0]?.[0]).toBe("/api/bots/bot-1/terminal?sessionId=worker");
+      expect(shown).not.toContain("main screen");
+    } finally {
+      watch.disconnect();
+      await act(async () => root.unmount());
+    }
+  });
+
   it("selects a focused pane once a later roster lists it", async () => {
     let panes = [{ sessionId: "main", label: "Main", main: true }];
     store.api.mockImplementation(async (path: string) => {

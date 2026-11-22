@@ -109,7 +109,8 @@ export function RemoteTerminalView({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [selectedPane, setSelectedPane] = useState<string | null>(() => lastViewedPanes.get(bot.id) ?? null);
+  // A tapped pane is the first read; waiting for a roster to list it costs a phone a whole extra read.
+  const [selectedPane, setSelectedPane] = useState<string | null>(() => paneFocus?.sessionId ?? lastViewedPanes.get(bot.id) ?? null);
   const [draft, setDraft] = useState("");
   // The pane a draft was typed for, MAIN_TAB for Main since a restart gives it a new id; a closed pane must not hand its line to whichever pane takes the screen.
   const [draftPane, setDraftPane] = useState<string | null>(null);
