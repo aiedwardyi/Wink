@@ -1,20 +1,25 @@
 // Automatic recall: before a typed turn, up to 2 matching rows from the bot's
 // own memory and notes ride in the turn text. Off unless the bot is listed in
-// lookup-bots.json. The index is rebuilt after a reply settles, never at send.
+// lookup-bots.json, or Import Memory holds more than every prompt carries; then
+// every bot looks up those extra lines, and a bot looks up its own import's the
+// same way. The index is rebuilt after a reply settles or an import lands, never at send.
 import { readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
+import { aboutYouFile, aboutYouPastTheCut, botImportFile, botImportPastTheCut } from "./about-you.ts";
 import { userTyping } from "./memory-pass.ts";
 import { currentOnly, PICKS_FILE } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { appendRotatingLog } from "./rotating-log.ts";
 import { parseJson } from "./schema.ts";
-import { listMemoryTopics, loadMemory, memoryFileRaw, PARKED_COPY, workspaceDir } from "./workspace.ts";
+import { IMPORT_FILE, listMemoryTopics, loadMemory, memoryFileRaw, PARKED_COPY, workspaceDir } from "./workspace.ts";
 
 // Its own file: bots.json and profile-sync.json are parsed strictly by older builds.
 const PICKS_SOURCE = `memory/${PICKS_FILE}`;
+const ABOUT_YOU_SOURCE = "Import Memory";
+const IMPORT_SOURCE = `memory/${IMPORT_FILE}`;
 const FLAG_FILE = "lookup-bots.json";
 const LOG_FILE = "lookup-log.jsonl";
 const LOG_MAX_BYTES = 1024 * 1024;
@@ -315,6 +320,12 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
       if (past) files.push({ source, tier, mtime, ...past });
       continue;
     }
+    if (source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE) {
+      // the lines before the cut already ride in every prompt
+      const text = source === IMPORT_SOURCE ? botImportPastTheCut(botId) : aboutYouPastTheCut();
+      if (text) files.push({ source, tier, mtime, text });
+      continue;
+    }
     const text = await readFile(path, "utf8").catch(() => null);
     // a replaced pick is history, never a recall hit
     if (text !== null) files.push({ source, tier, text: source === PICKS_SOURCE ? currentOnly(text) : text, mtime });
@@ -345,15 +356,19 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     indexes.delete(botId);
   };
 
-  const sourcesOf = async (botId: string): Promise<Source[]> => {
+  const sourcesOf = async (botId: string, own: boolean, overflow: boolean, ownOverflow: boolean): Promise<Source[]> => {
     const memoryDir = join(workspaceDir(botId), "memory");
     const notes = deps.notesPath(botId);
-    const found = await Promise.all([
+    const found = await Promise.all(!own ? [
+      ...(overflow ? [statSource(ABOUT_YOU_SOURCE, 0, aboutYouFile())] : []),
+      ...(ownOverflow ? [statSource(IMPORT_SOURCE, 0, botImportFile(botId))] : []),
+    ] : [
       statSource("MEMORY.md", 0, join(workspaceDir(botId), "MEMORY.md")),
       ...listMemoryTopics(botId)
         .filter((topic) => !PARKED_COPY.test(topic.name))
         .map((topic) => statSource(`memory/${topic.name}`, 0, join(memoryDir, topic.name))),
       ...(notes ? [statSource(basename(notes), 1, notes)] : []),
+      ...(overflow ? [statSource(ABOUT_YOU_SOURCE, 0, aboutYouFile())] : []),
     ]);
     return found.filter((source) => source !== null);
   };
@@ -361,17 +376,19 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const refresh = async (botId: string) => {
     try {
       await loadFlags();
-      if (!flagged.has(botId)) {
+      const overflow = Boolean(aboutYouPastTheCut());
+      const ownOverflow = Boolean(botImportPastTheCut(botId));
+      if (!flagged.has(botId) && !overflow && !ownOverflow) {
         drop(botId);
         return;
       }
       const run = (runs.get(botId) ?? 0) + 1;
       runs.set(botId, run);
-      const sources = await sourcesOf(botId);
+      const sources = await sourcesOf(botId, flagged.has(botId), overflow, ownOverflow);
       const signature = JSON.stringify(sources);
       if (indexes.get(botId)?.signature === signature) return;
       const index = await buildRecallIndex(await readNoteFiles(botId, sources));
-      if (runs.get(botId) !== run || !flagged.has(botId)) {
+      if (runs.get(botId) !== run || (!flagged.has(botId) && !overflow && !ownOverflow)) {
         index.close();
         return;
       }
@@ -462,7 +479,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   return {
     refresh,
     take(botId, threadId, cursor, text) {
-      if (!flagged.has(botId)) return [];
+      if (!flagged.has(botId) && !indexes.has(botId)) return [];
       pending.delete(markKey(botId, threadId));
       const entry: LookupLog = { at: now(), botId, words: [], rows: [], ms: 0, fired: false, reason: "no-match" };
       try {

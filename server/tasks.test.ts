@@ -41,6 +41,7 @@ describe("tasks", () => {
     const { store } = await freshStore();
     const bot = store.createBot();
     const firstThread = bot.threadId;
+    store.appendMessage(firstThread, { role: "user", kind: "text", text: "hello" });
     const task = store.createTask(bot.id)!;
 
     expect(task.threadId).not.toBe(firstThread);

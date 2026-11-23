@@ -768,12 +768,6 @@ export function roomResponders<T extends { id: string; name: string; hidden?: bo
   return [];
 }
 
-const onboardingCard = (): OptionCardData => ({
-  title: "What do you mostly want help with?",
-  subtitle: "Pick whatever's closest; we can always expand from there.",
-  options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"],
-});
-
 /** Root-to-leaf rows by parent links. A row's id is unique in its chat (the table's key), and a parent is stored
  * before its children, so the walk reads back through the rows once and builds an id map only for one that is not. */
 function walkPath(messages: readonly Message[], leafId: string | null): Message[] {
@@ -1722,8 +1716,7 @@ export class Store {
       Pick<BotRecord, "name" | "title" | "description" | "color" | "mascotExpression" | "mascotStyle" | "modelSelection" | "section" | "computer" | "cwd" | "autoApprove">
     > = {},
     opts: {
-      /** false = no onboarding seed. Imported bots must not open with a
-       * first-person greeting the user never asked for. */
+      /** @deprecated no-op: a new bot's chat starts empty. */
       seedMessages?: boolean;
       job?: string;
       /** Test seam for the packaged-Windows first-run computer default. */
@@ -1759,14 +1752,7 @@ export class Store {
     this.bots.unshift(bot);
     this.persistTask(bot.tasks[0]);
     this.saveBots();
-    // Announce the owner before its onboarding transcript. SSE clients need
-    // the bot/thread mapping before they can place either message.
     this.emit({ type: "bot", botId: bot.id });
-    if (opts.seedMessages !== false && !job) {
-      // Job-first bots open on the existing ChatView empty state. A scripted
-      // "I'll handle …" line looks like the bot already spoke.
-      this.appendMessage(bot.threadId, { role: "bot", kind: "options", card: onboardingCard() });
-    }
     return bot;
   }
 

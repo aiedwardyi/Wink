@@ -54,6 +54,7 @@ import { useNoReplySwitch } from "@/lib/no-reply-switch";
 import { hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
 import { useLiveReply, useThreadTurn } from "@/lib/thread-stream";
 import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
+import { ImportMemoryCard, useImportOffer } from "./ImportMemoryCard";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
 import { FolderFix } from "./FolderFix";
@@ -719,6 +720,9 @@ const MessagesList = memo(function MessagesList({
     return answers;
   }, [transcript]);
   const importOffer = useMemo(() => importOfferId(transcript), [transcript]);
+  // the import row is for a chat with nothing in it yet; a quiz older builds seeded never shows, so it does not count
+  const empty = useMemo(() => transcript.every(shouldHideOnboardingCard), [transcript]);
+  const importRow = useImportOffer(bot.id, empty);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
@@ -741,7 +745,13 @@ const MessagesList = memo(function MessagesList({
   const slots = new Set<string>();
   return (
     <>
-      {idleAfterOnboarding && !bot.busy && (
+      {importRow.offer && (
+        <div data-import-row className="contents">
+          <DaySeparator at={bot.tasks?.find((task) => task.threadId === bot.threadId)?.createdAt ?? bot.createdAt ?? Date.now()} />
+          <ImportMemoryCard key={bot.threadId} botId={bot.id} onClose={importRow.close} />
+        </div>
+      )}
+      {idleAfterOnboarding && !bot.busy && importRow.offer === false && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
           <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />
           <RenameTitle
@@ -818,7 +828,7 @@ const MessagesList = memo(function MessagesList({
                   />
                 );
               }
-              if (shouldHideOnboardingCard(m, transcript)) return null;
+              if (shouldHideOnboardingCard(m)) return null;
               return <OptionCard botId={bot.id} message={m} />;
             case "routine.run": {
               const executionThreadId = m.routineRun?.executionThreadId;

@@ -35,6 +35,8 @@ const MEMORY_WARN_SHARE = 0.8;
 const MEMORY_NEWEST_SHARE = 0.25;
 /** A copy memory sync set aside when one file changed on two PCs (memory-sync.ts park). */
 export const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
+/** An "Only this bot" import (about-you.ts), a side file so MEMORY.md stays the bot's own notes. */
+export const IMPORT_FILE = "imported.md";
 
 export const MEMORY_SEED = `# Memory
 
@@ -345,8 +347,8 @@ function namesStem(text: string, stem: string): boolean {
 /** Loaded lines over the one-rule size, side files no loaded line names, and side files whose pointers never say when to read them. */
 export function memoryHealthOf(text: string, names: string[]): MemoryHealth {
   const longLines = text.split("\n").filter((line) => Buffer.byteLength(line, "utf8") > MEMORY_LINE_MAX_BYTES).length;
-  // a parked copy already gets its own notice, and the timeline is named by the picks in the prompt
-  const checked = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE);
+  // a parked copy already gets its own notice; the timeline and an import ride in the prompt themselves
+  const checked = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE && name !== IMPORT_FILE);
   const orphans = checked.filter((name) => !namesStem(text, name.slice(0, -".md".length)));
   // the prompt's rule reads a side file only when a line says when, so a bare pointer leaves it unread
   const saysWhen = text.split("\n").filter((line) => TRIGGER.test(line)).flatMap((line) => line.split(/(?<=[.!?]) /)).filter((sentence) => TRIGGER.test(sentence)).join("\n");
