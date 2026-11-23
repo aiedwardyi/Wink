@@ -1837,6 +1837,15 @@ describe("memory pass", () => {
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- 38 years old (noted 2026-10-15)\n`);
   });
 
+  it("sends the rest of a message with a secret-looking paragraph to the note-taker", async () => {
+    generate.mockResolvedValue("[]");
+    say("t1", "Glasses v1 is the CEO meeting tool, watch the tokens.\n\nPart 2 shows top 3 competitors and 1 news line.");
+    await settle("t1", 3 * MINUTE);
+    const prompt = generate.mock.calls[0]![0];
+    expect(prompt).toContain("top 3 competitors");
+    expect(prompt).not.toContain("tokens.");
+  });
+
   it("skips quietly when Claude is missing or signed out", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     generate.mockRejectedValue(new Error("Not logged in - Please run /login"));
@@ -2205,7 +2214,7 @@ describe("memory pass filters", () => {
     ]) expect(eligibleRow(row(patch))).toBe(false);
   });
 
-  it("cuts pastes, attachments, code, quotes and long blocks", () => {
+  it("cuts pastes, attachments, code and quotes, and clips long blocks", () => {
     const text = [
       "i'm 38",
       '<pasted-text index="1">\npasted body\n</pasted-text>',
@@ -2217,7 +2226,30 @@ describe("memory pass filters", () => {
       "x".repeat(401),
       "1\n2\n3\n4\n5\n6\n7",
     ].join("\n\n");
-    expect(userTyping(text)).toBe("i'm 38\n\nhe said  ok");
+    expect(userTyping(text)).toBe(`i'm 38\n\nhe said  ok\n\n${"x".repeat(400)}…\n\n1\n2\n3\n4\n5\n6…`);
+  });
+
+  it("keeps the rest of a message when one paragraph looks secret", () => {
+    const spec = "Glasses v1 is the CEO meeting tool, keep the brief short and watch the tokens.\n\nPart 2 shows top 3 competitors and 1 news line.";
+    expect(userTyping(spec)).toBe("Part 2 shows top 3 competitors and 1 news line.");
+    const kept = "I live in Seoul and build the glasses app";
+    for (const said of [`${kept}\n\nmy wifi password is\n\nhunter22`, `${kept}\n\nhunter22\n\nthat's my wifi password`, `${kept}\n\nmy wifi password:\n\nit's hunter22`]) {
+      expect(userTyping(said)).toBe(kept);
+    }
+  });
+
+  it("clips a long paragraph instead of dropping it", () => {
+    const paragraph = `Glasses v1 brief: ${"the person, their company and what they shipped lately, ".repeat(9)}then top 3 competitors.`;
+    expect(paragraph.length).toBeGreaterThan(500);
+    expect(userTyping(paragraph)).toBe(`${paragraph.slice(0, 400).trimEnd()}…`);
+  });
+
+  it("keeps a goal the user set, marked as a goal", () => {
+    const text = "glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line";
+    expect(notePrompt("", [{ text }])).toContain(`"goal"`);
+    expect(acceptFacts([{ kind: "goal", fact: "Glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line", quote: "glasses v1 is a CEO meeting tool" }], text, ""))
+      .toEqual([{ line: "Goal: Glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line" }]);
+    expect(acceptFacts([{ kind: "goal", fact: "Wifi password is hunter22", quote: "my wifi password is hunter22" }], "my wifi password is hunter22", "")).toEqual([]);
   });
 
   it("masks secrets before text leaves Wink", () => {

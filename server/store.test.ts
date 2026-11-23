@@ -15,6 +15,7 @@ import { peerAllowKey } from "./peer-approval-key.ts";
 import { applyResolvedProjectFolder } from "./project-folder.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
+import { asksNudge } from "./task-asks.ts";
 import { agentRoster, Store, titleFromMessage, type BotRecord, type StoreChange } from "./store.ts";
 import { nextWinkAvatar } from "../shared/bot-avatar.ts";
 import * as taskState from "./task-state.ts";
@@ -744,6 +745,23 @@ describe("Store", () => {
     copy.goal = "mutated outside the store";
     expect(store.taskPacket(bot.threadId)?.goal).toBe("Prepare the weekly report");
     expect(new Store(selection).taskPacket(bot.threadId)).toEqual(saved);
+  });
+
+  it("gives a new chat the open asks from the bot's other chats", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const asks = [
+      { id: "A1", ask: "make the header smaller on phone", status: "open" as const, at: 100, changedAt: 100 },
+      { id: "A2", ask: "add dark mode to settings", status: "done" as const, at: 100, changedAt: 100 },
+    ];
+    const first = bot.threadId;
+    store.writeTaskPacket(taskPacket(bot.id, first, { asks, lastAskId: 2 }));
+    const task = store.createTask(bot.id, "New chat")!;
+    expect(store.taskPacket(task.threadId)).toBeNull();
+    const elsewhere = store.otherChatAsks(bot.id, task.threadId);
+    expect(elsewhere.map((ask) => ask.ask)).toEqual(["make the header smaller on phone"]);
+    expect(asksNudge(undefined, 200, "what's left?", elsewhere)).toContain("make the header smaller on phone");
+    expect(store.otherChatAsks(bot.id, first)).toEqual([]);
   });
 
   it("stages a send's task packet for every reader and settles it after dispatch", () => {

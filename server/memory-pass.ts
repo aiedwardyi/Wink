@@ -40,6 +40,8 @@ const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
 const SUMMARY_MAX = 120;
+const PARAGRAPH_MAX = 400;
+const PARAGRAPH_LINES = 6;
 const STATE_FILE = "memory-pass.json";
 export const OVERFLOW_FILE = "auto-notes-overflow.md";
 const OVERFLOW_HEAD = "# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n";
@@ -152,20 +154,28 @@ export function eligibleRow(message: Message | undefined): message is Message & 
   );
 }
 
-/** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive, unless the caller screens each line. */
-export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
+const clipParagraph = (paragraph: string) => {
+  const lines = paragraph.split("\n");
+  const head = lines.slice(0, PARAGRAPH_LINES).join("\n");
+  return head.length <= PARAGRAPH_MAX && lines.length <= PARAGRAPH_LINES ? head : `${head.slice(0, PARAGRAPH_MAX).trimEnd()}…`;
+};
+const shortParagraph = (paragraph: string) => !paragraph.trim().includes("\n") && paragraph.trim().split(/\s+/).length <= 3;
+
+/** The user's own typing: pastes, attachments, code and quotes cut; a sensitive paragraph goes and a long one is clipped, unless the caller screens each line, which drops long ones as noise. */
+export function userTyping(text: string, dropSensitive = true, keepImages = false, clipLong = dropSensitive): string {
   const typed = text
     .replace(/<pasted-text\b[^>]*>[\s\S]*?<\/pasted-text>/gi, "")
     .replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/gi, "")
     .replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "")
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
-  // the whole message: a label and its value can sit in different paragraphs
-  if (dropSensitive && secretValue(typed)) return "";
-  const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
-  const kept = unwrapped
-    .split(/\n\s*\n/)
-    .filter((paragraph) => paragraph.length <= 400 && paragraph.split("\n").length <= 6)
-    .map((paragraph) => paragraph.split("\n").filter((line) => !line.trimStart().startsWith(">")).join("\n").trim())
+  const paragraphs = typed.split(/\n\s*\n/);
+  const secret = paragraphs.map((paragraph) => dropSensitive && secretValue(paragraph));
+  // a label and its value can sit in neighboring paragraphs, so a short one beside a secret goes too
+  const kept = paragraphs
+    .filter((paragraph, index) => !secret[index] && !(shortParagraph(paragraph) && (secret[index - 1] || secret[index + 1])))
+    .map((paragraph) => paragraph.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, ""))
+    .filter((paragraph) => clipLong || (paragraph.length <= PARAGRAPH_MAX && paragraph.split("\n").length <= PARAGRAPH_LINES))
+    .map((paragraph) => clipParagraph(paragraph.split("\n").filter((line) => !line.trimStart().startsWith(">")).join("\n").trim()))
     .filter(Boolean);
   return redactSecretsInText(kept.join("\n\n"));
 }
@@ -209,8 +219,9 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "- Keep facts that stay true: who they are, their age, languages, tools they use, likes and dislikes, how they want things done.",
     "- Skip one-off requests that are not tweaks, questions, task details, and anything CURRENT NOTES already says.",
     "- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.",
+    "- goal: something the user wants built or reached, with its spec, like \"Glasses v1: person brief, top 3 competitors, 1 news line\". Never task details.",
     "- CONTEXT and PICTURES clarify short answers. Quote the user's choice, never the bot's suggestion.",
-    `- kind: "decision", "tweak" or "fact". One decision per thing.`,
+    `- kind: "decision", "tweak", "goal" or "fact". One decision per thing.`,
     `- decision: key is the thing decided, never the option, in 2-6 chat words, copied exactly if CURRENT PICKS has it. fact is the pick, ${DECISION_MAX} characters max, with its letter or number, like "C - Reddit cards"; over: the options it beat; picture, over_pictures: copy paths from PICTURES, a continued <prior> or CURRENT PICKS.`,
     "- \"actually c\" moving a CURRENT PICKS pick to an option it beat is a new decision, same key, even with tweaks after it.",
     "- tweak: a change the user asked for on a pick, like \"make the header smaller\"; key: that pick's key. Never a new pick.",
@@ -510,7 +521,9 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
     const tweak = kind === "tweak";
-    const line = factLine(fact.fact);
+    const goal = kind === "goal";
+    const stated = factLine(fact.fact);
+    const line = goal && stated ? `Goal: ${stated}` : stated;
     const key = fact.key?.replace(/\s+/g, " ").trim() ?? "";
     // switching to an option the current pick beat is grounded in that pick's record
     const before = decision ? current.get(pickKey(key || line)) : undefined;
@@ -519,7 +532,7 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
     if (before && !paragraphs.some((paragraph) => quotes(paragraph, said))) said = confirmed(sources, said, line, before) ?? said;
     if (!line || line.length > (decision || tweak ? DECISION_MAX : FACT_MAX) || !said || said.length > QUOTE_MAX) return null;
     if (!paragraphs.some((paragraph) => quotes(paragraph, said))) return null;
-    const sensitive = decision || tweak ? secretValue : secretLike;
+    const sensitive = decision || tweak || goal ? secretValue : secretLike;
     if (sensitive(line) || sensitive(said)) return null;
     const quoting = sources.filter(({ text }) => quotes(text, said));
     const identified = decision && fact.message_id != null ? quoting.filter(({ id }) => id === fact.message_id) : quoting;

@@ -9,7 +9,7 @@ export const MAX_STATUS_ASKS_BYTES = 128 * 1024;
 export const ASKS_LIST = "[Wink asks list";
 
 export const TASK_ASKS_PROMPT =
-  "Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet. Close it as done or declined as soon as it settles; never drop one. Keep three lists for asks and work only: the plan is the to-do for now, asks marked building are the sprint, and the asks list holds every open ask; never start a separate list file, and keep your other records. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them. Wink lists every open ask each time and merges a repeat into the ask it matches. Park an ask with until when it waits on a date. An ask with no ref and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.";
+  "Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet. Close it as done or declined as soon as it settles; never drop one. Keep three lists for asks and work only: the plan is the to-do for now, asks marked building are the sprint, and the asks list holds every open ask; never start a separate list file, and keep your other records. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them. Wink lists every open ask in a fresh session and on a status question, otherwise the asks the user's words name, and merges a repeat into the ask it matches. Park an ask with until when it waits on a date. An ask with no ref and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.";
 
 export const taskAskSchema = z.object({
   id: z.string().regex(/^A\d{1,6}$/),
@@ -88,7 +88,7 @@ export function mergeTaskAsks(
     const text = update.ask?.trim() ?? "";
     const target = id
       ? asks.find((ask) => ask.id === id)
-      : text ? asks.find((ask) => isOpenAsk(ask) && !isParked(ask, now) && words(ask.ask) === words(text)) : undefined;
+      : text ? asks.find((ask) => isOpenAsk(ask) && words(ask.ask) === words(text)) : undefined;
     if (id && !target) {
       return { error: `Unknown ask id ${id}. Open asks: ${asks.filter(isOpenAsk).map((ask) => ask.id).join(", ") || "none"}.` };
     }
@@ -152,6 +152,10 @@ function day(at: number): string {
   return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+const askLine = (ask: TaskAsk, now: number) => isParked(ask, now)
+  ? `- ${ask.id} parked back ${day(ask.until!)}: ${ask.ask}`
+  : `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+
 /** Open asks, needing a verdict first and then oldest, all of them; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
 function listed(asks: readonly TaskAsk[] | undefined, now: number) {
   const open = (asks ?? []).filter((ask) => isOpenAsk(ask) && !isParked(ask, now));
@@ -159,7 +163,7 @@ function listed(asks: readonly TaskAsk[] | undefined, now: number) {
   const due = open.filter((ask) => needsVerdict(ask, now)).sort(byAge);
   const rest = open.filter((ask) => !needsVerdict(ask, now)).sort(byAge);
   const ordered = [...due, ...rest.filter((ask) => !isQuestion(ask)), ...rest.filter(isQuestion)];
-  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  const line = (ask: TaskAsk) => askLine(ask, now);
   const bytes = (ask: TaskAsk) => Buffer.byteLength(line(ask), "utf8") + 1;
   if (ordered.reduce((sum, ask) => sum + bytes(ask), 0) <= MAX_STATUS_ASKS_BYTES) return { ordered, due, shown: ordered, line };
   const picked = new Set<TaskAsk>();
@@ -177,7 +181,7 @@ export function rotatedAsks(asks: readonly TaskAsk[] | undefined, now: number): 
   return shown.length < ordered.length ? shown.map((ask) => ask.id) : null;
 }
 
-/** Every open ask but the parked ones, which count in one line. Empty when none is open. */
+/** Every open ask, then each parked one with the day it comes back. Empty when none is open. */
 export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false): string {
   const parked = (asks ?? []).filter((ask) => isParked(ask, now));
   const { ordered, due, shown, line } = listed(asks, now);
@@ -187,16 +191,45 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   const waiting = ordered.length - shown.length;
   const rotated = waiting ? ` ${waiting} more wait for the next turn, least recently shown first.` : "";
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
-  const back = Math.min(...parked.map((ask) => ask.until!));
   return [
     `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
     ...shown.map(line),
-    ...(parked.length ? [`${parked.length} parked, next back ${day(back)}`] : []),
+    ...parked.toSorted((left, right) => left.until! - right.until!).map(line),
   ].join("\n");
 }
 
-/** For a turn the record does not ride: every open ask on a status turn, otherwise only once one needs a verdict. */
-export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, text: string): string {
-  if (isStatusTurn(text)) return asksBlock(asks, now, true);
-  return (asks ?? []).some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now) : "";
+const SKIPPED_TERMS = new Set("about again also asked being change could does doing done from have into just like list make more need next please really should still that them then there they thing things this want what when where which will with would your".split(" "));
+const terms = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+  .filter((word) => word.length >= (/^[a-z0-9]+$/.test(word) ? 4 : 2) && !SKIPPED_TERMS.has(word))
+  .map((word) => word.replace(/(?<=[a-z]{3})s$/, "")));
+
+/** The user's own open or parked asks sharing a word with the message. */
+function named(asks: readonly TaskAsk[], text: string): TaskAsk[] {
+  const said = terms(text);
+  return said.size ? asks.filter((ask) => isOpenAsk(ask) && !isQuestion(ask) && [...terms(ask.ask)].some((term) => said.has(term))) : [];
+}
+
+// another chat's ids mean nothing here, so its asks show without them
+function elsewhereBlock(asks: readonly TaskAsk[], now: number): string {
+  if (!asks.length) return "";
+  const shown = asks.slice(0, ASK_LIMITS.kept);
+  const more = asks.length - shown.length;
+  return [
+    `[Wink asks from the user's other chats with you - ${asks.length}; update them in that chat.${more ? ` ${more} more not shown.` : ""}]`,
+    ...shown.map((ask) => askLine(ask, now).replace(/^- A\d+ /, "- ")),
+  ].join("\n");
+}
+
+/** For a turn the record does not ride: every open ask on a status turn or once one needs a verdict, otherwise the asks the message names; asks from the bot's other chats ride the same way. */
+export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, text: string, elsewhere: readonly TaskAsk[] = []): string {
+  const status = isStatusTurn(text);
+  const own = asks ?? [];
+  const hits = named(own, text);
+  const block = status || own.some((ask) => needsVerdict(ask, now))
+    ? asksBlock(asks, now, status)
+    : hits.length
+      ? [`[Wink asks the user's message names - ${hits.length} of ${own.filter(isOpenAsk).length} open; a status question lists them all.]`, ...hits.map((ask) => askLine(ask, now))].join("\n")
+      : "";
+  const others = status ? elsewhere.filter(isOpenAsk) : named(elsewhere, text);
+  return [block, elsewhereBlock(others, now)].filter(Boolean).join("\n");
 }
