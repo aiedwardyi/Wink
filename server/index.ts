@@ -3180,7 +3180,7 @@ startupTiming.afterPaint("unlanded", async () => {
 const memoryLookup = createMemoryLookup({
   dataDir: DATA_DIR,
   notesPath: (botId) => store.bot(botId)?.projectNotes,
-  asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId)),
+  asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),
 });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
@@ -5808,7 +5808,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId, threadId);
   const roomEchoes = roomEchoesSinceLastUserTurn(activeMessages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model);
   const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
-  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
+  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind) && !notOwnerChats().has(threadId)
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);

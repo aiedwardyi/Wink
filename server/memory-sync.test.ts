@@ -73,6 +73,14 @@ function seed(text: string, ...all: PC[]) {
   }
 }
 
+// every PC hands its snapshot to every other until nothing changes
+function settle(...all: PC[]) {
+  for (let round = 0; round < 4; round++) {
+    for (const from of all) for (const to of all) if (from !== to && from.ledger.device) receive(from, to);
+    for (const pc of all) sync(pc);
+  }
+}
+
 describe("memory sync", () => {
   it("keeps background jobs on the owner if its ledger is copied to another PC", () => {
     const [owner, mirror] = pcs();
@@ -739,6 +747,180 @@ describe("memory sync", () => {
     sync(b);
     expect(read(b, "memory/archive/launch-plan.md")).toBe("Launch on Dec 1.\n");
     expect(read(b, "memory/launch-plan.md")).toBeNull();
+  });
+
+  it("joins a fresh third PC's notes into a file two PCs both edited, with every line kept on all three", () => {
+    const full = `# Memory\n\n${Array.from({ length: 30 }, (_, n) => `- fact ${n + 1} the user told this bot`).join("\n")}\n`;
+    const [a, b, c] = pcs(3);
+    seed(full, a, b);
+    edit(b, `${full}- fact from b\n`);
+    sync(b);
+    receive(b, a);
+    sync(a);
+    edit(a, `${full}- fact from b\n- fact from a\n`);
+    sync(a);
+    receive(a, b);
+    sync(b);
+    edit(c, "# Memory\n\n- Likes tea\n");
+    markTalked(c.ledger, "bot-1", 9_000);
+    settle(a, b, c);
+    for (const pc of [a, b, c]) {
+      expect(read(pc)).toBe(`${full}- fact from b\n- fact from a\n- Likes tea\n`);
+      expect(parked(pc)).toEqual([]);
+    }
+  });
+
+  it("joins a reinstalled PC's fresh notes into the pair's file", () => {
+    const full = `# Memory\n\n${Array.from({ length: 30 }, (_, n) => `- fact ${n + 1}`).join("\n")}\n`;
+    const [a, b] = pcs();
+    seed(full, a, b);
+    edit(b, `${full}- fact from b\n`);
+    sync(b);
+    receive(b, a);
+    sync(a);
+    rmSync(b.workspace, { recursive: true, force: true });
+    b.ledger = { bots: {} };
+    edit(b, "# Memory\n\n- Likes tea\n");
+    markTalked(b.ledger, "bot-1", 9_000);
+    settle(a, b);
+    for (const pc of [a, b]) {
+      expect(read(pc)).toBe(`${full}- fact from b\n- Likes tea\n`);
+      expect(parked(pc)).toEqual([]);
+    }
+  });
+
+  it("reads CRLF and LF first copies as the same lines", () => {
+    const facts = Array.from({ length: 30 }, (_, n) => `- fact ${n + 1}`);
+    const [a, b] = pcs();
+    edit(a, `# Memory\r\n\r\n${facts.join("\r\n")}\r\n`);
+    sync(a);
+    edit(b, `# Memory\n\n${facts.join("\n")}\n- Likes tea\n`);
+    markTalked(b.ledger, "bot-1", 9_000);
+    sync(b);
+    settle(a, b);
+    for (const pc of [a, b]) {
+      const lines = read(pc)!.split(/\r?\n/).filter(Boolean);
+      expect(lines).toEqual(["# Memory", ...facts, "- Likes tea"]);
+      expect(parked(pc)).toEqual([]);
+    }
+  });
+
+  it("keeps a line deleted while a first join was on its way, whoever the user messaged last", () => {
+    const facts = Array.from({ length: 30 }, (_, n) => `- fact ${n + 1}`);
+    const full = `# Memory\n\n${facts.join("\n")}\n`;
+    const trimmed = full.replace("- fact 3\n", "");
+    for (const last of ["a", "b"]) {
+      for (const joinedOnA of [false, true]) {
+        const [a, b] = pcs();
+        edit(a, full);
+        markTalked(a.ledger, "bot-1", last === "a" ? 9_000 : 5_000);
+        sync(a);
+        edit(b, "# Memory\n\n- Likes tea\n");
+        markTalked(b.ledger, "bot-1", last === "b" ? 9_000 : 5_000);
+        sync(b);
+        const bFirst = capture(b);
+        receive(a, b);
+        sync(b);
+        if (joinedOnA) {
+          receive(b, a, bFirst);
+          sync(a);
+          edit(a, `${trimmed}- Likes tea\n`);
+        } else {
+          edit(a, trimmed);
+        }
+        sync(a);
+        settle(a, b);
+        const label = `${last} talked last, ${joinedOnA ? "a joined too" : "a never saw b"}`;
+        for (const pc of [a, b]) {
+          expect(read(pc), label).toBe(`${trimmed}- Likes tea\n`);
+          expect(parked(pc), label).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it("puts a joined line under its own heading, keeps repeated lines, and sets aside a copy whose line it moved", () => {
+    const [a, b] = pcs();
+    edit(a, "# Memory\n\n## Likes\n- Coffee\n- Jazz\n- Hiking\n\n## Work\n- Ships on Fridays\n- Uses vim\n");
+    sync(a);
+    edit(b, "# Memory\n\n## Likes\n- Tea\n\n## Dislikes\n- Coffee\n\n---\n---\n");
+    markTalked(b.ledger, "bot-1", 9_000);
+    sync(b);
+    settle(a, b);
+    const want = "# Memory\n\n## Likes\n- Coffee\n- Jazz\n- Hiking\n- Tea\n\n## Work\n- Ships on Fridays\n- Uses vim\n\n## Dislikes\n---\n---\n";
+    for (const pc of [a, b]) {
+      expect(read(pc)).toBe(want);
+      expect(parked(pc)).toEqual(["# Memory\n\n## Likes\n- Tea\n\n## Dislikes\n- Coffee\n\n---\n---\n"]);
+    }
+  });
+
+  it("keeps a line deleted on the other PC out of a copy this PC kept after losing its ledger", () => {
+    const facts = Array.from({ length: 10 }, (_, n) => `- fact ${n + 1}`);
+    const full = `# Memory\n\n${facts.join("\n")}\n`;
+    // the new device id sorts before or after the old snapshot, so either is read first
+    for (const [oldSnapshot, device] of [["kept", "000000000000"], ["kept", "ffffffffffff"], ["gone", "000000000000"]] as const) {
+      const [a, b] = pcs();
+      seed(full, a, b);
+      if (oldSnapshot === "gone") rmSync(ownSnapshot(b));
+      b.ledger = { bots: {}, device, host: b.host };
+      edit(a, full.replace("- fact 4\n", ""));
+      sync(a);
+      markTalked(b.ledger, "bot-1", 9_000);
+      sync(b);
+      settle(a, b);
+      for (const pc of [a, b]) {
+        expect(read(pc), `${oldSnapshot} ${device}`).toBe(full.replace("- fact 4\n", ""));
+        expect(parked(pc), `${oldSnapshot} ${device}`).toEqual([]);
+      }
+    }
+  });
+
+  it("joins back the full notes an older build set aside when it took a new PC's first notes, either way it broke the tie", () => {
+    const full = `# Memory\n\n${Array.from({ length: 30 }, (_, n) => `- fact ${n + 1}`).join("\n")}\n`;
+    for (const kept of ["note", "full"]) {
+      const [a, b] = pcs();
+      edit(a, full);
+      sync(a);
+      edit(b, "# Memory\n\n- Likes tea\n");
+      markTalked(b.ledger, "bot-1", 9_000);
+      sync(b);
+      // what the older build on A publishes after its tie: one copy kept, the other set aside under the same versions
+      const mine = JSON.parse(capture(a));
+      delete mine.joins;
+      const theirs = JSON.parse(capture(b));
+      const vv = { ...mine.files["MEMORY.md"].vv, ...theirs.files["MEMORY.md"].vv };
+      const lost = kept === "note" ? full : "# Memory\n\n- Likes tea\n";
+      const body = `<!-- memory sync: a copy of MEMORY.md set aside when two PCs changed it at once -->\n${lost}`;
+      mine.files = {
+        "MEMORY.md": kept === "note" ? { vv, at: 1, text: "# Memory\n\n- Likes tea\n", by: { device: b.ledger.device, talkedAt: 9_000 } } : { vv, at: 1, text: full },
+        [`memory/MEMORY.conflict-${sha(body).slice(0, 8)}.md`]: { vv, at: 1, text: body },
+      };
+      receive(a, b, `${JSON.stringify(mine)}\n`);
+      sync(b);
+      expect(read(b), kept).toBe(`${full}- Likes tea\n`);
+      expect(parked(b), kept).toEqual([]);
+    }
+  });
+
+  it("still sets aside one of two edits made at once to a file a join built, once the join has settled", () => {
+    const [a, b] = pcs();
+    edit(a, "# Memory\n\n- Budget: 100 dollars\n- Owns deploys\n");
+    sync(a);
+    edit(b, "# Memory\n\n- Likes tea\n");
+    markTalked(b.ledger, "bot-1", 9_000);
+    sync(b);
+    settle(a, b);
+    const joined = "# Memory\n\n- Budget: 100 dollars\n- Owns deploys\n- Likes tea\n";
+    expect(read(a)).toBe(joined);
+    edit(a, joined.replace("100", "200"));
+    sync(a);
+    edit(b, joined.replace("100", "300"));
+    sync(b);
+    settle(a, b);
+    for (const pc of [a, b]) {
+      expect(read(pc)).toBe(joined.replace("100", "300"));
+      expect(parked(pc)).toEqual([joined.replace("100", "200")]);
+    }
   });
 
   it("publishes the last good copy of a file it cannot read this pass", () => {
