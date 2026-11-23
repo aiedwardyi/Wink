@@ -571,7 +571,7 @@ const drag = async (node: Element, to: number) => act(async () => {
   document.dispatchEvent(mouse("pointerup", 40, to));
 });
 
-it.each(["[data-left]", "[data-account-email]", "[data-edit-name]"])("reorders with a mouse drag from a row's %s", async (from) => {
+it.each(["[data-left]", "[data-account-email]", "[data-edit-name]", "[data-use]"])("reorders with a mouse drag from a row's %s", async (from) => {
   await mount();
   const before = rows();
   stack(claudeRows());
@@ -582,6 +582,46 @@ it.each(["[data-left]", "[data-account-email]", "[data-edit-name]"])("reorders w
   expected.splice(index + 1, 0, expected.splice(index, 1)[0]!);
   expect(rows()).toEqual(expected);
   expect(document.documentElement.hasAttribute("data-usage-dragging")).toBe(false);
+});
+
+it("reorders with a mouse drag from a signed-out row's Sign In", async () => {
+  h.board!.engines[0]!.accounts[0]!.signIn = "signed-out";
+  h.instances[0]!.snapshot = { authenticated: false, state: "available" };
+  await mount();
+  const before = rows();
+  stack(claudeRows());
+  const signIn = [...host.querySelectorAll<HTMLElement>('[data-account-row="claude"] button')].find((each) => each.textContent === "Sign In");
+  expect(signIn).toBeTruthy();
+  await drag(signIn!, 130);
+  expect(rows()).toEqual([before[1], before[0], ...before.slice(2)]);
+});
+
+it("reorders Connections with a mouse drag from Sign Out", async () => {
+  const first = h.instances.find((each) => each.accountOf === "claude")!;
+  const accounts = Array.from({ length: 3 }, (_, i) => ({ ...first, instanceId: i ? `slot-${i}` : first.instanceId }));
+  await mount(createElement(AccountConnections, { accounts, reload: async () => {} }));
+  const list = () => [...host.querySelectorAll<HTMLElement>("[data-connection-account]")];
+  stack(list());
+  const signOut = [...list()[0]!.querySelectorAll<HTMLElement>("button")].find((each) => each.textContent === "Sign Out");
+  expect(signOut).toBeTruthy();
+  await drag(signOut!, 130);
+  expect(list().map((node) => node.dataset.connectionAccount)).toEqual(["slot-1", first.instanceId, "slot-2"]);
+});
+
+it("keeps a press on Use with a 6 px jiggle a click", async () => {
+  await mount();
+  stack(claudeRows());
+  const use = q('[data-usage-engine="claude"] [data-use]')!;
+  const clicked = vi.fn();
+  use.addEventListener("click", clicked);
+  await act(async () => {
+    use.dispatchEvent(mouse("pointerdown", 40, 40));
+    document.dispatchEvent(mouse("pointermove", 40, 46));
+    document.dispatchEvent(mouse("pointerup", 40, 46));
+    use.click();
+  });
+  expect(lifted()).toBe(0);
+  expect(clicked).toHaveBeenCalledOnce();
 });
 
 it("waits a few px before dragging and stops the press from selecting text", async () => {

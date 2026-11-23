@@ -1,4 +1,4 @@
-import { Fragment, useId, useState, type MouseEvent, type ReactNode } from "react";
+import { Fragment, useId, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
@@ -6,38 +6,36 @@ import type { Translate } from "@/lib/i18n";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { Fold } from "./Fold";
 
-// Slots, not ids: a collapsed reorder permutes rows within the shown slots, while an order from another view shows through.
+// Slots plus the ids they held: a collapsed reorder permutes those ids within the slots, while an order that brings other rows into them picks again.
 function pickRows(accounts: UsageBoardAccount[], checked: string | null) {
   const main = accounts.findIndex((each) => each.id === checked);
-  return [0, 1, main > 2 ? main : 2];
+  const slots = [0, 1, main > 2 ? main : 2];
+  return { slots, ids: slots.map((slot) => accounts[slot]?.id) };
 }
 
-export function useCappedAccounts({ accounts, checked, t, row, loadOpen, saveOpen }: {
-  accounts: UsageBoardAccount[]; checked: string | null; t: Translate; row: (account: UsageBoardAccount) => ReactNode;
+export function useCappedAccounts({ accounts, checked, pending, t, row, loadOpen, saveOpen }: {
+  accounts: UsageBoardAccount[]; checked: string | null; pending: string | undefined; t: Translate; row: (account: UsageBoardAccount) => ReactNode;
   loadOpen: () => boolean; saveOpen: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(loadOpen);
   const [picked, setPicked] = useState(() => pickRows(accounts, checked));
-  // Only a Use pressed here keeps the old Main shown; a Main the board moves on its own picks again.
-  const [main, setMain] = useState<{ checked: string | null; used?: string }>({ checked });
-  const moved = main.checked !== checked;
-  if (moved) setMain({ checked });
+  // Only the save the board accepted keeps the old Main shown when it lands; a Main the board moves on its own picks again.
+  const [main, setMain] = useState({ checked, pending });
+  if (main.checked !== checked || main.pending !== pending) setMain({ checked, pending });
+  const moved = main.checked !== checked && checked !== main.pending;
   const at = accounts.findIndex((account) => account.id === checked);
-  if (!open && ((moved && checked !== main.used) || (at >= 0 && !picked.includes(at)))) setPicked(pickRows(accounts, checked));
+  const reordered = picked.slots.some((slot) => !picked.ids.includes(accounts[slot]?.id));
+  if (!open && (moved || reordered || (at >= 0 && !picked.slots.includes(at)))) setPicked(pickRows(accounts, checked));
   const id = useId();
   if (accounts.length <= 3) return accounts.map(row);
-  const use = (event: MouseEvent) => {
-    const used = event.target instanceof Element && event.target.closest("[data-use]")?.closest<HTMLElement>("[data-account-row]")?.dataset.accountRow;
-    if (used) setMain({ checked, used });
-  };
   const groups: { kept: boolean; accounts: UsageBoardAccount[] }[] = [];
   for (const [index, account] of accounts.entries()) {
-    const kept = picked.includes(index);
+    const kept = picked.slots.includes(index);
     const last = groups.at(-1);
     if (last?.kept === kept) last.accounts.push(account);
     else groups.push({ kept, accounts: [account] });
   }
-  const hidden = accounts.filter((_, index) => !picked.includes(index)).length;
+  const hidden = accounts.filter((_, index) => !picked.slots.includes(index)).length;
   const moving = groups.findIndex((each) => !each.kept);
   const toggle = () => afterFold(`${id}-${moving}`, () => {
     if (open) setPicked(pickRows(accounts, checked));
@@ -46,7 +44,7 @@ export function useCappedAccounts({ accounts, checked, t, row, loadOpen, saveOpe
   });
   return (
     <div>
-      <div id={id} onClickCapture={use} className="[&_[data-account-row]]:border-t [&>[data-account-row]:first-child]:border-t-0">
+      <div id={id} className="[&_[data-account-row]]:border-t [&>[data-account-row]:first-child]:border-t-0">
         {groups.map((group, index) => group.kept
           ? <Fragment key={group.accounts[0]!.id}>{group.accounts.map(row)}</Fragment>
           : <Fold key={group.accounts[0]!.id} id={`${id}-${index}`} open={open}>{group.accounts.map(row)}</Fold>)}
