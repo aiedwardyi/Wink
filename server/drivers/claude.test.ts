@@ -1384,6 +1384,23 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__composio");
   });
 
+  it("leaves connected apps unallowed in Ask, so each call reaches the Ask card", async () => {
+    await create(undefined, {}, { permissionMode: "acceptEdits" });
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({
+      threadId: "t-composio-ask",
+      text: "hi",
+      approval: "ask",
+      integrations: { composio: { command: process.execPath, args: ["/tmp/connector-proxy.js"], env: {} } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.composio).toBeDefined();
+    expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1].split(",")).not.toContain("mcp__composio");
+    expect(seen.argv[seen.argv.indexOf("--permission-prompt-tool") + 1]).toBe("mcp__ogb__approve");
+  });
+
   // the config file holds live credentials, so it must not outlive the turn —
   // including when the CLI dies mid-turn, which is the path that leaks if
   // cleanup is hung off the happy-path result instead of settle()

@@ -95,6 +95,7 @@ type RoomPicture = (path: string, name: string, caption: string) => Promise<
 const tokenMismatch = (claimed: { botId: string; threadId: string } | undefined, botId: string, threadId: string) =>
   Boolean(claimed && (claimed.botId !== botId || claimed.threadId !== threadId));
 
+const readOnlyRefusal = (tool: string) => `${tool} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`;
 const roomRefusal = (e: unknown) => ({ status: (e as { status?: number }).status ?? 500, error: `the room refused it: ${(e as Error).message}` });
 
 async function publishRoomPicture(picture: RoomPicture, path: string, name: string, caption: string) {
@@ -340,6 +341,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
       const depth = snapshot?.depth ?? 0;
+      if (deps.readOnlyTurn(fromBotId, source.threadId)) return json(res, 403, { error: readOnlyRefusal("ask_bot") });
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       if (toBotId === fromBotId) return json(res, 400, { error: "a bot cannot message itself" });
       if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
@@ -463,6 +465,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!source || !from) return json(res, 403, { error: "unknown sender" });
       const fromThreadId = source.threadId;
       if (!connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
+      if (deps.readOnlyTurn(from.id, fromThreadId)) return json(res, 403, { error: readOnlyRefusal("wake_me") });
       if (typeof body.cancel === "string") {
         return cancelWake(routines, from.id, body.cancel)
           ? json(res, 200, { ok: true })
@@ -563,6 +566,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
       if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), from.id, fromThreadId)) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (deps.readOnlyTurn(from.id, fromThreadId)) return json(res, 403, { error: readOnlyRefusal("generate_image") });
       const parsed = generateImageRequestSchema.safeParse(body);
       if (!parsed.success) {
         return json(res, 400, { error: "needs a prompt and a supported size and quality" });
@@ -612,9 +616,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromThreadId = source.threadId;
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
-      if (deps.readOnlyTurn(from.id, fromThreadId)) {
-        return json(res, 403, { error: 'call_api is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
-      }
+      if (deps.readOnlyTurn(from.id, fromThreadId)) return json(res, 403, { error: readOnlyRefusal("call_api") });
       const parsed = callApiRequestSchema.safeParse(body);
       if (!parsed.success) return json(res, 400, { error: "needs credential_id, method, and url; headers must be strings" });
       try {
@@ -680,6 +682,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
+      if (deps.readOnlyTurn(from.id, fromThreadId)) return json(res, 403, { error: readOnlyRefusal("delegate_bot") });
       if (!snapshot || !turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
       if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
       const credit = reserve(snapshot.rootId, "delegation");

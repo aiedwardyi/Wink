@@ -640,6 +640,7 @@ describe("a room bot's @ to this PC's bot", () => {
       const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
       const appendMessage = vi.fn((_threadId: string, _message: Partial<Message>) => ({ id: "message" }));
       const routes = createInternalRoutes({
+        readOnlyTurn: () => false,
         cfg: {},
         store: { bot: () => bot, taskByThread: () => undefined, appendMessage },
         connectorThread: () => ({}),
@@ -676,6 +677,7 @@ describe("a room bot's @ to this PC's bot", () => {
       const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
       const appendMessage = vi.fn(() => ({ id: "message" }));
       const routes = createInternalRoutes({
+        readOnlyTurn: () => false,
         cfg: { imageGen: { key: "test-key" } },
         store: { bot: () => bot, taskByThread: () => undefined, groupTaskByThread: () => undefined, appendMessage },
         connectorThread: () => ({}),

@@ -217,6 +217,9 @@ type AppServer = {
 const appServerAlive = (server: AppServer) =>
   server.child.exitCode === null && server.child.signalCode === null && !server.child.stdin.destroyed && !server.child.stdout.destroyed;
 
+/** Codex tools that run commands or open files and pages anywhere on the PC. */
+export const READ_ONLY_FEATURES_OFF = ["shell_tool", "unified_exec", "code_mode", "view_image", "browser_use", "in_app_browser", "computer_use"];
+
 // Only a Wink setting overrides; otherwise the user's own codex config decides.
 // untrusted asks before any edit or command that is not read-only.
 function codexPolicy(fullAuto: boolean, turn: AccessTurn) {
@@ -982,6 +985,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           for (const name of Object.keys(read?.config?.mcp_servers ?? {})) if (name !== "agents") mcpOff[`mcp_servers.${name}.enabled`] = false;
           for (const id of Object.keys(read?.config?.plugins ?? {})) mcpOff[`plugins.${id}.enabled`] = false;
           Object.assign(mcpOff, { "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
+          // the read-only sandbox fences writes, not reads, and untrusted runs cat or Get-Content unasked: no tool reads past the folder
+          Object.assign(mcpOff, Object.fromEntries(READ_ONLY_FEATURES_OFF.map((name) => [`features.${name}`, false])));
         }
         if (cursor && !warm) {
           try {

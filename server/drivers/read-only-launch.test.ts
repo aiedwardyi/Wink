@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testHome } from "../testing/test-home.ts";
 
-import { ensureDirs } from "../config.ts";
+import { DATA_DIR, ensureDirs } from "../config.ts";
 import * as procs from "../procs.ts";
 import type { ProviderInstance, SendTurnInput } from "../contracts.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
@@ -17,7 +17,7 @@ import * as auth from "./antigravity-auth.ts";
 import { AntigravityDriver } from "./antigravity.ts";
 import { BUILT_IN_DRIVERS } from "./builtIn.ts";
 import { ClaudeDriver } from "./claude.ts";
-import { CodexDriver } from "./codex.ts";
+import { CodexDriver, READ_ONLY_FEATURES_OFF } from "./codex.ts";
 import { MspMuseAgentDriver } from "./msp/muse.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -26,6 +26,9 @@ const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "Notebo
 const EXEMPT: Record<string, string> = { boxAgent: "a cloud box has no read-only mode, so Wink keeps the can't-work line for it" };
 const agents = { command: process.execPath, args: ["-e", ""], env: {} };
 const composio = { command: process.execPath, args: ["-e", "", "composio"], env: {} };
+
+// the CLI's absolute rule form
+const rule = (dir: string) => `Read(${/^[A-Za-z]:/.test(dir) ? `//${dir[0]!.toLowerCase()}/${dir.slice(3).replace(/\\/g, "/")}` : `/${dir}`}/**)`;
 
 const createSignIn = auth.antigravitySignIn;
 let scratch: string;
@@ -91,6 +94,8 @@ const ENGINES: Record<string, Engine> = {
       expect(argv).not.toContain("--plugin-dir");
       expect(mcpServers).toEqual(["agents", "ogb"]);
       expect(after(argv, "--allowedTools").split(",").sort()).toEqual(["mcp__agents", "mcp__ogb"]);
+      const deny = JSON.parse(after(argv, "--settings")).permissions.deny as string[];
+      for (const dir of [join(testHome(), ".ssh"), join(testHome(), ".codex"), join(testHome(), ".claude"), DATA_DIR, join(DATA_DIR, "accounts")]) expect(deny).toContain(rule(dir));
     },
   },
   codex: {
@@ -115,6 +120,8 @@ const ENGINES: Record<string, Engine> = {
         expect({ method, sandbox, approvalPolicy }).toEqual({ method, sandbox: "read-only", approvalPolicy: "untrusted" });
         expect(config).toMatchObject({ "mcp_servers.github.enabled": false, "plugins.unified-computer-use@openai-bundled.enabled": false, "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
         expect(config).not.toHaveProperty("mcp_servers.agents.enabled");
+        expect(config).toMatchObject({ "features.shell_tool": false, "features.unified_exec": false, "features.view_image": false });
+        for (const name of READ_ONLY_FEATURES_OFF) expect(config).toHaveProperty([`features.${name}`], false);
       }
     },
   },
@@ -129,6 +136,7 @@ const ENGINES: Record<string, Engine> = {
     },
     restricted({ argv }: { argv: string[] }) {
       expect(after(argv, "--mode")).toBe("plan");
+      expect(JSON.parse(after(argv, "--settings"))).toEqual({ allowNonWorkspaceAccess: false });
       expect(argv).not.toContain("--dangerously-skip-permissions");
     },
   },

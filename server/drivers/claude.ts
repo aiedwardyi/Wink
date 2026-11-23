@@ -285,10 +285,31 @@ type AskResolutionSource = "user" | "timeout" | "system";
 // so Ask for approval reaches the broker even where Write, Bash or a Wink tool is allowed.
 // Sandbox auto-allow is switched off too, or sandboxed Bash would skip them.
 const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"];
-const askSettings = (builtinAsks: string[]) => JSON.stringify({
-  permissions: { ask: [...WRITE_TOOLS, ...builtinAsks] },
+const askSettings = (builtinAsks: string[], deny: string[] = []) => JSON.stringify({
+  permissions: { ask: [...WRITE_TOOLS, ...builtinAsks], ...(deny.length ? { deny } : {}) },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
+
+/** The CLI's absolute rule form: Windows paths match as /c/Users/... */
+const rulePath = (path: string) => {
+  const drive = /^([A-Za-z]):[\\/]?(.*)$/.exec(path);
+  return drive ? `//${drive[1]!.toLowerCase()}/${drive[2]!.replace(/\\/g, "/")}` : `/${path}`;
+};
+
+/** Sign-ins, SSH keys and Wink's data stay unread on a read-only turn. A root holding the turn's folder is skipped:
+ * the folder stays readable, and the rest of that root is outside it, where reads need an approval nobody gives. */
+export function readOnlyReadDeny(cwd: string, env: Record<string, string | undefined>, account?: AccountContext): string[] {
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const roots = [DATA_DIR, join(DATA_DIR, "accounts"), join(home, ".ssh"), claudeConfigDir(env),
+    baseAccount("codex", "codex", env).home, baseAccount("grokAgent", "grokAgent", env).home, ...(account ? [account.home] : [])];
+  const inside = (root: string) => {
+    const rel = relative(root, cwd);
+    return !rel || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  const rules = roots.filter((root) => !inside(root)).map((root) => `Read(${rulePath(root).replace(/\/+$/, "")}/**)`);
+  // Windows paths match whatever case the model writes
+  return [...new Set(process.platform === "win32" ? rules.flatMap((rule) => [rule, rule.toLowerCase()]) : rules)];
+}
 
 const ownDefaultModeSchema = z.object({ permissions: z.object({ defaultMode: z.string() }) });
 
@@ -732,6 +753,8 @@ const unescapeAttribute = (value: string) =>
   );
 
 function storeImage(path: string, storeDir: string): { block: ClaudeImageBlock; realPath: string; bytes: number } | null {
+  // a network path would make realpathSync open the share, sending the Windows login and blocking the server
+  if (/^[\\/]{2}/.test(path)) return null;
   try {
     const file = realpathSync(path);
     if (dirname(file) !== realpathSync(storeDir)) return null;
@@ -1139,7 +1162,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       ];
       // Ask preallows a built-in's read and chat ops by name; its side effects reach the Ask card
       const builtinOps = asks && !turn.readOnly;
-      if (asks) args.push("--settings", askSettings(builtinOps ? BUILTIN_SERVERS.filter((server) => turn.integrations?.[server]).flatMap(claudeAskRules) : []));
+      if (asks) args.push("--settings", askSettings(builtinOps ? BUILTIN_SERVERS.filter((server) => turn.integrations?.[server]).flatMap(claudeAskRules) : [],
+        turn.readOnly ? readOnlyReadDeny(turn.cwd ?? homedir(), turnEnvironment, input.account) : []));
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
       // `--tools ""` already removes it, so no deny entry there.
@@ -1170,7 +1194,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const orbitOwned = { alwaysLoad: true, timeout: 1_800_000 };
       if (turn.integrations?.composio) {
         mcpServers.composio = { ...turn.integrations.composio };
-        allowed.push("mcp__composio");
+        // Ask cards every connected-app call: a mail or chat send is a side effect
+        if (!asks) allowed.push("mcp__composio");
       }
       if (turn.integrations?.computer) {
         mcpServers.computer = {

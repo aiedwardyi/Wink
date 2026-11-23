@@ -288,7 +288,7 @@ describe("a teammate's request under the host's setting for the bot", () => {
     walk(runner);
     expect(spread).toBe(true);
     const deps = { authority, chainAsk, bot, lane, works, askById, askFromHost, askRiders };
-    const variables = ["riders", "asked", "lead", "guestAsked", "access"].map((name) => `const ${name} = ${runnerConst(name)};`).join("\n");
+    const variables = ["riders", "asked", "lead", "guestAsked", "guestReadOnly", "access"].map((name) => `const ${name} = ${runnerConst(name)};`).join("\n");
     return new Function(...Object.keys(deps), `${js(variables)}\nreturn access;`)(...Object.values(deps));
   }
 
@@ -473,6 +473,20 @@ describe("a teammate's request under the host's setting for the bot", () => {
     expect(index.text.indexOf("readOnlyTurns !== true) throw", start)).toBeLessThan(index.text.indexOf("readOnlyTurnThreads.add(threadId)", start));
   });
 
+  it("counts a working teammate's turn on an Ask bot as read-only for Wink's tools, and on an Auto bot as working", () => {
+    const readOnlyRoomTurn = load("readOnlyRoomTurn", { store, readOnlyTurnThreads, readOnlyAskTurn, teammateAskTurn });
+    setPersonWorks(group.hosted.roomId, sora.id, true);
+    const { ask } = hostedSend(group, said(sora), "@Wink draw a cat");
+    expect(startAsk(ask!.id)).toBe(true);
+    store.patchBot(wink, { autoApprove: false });
+    expect(readOnlyRoomTurn(wink, group.threadId)).toBe(true);
+    store.patchBot(wink, { autoApprove: true });
+    expect(readOnlyRoomTurn(wink, group.threadId)).toBe(false);
+    expect(settleAsk(ask!.id, true)).not.toBeNull();
+    store.patchBot(wink, { autoApprove: false });
+    expect(readOnlyRoomTurn(wink, group.threadId)).toBe(false);
+  });
+
   it("never approves a step on a read-only turn, in a room or a joined room's task", async () => {
     store.patchBot(wink, { autoApprove: true });
     running();
@@ -649,7 +663,7 @@ describe("web_read in a room", () => {
       ts.forEachChild(node, walk);
     };
     walk(index);
-    const readOnlyRoomTurn = load("readOnlyRoomTurn", { store, readOnlyTurnThreads, readOnlyAskTurn });
+    const readOnlyRoomTurn = load("readOnlyRoomTurn", { store, readOnlyTurnThreads, readOnlyAskTurn, teammateAskTurn });
     return load(call!.arguments[2]!.getText(index), { store, readOnlyTurnThreads, readOnlyAskTurn, teammateAskTurn, joinedGuestThreads, readOnlyRoomTurn });
   }
 
