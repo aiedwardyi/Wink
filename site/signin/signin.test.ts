@@ -1150,7 +1150,7 @@ describe("entering a PC's code", () => {
 
   it("looks like the group join boxes", () => {
     const tsx = readFileSync(join(ROOT, "src/components/CodeBoxes.tsx"), "utf8");
-    expect(tsx).toContain("size-11 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold");
+    expect(tsx).toContain("h-11 min-w-0 flex-1 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold");
     const rule = CSS.match(/\.boxes input \{([^}]*)\}/)?.[1] ?? "";
     for (const part of ["width: 44px", "height: 44px", "border-radius: var(--radius-lg)", "var(--hairline) 60%", "var(--inset)", "text-align: center", "font: 600 18px ui-monospace"]) expect(rule).toContain(part);
     expect(CSS).toMatch(/\.boxes \{[^}]*gap: 8px/);
