@@ -346,8 +346,8 @@ import { goalRoute } from "./goal-route.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
-import { createUnlandedWork } from "./unlanded.ts";
-import { createAskPrs } from "./ask-prs.ts";
+import { createUnlandedWork, reportNotes } from "./unlanded.ts";
+import { closedAskLine, createAskPrs, createKnownRepos, reposIn, withClosed } from "./ask-prs.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -3029,12 +3029,23 @@ function stampShownAsks(threadId: string, sent: string): void {
   if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
-// a building ask closes as done once the PR in its ref merges
-function closeMergedAsks(botId: string, threadId: string, record: TaskResumePacket | null): TaskResumePacket | null {
+// a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
+function saveLandedCloses(threadId: string, turnId: string | undefined, landed: boolean): void {
+  const record = taskPacketForWrite(threadId);
+  const ids = askPrs.landed(threadId, turnId ?? "", landed, record?.asks);
+  if (record && ids.length) persistTaskPacket({ ...record, asks: withClosed(record.asks, ids, Date.now()) });
+}
+
+// a building ask whose ref PRs all merged shows as done on this turn, with a line; the store keeps it building until the turn lands
+function closeMergedAsks(botId: string, threadId: string, record: TaskResumePacket | null) {
   const ids = record ? askPrs.take(botId, threadId, record.asks) : [];
-  if (!record || !ids.length) return record;
+  const lines = record?.asks?.filter((ask) => ids.includes(ask.id)).map((ask) => closedAskLine(ask)) ?? [];
   const now = Date.now();
-  return persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, status: "done" as const, changedAt: now } : ask) }) ?? record;
+  return {
+    ids,
+    shown: (packet: TaskResumePacket | null): TaskResumePacket | null => packet && ids.length ? { ...packet, asks: withClosed(packet.asks, ids, now) } : packet,
+    notes: (full: boolean) => [...lines, askPrs.failedNote(botId, threadId, record?.asks, full)].filter(Boolean),
+  };
 }
 
 function queueTaskPacket(packet: TaskResumePacket): void {
@@ -3169,10 +3180,23 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
-const askPrs = createAskPrs({ repoDir: (botId, threadId) => {
-  const pinned = store.taskByThread(botId, threadId)?.cwd;
-  return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+// where a bare "PR n" may be when the bot's folder is not a repo: its asks, its workers' reports and its panes' remotes
+const knownRepos = createKnownRepos({ discover: async (botId) => {
+  const bot = store.bot(botId);
+  if (!bot) return [];
+  const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, null, undefined, { panesOnly: true });
+  const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
+  const remotes = await Promise.all([...new Set(panes.map((pane) => pane.cwd).filter(Boolean))].map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
+  const reports = [...reportNotes(store.notesBack(bot.threadId))].map((row) => row.text ?? "");
+  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports, ...remotes]);
 } });
+const askPrs = createAskPrs({
+  repoDir: (botId, threadId) => {
+    const pinned = store.taskByThread(botId, threadId)?.cwd;
+    return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+  },
+  repos: (botId) => knownRepos.get(botId),
+});
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
 startupTiming.afterPaint("unlanded", async () => {
   // the worker read each chat's reports; a chat loaded since then has them in memory
@@ -4512,6 +4536,7 @@ bus.subscribe((event: RuntimeEvent) => {
           liveTurnIdByThread.delete(event.threadId);
         }
         const disowned = Boolean(event.turnId && disownedTurnIds.delete(event.turnId));
+        saveLandedCloses(event.threadId, event.turnId, !superseded && !disowned && (event.promptAccepted || event.ok && !interrupted));
         if (!superseded && !disowned) {
           const seed = turnSeeds.take(event.threadId, event.turnId);
           if (seed && turnSeedsSession({
@@ -4582,6 +4607,7 @@ bus.subscribe((event: RuntimeEvent) => {
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void unlandedWork.refresh(bot.id, event.threadId);
+            void knownRepos.refresh(bot.id);
             void memoryLookup.settled(bot.id, event.threadId, cursor);
             memoryHealthCheck.settled(bot.id, event.threadId, cursor);
           }
@@ -4621,6 +4647,16 @@ bus.subscribe((event: RuntimeEvent) => {
         } else if (vpsTurn) {
           clearVpsTurn();
         }
+      } else {
+        const { superseded, interrupted } = turnCompletionDisposition({
+          eventTurnId: event.turnId,
+          liveTurnId: liveTurnIdByThread.get(event.threadId),
+          interruptedTurnIds,
+          interruptedAt: 0,
+          dispatchedAt: 0,
+          stopReason: event.stopReason,
+        });
+        saveLandedCloses(event.threadId, event.turnId, !superseded && (event.promptAccepted || event.ok && !interrupted));
       }
       const speaker = groupSpeakers.get(event.threadId);
       const group = store.groupByThread(event.threadId);
@@ -5476,7 +5512,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  let taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
+  let storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  let taskRecord = closes.shown(storedTaskRecord);
   const selectionChanged = task.lastInstanceId !== undefined && (
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
@@ -5585,13 +5623,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle) => {
     if (!grace) {
       rewound = threadId === bot.threadId && Boolean(bot.rewound);
-      taskRecord = taskPacketForWrite(threadId);
-      if (taskRecord && selectionChanged) {
-        taskRecord = persistTaskPacket(stampTaskResumePacket(taskRecord, "engine-switch", {
+      storedTaskRecord = taskPacketForWrite(threadId);
+      if (storedTaskRecord && selectionChanged) {
+        storedTaskRecord = persistTaskPacket(stampTaskResumePacket(storedTaskRecord, "engine-switch", {
           now: Date.now(),
-          turnsAtWrite: task.usage?.turns ?? taskRecord.turnsAtWrite,
-        })) ?? taskRecord;
+          turnsAtWrite: task.usage?.turns ?? storedTaskRecord.turnsAtWrite,
+        })) ?? storedTaskRecord;
       }
+      taskRecord = closes.shown(storedTaskRecord);
       recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages, skipTranscript)?.text) || "";
       durableTaskRecordText = taskRecord
         ? taskRecordBlock(taskRecord, Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
@@ -5600,7 +5639,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       sessionPrompt = sessionPromptFor({ report: task.nativePrompt, cursor: task.resumeCursors[instanceId], model, catalogWindow });
       reactions.delivered = task.reactionsDelivered;
     }
-    const taskRecordToFlush = taskRecord;
+    const taskRecordToFlush = storedTaskRecord;
     return prepareModelContext({
       messages,
       contextWindow: modelContextWindow,
@@ -5630,7 +5669,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           turnsAtWrite: task.usage?.turns ?? taskRecordToFlush.turnsAtWrite,
         }));
         if (!saved) throw new Error("the durable task record could not be flushed");
-        taskRecord = saved;
+        storedTaskRecord = saved;
+        taskRecord = closes.shown(saved);
       } : undefined,
     });
   };
@@ -5821,7 +5861,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+  // a failed check rides again wherever the record does, so a new session hears it
+  const recordRides = rewound || fresh || recycled || compactedThisTurn || resumeSessionUnseeded(seedInputs) || recovering || Boolean(unsettled);
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...closes.notes(recordRides), ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume, nativeReplayPrefix } = buildTurnContext({
@@ -6390,7 +6432,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...closes.notes(true), ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -6451,6 +6493,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
+      askPrs.closing(threadId, started.turnId ?? "", closes.ids);
       if (reservation) commit(reservation);
       if (holdNotes) newestPaneNoteId = undefined;
       // a deferred recycle's live session never took this turn's summary, so
@@ -7222,8 +7265,10 @@ async function runClaimedGroupMemberTurn(
     return true;
   }
   startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
-  const taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
-  const taskRecordToFlush = taskRecord;
+  const storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  const taskRecord = closes.shown(storedTaskRecord);
+  const taskRecordToFlush = storedTaskRecord;
   const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
   // A room replays Wink's context every turn, so no native session ever compacts it.
   const modelContextWindow = nativeCompactAt(instance.driverKind, selection.model, catalogWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }) ? Math.min(catalogWindow, NATIVE_SUMMARY_WINDOW) : catalogWindow;
@@ -7296,6 +7341,7 @@ async function runClaimedGroupMemberTurn(
     prepared.transcript.map((message) => replayMessageText(message, instance.driverKind, bot.id, selection.model)).join("\n"),
     ...roomMail.map((part) => inertMentions(part.text)),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
+    ...closes.notes(Boolean(prepared.compacted && durableTaskRecordText)),
   ].filter((value) => value !== null).join("\n\n");
   stampShownAsks(threadId, roomContext);
   // One turn per bot at a time, across BOTH engines. Without this a bot
@@ -7537,6 +7583,7 @@ async function runClaimedGroupMemberTurn(
     })
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
+        askPrs.closing(threadId, started.turnId ?? "", closes.ids);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
         accountNote.commit();
         releaseStarting();
