@@ -39,10 +39,7 @@ const DECISION_MAX = 100;
 const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
-const NEIGHBOR_WORDS = 12;
 const SUMMARY_MAX = 120;
-const PARAGRAPH_MAX = 400;
-const PARAGRAPH_LINES = 6;
 const STATE_FILE = "memory-pass.json";
 export const OVERFLOW_FILE = "auto-notes-overflow.md";
 const OVERFLOW_HEAD = "# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n";
@@ -155,6 +152,7 @@ export function eligibleRow(message: Message | undefined): message is Message & 
   );
 }
 
+/** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive, unless the caller screens each line. */
 /** The message without pasted blocks and fenced code: what the user did not type. */
 export function withoutBlocks(text: string): string {
   return text
@@ -163,39 +161,15 @@ export function withoutBlocks(text: string): string {
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
 }
 
-const clipParagraph = (paragraph: string) => {
-  const lines = paragraph.split("\n");
-  const head = lines.slice(0, PARAGRAPH_LINES).join("\n");
-  return head.length <= PARAGRAPH_MAX && lines.length <= PARAGRAPH_LINES ? head : `${head.slice(0, PARAGRAPH_MAX).trimEnd()}…`;
-};
-const shortParagraph = (paragraph: string, most = SHORT_ANSWER) => paragraph.trim().split(/\s+/).length <= most;
-const valueWord = (word: string) => word.length >= 6 && /\p{L}/u.test(word) &&
-  (/\d/.test(word) || /\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+){2,}/u.test(word) || (/\p{L}[!@#$%^&*=~|<>{}]+\p{L}/u.test(word) && !/:\/\/|^\W*[\w.+-]+@[\w-]+\.[\w.-]+\W*$/.test(word)));
-// Tr0ub4dor&3xQ, Tr@ub!dor&xQ, Blue-Horse-Staple, card or account digits, or a value spelled out letter by letter
-const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some(valueWord) || /\d(?:[ -]?\d){9,}/.test(paragraph) || /(?<!\S)(?:\S[ \t]+){5,}\S(?!\S)/u.test(paragraph);
-const sentence = (paragraph: string) => /[.!?]["')\]]*$/.test(paragraph.trim());
-// a value of plain words has no shape to spot, so a password label or a key handed over drops the whole message, as base did
-const PASSWORD_WORDS = /\b(?:passwords?|passcodes?|passwd|pins?)\b|비밀\s*번호|비번|암호(?!화|학)|패스워드|패스코드|핀\s*번호/i;
-const KEY_WORDS = String.raw`(?:api[ _-]?(?:key|token)|(?:access|auth|bearer|refresh) token|secret key|private key)`;
-const KEY_HANDED = new RegExp(String.raw`\b(?:the|my|our|your|this|that|an?|new)\s+(?:[\w-]+\s+)?${KEY_WORDS}\b|\b${KEY_WORDS}\s*(?:is|are|:|=)|(?:api|에이피아이)\s*(?:키|토큰)\s*(?:은|는|:|=)`, "i");
-const LOGIN_LABEL = /\b(?:log[- ]?in|sign[- ]?in|user ?name)\s*(?:is|:|=)\s*\S/i;
-
-/** The user's own typing: pastes, attachments, code and quotes cut; a sensitive paragraph goes and a long one is clipped, unless the caller screens each line, which drops long ones as noise. */
-export function userTyping(text: string, dropSensitive = true, keepImages = false, clipLong = dropSensitive): string {
+export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
   const typed = withoutBlocks(text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : ""));
-  if (dropSensitive && [PASSWORD_WORDS, KEY_HANDED].some((label) => label.test(plainTalk(typed)))) return "";
-  const paragraphs = typed.split(/\n\s*\n/);
-  const secret = paragraphs.map((paragraph) => dropSensitive && secretValue(paragraph));
-  const flagged = secret.some(Boolean);
-  // a label and its value can sit paragraphs apart: once one looks secret, a value or a short line goes anywhere, and a phrase beside it unless both read as sentences
-  const beside = (index: number) => [index - 1, index + 1].filter((at) => secret[at]).map((at) => paragraphs[at]!);
-  const kept = paragraphs
-    .filter((paragraph, index) => !secret[index] && !(flagged && (holdsValue(paragraph) || shortParagraph(paragraph))) &&
-      !(shortParagraph(paragraph, NEIGHBOR_WORDS) && beside(index).some((label) => !sentence(label) || !sentence(paragraph))))
-    .map((paragraph) => paragraph.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, ""))
-    // a clip is never checked past its cut, so a long paragraph holding a value goes whole
-    .filter((paragraph) => (paragraph.length <= PARAGRAPH_MAX && paragraph.split("\n").length <= PARAGRAPH_LINES) || (clipLong && !holdsValue(paragraph) && !LOGIN_LABEL.test(paragraph)))
-    .map((paragraph) => clipParagraph(paragraph.split("\n").filter((line) => !line.trimStart().startsWith(">")).join("\n").trim()))
+  // the whole message: a label and its value can sit in different paragraphs
+  if (dropSensitive && secretValue(typed)) return "";
+  const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
+  const kept = unwrapped
+    .split(/\n\s*\n/)
+    .filter((paragraph) => paragraph.length <= 400 && paragraph.split("\n").length <= 6)
+    .map((paragraph) => paragraph.split("\n").filter((line) => !line.trimStart().startsWith(">")).join("\n").trim())
     .filter(Boolean);
   return redactSecretsInText(kept.join("\n\n"));
 }
@@ -320,13 +294,26 @@ export function maskSecretValues(text: string): string {
     i === VALUE_PATTERNS.length - 1 && plainValue(value, all.slice(Math.max(0, at - 40), at), all) ? value : `«redacted ${value.length} chars»`), redactRoomMemory(text));
 }
 
-const plainTalk = (text: string) => text
-  .replace(/\b(?:(?:under|fewer than|up to|at most)\s+\d+|fewer|more|\d+)\s+tokens?\b/gi, "")
-  .replace(/\bpin\s+(?:it|this|that|the\s+\w+)\s+(?:to|at|on)\b/gi, "")
-  .replace(/\bsecret\s+(?:menu|theme|level|door|room)\b/gi, "");
+const valueWord = (word: string) => word.length >= 6 && /\p{L}/u.test(word) &&
+  (/\d/.test(word) || /\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+){2,}/u.test(word) || (/\p{L}[!@#$%^&*=~|<>{}]+\p{L}/u.test(word) && !/:\/\/|^\W*[\w.+-]+@[\w-]+\.[\w.-]+\W*$/.test(word)));
+// Tr0ub4dor&3xQ, Tr@ub!dor&xQ, Blue-Horse-Staple, card or account digits, or a value spelled out letter by letter
+const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some(valueWord) || /\d(?:[ -]?\d){9,}/.test(paragraph) || /(?<!\S)(?:\S[ \t]+){5,}\S(?!\S)/u.test(paragraph);
+// LLM token talk, only after a plain word or sentence punctuation: "the hf token" and "(github) token" name a credential
+const TOKEN_TALK = [
+  /(?<=(?:^|\n|\(|[,;.!?][ \t]|\b(?:the|my|our|your|their|its|this|that|these|those|a|an|of|per|in|on|at|for|and|or|but|so|to|with|by|from|about|watch|check|track|cut|lower|reduce|total|daily|weekly|monthly|high|higher|low|big|huge|llm|model|prompt|output|input|claude|gpt|opus|sonnet|haiku|ai|is|was|are|were)\b)[ \t]*)\btokens?\s+(?:costs?|usage|counts?(?!\s+down)|budgets?|limits?|spend(?:ing)?|bills?|totals?|intensive|heavy)\b/gi,
+  /(?<![\d.,])\b\d[\d.,]*[ \t]?(?:[kmb]|million|billion|thousand)\s+tokens?\b/gi,
+];
+// token talk clears a message base drops only when no login word, value handed over on its line or bare code sits in it
+const VALUE_HINT = /\b(?:pw|pwd|pass|passphrase|passkey|p\/w|log[- ]?in|sign[- ]?in|user ?name|admin|wi-?fi|router|modem|nas|door|gate|lock|unlock|safe|vault|alarm|garage|locker|combo|ssh|ftp|sftp)\b|\b(?:license|product|encryption|recovery|backup|secret|access|security|auth)\s+(?:keys?|codes?|phrase|answer|word)\b|\b[A-Z][A-Z0-9]*_(?:PASS|PWD|KEY|SECRET|TOKEN)\w*|로그인|아이디|와이파이|공유기|도어락|현관|금고|비밀|\b(?:below|next line|last line|coming|incoming|here(?:'s| is| are))\b|:[ \t]*\S|(?<![\w#$.,:/-])(?<!\bPR )\d{4,9}(?![\w%.,:/-])/i;
 
-function secretValue(text: string): boolean {
-  return secretLike(plainTalk(text));
+export function secretValue(text: string): boolean {
+  const plain = text
+    .replace(/\b(?:(?:under|fewer than|up to|at most)\s+\d+|fewer|more|\d+)\s+tokens?\b/gi, "")
+    .replace(/\bpin\s+(?:it|this|that|the\s+\w+)\s+(?:to|at|on)\b/gi, "")
+    .replace(/\bsecret\s+(?:menu|theme|level|door|room)\b/gi, "");
+  if (!secretLike(plain)) return false;
+  const rest = TOKEN_TALK.reduce((left, talk) => left.replace(talk, ""), plain);
+  return rest === plain || secretLike(rest) || VALUE_HINT.test(text) || holdsValue(text);
 }
 
 const STOP_WORDS = new Set(["the", "and", "but", "for", "with", "are", "was", "that", "this", "you", "your", "can", "can't", "cant", "don't", "dont", "just", "have", "has", "not", "i'm", "it's", "its", "really"]);

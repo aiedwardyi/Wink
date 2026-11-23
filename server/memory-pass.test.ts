@@ -18,6 +18,7 @@ import {
   parseFacts,
   pendingRows,
   secretLike,
+  secretValue,
   userTyping,
   type MemoryPass,
   type NoteGenerator,
@@ -38,6 +39,7 @@ import type { Message, StoreChange } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_MAX_BYTES, MEMORY_SEED, memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { BASE_SENDS, S32_ROWS, SECRET_CASES, secretCase, sendsValue } from "./testing/secret-cases.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- a second writer has to land between the pass's read and its write.
@@ -1837,13 +1839,13 @@ describe("memory pass", () => {
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- 38 years old (noted 2026-10-15)\n`);
   });
 
-  it("sends the rest of a message with a secret-looking paragraph to the note-taker", async () => {
+  it("sends a message whose only secret word is token talk to the note-taker", async () => {
     generate.mockResolvedValue("[]");
-    say("t1", "Glasses v1 is the CEO meeting tool, watch the tokens.\n\nPart 2 shows top 3 competitors and 1 news line.");
+    say("t1", "Glasses v1 is the CEO meeting tool, mind the token cost.\n\nPart 2 shows top 3 competitors and 1 news line.");
     await settle("t1", 3 * MINUTE);
     const prompt = generate.mock.calls[0]![0];
+    expect(prompt).toContain("mind the token cost");
     expect(prompt).toContain("top 3 competitors");
-    expect(prompt).not.toContain("tokens.");
   });
 
   it.each([
@@ -1856,6 +1858,7 @@ describe("memory pass", () => {
     ["a passphrase", "the vault password is below\n\nok\n\nseven purple otters dance under quiet moonlight tonight", 0],
     ["4-digit pins past a decision", "my bank pin is in the last line\n\nFor the glasses app go with option B for the header: small logo on the left, the person brief in the middle, and the three competitor chips under it, because it reads faster at a glance than option A did in the demo yesterday.\n\nit's 4821 for the card and 7731 for the app, remember both of them", 0],
     ["a Korean value", "와이파이 비밀번호 알려줄게\n\n알겠어\n\n손님용은 보라색원숭이식기세척기 이고 위층에서도 잘 잡혀 그러니까 그걸로 써", 0],
+    ...(["E2b", "E2e", "E3b", "E4b", "E4c", "E4e"] as const).map((id) => [`review case ${id}`, secretCase(id)[1]!, 0] as const),
   ] as const)("calls the note-taker for %s only when no label points at a value", async (_, text, calls) => {
     say("t1", text);
     await settle("t1", 3 * MINUTE);
@@ -2230,7 +2233,7 @@ describe("memory pass filters", () => {
     ]) expect(eligibleRow(row(patch))).toBe(false);
   });
 
-  it("cuts pastes, attachments, code and quotes, and clips long blocks", () => {
+  it("cuts pastes, attachments, code, quotes and long blocks", () => {
     const text = [
       "i'm 38",
       '<pasted-text index="1">\npasted body\n</pasted-text>',
@@ -2242,12 +2245,27 @@ describe("memory pass filters", () => {
       "x".repeat(401),
       "1\n2\n3\n4\n5\n6\n7",
     ].join("\n\n");
-    expect(userTyping(text)).toBe(`i'm 38\n\nhe said  ok\n\n${"x".repeat(400)}…\n\n1\n2\n3\n4\n5\n6…`);
+    expect(userTyping(text)).toBe("i'm 38\n\nhe said  ok");
   });
 
-  it("keeps the rest of a message when one paragraph looks secret", () => {
-    const spec = "Glasses v1 is the CEO meeting tool, keep the brief short and watch the tokens.\n\nPart 2 shows top 3 competitors and 1 news line.";
-    expect(userTyping(spec)).toBe("Part 2 shows top 3 competitors and 1 news line.");
+  it("keeps a message whose only secret word is token talk, unless it hints at a value", () => {
+    const spec = "Glasses v1 is the CEO meeting tool, keep the brief short and mind the token cost.\n\nPart 2 shows top 3 competitors and 1 news line.";
+    expect(userTyping(spec)).toBe(spec);
+    expect(secretValue(spec)).toBe(false);
+    expect(userTyping("keep it short, token cost matters")).toBe("keep it short, token cost matters");
+    for (const said of [
+      spec.replace("mind the token cost", "watch the tokens"),
+      `${spec}\n\nthe wifi one is HarborLanternQuartz`,
+      `${spec}\n\nthe staging one is: willowbasket`,
+      `${spec}\n\nmy code is 482913`,
+      "the access token usage page wants velvetpinecone",
+      "깃허브 token usage page wants velvetpinecone",
+      "(github) token usage page wants velvetpinecone",
+      "github.token usage page wants velvetpinecone",
+    ]) {
+      expect(secretValue(said)).toBe(true);
+      expect(userTyping(said)).toBe("");
+    }
   });
 
   it("drops the whole message for a password label or a key handed over, since a plain-word value has no shape", () => {
@@ -2278,8 +2296,6 @@ describe("memory pass filters", () => {
 
   it("still sends what base sent beside the words a password or key label uses", () => {
     for (const said of ["PR 2140 ea5032e5f", "#2140 is next", "$29.99", "15:38", "server/store.ts", "the login page is ugly", "pw reset email is ugly"]) expect(userTyping(said)).toBe(said);
-    const brief = `the sign in page should feel calm: ${"the person, their company and what they shipped lately, ".repeat(9)}`;
-    expect(userTyping(brief)).toBe(`${brief.slice(0, 400).trimEnd()}…`);
   });
 
   it("never sends a value whose label sits paragraphs away or that a long paragraph holds", () => {
@@ -2332,10 +2348,18 @@ describe("memory pass filters", () => {
     expect(userTyping("와이파이 비밀번호 알려줄게\n\n손님용은 OrangeWalrusTeapot 이고 위층에서도 잘 잡혀 그러니까 그걸로 써")).toBe("");
   });
 
-  it("clips a long paragraph instead of dropping it", () => {
-    const paragraph = `Glasses v1 brief: ${"the person, their company and what they shipped lately, ".repeat(9)}then top 3 competitors.`;
-    expect(paragraph.length).toBeGreaterThan(500);
-    expect(userTyping(paragraph)).toBe(`${paragraph.slice(0, 400).trimEnd()}…`);
+  it.each(["E2b", "E2e", "E3b", "E4b", "E4c", "E4e", ...Array.from({ length: 21 }, (_, at) => `F${at + 1}`)])("sends no value from review case %s", (id) => {
+    const [, text, values] = secretCase(id);
+    const seen = userTyping(text!);
+    expect(values.filter((value) => sendsValue(seen, value))).toEqual([]);
+  });
+
+  it("sends no value from any review round that base held back", () => {
+    const leaks = Object.entries(SECRET_CASES).flatMap(([set, cases]) => cases.flatMap(([id, text, values]) => {
+      const seen = text === null ? S32_ROWS.map((row) => userTyping(row)).join("\n\n") : userTyping(text);
+      return values.filter((value) => sendsValue(seen, value) && !BASE_SENDS.get(id)?.includes(value)).map((value) => `${set} ${id}: ${value}`);
+    }));
+    expect(leaks).toEqual([]);
   });
 
   it("keeps a goal the user set, marked as a goal", () => {
