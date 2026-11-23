@@ -203,10 +203,22 @@ const terms = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}]+
   .filter((word) => word.length >= (/^[a-z0-9]+$/.test(word) ? 4 : 2) && !SKIPPED_TERMS.has(word))
   .map((word) => word.replace(/(?<=[a-z]{3})s$/, "")));
 
-/** The user's own open or parked asks sharing a word with the message. */
+const NAMED_MAX = 3;
+// about 100 tokens at three bytes a token
+const NAMED_BYTES = 300;
+
+/** The user's open or parked asks sharing 2+ uncommon words with the message, or its only word, most shared first; a word more than NAMED_MAX asks hold is common. */
 function named(asks: readonly TaskAsk[], text: string): TaskAsk[] {
   const said = terms(text);
-  return said.size ? asks.filter((ask) => isOpenAsk(ask) && !isQuestion(ask) && [...terms(ask.ask)].some((term) => said.has(term))) : [];
+  const pool = asks.filter((ask) => isOpenAsk(ask) && !isQuestion(ask)).map((ask) => ({ ask, terms: [...terms(ask.ask)] }));
+  const held = new Map<string, number>();
+  for (const { terms } of pool) for (const term of terms) held.set(term, (held.get(term) ?? 0) + 1);
+  const need = Math.min(2, said.size);
+  return pool
+    .map(({ ask, terms }) => ({ ask, shared: terms.filter((term) => said.has(term) && held.get(term)! <= NAMED_MAX).length }))
+    .filter(({ shared }) => need && shared >= need)
+    .sort((left, right) => right.shared - left.shared)
+    .map(({ ask }) => ask);
 }
 
 // another chat's ids mean nothing here, so its asks show without them
@@ -220,16 +232,24 @@ function elsewhereBlock(asks: readonly TaskAsk[], now: number): string {
   ].join("\n");
 }
 
-/** For a turn the record does not ride: every open ask on a status turn or once one needs a verdict, otherwise the asks the message names; asks from the bot's other chats ride the same way. */
+/** For a turn the record does not ride: every open ask on a status turn or once one needs a verdict, otherwise up to NAMED_MAX asks the message names in NAMED_BYTES; asks from the bot's other chats ride the same way. */
 export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, text: string, elsewhere: readonly TaskAsk[] = []): string {
   const status = isStatusTurn(text);
   const own = asks ?? [];
-  const hits = named(own, text);
-  const block = status || own.some((ask) => needsVerdict(ask, now))
-    ? asksBlock(asks, now, status)
-    : hits.length
-      ? [`[Wink asks the user's message names - ${hits.length} of ${own.filter(isOpenAsk).length} open; a status question lists them all.]`, ...hits.map((ask) => askLine(ask, now))].join("\n")
-      : "";
-  const others = status ? elsewhere.filter(isOpenAsk) : named(elsewhere, text);
-  return [block, elsewhereBlock(others, now)].filter(Boolean).join("\n");
+  if (status) return [asksBlock(asks, now, true), elsewhereBlock(elsewhere.filter(isOpenAsk), now)].filter(Boolean).join("\n");
+  const block = own.some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now) : "";
+  const mine = new Set(block ? [] : own);
+  const render = (picked: readonly TaskAsk[]) => {
+    const hits = picked.filter((ask) => mine.has(ask));
+    return [
+      hits.length ? [`[Wink asks the user's message names - ${hits.length} of ${own.filter(isOpenAsk).length} open; a status question lists them all.]`, ...hits.map((ask) => askLine(ask, now))].join("\n") : "",
+      elsewhereBlock(picked.filter((ask) => !mine.has(ask)), now),
+    ].filter(Boolean).join("\n");
+  };
+  let picked: TaskAsk[] = [];
+  for (const ask of named([...mine, ...elsewhere], text)) {
+    if (picked.length === NAMED_MAX) break;
+    if (Buffer.byteLength(render([...picked, ask]), "utf8") <= NAMED_BYTES) picked = [...picked, ask];
+  }
+  return [block, render(picked)].filter(Boolean).join("\n");
 }

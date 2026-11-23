@@ -267,6 +267,19 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       expect(tokens(header)).toBeLessThanOrEqual(45);
     });
 
+    it("names at most 3 asks in about 100 tokens, and never on a word many asks share", () => {
+      const asks = [
+        ...["alpha bravo one", "alpha bravo two", "alpha bravo three"].map((words, index) => ask(index + 1, { ask: `ship the ${words} header` })),
+        ...["charlie delta one", "charlie delta two", "charlie delta three"].map((words, index) => ask(index + 4, { ask: `ship the ${words} header` })),
+      ];
+      const named = asksNudge(asks, NOW, "where are the alpha bravo and charlie delta headers?");
+      expect(listed(named).length).toBeGreaterThan(0);
+      expect(listed(named).length).toBeLessThanOrEqual(3);
+      expect(tokens(named)).toBeLessThanOrEqual(100);
+      expect(asksNudge(asks, NOW, "what did I ask you to change on the header?")).toBe("");
+      expect(asksNudge(asks, NOW, "ship the alpha build tonight")).toBe("");
+    });
+
     it("brings the bot's asks from its other chats, without their ids", () => {
       const elsewhere = [ask(1, { ask: "make the header smaller on phone" }), parkedAsk(2, NOV(20), { ask: "email export for the report" })];
       expect(asksNudge(undefined, NOW, "what's left?", elsewhere).split("\n")).toEqual([

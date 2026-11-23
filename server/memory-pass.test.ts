@@ -2238,6 +2238,24 @@ describe("memory pass filters", () => {
     }
   });
 
+  it("never sends a value whose label sits paragraphs away or that a long paragraph holds", () => {
+    const value = "Tr0ub4dor&3xQ";
+    const phrase = "correct horse battery staple zebra";
+    const prose = (length: number) => "The glasses app should feel calm and fast for a founder walking into a meeting. ".repeat(10).slice(0, length).trimEnd();
+    const decision = "For the glasses app go with option B for the header: small logo on the left and the person brief in the middle, because it reads faster at a glance.";
+    for (const said of [
+      `the key is ${value} ${prose(560)}`,
+      `password for the wifi\n\nok\n\n${value}`,
+      `${prose(430)} and the admin password is:\n\nit is ${value} for now`,
+      `${phrase}\n\n^ that's my bank password`,
+      `${value} ${prose(500)}`,
+      `my wifi password:\n\nthe value is ${value} ok`,
+      `my wifi password is\n\n${value}\nand the guest one is Vx9mK2pQ7zLw`,
+      `${decision}\n\nhere is the admin password\n\n${decision.slice(0, 80)}\n\n${value}`,
+    ]) expect(userTyping(said)).not.toMatch(/Tr0ub4dor|horse battery|Vx9mK2pQ7zLw/);
+    expect(userTyping(`this is the wifi password\n\n${phrase}\n\n${decision}`)).toBe(decision);
+  });
+
   it("clips a long paragraph instead of dropping it", () => {
     const paragraph = `Glasses v1 brief: ${"the person, their company and what they shipped lately, ".repeat(9)}then top 3 competitors.`;
     expect(paragraph.length).toBeGreaterThan(500);

@@ -5838,7 +5838,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
-    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, store.otherChatAsks(bot.id, threadId)) : "",
+    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, store.otherChatAsks(bot.id, threadId, notOwnerChats())) : "",
   });
   stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({

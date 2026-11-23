@@ -2293,15 +2293,15 @@ export class Store {
     return repaired ? structuredClone(repaired) : null;
   }
 
-  /** Open asks the bot's other chats hold, newest copy of each, minus the ones this chat already has. */
-  otherChatAsks(botId: string, threadId: string): TaskAsk[] {
+  /** Open asks the bot's other owner chats hold, newest copy of each, minus the ones this chat already has; none for or from a room or routine thread in notOwner. */
+  otherChatAsks(botId: string, threadId: string, notOwner: ReadonlySet<string>): TaskAsk[] {
     const bot = this.bot(botId);
-    if (!bot) return [];
+    if (!bot || notOwner.has(threadId)) return [];
     const key = (ask: TaskAsk) => `${ask.at}\0${ask.ask}`;
     const own = new Set((this.taskPacket(threadId)?.asks ?? []).map(key));
     const threads = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
     threads.delete(threadId);
-    const records = [...threads].map((id) => this.taskPacket(id)).filter((record) => record !== null);
+    const records = [...threads].filter((id) => !notOwner.has(id)).map((id) => this.taskPacket(id)).filter((record) => record !== null);
     return latestTaskAsks(records, (ask) => ask.ask).filter((ask) => isOpenAsk(ask) && !own.has(key(ask)));
   }
 

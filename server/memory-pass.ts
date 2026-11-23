@@ -159,7 +159,9 @@ const clipParagraph = (paragraph: string) => {
   const head = lines.slice(0, PARAGRAPH_LINES).join("\n");
   return head.length <= PARAGRAPH_MAX && lines.length <= PARAGRAPH_LINES ? head : `${head.slice(0, PARAGRAPH_MAX).trimEnd()}…`;
 };
-const shortParagraph = (paragraph: string) => !paragraph.trim().includes("\n") && paragraph.trim().split(/\s+/).length <= 3;
+const shortParagraph = (paragraph: string) => !paragraph.trim().includes("\n") && paragraph.trim().split(/\s+/).length <= SHORT_ANSWER;
+// letters and digits in one word, like Tr0ub4dor&3xQ or hunter22
+const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some((word) => word.length >= 6 && /\p{L}/u.test(word) && /\d/.test(word));
 
 /** The user's own typing: pastes, attachments, code and quotes cut; a sensitive paragraph goes and a long one is clipped, unless the caller screens each line, which drops long ones as noise. */
 export function userTyping(text: string, dropSensitive = true, keepImages = false, clipLong = dropSensitive): string {
@@ -170,11 +172,13 @@ export function userTyping(text: string, dropSensitive = true, keepImages = fals
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
   const paragraphs = typed.split(/\n\s*\n/);
   const secret = paragraphs.map((paragraph) => dropSensitive && secretValue(paragraph));
-  // a label and its value can sit in neighboring paragraphs, so a short one beside a secret goes too
+  const flagged = secret.some(Boolean);
+  // a label and its value can sit paragraphs apart: once one looks secret, one holding a value goes, and a short one beside it
   const kept = paragraphs
-    .filter((paragraph, index) => !secret[index] && !(shortParagraph(paragraph) && (secret[index - 1] || secret[index + 1])))
+    .filter((paragraph, index) => !secret[index] && !(flagged && holdsValue(paragraph)) && !(shortParagraph(paragraph) && (secret[index - 1] || secret[index + 1])))
     .map((paragraph) => paragraph.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, ""))
-    .filter((paragraph) => clipLong || (paragraph.length <= PARAGRAPH_MAX && paragraph.split("\n").length <= PARAGRAPH_LINES))
+    // a clip is never checked past its cut, so a long paragraph holding a value goes whole
+    .filter((paragraph) => (paragraph.length <= PARAGRAPH_MAX && paragraph.split("\n").length <= PARAGRAPH_LINES) || (clipLong && !holdsValue(paragraph)))
     .map((paragraph) => clipParagraph(paragraph.split("\n").filter((line) => !line.trimStart().startsWith(">")).join("\n").trim()))
     .filter(Boolean);
   return redactSecretsInText(kept.join("\n\n"));

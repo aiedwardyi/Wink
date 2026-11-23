@@ -15,6 +15,7 @@ import { peerAllowKey } from "./peer-approval-key.ts";
 import { applyResolvedProjectFolder } from "./project-folder.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
+import { closeJoinedDb, roomTaskThreads, setMyRoomBotTurn } from "./rooms/joined.ts";
 import { asksNudge } from "./task-asks.ts";
 import { agentRoster, Store, titleFromMessage, type BotRecord, type StoreChange } from "./store.ts";
 import { nextWinkAvatar } from "../shared/bot-avatar.ts";
@@ -758,10 +759,30 @@ describe("Store", () => {
     store.writeTaskPacket(taskPacket(bot.id, first, { asks, lastAskId: 2 }));
     const task = store.createTask(bot.id, "New chat")!;
     expect(store.taskPacket(task.threadId)).toBeNull();
-    const elsewhere = store.otherChatAsks(bot.id, task.threadId);
+    const elsewhere = store.otherChatAsks(bot.id, task.threadId, new Set());
     expect(elsewhere.map((ask) => ask.ask)).toEqual(["make the header smaller on phone"]);
     expect(asksNudge(undefined, 200, "what's left?", elsewhere)).toContain("make the header smaller on phone");
-    expect(store.otherChatAsks(bot.id, first)).toEqual([]);
+    expect(store.otherChatAsks(bot.id, first, new Set())).toEqual([]);
+  });
+
+  it("keeps the owner's asks out of a joined room turn and room asks out of the owner's chats", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const owner = [{ id: "A1", ask: "renew the visa for the Lisbon trip", status: "open" as const, at: 100, changedAt: 100 }];
+    store.writeTaskPacket(taskPacket(bot.id, bot.threadId, { asks: owner, lastAskId: 1 }));
+    const room = store.createTask(bot.id, "Design sync", false)!;
+    store.writeTaskPacket(taskPacket(bot.id, room.threadId, { asks: [{ id: "A1", ask: "Sam wants the deck by Friday", status: "open", at: 100, changedAt: 100 }], lastAskId: 1 }));
+    const chat = store.createTask(bot.id, "New chat")!;
+    mkdirSync(DATA_DIR, { recursive: true });
+    try {
+      setMyRoomBotTurn("r1", "tb-AAAAAAAAAAAAAAAA", room.threadId, 0);
+      const inRoom = (text: string) => asksNudge(store.taskPacket(room.threadId)?.asks, 200, text, store.otherChatAsks(bot.id, room.threadId, roomTaskThreads()));
+      for (const said of ["status", "has anyone been to Lisbon for the visa?"]) expect(inRoom(said)).not.toContain("visa");
+      expect(store.otherChatAsks(bot.id, chat.threadId, roomTaskThreads()).map((ask) => ask.ask)).toEqual(["renew the visa for the Lisbon trip"]);
+    } finally {
+      closeJoinedDb();
+    }
+    expect(readFileSync(new URL("./index.ts", import.meta.url), "utf8")).toContain("store.otherChatAsks(bot.id, threadId, notOwnerChats())");
   });
 
   it("stages a send's task packet for every reader and settles it after dispatch", () => {
