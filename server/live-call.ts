@@ -12,7 +12,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { callPrefsSchema } from "./bot-profile.ts";
 import { CALL_TASK_RULES, callTaskContext } from "./call-context.ts";
 import type { AppConfig } from "./config.ts";
-import { aboutYouFacts } from "./about-you.ts";
+import { aboutYouFacts, botImportFacts } from "./about-you.ts";
 import { estimateContextTokens, fittingHead, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { RoomVoiceTail } from "./rooms/voice-tail.ts";
@@ -140,7 +140,7 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
 export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, voice: LiveVoice = LIVE_VOICE, catalog?: ModelCatalogLookup, room?: RoomVoiceTail): Promise<string> {
   const notes = loadMemory(bot.id);
   const picks = picksPrompt(bot.id);
-  const about = aboutYouFacts();
+  const about = [aboutYouFacts(), botImportFacts(bot.id)].filter(Boolean).join("\n");
   // Only what was said in the chat is call talk: a pane note, tool chip or card is a worker's screen, not his words or the bot's.
   const unsaid = new Set(messages.filter((row) => row.kind !== "text" && row.kind !== "compaction").map((row) => row.id));
   const spoken = messages.map((row) => row.text?.includes("`") ? { ...row, text: row.text.replace(CODE_BLOCK, "(code, in the chat)").replaceAll("`", "") } : row);

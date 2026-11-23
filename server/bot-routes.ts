@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { BOT_AVATAR_PICKER_ORDER, botAvatarChoiceSchema, botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
+import { ABOUT_YOU_MAX_PASTE, addToBotMemory, day } from "./about-you.ts";
 import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -46,6 +47,8 @@ type BotRouteDeps = {
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
   noteTalked: (botId: string) => void;
+  /** Rebuilds the bot's memory lookup index (memory-lookup.ts refresh). */
+  refreshLookup: (botId: string) => Promise<void>;
   activeVpsThreads: Map<string, string>;
   resumePaneWakes: (botId: string) => void;
 };
@@ -511,6 +514,24 @@ export function createBotRoutes(deps: BotRouteDeps) {
       memoryHealthCheck.refresh(m[1]);
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });
+    },
+    importMemory: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      // JSON escaping can double a paste, so the body gets room past the paste's own cap
+      const parsed = z.object({ text: z.string() }).safeParse(await readBody(req, ABOUT_YOU_MAX_PASTE * 2 + 64 * 1024));
+      if (!parsed.success) return json(res, 400, { error: "text must be a string" });
+      const result = addToBotMemory(m[1], parsed.data.text, day(Date.now()));
+      if ("error" in result) {
+        if (result.error === "too-large") return json(res, 413, { error: result.error, maxBytes: ABOUT_YOU_MAX_PASTE });
+        return json(res, result.error === "empty" ? 400 : 500, { error: result.error });
+      }
+      if (result.added) {
+        deps.noteTalked(m[1]);
+        memoryHealthCheck.refresh(m[1]);
+        // lines past the prompt's cut are found from the next turn on, so the index is current before the reply
+        await deps.refreshLookup(m[1]);
+      }
+      return json(res, 200, result);
     },
     memoryTopic: async (res: ServerResponse, m: RegExpMatchArray) => {
       const bot = store.bot(m[1]);
