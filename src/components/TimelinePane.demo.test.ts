@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +9,6 @@ import { I18nProvider } from "@/lib/i18n";
 import { noteMemorySnapshot } from "@/lib/memory-clean-events";
 
 import { TimelinePane } from "./TimelinePane";
-import timelineCss from "./TimelinePane.css?raw";
 
 describe("TimelinePane demo", () => {
   const urls: string[] = [];
@@ -69,7 +70,7 @@ describe("TimelinePane demo", () => {
       for (const [key, value] of Object.entries({ clientX: x, clientY: y })) Object.defineProperty(event, key, { value });
       act(() => { canvas().dispatchEvent(event); });
     };
-    expect(timelineCss).not.toMatch(/will-change/);
+    expect(readFileSync("src/components/TimelinePane.css", "utf8")).not.toMatch(/will-change/);
     expect(sheet().style.willChange).toBe("");
     touch("pointerdown", 100, 100);
     touch("pointermove", 100, 160);
