@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, useStore, type Bot } from "@/state/store";
 import { turnCompleted } from "@/lib/call";
 import { I18nProvider } from "@/lib/i18n";
+import { answerCall } from "@/lib/live-call/active";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { CallHostSlot } from "./CallSlots";
@@ -209,6 +210,27 @@ describe("who answers a call", () => {
     await vi.waitFor(() => expect(posts.find(({ path }) => path === "/api/bots/atlas/messages")?.body).toMatchObject({ text: "and the tests" }));
     expect(back.texts).toEqual([]);
     expect(box()).toBe("working");
+  });
+
+  it("a call the bot rang stays on Gemini voice when the setting says Same bot", async () => {
+    await mount("bot");
+    const built = fakes.built;
+    await act(async () => void answerCall(atlas, "Can I delete the old logs?", true));
+    await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+    const voice = fakes.engines[0]!;
+    await act(async () => voice.events.ready());
+    await act(async () => {
+      voice.events.answering();
+      voice.events.said("Atlas asks: can it delete the old logs?");
+      voice.events.turnDone();
+    });
+    await vi.waitFor(() => expect(box()).toBe("listening"));
+    await act(async () => voice.events.heard("yes go ahead"));
+    expect(voice.closed).toBe(false);
+    expect(fakes.engines).toHaveLength(1);
+    expect(tokens()).toHaveLength(1);
+    expect(tokens()[0]!.body).not.toHaveProperty("mode");
+    expect(fakes.built).toBe(built);
   });
 
   it("a switch made while the bot works waits for its reply to be read, once, then moves", async () => {

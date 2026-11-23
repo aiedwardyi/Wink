@@ -219,12 +219,32 @@ export function backs(promise: string, sent: readonly string[]): boolean {
 
 const tokens = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 
-/** The voice's own words back through a phone speaker: his line is a run of them. Under three words it may be either. */
-export function echoOf(heard: string, voice: string): "echo" | "maybe" | "no" {
-  const words = tokens(heard);
-  const said = tokens(voice);
+const NUMBER = /^(?:\p{N}+|zero|oh|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|point)$/u;
+const SPELLED: Array<[RegExp, string]> = [[/\bcan't\b/g, "can not"], [/\bwon't\b/g, "will not"], [/n't\b/g, " not"], [/'re\b/g, " are"], [/'m\b/g, " am"], [/'s\b/g, " is"], [/'ve\b/g, " have"], [/'ll\b/g, " will"], [/'d\b/g, " would"]];
+
+/** Words as speech-to-text writes them back: contractions spelled out, a number in digits or words one token. */
+const heardForm = (text: string) => tokens(SPELLED.reduce((was, [from, to]) => was.replace(from, to), text.toLowerCase().replace(/’/g, "'")))
+  .map((word) => (NUMBER.test(word) ? "#" : word))
+  .filter((word, i, words) => word !== "#" || words[i - 1] !== "#");
+
+/** One letter added, dropped or changed: "along" for "long", "red" for "read". */
+function nearWord(a: string, b: string): boolean {
+  if (Math.min(a.length, b.length) < 3 || Math.abs(a.length - b.length) > 1) return false;
+  let head = 0;
+  while (a[head] !== undefined && a[head] === b[head]) head += 1;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a.at(-1 - tail) === b.at(-1 - tail)) tail += 1;
+  return a.length - head - tail <= 1 && b.length - head - tail <= 1;
+}
+
+/** The voice's own words back through a phone speaker: his line is a run of them. Under three words it may be either. Loose takes the run as speech-to-text hears it back, one word in four a letter off. */
+export function echoOf(heard: string, voice: string, loose = false): "echo" | "maybe" | "no" {
+  const words = loose ? heardForm(heard) : tokens(heard);
+  const said = loose ? heardForm(voice) : tokens(voice);
   if (!words.length) return "maybe";
-  if (!said.some((_, start) => words.every((word, i) => said[start + i] === word))) return "no";
+  const off = (start: number) => words.filter((word, i) => said[start + i] !== word).length;
+  const run = (start: number) => words.every((word, i) => said[start + i] === word || (loose && nearWord(word, said[start + i] ?? "")));
+  if (!said.some((_, start) => run(start) && off(start) * 4 <= (loose ? words.length : 0))) return "no";
   return words.length >= 3 ? "echo" : "maybe";
 }
 

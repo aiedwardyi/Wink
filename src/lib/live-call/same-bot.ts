@@ -248,7 +248,7 @@ export class SameBotCall {
   private overlap(text: string) {
     this.over += text;
     const words = spokenText(this.over);
-    const echo = echoOf(words, `${this.lastSaid} ${this.said}`);
+    const echo = echoOf(words, `${this.lastSaid} ${this.said}`, true);
     if (echo === "echo") this.over = "";
     if (echo !== "no" || backchannel(words)) return;
     this.interrupt();

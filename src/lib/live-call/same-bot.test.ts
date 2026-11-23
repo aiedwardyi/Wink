@@ -4,6 +4,7 @@ import type { Message } from "@/state/store-types";
 import { READY_MS, VOICE_OUT, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
 import { SameBotCall } from "./same-bot";
+import { sameBotSetup } from "../../../server/same-bot-call.ts";
 
 class FakeEngine implements LiveEngine {
   events!: LiveEvents;
@@ -185,6 +186,50 @@ describe("same-bot call", () => {
     s.audio.flush();
     s.audio.onIdle();
     expect(s.sent).toEqual(["tell me"]);
+  });
+
+  it("Google never cuts a read itself: its own voice, a nod or a noise heard mid-read is not sent and the rest is still read", async () => {
+    const googleCuts = sameBotSetup("Atlas").realtimeInputConfig.activityHandling !== "NO_INTERRUPTION";
+    for (const heard of ["first i checked the build", "Yeah.", ""]) {
+      const s = await started();
+      answered(s, "First I checked the build. Then I ran the tests.");
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said("First I checked the build.");
+      s.audio.mic!(loudFrame());
+      if (googleCuts) {
+        s.engine().events.interrupted();
+        s.engine().events.turnDone();
+      }
+      if (heard) s.engine().events.heard(heard);
+      if (!googleCuts) s.engine().events.turnDone();
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me"]);
+      expect(s.engine().texts).toEqual(["[READ]\nFirst I checked the build.", "[READ]\nThen I ran the tests."]);
+    }
+  });
+
+  it("its own voice heard back a little wrong is still its own: a misheard word, a number in words, a contraction spelled out", async () => {
+    for (const [reply, echo] of [
+      ["A reply long enough to be read aloud for a while.", "a reply along enough to be red aloud"],
+      ["PR 2148 merged at 5 PM.", "pr twenty one forty eight merged at five pm"],
+      ["It's done and I'm deploying it now.", "it is done and i am deploying it now"],
+    ] as const) {
+      const s = await started();
+      answered(s, reply);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(reply);
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      s.engine().events.heard(echo);
+      expect(s.audio.flushed).toBe(0);
+      expect(s.call.state().status).toBe("speaking");
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me"]);
+    }
   });
 
   it("stops reading at a tap and listens again", async () => {

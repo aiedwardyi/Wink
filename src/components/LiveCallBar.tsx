@@ -182,13 +182,17 @@ export function LiveCallHost() {
 export function useAnswerSwitch(active: ActiveCall, call: { idle(): boolean }, audio: CallAudio, snap: CallState): RefObject<boolean> {
   const { state } = useStore();
   const want = active.room ? "gemini" : state.config?.liveCall?.answer ?? "gemini";
+  // A call the bot rang answers on Gemini voice whatever the setting; only a pick made during the call moves it.
+  const [placed] = useState(want);
+  const picked = useRef(false);
   const moved = useRef(false);
   useEffect(() => {
-    if (moved.current || want === (active.answer ?? "gemini") || !call.idle()) return;
+    picked.current ||= want !== placed;
+    if (moved.current || !picked.current || want === (active.answer ?? "gemini") || !call.idle()) return;
     if (!switchAnswer(active, want, { audio, muted: snap.muted })) return;
     moved.current = true;
     audio.handOver();
-  }, [active, audio, call, snap, want]);
+  }, [active, audio, call, placed, snap, want]);
   return moved;
 }
 
