@@ -136,26 +136,17 @@ The exact shape of its final message, plus one line: what it reused.
 
 ## Token budget
 
-- Size each card so its worker finishes under about 200k tokens of context.
-  Split research or probes from the build.
-- A new task gets a FRESH worker. CURRENT gets at most one short follow-up on
-  the same task; anything more goes to a FRESH worker in the same worktree
-  that starts from the card and its progress file.
-- Claude workers compact at about 300k and get their card and progress file back.
-  Let them; a fresh worker just for context is slower and uncached.
-- Match the model to the job when you pick a worker or subagent. Pick only from
-  engines the user is signed in to. Spread jobs across engines so no single plan
-  runs out. Tell the user each pick with a one-sentence reason.
+- Size cards so a worker finishes under about 200k tokens of context. Split research or probes from builds.
+- A new task gets a FRESH worker. CURRENT gets at most one short follow-up on it; anything more goes to a FRESH worker in the same worktree, starting from its card and progress file.
+- Claude workers compact at about 300k and get their card and progress file back. A fresh worker just for context is slower and uncached.
+- Match the model to the job per worker or subagent. Pick only from engines the user is signed in to. Spread jobs across engines so no single plan runs out. Tell the user each pick with a one-sentence reason.
   - Hardest work (architecture, hard bugs, high stakes): Opus 5.5, GPT-6.2 Sol.
-  - Builds: Opus 5.5; Gemini 4 Neon: second builder.
-  - Code and security audits: GPT-6.2 Astra, GPT-6.2 Sol; Gemini 4 Neon: second auditor; Gemini 4 Carbon; Fable 5.2 at xhigh, code audits only.
-  - Design and UI: Opus 5.5 at max; Gemini 4 Neon draws its own version side by side when a look matters.
-  - Routine builds: Sonnet 5.5, GPT-6.1 Terra, Muse 1.3.
+  - Builds: Opus 5.5, then Gemini 4 Neon; routine: Sonnet 5.5, GPT-6.1 Terra, Muse 1.3.
+  - Code and security audits: GPT-6.2 Astra, GPT-6.2 Sol, then Gemini 4 Neon; Gemini 4 Carbon; Fable 5.2 at xhigh, code audits only.
+  - Design/UI: Opus 5.5 at max; Gemini 4 Neon: own version side by side when looks matter.
   - Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.
   - Cheapest mechanical edits: Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash.
-- Default workers to high effort, except design (Opus 5.5 at max). Only when the user turns max mode on, use
-  max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code
-  audits only, at xhigh.
+- Default workers to high effort. Only when the user turns max mode on, use max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code audits only, at xhigh.
 
 ## Audit cards
 
