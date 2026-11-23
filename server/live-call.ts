@@ -15,11 +15,12 @@ import type { AppConfig } from "./config.ts";
 import { aboutYouFacts, botImportFacts } from "./about-you.ts";
 import { estimateContextTokens, fittingHead, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { PICKS_FILE, PICKS_PROMPT_TOKENS, picksBlock } from "./picks.ts";
 import type { RoomVoiceTail } from "./rooms/voice-tail.ts";
 import { hasQueuedSends } from "./steer-queue.ts";
 import type { BotRecord, Message, SecretRequestCardData, Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
-import { loadMemory, picksPrompt, shownMemory } from "./workspace.ts";
+import { loadMemory, readMemoryTopic, shownMemory } from "./workspace.ts";
 
 export const LIVE_CALL_FILE = join("diag", "live-call.jsonl");
 export const LIVE_CALL_KEEP = 500;
@@ -141,7 +142,11 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
 
 export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, voice: LiveVoice = LIVE_VOICE, catalog?: ModelCatalogLookup, room?: RoomVoiceTail): Promise<string> {
   const notes = loadMemory(bot.id, NOTES_MAX_BYTES - CUT_LINE_BYTES);
-  const picks = picksPrompt(bot.id);
+  let timeline: string | null = null;
+  try {
+    timeline = readMemoryTopic(bot.id, PICKS_FILE);
+  } catch {}
+  const picks = picksBlock(timeline, PICKS_PROMPT_TOKENS);
   const about = [aboutYouFacts(), botImportFacts(bot.id)].filter(Boolean).join("\n");
   // Only what was said in the chat is call talk: a pane note, tool chip or card is a worker's screen, not his words or the bot's.
   const unsaid = new Set(messages.filter((row) => row.kind !== "text" && row.kind !== "compaction").map((row) => row.id));

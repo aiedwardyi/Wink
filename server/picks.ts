@@ -4,7 +4,7 @@ import { entryTime, pickStamp } from "../shared/timeline-time.ts";
 import { holdSources, sharedSources, type PickBinding } from "./pick-sources.ts";
 
 export const PICKS_FILE = "decisions.md";
-/** Estimated tokens of the current-picks block in the prompt, header included. */
+/** Estimated tokens of the current-picks block in a voice call's brief, header included; the chat prompt shows every pick. */
 export const PICKS_PROMPT_TOKENS = 300;
 /** The open goals' own budget, so a goal never falls into the picks' "+N more". */
 export const GOALS_PROMPT_TOKENS = 400;
@@ -535,15 +535,15 @@ function goalsBlock(text: string | null | undefined, max = GOALS_PROMPT_TOKENS):
   return [GOALS_HEADER, ...goalLines(goals.map((entry) => ({ name: `${entry.key} (${monthDay(entry.id)})`, goal: entry.picked })), max - promptTokens(`${GOALS_HEADER}\n`))].join("\n");
 }
 
-/** The prompt's open goals, then its current picks, newest first, within `max` estimated tokens: whole lines while every other key still fits, then the pick alone, then its key. Empty when there are none. */
-export function picksBlock(text: string | null | undefined, max = PICKS_PROMPT_TOKENS): string {
+/** The prompt's open goals, then its current picks, newest first, within `max` estimated tokens (every pick in full by default): whole lines while every other key still fits, then the pick alone, then its key. Empty when there are none. */
+export function picksBlock(text: string | null | undefined, max = Infinity): string {
   const goals = goalsBlock(text);
   const live = currentPicks(text).reverse();
   if (!live.length) return goals;
   let out = HEADER;
   const listed: PickEntry[] = [];
   for (const [index, entry] of live.entries()) {
-    const rest = keyIndex([...listed, ...live.slice(index + 1)]);
+    const rest = max === Infinity ? "" : keyIndex([...listed, ...live.slice(index + 1)]);
     const line = [pickLine(entry), shortLine(entry)].find((option) => promptTokens(`${out}\n${option}${rest}`) <= max);
     // the newest pick always shows, its words if not its picture and tweaks
     if (line || !index) out += `\n${line ?? shortLine(entry)}`;

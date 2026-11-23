@@ -18,7 +18,8 @@ import { Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, mergeTaskAsks } from "./task-asks.ts";
 import { seedTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
-import { workspaceDir } from "./workspace.ts";
+import { picksPrompt, workspaceDir } from "./workspace.ts";
+import { promptTokens } from "./picks.ts";
 import { markRelaySocket } from "./phone-relay/via.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./rooms/db.ts";
 import { addJoinedEntries, closeJoinedDb, joinedEntries, saveJoined } from "./rooms/joined.ts";
@@ -539,6 +540,19 @@ describe("call token", () => {
     expect(notes).toContain("Likes short answers");
     expect(notes).toContain('- forum look (11-17): C - Reddit cards + tweaks: "make the header smaller" (11-17)');
     expect(notes).not.toContain("plain list");
+  });
+
+  it("brief keeps the 300-token picks cap while the chat prompt shows every pick", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Picker" }, { seedMessages: false });
+    mkdirSync(join(workspaceDir(bot.id), "memory"), { recursive: true });
+    const entries = Array.from({ length: 78 }, (_, n) => `## 2026-11-${10 + Math.floor(n / 20)} ${String(10 + (n % 20)).padStart(2, "0")}:00 | topic number ${n} | current\n- Picked: Option ${n} - plain words\n- Said: "option ${n}"\n`);
+    writeFileSync(join(workspaceDir(bot.id), "memory", "decisions.md"), `# Decision timeline\n\n${entries.join("\n")}`);
+    await h.post("token", {}, bot.id);
+    const brief = String(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text);
+    const notes = brief.slice(brief.indexOf("YOUR NOTES:\n") + "YOUR NOTES:\n".length, brief.indexOf("RECENT CHAT:"));
+    expect(promptTokens(notes)).toBeLessThanOrEqual(300);
+    expect(picksPrompt(bot.id).split("\n").filter((line) => line.startsWith("- topic number"))).toHaveLength(78);
   });
 
   it("brief answers the question asked first; role and notes never decline it", async () => {
