@@ -27,6 +27,7 @@ import { UsageDesk } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
 
 const KEY = "openmausbot.usageAccountsOpen.v1";
+const ORDER = "openmausbot.usageOrder.v1";
 let root: Root;
 let host: HTMLDivElement;
 let board: UsageBoard;
@@ -114,6 +115,34 @@ describe("Usage account cap", () => {
     expect(rows()).toEqual([ids()[0], ids()[1], ids()[7]]);
     await reopen();
     expect(rows()).toEqual([ids()[0], ids()[1], ids()[7]]);
+  });
+
+  it("picks again when the board moves Main on its own, as after a cached board's old Main", async () => {
+    accounts(5, "claude", 5);
+    await render();
+    expect(rows()).toEqual([ids()[0], ids()[1], ids()[4]]);
+    engine().mainId = ids()[0]!;
+    await render();
+    expect(rows()).toEqual(ids().slice(0, 3));
+  });
+
+  it("follows a saved order changed in another view", async () => {
+    accounts(5);
+    const [a, b, c, d, e] = ids();
+    localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, e, c, d] }));
+    await render();
+    expect(rows()).toEqual([a, b, e]);
+    localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, c, d, e] }));
+    await act(async () => { window.dispatchEvent(new StorageEvent("storage", { key: ORDER })); });
+    expect(rows()).toEqual([a, b, c]);
+  });
+
+  it("keeps the shown rows through a collapsed reorder past a low Main", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, , , , f] = ids();
+    await render();
+    await act(async () => { section().querySelector(`[data-account-row="${b}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true })); });
+    expect(rows()).toEqual([a, f, b]);
   });
 
   it("remembers each engine across reopening and keeps another engine closed", async () => {
