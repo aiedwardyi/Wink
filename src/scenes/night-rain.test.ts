@@ -62,6 +62,12 @@ describe("night rain", () => {
     expect(words.filter((w) => !/^[\uac00-\ud7a3]+$/.test(w)), "the sign font and its check are Korean: other script draws as empty boxes").toEqual([]);
   });
 
+  it("clamps the sign light, a sum over overlapping panels", () => {
+    const uses = frag().match(/[\w(]*plateLit\(uSize, px\)[^;]*/g) ?? [];
+    expect(uses.length).toBeGreaterThan(0);
+    expect(uses.filter((u) => !u.startsWith("min(plateLit(uSize, px), 1.0)")), "panels can overlap: wrap it in min(..., 1.0) or lane goes negative").toEqual([]);
+  });
+
   it("never copies the backdrop's live transform", () => {
     expect(source.match(/getTransform\(\)/g) ?? [], "paint resets it while compositing, so a copy taken later is 1:1 and halves everything on hi-dpi: use g.canvas.width / w").toEqual([]);
   });

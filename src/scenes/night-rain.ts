@@ -381,7 +381,7 @@ void main() {
   col = mix(col, smoothstep(0.0, 1.0, col), 0.3);
   col += (h12(gl_FragCoord.xy + fract(t * 7.0) * 311.0) - 0.5) * 0.024;
   // Under the transcript: dimmed, and its brights held down so text keeps its contrast; he and the signs keep a little of their light.
-  lane *= (1.0 - 0.4 * him) * (1.0 - 0.7 * plateLit(uSize, px));
+  lane *= (1.0 - 0.4 * him) * (1.0 - 0.7 * min(plateLit(uSize, px), 1.0));
   col *= mix(1.0, uSize.x > uSize.y ? 0.5 : 0.6, lane);
   col /= 1.0 + 2.4 * dot(col, vec3(0.3, 0.5, 0.2)) * lane;
   col *= 1.0 - 0.6 * (1.0 - smoothstep(20.0, 120.0, px.y));
