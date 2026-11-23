@@ -438,7 +438,7 @@ describe("a joined room's lookup", () => {
     await lookup.refresh(botId);
     return { botId, lookup };
   };
-  const filler = (at: number, fact: (i: number) => string) => Array.from({ length: 600 }, (_, i) => (at(i) ? fact(i) : `The user visited town number ${i + 1} on a long walk.`));
+  const filler = (pick: (i: number) => boolean, fact: (i: number) => string) => Array.from({ length: 600 }, (_, i) => (pick(i) ? fact(i) : `The user visited town number ${i + 1} on a long walk.`));
 
   it("still finds the bot's own note when many import rows rank ahead of it", async () => {
     const imported = Array.from({ length: 40 }, (_, i) => `- Dentist ${i}: Cloud Dental office. (from ChatGPT, 2026-11-22)`).join("\n");
