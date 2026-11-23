@@ -220,11 +220,11 @@ export function backs(promise: string, sent: readonly string[]): boolean {
 const tokens = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 
 const NUMBER = /^(?:\p{N}+|zero|oh|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|point)$/u;
-const SPELLED: Array<[RegExp, string]> = [[/\bcan't\b/g, "can not"], [/\bwon't\b/g, "will not"], [/n't\b/g, " not"], [/'re\b/g, " are"], [/'m\b/g, " am"], [/'s\b/g, " is"], [/'ve\b/g, " have"], [/'ll\b/g, " will"], [/'d\b/g, " would"]];
+const SPELLED: Array<[RegExp, string]> = [[/\$(\d[\d.,]*)/g, "$1 dollars"], [/(\d)\s?%/g, "$1 percent"], [/\bcan't\b/g, "can not"], [/\bwon't\b/g, "will not"], [/n't\b/g, " not"], [/'re\b/g, " are"], [/'m\b/g, " am"], [/'s\b/g, " is"], [/'ve\b/g, " have"], [/'ll\b/g, " will"], [/'d\b/g, " would"]];
 
 /** Words as speech-to-text writes them back: contractions spelled out, a number in digits or words one token. */
 const heardForm = (text: string) => tokens(SPELLED.reduce((was, [from, to]) => was.replace(from, to), text.toLowerCase().replace(/’/g, "'")))
-  .map((word) => (NUMBER.test(word) ? "#" : word))
+  .map((word) => (NUMBER.test(word) ? "#" : word.replace(/\p{N}+/gu, "#")))
   .filter((word, i, words) => word !== "#" || words[i - 1] !== "#");
 
 /** One letter added, dropped or changed: "along" for "long", "red" for "read". */
@@ -237,20 +237,43 @@ function nearWord(a: string, b: string): boolean {
   return a.length - head - tail <= 1 && b.length - head - tail <= 1;
 }
 
-/** The voice's own words back through a phone speaker: his line is a run of them. Under three words it may be either. Loose takes the run as speech-to-text hears it back, one word in four a letter off. */
+/** Fewest letter edits that turn `line` into some stretch of `text`. */
+function editsInto(line: string, text: string): number {
+  let row = Array.from({ length: line.length + 1 }, (_, i) => i);
+  let best = row[line.length]!;
+  for (const letter of text) {
+    const next = [0];
+    for (let i = 1; i <= line.length; i++) next[i] = Math.min(row[i]! + 1, next[i - 1]! + 1, row[i - 1]! + (line[i - 1] === letter ? 0 : 1));
+    row = next;
+    best = Math.min(best, row[line.length]!);
+  }
+  return best;
+}
+
+/** The voice's own words back through a phone speaker: his line is a run of them. Under three words it may be either. Loose takes the run as speech-to-text hears it back: one word in four a letter off, or one letter in eight dropped, added or changed, which covers a lost or extra word and Korean spacing. */
 export function echoOf(heard: string, voice: string, loose = false): "echo" | "maybe" | "no" {
   const words = loose ? heardForm(heard) : tokens(heard);
   const said = loose ? heardForm(voice) : tokens(voice);
   if (!words.length) return "maybe";
   const off = (start: number) => words.filter((word, i) => said[start + i] !== word).length;
   const run = (start: number) => words.every((word, i) => said[start + i] === word || (loose && nearWord(word, said[start + i] ?? "")));
-  if (!said.some((_, start) => run(start) && off(start) * 4 <= (loose ? words.length : 0))) return "no";
-  return words.length >= 3 ? "echo" : "maybe";
+  if (said.some((_, start) => run(start) && off(start) * 4 <= (loose ? words.length : 0))) return words.length >= 3 ? "echo" : "maybe";
+  const line = words.join(" ");
+  return loose && words.length >= 3 && editsInto(line, said.join(" ")) * 8 <= line.length ? "echo" : "no";
 }
+
+const NOD = "h?m+|mhm|uh-?huh|u[hm]+|yeah|yes|yep|ok|okay|right|응|네|어";
+const BACKCHANNEL = new RegExp(`^(?:${NOD})[.!?,\\s]*$`, "i");
+const NODS = new RegExp(`^\\s*(?:(?:${NOD})(?![\\p{L}\\p{N}])[.!?,\\s]*)+`, "iu");
 
 /** "Hmm.", "Yes.": a nod while the voice talks, not a barge-in. */
 export function backchannel(heard: string): boolean {
-  return /^(?:h?m+|mhm|uh-?huh|u[hm]+|yeah|yes|yep|ok|okay|right|응|네|어)[.!?,\s]*$/i.test(heard.trim());
+  return BACKCHANNEL.test(heard.trim());
+}
+
+/** The line after any nods that open it: "Yeah. long enough to be" is its own voice behind a nod. */
+export function afterNods(heard: string): string {
+  return heard.replace(NODS, "");
 }
 
 /** The bot's reply asks again what its card asks. */

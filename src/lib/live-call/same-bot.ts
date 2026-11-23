@@ -6,7 +6,7 @@ import { isShownMessage } from "@/lib/shown-message";
 import type { Message } from "@/state/store-types";
 import { MAX_RECONNECTS, MIC_ERRORS, READY_MS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
-import { backchannel, echoOf } from "./guard";
+import { afterNods, echoOf } from "./guard";
 
 const QUOTA = /quota|resource.?exhausted/i;
 const READ = "[READ]\n";
@@ -59,6 +59,8 @@ export class SameBotCall {
   private said = "";
   /** Heard while it reads, not yet his: it may be the voice coming back. */
   private over = "";
+  /** A sound reached Google while it read: until Google's turn for that sound ends, its words may be the voice's own, even once the read is over. */
+  private overSound = false;
   private lastSaid = "";
   /** Whose words the voice is answering: his (never played) or a [READ] it was sent. */
   private turn: "user" | "read" | null = null;
@@ -170,7 +172,10 @@ export class SameBotCall {
   private frame(pcm: ArrayBuffer) {
     if (!this.connected || this.snapshot.muted) return;
     this.micOpen = true;
-    if (!this.speaking && loud(pcm)) this.loudAt = this.now();
+    if (loud(pcm)) {
+      if (this.speaking) this.overSound = true;
+      else this.loudAt = this.now();
+    }
     this.engine?.sendAudio(pcm);
   }
 
@@ -192,7 +197,7 @@ export class SameBotCall {
       },
       heard: (text) => {
         if (!mine()) return;
-        if (this.speaking) return this.overlap(text);
+        if (this.speaking || this.overSound) return this.overlap(text);
         this.over = "";
         this.heard += text;
         this.caption("user", this.heard);
@@ -213,7 +218,11 @@ export class SameBotCall {
           this.deps.audio.endTurn();
           this.reading = undefined;
           this.lastSaid += ` ${this.said}`;
-        } else this.commit();
+        } else {
+          this.overSound = false;
+          this.over = "";
+          this.commit();
+        }
         this.turn = null;
         this.said = "";
         this.cut = false;
@@ -244,15 +253,17 @@ export class SameBotCall {
     };
   }
 
-  /** Words heard while it reads: its own voice coming back is dropped and a nod lets it go on; anything else stops it like a tap and is his line. */
+  /** Words heard while it reads: its own voice coming back, even behind a nod, is dropped and a nod lets it go on; anything else stops it like a tap and is his line. */
   private overlap(text: string) {
     this.over += text;
-    const words = spokenText(this.over);
+    const words = afterNods(spokenText(this.over));
+    if (!words) return;
     const echo = echoOf(words, `${this.lastSaid} ${this.said}`, true);
     if (echo === "echo") this.over = "";
-    if (echo !== "no" || backchannel(words)) return;
+    if (echo !== "no") return;
     this.interrupt();
-    this.heard = this.over;
+    this.overSound = false;
+    this.heard += this.over;
     this.over = "";
     this.caption("user", this.heard);
   }
