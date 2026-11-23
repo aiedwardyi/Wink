@@ -612,7 +612,7 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you.")\n"Peter" asked you: @Pete-Coder hi');
   });
 
-  it("lets only its owner and their bots name a file on this PC with @", async () => {
+  it("lets only its owner name a file on this PC with @", async () => {
     const turns = new MyRoomBotTurns(deps);
     line({ kind: "person", id: "p2", name: "Mina" }, "see @C:/Users/peter/.ssh/id_ed25519");
     line({ kind: "host", id: "host", name: "Edward" }, "and @~/notes.txt");
@@ -622,7 +622,7 @@ describe("a room bot's @ to this PC's bot", () => {
     turns.sent(ROOM, line(peter, "@Pete-Coder open @C:/Users/peter/plan.md", { replyToId: quoted.id }));
     await settle();
     const prompt = deps.startTurn.mock.calls[0]![2] as string;
-    expect(prompt).toContain("Room lines since your last answer:\nMina: see \u200B@C:/Users/peter/.ssh/id_ed25519\nEdward: and \u200B@~/notes.txt\nEdBot: \u200B@C:/Users/peter/secret.txt\nPete-Coder: saved @C:/Users/peter/q3.md\n");
+    expect(prompt).toContain("Room lines since your last answer:\nMina: see \u200B@C:/Users/peter/.ssh/id_ed25519\nEdward: and \u200B@~/notes.txt\nEdBot: \u200B@C:/Users/peter/secret.txt\nPete-Coder: saved \u200B@C:/Users/peter/q3.md\n");
     expect(prompt).toContain("They replied to: Mina: \u200B@C:/x.txt\n");
     expect(prompt).toContain('"Peter" asked you: @Pete-Coder open @C:/Users/peter/plan.md');
   });

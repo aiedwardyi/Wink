@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { composeUserTurnPrompt, guestWords, inertMentions, promptWithReply, replyExcerpt, transcriptText, turnReplaysTranscript } from "./replies.ts";
+import { composeUserTurnPrompt, inertMentions, lineWords, promptWithReply, replyExcerpt, transcriptText, turnReplaysTranscript } from "./replies.ts";
 import type { Message } from "./store.ts";
 
 const message = (patch: Partial<Message> = {}): Message => ({
@@ -39,10 +39,21 @@ describe("flat replies", () => {
 
   it("breaks each @ the Claude CLI reads as a file, for a teammate and a teammate's bot only", () => {
     expect(inertMentions("@a x@b (@c) 。@d、@e？@f！@g\u3000@h\t@i")).toBe("\u200B@a x@b (@c) 。\u200B@d、\u200B@e？\u200B@f！\u200B@g\u3000\u200B@h\t\u200B@i");
-    expect(guestWords({ kind: "bot", owner: "p1" }, "@x")).toBe("\u200B@x");
-    expect(guestWords({ kind: "bot" }, "@x")).toBe("@x");
-    expect(guestWords({ kind: "host" }, "@x")).toBe("@x");
-    expect(guestWords(undefined, "@x")).toBe("@x");
+    expect(lineWords({ author: { kind: "bot", owner: "p1" } }, "@x")).toBe("\u200B@x");
+    expect(lineWords({ author: { kind: "bot" } }, "@x")).toBe("@x");
+    expect(lineWords({ author: { kind: "host" } }, "@x")).toBe("@x");
+    expect(lineWords({ role: "bot" }, "@x")).toBe("@x");
+  });
+
+  it("in a group, lets only the host's own words name a file", () => {
+    for (const line of [{ author: { kind: "bot" } }, { author: { kind: "person" } }, { role: "bot" }, { role: "user", from: {} }, { role: "user", comm: {} }]) {
+      expect(lineWords(line, "@x", true)).toBe("\u200B@x");
+    }
+    expect(lineWords({ author: { kind: "host" } }, "@x", true)).toBe("@x");
+    expect(lineWords({ role: "user" }, "@x", true)).toBe("@x");
+    const echo = message({ role: "bot", text: "I can't open @C:/Users/me/secret.txt", from: { botId: "b1", name: "Hazel", color: "" } });
+    expect(promptWithReply("Sure", echo, "Edward", true)).toContain("--- quoted excerpt ---\nI can't open \u200B@C:/Users/me/secret.txt\n");
+    expect(promptWithReply("Sure", echo, "Edward")).toContain("--- quoted excerpt ---\nI can't open @C:/Users/me/secret.txt\n");
   });
 
   it("marks quotes as untrusted conversation data for the provider", () => {

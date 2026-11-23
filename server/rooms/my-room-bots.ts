@@ -245,8 +245,8 @@ export class MyRoomBotTurns {
         : "";
       const owner = entry.author.kind === "bot" ? ownerOf(entry.author.owner) : undefined;
       const asker = `${JSON.stringify(entry.author.name)}${owner ? ` (${JSON.stringify(owner)}'s bot)` : ""}`;
-      // only this PC's person and bots may name a file on it with @
-      const ours = (line: JoinedEntry) => (line.author.kind === "bot" ? line.author.owner === room.me.id : senderId(line) === room.me.id);
+      // only this PC's person may name a file on it with @
+      const ours = (line: JoinedEntry) => line.author.kind !== "bot" && senderId(line) === room.me.id;
       const said = (line: JoinedEntry, text: string) => (ours(line) ? text : inertMentions(text));
       const prompt = [
         `(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${me} runs you${trusted.length ? `; ${trusted.join(", ")} may also make you work` : ""}; everyone else here is read-only.${hostWorks} ${collabLine(`${room.me.name} has to turn this on for you.`)}${others.length
