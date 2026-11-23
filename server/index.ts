@@ -209,7 +209,7 @@ import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { botRoute, CommsCallers } from "./comms-caller.ts";
+import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
@@ -695,8 +695,7 @@ googleAccount.onIdToken(googlePhotoChanged);
  * but the compare costs nothing to make safe. */
 const commsCallers = new CommsCallers();
 function authorizedComms(header: string | string[] | undefined, path: string): boolean {
-  const caller = commsCallers.resolve(header);
-  return caller ? botRoute(path, caller.botId) : bootToken(header);
+  return commsCallers.allows(header, path, bootToken);
 }
 function bootToken(header: string | string[] | undefined): boolean {
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
@@ -820,7 +819,7 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation; reader?: boolean },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
@@ -842,6 +841,7 @@ function askBotAndWait(
       ...peerAttribution(peer?.sender, peer?.channel),
       onDispatchError,
       commsAsk: true,
+      ...(peer?.reader ? { webReader: true } : {}),
     }).then(() => undefined),
     adopt: () => {
       if (!peer || !store.bot(targetBotId)?.busy) return undefined;
@@ -5100,6 +5100,8 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
+  /** web_read's borrowed reader: page text steers it, so read-only with no Wink tools. */
+  webReader?: boolean;
 };
 
 /** True only for a turn a person actually typed - not a pane note wake, a
@@ -5805,7 +5807,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const roomEchoes = roomEchoesSinceLastUserTurn(activeMessages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model);
   const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
-    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
+    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text, roomTaskThreads().has(threadId))
     : [];
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
@@ -5936,7 +5938,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     const releaseStarting = takeStartingHold(bot.id);
     let systemSeed: ReturnType<typeof systemSeeds.set> | undefined;
     try {
-      const readOnly = opts?.readOnly === true;
+      const readOnly = opts?.readOnly === true || opts?.webReader === true;
       if (readOnly && instance.adapter.capabilities.readOnlyTurns !== true) throw new Error(`${bot.name} can't answer other people here: its engine can't work read-only`);
       if (readOnly) readOnlyTurnThreads.add(threadId);
       else readOnlyTurnThreads.delete(threadId);
@@ -6197,7 +6199,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           !candidate.hidden &&
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
-      if (instance.adapter.capabilities.agentsMcp === true) {
+      if (instance.adapter.capabilities.agentsMcp === true && opts?.webReader !== true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
@@ -9254,9 +9256,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (path === "/api/about-you/decline" && method === "POST") return aboutYouRoutes.decline(res);
     m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);
     if (m && method === "DELETE") {
-      aboutYouRoutes.remove(res, m[1]);
-      for (const bot of store.bots) void memoryLookup.refresh(bot.id);
-      return;
+      // the removed lines are out of every bot's lookup before the removal is answered
+      return aboutYouRoutes.remove(res, m[1], async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
     }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's

@@ -1,13 +1,14 @@
 // About You: what the user's other AI knew about them, kept once for every bot.
-// Code splits the paste into fact lines, drops repeats and secret-looking lines,
-// and notes where each came from; no model reads or rewrites it.
+// Code splits the paste into fact lines, drops repeats and machine keys, holds
+// back secret-looking lines for the user to Keep or leave out, and notes where
+// each came from; no model reads or rewrites it.
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
 
 import { UNNAMED_SOURCE } from "../shared/about-you-note.ts";
-import { redactRoomMemory } from "../shared/redact.ts";
+import { hasMachineKey, redactRoomMemory } from "../shared/redact.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { json, readBody } from "./http-helpers.ts";
@@ -83,18 +84,56 @@ export function sourceOf(paste: string): string {
   return [...safe].slice(0, 40).join("").trim() || UNNAMED_SOURCE;
 }
 
-/** The fact lines in a paste, cleaned, with secret-looking ones left out and counted. */
-export function factsOf(paste: string): { facts: string[]; hidden: number } {
+const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+const PEM_END = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+// what sits between BEGIN and END: base64 rows, blank rows and the header fields of an encrypted key
+const PEM_BODY = /^\s*(?:[A-Za-z0-9+/=]*|(?:Proc-Type|DEK-Info|Version|Comment)\s*:.*)\s*$/;
+
+/** Every fact line of a paste, cleaned. Machine keys are dropped and counted in hidden, never offered back.
+ * Other secret-looking lines (the base filter's catch) come back in flagged: saved only if the user taps Keep. */
+export function factsOf(paste: string): { facts: string[]; hidden: number; flagged: string[] } {
   const facts: string[] = [];
+  const flagged: string[] = [];
   let hidden = 0;
+  let pem = false;
   for (const raw of paste.split(/\r?\n/)) {
+    // a private key spans lines, and its last base64 row alone reads as nothing, so the whole block goes
+    if (pem) {
+      if (PEM_END.test(raw)) {
+        pem = false;
+        continue;
+      }
+      // a row may carry the list marker of the paste it came from
+      if (PEM_BODY.test(clean(raw.trim()))) continue;
+      pem = false;
+    }
+    if (raw.includes("-----") && PEM_BEGIN.test(raw)) {
+      pem = !PEM_END.test(raw.slice(raw.search(PEM_BEGIN) + 5));
+      hidden++;
+      continue;
+    }
     const line = clean(raw);
     if (!line || SKIP.test(raw.trim()) || /[:：]$/.test(line)) continue;
-    // a split could part a label from its value, so the whole line is checked
-    if (secretLike(line) || redactRoomMemory(line) !== line) hidden++;
+    // a split could part a label from its value, so the whole line is checked; every machine key is caught here too
+    if (secretLike(line) || redactRoomMemory(line) !== line) {
+      if (hasMachineKey(line)) hidden++;
+      else flagged.push(line);
+    } else facts.push(...pieces(line));
+  }
+  return { facts, hidden, flagged };
+}
+
+/** Lines the user tapped Keep on: saved as written, though a machine key never is. */
+function keptFactsOf(lines: string[]): { facts: string[]; hidden: number; flagged: string[] } {
+  const facts: string[] = [];
+  let hidden = 0;
+  for (const raw of lines) {
+    const line = clean(raw);
+    if (!line) continue;
+    if (PEM_BEGIN.test(raw) || hasMachineKey(raw) || hasMachineKey(line)) hidden++;
     else facts.push(...pieces(line));
   }
-  return { facts, hidden };
+  return { facts, hidden, flagged: [] };
 }
 
 function readSaved(path = aboutYouFile()): string {
@@ -108,20 +147,39 @@ function readSaved(path = aboutYouFile()): string {
 
 const savedLines = (raw: string) => raw.split(/\r?\n/).filter((line) => line.trim());
 
-export type AboutYouAdd = { source: string; found: number; added: number; duplicates: number; hidden: number };
+/** flagged: lines that looked like passwords, left out of memory. They go back only to the screen that sent the paste. */
+export type AboutYouAdd = { source: string; found: number; added: number; duplicates: number; hidden: number; flagged: string[] };
 export type AboutYouError = { error: "empty" | "too-large" | "failed" };
 
+/** A paste, or the lines a user chose to Keep from one (with the source the paste named). */
+export type ImportRequest = { text: string } | { keep: string[]; source: string };
+
+const importSchema = z.union([
+  z.object({ text: z.string() }),
+  z.object({ keep: z.array(z.string()).min(1), source: z.string() }),
+]);
+
+/** The body of an Import Memory save, for All my bots and Only this bot alike. */
+export async function readImportRequest(req: IncomingMessage): Promise<ImportRequest | null> {
+  // JSON escaping can double a paste, so the body gets room past the paste's own cap
+  const parsed = importSchema.safeParse(await readBody(req, ABOUT_YOU_MAX_PASTE * 2 + 64 * 1024));
+  return parsed.success ? parsed.data : null;
+}
+
 // every new fact is appended, never cut: the read side decides what rides in each prompt
-function addFacts(paste: string, date: string, read: () => string, write: (text: string) => void, accepted?: string[]): AboutYouAdd | AboutYouError {
-  if (!paste.trim()) return { error: "empty" };
-  if (bytes(paste) > ABOUT_YOU_MAX_PASTE) return { error: "too-large" };
-  const source = sourceOf(paste);
-  const { facts, hidden } = factsOf(paste);
+function addFacts(request: ImportRequest | string, date: string, read: () => string, write: (text: string) => void, accepted?: string[]): AboutYouAdd | AboutYouError {
+  const asked = typeof request === "string" ? { text: request } : request;
+  const text = "text" in asked ? asked.text : asked.keep.join("\n");
+  if (!text.trim()) return { error: "empty" };
+  if (bytes(text) > ABOUT_YOU_MAX_PASTE) return { error: "too-large" };
+  // a kept line goes under the source its paste named, read through the same guard as a Source: line
+  const source = "text" in asked ? sourceOf(text) : sourceOf(`Source: ${asked.source.replace(/[\r\n]+/g, " ")}`);
+  const { facts, hidden, flagged } = "text" in asked ? factsOf(text) : keptFactsOf(asked.keep);
   try {
     const raw = read();
     const seen = new Set(savedLines(raw).map((line) => keyOf(clean(line))));
     const added: string[] = [];
-    const result: AboutYouAdd = { source, found: facts.length, added: 0, duplicates: 0, hidden };
+    const result: AboutYouAdd = { source, found: facts.length, added: 0, duplicates: 0, hidden, flagged };
     for (const fact of facts) {
       const key = keyOf(fact);
       if (!key || seen.has(key)) {
@@ -141,8 +199,8 @@ function addFacts(paste: string, date: string, read: () => string, write: (text:
   }
 }
 
-/** Adds each fact of the paste once to the shared About You file. */
-export function addToAboutYou(paste: string, date: string, accepted?: string[]): AboutYouAdd | AboutYouError {
+/** Adds each fact of the paste (or each kept line) once to the shared About You file. */
+export function addToAboutYou(paste: ImportRequest | string, date: string, accepted?: string[]): AboutYouAdd | AboutYouError {
   return addFacts(paste, date, readSaved, (text) => {
     mkdirSync(join(DATA_DIR, "about-you"), { recursive: true, mode: 0o700 });
     writeFileAtomic(aboutYouFile(), text, { mode: 0o600 });
@@ -150,7 +208,7 @@ export function addToAboutYou(paste: string, date: string, accepted?: string[]):
 }
 
 /** "Only this bot": the same fact lines go into that bot's own import file, read the way About You is; MEMORY.md is left alone. */
-export function addToBotMemory(botId: string, paste: string, date: string): AboutYouAdd | AboutYouError {
+export function addToBotMemory(botId: string, paste: ImportRequest | string, date: string): AboutYouAdd | AboutYouError {
   return addFacts(paste, date, () => readSaved(botImportFile(botId)), (text) => {
     ensureWorkspace(botId);
     writeFileAtomic(botImportFile(botId), text, { mode: 0o600 });
@@ -265,10 +323,9 @@ export const aboutYouRoutes = {
     return json(res, 200, { declined: true });
   },
   async add(req: IncomingMessage, res: ServerResponse, now = Date.now, saved: () => Promise<void> = async () => {}) {
-    // JSON escaping can double a paste, so the body gets room past the paste's own cap
-    const parsed = z.object({ text: z.string() }).safeParse(await readBody(req, ABOUT_YOU_MAX_PASTE * 2 + 64 * 1024));
-    if (!parsed.success) return json(res, 400, { error: "text must be a string" });
-    const result = addToAboutYou(parsed.data.text, day(now()));
+    const asked = await readImportRequest(req);
+    if (!asked) return json(res, 400, { error: "text must be a string" });
+    const result = addToAboutYou(asked, day(now()));
     if (!("error" in result)) {
       await saved();
       return json(res, 200, { ...result, sources: aboutYouSources() });
@@ -276,7 +333,7 @@ export const aboutYouRoutes = {
     if (result.error === "too-large") return json(res, 413, { error: result.error, maxBytes: ABOUT_YOU_MAX_PASTE });
     return json(res, result.error === "empty" ? 400 : 500, { error: result.error });
   },
-  remove(res: ServerResponse, encoded: string) {
+  async remove(res: ServerResponse, encoded: string, saved: () => Promise<void> = async () => {}) {
     let source: string;
     try {
       source = decodeURIComponent(encoded);
@@ -284,6 +341,7 @@ export const aboutYouRoutes = {
       return json(res, 400, { error: "bad source name" });
     }
     removeAboutYouSource(source);
+    await saved();
     return json(res, 200, { sources: aboutYouSources() });
   },
 };

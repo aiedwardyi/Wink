@@ -800,7 +800,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   }
   if (name === WEB_READ_TOOL.name) {
     return await webRead(args, api, (toBotId, message) =>
-      api("/api/internal/ask-bot", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH }) }), READ_ONLY);
+      api("/api/internal/ask-bot", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH, reader: true }) }), READ_ONLY);
   }
   if (name === "report_issue") {
     const r = await api("/api/internal/team-report", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });

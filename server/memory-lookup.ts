@@ -60,7 +60,8 @@ type Terms = { list: string[]; groups: string[][] };
 
 export interface RecallIndex {
   terms(query: string, expired?: () => boolean): Terms;
-  hits(terms: Terms): RecallHit[];
+  /** A joined room sees only what the bot itself wrote, never Import Memory. */
+  hits(terms: Terms, room?: boolean): RecallHit[];
   gate(terms: Terms, hits: RecallHit[]): RecallHit[];
   close(): void;
 }
@@ -175,20 +176,33 @@ function hasNearPair(positions: number[][]): boolean {
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
   const parsed = files.flatMap(piecesOfFile);
+  const imported = (piece: Piece) => piece.source === ABOUT_YOU_SOURCE || piece.source === IMPORT_SOURCE;
   const latest = new Map<string, string>();
-  for (const piece of parsed.flat()) if (piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
-  const rows = parsed.filter((row) => row.every((piece) => piece.date === latest.get(piece.topic)));
+  const latestOwn = new Map<string, string>();
+  for (const piece of parsed.flat()) {
+    if (piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
+    if (!imported(piece) && piece.date > (latestOwn.get(piece.topic) ?? "")) latestOwn.set(piece.topic, piece.date);
+  }
+  const newest = parsed.filter((row) => row.every((piece) => piece.date === latest.get(piece.topic)));
+  const taken = new Set(newest);
+  // the bot's own newest note on a topic a newer import row took over: only a joined room, which never sees the import, reads it
+  const ownOnly = parsed.filter((row) => !taken.has(row) && row.every((piece) => !imported(piece) && piece.date === latestOwn.get(piece.topic)));
+  const rows = [...newest, ...ownOnly];
   const pieces = rows.flat();
+  // 0: every turn, 1: ordinary turns only (an import row), 2: a joined room only
+  const scopes = [...newest.flatMap((row) => row.map((piece) => (imported(piece) ? 1 : 0))), ...ownOnly.flatMap((row) => row.map(() => 2))];
   const db = new DatabaseSync(":memory:");
-  db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, tokenize='porter unicode61')");
-  const insert = db.prepare("INSERT INTO notes(rowid, text) VALUES (?, ?)");
+  db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, scope UNINDEXED, tokenize='porter unicode61')");
+  const insert = db.prepare("INSERT INTO notes(rowid, text, scope) VALUES (?, ?, ?)");
   db.exec("BEGIN");
   for (const [index, piece] of pieces.entries()) {
-    insert.run(index + 1, piece.text);
+    insert.run(index + 1, piece.text, scopes[index]!);
     if ((index + 1) % YIELD_EVERY === 0) await yieldLoop();
   }
   db.exec("COMMIT");
-  const search = db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? ORDER BY bm25(notes), rowid LIMIT ${HIT_LIMIT}`);
+  const search = (hidden: number) => db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? AND scope != ${hidden} ORDER BY bm25(notes), rowid LIMIT ${HIT_LIMIT}`);
+  const ordinary = search(2);
+  const joined = search(1);
 
   const documents = new Map<string, number>();
   for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
@@ -232,11 +246,11 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       const list = [...base, ...joined].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
       return { list, groups: list.map((term) => repair(term, expired)) };
     },
-    hits({ groups }) {
+    hits({ groups }, room = false) {
       const match = [...new Set(groups.flat())].map((term) => `"${term}"`).join(" OR ");
       if (!match) return [];
       // SAFETY: the SELECT above names exactly these two columns.
-      return (search.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
+      return ((room ? joined : ordinary).all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
     },
     gate({ list, groups }, hits) {
       if (list.length < 2) return [];
@@ -274,8 +288,8 @@ export interface MemoryLookupDeps {
 /* oxlint-disable anti-slop/no-unknown-parameters -- provider resume cursors are opaque. */
 export interface MemoryLookup {
   refresh(botId: string): Promise<void>;
-  /** The recall note for a typed turn, or nothing. No I/O and no build. */
-  take(botId: string, threadId: string, cursor: unknown, text: string): string[];
+  /** The recall note for a typed turn, or nothing. No I/O and no build. A joined room's turn answers everyone there, so Import Memory rows stay out of it. */
+  take(botId: string, threadId: string, cursor: unknown, text: string, room?: boolean): string[];
   /** The provider took the last take's turn, so its rows now count as shown. */
   accepted(botId: string, threadId: string): void;
   /** The last take never reached the provider, so its rows are still unseen. */
@@ -309,20 +323,38 @@ function pastTheCut(botId: string): { text: string; firstLine: number } | null {
   return { text: raw.slice(loaded.text.length), firstLine: loaded.text.split("\n").length };
 }
 
+// the saved lines past the cut, oldest first, as many as the room left in the corpus holds
+function withinBudget(text: string, room: number): string {
+  if (Buffer.byteLength(text) <= room) return text;
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of text.split("\n")) {
+    used += Buffer.byteLength(line) + 1;
+    if (used > room) break;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile[]> {
   const files: NoteFile[] = [];
   let bytes = 0;
   for (const { source, tier, path, mtime, size } of sources) {
-    if (bytes + size > MAX_CORPUS_BYTES) continue;
-    bytes += size;
+    // an import file only counts for the lines past the cut: a big one fills what is left, it is not skipped whole
+    const shared = source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE;
+    if (!shared) {
+      if (bytes + size > MAX_CORPUS_BYTES) continue;
+      bytes += size;
+    }
     if (tier === 0 && source === "MEMORY.md") {
       const past = pastTheCut(botId);
       if (past) files.push({ source, tier, mtime, ...past });
       continue;
     }
-    if (source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE) {
+    if (shared) {
       // the lines before the cut already ride in every prompt
-      const text = source === IMPORT_SOURCE ? botImportPastTheCut(botId) : aboutYouPastTheCut();
+      const text = withinBudget(source === IMPORT_SOURCE ? botImportPastTheCut(botId) : aboutYouPastTheCut(), MAX_CORPUS_BYTES - bytes);
+      bytes += Buffer.byteLength(text);
       if (text) files.push({ source, tier, mtime, text });
       continue;
     }
@@ -378,12 +410,13 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       await loadFlags();
       const overflow = Boolean(aboutYouPastTheCut());
       const ownOverflow = Boolean(botImportPastTheCut(botId));
+      // a build still running for an earlier state must find itself replaced, whether this refresh builds or drops
+      const run = (runs.get(botId) ?? 0) + 1;
+      runs.set(botId, run);
       if (!flagged.has(botId) && !overflow && !ownOverflow) {
         drop(botId);
         return;
       }
-      const run = (runs.get(botId) ?? 0) + 1;
-      runs.set(botId, run);
       const sources = await sourcesOf(botId, flagged.has(botId), overflow, ownOverflow);
       const signature = JSON.stringify(sources);
       if (indexes.get(botId)?.signature === signature) return;
@@ -427,7 +460,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
 
   const logged = (hits: RecallHit[]) => hits.map((hit) => ({ row: hit.ref, score: Number(hit.score.toFixed(3)) }));
 
-  const lookup = (entry: LookupLog, botId: string, threadId: string, session: string, text: string): string[] => {
+  const lookup = (entry: LookupLog, botId: string, threadId: string, session: string, text: string, room: boolean): string[] => {
     const started = clock();
     const over = () => {
       entry.ms = Number((clock() - started).toFixed(2));
@@ -447,7 +480,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       entry.reason = "no-words";
       return [];
     }
-    const hits = index.hits(terms);
+    const hits = index.hits(terms, room);
     entry.rows = logged(hits.slice(0, 3));
     if (over()) return [];
     const passed = index.gate(terms, hits);
@@ -478,12 +511,12 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
 
   return {
     refresh,
-    take(botId, threadId, cursor, text) {
+    take(botId, threadId, cursor, text, room = false) {
       if (!flagged.has(botId) && !indexes.has(botId)) return [];
       pending.delete(markKey(botId, threadId));
       const entry: LookupLog = { at: now(), botId, words: [], rows: [], ms: 0, fired: false, reason: "no-match" };
       try {
-        return lookup(entry, botId, threadId, cursorKey(cursor), text);
+        return lookup(entry, botId, threadId, cursorKey(cursor), text, room);
       } catch {
         entry.fired = false;
         entry.rows = [];

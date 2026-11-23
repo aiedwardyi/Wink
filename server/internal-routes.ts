@@ -50,7 +50,7 @@ type InternalRouteDeps = {
   MAX_COMMS_DEPTH: number;
   MAX_WORKSPACE_BOTS: number;
   computerControl: ComputerControl;
-  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation }) => Promise<AskReply>;
+  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation; reader?: boolean }) => Promise<AskReply>;
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
@@ -340,6 +340,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
+      const reader = body.reader === true;
       const depth = snapshot?.depth ?? 0;
       if (deps.readOnlyTurn(fromBotId, source.threadId)) return json(res, 403, { error: readOnlyRefusal("ask_bot") });
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
@@ -375,6 +376,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       let currentFrom = from;
       let currentTarget = target;
       const queueAsk = (approved = false) => {
+        // A queued ask runs later as a normal turn, so web_read's reader is never queued.
+        if (reader) {
+          release(reservation);
+          return json(res, 200, { busy: true });
+        }
         const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth, root: snapshot.rootId ?? undefined }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved, turnId: snapshot.turnId, id: taskId, reservation });
         if (!queued.id) return refuse(200, "no such bot");
         if (deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, deps.runDelegatedTurn);
@@ -426,6 +432,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         taskId,
         commsRoot: snapshot.rootId,
         reservation,
+        ...(reader ? { reader: true } : {}),
       });
       // the peer's real reply reaches the channel and this thread when its turn ends
       if (reply.taskId) {
