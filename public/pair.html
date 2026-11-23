@@ -396,8 +396,11 @@
             opening: "Wink 여는 중…",
           },
         }[lang];
-        // The glasses lens is a small square; the server's redirect to /pair carries no other sign.
-        const glasses = window.matchMedia?.("(max-width: 800px) and (min-aspect-ratio: 4/5) and (max-aspect-ratio: 5/4)").matches === true;
+        // The glasses browser is an Android web view (Meta's own check: the "wv" token) on a small square; neither alone is the lens.
+        const glasses =
+          /\bwv\b/.test(navigator.userAgent) &&
+          /Android/.test(navigator.userAgent) &&
+          window.matchMedia?.("(max-width: 800px) and (min-aspect-ratio: 4/5) and (max-aspect-ratio: 5/4)").matches === true;
         const spokenDigits = (text) => {
           const words = new Map(Object.entries({
             zero: "0", oh: "0", o: "0", one: "1", won: "1", two: "2", to: "2", too: "2", three: "3",
