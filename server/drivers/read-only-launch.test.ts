@@ -120,7 +120,7 @@ const ENGINES: Record<string, Engine> = {
         expect({ method, sandbox, approvalPolicy }).toEqual({ method, sandbox: "read-only", approvalPolicy: "untrusted" });
         expect(config).toMatchObject({ "mcp_servers.github.enabled": false, "plugins.unified-computer-use@openai-bundled.enabled": false, "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
         expect(config).not.toHaveProperty("mcp_servers.agents.enabled");
-        expect(config).toMatchObject({ "features.shell_tool": false, "features.unified_exec": false, "features.view_image": false });
+        expect(config).toMatchObject({ "features.shell_tool": false, "features.unified_exec": false, "features.view_image": false, "features.multi_agent": false, "features.multi_agent_v2": false });
         for (const name of READ_ONLY_FEATURES_OFF) expect(config).toHaveProperty([`features.${name}`], false);
       }
     },

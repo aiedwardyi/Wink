@@ -328,7 +328,13 @@ describe("a teammate's request under the host's setting for the bot", () => {
     expect(turnAccess("ask-1", { autoApprove: false })).toEqual({ approval: "ask", readOnly: true });
     expect(turnAccess("ask-1", { autoApprove: true })).toEqual({ approval: "auto" });
     expect(turnAccess(undefined, { autoApprove: false })).toEqual({ approval: "ask" });
-    expect(turnAccess(undefined, { autoApprove: true }, true)).toEqual({ approval: "auto", readOnly: true });
+    expect(turnAccess(undefined, { autoApprove: true }, true)).toEqual({ approval: "auto", readOnly: true, ownerText: true });
+  });
+
+  it("keeps @file attach on the owner's own lane, never on a teammate's", () => {
+    expect(turnAccess(undefined, { autoApprove: false }, true)).toEqual({ approval: "ask", readOnly: true, ownerText: true });
+    expect(turnAccess("ask-1", { autoApprove: true }, true)).toEqual({ approval: "auto", readOnly: true });
+    expect(turnAccess("ask-1", { autoApprove: false }, true, false)).toEqual({ approval: "ask", readOnly: true });
   });
 
   it("sends a teammate's turn without the switch read-only and never Auto, whatever the bot's mode", () => {

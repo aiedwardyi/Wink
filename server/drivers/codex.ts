@@ -217,8 +217,8 @@ type AppServer = {
 const appServerAlive = (server: AppServer) =>
   server.child.exitCode === null && server.child.signalCode === null && !server.child.stdin.destroyed && !server.child.stdout.destroyed;
 
-/** Codex tools that run commands or open files and pages anywhere on the PC. */
-export const READ_ONLY_FEATURES_OFF = ["shell_tool", "unified_exec", "code_mode", "view_image", "browser_use", "in_app_browser", "computer_use"];
+/** Codex tools that run commands or open files and pages anywhere on the PC (a multi_agent helper takes local_image paths). */
+export const READ_ONLY_FEATURES_OFF = ["shell_tool", "unified_exec", "code_mode", "view_image", "browser_use", "in_app_browser", "computer_use", "multi_agent", "multi_agent_v2"];
 
 // Only a Wink setting overrides; otherwise the user's own codex config decides.
 // untrusted asks before any edit or command that is not read-only.

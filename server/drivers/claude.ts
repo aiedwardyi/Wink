@@ -1287,6 +1287,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
 
       const env = claudeEnvironment(turnModel, turnEnvironment, input.account);
+      // the CLI attaches any typed @path with no ask, so a guest's text could name any file on the PC
+      const noMentions = turn.readOnly === true && turn.ownerText !== true;
+      if (noMentions) env.CLAUDE_CODE_DISABLE_FILE_MENTIONS = "1";
       // the CLI skips its "no visible output" nudge when a turn ends on a listed tool
       if (mcpServers.agents) env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "mcp__agents__no_reply_needed";
       else delete env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
@@ -1298,7 +1301,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // the harness sends later changes in the turn text.
       const unkeyed = new Set(["--mcp-config", "--append-system-prompt"]);
       const keyArgs = args.filter((a, i) => !unkeyed.has(a) && !unkeyed.has(args[i - 1] ?? ""));
-      const argsKey = JSON.stringify({ args: keyArgs, mcpServers, cwd, model: injected.model ?? null, base: env.ANTHROPIC_BASE_URL ?? null });
+      const argsKey = JSON.stringify({ args: keyArgs, mcpServers, cwd, model: injected.model ?? null, base: env.ANTHROPIC_BASE_URL ?? null, ...(noMentions && { noMentions }) });
 
       // Reuse the live process only when it is idle, unchanged, and the
       // harness named that same session. An omitted cursor (Orbit recycled

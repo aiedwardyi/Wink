@@ -7437,7 +7437,8 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
-  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || guestReadOnly ? { readOnly: true } : {}) };
+  // the owner's own lane keeps Claude's @file attach; a guest's words never get it
+  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || guestReadOnly ? { readOnly: true } : {}), ...(lane && !guestAsked ? { ownerText: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
