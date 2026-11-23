@@ -435,8 +435,10 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
 
   // will-change pins the sheet's bitmap at the scale it first painted, so it is set only while a drag or glide moves it.
   // Below 1.5x Chromium draws subpixel text only off a layer, so a lift there would flicker the text to grayscale and back.
+  // That follows the display scale; devicePixelRatio also carries the desktop window zoom, and under 1.5x it shifts grey text on a layer too.
   const lift = useCallback((on: boolean) => {
-    if (sheet.current) sheet.current.style.willChange = on && devicePixelRatio >= 1.5 ? "transform" : "";
+    const scale = devicePixelRatio / (window.ogb?.zoomFactor?.() ?? 1);
+    if (sheet.current) sheet.current.style.willChange = on && Math.round(Math.min(scale, devicePixelRatio) * 100) >= 150 ? "transform" : "";
   }, []);
 
   const stopGlide = useCallback(() => {

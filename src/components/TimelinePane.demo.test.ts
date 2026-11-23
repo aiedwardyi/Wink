@@ -90,6 +90,17 @@ describe("TimelinePane demo", () => {
     }
   });
 
+  it("lifts only when both the display scale and the window-zoomed ratio reach 1.5x", () => {
+    for (const [ratio, zoom, lifted] of [[1.5, 1.2, ""], [1.2, 0.8, ""], [1.6, 0.8, "transform"]] as const) {
+      vi.stubGlobal("devicePixelRatio", ratio);
+      vi.stubGlobal("ogb", { zoomFactor: () => zoom });
+      pointer("pointerdown", 100, 100);
+      pointer("pointermove", 100, 160);
+      expect(sheet().style.willChange).toBe(lifted);
+      pointer("pointerup", 100, 160);
+    }
+  });
+
   it("ends a mouse drag whose mouse-up never arrived like one that did", () => {
     vi.stubGlobal("devicePixelRatio", 2);
     const mouse = { pointerType: "mouse", buttons: 1 };
