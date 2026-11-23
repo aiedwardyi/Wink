@@ -48,6 +48,8 @@ const PARAGRAPH_CHARS = 400;
 const PARAGRAPH_LINES = 6;
 const YIELD_EVERY = 200;
 const SIDE_DEPTH = 3;
+// past this many postings the search is cheaper than ruling it out
+const SCAN_POSTINGS = 2_000;
 // copies kept for undo: their lines were taken out of memory on purpose
 const BACKUP = /^(?:MEMORY-(?:pre|full)-|pre-drift-fix-)|-history/i;
 const DEADLINE_EVERY = 256;
@@ -266,6 +268,19 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     }
     return found;
   };
+  // which pieces hold each note token, in their text and in their title
+  const postings = new Map<string, number[]>();
+  const titled = new Map<string, number[]>();
+  for (const [at, piece] of pieces.entries()) {
+    for (const [map, tokens] of [[postings, piece.tokens], [titled, piece.title]] as const) {
+      for (const token of new Set(tokens)) {
+        const list = map.get(token);
+        if (list) list.push(at);
+        else map.set(token, [at]);
+      }
+    }
+  }
+  const matched = new WeakMap<Terms, Map<string, number>>();
   const known = (groups: string[][]) => groups.map((group) => group.filter((option) => documents.has(option)));
   const weight = (options: string[]) => (options.length ? Math.max(...options.map(idf)) : maxIdf);
 
@@ -306,11 +321,27 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       const list = [...base, ...joined].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
       return { list, groups: list.map((term) => repair(term, expired)) };
     },
-    possible({ list, groups }) {
+    possible(terms) {
+      const { list, groups } = terms;
       const inNotes = known(groups);
       const found = inNotes.filter((options) => options.length);
       const whole = inNotes.reduce((sum, options) => sum + weight(options), 0);
-      return list.length >= 2 && found.length >= 2 && found.some((options) => weight(options) >= rareBar) && found.reduce((sum, options) => sum + weight(options), 0) / whole >= MIN_COVER;
+      if (!(list.length >= 2 && found.length >= 2 && found.some((options) => weight(options) >= rareBar) && found.reduce((sum, options) => sum + weight(options), 0) / whole >= MIN_COVER)) return false;
+      // every gate rule but nearness, checked on each piece from the postings, so a turn no piece could pass skips the search
+      const tokens = groupBits(inNotes);
+      matched.set(terms, tokens);
+      const weights = inNotes.map(weight);
+      let scan = 0;
+      for (const token of tokens.keys()) scan += postings.get(token)?.length ?? 0;
+      if (scan > SCAN_POSTINGS) return true;
+      const masks = new Map<number, number>();
+      for (const [token, mask] of tokens) for (const at of postings.get(token) ?? []) masks.set(at, (masks.get(at) ?? 0) | mask);
+      const inTitle = new Set([...tokens.keys()].flatMap((token) => titled.get(token) ?? []));
+      return [...masks].some(([at, mask]) => {
+        if (!inTitle.has(at) || bits(mask) < 2) return false;
+        const groups = weights.flatMap((value, group) => (mask & (1 << group) ? [value] : []));
+        return groups.some((value) => value >= rareBar) && groups.reduce((sum, value) => sum + value, 0) / whole >= MIN_COVER;
+      });
     },
     hits({ groups }) {
       const match = [...new Set(groups.flat())].map((term) => `"${term}"`).join(" OR ");
@@ -318,12 +349,13 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       // SAFETY: the SELECT above names exactly these two columns.
       return (search.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
     },
-    gate({ list, groups }, hits) {
+    gate(terms, hits) {
+      const { list, groups } = terms;
       if (list.length < 2) return [];
       const inNotes = known(groups);
       const whole = inNotes.reduce((sum, options) => sum + weight(options), 0);
       const weights = inNotes.map(weight);
-      const found = groupBits(inNotes);
+      const found = matched.get(terms) ?? groupBits(inNotes);
       return hits.filter((hit) => {
         if (!hit.title.some((token) => found.has(token))) return false;
         const at = inNotes.map((): number[] => []);
