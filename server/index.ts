@@ -340,7 +340,7 @@ import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save
 import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer, noteOfferTurn, takeImportOffer } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -3996,7 +3996,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
-            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}), ...takeImportOffer(event.threadId, event.text) },
+            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}) },
         );
         markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "assistant.persisted", {
           turnId: event.turnId,
@@ -4467,7 +4467,6 @@ bus.subscribe((event: RuntimeEvent) => {
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
-      noteOfferTurn(event.threadId, false);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
       for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
       const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
@@ -5303,7 +5302,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1, bot.threadId).tool) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTool(store.activePathBack(bot.threadId), 1)) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5791,15 +5790,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
-    ? importMemoryTurn(activeMessages, 0, threadId)
-    : { offer: false, tool: false };
-  noteOfferTurn(threadId, importMemory.offer);
-  if (importMemory.offer) noteImportOffer(threadId);
-  const currentPrompt = [
-    ...(importMemory.offer ? [importOfferNote()] : []),
-    composeUserTurnPrompt(text, turnOpts),
-    ...folded,
-  ].join("\n\n");
+    ? importMemoryTool(activeMessages)
+    : false;
+  const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded].join("\n\n");
   let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
     activeMessages,
     skipTranscript,
@@ -6209,7 +6202,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6330,7 +6323,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           accessRules(live.adapter.access?.({ approval, ...(readOnly ? { readOnly } : {}), cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           // a joined room's session answers everyone there, so it never carries the owner's About You
-          tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt()) +
+          tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
           tracePart("playbook", packagePlaybooks) +
@@ -7453,7 +7446,7 @@ async function runClaimedGroupMemberTurn(
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
     // a teammate's ask, or a chain one started, answers the whole room: the owner's private facts stay out
-    (asked ? "" : aboutYouPrompt()) +
+    (asked ? "" : aboutYouPrompt(bot.id)) +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -8078,7 +8071,7 @@ function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     gemini: { configured: Boolean(cfg.gemini?.apiKey), introSeen: callIntro.seen() },
-    liveCall: { voice: cfg.liveCall?.voice ?? LIVE_VOICE },
+    liveCall: { voice: cfg.liveCall?.voice ?? LIVE_VOICE, answer: cfg.liveCall?.answer ?? "gemini" },
     openaiCompat: { configured: Boolean(cfg.openaiCompat?.key) },
     composio: {
       configured: composio.configured(cfg),
@@ -8300,6 +8293,7 @@ const botRoutes = createBotRoutes({
   projectNotesCheck,
   memoryHealthCheck,
   noteTalked,
+  refreshLookup: (botId) => memoryLookup.refresh(botId),
   activeVpsThreads,
   resumePaneWakes,
 });
@@ -8512,11 +8506,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
       }
       if (method === "POST" && path === "/api/internal/import-memory") {
-        return await importMemoryRoute(req, res, {
+        await importMemoryRoute(req, res, {
           caller: (header) => commsCallers.resolve(header),
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
         });
+        for (const bot of store.bots) void memoryLookup.refresh(bot.id);
+        return;
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
         const source = commsCallers.resolve(req.headers.authorization);
@@ -9247,10 +9243,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       return await terminalLive.handle(req, res, bot.id, m[2], url);
     }
-    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res);
-    if (path === "/api/about-you" && method === "POST") return await aboutYouRoutes.add(req, res);
+    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res, store.bot(url.searchParams.get("bot") ?? "")?.id);
+    if (path === "/api/about-you" && method === "POST") {
+      // past the prompt's cut, Import Memory is looked up by every bot, from the next turn on
+      return aboutYouRoutes.add(req, res, Date.now, async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
+    }
+    if (path === "/api/about-you/decline" && method === "POST") return aboutYouRoutes.decline(res);
     m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);
-    if (m && method === "DELETE") return aboutYouRoutes.remove(res, m[1]);
+    if (m && method === "DELETE") {
+      aboutYouRoutes.remove(res, m[1]);
+      for (const bot of store.bots) void memoryLookup.refresh(bot.id);
+      return;
+    }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's
     // workspace); these routes only make them visible without a trip to
@@ -9262,6 +9268,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "PUT") {
       return await botRoutes.putMemory(req, res, m);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
+    if (m && method === "POST") {
+      return await botRoutes.importMemory(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/topics\/([^/]+)$/);
     if (m && method === "GET") {

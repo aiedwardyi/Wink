@@ -6,9 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { aboutYouRoutes, aboutYouSources, ABOUT_YOU_MAX_PASTE } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTool, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
 import type { Message } from "./store.ts";
-import { en, ko } from "../src/lib/i18n-catalog.ts";
+import { en } from "../src/lib/i18n-catalog.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
 const dir = join(DATA_DIR, "about-you");
@@ -36,99 +36,53 @@ beforeEach(() => {
 });
 afterEach(() => removeTestData(dir));
 
-describe("new bot import offer", () => {
-  it("offers on a new chat's first typed message while Import Memory is empty", () => {
-    expect(importMemoryTurn([typed("hi")])).toEqual({ offer: true, tool: true });
-    expect(importMemoryTurn([], 1)).toEqual({ offer: true, tool: true });
+describe("import_memory tool for a new chat", () => {
+  it("is on for a new chat's first typed message while Import Memory is empty", () => {
+    expect(importMemoryTool([typed("hi")])).toBe(true);
+    expect(importMemoryTool([], 1)).toBe(true);
+    expect(importMemoryTool([])).toBe(false);
   });
 
-  it("never offers once anything is imported, including facts synced from another PC", () => {
+  it("is off once anything is imported, including facts synced from another PC", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "MEMORY.md"), "- Lives in Seoul. (from ChatGPT, 2026-11-18)\n");
-    expect(importMemoryTurn([typed("hi")])).toEqual({ offer: false, tool: false });
+    expect(importMemoryTool([typed("hi")])).toBe(false);
   });
 
-  it("never offers again after the user says no", async () => {
-    noteImportOffer("t1");
+  it("is off after the user says no", async () => {
     expect(await call({ decline: true }, [typed("no thanks")])).toEqual({ status: 200, text: expect.stringContaining("no bot offers this again") });
-    expect(importMemoryTurn([typed("hi")])).toEqual({ offer: false, tool: false });
-    expect(importMemoryTurn([typed("hi"), typed("no thanks")], 0, "t1")).toEqual({ offer: false, tool: false });
+    expect(importMemoryTool([typed("hi")])).toBe(false);
     expect(existsSync(join(dir, "MEMORY.md"))).toBe(false);
   });
 
-  it("offers only on the first turn: a send during it or after keeps the tool, not the offer", () => {
-    expect(importMemoryTurn([typed("hi"), typed("also this")])).toEqual({ offer: false, tool: true });
-    expect(importMemoryTurn([typed("hi"), reply("hello"), typed(paste)])).toEqual({ offer: false, tool: true });
-    expect(importMemoryTurn([typed("a"), reply("b"), typed("c"), reply("d"), typed("e"), reply("f"), typed("g")])).toEqual({ offer: false, tool: false });
+  it("stays on for the first 3 typed messages only", () => {
+    expect(importMemoryTool([typed("hi"), reply("hello"), typed(paste)])).toBe(true);
+    expect(importMemoryTool([typed("a"), reply("b"), typed("c"), reply("d"), typed("e"), reply("f"), typed("g")])).toBe(false);
   });
 
   it("reads only the start of a heavy chat", () => {
     let read = 0;
     const heavy = { *[Symbol.iterator]() { for (let i = 0; i < 1e9; i++) { read++; yield i % 2 ? reply("r") : typed("q"); } } } as unknown as Message[];
-    expect(importMemoryTurn(heavy)).toEqual({ offer: false, tool: false });
+    expect(importMemoryTool(heavy)).toBe(false);
     expect(read).toBeLessThan(10);
   });
 
-  it("ends the reply with the fixed 3-step offer, saying to paste in the other AI's own app, not Wink", () => {
-    const steps = (note: string) => note.slice(note.indexOf("Offer only in this reply.") + 25, note.indexOf("```text")).trim();
-    expect(steps(importOfferNote())).toBe([
-      "Want me to know what ChatGPT, Claude, Gemini, Grok or Muse already knows about you? It takes a minute:",
-      "1. Copy the prompt in the box below.",
-      "2. Paste it into that AI, on its own app or website (not here in Wink).",
-      "3. Copy its answer and paste it back here.",
-    ].join("\n"));
-    expect(importOfferNote()).toContain("word for word");
-    noteSendLocale("ko");
-    const ko = steps(importOfferNote());
-    expect(ko.split("\n").map((line) => line.slice(0, 3))).toEqual([ko.slice(0, 3), "1. ", "2. ", "3. "]);
-    expect(ko).toContain("ChatGPT, Claude, Gemini, Grok, Muse가");
-    expect(ko).toContain("(여기 Wink 말고요)");
-  });
-
-  it("asks for the exact Settings prompt in the user's language", () => {
-    expect(importOfferNote()).toContain(`\`\`\`text\n${en["aboutYou.prompt"]}\n\`\`\``);
-    noteSendLocale("ko");
-    expect(importOfferNote()).toContain(`\`\`\`text\n${ko["aboutYou.prompt"]}\n\`\`\``);
+  it("ends once Settings saves a fact", async () => {
+    expect(importMemoryTool([typed("hi")])).toBe(true);
+    const res = { writeHead: () => {}, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
+    await aboutYouRoutes.add(Readable.from([JSON.stringify({ text: "- I play cello.\nSource: ChatGPT" })]) as IncomingMessage, res);
+    expect(importMemoryTool([typed("hi")])).toBe(false);
   });
 });
 
 describe("import_memory saves through the Settings path", () => {
-  it("keeps the pending tool after Settings saves a fact", async () => {
-    const chat = [typed("hi"), reply("offer")];
-    expect(importMemoryTurn([chat[0]])).toEqual({ offer: true, tool: true });
-    noteImportOffer("t1");
-    let status = 0;
-    const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
-    await aboutYouRoutes.add(Readable.from([JSON.stringify({ text: "- I play cello.\nSource: ChatGPT" })]) as IncomingMessage, res);
-    expect(status).toBe(200);
+  it("saves only the facts not already saved", async () => {
     const answer = typed("- I play cello.\n- Call me Dana.\n- I grow tomatoes.\n- I bike to work.\n- I use a paper calendar.\nSource: ChatGPT");
-    expect(importMemoryTurn([...chat, answer], 0, "t1")).toEqual({ offer: false, tool: true });
-    expect(importMemoryTurn([...chat].reverse(), 1, "t1")).toEqual({ offer: false, tool: true });
-    expect(importMemoryTurn([...chat, answer], 0, "other")).toEqual({ offer: false, tool: false });
-    expect(importMemoryTurn([...chat, answer, typed("later"), typed("too late")], 0, "t1")).toEqual({ offer: false, tool: false });
-    const result = await call({}, [...chat, answer]);
+    await call({}, [typed("- I play cello.\nSource: ChatGPT")]);
+    const result = await call({}, [typed("hi"), reply("hello"), answer]);
     expect(result.text).toContain("Added 4 new.");
     expect(result.text).toContain("Saved facts:\n- Call me Dana.\n- I grow tomatoes.\n- I bike to work.\n- I use a paper calendar.");
     expect(result.text).not.toContain("I play cello.");
-    expect(importMemoryTurn([...chat, answer], 0, "t1")).toEqual({ offer: false, tool: false });
-  });
-  it("ends every other chat's pending tool once one chat imports", async () => {
-    const chat = [typed("hi"), reply("offer")];
-    noteImportOffer("t1");
-    noteImportOffer("t2");
-    const res = { writeHead: () => {}, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
-    await aboutYouRoutes.add(Readable.from([JSON.stringify({ text: "- I play cello.\nSource: ChatGPT" })]) as IncomingMessage, res);
-    expect(importMemoryTurn([...chat, typed("later")], 0, "t2")).toEqual({ offer: false, tool: true });
-    expect((await call({}, [...chat, typed(paste)])).text).toContain("Added 2 new.");
-    expect(importMemoryTurn([...chat, typed("- I collect maps.\nSource: ChatGPT")], 0, "t2")).toEqual({ offer: false, tool: false });
-  });
-
-  it("a file where the pending folder goes never fails a turn or an import", async () => {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "pending"), "storage collision");
-    expect(importMemoryTurn([typed("Hello there")], 0, "t1")).toEqual({ offer: true, tool: true });
-    expect(() => noteImportOffer("t1")).not.toThrow();
-    expect((await call({}, [typed("Hello there"), reply("offer"), typed(paste)])).text).toContain("Added 2 new.");
   });
 
   it("lists only newly saved facts for a partial import", async () => {
@@ -187,13 +141,13 @@ describe("import_memory saves through the Settings path", () => {
     expect(existsSync(join(dir, "MEMORY.md"))).toBe(false);
   });
 
-  it("counts what a full memory left out", async () => {
+  it("saves every fact past the prompt's 200-line cut", async () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "MEMORY.md"), Array.from({ length: 199 }, (_, i) => `- Fact ${i}. (from Gemini, 2026-11-18)`).join("\n") + "\n");
     const text = (await call({}, [typed(paste)])).text;
-    expect(text).toContain("Added 1 new. Memory is full: 1 not added.");
-    expect(text).toContain("Saved facts:\n- The user is Dana Park; call her Dana.");
-    expect(text).not.toContain("Speaks Korean and English.");
+    expect(text).toContain("Added 2 new.");
+    expect(text).not.toContain("not added");
+    expect(aboutYouSources().find((entry) => entry.source === "ChatGPT")?.facts).toEqual(["The user is Dana Park; call her Dana.", "Speaks Korean and English."]);
   });
 
   it("answers a Korean user in Korean", async () => {
@@ -212,8 +166,8 @@ describe("import_memory saves through the Settings path", () => {
     expect(index).toContain("turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)");
     const mounts = index.split("\n").filter((line) => line.includes("agentsIntegration(bot.id"));
     expect(mounts.filter((line) => line.includes("importMemory")).map((line) => line.trim())).toEqual([
-      "const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1, bot.threadId).tool) : undefined;",
-      "integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);",
+      "const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTool(store.activePathBack(bot.threadId), 1)) : undefined;",
+      "integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory);",
     ]);
     expect(mounts.find((line) => line.includes("hop"))).not.toContain("importMemory");
   });

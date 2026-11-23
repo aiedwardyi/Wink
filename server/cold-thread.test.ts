@@ -462,6 +462,8 @@ describe("loading a chat off the server thread", () => {
 
   it("dismisses an unloaded chat's first-run quiz by key when the user sends", () => {
     const bot = fresh().createBot({});
+    // older builds seeded this quiz; their chats still hold it
+    fresh().appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "What do you mostly want help with?", subtitle: "", options: ["Work & projects"] } });
     expect(fresh().messagesFor(bot.threadId).some((row) => row.kind === "options" && !row.card?.dismissed)).toBe(true);
     const store = fresh();
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
