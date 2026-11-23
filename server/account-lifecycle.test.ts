@@ -1222,3 +1222,30 @@ describe("account HTTP routes", () => {
     expect((await request(f, "POST", `/api/instances/${added.id}/sign-out`)).status).toBe(409);
   });
 });
+
+describe("base sign-out beside added accounts", () => {
+  it("reads the signed-out base as signed out, never as not installed", async () => {
+    const f = await fixture();
+    await f.add();
+    f.invalidate.mockImplementation((id: string) => f.registry.invalidateAccount(id));
+    await f.controller.remove("claude");
+    expect(f.invalidate).toHaveBeenCalledWith("claude");
+    expect(f.registry.accountStopped("claude")).toBe(true);
+    for (const rows of [await f.registry.describeKnown(), await f.registry.describeCached()]) {
+      expect(rows.find((row) => row.instanceId === "claude")!.snapshot).toMatchObject({ state: "available", authenticated: false });
+    }
+  });
+
+  it("reads a signed-out Main base as signed out after a hand-over and keeps the saved account", async () => {
+    const f = await fixture(vi.fn());
+    const account = await f.add();
+    expect(f.accounts.defaultFor("claude") ?? "claude").toBe("claude");
+    await expect(f.controller.remove("claude", account.id)).resolves.toEqual({ state: "removed", destinationId: account.id });
+    expect(f.registry.accountStopped("claude")).toBe(true);
+    for (const rows of [await f.registry.describeKnown(), await f.registry.describeCached()]) {
+      expect(rows.find((row) => row.instanceId === "claude")!.snapshot).toMatchObject({ state: "available", authenticated: false });
+    }
+    expect(f.accounts.list().filter((row) => row.of === "claude").map((row) => row.id)).toEqual(["claude", account.id]);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+  });
+});

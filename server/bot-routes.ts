@@ -20,7 +20,7 @@ import type { KeepGoing } from "./keep-going.ts";
 import { applyEffortPick } from "./live-effort.ts";
 import type { createMemoryHealthCheck } from "./memory-health.ts";
 import { modelPickPatch } from "./pending-model.ts";
-import { parseTimeline, PICKS_FILE } from "./picks.ts";
+import { parseTimeline, PICKS_FILE, timelineEntries } from "./picks.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
@@ -556,7 +556,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (text === null && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
       if (text === null) return json(res, 404, { error: "no such topic file" });
       if (name !== PICKS_FILE) return json(res, 200, { name, text });
-      const entries = timelinePicks(parseTimeline(text).entries, bot, store);
+      const entries = timelinePicks(timelineEntries(parseTimeline(text).entries), bot, store);
       return json(res, 200, { name, text, entries });
     },
   };

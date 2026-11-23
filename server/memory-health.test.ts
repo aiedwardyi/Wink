@@ -36,6 +36,12 @@ describe("memoryNotice", () => {
     );
   });
 
+  it("asks for when to read a side file whose pointer never says", () => {
+    expect(memoryNotice({ longLines: 0, orphans: [], untriggered: ["glasses-v1.md"] })).toBe(
+      '[Memory check: memory/glasses-v1.md has a pointer line that never says when to read it. This session, end each of those pointer lines with when to read the file, like "read memory/glasses-v1.md before X". Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]',
+    );
+  });
+
   it("is empty for a healthy bot", () => {
     expect(memoryNotice(HEALTHY)).toBe("");
     expect(memoryNotice(HEALTHY, undefined)).toBe("");

@@ -120,6 +120,8 @@ describe("instance Sign Out route", () => {
     expect(logouts()).toBe(1);
     expect(existsSync(at("auth.json"))).toBe(false);
     expect(await authenticated()).toBe(false);
+    // The row's plain read after Sign Out relies on the 200 coming only once the cached probe says signed out.
+    expect((await claudeRow(""))?.snapshot.authenticated).toBe(false);
   }, 40_000);
 
   it("gives every joined press the real failure when the logout fails, and a fresh press after it starts its own", async () => {

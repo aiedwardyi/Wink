@@ -19,7 +19,10 @@ vi.mock("@/state/store", () => ({ useStore: () => ({ state: { instances: [] }, d
 vi.mock("./usage-layout", async (original) => ({ ...await original<typeof import("./usage-layout")>(), get USAGE_LAYOUT() { return h.layout; } }));
 vi.mock("@/lib/usage-board-client", async (original) => ({
   ...await original<typeof import("@/lib/usage-board-client")>(),
-  requestMain: vi.fn((base: string, id: string) => { h.state.board!.engines.find((each) => each.base === base)!.mainId = id; }),
+  requestMain: vi.fn((base: string, id: string) => {
+    if (h.state.pending[base]) return;
+    h.state = { ...h.state, pending: { ...h.state.pending, [base]: { target: id, from: h.state.board!.engines.find((each) => each.base === base)!.mainId, after: null } } };
+  }),
 }));
 
 import { I18nProvider, persistPreference } from "@/lib/i18n";
@@ -27,6 +30,7 @@ import { UsageDesk } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
 
 const KEY = "openmausbot.usageAccountsOpen.v1";
+const ORDER = "openmausbot.usageOrder.v1";
 let root: Root;
 let host: HTMLDivElement;
 let board: UsageBoard;
@@ -46,6 +50,12 @@ const click = async (node: HTMLElement | null) => {
   expect(node).toBeTruthy();
   await act(async () => { node!.click(); });
 };
+async function settle(saved = true, base = "claude") {
+  const { [base]: wait, ...pending } = h.state.pending;
+  if (saved) engine(base).mainId = wait!.target;
+  h.state = { ...h.state, pending, failed: saved ? h.state.failed : new Set([base]) };
+  await render();
+}
 async function reopen() {
   await act(async () => root.unmount());
   root = createRoot(host);
@@ -104,16 +114,85 @@ describe("Usage account cap", () => {
     expect(button()?.textContent).toBe("Show 5 more");
     await click(section().querySelector<HTMLButtonElement>("[data-use]"));
     await render();
+    await settle();
     expect(rows()).toEqual(initial);
     await click(button());
     expect(rows()).toEqual(ids());
     await click(section().querySelector<HTMLButtonElement>(`[data-account-row="${ids()[7]}"] [data-use]`));
     await render();
+    await settle();
     expect(rows()).toEqual(ids());
     await click(button());
     expect(rows()).toEqual([ids()[0], ids()[1], ids()[7]]);
     await reopen();
     expect(rows()).toEqual([ids()[0], ids()[1], ids()[7]]);
+  });
+
+  it("picks again when the board moves Main on its own, as after a cached board's old Main", async () => {
+    accounts(5, "claude", 5);
+    await render();
+    expect(rows()).toEqual([ids()[0], ids()[1], ids()[4]]);
+    engine().mainId = ids()[0]!;
+    await render();
+    expect(rows()).toEqual(ids().slice(0, 3));
+  });
+
+  it("follows a saved order changed in another view", async () => {
+    accounts(5);
+    const [a, b, c, d, e] = ids();
+    localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, e, c, d] }));
+    await render();
+    expect(rows()).toEqual([a, b, e]);
+    localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, c, d, e] }));
+    await act(async () => { window.dispatchEvent(new StorageEvent("storage", { key: ORDER })); });
+    expect(rows()).toEqual([a, b, c]);
+  });
+
+  it("picks again when another view moves an unchanged low Main to the top", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, c, d, e, f] = ids();
+    await render();
+    expect(rows()).toEqual([a, b, f]);
+    localStorage.setItem(ORDER, JSON.stringify({ claude: [f, a, b, c, d, e] }));
+    await act(async () => { window.dispatchEvent(new StorageEvent("storage", { key: ORDER })); });
+    expect(rows()).toEqual([f, a, b]);
+    engine().accounts[0] = { ...engine().accounts[0]! };
+    board.revision++;
+    await render();
+    expect(rows()).toEqual([f, a, b]);
+  });
+
+  it("keeps the former Main after Use when a second Use is pressed while the first save waits", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, , , , f] = ids();
+    await render();
+    await click(section().querySelector<HTMLButtonElement>(`[data-account-row="${a}"] [data-use]`));
+    await render();
+    await click(section().querySelector<HTMLButtonElement>(`[data-account-row="${b}"] [data-use]`));
+    await render();
+    await settle();
+    expect(engine().mainId).toBe(a);
+    expect(rows()).toEqual([a, b, f]);
+  });
+
+  it("picks again when the board moves Main to a row whose Use was refused", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, c] = ids();
+    await render();
+    await click(section().querySelector<HTMLButtonElement>(`[data-account-row="${a}"] [data-use]`));
+    await render();
+    await settle(false);
+    engine().mainId = a!;
+    await render();
+    expect(rows()).toEqual([a, b, c]);
+  });
+
+  it("keeps the shown rows through a collapsed reorder past a low Main", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, , , , f] = ids();
+    await render();
+    await act(async () => { section().querySelector(`[data-account-row="${b}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true })); });
+    expect(rows()).toEqual([a, f, b]);
   });
 
   it("remembers each engine across reopening and keeps another engine closed", async () => {

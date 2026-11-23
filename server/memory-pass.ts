@@ -11,7 +11,7 @@ import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } fro
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
-import { redactSecretsInText } from "./redact.ts";
+import { redactRoomMemory, redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { chatSyncBotId } from "./thread-sync.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
@@ -153,12 +153,16 @@ export function eligibleRow(message: Message | undefined): message is Message & 
 }
 
 /** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive, unless the caller screens each line. */
-export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
-  const typed = text
+/** The message without pasted blocks and fenced code: what the user did not type. */
+export function withoutBlocks(text: string): string {
+  return text
     .replace(/<pasted-text\b[^>]*>[\s\S]*?<\/pasted-text>/gi, "")
     .replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/gi, "")
-    .replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "")
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
+}
+
+export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
+  const typed = withoutBlocks(text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : ""));
   // the whole message: a label and its value can sit in different paragraphs
   if (dropSensitive && secretValue(typed)) return "";
   const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
@@ -257,16 +261,36 @@ const SECRET_WORDS =
 // No \b here: it never fires between Hangul syllables.
 const SECRET_WORDS_KO =
   /비밀\s*(?:번호|키)|비번|암호(?!화|학)|패스워드|패스코드|인증\s*(?:번호|코드)|보안\s*코드|일회용\s*(?:코드|번호)|(?:api|에이피아이)\s*키|토큰|개인\s*키(?!보드)|계좌\s*번호|카드\s*번호|주민\s*(?:등록\s*)?번호|핀\s*번호|시크릿/i;
-const TOKEN_PATTERNS = [
-  /«redacted/i,
+const VALUE_PATTERNS = [
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/,
   /\b(?:ghp|gho|ghu|ghs|ghr|github_pat|xox[abposr])[_-][A-Za-z0-9_-]{8,}/,
   /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/,
   /\b(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/,
 ];
+const TOKEN_PATTERNS = [/«redacted/i, ...VALUE_PATTERNS];
+// The last VALUE_PATTERN also matches paths, links, model ids, uuids and shas: words of one case or digits, not a key.
+// The part alternatives must not overlap ([A-Z][a-z]+, not [A-Z]?[a-z]+): overlap backtracks exponentially on a long run.
+const PLAIN_RUN = /^[/_-]*(?:[a-z0-9]+|[A-Z][a-z]+|[A-Z]+)(?:[/_-]+(?:[a-z0-9]+|[A-Z][a-z]+|[A-Z]+))*[/_-]*$/;
+const KEY_WORD_BEFORE = /(?:\b(?:keys?|tokens?|secrets?|passwords?|passcodes?|credentials?)|키|토큰|비밀\s*번호|비번|암호)\W{0,3}$/i;
+
+// A sha or uuid is plain; the same lowercase shape is a key after a key word, behind a short prefix (key-, dop_v1_), when not hex, or alone.
+function plainValue(value: string, before: string, all: string): boolean {
+  if (!PLAIN_RUN.test(value) || KEY_WORD_BEFORE.test(before)) return false;
+  const parts = value.split(/[/_-]+/).filter(Boolean);
+  const last = parts.at(-1) ?? "";
+  if (!/^(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-z0-9]{20,}$/.test(last)) return true;
+  const prefixed = parts.length > 1 && parts.length <= 3 && parts.slice(0, -1).every((part) => part.length <= 6);
+  return /^[0-9a-f]+$/.test(last) && !prefixed && all.trim() !== value;
+}
 
 export function secretLike(text: string): boolean {
   return redactSecretsInText(text) !== text || SECRET_WORDS.test(text) || SECRET_WORDS_KO.test(text) || TOKEN_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/** The key values secretLike flags, masked in place; words like "password" or "tokens" and plain names stay, so a goal keeps its sense. */
+export function maskSecretValues(text: string): string {
+  return VALUE_PATTERNS.reduce((out, pattern, i) => out.replace(new RegExp(pattern.source, "g"), (value: string, at: number, all: string) =>
+    i === VALUE_PATTERNS.length - 1 && plainValue(value, all.slice(Math.max(0, at - 40), at), all) ? value : `«redacted ${value.length} chars»`), redactRoomMemory(text));
 }
 
 function secretValue(text: string): boolean {

@@ -95,6 +95,13 @@ export function createPaneRuns(file) {
       save();
     },
     ended: (id) => mark(id, "ended"),
+    ranLocally(id, local) {
+      const run = runs.get(id);
+      if (!run || prior.has(id) || Boolean(run.local) === local) return;
+      if (local) run.local = true;
+      else delete run.local;
+      save();
+    },
     closed(id) {
       const run = runs.get(id);
       if (!run) return true;
@@ -123,6 +130,9 @@ export function createPaneRuns(file) {
     held(id) {
       if (prior.delete(id)) waiting.add(id);
     },
+    /** One bot's records a worker host this start cannot reach may still run. */
+    heldBy: (botId) => [...waiting].map((id) => runs.get(id)).filter((run) => run?.botId === botId),
+    has: (id) => runs.has(id),
     /** That host is gone after all, so the pane takes the restart path. */
     released(id) {
       if (waiting.delete(id)) prior.add(id);

@@ -19,6 +19,7 @@ const OPS = {
     show_image: "chat",
     update_task_state: "chat",
     no_reply_needed: "chat",
+    pin_goal: "chat",
     hand_off: "chat",
     ask_bot: "chat",
     delegate_bot: "chat",

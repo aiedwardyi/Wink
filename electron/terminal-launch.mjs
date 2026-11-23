@@ -86,6 +86,18 @@ export async function openBlankTerminal(platform = process.platform, run = execF
   return false;
 }
 
+/** Terminal opens at 80x24, which hides agy's sign-in code box below the fold. */
+function openMacTerminal(script, run) {
+  return launch("osascript", [
+    "-e", 'tell application "Terminal"',
+    "-e", `set signIn to do script ${JSON.stringify(script)}`,
+    "-e", "activate",
+    "-e", "set number of columns of signIn to 120",
+    "-e", "set number of rows of signIn to 40",
+    "-e", "end tell",
+  ], undefined, run);
+}
+
 export async function openSignInTerminal({ command, driverKind }, platform = process.platform, run = execFile) {
   const agy = driverKind === "antigravityAgent";
   if (platform === "win32") {
@@ -93,8 +105,7 @@ export async function openSignInTerminal({ command, driverKind }, platform = pro
     return launch("cmd.exe", ["/c", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true }, run);
   }
   if (platform === "darwin") {
-    const script = `${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${command}`;
-    return launch("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(script)}`, "-e", 'tell application "Terminal" to activate'], undefined, run);
+    return openMacTerminal(`${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${command}`, run);
   }
   return false;
 }
@@ -130,7 +141,7 @@ export async function openInstallTerminal(install, platform = process.platform, 
     return launch("cmd.exe", ["/c", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand", Buffer.from(buildInstallScript(install, platform), "utf16le").toString("base64")], { windowsHide: true }, run);
   }
   if (platform === "darwin") {
-    return launch("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(buildInstallScript(install, platform))}`, "-e", 'tell application "Terminal" to activate'], undefined, run);
+    return openMacTerminal(buildInstallScript(install, platform), run);
   }
   return false;
 }
