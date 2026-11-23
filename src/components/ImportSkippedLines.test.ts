@@ -29,7 +29,7 @@ async function mount(node: ReturnType<typeof createElement>, answer: (call: Call
     const call = { url, body: init?.body ? JSON.parse(String(init.body)) : undefined };
     if (init?.method === "POST") calls.push(call);
     if (url === "/api/about-you" && !init?.method) return Response.json({ sources: [], declined: false });
-    const body = answer(call);
+    const body = await answer(call);
     return body ? Response.json(body) : new Response("{}", { status: 404 });
   }));
   vi.stubGlobal("EventSource", class { close() {} });
@@ -97,6 +97,35 @@ it("flags: one compact line, folded, that lists each line with Keep; Keep saves 
   // held in the open card only
   expect(JSON.stringify({ ...localStorage })).not.toContain("hunter2");
   expect(JSON.stringify({ ...sessionStorage })).not.toContain("hunter2");
+});
+
+it("a Keep that finishes after another import was saved does not change the new box's count", async () => {
+  let release!: () => void;
+  const late = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { host } = await mount(createElement(ImportMemoryCard, { botId: "helper", onClose: () => {} }), async ({ body }) => {
+    const sent = body as { keep?: string[]; text?: string };
+    if (sent.keep) {
+      await late;
+      return { source: "ChatGPT", found: 1, added: 1, duplicates: 0, hidden: 0, flagged: [] };
+    }
+    return sent.text?.includes("Gemini")
+      ? { source: "Gemini", found: 2, added: 2, duplicates: 0, hidden: 0, flagged: [] }
+      : { source: "ChatGPT", found: 2, added: 1, duplicates: 0, hidden: 0, flagged: [PIN] };
+  });
+  await importThrough(host, "all");
+  await click(host.querySelector("[data-import-skipped] button[aria-expanded]"));
+  await click(button(host, "Keep"));
+  await click(button(host, "Add another AI"));
+  await type(host, "- Likes tea.\nSource: Gemini");
+  await click(button(host, "Add to memory"));
+  expect(host.querySelector("[data-import-saved]")!.textContent).toContain("Added 2 facts from Gemini");
+  await act(async () => {
+    release();
+    await late;
+  });
+  expect(host.querySelector("[data-import-saved]")!.textContent).toContain("Added 2 facts from Gemini");
 });
 
 it("a paste of only flagged lines still opens the saved box with the review line", async () => {

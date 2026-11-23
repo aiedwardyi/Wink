@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronRight, ChevronUp, Import, X } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { aboutYouNote, UNNAMED_SOURCE } from "../../shared/about-you-note";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { cn } from "@/lib/cn";
@@ -15,6 +15,7 @@ import { ROW_BUTTON } from "./SettingsPrimitives";
 
 type Scope = "all" | "bot";
 type Added = { source: string; added: number; found: number; hidden: number; flagged?: string[] };
+type Saved = Added & { scope: Scope; id: number };
 
 // phone hit areas reach 40 px; the look at rest stays the mock's
 const LINK = "relative text-accent-text hover:underline focus-visible:underline focus-visible:outline-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:inset-x-0";
@@ -26,6 +27,8 @@ const SCOPE_HIT = "[@media(pointer:coarse)]:[&_[role=radiogroup]]:overflow-visib
 // the last answers, so a chat opened after them paints the row without waiting
 let offered: boolean | null = null;
 const ownImport = new Set<string>();
+// each dismissal, so a lookup that was already out when the row was dismissed cannot bring it back
+let dismissals = 0;
 
 export type ImportOffer = { offer: boolean | null; close: () => void };
 
@@ -35,7 +38,9 @@ export function useImportOffer(botId: string, fresh: boolean): ImportOffer {
   useEffect(() => {
     if (!fresh) return;
     let gone = false;
+    const asked = dismissals;
     void api(`/api/about-you?bot=${encodeURIComponent(botId)}`).then((body) => {
+      if (dismissals !== asked) return;
       offered = Array.isArray(body?.sources) && !body.sources.length && body.declined !== true;
       if (body?.imported === true) ownImport.add(botId);
       if (!gone) setOffer(offered && !ownImport.has(botId));
@@ -71,10 +76,12 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
   const [scope, setScope] = useState<Scope>("all");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  const [saved, setSaved] = useState<(Added & { scope: Scope }) | null>(null);
+  const [saved, setSaved] = useState<Saved | null>(null);
+  const saves = useRef(0);
 
   const dismiss = () => {
     offered = false;
+    dismissals++;
     onClose();
     void api("/api/about-you/decline", { method: "POST" }).catch(() => {});
   };
@@ -104,7 +111,7 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
           if (scope === "all") offered = false;
           else ownImport.add(botId);
         }
-        setSaved({ ...body, scope });
+        setSaved({ ...body, scope, id: ++saves.current });
         setText("");
         setPrompt(false);
       }
@@ -123,7 +130,8 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
       if (saved.scope === "all") offered = false;
       else ownImport.add(botId);
     }
-    setSaved((before) => before && { ...before, added: before.added + body.added });
+    // only the box this Keep started from counts it: another import may be on screen by now
+    setSaved((before) => (before?.id === saved.id ? { ...before, added: before.added + body.added } : before));
   };
 
   if (saved) {
