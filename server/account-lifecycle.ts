@@ -333,6 +333,7 @@ export class AccountLifecycle {
     this.hooks.invalidate(id);
     await this.hooks.reload();
     this.registry.blockAccount(id, !added);
+    if (!added) await this.registry.retryAccount(id).catch(() => { console.error("Signed-out base check could not be refreshed"); });
     return { state: "removed", destinationId: drain.destinationId };
   }
 
