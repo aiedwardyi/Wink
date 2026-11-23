@@ -5,7 +5,7 @@ import ts from "typescript";
 
 import * as askPrsModule from "./ask-prs.ts";
 import { askPr, createAskPrs } from "./ask-prs.ts";
-import { asksNudge, type TaskAsk } from "./task-asks.ts";
+import { asksNudge, mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
 import { seedTaskResumePacket, stampTaskResumePacket } from "./task-state-fold.ts";
 import { taskRecordBlock } from "./turn-context.ts";
 import { UNLANDED_REFRESH_MS } from "./unlanded.ts";
@@ -93,7 +93,7 @@ describe("ask PRs outside a git folder", () => {
 
   it("closes a building ask once its PR merges, from a bot folder that is not a git repo", async () => {
     const prs = desktop(["aiedwardyi/wink"]);
-    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2; ships 1.0.296" })];
+    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2" })];
     prs.take("bot", "thread", asks);
     await prs.settled();
     expect(prs.take("bot", "thread", asks)).toEqual(["A1014"]);
@@ -110,7 +110,7 @@ describe("ask PRs outside a git folder", () => {
 
   it("checks every known repo and closes when exactly one has the merged PR", async () => {
     const prs = desktop(["aiedwardyi/wink", "aiedwardyi/other"]);
-    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2; ships 1.0.296" })];
+    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2" })];
     prs.take("bot", "thread", asks);
     await prs.settled();
     expect(prs.take("bot", "thread", asks)).toEqual(["A1014"]);
@@ -127,7 +127,7 @@ describe("ask PRs outside a git folder", () => {
         throw new Error("HTTP 502: Bad Gateway");
       },
     } as Parameters<typeof createAskPrs>[0]);
-    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2; ships 1.0.296" })];
+    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2" })];
     prs.take("bot", "thread", asks);
     await prs.settled();
     expect(prs.take("bot", "thread", asks)).toEqual([]);
@@ -144,7 +144,7 @@ describe("ask PRs outside a git folder", () => {
         return JSON.stringify({ state: "MERGED" });
       },
     } as Parameters<typeof createAskPrs>[0]);
-    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2; ships 1.0.296" })];
+    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2" })];
     prs.take("bot", "thread", asks);
     await prs.settled();
     expect(prs.take("bot", "thread", asks)).toEqual([]);
@@ -237,32 +237,32 @@ describe("ask PR closes the bot can see", () => {
   });
 
   it.each([
-    ["PR 2152 merged; real phone test after 1.0.296", "PR 2152 merged", true],
-    ["PR 2150 + PR 2153", "PR 2150 and PR 2153 merged", false],
-  ])("gives a closed ask one line with its old ref: %s", (ref, merged, stepLeft) => {
-    const closedAskLine = (askPrsModule as { closedAskLine?: (ask: TaskAsk) => string }).closedAskLine;
-    const line = closedAskLine?.(ask(1035, { ref }));
-    expect(line, "closedAskLine").toEqual(expect.stringContaining("A1035"));
+    ["PR 2150 + PR 2153", "PR 2150 and PR 2153 merged"],
+    ["PR 2152 MERGED 46e6705b6", "PR 2152 merged"],
+  ])("gives a closed ask one line with its old ref: %s", (ref, merged) => {
+    const line = askPrsModule.closedAskLine(ask(1035, { ref }));
+    expect(line).toContain("Wink closed A1035");
     expect(line).toContain(merged);
     expect(line).toContain(ref);
-    expect(line?.split("\n")).toHaveLength(1);
-    if (stepLeft) expect(line).toMatch(/still open/);
-    else expect(line).not.toMatch(/still open/);
+    expect(line.split("\n")).toHaveLength(1);
+    expect(line).not.toMatch(/step left/);
   });
 
   it.each([
-    ["A1033", "PR 2150 + PR 2153 f73306e29; gates running; real Mac recheck tomorrow"],
-    ["A886", "PR 2089 gate RISK: relay deploy first (needs his deploy word)"],
-  ])("says a step may be left whenever the ref says more than its PRs: %s", (_id, ref) => {
-    const closedAskLine = (askPrsModule as { closedAskLine?: (ask: TaskAsk) => string }).closedAskLine;
-    const line = closedAskLine?.(ask(1, { ref }));
-    expect(line, "closedAskLine").toContain(ref);
-    expect(line).toMatch(/still open/);
+    ["PR 2152 MERGED 46e6705b6; real phone test after 1.0.296", "PR 2152 merged; step left: real phone test after 1.0.296"],
+    ["PR 2150 + PR 2153 f73306e29; gates running; real Mac recheck tomorrow", "PR 2150 and PR 2153 merged; step left: gates running; real Mac recheck tomorrow"],
+    ["PR 2098 merged; PASSWORD-FILTER-2", "PR 2098 merged; step left: PASSWORD-FILTER-2"],
+    ["PR 2089 gate RISK: relay deploy first (needs his deploy word)", "PR 2089 merged; step left: gate RISK: relay deploy first (needs his deploy word)"],
+  ])("keeps an ask building and names the step its ref still holds: %s", (ref, said) => {
+    const line = askPrsModule.closedAskLine(ask(1, { ref }));
+    expect(line).toContain("Wink kept A1");
+    expect(line).toContain(said);
+    expect(line).not.toMatch(/closed/);
   });
 
   it("saves a close only once the turn that carried its line lands", async () => {
     const { prs } = rig({ "2138": "MERGED" });
-    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2; ships 1.0.296" })];
+    const asks = [ask(1014, { ref: "PR 2138 merged b3cb094a2" })];
     prs.take("bot", "thread", asks);
     await prs.settled();
     const landing = prs as { closing?: (threadId: string, turnId: string, ids: readonly string[]) => void; landed?: (threadId: string, turnId: string, landed: boolean) => string[] };
@@ -283,6 +283,7 @@ describe("ask PR closes the bot can see", () => {
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const close = index.slice(index.indexOf("function closeMergedAsks("), index.indexOf("function queueTaskPacket("));
     expect(close).toContain("closedAskLine(");
+    expect(close).toContain("askPrs.stepNote(");
   });
 });
 
@@ -329,7 +330,7 @@ describe("a closing turn in index.ts", () => {
     await prs.settled();
     const landing = prs as Landing;
     landing.closing?.("thread", "t1", prs.take("bot", "thread", asks));
-    const edited = [{ ...asks[0]!, status: "open" as const }, { ...asks[1]!, ref: "PR 2152; phone test left" }, asks[2]!];
+    const edited = [{ ...asks[0]!, status: "open" as const, changedAt: 2 }, { ...asks[1]!, ref: "PR 2152; phone test left", changedAt: 2 }, asks[2]!];
     expect(landing.landed?.("thread", "t1", true, edited)).toEqual(["A1037"]);
   });
 
@@ -414,5 +415,43 @@ describe("a closing turn in index.ts", () => {
     const source = index();
     expect(source).not.toContain("const taskRecordToFlush = taskRecord;");
     expect(source.split("const taskRecordToFlush = storedTaskRecord;")).toHaveLength(3);
+  });
+});
+
+describe("an ask with a step left", () => {
+  it("stays open after its PRs merge and the turn lands", async () => {
+    const { prs } = rig({ "2152": "MERGED" });
+    const asks = [ask(1035, { ref: "PR 2152 MERGED 46e6705b6; real phone test after 1.0.296" })];
+    prs.take("bot", "thread", asks);
+    await prs.settled();
+    prs.closing("thread", "t1", prs.take("bot", "thread", asks));
+    expect(prs.landed("thread", "t1", true, asks)).toEqual([]);
+  });
+
+  it("tells the bot once that its PRs merged and which step is left, again after a turn that never landed", async () => {
+    const { prs } = rig({ "2152": "MERGED" });
+    const asks = [ask(1035, { ref: "PR 2152 MERGED 46e6705b6; real phone test after 1.0.296" })];
+    prs.take("bot", "thread", asks);
+    await prs.settled();
+    expect(prs.stepNote("bot", "thread", asks)).toContain("PR 2152 merged; step left: real phone test after 1.0.296");
+    expect(prs.stepNote("bot", "thread", asks), "once per change").toBe("");
+    expect(prs.stepNote("bot", "thread", asks, true), "a new session hears it").toContain("A1035");
+    prs.closing("thread", "t1", []);
+    prs.landed("thread", "t1", false);
+    expect(prs.stepNote("bot", "thread", asks)).toContain("A1035");
+  });
+
+});
+
+describe("a bot edit in the closing turn", () => {
+  it("is not closed over a bot reply that keeps it building", async () => {
+    const { prs } = rig({ "2152": "MERGED" });
+    const asks = [ask(1035, { ref: "PR 2152" })];
+    prs.take("bot", "thread", asks);
+    await prs.settled();
+    prs.closing("thread", "t1", prs.take("bot", "thread", asks));
+    const replied = mergeTaskAsks({ asks }, [{ id: "A1035", status: "building" }], 5_000);
+    if ("error" in replied) throw new Error(replied.error);
+    expect(prs.landed("thread", "t1", true, replied.asks)).toEqual([]);
   });
 });

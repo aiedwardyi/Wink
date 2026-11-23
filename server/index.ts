@@ -3044,7 +3044,7 @@ function closeMergedAsks(botId: string, threadId: string, record: TaskResumePack
   return {
     ids,
     shown: (packet: TaskResumePacket | null): TaskResumePacket | null => packet && ids.length ? { ...packet, asks: withClosed(packet.asks, ids, now) } : packet,
-    notes: (full: boolean) => [...lines, askPrs.failedNote(botId, threadId, record?.asks, full)].filter(Boolean),
+    notes: (full: boolean) => [...lines, askPrs.stepNote(botId, threadId, record?.asks, full), askPrs.failedNote(botId, threadId, record?.asks, full)].filter(Boolean),
   };
 }
 

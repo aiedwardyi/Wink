@@ -69,13 +69,20 @@ export function withClosed(asks: readonly TaskAsk[] | undefined, ids: readonly s
   return (asks ?? []).map((ask) => ids.includes(ask.id) && ask.status === "building" ? { ...ask, status: "done" as const, changedAt: now } : ask);
 }
 
-/** The line a closing turn carries: the ask's words, its PRs and its whole ref, which may hold a step not done yet. */
+/** What a ref says beyond its PRs, SHAs and "merged": a step not done yet, or "". */
+export function stepLeft(ref: string | undefined): string {
+  const words = oneLine(ref ?? "").replace(PR_URL, " ").replace(REPO_PR, " ").replace(PR_REF, " ").replace(SHA, " ").replace(/\b(?:merged|and)\b/gi, " ");
+  return words.split(/[;,+]/).map((part) => oneLine(part).replace(/^[\s:.-]+|[\s:.-]+$/g, "")).filter((part) => /\p{L}/u.test(part)).join("; ");
+}
+
+/** The line a turn carries once an ask's PRs all merged: closed, or kept building with the step its ref still names. */
 export function closedAskLine(ask: TaskAsk): string {
   const ref = oneLine(ask.ref ?? "");
-  const prs = refPrs(ref).map((pr) => pr.repo ? `${pr.repo}#${pr.number}` : `PR ${pr.number}`);
-  const words = ref.replace(PR_URL, " ").replace(REPO_PR, " ").replace(PR_REF, " ").replace(SHA, " ").replace(/\b(?:merged|and)\b/gi, " ");
-  const step = /\p{L}/u.test(words) ? ": if a step in it is still open, add an ask for it" : "";
-  return `[Wink closed ${ask.id} "${oneLine(ask.ask)}": ${prs.join(" and ")} merged. Its ref was "${ref}"${step}.]`;
+  const prs = refPrs(ref).map((pr) => pr.repo ? `${pr.repo}#${pr.number}` : `PR ${pr.number}`).join(" and ");
+  const step = stepLeft(ref);
+  return step
+    ? `[Wink kept ${ask.id} "${oneLine(ask.ask)}" building: ${prs} merged; step left: ${step}. Close it once that step is done.]`
+    : `[Wink closed ${ask.id} "${oneLine(ask.ask)}": ${prs} merged. Its ref was "${ref}".]`;
 }
 
 export interface AskPrsDeps {
@@ -94,9 +101,11 @@ export function createAskPrs(deps: AskPrsDeps) {
   const running = new Map<string, Promise<void>>();
   // a folder gh found is not a git repo is not asked again; its "PR n" goes to the known repos
   const notRepo = new Set<string>();
-  const taken = new Map<string, Map<string, string | undefined>>();
-  const pending = new Map<string, { turnId: string; refs: Map<string, string | undefined> }>();
+  // changedAt of each ask take() closed, so any bot edit before the turn lands keeps it
+  const taken = new Map<string, Map<string, number>>();
+  const pending = new Map<string, { turnId: string; changed: Map<string, number | undefined> }>();
   const noted = new Map<string, string>();
+  const told = new Map<string, string>();
 
   async function check(key: string, number: number, repo: string | undefined, dir: string | undefined, botId: string): Promise<void> {
     let result: Check;
@@ -158,12 +167,23 @@ export function createAskPrs(deps: AskPrsDeps) {
   const failed = (botId: string, threadId: string, asks: readonly TaskAsk[] | undefined) =>
     verdicts(botId, threadId, asks, false).flatMap(({ ask, reason }) => reason ? [{ id: ask.id, reason }] : []);
 
+  const once = (seen: Map<string, string>, threadId: string, line: string, full: boolean) => {
+    if (line === (seen.get(threadId) ?? "") && !full) return "";
+    seen.set(threadId, line);
+    return line;
+  };
+
   return {
-    /** Ids of building asks whose PRs the last checks found all merged; starts checks for the rest. */
+    /** Ids of building asks whose PRs the last checks found all merged and whose ref names no step left; starts checks for the rest. */
     take(botId: string, threadId: string, asks: readonly TaskAsk[] | undefined): string[] {
-      const merged = verdicts(botId, threadId, asks, true).filter((verdict) => verdict.merged).map(({ ask }) => ask);
-      taken.set(threadId, new Map(merged.map((ask) => [ask.id, ask.ref])));
+      const merged = verdicts(botId, threadId, asks, true).filter((verdict) => verdict.merged && !stepLeft(verdict.ask.ref)).map(({ ask }) => ask);
+      taken.set(threadId, new Map(merged.map((ask) => [ask.id, ask.changedAt])));
       return merged.map((ask) => ask.id);
+    },
+    /** Lines for building asks whose PRs all merged but whose ref names a step left; "" when unchanged since the last, unless full. No I/O. */
+    stepNote(botId: string, threadId: string, asks: readonly TaskAsk[] | undefined, full = false): string {
+      const kept = verdicts(botId, threadId, asks, false).filter((verdict) => verdict.merged && stepLeft(verdict.ask.ref));
+      return once(told, threadId, kept.map(({ ask }) => closedAskLine(ask)).join("\n"), full);
     },
     /** Building asks whose PRs could not be checked, and why. No I/O. */
     failed,
@@ -171,24 +191,23 @@ export function createAskPrs(deps: AskPrsDeps) {
     failedNote(botId: string, threadId: string, asks: readonly TaskAsk[] | undefined, full = false): string {
       const rows = failed(botId, threadId, asks);
       const line = rows.length ? `[Wink could not tell if these asks' PRs merged, so they stay open: ${rows.map((row) => `${row.id} (${row.reason})`).join("; ")}.]` : "";
-      if (line === (noted.get(threadId) ?? "") && !full) return "";
-      noted.set(threadId, line);
-      return line;
+      return once(noted, threadId, line, full);
     },
     /** The asks this dispatched turn shows closed. */
     closing(threadId: string, turnId: string, ids: readonly string[]): void {
-      pending.set(threadId, { turnId, refs: new Map(ids.map((id) => [id, taken.get(threadId)?.get(id)])) });
+      pending.set(threadId, { turnId, changed: new Map(ids.map((id) => [id, taken.get(threadId)?.get(id)])) });
     },
-    /** Ids to save as done once the turn that showed them ends; none unless it landed. With asks, only those still building with the ref they had at closing(). */
+    /** Ids to save as done once the turn that showed them ends; none unless it landed. With asks, only those still building and unchanged since take(). */
     landed(threadId: string, turnId: string, landed: boolean, asks?: readonly TaskAsk[]): string[] {
       const turn = pending.get(threadId);
       if (turn?.turnId !== turnId) return [];
       pending.delete(threadId);
       if (!landed) {
         noted.delete(threadId);
+        told.delete(threadId);
         return [];
       }
-      return [...turn.refs].filter(([id, ref]) => !asks || asks.some((ask) => ask.id === id && ask.status === "building" && ask.ref === ref)).map(([id]) => id);
+      return [...turn.changed].filter(([id, at]) => !asks || asks.some((ask) => ask.id === id && ask.status === "building" && ask.changedAt === at)).map(([id]) => id);
     },
     /** Resolves once every check started so far has finished. */
     settled: () => Promise.all([...running.values()]).then(() => {}),
