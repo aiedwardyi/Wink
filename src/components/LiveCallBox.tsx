@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { Loader2, Mic, MicOff, PhoneOff, Square } from "lucide-react";
 
 import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -55,7 +55,7 @@ function CaptionLine({ caption, who }: { caption: NonNullable<CallState["caption
 }
 
 function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boolean }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
@@ -90,6 +90,11 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
         </p>}
         <span className="ml-auto" />
         <CallGear bot={bot} />
+        {call.interrupt && snap.status === "speaking" && (
+          <button type="button" data-call-stop="" aria-label={t("callMenu.stop")} title={t("callMenu.stop")} onClick={() => call.interrupt?.()} className={cn(icon, "text-ink-secondary hover:bg-control hover:text-ink")}>
+            <Square size={14} className="fill-current" />
+          </button>
+        )}
         {talking && (
           <button type="button" aria-pressed={snap.muted} aria-label={snap.muted ? words.unmute : words.mute} title={snap.muted ? words.unmute : words.mute} onClick={() => call.mute(!snap.muted)} className={cn(icon, snap.muted ? "bg-control text-ink" : "text-ink-secondary hover:bg-control hover:text-ink")}>
             {snap.muted ? <MicOff size={17} /> : <Mic size={17} />}

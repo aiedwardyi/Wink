@@ -24,6 +24,12 @@ import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./
 import { addJoinedEntries, closeJoinedDb, joinedEntries, saveJoined } from "./rooms/joined.ts";
 
 const KEY = "AIzaTEST-not-a-real-key-0123456789";
+const sameBot = vi.hoisted(() => ({ loads: 0 }));
+// Counts loads of the same-bot voice setup: a Gemini voice call must never pull it in.
+vi.mock("./same-bot-call.ts", async (importOriginal) => {
+  sameBot.loads += 1;
+  return importOriginal();
+});
 const dirs: string[] = [];
 afterEach(() => { closeRoomsDb(); closeJoinedDb(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
@@ -52,6 +58,15 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
 }
 
 describe("call token", () => {
+  // First, so nothing earlier has asked for a same-bot call.
+  it("loads the same-bot code only when a same-bot call asks for its voice", async () => {
+    const h = harness();
+    expect((await h.post("token")).status).toBe(200);
+    expect(sameBot.loads).toBe(0);
+    expect((await h.post("token", { mode: "bot" })).status).toBe(200);
+    expect(sameBot.loads).toBe(1);
+  });
+
   it("gives the voice the live waiting asks and forbids an empty to-do answer", async () => {
     const h = harness();
     const now = Date.now();
@@ -170,6 +185,29 @@ describe("call token", () => {
     await h.post("lines", { callId: data.callId, lines: [{ who: "voice", text: "Anything else?" }, { who: "user", text: " " }] });
     expect(settled).toHaveBeenCalledTimes(1);
   });
+  it("gives a same-bot call a voice that only reads: no brief, no tools, the picked voice", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam" } });
+    const { status, data } = await h.post("token", { mode: "bot" });
+    expect(status).toBe(200);
+    expect(data).toMatchObject({ callId: expect.stringMatching(CALL_ID), engine: "gemini", voice: "Alnilam", locale: "en" });
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(setup.tools).toBeUndefined();
+    expect(setup).toMatchObject({ model: `models/${LIVE_MODEL}`, inputAudioTranscription: {}, outputAudioTranscription: {}, sessionResumption: {} });
+    const text = setup.systemInstruction.parts[0].text as string;
+    expect(text).toContain("You are only the voice of Juno");
+    expect(text).toContain("[READ]");
+    expect(text).not.toContain("fix the login page");
+    expect(text).not.toContain("STATUS:");
+  });
+
+  it("keeps the Gemini brief for a room call even when asked for the same bot", async () => {
+    const roomTail = vi.fn(() => ({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" }));
+    const h = harness({ roomTail });
+    expect((await h.post("token", { mode: "bot", room: { id: "launch", kind: "host" } })).status).toBe(200);
+    expect(h.sent().bidiGenerateContentSetup.tools).toEqual([{ functionDeclarations: LIVE_TOOLS }]);
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Minji: Safari broke");
+  });
+
   it("uses one room snapshot for validation and the brief", async () => {
     const roomTail = vi.fn().mockReturnValueOnce({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" });
     const h = harness({ roomTail });
@@ -344,6 +382,26 @@ describe("call token", () => {
     const setup = h.sent(h.fetch.mock.calls.length - 1).bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
     expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm.");
+  });
+
+  it("a same-bot call resumes with the voice and language it started with, not the bot's newer ones", async () => {
+    const h = harness();
+    const first = await h.post("token", { mode: "bot", call: { voice: "Erinome", language: "ko" } });
+    h.store.patchBot(h.bot.id, { call: { voice: "Puck", language: "en" } });
+    const resumed = await h.post("token", { mode: "bot", callId: first.data.callId, resume: true, locale: "en" });
+    expect(resumed.data).toMatchObject({ voice: "Erinome", locale: "ko" });
+    expect(h.sent(1).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+    await h.post("end", { callId: first.data.callId, stats: {} });
+    expect(JSON.parse(readFileSync(join(h.dir, CALL_PICKS_FILE), "utf8"))).toEqual({});
+  });
+
+  it("a same-bot swap speaks with the picks it carries, and a resume after it keeps them", async () => {
+    const h = harness();
+    const first = await h.post("token", { mode: "bot", call: { voice: "Erinome" } });
+    const swapped = await h.post("token", { mode: "bot", callId: first.data.callId, swap: true, call: { voice: "Puck", language: "ko" } });
+    expect(swapped.data).toMatchObject({ voice: "Puck", locale: "ko" });
+    const resumed = await h.post("token", { mode: "bot", callId: first.data.callId, resume: true });
+    expect(resumed.data).toMatchObject({ voice: "Puck", locale: "ko" });
   });
 
   it("a finished call leaves no picks behind", async () => {

@@ -334,17 +334,22 @@ it("shows the signed-in Gemini account beside Sign Out like Muse", async () => {
 
 it.each(["en", "ko"] as const)("shows a failed sign-out and allows retry in %s", async (locale) => {
   applyLocale(locale);
-  const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 }));
+  const grok = instance({ instanceId: "grok", driverKind: "grokAgent", install: { logout: ["logout"] } });
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => init?.method === "POST"
+    ? new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 })
+    : new Response(JSON.stringify({ instances: [grok] })));
+  const onUpdated = vi.fn();
   const host = document.createElement("div");
   const root = createRoot(host);
   try {
-    await act(async () => root.render(createElement(EngineRow, {
-      instance: instance({ instanceId: "grok", driverKind: "grokAgent", install: { logout: ["logout"] } }),
-    })));
+    await act(async () => root.render(createElement(EngineRow, { instance: grok, onUpdated })));
     await act(async () => host.querySelector("button")!.click());
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(locale === "en" ? "Didn't finish. Try again." : "완료되지 않았어요. 다시 시도하세요.");
     expect(host.querySelector("button")!.disabled).toBe(false);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    // The row is refreshed after the failure too, with no extra tap.
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[1][0])).toContain("/api/instances?refresh=1");
+    expect(onUpdated).toHaveBeenCalledExactlyOnceWith(grok);
   } finally {
     await act(async () => root.unmount());
     fetch.mockRestore();

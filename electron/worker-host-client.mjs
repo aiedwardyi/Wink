@@ -229,12 +229,24 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
     // Probing and launching both happen under this lock, so a probe never collides with a host taking host.lock.
     try { launchLock = holdWorkerHostLock(path.join(slot, "launch.lock")); } catch { throw down("not answering", "another launch is in flight"); }
     try {
-      const state = workerHostLock(path.join(slot, "host.lock"));
+      let state = "dead";
+      try {
+        // A host publishes only while it holds host.lock, so a record found while this holds it is a dead host's.
+        const probe = holdWorkerHostLock(path.join(slot, "host.lock"));
+        // Windows refuses to rename the new host's record over a file the wait below has open, so the dead host's goes first.
+        try { fs.rmSync(path.join(slot, "host.json"), { force: true }); } catch {} finally { fs.closeSync(probe); }
+      } catch (error) {
+        state = error.code === "EBUSY" ? "alive" : "unknown";
+      }
       if (state === "unknown") throw down("unknown version", "host lock unreadable");
       if (state === "alive") {
-        const record = await readRecord(path.join(slot, "host.json"));
-        if (record?.protocol !== WORKER_HOST_PROTOCOL || !record.pipe || !record.secret) throw down("unknown version", record ? `protocol ${record.protocol}` : "no host record");
-        return await reach(record);
+        const published = await readRecord(path.join(slot, "host.json"));
+        // A host whose rename failed still listens on the pipe this install launched it with; a refused launch never listened.
+        const launched = await readRecord(path.join(slot, "launch.json"));
+        const records = [published, launched?.install === install && { protocol: WORKER_HOST_PROTOCOL, ...launched }].filter((record) => record?.protocol === WORKER_HOST_PROTOCOL && record.pipe && record.secret);
+        if (!records.length) throw down("unknown version", published ? `protocol ${published.protocol}` : "no host record");
+        try { return await reach(records[0]); } catch (error) { if (error.code !== "ENOENT" || !records[1]) throw error; }
+        return await reach(records[1]);
       }
       const slots = await fs.promises.readdir(root, { withFileTypes: true });
       const others = slots.filter((item) => item.isDirectory() && /^v\d+$/.test(item.name) && item.name !== path.basename(slot) && workerHostLock(path.join(root, item.name, "host.lock")) === "alive");

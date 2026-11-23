@@ -32,11 +32,13 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
     setBusy(true);
     setError(false);
     try {
-      await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/sign-out`, { method: "POST", body: "{}" });
+      const failed = await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/sign-out`, { method: "POST", body: "{}" }).then(() => false, () => true);
+      // After a failure too, so the row shows what the sign-out left behind.
       const { instances } = await api("/api/instances?refresh=1");
       dispatch?.({ type: "instances", instances, preserveRateLimits: true });
       const next = (instances as InstanceInfo[]).find((row) => row.instanceId === instance.instanceId);
       if (next) { setCurrent(next); onUpdated?.(next); }
+      if (failed) setError(true);
     } catch { setError(true); }
     finally { setBusy(false); }
   };

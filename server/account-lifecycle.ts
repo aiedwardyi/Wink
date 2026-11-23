@@ -1,7 +1,7 @@
 import type { ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { AccountError, AccountService, MISSING_HOME, missingAccountHome, type AccountRecord } from "./accounts.ts";
-import { LoginBusyError, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
+import { LoginBusyError, SIGNED_IN_ELSEWHERE, type LoginCapture } from "./engine-login.ts";
 import { ENGINE_OF } from "./account-names.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
 import { baseAccount } from "./worker-resume.ts";
@@ -33,7 +33,7 @@ export class AccountLifecycle {
   private drainTimer?: ReturnType<typeof setTimeout>;
   private retries = new Map<string, { delay: number; timer?: ReturnType<typeof setTimeout> }>();
   private disposed = false;
-  private results = new Map<string, { state: "failed" | "cancelled"; error?: "device_cap" } | { state: "duplicate"; existingId: string }>();
+  private results = new Map<string, { state: "failed" | "cancelled"; error?: LoginCapture["error"] } | { state: "duplicate"; existingId: string }>();
   readonly accounts: AccountService;
   private readonly registry: ProviderRegistry;
   private readonly hooks: Hooks;
