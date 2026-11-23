@@ -5,6 +5,7 @@ import { agoText } from "@/lib/ago";
 import { chatErrorText } from "@/lib/error-text";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { catalogModelLabel, chipPhoneName, modelChipText } from "@/lib/model-chip";
+import { isShownMessage } from "@/lib/shown-message";
 import { shownModelSelection, useStore, useStreamSelect, visibleMessages, type Bot } from "@/state/store";
 import { linesAbove, replyMove, type ReplyMove } from "./glass-keys";
 
@@ -27,8 +28,9 @@ export function replies(bot: Bot, stream: string, t: Translate): Reply[] {
   let answered = true;
   let failed: { id: string; text: string; at?: number } | undefined;
   for (const message of visibleMessages(bot)) {
+    if (!isShownMessage(message)) continue;
     const error = message.kind === "activity" ? message.tool?.name : undefined;
-    if (!answered && error?.startsWith("error:")) {
+    if (you !== undefined && error?.startsWith("error:")) {
       const shown = chatErrorText(error.slice(6).trim(), bot.name, t);
       failed = shown ? { id: message.id, text: shown.text, at: message.at } : undefined;
     }
@@ -40,10 +42,11 @@ export function replies(bot: Bot, stream: string, t: Translate): Reply[] {
     } else {
       list.push({ id: message.id, you, text: message.text, at: message.at });
       answered = true;
+      failed = undefined;
     }
   }
   if (stream || (!answered && bot.busy)) list.push({ id: "live", you, text: stream, live: true });
-  else if (!answered && failed) list.push({ ...failed, you });
+  else if (failed) list.push({ ...failed, you });
   return list;
 }
 

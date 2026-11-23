@@ -138,7 +138,22 @@ function Glasses() {
           toCheck(field);
           break;
         case "send":
-          if (draft) dispatch({ type: "send", botId: bot.id, text: draft, threadId: bot.threadId, sendId: crypto.randomUUID() });
+          if (draft) {
+            dispatch({
+              type: "send",
+              botId: bot.id,
+              text: draft,
+              threadId: bot.threadId,
+              sendId: crypto.randomUUID(),
+              onError: () => {
+                if (latest.current.draft !== null) return;
+                window.history.pushState({ glass: "check" }, "");
+                latest.current.draft = draft;
+                setDraft(draft);
+                requestAnimationFrame(() => focusGlass("send"));
+              },
+            });
+          }
           latest.current.draft = null;
           setDraft(null);
           window.history.back();

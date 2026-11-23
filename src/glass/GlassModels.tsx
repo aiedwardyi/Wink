@@ -15,14 +15,17 @@ export function useGlassModels(bot: Bot | undefined): GlassModel[] {
   if (!bot || !shown) return [];
   return pickerModels(pickerRows(state.instances, shown))
     .filter((item) => !needsCli(item.instance) && !needsSignIn(item.instance) && item.cell.options.length > 0)
-    .map((item) => ({
-      key: item.instance.instanceId + "/" + item.cell.label,
-      kind: item.instance.driverKind,
-      name: item.instance.driverKind === "claudeAgent" ? "Claude " + item.cell.label : item.cell.label,
-      group: item.label,
-      selection: selectPickerModel(item.instance, item.cell.options[0]!.id, shown),
-      current: item.instance.instanceId === shown.instanceId && item.cell.options.some((option) => option.id === shown.model),
-    }));
+    .map((item) => {
+      const current = item.instance.instanceId === shown.instanceId && item.cell.options.some((option) => option.id === shown.model);
+      return {
+        key: item.instance.instanceId + "/" + item.cell.label,
+        kind: item.instance.driverKind,
+        name: item.instance.driverKind === "claudeAgent" ? "Claude " + item.cell.label : item.cell.label,
+        group: item.label,
+        selection: current ? shown : selectPickerModel(item.instance, item.cell.options[0]!.id, shown),
+        current,
+      };
+    });
 }
 
 export function GlassModels({ bot, models, at }: { bot: Bot; models: GlassModel[]; at: number }) {

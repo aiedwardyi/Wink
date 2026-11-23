@@ -88,6 +88,10 @@ describe("glasses chat after a failed turn", () => {
 describe("glasses keys", () => {
   it("two fast Enters on Send send once and stay on the chat", async () => {
     await mount(atlas(), [ready]);
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({ url: String(url), method: init.method ?? "GET" });
+      return new Promise<Response>(() => {});
+    }));
     const back = vi.spyOn(history, "back").mockImplementation(() => {});
     const speak = document.querySelector<HTMLInputElement>('[data-glass="speak"]');
     if (speak) speak.value = "ship it";
@@ -126,5 +130,48 @@ describe("glasses keys", () => {
     expect(push).not.toHaveBeenCalled();
     expect(document.querySelector(".glass-wheel")).toBeNull();
     expect(document.activeElement?.classList.contains("glass-chip")).toBe(true);
+  });
+});
+
+describe("glasses thread fixes", () => {
+  const gemini: InstanceInfo = {
+    instanceId: "gem", driverKind: "antigravityAgent", displayName: "Gemini", snapshot: { state: "available" },
+    models: { default: "gemini-4-carbon-high", options: [{ id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)" }, { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)" }, { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)" }] },
+  };
+  const scroll = () => document.querySelector(".glass-scroll")?.textContent;
+
+  it("Enter on the current model row keeps a non-first Gemini tier", async () => {
+    await mount(atlas({ modelSelection: { instanceId: "gem", model: "gemini-4-carbon-medium" } }), [gemini]);
+    vi.spyOn(history, "back").mockImplementation(() => {});
+    focus("header");
+    await press("Enter");
+    expect(document.querySelector(".glass-wheel")).not.toBeNull();
+    await press("Enter");
+    expect(posts(/./)).toHaveLength(0);
+  });
+
+  it("keeps the failure line when a turn fails after it wrote some text", async () => {
+    await mount(
+      atlas({ messages: [...chat, { id: "u2", at: 3, role: "user", kind: "text", text: "and now?" }, { id: "b2", at: 4, role: "bot", kind: "text", text: "Partial" }, { id: "e1", at: 5, role: "bot", kind: "activity", tool: { name: "error: stream disconnected before completion" } }] }),
+      [ready],
+    );
+    expect(scroll()).toBe(en["errors.engine"]);
+  });
+
+  it("does not show an engine summary as the bot's reply", async () => {
+    await mount(atlas({ messages: [...chat, { id: "b2", at: 3, role: "bot", kind: "text", text: "Looking at the files", summarized: true }] }), [ready]);
+    expect(scroll()).toBe("Hello");
+  });
+
+  it("brings the voice draft back when the send is rejected", async () => {
+    await mount(atlas(), [ready]);
+    vi.spyOn(history, "back").mockImplementation(() => {});
+    const speak = document.querySelector<HTMLInputElement>('[data-glass="speak"]');
+    if (speak) speak.value = "ship it";
+    focus("speak");
+    await press("Enter");
+    focus("send");
+    await press("Enter");
+    await vi.waitFor(() => expect(document.querySelector(".glass-dtext")?.textContent).toBe("ship it"));
   });
 });
