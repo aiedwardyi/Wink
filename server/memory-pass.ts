@@ -153,12 +153,16 @@ export function eligibleRow(message: Message | undefined): message is Message & 
 }
 
 /** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive, unless the caller screens each line. */
-export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
-  const typed = text
+/** The message without pasted blocks and fenced code: what the user did not type. */
+export function withoutBlocks(text: string): string {
+  return text
     .replace(/<pasted-text\b[^>]*>[\s\S]*?<\/pasted-text>/gi, "")
     .replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/gi, "")
-    .replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "")
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
+}
+
+export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
+  const typed = withoutBlocks(text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : ""));
   // the whole message: a label and its value can sit in different paragraphs
   if (dropSensitive && secretValue(typed)) return "";
   const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");

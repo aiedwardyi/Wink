@@ -64,6 +64,7 @@ export const KEPT_LIMITS: Limits = {
   },
   "server/key-broker.ts": { MAX_RESPONSE_BYTES: FILE, MAX_UPLOAD_FILE_BYTES: FILE, MAX_UPLOAD_BYTES: FILE },
   "server/memory-lookup.ts": { MAX_ROWS: TOKENS, MAX_CHARS: TOKENS, MAX_CORPUS_BYTES: FILE, MAX_TERMS: TOKENS, MAX_WORD: TOKENS },
+  "server/memory-sync.ts": { MAX_EDITS: STATE, MAX_CUT_LINES: STATE },
   "server/memory-pass.ts": { MAX_PASSES: AUTO, MAX_PENDING: AUTO },
   "server/openmaus-status-capsule.ts": { MAX_CACHE_BYTES: FILE },
   "server/phone-access.ts": { MAX_BODY_BYTES: BODY },
