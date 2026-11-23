@@ -317,8 +317,8 @@ it.each(["grokAgent", "museAgent", "antigravityAgent"])("signs %s out on one cli
   }
 });
 
-it("flips Gemini to Sign In once its sign-out answers, while a probe of every engine still runs", async () => {
-  const connected = instance({ instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", install: { login: { args: ["login"] }, logout: ["logout"] },
+it.each(["grokAgent", "museAgent", "antigravityAgent"])("flips %s to Sign In once its sign-out answers, while a probe of every engine still runs", async (driverKind) => {
+  const connected = instance({ instanceId: driverKind, driverKind, install: { login: { args: ["login"] }, logout: ["logout"] },
     snapshot: { state: "available", authenticated: true, account: "ed@example.com" } });
   const signedOut = { ...connected, snapshot: { state: "available" as const, authenticated: false } };
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation((url, init) => init?.method === "POST" ? Promise.resolve(new Response("{}"))
