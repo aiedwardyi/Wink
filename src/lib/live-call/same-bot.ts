@@ -6,6 +6,7 @@ import { isShownMessage } from "@/lib/shown-message";
 import type { Message } from "@/state/store-types";
 import { MAX_RECONNECTS, MIC_ERRORS, READY_MS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
+import { backchannel, echoOf } from "./guard";
 
 const QUOTA = /quota|resource.?exhausted/i;
 const READ = "[READ]\n";
@@ -56,6 +57,9 @@ export class SameBotCall {
   private reading?: string;
   private heard = "";
   private said = "";
+  /** Heard while it reads, not yet his: it may be the voice coming back. */
+  private over = "";
+  private lastSaid = "";
   /** Whose words the voice is answering: his (never played) or a [READ] it was sent. */
   private turn: "user" | "read" | null = null;
   private asked = false;
@@ -96,7 +100,6 @@ export class SameBotCall {
     return this.snapshot.status === "ended" || this.snapshot.status === "failed";
   }
 
-  /** Half-duplex: while a reply is read the mic sends nothing, so the voice never hears itself. */
   private get speaking() {
     return this.deps.audio.playing || (!this.cut && (this.turn === "read" || this.asked));
   }
@@ -166,13 +169,8 @@ export class SameBotCall {
 
   private frame(pcm: ArrayBuffer) {
     if (!this.connected || this.snapshot.muted) return;
-    if (this.speaking) {
-      if (this.micOpen) this.engine?.audioPaused();
-      this.micOpen = false;
-      return;
-    }
     this.micOpen = true;
-    if (loud(pcm)) this.loudAt = this.now();
+    if (!this.speaking && loud(pcm)) this.loudAt = this.now();
     this.engine?.sendAudio(pcm);
   }
 
@@ -193,7 +191,9 @@ export class SameBotCall {
         if (mine() && this.turn === "read" && !this.cut) this.deps.audio.play(pcm);
       },
       heard: (text) => {
-        if (!mine() || this.speaking) return;
+        if (!mine()) return;
+        if (this.speaking) return this.overlap(text);
+        this.over = "";
         this.heard += text;
         this.caption("user", this.heard);
       },
@@ -212,6 +212,7 @@ export class SameBotCall {
         if (this.turn === "read") {
           this.deps.audio.endTurn();
           this.reading = undefined;
+          this.lastSaid += ` ${this.said}`;
         } else this.commit();
         this.turn = null;
         this.said = "";
@@ -241,6 +242,19 @@ export class SameBotCall {
         void this.reconnect();
       },
     };
+  }
+
+  /** Words heard while it reads: its own voice coming back is dropped and a nod lets it go on; anything else stops it like a tap and is his line. */
+  private overlap(text: string) {
+    this.over += text;
+    const words = spokenText(this.over);
+    const echo = echoOf(words, `${this.lastSaid} ${this.said}`);
+    if (echo === "echo") this.over = "";
+    if (echo !== "no" || backchannel(words)) return;
+    this.interrupt();
+    this.heard = this.over;
+    this.over = "";
+    this.caption("user", this.heard);
   }
 
   private caption(who: "user" | "voice", text: string) {
@@ -298,6 +312,7 @@ export class SameBotCall {
   }
 
   private read(text: string) {
+    if (!this.speaking) this.lastSaid = "";
     this.reads.push(...toUtterances(text));
     this.readNext();
   }
@@ -321,6 +336,11 @@ export class SameBotCall {
     this.cut = this.turn === "read" || this.asked;
     this.deps.audio.flush();
     this.refresh();
+  }
+
+  /** Nothing read, heard or waited on: another session can take over and lose nothing. */
+  idle(): boolean {
+    return this.snapshot.status === "listening" && !this.turn && !this.asked && !this.reads.length && !spokenText(this.heard);
   }
 
   retune(prefs: CallPrefs, volume = 1) {

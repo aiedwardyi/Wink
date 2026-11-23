@@ -147,16 +147,43 @@ describe("same-bot call", () => {
     expect(s.engine().texts).toEqual([]);
   });
 
-  it("keeps the mic shut while it reads, so the voice never hears itself", async () => {
+  it("stops reading when he talks over it, and sends what he said", async () => {
     const s = await started();
-    answered(s, "Here is a reply long enough to read.");
-    expect(s.engine().frames).toBe(1);
+    answered(s, "A reply long enough to be read aloud for a while.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said("A reply long enough to be read aloud for a while.");
+    s.engine().events.turnDone();
+    expect(s.call.state().status).toBe("speaking");
+    const frames = s.engine().frames;
     s.audio.mic!(loudFrame());
-    expect(s.engine().frames).toBe(1);
-    expect(s.engine().paused).toBe(1);
-    s.engine().events.heard("echo of the reply");
+    expect(s.engine().frames).toBe(frames + 1);
+    s.engine().events.heard("wait, stop that");
+    expect(s.audio.flushed).toBe(1);
+    expect(s.call.state().status).toBe("listening");
+    s.engine().events.heard(" and check the logs");
     s.engine().events.answering();
     s.engine().events.turnDone();
+    expect(s.sent).toEqual(["tell me", "wait, stop that and check the logs"]);
+  });
+
+  it("its own voice coming back through the mic neither stops the read nor is sent", async () => {
+    const s = await started();
+    answered(s, "A reply long enough to be read aloud for a while.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said("A reply long enough to be read aloud for a while.");
+    s.engine().events.turnDone();
+    s.audio.mic!(loudFrame());
+    s.engine().events.heard("a reply long enough");
+    s.engine().events.heard(" to be read");
+    s.engine().events.heard("yeah");
+    expect(s.audio.flushed).toBe(0);
+    expect(s.call.state().status).toBe("speaking");
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    s.audio.flush();
+    s.audio.onIdle();
     expect(s.sent).toEqual(["tell me"]);
   });
 

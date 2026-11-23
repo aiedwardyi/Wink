@@ -1679,6 +1679,11 @@ export class LiveCall {
     if (muted) this.engine?.audioPaused();
   }
 
+  /** Nothing said, heard, offered or waited on: another session can take over and lose nothing. */
+  idle(): boolean {
+    return this.snapshot.status === "listening" && !this.pending && !this.held.length && !this.playing && !this.generating && !spokenText(this.heardBuf) && !this.sends.size && !this.open.text();
+  }
+
   hidden(isHidden: boolean) {
     if (isHidden) {
       this.hiddenAt = this.now();
