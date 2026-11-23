@@ -274,8 +274,8 @@ export interface MemoryLookupDeps {
 /* oxlint-disable anti-slop/no-unknown-parameters -- provider resume cursors are opaque. */
 export interface MemoryLookup {
   refresh(botId: string): Promise<void>;
-  /** The recall note for a typed turn, or nothing. No I/O and no build. */
-  take(botId: string, threadId: string, cursor: unknown, text: string): string[];
+  /** The recall note for a typed turn, or nothing. No I/O and no build. A joined room's turn answers everyone there, so Import Memory rows stay out of it. */
+  take(botId: string, threadId: string, cursor: unknown, text: string, room?: boolean): string[];
   /** The provider took the last take's turn, so its rows now count as shown. */
   accepted(botId: string, threadId: string): void;
   /** The last take never reached the provider, so its rows are still unseen. */
@@ -428,7 +428,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
 
   const logged = (hits: RecallHit[]) => hits.map((hit) => ({ row: hit.ref, score: Number(hit.score.toFixed(3)) }));
 
-  const lookup = (entry: LookupLog, botId: string, threadId: string, session: string, text: string): string[] => {
+  const lookup = (entry: LookupLog, botId: string, threadId: string, session: string, text: string, room: boolean): string[] => {
     const started = clock();
     const over = () => {
       entry.ms = Number((clock() - started).toFixed(2));
@@ -448,7 +448,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       entry.reason = "no-words";
       return [];
     }
-    const hits = index.hits(terms);
+    const hits = index.hits(terms).filter((hit) => !room || (hit.source !== ABOUT_YOU_SOURCE && hit.source !== IMPORT_SOURCE));
     entry.rows = logged(hits.slice(0, 3));
     if (over()) return [];
     const passed = index.gate(terms, hits);
@@ -479,12 +479,12 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
 
   return {
     refresh,
-    take(botId, threadId, cursor, text) {
+    take(botId, threadId, cursor, text, room = false) {
       if (!flagged.has(botId) && !indexes.has(botId)) return [];
       pending.delete(markKey(botId, threadId));
       const entry: LookupLog = { at: now(), botId, words: [], rows: [], ms: 0, fired: false, reason: "no-match" };
       try {
-        return lookup(entry, botId, threadId, cursorKey(cursor), text);
+        return lookup(entry, botId, threadId, cursorKey(cursor), text, room);
       } catch {
         entry.fired = false;
         entry.rows = [];

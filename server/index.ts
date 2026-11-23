@@ -5798,7 +5798,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const roomEchoes = roomEchoesSinceLastUserTurn(activeMessages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model);
   const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
-    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
+    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text, roomTaskThreads().has(threadId))
     : [];
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];

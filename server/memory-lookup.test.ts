@@ -445,10 +445,10 @@ describe("send path wiring", () => {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None },
   }).outputText}\nreturn run;`)() as (scope: object) => string;
 
-  const turn = (opts: object | undefined, driverKind = "claudeAgent") => {
+  const turn = (opts: object | undefined, driverKind = "claudeAgent", rooms: string[] = []) => {
     const take = vi.fn((): string[] => ["[recall]"]);
     const scope = {
-      opts, memoryLookup: { take }, instance: { driverKind, instanceId: "i1" }, supportsWorkspaceFiles: (kind: string) => kind !== "boxAgent",
+      opts, memoryLookup: { take }, roomTaskThreads: () => new Set(rooms), instance: { driverKind, instanceId: "i1" }, supportsWorkspaceFiles: (kind: string) => kind !== "boxAgent",
       bot: { id: "b1" }, threadId: "t1", task: { resumeCursors: { i1: "c1" } }, instanceId: "i1", rewound: false, fresh: false, recycled: false, text: "typed words",
       threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
       accountNotices: { forTurn: () => ({}) }, currentPrompt: "hello",
@@ -458,8 +458,13 @@ describe("send path wiring", () => {
 
   it.each(["claudeAgent", "codex", "acp", "antigravity"])("runs on a typed turn on %s", (kind) => {
     const { prompt, take } = turn(undefined, kind);
-    expect(take).toHaveBeenCalledWith("b1", "t1", "c1", "typed words");
+    expect(take).toHaveBeenCalledWith("b1", "t1", "c1", "typed words", false);
     expect(prompt).toBe("[recall]\n\nCurrent message:\n\nhello");
+  });
+
+  it("tells the lookup when the turn answers a joined room", () => {
+    expect(turn(undefined, "claudeAgent", ["t1"]).take).toHaveBeenCalledWith("b1", "t1", "c1", "typed words", true);
+    expect(turn(undefined, "claudeAgent", ["other-room"]).take).toHaveBeenCalledWith("b1", "t1", "c1", "typed words", false);
   });
 
   it.each([
@@ -483,12 +488,12 @@ describe("send path wiring", () => {
     expect(scope.prompt).not.toBe("hello");
     const take = vi.fn((): string[] => []);
     expect(run({
-      opts: undefined, memoryLookup: { take }, instance: { driverKind: "codex", instanceId: "i1" }, supportsWorkspaceFiles: () => true,
+      opts: undefined, memoryLookup: { take }, roomTaskThreads: () => new Set(), instance: { driverKind: "codex", instanceId: "i1" }, supportsWorkspaceFiles: () => true,
       bot: { id: "b1" }, threadId: "t1", task: { resumeCursors: {} }, instanceId: "i1", rewound: false, fresh: true, recycled: false, text: "typed words",
       threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
       accountNotices: { forTurn: () => ({}) }, currentPrompt: "hello",
     })).toBe("hello");
-    expect(take).toHaveBeenCalledWith("b1", "t1", undefined, "typed words");
+    expect(take).toHaveBeenCalledWith("b1", "t1", undefined, "typed words", false);
   });
 
   it("never reaches the system prompt", () => {
