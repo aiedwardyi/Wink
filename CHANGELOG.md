@@ -2,6 +2,11 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.297] - 2026-11-24
+
+### Fixed
+- Glasses: the 6-number code screen has no blue box over the boxes, takes spoken numbers once, and says so when you enter the PC code there instead.
+
 ## [1.0.296] - 2026-11-23
 
 ### Added
