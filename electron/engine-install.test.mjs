@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -273,7 +273,13 @@ describe.each(posixShells.filter((shell) => existsSync(shell)))("fresh Mac insta
     }
     writeFileSync(join(bin, "curl"), `#!/bin/sh\nfor url; do :; done\necho "curl $url" >> "$LOG"\nfor known in "$STUBS"/*.url; do\n  [ "$(cat "$known")" = "$url" ] && exec cat "\${known%.url}.installer"\ndone\nexit 22\n`);
     chmodSync(join(bin, "curl"), 0o755);
-    const system = process.platform === "win32" ? join(shell, "..") : "/usr/bin:/bin";
+    // Only the tools the installers use: a host with Node in /usr/bin must not leak it onto PATH.
+    const tools = createFixtureHome("engine-install-tools");
+    for (const tool of ["bash", "sh", "cat", "mkdir", "chmod"]) {
+      const found = ["/usr/bin", "/bin"].map((dir) => join(dir, tool)).find((file) => existsSync(file));
+      if (found) symlinkSync(found, join(tools, tool));
+    }
+    const system = process.platform === "win32" ? join(shell, "..") : tools;
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(path|home)$/i.test(key)));
     const run = (script) => spawnSync(shell, ["-c", script], {
       encoding: "utf8", timeout: 30000, windowsHide: true,

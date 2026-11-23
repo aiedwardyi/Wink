@@ -105,7 +105,8 @@ describe("augmentedPath", () => {
   posixIt("finds every native installer's CLI installed after launch", async () => {
     resetPathCacheForTests();
     augmentedPath();
-    const installs = [["claude", ".local"], ["codex", ".local"], ["agy", ".local"], ["muse", ".local"], ["grok", ".grok"]] as const;
+    // Names no host has installed, so a CLI already on this machine's PATH cannot be the first hit.
+    const installs = [["wink-late-claude", ".local"], ["wink-late-codex", ".local"], ["wink-late-agy", ".local"], ["wink-late-muse", ".local"], ["wink-late-grok", ".grok"]] as const;
     const files = installs.map(([name, dir]) => join(testHome(), dir, "bin", name));
     for (const file of files) {
       mkdirSync(join(file, ".."), { recursive: true });

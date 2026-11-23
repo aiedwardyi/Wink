@@ -1180,12 +1180,13 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     };
 
     const snapshot = async (opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot> => {
-      const version = await new Promise<string | null>((resolve) => {
+      const { version, missing } = await new Promise<{ version: string | null; missing: boolean }>((resolve) => {
         execCli(config.cli, ["--version"], { timeout: 8000, env: env() }, (err, stdout) =>
-          resolve(err ? null : stdout.trim()),
+          resolve({ version: err ? null : stdout.trim(), missing: err !== null && "code" in err && err.code === "ENOENT" }),
         );
       });
-      if (!version) return cliNotFound(config.cli);
+      // Only a failed lookup is Not Installed; a slow or failing agy is installed but not answering.
+      if (!version) return missing ? cliNotFound(config.cli) : { state: "unavailable", reason: `\`${config.cli}\` did not answer --version` };
       const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
       return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env()) : undefined };
     };

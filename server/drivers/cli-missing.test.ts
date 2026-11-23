@@ -44,7 +44,8 @@ describe("missing engine CLI", () => {
       resetPathCacheForTests();
       // SAFETY: every built-in CLI driver config carries cli.
       const typed = driver as ProviderDriver<{ cli: string }>;
-      const config = typed.decodeConfig({});
+      // A name no host has installed, so a CLI already on this machine's PATH cannot answer first.
+      const config = typed.decodeConfig({ cli: `wink-late-${kind}` });
       const instance = await typed.create({ instanceId: "fresh", displayName: "Fresh", environment: {}, enabled: true, config });
       try {
         expect(await instance.snapshot()).toMatchObject({ state: "unavailable", cliMissing: true });
@@ -57,4 +58,16 @@ describe("missing engine CLI", () => {
       } finally { await instance.dispose(); }
     },
   );
+
+  it("an agy that is installed but fails --version is unavailable, not Not Installed", async () => {
+    const script = join(testHome(), "failing-agy.cjs");
+    writeFileSync(script, "process.exit(1);\n");
+    const config = AntigravityDriver.decodeConfig({ cli: `"${process.execPath}" "${script}"` });
+    const instance = await AntigravityDriver.create({ instanceId: "failing", displayName: "Failing", environment: {}, enabled: true, config });
+    try {
+      const snapshot = await instance.snapshot();
+      expect(snapshot.state).toBe("unavailable");
+      expect(snapshot.cliMissing).toBeUndefined();
+    } finally { await instance.dispose(); }
+  });
 });
