@@ -250,7 +250,11 @@ export class AccountLifecycle {
         }
         const success = await this.registry.signOut(id);
         if (!success) throw new AccountError("Sign-out failed", 502);
-        if (guarded) this.hooks.invalidate(id);
+        if (guarded) {
+          this.hooks.invalidate(id);
+          // Invalidating drops the signed-out check and a stopped base never checks on its own: without a new one it reads as not installed.
+          await this.registry.retryAccount(id).catch(() => { console.error("Signed-out base check could not be refreshed"); });
+        }
         return {};
       }
       const blocked = this.registry.accountBlocked(id);
@@ -329,6 +333,7 @@ export class AccountLifecycle {
     this.hooks.invalidate(id);
     await this.hooks.reload();
     this.registry.blockAccount(id, !added);
+    if (!added) await this.registry.retryAccount(id).catch(() => { console.error("Signed-out base check could not be refreshed"); });
     return { state: "removed", destinationId: drain.destinationId };
   }
 
