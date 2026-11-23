@@ -226,6 +226,56 @@ describe("pair page", () => {
       await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("/glasses"));
     });
 
+    const cells = () => [...document.querySelectorAll(".g-group span")].map((cell) => cell.textContent).join("");
+    const say = (text) => {
+      const field = document.getElementById("g-code");
+      field.value = text;
+      field.dispatchEvent(new Event("input"));
+    };
+
+    it("never shows the field under the code boxes, so no selection, voice mark or tap mark covers them", () => {
+      expect(SOURCE).toMatch(/\.g-code input \{[^}]*opacity: 0;/);
+      expect(SOURCE).toMatch(/\.g-code \{[^}]*-webkit-tap-highlight-color: transparent;/);
+    });
+
+    it.each(["123456", "1 2 3 4 5 6", "123 456.", "one two three four five six", "won to three for five six", "SXUMBB. 123456"])(
+      "fills the boxes from the dictated %j",
+      (text) => {
+        lens(true);
+        open("/pair", googlePc());
+        say(text);
+        expect(cells()).toBe("123456");
+        expect(document.getElementById("g-pair").hidden).toBe(false);
+      },
+    );
+
+    it("keeps the cursor in the field until the voice keyboard is done with its words", () => {
+      lens(true);
+      open("/pair", googlePc());
+      const field = document.getElementById("g-code");
+      field.dispatchEvent(new Event("compositionstart"));
+      say("one two three four five six");
+      expect(cells()).toBe("123456");
+      expect(document.activeElement).toBe(field);
+      field.dispatchEvent(new Event("compositionend"));
+      expect(document.activeElement?.id).toBe("g-pair");
+    });
+
+    it.each([
+      ["en", `Wink on PC › ${en["settings.title"]} › ${en["settings.section.devices"]} › ${en["settings.devices.codeInstead"]} › ${en["settings.devices.getCode"]}`, "That's the PC code. This step needs the 6 numbers."],
+      ["ko", `PC의 Wink › ${ko["settings.title"]} › ${ko["settings.section.devices"]} › ${ko["settings.devices.codeInstead"]} › ${ko["settings.devices.getCode"]}`, "PC 코드입니다. 이 단계에는 숫자 6자리가 필요합니다."],
+    ])("names the PC's buttons to the 6 numbers and says a 6 letter code is the PC code (%s)", (locale, path, pcCode) => {
+      localStorage.setItem("omb-locale", locale);
+      lens(true);
+      open("/pair", googlePc());
+      const hint = document.getElementById("g-hint");
+      expect(hint.textContent).toBe(path);
+      say("SXUMBB.");
+      expect(hint.textContent).toBe(pcCode);
+      say("hello");
+      expect(hint.textContent).toContain("“hello”");
+    });
+
     // A square window alone is an unfolded foldable, a split-screen phone or a small desktop window.
     it.each([
       ["an unfolded foldable", FOLDABLE],

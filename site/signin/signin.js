@@ -13,6 +13,11 @@
   const OPENING = "wink-signin-opening";
   // The PC a typed code reached in this browser: its return leg offers that PC's own code form.
   const TYPED = "wink-signin-typed";
+  // Same check as public/pair.html: Google cannot finish in Meta's glasses web view.
+  const GLASSES =
+    /\bwv\b/.test(navigator.userAgent) &&
+    /Android/.test(navigator.userAgent) &&
+    globalThis.matchMedia?.("(max-width: 800px) and (min-aspect-ratio: 4/5) and (max-aspect-ratio: 5/4)").matches === true;
   const EMPTY = "Sign in with Google in Wink on your PC first: Settings, Devices.";
   const OFFLINE = "Could not reach your PC. Check your connection and try again.";
   const BAD_LINK = "That PC link is not valid.";
@@ -344,14 +349,14 @@
       lock(true);
       say("");
       const label = await codeLabel(code);
-      // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
+      // Then the same Google check as picking the PC from the list, or on the glasses the PC's code form. Not remembered here: the return leg remembers it once Google says it is this account's.
       if (LABEL_RE.test(label)) {
         holdAccount(label);
         try {
           localStorage.setItem(TYPED, label);
         } catch {}
         typed = true;
-        location.assign(`https://${label}.${config.base}/pair?g=1`);
+        location.assign(`https://${label}.${config.base}/pair${GLASSES ? "" : "?g=1"}`);
         return;
       }
       reset();

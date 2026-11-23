@@ -200,6 +200,7 @@
         display: flex;
         gap: 22px;
         margin-top: 38px;
+        -webkit-tap-highlight-color: transparent;
       }
       .g-group {
         display: flex;
@@ -227,8 +228,8 @@
         all: unset;
         position: absolute;
         inset: 0;
-        color: transparent;
-        caret-color: transparent;
+        /* Unseen, not just see-through: a selection or a voice keyboard's mark would paint over the boxes. */
+        opacity: 0;
       }
       #g-pair {
         width: 268px;
@@ -380,8 +381,9 @@
             title: "Pair with Wink",
             text: "Enter the 6-digit code from {pc}",
             pc: "your PC",
-            hint: "Wink on PC › Settings › Devices",
+            hint: "Wink on PC › Settings › Devices › Code instead of Google › Get Code",
             heard: "heard “{text}”",
+            pcCode: "That's the PC code. This step needs the 6 numbers.",
             pair: "Connect",
             paired: "Paired",
             opening: "Opening Wink…",
@@ -390,8 +392,9 @@
             title: "Wink와 연결",
             text: "{pc}에 표시된 6자리 코드를 입력하세요",
             pc: "PC",
-            hint: "PC의 Wink › 설정 › 기기",
+            hint: "PC의 Wink › 설정 › 기기 › Google 대신 코드로 연결 › 코드 받기",
             heard: "들은 내용 “{text}”",
+            pcCode: "PC 코드입니다. 이 단계에는 숫자 6자리가 필요합니다.",
             pair: "연결",
             paired: "연결됨",
             opening: "Wink 여는 중…",
@@ -569,6 +572,7 @@
             gHint.textContent = text;
             gHint.className = tone || "";
           };
+          let composing = false;
           const read = () => {
             const digits = spokenDigits(gCode.value).slice(0, 6);
             cells.forEach((cell, i) => {
@@ -576,14 +580,24 @@
               cell.classList.toggle("next", i === digits.length);
             });
             const said = gCode.value.trim();
-            if (/[a-z]/i.test(said)) hint(GLASS.heard.replace("{text}", () => said), "heard");
+            // The sign-in page's 6 letter code, same letters as src/components/CodeBoxes.tsx.
+            if (!digits && /^[2-9A-HJ-NP-Z]{6}$/.test(said.toUpperCase().replace(/[^A-Z0-9]/g, ""))) hint(GLASS.pcCode, "heard");
+            else if (/[a-z]/i.test(said)) hint(GLASS.heard.replace("{text}", () => said), "heard");
             else hint(GLASS.hint);
             gPair.hidden = digits.length !== 6;
-            if (!gPair.hidden) gPair.focus();
+            // Focus leaving mid-dictation makes the voice keyboard type its words again.
+            if (!gPair.hidden && !composing) gPair.focus();
             return digits;
           };
           gCode.addEventListener("input", read);
           gCode.addEventListener("change", read);
+          gCode.addEventListener("compositionstart", () => {
+            composing = true;
+          });
+          gCode.addEventListener("compositionend", () => {
+            composing = false;
+            read();
+          });
           gPair.addEventListener("click", async () => {
             const digits = read();
             if (digits.length !== 6) return;
