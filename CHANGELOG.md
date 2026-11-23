@@ -2,6 +2,26 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.296] - 2026-11-23
+
+### Added
+- Wink on Meta Ray-Ban Display glasses: read and switch chats, and send by voice from the lens.
+
+### Changed
+- Import keeps lines that look like passwords aside for a one-tap Keep instead of dropping them.
+- Group codes are 8 characters and paste in one go.
+
+### Fixed
+- Bots can read web pages you send them.
+- Memory lookup works for every bot, and syncing between PCs never shrinks notes.
+- Goals stay through long chats.
+- Group guests can't reach the host's files.
+- Usage keeps your account order, one sign-in shows as one Usage row, and a signed-out Claude shows Sign In.
+- Engine rows update right after you sign out.
+- Gemini sign-in from your phone or a terminal is seen.
+- Closed helpers never come back after an update.
+- Mac: engines install without Node, Usage starts open, Tailscale is found and the sign-in window is bigger.
+
 ## [1.0.295] - 2026-11-23
 
 ### Added
