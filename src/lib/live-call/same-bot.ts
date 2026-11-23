@@ -37,6 +37,11 @@ export class SameBotCall {
   private connected = false;
   private callId?: string;
   private attempts = 0;
+  private prefs?: CallPrefs;
+  /** What the live session speaks with; a pick that differs swaps it. */
+  private voice?: string;
+  private language?: string;
+  private swapping = false;
   private handle?: string;
   private reconnects = 0;
   private readyTimer?: ReturnType<typeof setTimeout>;
@@ -66,6 +71,7 @@ export class SameBotCall {
   constructor(deps: Deps) {
     this.deps = deps;
     this.now = deps.now ?? Date.now;
+    this.prefs = deps.prefs;
     deps.audio.onStart = () => {
       if (this.spokeAt) this.firstWordMs.push(this.now() - this.spokeAt);
       this.spokeAt = 0;
@@ -124,27 +130,29 @@ export class SameBotCall {
     this.connect(session);
   }
 
-  private async token(): Promise<LiveSession | null> {
+  /** A swap that cannot be had leaves the live session as it is. */
+  private async token(swap = false): Promise<LiveSession | null> {
+    const lose = (error: string) => {
+      if (!swap) this.fail(error);
+      return null;
+    };
+    const base = { locale: activeLocale(), mode: "bot", call: this.prefs };
+    const body = !this.callId ? base : swap ? { ...base, callId: this.callId, swap: true } : { ...base, callId: this.callId, resume: true };
     let posted: Posted;
     try {
-      posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), mode: "bot", call: this.deps.prefs, ...(this.callId ? { callId: this.callId, resume: true } : {}) });
+      posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, body);
     } catch (error) {
-      this.fail(error instanceof Error ? error.message : String(error));
-      return null;
+      return lose(error instanceof Error ? error.message : String(error));
     }
     if (posted.status === 409 && !this.callId) {
       this.set({ status: "needsKey" });
       return null;
     }
-    if (posted.status === 429) {
-      this.fail(VOICE_OUT);
-      return null;
-    }
-    if (posted.status !== 200) {
-      this.fail(String(posted.data.error ?? `call failed (${posted.status})`));
-      return null;
-    }
+    if (posted.status === 429) return lose(VOICE_OUT);
+    if (posted.status !== 200) return lose(String(posted.data.error ?? `call failed (${posted.status})`));
     this.callId = posted.data.callId;
+    this.voice = posted.data.voice;
+    this.language = posted.data.locale === "ko" ? "ko" : "en";
     return { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice, ...(this.handle ? { handle: this.handle } : {}) };
   }
 
@@ -179,6 +187,7 @@ export class SameBotCall {
         if (this.snapshot.status === "starting") this.set({ status: "listening" });
         this.refresh();
         this.readNext();
+        this.restyle();
       },
       audio: (pcm) => {
         if (mine() && this.turn === "read" && !this.cut) this.deps.audio.play(pcm);
@@ -209,6 +218,7 @@ export class SameBotCall {
         this.cut = false;
         this.readNext();
         this.refresh();
+        this.restyle();
       },
       interrupted: () => {
         if (!mine()) return;
@@ -311,6 +321,28 @@ export class SameBotCall {
 
   retune(prefs: CallPrefs, volume = 1) {
     this.deps.audio.tune(callPace(prefs), volume);
+    this.prefs = prefs;
+    this.restyle();
+  }
+
+  // A new voice or language opens a new session, never mid-word: it waits until nothing is being said or heard.
+  private restyle() {
+    const prefs = this.prefs;
+    if (!prefs || !this.connected || this.ended || this.swapping || this.turn || this.asked || spokenText(this.heard)) return;
+    if ((prefs.voice ?? this.voice) === this.voice && (prefs.language ?? (activeLocale() === "ko" ? "ko" : "en")) === this.language) return;
+    this.swapping = true;
+    void this.swap().finally(() => { this.swapping = false; });
+  }
+
+  private async swap() {
+    const session = await this.token(true);
+    if (!session || !this.connected || this.ended || this.turn || this.asked || spokenText(this.heard)) return;
+    const old = this.engine;
+    this.engine = null;
+    this.connected = false;
+    this.handle = undefined;
+    old?.close();
+    this.connect(session);
   }
 
   mute(muted: boolean) {

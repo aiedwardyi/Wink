@@ -395,6 +395,15 @@ describe("call token", () => {
     expect(JSON.parse(readFileSync(join(h.dir, CALL_PICKS_FILE), "utf8"))).toEqual({});
   });
 
+  it("a same-bot swap speaks with the picks it carries, and a resume after it keeps them", async () => {
+    const h = harness();
+    const first = await h.post("token", { mode: "bot", call: { voice: "Erinome" } });
+    const swapped = await h.post("token", { mode: "bot", callId: first.data.callId, swap: true, call: { voice: "Puck", language: "ko" } });
+    expect(swapped.data).toMatchObject({ voice: "Puck", locale: "ko" });
+    const resumed = await h.post("token", { mode: "bot", callId: first.data.callId, resume: true });
+    expect(resumed.data).toMatchObject({ voice: "Puck", locale: "ko" });
+  });
+
   it("a finished call leaves no picks behind", async () => {
     const h = harness();
     const first = await h.post("token", { call: { voice: "Fenrir" } });

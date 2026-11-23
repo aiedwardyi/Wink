@@ -281,6 +281,65 @@ describe("same-bot call", () => {
     expect(stopped).not.toHaveBeenCalled();
   });
 
+  describe("a voice or language pick", () => {
+    const aoede: Posted = { status: 200, data: { callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m", voice: "Aoede", locale: "en" } };
+    const swaps = (s: ReturnType<typeof setup>) => s.posts.filter(({ path, body }) => path.endsWith("/call/token") && body.swap);
+
+    it("opens a new session with it, as a Gemini call does, and reads on that one", async () => {
+      const s = setup(aoede);
+      await s.call.start();
+      s.engine().events.ready();
+      s.mint({ status: 200, data: { ...aoede.data, voice: "Puck" } });
+      s.call.retune({ voice: "Puck" });
+      await vi.waitFor(() => expect(s.engines).toHaveLength(2));
+      expect(swaps(s)).toMatchObject([{ body: { callId: "c-0123456789ab", swap: true, call: { voice: "Puck" } } }]);
+      expect(s.engines[0]!.closed).toBe(true);
+      s.engine().events.ready();
+      answered(s, "Read in the new voice.");
+      expect(s.engines[1]!.texts).toEqual(["[READ]\nRead in the new voice."]);
+      s.call.retune({ voice: "Puck" });
+      expect(swaps(s)).toHaveLength(1);
+    });
+
+    it("waits for the words in progress, then swaps", async () => {
+      const s = setup(aoede);
+      await s.call.start();
+      s.engine().events.ready();
+      answered(s, "A reply that is being read now.");
+      s.call.retune({ language: "ko" });
+      await Promise.resolve();
+      expect(swaps(s)).toHaveLength(0);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      await vi.waitFor(() => expect(s.engines).toHaveLength(2));
+      expect(swaps(s)).toMatchObject([{ body: { swap: true, call: { language: "ko" } } }]);
+    });
+
+    it("leaves the session alone for speed, volume and a pick it already has", async () => {
+      const s = setup(aoede);
+      await s.call.start();
+      s.engine().events.ready();
+      s.call.retune({ speed: 1.2, voice: "Aoede", language: "en" }, 0.5);
+      s.call.retune({});
+      await Promise.resolve();
+      expect(swaps(s)).toHaveLength(0);
+      expect(s.engines).toHaveLength(1);
+    });
+
+    it("keeps the call on its session when the new one cannot be had", async () => {
+      const s = setup(aoede);
+      await s.call.start();
+      s.engine().events.ready();
+      s.mint({ status: 502, data: { error: "no" } });
+      s.call.retune({ voice: "Puck" });
+      await vi.waitFor(() => expect(swaps(s)).toHaveLength(1));
+      await Promise.resolve();
+      expect(s.engines).toHaveLength(1);
+      expect(s.engines[0]!.closed).toBe(false);
+      expect(s.call.state().status).toBe("listening");
+    });
+  });
+
   it("leaves Working and says the line was not sent when the send never reached the bot", async () => {
     const s = await started();
     say(s, "check the blocked build");

@@ -101,7 +101,7 @@ export function SameBotSession({ active, bot }: { active: ActiveCall; bot: Bot }
 
   const picks = bot.call;
   const volume = useCallVolume();
-  useEffect(() => call.retune(picks ?? {}, volume), [call, picks?.speed, picks?.style, volume]);
+  useEffect(() => call.retune(picks ?? {}, volume), [call, picks?.voice, picks?.speed, picks?.style, picks?.language, volume]);
 
   return null;
 }
