@@ -174,10 +174,16 @@ const valueWord = (word: string) => word.length >= 6 && /\p{L}/u.test(word) &&
 // Tr0ub4dor&3xQ, Tr@ub!dor&xQ, Blue-Horse-Staple, card or account digits, or a value spelled out letter by letter
 const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some(valueWord) || /\d(?:[ -]?\d){9,}/.test(paragraph) || /(?<!\S)(?:\S[ \t]+){5,}\S(?!\S)/u.test(paragraph);
 const sentence = (paragraph: string) => /[.!?]["')\]]*$/.test(paragraph.trim());
+// a value of plain words has no shape to spot, so a password label or a key handed over drops the whole message, as base did
+const PASSWORD_WORDS = /\b(?:passwords?|passcodes?|passwd|pins?)\b|비밀\s*번호|비번|암호(?!화|학)|패스워드|패스코드|핀\s*번호/i;
+const KEY_WORDS = String.raw`(?:api[ _-]?(?:key|token)|(?:access|auth|bearer|refresh) token|secret key|private key)`;
+const KEY_HANDED = new RegExp(String.raw`\b(?:the|my|our|your|this|that|an?|new)\s+(?:[\w-]+\s+)?${KEY_WORDS}\b|\b${KEY_WORDS}\s*(?:is|are|:|=)|(?:api|에이피아이)\s*(?:키|토큰)\s*(?:은|는|:|=)`, "i");
+const LOGIN_LABEL = /\b(?:log[- ]?in|sign[- ]?in|user ?name)\s*(?:is|:|=)\s*\S/i;
 
 /** The user's own typing: pastes, attachments, code and quotes cut; a sensitive paragraph goes and a long one is clipped, unless the caller screens each line, which drops long ones as noise. */
 export function userTyping(text: string, dropSensitive = true, keepImages = false, clipLong = dropSensitive): string {
   const typed = withoutBlocks(text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : ""));
+  if (dropSensitive && [PASSWORD_WORDS, KEY_HANDED].some((label) => label.test(plainTalk(typed)))) return "";
   const paragraphs = typed.split(/\n\s*\n/);
   const secret = paragraphs.map((paragraph) => dropSensitive && secretValue(paragraph));
   const flagged = secret.some(Boolean);
@@ -188,7 +194,7 @@ export function userTyping(text: string, dropSensitive = true, keepImages = fals
       !(shortParagraph(paragraph, NEIGHBOR_WORDS) && beside(index).some((label) => !sentence(label) || !sentence(paragraph))))
     .map((paragraph) => paragraph.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, ""))
     // a clip is never checked past its cut, so a long paragraph holding a value goes whole
-    .filter((paragraph) => (paragraph.length <= PARAGRAPH_MAX && paragraph.split("\n").length <= PARAGRAPH_LINES) || (clipLong && !holdsValue(paragraph)))
+    .filter((paragraph) => (paragraph.length <= PARAGRAPH_MAX && paragraph.split("\n").length <= PARAGRAPH_LINES) || (clipLong && !holdsValue(paragraph) && !LOGIN_LABEL.test(paragraph)))
     .map((paragraph) => clipParagraph(paragraph.split("\n").filter((line) => !line.trimStart().startsWith(">")).join("\n").trim()))
     .filter(Boolean);
   return redactSecretsInText(kept.join("\n\n"));
@@ -314,12 +320,13 @@ export function maskSecretValues(text: string): string {
     i === VALUE_PATTERNS.length - 1 && plainValue(value, all.slice(Math.max(0, at - 40), at), all) ? value : `«redacted ${value.length} chars»`), redactRoomMemory(text));
 }
 
+const plainTalk = (text: string) => text
+  .replace(/\b(?:(?:under|fewer than|up to|at most)\s+\d+|fewer|more|\d+)\s+tokens?\b/gi, "")
+  .replace(/\bpin\s+(?:it|this|that|the\s+\w+)\s+(?:to|at|on)\b/gi, "")
+  .replace(/\bsecret\s+(?:menu|theme|level|door|room)\b/gi, "");
+
 function secretValue(text: string): boolean {
-  const plain = text
-    .replace(/\b(?:(?:under|fewer than|up to|at most)\s+\d+|fewer|more|\d+)\s+tokens?\b/gi, "")
-    .replace(/\bpin\s+(?:it|this|that|the\s+\w+)\s+(?:to|at|on)\b/gi, "")
-    .replace(/\bsecret\s+(?:menu|theme|level|door|room)\b/gi, "");
-  return secretLike(plain);
+  return secretLike(plainTalk(text));
 }
 
 const STOP_WORDS = new Set(["the", "and", "but", "for", "with", "are", "was", "that", "this", "you", "your", "can", "can't", "cant", "don't", "dont", "just", "have", "has", "not", "i'm", "it's", "its", "really"]);

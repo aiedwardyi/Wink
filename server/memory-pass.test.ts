@@ -1846,6 +1846,22 @@ describe("memory pass", () => {
     expect(prompt).not.toContain("tokens.");
   });
 
+  it.each([
+    ["a plain fact", "I live in Seoul and build the glasses app", 1],
+    ["a value two paragraphs from its label", "password for the nas\n\nok so\n\nPurpleMonkeyDishwasher", 0],
+    ["a value with symbols beside its label", "the staging password is in the next line\n\nlet's go with option B for the header, and use Tr@ub!dor&xQ for the staging login", 0],
+    ["a plain-word value beside its label", "the staging password is in the next line\n\nlet's go with option B for the header, and use PurpleMonkeyDishwasher for the staging login", 0],
+    ["a login in a long paragraph", `router login is admin / PurpleMonkeyDishwasher ${"The glasses app should feel calm and fast for a founder walking into a meeting, with one glance views and no menus to dig through. ".repeat(4)}`, 0],
+    ["a value in a long sentence", "password for the nas\n\nok so\n\nit is PurpleMonkeyDishwasher and you type it exactly like that with capitals", 0],
+    ["a passphrase", "the vault password is below\n\nok\n\nseven purple otters dance under quiet moonlight tonight", 0],
+    ["4-digit pins past a decision", "my bank pin is in the last line\n\nFor the glasses app go with option B for the header: small logo on the left, the person brief in the middle, and the three competitor chips under it, because it reads faster at a glance than option A did in the demo yesterday.\n\nit's 4821 for the card and 7731 for the app, remember both of them", 0],
+    ["a Korean value", "와이파이 비밀번호 알려줄게\n\n알겠어\n\n손님용은 보라색원숭이식기세척기 이고 위층에서도 잘 잡혀 그러니까 그걸로 써", 0],
+  ] as const)("calls the note-taker for %s only when no label points at a value", async (_, text, calls) => {
+    say("t1", text);
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(calls);
+  });
+
   it("skips quietly when Claude is missing or signed out", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     generate.mockRejectedValue(new Error("Not logged in - Please run /login"));
@@ -2232,10 +2248,38 @@ describe("memory pass filters", () => {
   it("keeps the rest of a message when one paragraph looks secret", () => {
     const spec = "Glasses v1 is the CEO meeting tool, keep the brief short and watch the tokens.\n\nPart 2 shows top 3 competitors and 1 news line.";
     expect(userTyping(spec)).toBe("Part 2 shows top 3 competitors and 1 news line.");
+  });
+
+  it("drops the whole message for a password label or a key handed over, since a plain-word value has no shape", () => {
     const kept = "I live in Seoul and build the glasses app for founders walking into a meeting";
-    for (const said of [`${kept}\n\nmy wifi password is\n\nhunter22`, `${kept}\n\nhunter22\n\nthat's my wifi password`, `${kept}\n\nmy wifi password:\n\nit's hunter22`]) {
-      expect(userTyping(said)).toBe(kept);
-    }
+    const word = "PurpleMonkeyDishwasher";
+    const prose = (length: number) => "The glasses app should feel calm and fast for a founder walking into a meeting, with one glance views and no menus to dig through. ".repeat(5).slice(0, length).trimEnd();
+    const decision = "For the glasses app go with option B for the header: small logo on the left, the person brief in the middle, and the three competitor chips under it, because it reads faster at a glance than option A did in the demo yesterday.";
+    for (const said of [
+      `${kept}\n\nmy wifi password is\n\nhunter22`,
+      `${kept}\n\nhunter22\n\nthat's my wifi password`,
+      `${kept}\n\nmy wifi password:\n\nit's hunter22`,
+      `the staging password is in the next line\n\nlet's go with option B for the header, and use ${word} for the staging login`,
+      `${prose(120)} The router login is admin / ${word} for now. ${prose(420)}\n\npassword: hunter2!Xy9zz`,
+      `router login is admin / ${word} ${prose(520)}`,
+      `와이파이 비밀번호 알려줄게\n\n손님용은 ${word} 이고 위층에서도 잘 잡혀 그러니까 그걸로 쓰고 다른 사람한테는 절대 알려주지 마`,
+      `password for the nas\n\nok so\n\nit is ${word} and you type it exactly like that with capitals`,
+      "the vault password is below\n\nok\n\nseven purple otters dance under quiet moonlight tonight",
+      `${word} is what I set last night for everything\n\n${decision}\n\nthat first line is the root password btw`,
+      "The nas password is below.\n\nIt is MarigoldTeacupSaxophone, all one word, capitals as shown.",
+      "the safe password is below\n\nit's the word tulipgarden typed twice with no space between the two copies ok thanks",
+      `my bank pin is in the last line\n\n${decision}\n\nit's 4821 for the card and 7731 for the app, remember both of them`,
+      "와이파이 비밀번호 알려줄게\n\n알겠어\n\n손님용은 보라색원숭이식기세척기 이고 위층에서도 잘 잡혀 그러니까 그걸로 써",
+      `wifi password below, then the plan\n\nlantern orchid granite whisper velvet thunder maple and that is all lowercase with single spaces between the seven words\n\n${decision}`,
+      "here is the api token for the staging box\n\nuse maple-otter-canyon-drift as the value and put it in the header named x-wink on every call",
+      "password: hunter2!Xy9zz\n\nand the backup one is MarigoldTeacupSaxophone in case the first one stops working after the router update next week",
+    ]) expect(userTyping(said)).toBe("");
+  });
+
+  it("still sends what base sent beside the words a password or key label uses", () => {
+    for (const said of ["PR 2140 ea5032e5f", "#2140 is next", "$29.99", "15:38", "server/store.ts", "the login page is ugly", "pw reset email is ugly"]) expect(userTyping(said)).toBe(said);
+    const brief = `the sign in page should feel calm: ${"the person, their company and what they shipped lately, ".repeat(9)}`;
+    expect(userTyping(brief)).toBe(`${brief.slice(0, 400).trimEnd()}…`);
   });
 
   it("never sends a value whose label sits paragraphs away or that a long paragraph holds", () => {
@@ -2253,7 +2297,7 @@ describe("memory pass filters", () => {
       `my wifi password is\n\n${value}\nand the guest one is Vx9mK2pQ7zLw`,
       `${decision}\n\nhere is the admin password\n\n${decision.slice(0, 80)}\n\n${value}`,
     ]) expect(userTyping(said)).not.toMatch(/Tr0ub4dor|horse battery|Vx9mK2pQ7zLw/);
-    expect(userTyping(`this is the wifi password\n\n${phrase}\n\n${decision}`)).toBe(decision);
+    expect(userTyping(`this is the wifi password\n\n${phrase}\n\n${decision}`)).toBe("");
   });
 
   it("drops a value with no digit beside its label", () => {
@@ -2275,7 +2319,7 @@ describe("memory pass filters", () => {
   it("drops a value two paragraphs from its label, before or after it", () => {
     const decision = "For the glasses app go with option B for the header: small logo on the left and the person brief in the middle, because it reads faster at a glance.";
     expect(userTyping("password for the nas\n\nok so\n\nOrangeWalrusTeapot")).toBe("");
-    expect(userTyping(`J@zz!hands&Go\n\n${decision}\n\nthat first line is the root password btw`)).toBe(decision);
+    expect(userTyping(`J@zz!hands&Go\n\n${decision}\n\nthat first line is the root password btw`)).toBe("");
   });
 
   it("never clips and sends a long paragraph holding a value with no digit", () => {
