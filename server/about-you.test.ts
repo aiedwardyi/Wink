@@ -107,6 +107,18 @@ describe("About You save", () => {
     expect(status).toBe(400);
   });
 
+  it("answers a source removal only after what must follow it ran", async () => {
+    addToAboutYou("- Likes short answers.\nSource: ChatGPT", "2026-11-16");
+    const order: string[] = [];
+    const res = { writeHead: () => order.push("sent"), setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
+    await aboutYouRoutes.remove(res, "ChatGPT", async () => {
+      await Promise.resolve();
+      order.push("refreshed");
+    });
+    expect(order).toEqual(["refreshed", "sent"]);
+    expect(aboutYouSources()).toEqual([]);
+  });
+
   it("refuses an empty or oversized paste and saves nothing", () => {
     expect(addToAboutYou("  \n", "2026-11-16")).toEqual({ error: "empty" });
     expect(addToAboutYou("x".repeat(4 * 1024 * 1024 + 1), "2026-11-16")).toEqual({ error: "too-large" });

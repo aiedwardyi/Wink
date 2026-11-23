@@ -9249,9 +9249,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (path === "/api/about-you/decline" && method === "POST") return aboutYouRoutes.decline(res);
     m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);
     if (m && method === "DELETE") {
-      aboutYouRoutes.remove(res, m[1]);
-      for (const bot of store.bots) void memoryLookup.refresh(bot.id);
-      return;
+      // the removed lines are out of every bot's lookup before the removal is answered
+      return aboutYouRoutes.remove(res, m[1], async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
     }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's

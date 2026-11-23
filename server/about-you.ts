@@ -333,7 +333,7 @@ export const aboutYouRoutes = {
     if (result.error === "too-large") return json(res, 413, { error: result.error, maxBytes: ABOUT_YOU_MAX_PASTE });
     return json(res, result.error === "empty" ? 400 : 500, { error: result.error });
   },
-  remove(res: ServerResponse, encoded: string) {
+  async remove(res: ServerResponse, encoded: string, saved: () => Promise<void> = async () => {}) {
     let source: string;
     try {
       source = decodeURIComponent(encoded);
@@ -341,6 +341,7 @@ export const aboutYouRoutes = {
       return json(res, 400, { error: "bad source name" });
     }
     removeAboutYouSource(source);
+    await saved();
     return json(res, 200, { sources: aboutYouSources() });
   },
 };
