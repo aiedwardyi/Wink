@@ -72,6 +72,16 @@ describe("About You save", () => {
     expect(factsOf(`- ${head} violet-meadow-finch`)).toEqual({ facts: [], hidden: 0, flagged: [`${head} violet-meadow-finch`] });
   });
 
+  it("drops a whole private key, whatever list marker its rows carry, and offers none of it back", () => {
+    const row = (n: number) => `MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt${n}`.padEnd(64, "x");
+    const key = ["-----BEGIN RSA PRIVATE KEY-----", `- ${row(1)}`, `* ${row(2)}`, `  1. ${row(3)}`, `• ${row(4)}`, "", `- ${row(5)}`, "-----END RSA PRIVATE KEY-----"];
+    const paste = ["- Plays cello on Sundays.", ...key, "- Lives in Seoul."].join("\n");
+    expect(factsOf(paste)).toEqual({ facts: ["Plays cello on Sundays.", "Lives in Seoul."], hidden: 1, flagged: [] });
+    expect(factsOf(paste.replace("-----BEGIN", "- -----BEGIN").replace("-----END", "- -----END"))).toEqual({ facts: ["Plays cello on Sundays.", "Lives in Seoul."], hidden: 1, flagged: [] });
+    const encrypted = ["-----BEGIN RSA PRIVATE KEY-----", "- Proc-Type: 4,ENCRYPTED", "- DEK-Info: AES-128-CBC,0123456789ABCDEF", "", `- ${row(6)}`, "-----END RSA PRIVATE KEY-----"];
+    expect(factsOf(encrypted.join("\n"))).toEqual({ facts: [], hidden: 1, flagged: [] });
+  });
+
   it("keeps every byte of a word longer than a memory line", () => {
     const url = `https://example.com/${"a".repeat(400)}`;
     const { facts } = factsOf(`- Project page: ${url}`);

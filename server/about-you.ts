@@ -99,8 +99,12 @@ export function factsOf(paste: string): { facts: string[]; hidden: number; flagg
   for (const raw of paste.split(/\r?\n/)) {
     // a private key spans lines, and its last base64 row alone reads as nothing, so the whole block goes
     if (pem) {
-      if (PEM_END.test(raw)) pem = false;
-      if (PEM_END.test(raw) || PEM_BODY.test(raw)) continue;
+      if (PEM_END.test(raw)) {
+        pem = false;
+        continue;
+      }
+      // a row may carry the list marker of the paste it came from
+      if (PEM_BODY.test(clean(raw.trim()))) continue;
       pem = false;
     }
     if (raw.includes("-----") && PEM_BEGIN.test(raw)) {
