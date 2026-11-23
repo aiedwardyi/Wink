@@ -49,6 +49,7 @@ import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, inSendOrder, queuedSendIds, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
+import { warmMedia } from "@/lib/media-index";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
 import { hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
@@ -1040,6 +1041,12 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     setMenu(null);
   }
   useEffect(() => preview ? undefined : endSelectMode, [bot.threadId, preview]);
+  // The side pane opens on Media, which waits for the whole chat's list: ask once the page is idle, with no turn live and nothing typed.
+  useEffect(() => {
+    if (preview || hidden || bot.busy) return;
+    const idle = window.requestIdleCallback?.(() => { if (!composerInputRef.current?.value) warmMedia(bot.threadId); });
+    return () => { if (idle !== undefined) window.cancelIdleCallback(idle); };
+  }, [bot.threadId, bot.busy, preview, hidden]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
       if (findBlocked || preview) return;
