@@ -433,13 +433,39 @@ describe("a teammate's request under the host's setting for the bot", () => {
     for (const driver of BUILT_IN_DRIVERS.filter((candidate) => candidate.driverKind !== "boxAgent")) {
       const instance = await driver.create({ instanceId: `read-only-${driver.driverKind}`, displayName: undefined, environment: {}, enabled: false, config: driver.defaultConfig() });
       const endAsk = vi.fn();
-      const refused = new Function("works", "instance", "authority", "endAsk", "cantWorkLine", "bot", "userName", js(`${gate!.getText(index)}\nreturn false;`))(
-        works, instance, ask!.id, endAsk, (bot: string, host: string) => `${bot} can't take requests from you yet. ${host} has to turn on "Can make bots work" for you.`, { name: "Wink" }, "Edward",
+      const refused = new Function("works", "guestReadOnly", "instance", "authority", "endAsk", "cantWorkLine", "bot", "userName", js(`${gate!.getText(index)}\nreturn false;`))(
+        works, true, instance, ask!.id, endAsk, (bot: string, host: string) => `${bot} can't take requests from you yet. ${host} has to turn on "Can make bots work" for you.`, { name: "Wink" }, "Edward",
       );
       await instance.dispose();
       expect({ engine: driver.driverKind, refused, said: endAsk.mock.calls }).toEqual({ engine: driver.driverKind, refused: false, said: [] });
     }
     expect(turnAccess(ask!.id, { autoApprove: true }, false, works)).toEqual({ approval: "ask", readOnly: true });
+  });
+
+  it("refuses a switched-on teammate's turn on an engine that can't work read-only, while the bot is in Ask mode", async () => {
+    const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
+    let gate: ts.IfStatement | undefined;
+    const walk = (node: ts.Node) => {
+      if (ts.isIfStatement(node) && node.thenStatement.getText(index).includes("cantWorkLine(")) gate ??= node;
+      ts.forEachChild(node, walk);
+    };
+    walk(runner);
+    setPersonWorks(group.hosted.roomId, sora.id, true);
+    const ask = running();
+    const box = BUILT_IN_DRIVERS.find((candidate) => candidate.driverKind === "boxAgent")!;
+    const instance = await box.create({ instanceId: "read-only-box", displayName: undefined, environment: {}, enabled: false, config: box.defaultConfig() });
+    const refusedFor = (autoApprove: boolean) => {
+      const works = turnWorks(ask.id);
+      const access = turnAccess(ask.id, { autoApprove }, false, works);
+      const endAsk = vi.fn();
+      const refused = new Function("works", "guestReadOnly", "instance", "authority", "endAsk", "cantWorkLine", "bot", "userName", js(`${gate!.getText(index)}\nreturn false;`))(
+        works, access.readOnly === true, instance, ask.id, endAsk, () => "can't work", { name: "Wink" }, "Edward",
+      );
+      return { refused, ended: endAsk.mock.calls.length };
+    };
+    await instance.dispose();
+    expect(refusedFor(false)).toEqual({ refused: true, ended: 1 });
+    expect(refusedFor(true)).toEqual({ refused: false, ended: 0 });
   });
 
   it("lets a read-only turn @ no other bot, since the next one would run without the asker's limits", () => {

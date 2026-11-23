@@ -7311,7 +7311,7 @@ async function runClaimedGroupMemberTurn(
   const guestAsked = asked && (!askFromHost(lead) || riders.some((ask) => !askFromHost(ask)));
   // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
   const guestReadOnly = Boolean(guestAsked && (!bot.autoApprove || !works));
-  if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
+  if ((!works || guestReadOnly) && instance.adapter.capabilities.readOnlyTurns !== true) {
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
   }
