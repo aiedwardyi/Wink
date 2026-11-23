@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { aboutYouNote } from "../../shared/about-you-note";
 import { useI18n } from "@/lib/i18n";
@@ -9,7 +9,7 @@ import { Fold } from "./Fold";
 import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 
 type Source = { source: string; facts: string[] };
-type Added = { added: number; found: number; hidden: number };
+type Added = { source: string; added: number; found: number; hidden: number; flagged?: string[] };
 
 const STEP = "flex items-center justify-between gap-4";
 const STEP_TITLE = "text-[13px] font-medium text-ink";
@@ -51,6 +51,56 @@ export function ImportPromptBox({ className }: { className?: string }) {
   );
 }
 
+/** Lines of a paste that looked like passwords, left out of memory. They live only in this component:
+ * Keep saves one as written, to wherever the paste went, and it leaves the list; leaving keeps the rest out. */
+export function SkippedLines({ lines, keep, className }: { lines: string[]; keep: (line: string) => Promise<void>; className?: string }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [kept, setKept] = useState<ReadonlySet<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const save = async (at: number) => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await keep(lines[at]!);
+      setKept((before) => new Set(before).add(at));
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // a kept line is in memory now, so it no longer counts as skipped
+  const left = lines.flatMap((line, at) => (kept.has(at) ? [] : [{ line, at }]));
+  if (!left.length) return null;
+
+  return (
+    <div data-import-skipped className={className}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-fit items-center gap-1.5 text-left text-[12.5px] leading-5 text-ink-secondary hover:text-ink focus-visible:text-ink focus-visible:outline-none">
+        {open ? <ChevronDown size={14} aria-hidden className="shrink-0" /> : <ChevronRight size={14} aria-hidden className="shrink-0" />}
+        {left.length === 1 ? t("importCard.skippedOne") : t("importCard.skipped", { count: left.length })}
+      </button>
+      <Fold open={open}>
+        <ul className="mt-1.5 flex flex-col gap-1.5">
+          {left.map(({ line, at }) => (
+            <li key={at} className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 text-[13px] leading-5 text-ink [overflow-wrap:anywhere]">{line}</span>
+              <button type="button" onClick={() => void save(at)} disabled={busy} className={cn(ROW_BUTTON, "text-ink")}>
+                {t("importCard.keep")}
+              </button>
+            </li>
+          ))}
+        </ul>
+        {failed && <div role="status" className="mt-1.5 text-[12.5px] text-ink">{t("aboutYou.failed")}</div>}
+      </Fold>
+    </div>
+  );
+}
+
 /** Settings > About You: what the user's other AI knew about them, read by every bot. */
 export function AboutYouCard() {
   const { t } = useI18n();
@@ -60,6 +110,8 @@ export function AboutYouCard() {
   const [more, setMore] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  // the last paste's password-looking lines, held here only; a new paste starts a new list
+  const [skipped, setSkipped] = useState<{ id: number; lines: string[]; source: string } | null>(null);
   // only the newest request's list lands: an older answer would undo a newer change
   const listSeq = useRef(0);
 
@@ -84,6 +136,7 @@ export function AboutYouCard() {
       setText("");
       setMore(false);
       setNote(aboutYouNote(body, t));
+      setSkipped(body.flagged?.length ? { id: seq, lines: body.flagged, source: body.source } : null);
     } catch (error) {
       setNote((error as { status?: number }).status === 413 ? t("aboutYou.tooLarge") : t("aboutYou.failed"));
     } finally {
@@ -100,6 +153,12 @@ export function AboutYouCard() {
     } catch {
       setNote(t("aboutYou.failed"));
     }
+  };
+
+  const keep = async (line: string) => {
+    const seq = ++listSeq.current;
+    const body: Added & { sources: Source[] } = await api("/api/about-you", { method: "POST", body: JSON.stringify({ keep: [line], source: skipped!.source }) });
+    if (seq === listSeq.current) setSources(body.sources);
   };
 
   const known = Boolean(sources?.length);
@@ -131,6 +190,7 @@ export function AboutYouCard() {
   return (
     <Card subtitle={known ? t("aboutYou.known") : t("aboutYou.empty")}>
       {note && <div role="status" className="mb-3 text-[13px] text-ink">{note}</div>}
+      {skipped && <SkippedLines key={skipped.id} lines={skipped.lines} keep={keep} className="mb-3" />}
       {known ? (
         <>
           <div className="divide-y divide-hairline/40">

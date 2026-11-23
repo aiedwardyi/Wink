@@ -15,7 +15,7 @@ import { findCliCandidates, refreshPathCache, splitCliString } from "../env-path
 import { clearVersionCache, cliRevision } from "../procs.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
 import { MISSING_HOME, missingAccountHome } from "../accounts.ts";
-import { EngineLogin } from "../engine-login.ts";
+import { EngineLogin, type LoginCapture } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
 import { warmPool as sharedWarmPool, type WarmPool } from "../drivers/warm-pool.ts";
 import { retiredEngineLabel } from "../../shared/model-selection.ts";
@@ -101,7 +101,8 @@ function cliOfRaw(raw: unknown): string | undefined {
 
 export class ProviderRegistry {
   readonly logins = new EngineLogin();
-  private signingOut = new Set<string>();
+  // The sign-out in flight per instance; a press while one runs gets its answer.
+  private signingOut = new Map<string, Promise<boolean>>();
   private accounts = new Map<string, AccountContext>();
   private blockedAccounts = new Set<string>();
   private checkingAccounts = new Set<string>();
@@ -391,7 +392,15 @@ export class ProviderRegistry {
     if (!args) return null;
     const env = device ? { ...config.env, ...login?.deviceEnv } : config.env;
     const paste = device || Boolean(config.account && config.engine === "claudeAgent");
-    const capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
+    const signInEnded = await this.get(instanceId)?.signingIn?.();
+    let capture: LoginCapture;
+    try {
+      capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
+    } catch (error) {
+      signInEnded?.(false);
+      throw error;
+    }
+    if (signInEnded) void this.logins.wait(instanceId).then(() => signInEnded(this.logins.state(instanceId) === "complete"));
     return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
       ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
     };
@@ -405,17 +414,36 @@ export class ProviderRegistry {
     return true;
   }
 
+  /** Whether a sign-out runs for this instance now; a press then joins it (signOut returns its answer). */
+  signingOutNow(instanceId: InstanceId) {
+    return this.signingOut.has(instanceId);
+  }
+
   async signOut(instanceId: InstanceId) {
     const config = this.loginConfig(instanceId);
     if (!config?.install?.logout) return null;
-    if (this.signingOut.has(instanceId)) return false;
-    this.signingOut.add(instanceId);
+    // A second press (another client, the phone, a reload, a retry) waits for the running sign-out and gets its answer.
+    const running = this.signingOut.get(instanceId);
+    if (running) return running;
+    let join!: (out: Promise<boolean>) => void;
+    const shared = new Promise<boolean>((resolve) => { join = resolve; });
+    shared.catch(() => undefined);
+    this.signingOut.set(instanceId, shared);
+    const out = this.signOutOnce(instanceId, config, config.install.logout);
+    join(out);
+    return out;
+  }
+
+  private async signOutOnce(instanceId: InstanceId, config: NonNullable<ReturnType<ProviderRegistry["loginConfig"]>>, logout: string[]) {
     const since = this.holdIdentity(instanceId, "sign-out");
     try {
       await this.logins.cancel(instanceId);
-      await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
+      await this.logins.start(instanceId, config.cli, logout, config.env, [], { scope: config.engine, account: config.account });
       await this.logins.wait(instanceId);
       let success = this.logins.state(instanceId) === "complete";
+      const signingOut = this.get(instanceId);
+      if (success && !config.account) signingOut?.signedOutByCli?.();
+      else if (!success && !config.account && signingOut?.signOutWithoutCli) success = await signingOut.signOutWithoutCli(this.logins.capture(instanceId).error);
       if (success || this.accounts.has(instanceId)) {
         if (success) this.logins.clear(instanceId);
         const previous = this.probed.get(instanceId);

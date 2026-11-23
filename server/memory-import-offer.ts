@@ -72,7 +72,9 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
   }
   const accepted: string[] = [];
   const result = addToAboutYou(pastedAnswer(deps.messages(source.threadId)), day((deps.now ?? Date.now)()), accepted);
-  const note = !("error" in result) ? aboutYouNote(result, t)
+  // the count only: a line that looked like a password is never echoed into the chat, which is saved and sent on
+  const flagged = !("error" in result) && result.flagged.length ? ` ${t(result.flagged.length === 1 ? "aboutYou.flaggedChatOne" : "aboutYou.flaggedChat", { count: result.flagged.length })}` : "";
+  const note = !("error" in result) ? (aboutYouNote(result, t) + flagged).trim()
     : result.error === "too-large" ? t("aboutYou.tooLarge")
     : result.error === "empty" ? t("aboutYou.noFacts")
     : t("aboutYou.failed");
