@@ -15,7 +15,7 @@ import { requestCredentials, roomDoorPath } from "../phone-auth.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { apiRequestAuthorized } from "../remote-access.ts";
 import { Store } from "../store.ts";
-import { askById, closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, startAsk, type HostedGroup, type RoomAskDeps } from "./asks.ts";
+import { askById, closeAsksDb, configureRoomAsks, readOnlyAskTurn, roomAsks, roomAskHooks, startAsk, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import * as roomDoor from "./door.ts";
@@ -348,6 +348,26 @@ describe("short codes", () => {
     const res = await post("/room/v1/join", { code: "abcdef", name: "Mina", device: "pc-mina-0123456789abcdef" });
     expect(res.status).toBe(200);
     expect(res.body.code).toBe(`wkr1:${HOST}:${long.id}.${long.secret}`);
+  });
+
+  it("joins with an 8-character short code", async () => {
+    const group = peopleRoom();
+    await shortRoomCode(group.hosted.roomId, async () => ({ code: "ABCDEFGH", exp: Date.now() + MINUTE }));
+    const res = await post("/room/v1/join", { code: "abcdefgh", name: "Mina", device: "pc-mina-0123456789abcdef" });
+    expect(res.status).toBe(200);
+    expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
+  });
+
+  it("gives a fresh short-code joiner read-only bot turns until the host lets them make bots work", async () => {
+    const wink = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
+    const group = store.createGroup("Team", [wink], false, undefined, undefined, { roomId: createRoom("Team").id }) as HostedGroup;
+    await shortRoomCode(group.hosted.roomId, async () => ({ code: "ABCDEFGH", exp: Date.now() + MINUTE }));
+    const res = await post("/room/v1/join", { code: "ABCDEFGH", name: "Mina", device: "pc-mina-0123456789abcdef" });
+    expect(res.status).toBe(200);
+    expect(roomPeople(group.hosted.roomId).find((person) => person.id === res.body.person.id)?.works).toBe(false);
+    const { ask } = hostedSend(group, { kind: "person", id: res.body.person.id }, "@Wink fix the build");
+    expect(startAsk(ask!.id)).toBe(true);
+    expect(readOnlyAskTurn(group.hosted.roomId, group.threadId, wink)).toBe(true);
   });
 
   it("refuses an unknown short code as no invite", async () => {
