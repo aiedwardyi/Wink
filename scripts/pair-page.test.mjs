@@ -181,6 +181,35 @@ describe("pair page", () => {
     expect(page.status.className).toBe("status ok");
   });
 
+  describe("on a glasses lens", () => {
+    const lens = (glasses) => vi.stubGlobal("matchMedia", (query) => ({ matches: glasses && query.includes("aspect-ratio"), media: query }));
+    const glass = () => document.getElementById("glass");
+    afterEach(() => document.body.removeAttribute("class"));
+
+    it.each([
+      ["?g=1 when the PC can't take Google", "/pair?g=1", googlePc({ start: 409 })],
+      ["a refused Google sign-in", "/pair#g=id.token.sig", googlePc({ signIn: () => new Response(JSON.stringify({ error: "wrong-account" }), { status: 403 }) })],
+    ])("falls back to the glasses code screen after %s", async (_, url, answer) => {
+      lens(true);
+      const page = open(url, answer);
+      await vi.waitFor(() => expect(glass().hidden).toBe(false));
+      expect(document.body.classList.contains("glasses")).toBe(true);
+      expect(page.form.hidden).toBe(true);
+      expect(document.activeElement?.id).toBe("g-code");
+    });
+
+    it.each([
+      ["?g=1 when the PC can't take Google", "/pair?g=1", googlePc({ start: 409 })],
+      ["a refused Google sign-in", "/pair#g=id.token.sig", googlePc({ signIn: () => new Response(JSON.stringify({ error: "wrong-account" }), { status: 403 }) })],
+    ])("keeps the phone form after %s on a phone", async (_, url, answer) => {
+      lens(false);
+      const page = open(url, answer);
+      await vi.waitFor(() => expect(page.form.hidden).toBe(false));
+      expect(glass().hidden).toBe(true);
+      expect(document.body.classList.contains("glasses")).toBe(false);
+    });
+  });
+
   it("names a wrong account and offers the code field after a refused Google sign-in", async () => {
     for (const [error, text] of [["wrong-account", "Use the Google account this PC is signed in with."], ["nonce-mismatch", "Google sign-in did not work. Try again, or enter the 6 digit code."]]) {
       const page = open("/pair#g=id.token.sig", googlePc({ signIn: () => new Response(JSON.stringify({ error }), { status: 403 }) }));
