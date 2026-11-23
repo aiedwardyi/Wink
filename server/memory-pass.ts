@@ -39,6 +39,7 @@ const DECISION_MAX = 100;
 const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
+const NEIGHBOR_WORDS = 12;
 const SUMMARY_MAX = 120;
 const PARAGRAPH_MAX = 400;
 const PARAGRAPH_LINES = 6;
@@ -167,9 +168,12 @@ const clipParagraph = (paragraph: string) => {
   const head = lines.slice(0, PARAGRAPH_LINES).join("\n");
   return head.length <= PARAGRAPH_MAX && lines.length <= PARAGRAPH_LINES ? head : `${head.slice(0, PARAGRAPH_MAX).trimEnd()}…`;
 };
-const shortParagraph = (paragraph: string) => !paragraph.trim().includes("\n") && paragraph.trim().split(/\s+/).length <= SHORT_ANSWER;
-// letters and digits in one word, like Tr0ub4dor&3xQ or hunter22
-const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some((word) => word.length >= 6 && /\p{L}/u.test(word) && /\d/.test(word));
+const shortParagraph = (paragraph: string, most = SHORT_ANSWER) => paragraph.trim().split(/\s+/).length <= most;
+const valueWord = (word: string) => word.length >= 6 && /\p{L}/u.test(word) &&
+  (/\d/.test(word) || /\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+){2,}/u.test(word) || (/\p{L}[!@#$%^&*=~|<>{}]+\p{L}/u.test(word) && !/:\/\/|^\W*[\w.+-]+@[\w-]+\.[\w.-]+\W*$/.test(word)));
+// Tr0ub4dor&3xQ, Tr@ub!dor&xQ, Blue-Horse-Staple, card or account digits, or a value spelled out letter by letter
+const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some(valueWord) || /\d(?:[ -]?\d){9,}/.test(paragraph) || /(?<!\S)(?:\S[ \t]+){5,}\S(?!\S)/u.test(paragraph);
+const sentence = (paragraph: string) => /[.!?]["')\]]*$/.test(paragraph.trim());
 
 /** The user's own typing: pastes, attachments, code and quotes cut; a sensitive paragraph goes and a long one is clipped, unless the caller screens each line, which drops long ones as noise. */
 export function userTyping(text: string, dropSensitive = true, keepImages = false, clipLong = dropSensitive): string {
@@ -177,9 +181,11 @@ export function userTyping(text: string, dropSensitive = true, keepImages = fals
   const paragraphs = typed.split(/\n\s*\n/);
   const secret = paragraphs.map((paragraph) => dropSensitive && secretValue(paragraph));
   const flagged = secret.some(Boolean);
-  // a label and its value can sit paragraphs apart: once one looks secret, one holding a value goes, and a short one beside it
+  // a label and its value can sit paragraphs apart: once one looks secret, a value or a short line goes anywhere, and a phrase beside it unless both read as sentences
+  const beside = (index: number) => [index - 1, index + 1].filter((at) => secret[at]).map((at) => paragraphs[at]!);
   const kept = paragraphs
-    .filter((paragraph, index) => !secret[index] && !(flagged && holdsValue(paragraph)) && !(shortParagraph(paragraph) && (secret[index - 1] || secret[index + 1])))
+    .filter((paragraph, index) => !secret[index] && !(flagged && (holdsValue(paragraph) || shortParagraph(paragraph))) &&
+      !(shortParagraph(paragraph, NEIGHBOR_WORDS) && beside(index).some((label) => !sentence(label) || !sentence(paragraph))))
     .map((paragraph) => paragraph.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, ""))
     // a clip is never checked past its cut, so a long paragraph holding a value goes whole
     .filter((paragraph) => (paragraph.length <= PARAGRAPH_MAX && paragraph.split("\n").length <= PARAGRAPH_LINES) || (clipLong && !holdsValue(paragraph)))

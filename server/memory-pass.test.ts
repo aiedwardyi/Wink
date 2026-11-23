@@ -2232,7 +2232,7 @@ describe("memory pass filters", () => {
   it("keeps the rest of a message when one paragraph looks secret", () => {
     const spec = "Glasses v1 is the CEO meeting tool, keep the brief short and watch the tokens.\n\nPart 2 shows top 3 competitors and 1 news line.";
     expect(userTyping(spec)).toBe("Part 2 shows top 3 competitors and 1 news line.");
-    const kept = "I live in Seoul and build the glasses app";
+    const kept = "I live in Seoul and build the glasses app for founders walking into a meeting";
     for (const said of [`${kept}\n\nmy wifi password is\n\nhunter22`, `${kept}\n\nhunter22\n\nthat's my wifi password`, `${kept}\n\nmy wifi password:\n\nit's hunter22`]) {
       expect(userTyping(said)).toBe(kept);
     }
@@ -2254,6 +2254,38 @@ describe("memory pass filters", () => {
       `${decision}\n\nhere is the admin password\n\n${decision.slice(0, 80)}\n\n${value}`,
     ]) expect(userTyping(said)).not.toMatch(/Tr0ub4dor|horse battery|Vx9mK2pQ7zLw/);
     expect(userTyping(`this is the wifi password\n\n${phrase}\n\n${decision}`)).toBe(decision);
+  });
+
+  it("drops a value with no digit beside its label", () => {
+    expect(userTyping("the staging password is in the next line\n\nlet's use Fr@nk!ly&On for the staging login from now on ok")).toBe("");
+  });
+
+  it("drops a passphrase over 6 words beside its label", () => {
+    expect(userTyping("the vault password is below\n\nlantern copper river eleven quiet maple storm")).toBe("");
+  });
+
+  it("drops digits-only values beside their label", () => {
+    expect(userTyping("my bank card secret details\n\n5500 0000 0000 0004 09 28 321 7395")).toBe("");
+  });
+
+  it("drops a value spelled out with spaces", () => {
+    expect(userTyping("the safe password is below\n\nk 9 v x 2 m p q 7 z")).toBe("");
+  });
+
+  it("drops a value two paragraphs from its label, before or after it", () => {
+    const decision = "For the glasses app go with option B for the header: small logo on the left and the person brief in the middle, because it reads faster at a glance.";
+    expect(userTyping("password for the nas\n\nok so\n\nOrangeWalrusTeapot")).toBe("");
+    expect(userTyping(`J@zz!hands&Go\n\n${decision}\n\nthat first line is the root password btw`)).toBe(decision);
+  });
+
+  it("never clips and sends a long paragraph holding a value with no digit", () => {
+    const prose = "The glasses app should feel calm and fast for a founder walking into a meeting. ".repeat(8);
+    expect(userTyping(`router login is admin / Fr@nk!ly&On ${prose}`)).toBe("");
+    expect(userTyping(`${prose.slice(0, 120)} The router login is admin / Red-Kite-Paper-Lamp for now. ${prose}\n\npassword: hunter2!Xy9zz`)).toBe("");
+  });
+
+  it("drops a value beside a Korean label", () => {
+    expect(userTyping("와이파이 비밀번호 알려줄게\n\n손님용은 OrangeWalrusTeapot 이고 위층에서도 잘 잡혀 그러니까 그걸로 써")).toBe("");
   });
 
   it("clips a long paragraph instead of dropping it", () => {
