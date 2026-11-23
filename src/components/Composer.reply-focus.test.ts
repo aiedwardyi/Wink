@@ -27,9 +27,13 @@ vi.mock("@/state/store", async (importOriginal) => {
 });
 
 import { Composer } from "./Composer";
+import { useReplyDraft } from "@/lib/drafts";
+import { useReplyFocus } from "@/lib/reply-focus";
+import { useTeamRoomReply } from "./TeamRoomComposer";
 import { api, type Bot, type Message } from "@/state/store";
 
 const replyMessage: Message = { id: "m1", role: "bot", kind: "text", text: "hi", at: 0 };
+const transcript = [replyMessage];
 
 let root: ReturnType<typeof createRoot> | null = null;
 let host: HTMLElement | null = null;
@@ -269,6 +273,50 @@ describe("composer reply focus", () => {
     expect(document.activeElement).not.toBe(textarea);
     await act(async () => textarea.focus());
     expect(document.activeElement).toBe(textarea);
+  });
+
+  describe("Reply tap on a phone", () => {
+    function Harness({ locked, room }: { locked: boolean; room: boolean }) {
+      const draft = useReplyDraft("tap-thread", "tap-draft", transcript);
+      const pick = useReplyFocus(draft.selectReply);
+      const team = useTeamRoomReply("tap-room", "tap-room-draft", transcript);
+      const { replyTo, selectReply } = room ? team : { replyTo: draft.replyTo, selectReply: pick };
+      return createElement("div", null,
+        createElement("button", { "data-reply": true, onClick: () => selectReply(replyMessage) }),
+        createElement(Composer, { replyTo, locked }));
+    }
+    async function phone(locked = false, room = false) {
+      const matchMedia = window.matchMedia.bind(window);
+      vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ ...matchMedia(query), matches: query === "(pointer: coarse)" }));
+      host = document.createElement("div");
+      document.body.append(host);
+      root = createRoot(host);
+      await act(async () => root!.render(createElement(Harness, { locked, room })));
+      return { textarea: host.querySelector("textarea")!, tap: () => host!.querySelector<HTMLButtonElement>("[data-reply]")!.click() };
+    }
+
+    it.each([false, true])("opens the keyboard inside the tap itself (team room %s)", async (room) => {
+      const { textarea, tap } = await phone(false, room);
+      tap();
+      expect(document.activeElement).toBe(textarea);
+    });
+
+    it("leaves a locked box alone", async () => {
+      const { textarea, tap } = await phone(true);
+      tap();
+      expect(document.activeElement).not.toBe(textarea);
+    });
+
+    it("leaves a modal alone", async () => {
+      const { textarea, tap } = await phone();
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      document.body.append(dialog);
+      tap();
+      dialog.remove();
+      expect(document.activeElement).not.toBe(textarea);
+    });
   });
 
   it("consumes mobile chat focus requests without opening the keyboard", async () => {
