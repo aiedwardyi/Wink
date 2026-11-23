@@ -64,7 +64,7 @@ export function createUsageBoard(deps: Deps) {
   let accountSet = "";
   let epoch = 0;
   let previous = new Map<string, number>();
-  let shownFolds = "";
+  let shownFolds = "[]";
   // Accounts the last known runs had workers on: a read without runs keeps that answer instead of flipping rows.
   const working = new Set<string>();
   const identities = new Map<string, string | null>();
@@ -115,6 +115,7 @@ export function createUsageBoard(deps: Deps) {
       }
       for (const [id, report] of reports) if (current.get(id) !== report.generation) reports.delete(id);
       for (const [id, turn] of turns) if (current.get(turn.accountId) !== turn.generation) turns.delete(id);
+      for (const id of working) if (!current.has(id)) working.delete(id);
       previous = current;
       accountSet = signature;
       epoch++;
@@ -298,8 +299,8 @@ export function createUsageBoard(deps: Deps) {
       folds.push(...group.duplicates);
     }
     // Rows come and go without an account change: the next read is a full one, so a returning row brings its whole history.
-    if (folds.join() !== shownFolds) {
-      shownFolds = folds.join();
+    if (JSON.stringify(folds) !== shownFolds) {
+      shownFolds = JSON.stringify(folds);
       epoch++;
       bump();
     }

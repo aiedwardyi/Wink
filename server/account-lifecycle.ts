@@ -253,7 +253,7 @@ export class AccountLifecycle {
         if (guarded) {
           this.hooks.invalidate(id);
           // Invalidating drops the signed-out check and a stopped base never checks on its own: without a new one it reads as not installed.
-          await this.registry.retryAccount(id).catch(() => {});
+          await this.registry.retryAccount(id).catch(() => { console.error("Signed-out base check could not be refreshed"); });
         }
         return {};
       }
