@@ -58,6 +58,11 @@ describe("fileableNotes", () => {
     const raw = ["# Bot memory", "## Project", "~~~~md", "```", "- inside the tildes", "~~~", "- still inside", "~~~~", "- after the block"].join("\n");
     expect(fileableNotes(raw).map(({ text }) => text)).toEqual(["- after the block"]);
   });
+
+  it("sees code fences in a CRLF file", () => {
+    const raw = ["# Bot memory", "## Project", "~~~~md", "```", "- inside the tildes", "~~~", "- still inside", "~~~~", "- after the block"].join("\r\n");
+    expect(fileableNotes(raw).map(({ text }) => text)).toEqual(["- after the block"]);
+  });
 });
 
 describe("planFiling", () => {
