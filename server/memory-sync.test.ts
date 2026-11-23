@@ -673,6 +673,74 @@ describe("memory sync", () => {
     expect(parked(b)).toEqual(["## Ana\n- owns deploys\n## Bo\n- owns docs\n"]);
   });
 
+  it("joins a new PC's first notes into the full notes, whichever PC sees the other first", () => {
+    const full = `# Memory\n\n${Array.from({ length: 30 }, (_, n) => `- fact ${n + 1} the user told this bot`).join("\n")}\n`;
+    for (const order of ["first pass", "b sees a", "a sees b", "both at once"]) {
+      const [a, b] = pcs();
+      edit(a, full);
+      markTalked(a.ledger, "bot-1", 5_000);
+      sync(a);
+      edit(b, "# Memory\n\n- Likes tea\n");
+      markTalked(b.ledger, "bot-1", 9_000);
+      if (order !== "first pass") sync(b);
+      if (order === "first pass" || order === "b sees a") {
+        receive(a, b);
+        sync(b);
+      } else if (order === "a sees b") {
+        receive(b, a);
+        sync(a);
+      } else {
+        receive(a, b);
+        receive(b, a);
+        sync(a);
+        sync(b);
+      }
+      for (let round = 0; round < 2; round++) {
+        receive(a, b);
+        receive(b, a);
+        sync(a);
+        sync(b);
+      }
+      for (const pc of [a, b]) {
+        expect(read(pc), order).toBe(`${full}- Likes tea\n`);
+        expect(parked(pc), order).toEqual([]);
+      }
+    }
+  });
+
+  it("syncs side files named in any language and in subfolders, where older builds still read the rest", () => {
+    const [a, b] = pcs();
+    edit(a, "# Memory\n- see memory/프로젝트.md\n");
+    edit(a, "Korean-named notes\n", "memory/프로젝트.md");
+    edit(a, "plan in a subfolder\n", "memory/projects/launch-plan.md");
+    sync(a);
+    receive(a, b);
+    sync(b);
+    expect(read(b, "memory/프로젝트.md")).toBe("Korean-named notes\n");
+    expect(read(b, "memory/projects/launch-plan.md")).toBe("plan in a subfolder\n");
+    // an older build parses `files` with its ASCII, no-folder name rule and rejects the whole snapshot on any other name
+    const snapshot = JSON.parse(capture(a));
+    expect(Object.keys(snapshot.files).every((name) => name === "MEMORY.md" || /^memory\/[\w][\w .-]{0,199}\.md$/.test(name))).toBe(true);
+    expect(Object.keys(snapshot.wide).sort()).toEqual(["memory/projects/launch-plan.md", "memory/프로젝트.md"]);
+  });
+
+  it("keeps a side file moved into a subfolder on the other PC", () => {
+    const [a, b] = pcs();
+    seed("# Memory\n- Launch plan: read memory/launch-plan.md before release talk\n", a, b);
+    edit(a, "Launch on Dec 1.\n", "memory/launch-plan.md");
+    sync(a);
+    receive(a, b);
+    sync(b);
+    mkdirSync(join(a.workspace, "memory", "archive"));
+    renameSync(join(a.workspace, "memory", "launch-plan.md"), join(a.workspace, "memory", "archive", "launch-plan.md"));
+    edit(a, "# Memory\n- Launch plan: read memory/archive/launch-plan.md before release talk\n");
+    sync(a);
+    receive(a, b);
+    sync(b);
+    expect(read(b, "memory/archive/launch-plan.md")).toBe("Launch on Dec 1.\n");
+    expect(read(b, "memory/launch-plan.md")).toBeNull();
+  });
+
   it("publishes the last good copy of a file it cannot read this pass", () => {
     const [a] = pcs(1);
     edit(a, "deploy notes\n", "memory/deploy.md");

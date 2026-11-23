@@ -24,8 +24,18 @@ const PARKED_FILE = /^memory\/(.+)\.conflict-[0-9a-f]{8}\.md$/;
 const PARKED_NOTE = "<!-- memory sync:";
 const MEMORY_FILE = "MEMORY.md";
 
-const isSyncedFile = (file: string) =>
-  file === MEMORY_FILE || (file.startsWith("memory/") && isMemoryTopicName(file.slice("memory/".length)));
+// any language's letters, up to 3 folders deep; never "..", a hidden name or a folder Windows would rename
+const TOPIC_NAME = /^[\p{L}\p{N}_][\p{L}\p{N}\p{M}_ .-]{0,199}\.md$/u;
+const TOPIC_FOLDER = /^[\p{L}\p{N}_][\p{L}\p{N}\p{M}_ .-]{0,99}(?<![ .])$/u;
+const TOPIC_DEPTH = 3;
+
+const isSyncedFile = (file: string) => {
+  if (file === MEMORY_FILE) return true;
+  const parts = file.split("/");
+  return parts[0] === "memory" && parts.length >= 2 && parts.length <= TOPIC_DEPTH + 2 && TOPIC_NAME.test(parts.at(-1)!) && parts.slice(1, -1).every((part) => TOPIC_FOLDER.test(part));
+};
+// older builds reject a whole snapshot that names a file outside their rule, so those files ride under a key they skip
+const isOlderBuildFile = (file: string) => file === MEMORY_FILE || (file.startsWith("memory/") && isMemoryTopicName(file.slice("memory/".length)));
 
 /** Device id -> the newest edit from that PC a copy includes. */
 const versionsSchema = z.record(z.string().regex(DEVICE), z.number().int().positive().max(Number.MAX_SAFE_INTEGER));
@@ -36,18 +46,21 @@ const time = z.number().int().nonnegative().max(8.64e15);
 const rankSchema = z.object({ device: z.string().regex(DEVICE), talkedAt: time });
 type Rank = z.infer<typeof rankSchema>;
 
+const filesSchema = z.record(
+  z.string().refine(isSyncedFile),
+  // tidied: the versions an idle tidy removed lines from, when that is all that changed since them
+  z.object({ vv: versionsSchema, at: time, text: z.string().nullable(), by: rankSchema.optional(), tidied: versionsSchema.optional() }),
+);
+
 const snapshotSchema = z.object({
   format: z.literal(FORMAT),
   version: z.literal(1),
   device: z.string().regex(DEVICE),
   // when the user last messaged this bot on that PC
   talkedAt: time,
-  files: z.record(
-    z.string().refine(isSyncedFile),
-    // tidied: the versions an idle tidy removed lines from, when that is all that changed since them
-    z.object({ vv: versionsSchema, at: time, text: z.string().nullable(), by: rankSchema.optional(), tidied: versionsSchema.optional() }),
-  ),
-});
+  files: filesSchema,
+  wide: filesSchema.optional(),
+}).transform(({ wide, ...snapshot }) => ({ ...snapshot, files: { ...snapshot.files, ...wide } }));
 type Snapshot = z.infer<typeof snapshotSchema>;
 
 const ledgerSchema = z.object({
@@ -143,14 +156,23 @@ function writeText(path: string, text: string | null): void {
   writeFileAtomic(path, text, { mode: 0o600 });
 }
 
-// MEMORY.md plus memory/<topic>.md; undefined when the topic folder exists but cannot be listed
+// MEMORY.md plus every synced file under memory/; undefined when a topic folder exists but cannot be listed
 function memoryFiles(root: string): string[] | undefined {
-  if (!existsSync(join(root, "memory"))) return [MEMORY_FILE];
-  try {
-    return [MEMORY_FILE, ...readdirSync(join(root, "memory")).filter(isMemoryTopicName).map((name) => `memory/${name}`)];
-  } catch {
-    return undefined;
-  }
+  const files = [MEMORY_FILE];
+  const walk = (folder: string, depth: number): boolean => {
+    if (!existsSync(join(root, folder))) return true;
+    try {
+      for (const entry of readdirSync(join(root, folder), { withFileTypes: true })) {
+        const file = `${folder}/${entry.name}`;
+        if (isSyncedFile(file)) files.push(file);
+        else if (entry.isDirectory() && depth < TOPIC_DEPTH && TOPIC_FOLDER.test(entry.name) && !walk(file, depth + 1)) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return walk("memory", 0) ? files : undefined;
 }
 
 function readRaw(path: string): string | null {
@@ -378,6 +400,20 @@ function park(workspace: string, file: string, text: string, at: number) {
   return { name, body };
 }
 
+const nonblank = (text: string) => text.split("\n").filter((line) => line.trim());
+
+// two PCs each started the file before either saw the other's, so nothing in one was removed from the other: every line of both, the longer copy first
+function joinFirstCopies(a: string, b: string): string {
+  const longer = nonblank(a).length - nonblank(b).length;
+  const [base, other] = longer > 0 || (longer === 0 && hash(a)! > hash(b)!) ? [a, b] : [b, a];
+  const lines = new Set(base.split("\n"));
+  const added = nonblank(other).filter((line) => !lines.has(line) && lines.add(line));
+  return added.length ? `${base.replace(/\n*$/, "\n")}${added.join("\n")}\n` : base;
+}
+
+// a copy only its own PC ever edited, and not one the older build handed over
+const firstCopy = (vv: Versions, by: Rank | undefined) => Object.keys(vv).length === 1 && !by;
+
 // every nonblank line of a set-aside copy is in its file, in the same order
 function covered(main: string, copy: string): boolean {
   const lines = main.split("\n");
@@ -524,7 +560,10 @@ export function syncBotMemory(
         continue;
       }
       // changed on two PCs at once, or the same versions with different text from a copied ledger
-      const merged: string | null = file === `memory/${PICKS_FILE}` && typeof text === "string" && entry.text !== null ? mergeTimelines(text, entry.text) : null;
+      const firsts: boolean = firstCopy(state.vv, state.by) && firstCopy(entry.vv, entry.by) && Object.keys(state.vv)[0] !== Object.keys(entry.vv)[0];
+      const merged: string | null = text === null || entry.text === null
+        ? null
+        : file === `memory/${PICKS_FILE}` ? mergeTimelines(text, entry.text) : firsts ? joinFirstCopies(text, entry.text) : null;
       if (merged !== null) {
         writeText(path, merged);
         text = merged;
@@ -584,13 +623,16 @@ export function syncBotMemory(
     results[file] = "pushed";
   }
   const published: Snapshot["files"] = {};
+  const wide: Snapshot["files"] = {};
   for (const [file, state] of Object.entries(bot.files)) {
     const text = texts.get(file);
     // unreadable this pass: keep what this PC last published rather than claim a delete
     const entry = text === undefined ? own?.files[file] : { vv: state.vv, at: state.at, text, by: state.by, tidied: state.tidied };
-    if (entry) published[file] = entry;
+    if (entry) (isOlderBuildFile(file) ? published : wide)[file] = entry;
   }
-  const body = `${JSON.stringify({ format: FORMAT, version: 1, device: me, talkedAt, files: published })}\n`;
+  const snapshot: z.input<typeof snapshotSchema> = { format: FORMAT, version: 1, device: me, talkedAt, files: published };
+  if (Object.keys(wide).length) snapshot.wide = wide;
+  const body = `${JSON.stringify(snapshot)}\n`;
   const path = join(dir, `${me}.json`);
   // a replayed, half-written or placeholder copy of this PC's snapshot is rewritten, not trusted
   if (readRaw(path) !== body) {

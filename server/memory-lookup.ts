@@ -1,20 +1,26 @@
 // Automatic recall: before a typed turn, up to 2 matching rows from the bot's
-// own memory and notes ride in the turn text. Off unless the bot is listed in
-// lookup-bots.json. The index is rebuilt after a reply settles, never at send.
+// own memory, notes and parked asks ride in the turn text. On for every bot
+// unless lookup-bots.json exists, which then lists the bots it stays on for.
+// The index is rebuilt after a reply settles, never at send.
 import { readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
+import { latestTaskAsks } from "../shared/task-ask-list.ts";
 import { userTyping } from "./memory-pass.ts";
 import { currentOnly, PICKS_FILE } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { appendRotatingLog } from "./rotating-log.ts";
 import { parseJson } from "./schema.ts";
+import type { BotRecord } from "./store.ts";
+import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
+import type { TaskResumePacket } from "./task-state.ts";
 import { listMemoryTopics, loadMemory, memoryFileRaw, PARKED_COPY, workspaceDir } from "./workspace.ts";
 
 // Its own file: bots.json and profile-sync.json are parsed strictly by older builds.
 const PICKS_SOURCE = `memory/${PICKS_FILE}`;
+const ASKS_SOURCE = "parked asks";
 const FLAG_FILE = "lookup-bots.json";
 const LOG_FILE = "lookup-log.jsonl";
 const LOG_MAX_BYTES = 1024 * 1024;
@@ -33,6 +39,9 @@ const NEAR_WORDS = 10;
 const MIN_COVER = 0.5;
 const RARE_IDF = 3;
 const TITLE_CHARS = 140;
+// the note-taker's paragraph limits
+const PARAGRAPH_CHARS = 400;
+const PARAGRAPH_LINES = 6;
 const YIELD_EVERY = 200;
 const DEADLINE_EVERY = 256;
 
@@ -54,7 +63,8 @@ export type RecallHit = Piece & { score: number };
 type Terms = { list: string[]; groups: string[][] };
 
 export interface RecallIndex {
-  terms(query: string, expired?: () => boolean): Terms;
+  /** extra: text whose words count only when the notes have them */
+  terms(query: string, expired?: () => boolean, extra?: string): Terms;
   hits(terms: Terms): RecallHit[];
   gate(terms: Terms, hits: RecallHit[]): RecallHit[];
   close(): void;
@@ -212,8 +222,9 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
   };
 
   return {
-    terms(query, expired) {
+    terms(query, expired, extra = "") {
       const all = words(redactSecretsInText(query));
+      const known = words(redactSecretsInText(extra)).filter((word) => documents.has(word));
       const parts = new Set<string>();
       const joined: string[] = [];
       for (let i = 0; i + 1 < all.length; i++) {
@@ -223,7 +234,7 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
           parts.add(all[i]!).add(all[i + 1]!);
         }
       }
-      const base = [...new Set(all.filter((word) => !skipped(word) && !parts.has(word) && !/^\d+$/.test(word) && word.length <= MAX_WORD))];
+      const base = [...new Set([...all, ...known].filter((word) => !skipped(word) && !parts.has(word) && !/^\d+$/.test(word) && word.length <= MAX_WORD))];
       const list = [...base, ...joined].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
       return { list, groups: list.map((term) => repair(term, expired)) };
     },
@@ -261,6 +272,8 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
 export interface MemoryLookupDeps {
   dataDir: string;
   notesPath: (botId: string) => string | undefined;
+  /** Every ask in the bot's task records; parked ones are hidden from its asks list, so lookup finds them. */
+  asks?: (botId: string) => readonly TaskAsk[];
   now?: () => number;
   /** High-resolution ms, for the budget. */
   clock?: () => number;
@@ -304,6 +317,26 @@ function pastTheCut(botId: string): { text: string; firstLine: number } | null {
   return { text: raw.slice(loaded.text.length), firstLine: loaded.text.split("\n").length };
 }
 
+/** A bot's asks across all its chats, each as its newest record has it. */
+export function botAsks(bot: Pick<BotRecord, "threadId" | "tasks"> | null | undefined, read: (threadId: string) => TaskResumePacket | null): TaskAsk[] {
+  if (!bot) return [];
+  const threads = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
+  return latestTaskAsks([...threads].flatMap((threadId) => read(threadId) ?? []), (ask) => ask.ask);
+}
+
+function parkedAsksFile(asks: readonly TaskAsk[], now: number): NoteFile | null {
+  const parked = asks.filter((ask) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now);
+  if (!parked.length) return null;
+  const text = parked.map((ask) => `- ${ask.ask} (${ask.id}, parked until ${localDay(ask.until!)})`).join("\n");
+  return { source: ASKS_SOURCE, tier: 0, text, mtime: Math.max(...parked.map((ask) => ask.changedAt)) };
+}
+
+// the typed words drop a paragraph over the note-taker's limits; its start is still searched, by the words the notes have
+function clippedParagraphs(text: string): string {
+  const long = text.split(/\n\s*\n/).filter((paragraph) => !/[<`~]/.test(paragraph) && (paragraph.length > PARAGRAPH_CHARS || paragraph.split("\n").length > PARAGRAPH_LINES));
+  return userTyping(long.map((paragraph) => paragraph.split("\n").slice(0, PARAGRAPH_LINES).join("\n").slice(0, PARAGRAPH_CHARS).replace(/\s+\S*$/, "")).join("\n\n"));
+}
+
 async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile[]> {
   const files: NoteFile[] = [];
   let bytes = 0;
@@ -326,7 +359,9 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const now = deps.now ?? Date.now;
   const clock = deps.clock ?? (() => performance.now());
   const logFile = join(deps.dataDir, LOG_FILE);
-  let flagged = new Set<string>();
+  // null: no list, so every bot
+  let listed: Set<string> | null = null;
+  const on = (botId: string) => !listed || listed.has(botId);
   const indexes = new Map<string, { index: RecallIndex; signature: string }>();
   const runs = new Map<string, number>();
   const shown = new Map<string, { cursor: string; rows: Set<string> }>();
@@ -335,9 +370,10 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
 
   const loadFlags = async () => {
     const parsed = await readFile(join(deps.dataDir, FLAG_FILE), "utf8")
-      .then((text) => z.array(z.string()).safeParse(parseJson(text)), () => null)
+      .then((text) => z.array(z.string()).safeParse(parseJson(text)), (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : null))
       .catch(() => null);
-    flagged = new Set(parsed?.success ? parsed.data : []);
+    // a list that cannot be read turns lookup off rather than on for bots it may leave out
+    listed = parsed === undefined ? null : new Set(parsed?.success ? parsed.data : []);
   };
 
   const drop = (botId: string) => {
@@ -361,17 +397,18 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const refresh = async (botId: string) => {
     try {
       await loadFlags();
-      if (!flagged.has(botId)) {
+      if (!on(botId)) {
         drop(botId);
         return;
       }
       const run = (runs.get(botId) ?? 0) + 1;
       runs.set(botId, run);
       const sources = await sourcesOf(botId);
-      const signature = JSON.stringify(sources);
+      const asks = parkedAsksFile(deps.asks?.(botId) ?? [], now());
+      const signature = JSON.stringify([sources, asks?.text]);
       if (indexes.get(botId)?.signature === signature) return;
-      const index = await buildRecallIndex(await readNoteFiles(botId, sources));
-      if (runs.get(botId) !== run || !flagged.has(botId)) {
+      const index = await buildRecallIndex([...await readNoteFiles(botId, sources), ...(asks ? [asks] : [])]);
+      if (runs.get(botId) !== run || !on(botId)) {
         index.close();
         return;
       }
@@ -423,7 +460,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       entry.reason = "no-index";
       return [];
     }
-    const terms = index.terms(userTyping(text), over);
+    const terms = index.terms(userTyping(text), over, clippedParagraphs(text));
     entry.words = terms.list;
     if (over()) return [];
     if (!terms.list.length) {
@@ -462,7 +499,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   return {
     refresh,
     take(botId, threadId, cursor, text) {
-      if (!flagged.has(botId)) return [];
+      if (!on(botId)) return [];
       pending.delete(markKey(botId, threadId));
       const entry: LookupLog = { at: now(), botId, words: [], rows: [], ms: 0, fired: false, reason: "no-match" };
       try {

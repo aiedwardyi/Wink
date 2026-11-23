@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
@@ -21,6 +21,8 @@ function flag(...ids: string[]) {
   mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(join(DATA_DIR, "lookup-bots.json"), JSON.stringify(ids));
 }
+
+const unflag = () => rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
 
 function notesFile(text: string): string {
   mkdirSync(DATA_DIR, { recursive: true });
@@ -99,11 +101,19 @@ describe("the flag", () => {
     expect(logRows().length).toBe(before);
   });
 
-  it("is off on a missing or malformed list", async () => {
+  it("is off on a malformed list", async () => {
     const { botId, lookup } = await lookupFor(FIXTURE);
     writeFileSync(join(DATA_DIR, "lookup-bots.json"), "{not json");
     await lookup.refresh(botId);
     expect(ask(lookup, botId, "OpenAI credit")).toEqual([]);
+  });
+
+  it("is on for every bot with no list", async () => {
+    unflag();
+    const botId = `bot-${randomUUID()}`;
+    sideFile(botId, "glasses-v1.md", "# Glasses v1\n\n- CEO meeting tool: person brief + top 3 competitors + 1 recent news line, shown before the meeting\n");
+    const { lookup } = await lookupFor(FILLER, { botId, listed: false });
+    expect(ask(lookup, botId, "glasses v1 person brief, 3 competitors and 1 news line")[0]).toContain("memory/glasses-v1.md");
   });
 
   it("drops the index when a bot leaves the list", async () => {
@@ -218,6 +228,32 @@ describe("corpus", () => {
     const lines = ask(lookup, botId, "brass heron")[0]!.split("\n");
     expect(lines[1]).toContain("memory/topic.md");
     expect(lines[2]).toMatch(/^- [\w-]+\.md/);
+  });
+
+  it("finds a parked ask by its words, reading asks only when it builds", async () => {
+    const at = Date.now();
+    const asks = vi.fn(() => [
+      { id: "A961", ask: "Glasses prompter demo for the CEO meeting", status: "open" as const, until: at + 3 * 86_400_000, at, changedAt: at },
+      { id: "A962", ask: "Walnut ledger export for the accountant", status: "open" as const, at, changedAt: at },
+      { id: "A963", ask: "Saffron kiosk banner for the lobby", status: "done" as const, until: at + 86_400_000, at, changedAt: at },
+    ]);
+    const { botId, lookup } = await lookupFor(FILLER, { asks });
+    const calls = asks.mock.calls.length;
+    const [note] = ask(lookup, botId, "the glasses prompter demo");
+    expect(note).toContain("parked asks");
+    expect(note).toContain("A961");
+    expect(ask(lookup, botId, "walnut ledger export", undefined, "t2")).toEqual([]);
+    expect(ask(lookup, botId, "saffron kiosk banner", undefined, "t3")).toEqual([]);
+    expect(asks.mock.calls.length).toBe(calls);
+  });
+
+  it("searches a long paragraph by its start", async () => {
+    const botId = `bot-${randomUUID()}`;
+    sideFile(botId, "glasses-v1.md", "# Glasses v1\n\n- CEO meeting tool: person brief + top 3 competitors + 1 recent news line, shown before the meeting\n");
+    const { lookup } = await lookupFor(FILLER, { botId });
+    const long = `glasses v1 person brief, 3 competitors and 1 news line. ${"Then we walk through how the room reacts and what we say next. ".repeat(8)}`;
+    expect(long.length).toBeGreaterThan(400);
+    expect(ask(lookup, botId, long)[0]).toContain("memory/glasses-v1.md");
   });
 
   it("does not see an edit until a reply settles", async () => {
@@ -347,6 +383,25 @@ describe("budget", () => {
     flag(botId);
     const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
     expect(ask(lookup, botId, "OpenAI credit")).toEqual([]);
+  });
+});
+
+describe("speed", () => {
+  it("answers in under 3 ms at p95 over 100 side files", async () => {
+    const botId = `bot-${randomUUID()}`;
+    for (let file = 0; file < 100; file++) {
+      sideFile(botId, `topic${file}.md`, Array.from({ length: 20 }, (_, n) => `- Topic${file} item${n}: harbor${file} lantern${n} kettle${file}x${n} note about the plan`).join("\n"));
+    }
+    const { lookup } = await lookupFor(FILLER, { botId });
+    const queries = ["harbor7 lantern3 plan", "what was the kettle42x5 note", "hey can you push it", "topic99 item19 lantern19", "write me a poem about autumn"];
+    const times: number[] = [];
+    for (let run = 0; run < 220; run++) {
+      const started = performance.now();
+      ask(lookup, botId, queries[run % queries.length]!, `s${run}`);
+      if (run >= 20) times.push(performance.now() - started);
+    }
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95)]).toBeLessThan(3);
   });
 });
 
