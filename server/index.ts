@@ -4664,6 +4664,7 @@ bus.subscribe((event: RuntimeEvent) => {
         memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
         memorySleep.onSettled(speaker.botId);
+        void knownRepos.refresh(speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
         const speakingBot = store.bot(speaker.botId);

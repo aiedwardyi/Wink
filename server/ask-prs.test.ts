@@ -179,6 +179,16 @@ describe("ask PRs outside a git folder", () => {
     expect(prs.take("bot", "thread", asks), "the other repo's missing PR is not a failure").toEqual(["A1014"]);
   });
 
+  it.each(["aiedwardyi/wink#999999", "https://github.com/aiedwardyi/wink/pull/999999"])("tells the bot a PR %s names with its repo is not found", async (ref) => {
+    const { prs } = rig({});
+    const asks = [ask(1, { ref })];
+    prs.take("bot", "thread", asks);
+    await prs.settled();
+    expect(prs.take("bot", "thread", asks)).toEqual([]);
+    expect(prs.failed("bot", "thread", asks)).toEqual([{ id: "A1", reason: expect.stringContaining("aiedwardyi/wink#999999") }]);
+    expect(prs.failedNote("bot", "thread", asks)).toContain("A1");
+  });
+
   it("tells the bot about a check it could not run on a turn with no ask due a verdict", async () => {
     const prs = desktop([]);
     const asks = [ask(914, { ref: "PR 2098 merged; PASSWORD-FILTER-2" })];
@@ -347,6 +357,7 @@ describe("a closing turn in index.ts", () => {
     expect(saved).toBeGreaterThan(0);
     expect(saved).toBeLessThan(oneToOne.indexOf("if (!superseded && !disowned) {"));
     expect(done.slice(room, speaker)).toContain("saveLandedCloses(event.threadId, event.turnId, ");
+    expect(done.slice(speaker, done.indexOf("roomLanes.settle(event.threadId);", speaker)), "a room-only bot learns its repos too").toContain("void knownRepos.refresh(speaker.botId);");
     const save = source.slice(source.indexOf("function saveLandedCloses("), source.indexOf("function closeMergedAsks("));
     expect(save).toContain("askPrs.landed(");
     expect(save).toContain("persistTaskPacket(");
@@ -441,6 +452,29 @@ describe("an ask with a step left", () => {
     expect(prs.stepNote("bot", "thread", asks)).toContain("A1035");
   });
 
+  it.each([
+    "https://github.com/aiedwardyi/Wink/pull/2152",
+    "https://www.github.com/aiedwardyi/Wink/pull/2152",
+    "https://github.com/aiedwardyi/Wink/pull/2152/files",
+    "http://github.com/aiedwardyi/Wink/pull/2152 merged",
+  ])("closes a ref written as the PR link %s once it merges, with no step left", async (ref) => {
+    const { prs } = rig({ "2152": "MERGED" });
+    const asks = [ask(1035, { ref })];
+    prs.take("bot", "thread", asks);
+    await prs.settled();
+    prs.closing("thread", "t1", prs.take("bot", "thread", asks));
+    expect(prs.stepNote("bot", "thread", asks)).toBe("");
+    expect(prs.landed("thread", "t1", true, asks)).toEqual(["A1035"]);
+  });
+
+  it("keeps a PR link ref with a step after it open", async () => {
+    const { prs } = rig({ "2152": "MERGED" });
+    const asks = [ask(1035, { ref: "https://github.com/aiedwardyi/Wink/pull/2152/files; real phone test" })];
+    prs.take("bot", "thread", asks);
+    await prs.settled();
+    expect(prs.take("bot", "thread", asks)).toEqual([]);
+    expect(prs.stepNote("bot", "thread", asks)).toContain("step left: real phone test.");
+  });
 });
 
 describe("a bot edit in the closing turn", () => {

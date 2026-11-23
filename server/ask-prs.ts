@@ -6,7 +6,7 @@ import { ghRun, type MapGh } from "./map-pr.ts";
 import type { TaskAsk } from "./task-asks.ts";
 import { NOT_FOUND, UNLANDED_REFRESH_MS } from "./unlanded.ts";
 
-const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/gi;
+const PR_URL = /(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#][^\s;,+]*)?/gi;
 const REPO_PR = /\b([\w.-]+\/[\w.-]+)#(\d+)\b/g;
 const PR_REF = /\bPR\s*#?(\d{1,6})\b/gi;
 const GITHUB_REPO = /github\.com[:/]([\w.-]+\/[\w.-]+)/gi;
@@ -133,7 +133,10 @@ export function createAskPrs(deps: AskPrsDeps) {
 
   /** One PR's state: the folder's repo for a bare "PR n", else the one known repo that holds it. undefined while unchecked. */
   function placed(botId: string, dir: string | undefined, pr: Pr, start: boolean): Check | undefined {
-    if (pr.repo) return look(`${pr.repo}|${pr.number}`, pr.number, pr.repo, undefined, botId, start).last;
+    if (pr.repo) {
+      const last = look(`${pr.repo}|${pr.number}`, pr.number, pr.repo, undefined, botId, start).last;
+      return last?.state === "missing" ? { at: 0, state: "failed", reason: `${pr.repo}#${pr.number} not found` } : last;
+    }
     if (dir && !notRepo.has(dir)) {
       const local = look(`${dir}|${pr.number}`, pr.number, undefined, dir, botId, start).last;
       if (!notRepo.has(dir)) return local;
