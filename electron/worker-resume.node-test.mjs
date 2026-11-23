@@ -580,8 +580,10 @@ test("a worker host back while the panes that ran in the app still resume never 
   await until(() => f.launched.length === 1);
   // The host answers the next pass, gone with HOSTED, while LOCAL still loads.
   client.reach = "kept";
-  if (tick) next();
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  if (tick) {
+    next();
+    await until(() => f.launched.length === 2);
+  }
   ready = true;
   loaded();
   await until(() => tick || f.notes.length === 2);
