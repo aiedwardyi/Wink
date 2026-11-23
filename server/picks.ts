@@ -517,7 +517,8 @@ export function goalLines(goals: readonly PinnedGoal[], max: number): string[] {
   const order = [...shown.keys()].sort((a, b) => cost(shown[a]!) - cost(shown[b]!));
   for (const [done, index] of order.entries()) {
     const share = left / (order.length - done);
-    if (cost(shown[index]!) > share) shown[index] = clipTokens(shown[index]!, share - cost(""));
+    // a long name gets at most half its line, so the goal's own words still show
+    if (cost(shown[index]!) > share) shown[index] = clipTokens(`${clipTokens(`- ${goals[index]!.name}`, Math.floor(share / 2))}: ${goals[index]!.goal}`, share - cost(""));
     left -= cost(shown[index]!);
   }
   return [...shown, ...(keys ? [keys] : []), GOALS_CUT];

@@ -248,6 +248,15 @@ describe("goals", () => {
     for (let i = 0; i < 12; i += 1) expect(block).toContain(`- goal ${i} (11-22): spec words`);
   });
 
+  it("keeps goal words on every line when 20 open goals have long names", () => {
+    const goals = Array.from({ length: 20 }, (_, i) => ({ kind: "goal" as const, at: at + i * 60_000, key: `${i} Glasses v1 meeting tool for the CEO`, goal: `spec ${i}: person brief + top 3 competitors + 1 news line` }));
+    const block = picksBlock(applyPicks("", goals)!.text);
+    const lines = block.split("\n").filter((line) => line.startsWith("- "));
+    expect(promptTokens(block)).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
+    expect(lines.length).toBeGreaterThan(10);
+    for (const line of lines) expect(line).toMatch(/: spec \d+: person/);
+  });
+
   it("leaves a goal open when Auto Notes lands a pick on its key", () => {
     const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }])!.text;
     expect(pickKeysList(text)).toBe("");
