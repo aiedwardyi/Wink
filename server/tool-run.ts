@@ -27,8 +27,8 @@ const BOILERPLATE = [
   /\bdid not complete successfully: exit code\b|\bexecutor failed running \[|^(?:error: )?service '[^']*' failed to build\b/i,
   // a CI runner's or task runner's footer: it names the job, the build step's image or the target that failed, not why
   /^process completed with exit code\b|^(?:error: )?build step \d+ "[^"]*" failed\b|^nx\s+running targets? .*\bfailed\b|^failed tasks:$/i,
-  // and its epilogue: GitLab's job result and cleanup, its Kubernetes executor's pod, Jenkins' and Travis' result
-  /^error: job failed\b|^cleaning up (?:project directory|file based variables)\b|^(?:using kubernetes|waiting for pod)\b|^(?:error: )?script returned exit code\b|^finished: (?:failure|unstable|aborted)$|^the command ".*" exited with \d+\.?$/i,
+  // and its epilogue: GitLab's job result and cleanup, its Kubernetes executor's pod, Jenkins', Travis' and Buildkite's result
+  /^error: job failed\b.*\bexit (?:code|status):? \d+$|^cleaning up (?:project directory|file based variables)\b|^(?:using kubernetes|waiting for pod)\b|^(?:error: )?script returned exit code\b|^finished: (?:failure|unstable|aborted)$|^the command ".*" exited with \d+\.?$|^(?:[\w ]+ )?error:? exit (?:code|status):? \d+$/i,
   /^found \d+ errors?\b|^\d+ (?:errors?|failed|failing)\b/i,
   /^make(?:\[\d+\])?: \*\*\*/,
 ];
@@ -47,17 +47,29 @@ const RUNNER = /^(?:● |[-=_⎯]{3,}|(?:FAIL|PASS|RUN)\s|[✓√×❯↓]\s|Tes
 const FAILURES = /^(?:⎯+ (?:failed (?:tests|suites) \d+|unhandled (?:errors?|rejections?)) ⎯+|=+ (?:failures|errors) =+)$/i;
 // Python prints a chain's root cause first: what follows was raised while handling it or wraps it, so two causes share it
 const CHAINED = /^(?:during handling of the above exception, another exception occurred|the above exception was the direct cause of the following exception):$/i;
+// a time a CI runner puts before every line it relays: Azure's and GitHub Actions' raw log, GitLab's with its stream mark, Buildkite's
+// and Jenkins' Timestamper ("[2026-11-22T04:12:09Z]"), TeamCity's ("[04:12:09]E: [Step 1/2]") and Buildkite's raw time mark
+const LINE_STAMP = /^(?:\d{4}-\d\d-\d\dT[\d:.]+Z(?: \d\d[OE]\+?)?|\[\d{4}-\d\d-\d\dT[\d:.]+Z\]|\[\d\d:\d\d:\d\d\](?: ?[a-z]?:)?(?:\s*\[Step \d+\/\d+\])?|\x1b_bk;t=\d+\x07)/i;
+// a clock before every line that LINE_STAMP does not know: where the tool's own text starts is not known, so the log is not read
+const CLOCK = /^\W{0,2}(?:\d{2,4}[-/.]\d\d[-/.]\d{2,4}[T ]|[a-z]{3} +\d{1,2} )?\d{1,2}:\d\d:\d\d/i;
 // BuildKit's plain progress puts "#<step> <seconds> " before each line a build step printed
 const BUILDKIT = /^#\d+ (?:\d+\.\d+ )?/;
 // a CI runner's mark before a line it relays: Cloud Build's 'Step #1 - "build": ', Azure's and GitHub Actions' "##[error]" and
 // "##[group]", GitHub Actions' workflow commands ("::error::", "::error file=a.ts,line=3::", "::group::"), GitLab's section marks
 const CI_PREFIX = /^(?:Step #\d+(?: - "[^"]*")?: ?|##\[[a-z]+\]|::(?:error|warning|notice|debug|group|endgroup)(?: [^\r\n]*?)?::|section_(?:start|end):\d+:[\w.-]+(?:\[[^\]]*\])?)/i;
+// a CI runner's error mark: the line it relays is an error, and a workflow command's file= and line= say where
+const ERROR_MARK = /^(?:##\[error\]|::error(?: ([^\r\n]*?))?::)/i;
 // what a jest assertion expected and received: two failures of one test differ there, and only there
 const ASSERTED = /^(?:expected|received)\b[\w ]*:\s*\S/i;
 const MATCHER = /\bexpect\(received\)/;
 // a Rust assertion says how it compared, and the left and right values under it say what: two failures of one test differ there
 const COMPARED = /\bassertion (?:`left [!=]= right` failed|failed: `\(left [!=]= right\)`)/;
 const SIDE = /^(?:left|right):\s*\S/;
+// a snapshot mismatch says which failure it is only by the lines its diff takes out and puts in, under a legend that is always the same
+const SNAPSHOT = /\bsnapshot\b.*\bmismatched\b/i;
+const DIFF = /^[-+](?:\s|$)/;
+const LEGEND = /^[-+] (?:Expected|Received|Snapshot)(?:\s+[-+] \d+)?$/;
+const CODE_FRAME = /^\d+\s*\|/;
 const WEAK = /\b(?:error|failed|failure|cannot|can't|could not|unable|not found|no such|denied|refused|hang up|timed? ?out|undefined|invalid|unexpected|missing)\b/i;
 // Fail closed: a failure is signed only when it says which failure it is, since a missed handoff costs nothing and a wrong one
 // teaches a bot the wrong fix. That is a failing test with its file, from a runner read below, or an error naming a path with a
@@ -95,8 +107,34 @@ const VENDOR = /(?:^|\/)(?:node_modules|site-packages|dist-packages)(?:\/|$)/;
 const CD_STEP = /^(?:cd|pushd|popd|set-location|sl|chdir)(?:\s+(?:\/d\s+|-(?:literal)?path\s+|(?:-[lpe@]+\s+)*(?:--\s+)?)(.+?))?\s*$/i;
 const ANY_CD = /(?:^|[\s;&|(`"'])(?:cd|pushd|popd|set-location|chdir)(?:\s|$)/i;
 
-/** Each line as the tool printed it: no color, no CI runner's mark before it. */
-const printedLines = (output: string) => stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim().replace(CI_PREFIX, "").trim());
+/** Each line as the tool printed it (no color, no time or CI runner's mark before it), and the lines a runner marked as errors. */
+function readLines(output: string): { lines: string[]; errors: Set<string> } {
+  const errors = new Set<string>();
+  let lines = stripVTControlCharacters(output).split(/\r?\n/).map((line) => line.trim());
+  const every = (rule: RegExp) => {
+    const filled = lines.filter((line) => line && !/^exit code -?\d+$/i.test(line));
+    return filled.length > 1 && filled.every((line) => rule.test(line));
+  };
+  if (every(LINE_STAMP)) lines = lines.map((line) => line.replace(LINE_STAMP, "").trim());
+  if (every(CLOCK)) return { lines: [], errors };
+  lines = lines.map((line) => {
+    const mark = ERROR_MARK.exec(line);
+    if (!mark) return line.replace(CI_PREFIX, "").trim();
+    const [, file] = /(?:^|,)file=([^,]+)/.exec(mark[1] ?? "") ?? [];
+    const [, row] = /(?:^|,)line=(\d+)/.exec(mark[1] ?? "") ?? [];
+    const text = line.slice(mark[0].length).trim();
+    const shown = file && !text.includes(file.replace(/^.*[\\/]/, "")) ? `${text} (${file}${row ? `:${row}` : ""})` : text;
+    if (shown) errors.add(shown);
+    return shown;
+  });
+  return { lines, errors };
+}
+const printedLines = (output: string) => readLines(output).lines;
+// how many brackets a value's line leaves open, outside its strings and chars
+const depth = (text: string) => {
+  const bare = text.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)'/g, "");
+  return bare.split(/[{[(]/).length - bare.split(/[}\])]/).length;
+};
 const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
@@ -106,7 +144,7 @@ const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0,
  */
 export function errorLine(output: string): string {
   let logged = false;
-  const raw = printedLines(output);
+  const { lines: raw, errors } = readLines(output);
   // a Docker build: the error is a line its step printed, and a step whose lines say nothing strong is not signed
   const built = raw.some((line) => BUILDKIT.test(line));
   const printed = built ? raw.map((line) => line.replace(BUILDKIT, "").trim()) : raw;
@@ -120,14 +158,30 @@ export function errorLine(output: string): string {
   const asserted = lines.findIndex((line) => ASSERTED.test(line) || COMPARED.test(line));
   // an assertion and its values say which failure this is ahead of an error line after it, often the runner's own ("error: test failed")
   const first = asserted >= 0 && !(strong[0]! < asserted) ? asserted : strong[0];
-  const at = (traceback ? strong.at(-1) : first) ?? (asserted >= 0 ? asserted : built ? -1 : lines.findIndex((line) => WEAK.test(line)));
+  const at = (traceback ? strong.at(-1) : first) ?? (asserted >= 0 ? asserted : built ? -1 : lines.findIndex((line) => WEAK.test(line) || errors.has(line)));
   const line = lines[at] ?? "";
   // a header with no detail under it says nothing about which failure this is
   if (HEADER.test(line)) return lines[at + 1] ? `${line} ${lines[at + 1]}` : "";
-  // nor does an assertion without the values it expected and received
-  let end = at + 1;
-  while (end < lines.length && (ASSERTED.test(lines[end]!) || SIDE.test(lines[end]!))) end++;
-  const values = lines.slice(at + 1, end);
+  // nor does a snapshot mismatch without its diff
+  if (SNAPSHOT.test(line)) {
+    const diff: string[] = [];
+    for (const text of lines.slice(at + 1)) {
+      if (DIFF.test(text)) {
+        if (!LEGEND.test(text)) diff.push(text);
+      } else if (STRONG.test(text) || CODE_FRAME.test(text)) break;
+    }
+    return diff.length ? `${line} ${diff.join(" ")}` : "";
+  }
+  // or an assertion without the values it expected and received, each read to its end: Rust's pretty Debug runs over lines
+  const values: string[] = [];
+  let open = 0;
+  for (let end = at + 1; end < lines.length && (ASSERTED.test(lines[end]!) || SIDE.test(lines[end]!)); ) {
+    let value = lines[end++]!;
+    for (open = SIDE.test(value) ? depth(value) : 0; open > 0 && end < lines.length; value += ` ${lines[end++]}`) open += depth(lines[end]!);
+    values.push(value);
+  }
+  // a value cut before its end does not say which it was
+  if (open > 0) return "";
   if (at === asserted && ASSERTED.test(line)) return [line, ...values].join(" ");
   return MATCHER.test(line) || COMPARED.test(line) ? (values.length ? `${line} ${values.join(" ")}` : "") : line;
 }
@@ -337,7 +391,8 @@ export function runSig(line: string, where: { place: ShellPlace; command: string
       spots.push(`${file}:${colon ?? paren}`);
       return " ";
     });
-  const stem = words(rest).slice(0, 24).join(" ");
+  // an assertion's values and a snapshot's diff say which failure this is wherever they start, so they are never cut
+  const stem = words(rest).slice(0, COMPARED.test(line) || SNAPSHOT.test(line) ? undefined : 24).join(" ");
   if (!test) {
     const pathError = PATH_ERROR.test(line);
     // a file named in a build step is the one that step sees, so the step says which

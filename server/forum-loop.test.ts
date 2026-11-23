@@ -1065,7 +1065,7 @@ describe("what tells two failures apart, and what only tells two runs apart", ()
       expect(sig("npm test", gitlab(108, 100, footer))).not.toBe(sig("npm test", gitlab(20, 0, footer)));
     }
     // a runner's footer alone (GitLab, its Kubernetes executor, Jenkins, Travis, GitHub Actions) says only that the job failed
-    for (const footer of ["ERROR: Job failed: command terminated with exit code 1", "ERROR: Job failed (system failure): pod gitlab-runner/runner-abc123 status is Failed", "ERROR: script returned exit code 1", "Finished: FAILURE", "The command \"./deploy.sh\" exited with 1.", "::error::Process completed with exit code 1."]) {
+    for (const footer of ["ERROR: Job failed: command terminated with exit code 1", "ERROR: Job failed: exit status 1", "ERROR: script returned exit code 1", "Finished: FAILURE", "The command \"./deploy.sh\" exited with 1.", "::error::Process completed with exit code 1."]) {
       expect(errorLine(`$ ./deploy.sh\n${footer}`)).toBe("");
     }
     // cargo test: one test, the same panic place and footer, other values
@@ -1084,6 +1084,51 @@ describe("what tells two failures apart, and what only tells two runs apart", ()
     // with no values the assertion says only that two sides differed
     expect(errorLine("thread 'invoice::us_tax' panicked at src/tax.rs:15:5:\nassertion `left == right` failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace")).toBe("");
     expect(sig("cargo test", cargo(100, 108).replace(/\n {0,2}(?:left|right): \d+/g, ""))).toBeUndefined();
+  });
+
+  it("reads a log under any CI runner's line stamps and leaves one it cannot read unsigned, keeps an error mark's place, and reads a Rust value to its end and a snapshot by its diff", () => {
+    const jest = (expected: number, received: number) => ["FAIL src/tax.test.ts", "  ● invoice tax", "", "    expect(received).toBe(expected) // Object.is equality", "", `    Expected: ${expected}`, `    Received: ${received}`, "", "      at Object.toBe (src/tax.test.ts:15:24)", "", "Tests:       1 failed, 1 total"];
+    // Azure and GitHub Actions raw logs, GitLab's with its stream mark, Buildkite and Jenkins Timestamper, TeamCity
+    for (const stamp of ["2026-11-22T04:12:09.1000000Z ", "2026-11-22T04:12:09.221844Z 00O ", "[2026-11-22T04:12:09Z] ", "[04:12:09] :\t [Step 1/1] "]) {
+      const stamped = (expected: number, received: number) => [...jest(expected, received), "user command error: exit status 1"].map((line) => stamp + line).join("\n");
+      expect(errorLine(stamped(108, 100))).toBe("Expected: 108 Received: 100");
+      expect(sig("npm test", stamped(108, 100))).toBe(sig("npm test", jest(108, 100).join("\n")));
+      expect(sig("npm test", stamped(108, 100))).not.toBe(sig("npm test", stamped(20, 0)));
+    }
+    // a test run with no test named says nothing about which test, whatever task footer follows it
+    const dotnet = ["  Failed TaxForUs [12 ms]", "  Error Message:", "     Expected: 108", "  But was:  100", "Failed!  - Failed:     1, Passed:     3, Total:     4", "##[error]Error: The process '/usr/bin/dotnet' failed with exit code 1"];
+    expect(sig("dotnet test", dotnet.map((line, at) => `2026-11-22T04:12:${10 + at}.1271828Z ${line}`).join("\n"))).toBeUndefined();
+    // a clock before every line in a form not known here: which part is the tool's is not known
+    const clocked = [...jest(108, 100), "Error: tax mismatch at /builds/shop/src/tax.ts:15"].map((line) => `04:12:09.100 | ${line}`).join("\n");
+    expect(errorLine(clocked)).toBe("");
+    expect(sig("npm test", clocked)).toBeUndefined();
+    // a workflow command's message is an error line whatever words it has, and its file= and line= say where
+    expect(errorLine("::debug::isExplicit: \n::error::Input required and not supplied: token")).toBe("Input required and not supplied: token");
+    const golangci = (message: string) => `::error file=internal/tax/tax.go,line=15,col=2::${message}`;
+    expect(errorLine(golangci("ineffectual assignment to err (ineffassign)"))).toBe("ineffectual assignment to err (ineffassign) (internal/tax/tax.go:15)");
+    expect(sig("golangci-lint run", golangci("ineffectual assignment to err (ineffassign)"))).toBeTruthy();
+    expect(sig("golangci-lint run", golangci("ineffectual assignment to err (ineffassign)"))).not.toBe(sig("golangci-lint run", golangci("Error return value of `f.Close` is not checked (errcheck)")));
+    // GitLab's job result is a footer only when all it adds is an exit code
+    const pod = "ERROR: Job failed (system failure): prepare environment: waiting for pod running: timed out waiting for pod to start";
+    expect(errorLine(`Preparing environment\n${pod}`)).toBe(pod);
+    expect(errorLine("$ npm test\nERROR: Job failed: exit status 1")).toBe("");
+    // a Rust value Debug prints over lines, and one past the stem's words, each say which failure this is
+    const pretty = (region: string, tax: number) => [
+      "---- tests::us_tax stdout ----", "thread 'tests::us_tax' panicked at src/lib.rs:41:9:", "assertion `left == right` failed",
+      "  left: Invoice {", `    region: "${region}",`, `    tax: ${tax},`, "}", " right: Invoice {", "    region: \"US\",", "    tax: 108,", "}", "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+    ].join("\n");
+    expect(errorLine(pretty("US", 100))).toBe("assertion `left == right` failed left: Invoice { region: \"US\", tax: 100, } right: Invoice { region: \"US\", tax: 108, }");
+    expect(sig("cargo test", pretty("US", 100))).toBe(sig("cargo test", pretty("US", 100)));
+    expect(sig("cargo test", pretty("US", 100))).not.toBe(sig("cargo test", pretty("EU", 108)));
+    expect(errorLine(pretty("US", 100).split("\n").slice(0, 6).join("\n"))).toBe("");
+    const wide = (tax: number) => `thread 'tests::us_tax' panicked at src/lib.rs:41:9:\nassertion \`left == right\` failed\n  left: Invoice { id: 1, customer: "acme", region: "US", currency: "USD", lines: 3, net: 100, discount: 0, tax: 8 }\n right: Invoice { id: 1, customer: "acme", region: "US", currency: "USD", lines: 3, net: 100, discount: 0, tax: ${tax} }`;
+    expect(sig("cargo test", wide(0))).not.toBe(sig("cargo test", wide(5)));
+    // a snapshot mismatch signs by what its diff takes out and puts in, never by its legend alone
+    const snapshot = (diff: string[]) => [" FAIL  src/tax.test.ts > invoice tax > charges US sales tax", "Error: Snapshot `invoice tax > charges US sales tax 1` mismatched", "", "- Expected", "+ Received", "", ...diff, "", " ❯ src/tax.test.ts:15:24", "     15|   expect(label(tax)).toMatchSnapshot()", "", " Test Files  1 failed (1)"].join("\n");
+    expect(errorLine(snapshot(["- \"Tax 108\"", "+ \"Tax 100\""]))).toBe("Error: Snapshot `invoice tax > charges US sales tax 1` mismatched - \"Tax 108\" + \"Tax 100\"");
+    expect(sig("npx vitest run", snapshot(["- \"Tax 108\"", "+ \"Tax 100\""]))).toBeTruthy();
+    expect(sig("npx vitest run", snapshot(["- \"Tax 108\"", "+ \"Tax 100\""]))).not.toBe(sig("npx vitest run", snapshot(["- \"Region US\"", "+ \"Region EU\""])));
+    expect(sig("npx vitest run", snapshot([]))).toBeUndefined();
   });
 
   it("follows cd -P, cd -L and a WSL /mnt/<drive> path", () => {
