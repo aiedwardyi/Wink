@@ -4,7 +4,7 @@ import { endsNoteWindow, isWakeNote } from "./pane-wake.ts";
 import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
+import { ENGINE_SUMMARY_PREFIX, inertMentions, replyExcerpt, transcriptText, typedByHost } from "./replies.ts";
 import { TYPED_VALUES_HEADER, typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import { goalLines, type PinnedGoal } from "./picks.ts";
 import type { Message, OptionCardData } from "./store.ts";
@@ -592,7 +592,7 @@ function replayUnits(
   const through = new Map(throughMail.map((row) => [row.id, row.upto]));
   const from = pending.size ? 0 : offset;
   const delegations = delegationContext(messages.slice(from).filter((row) => !excludeIds.has(row.id)), referenceMessages);
-  return messages.slice(from).flatMap((message, index): ReplayUnit[] => {
+  const units = messages.slice(from).flatMap((message, index): ReplayUnit[] => {
     const pathIndex = from + index;
     if (pathIndex < offset && !pending.has(message.id)) return [];
     if (excludeIds.has(message.id) || message.restated) return [];
@@ -603,7 +603,7 @@ function replayUnits(
     // the app's own call notice: the bot never said it and never got the send
     if (message.call?.notice) return [];
     if (message.kind === "text" && message.text?.trim()) {
-      const body = transcriptText(message, messagesById, userName);
+      const body = transcriptText(message, messagesById, userName, includeSpeakers);
       const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : message.role === "bot" && message.call?.voice ? `${message.call.unheard ? VOICE_UNHEARD : VOICE_SAID} ${body}` : body;
       const speaker = message.role === "user" ? (message.author?.kind === "person" ? message.author.name : userName) : (message.from?.name ?? "Bot");
       const unit: ReplayUnit = {
@@ -657,6 +657,10 @@ function replayUnits(
     }
     return [];
   });
+  if (!includeSpeakers) return units;
+  // in a group only the host's own lines may name a file with @
+  const host = new Set(messages.flatMap((message) => (message.kind === "text" && typedByHost(message) ? [message.id] : [])));
+  return units.map((unit) => (host.has(unit.id) ? unit : { ...unit, text: inertMentions(unit.text) }));
 }
 
 /** One line per run of one speaker's tool chips, ending at the run's last chip. */
@@ -820,10 +824,11 @@ function boundaryLabel(at: number): string {
   return Number.isFinite(at) ? new Date(at).toISOString() : "an earlier message";
 }
 
-function summaryMessage(summary: string, coveredAt: number): ModelContextMessage {
+// a group's summary is model text, so its @ names no file
+function summaryMessage(summary: string, coveredAt: number, group = false): ModelContextMessage {
   return {
     role: "assistant",
-    text: `${SUMMARY_HEADER}\nCovers the conversation up to ${boundaryLabel(coveredAt)}; everything after it follows verbatim.\n${summary}`,
+    text: `${SUMMARY_HEADER}\nCovers the conversation up to ${boundaryLabel(coveredAt)}; everything after it follows verbatim.\n${group ? inertMentions(summary) : summary}`,
   };
 }
 
@@ -1123,7 +1128,7 @@ export function planCompaction(input: {
     input.includeSpeakers ?? false,
   );
   const currentTranscript = [
-    ...(previous ? [summaryMessage(storedSummary, input.messages[previous.coveredIndex]!.at)] : []),
+    ...(previous ? [summaryMessage(storedSummary, input.messages[previous.coveredIndex]!.at, input.includeSpeakers)] : []),
     ...units.map(replayMessage),
   ];
   const currentTokens = estimateContextTokens(currentTranscript);
@@ -1459,7 +1464,7 @@ export async function prepareModelContext(input: {
   }
 
   const record = compactionRecord(plan, summary, input.goals);
-  const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(replayMessage)];
+  const transcript = [summaryMessage(record.summary, coveredThrough.at, input.includeSpeakers), ...tail.map(replayMessage)];
   const estimatedTokens = estimateContextTokens(transcript);
   if (estimatedTokens > budgetTokens) {
     return failedContext("Context summarization could not fit the selected model window.", previous);

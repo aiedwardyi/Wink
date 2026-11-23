@@ -204,7 +204,7 @@ import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
 import { lastMessageAt } from "./message-db.ts";
 import "./turn-index.ts";
-import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
@@ -7294,7 +7294,7 @@ async function runClaimedGroupMemberTurn(
   const roomContext = [
     prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
     prepared.transcript.map((message) => replayMessageText(message, instance.driverKind, bot.id, selection.model)).join("\n"),
-    ...roomMail.map((part) => part.text),
+    ...roomMail.map((part) => inertMentions(part.text)),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
   ].filter((value) => value !== null).join("\n\n");
   stampShownAsks(threadId, roomContext);
@@ -7309,7 +7309,9 @@ async function runClaimedGroupMemberTurn(
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
   const works = !asked || Boolean(lead && asksWork([lead, ...riders]));
   const guestAsked = asked && (!askFromHost(lead) || riders.some((ask) => !askFromHost(ask)));
-  if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
+  // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
+  const guestReadOnly = Boolean(guestAsked && (!bot.autoApprove || !works));
+  if ((!works || guestReadOnly) && instance.adapter.capabilities.readOnlyTurns !== true) {
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
   }
@@ -7325,7 +7327,8 @@ async function runClaimedGroupMemberTurn(
     ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff));
+    // a lane is read-only for the engine only: its own hand_off and the owner's tools stay
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works || guestReadOnly, Boolean(handoff));
   }
   const canMessage = works && Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
@@ -7443,8 +7446,8 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
-  // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
-  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (guestAsked && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
+  // the owner's own lane keeps Claude's @file attach; a guest's words never get it
+  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || guestReadOnly ? { readOnly: true } : {}), ...(lane && !guestAsked ? { ownerText: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
@@ -8169,7 +8172,9 @@ const groupRoutes = createGroupRoutes({
 });
 function readOnlyRoomTurn(botId: string, threadId: string) {
   const hosted = store.groupByThread(threadId)?.hosted;
-  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && readOnlyAskTurn(hosted.roomId, threadId, botId));
+  // a teammate who may make bots work still gets a read-only turn from a bot not on Auto
+  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && (readOnlyAskTurn(hosted.roomId, threadId, botId)
+    || (teammateAskTurn(hosted.roomId, threadId, botId) && !store.bot(botId)?.autoApprove)));
 }
 /** A room turn anyone but this PC's owner asked for, read-only or with "Can make bots work". */
 function guestRoomTurn(botId: string, threadId: string) {

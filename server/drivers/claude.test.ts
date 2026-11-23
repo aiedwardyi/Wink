@@ -1319,6 +1319,36 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
   });
 
+  it("turns off @file attach on a guest's read-only turn, not on an owner turn or the owner's own lane", async () => {
+    await create();
+    const mentions = async (threadId: string, extra: { readOnly?: true; ownerText?: true }) => {
+      const dump = join(scratch, `${threadId}.json`);
+      process.env.FAKE_CLAUDE_DUMP = dump;
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "summarize @C:/Users/someone/Documents/secret.txt", cwd: scratch, ...extra });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      return JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_FILE_MENTIONS;
+    };
+    expect(await mentions("t-guest", { readOnly: true })).toBe("1");
+    expect(await mentions("t-owner", {})).toBeUndefined();
+    expect(await mentions("t-lane", { readOnly: true, ownerText: true })).toBeUndefined();
+  });
+
+  it("never hands a guest's read-only turn the owner lane's warm process", async () => {
+    await create();
+    const dump = join(scratch, "lane-then-guest.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-lane-guest", text: "owner", cwd: scratch, readOnly: true, ownerText: true });
+    await recorder.until((e) => e.type === "turn.completed");
+    const lane = JSON.parse(readFileSync(dump, "utf8")) as { pid: number };
+    const cursor = (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
+
+    const guest = await instance.adapter.sendTurn({ threadId: "t-lane-guest", text: "guest", cwd: scratch, readOnly: true, resumeCursor: cursor });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === guest.turnId);
+    const seen = JSON.parse(readFileSync(dump, "utf8")) as { pid: number; env: Record<string, string> };
+    expect(seen.pid).not.toBe(lane.pid);
+    expect(seen.env.CLAUDE_CODE_DISABLE_FILE_MENTIONS).toBe("1");
+  });
+
   it("passes an explicit empty available set to disable every Claude built-in", async () => {
     await create(undefined, {}, { tools: [], disallowedTools: [] });
     const dump = join(scratch, "no-builtins.json");
@@ -1382,6 +1412,23 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     // the user's Composio key must not be readable via `ps`
     expect(JSON.stringify(seen.argv)).not.toContain("ak_test");
     expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__composio");
+  });
+
+  it("leaves connected apps unallowed in Ask, so each call reaches the Ask card", async () => {
+    await create(undefined, {}, { permissionMode: "acceptEdits" });
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({
+      threadId: "t-composio-ask",
+      text: "hi",
+      approval: "ask",
+      integrations: { composio: { command: process.execPath, args: ["/tmp/connector-proxy.js"], env: {} } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.composio).toBeDefined();
+    expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1].split(",")).not.toContain("mcp__composio");
+    expect(seen.argv[seen.argv.indexOf("--permission-prompt-tool") + 1]).toBe("mcp__ogb__approve");
   });
 
   // the config file holds live credentials, so it must not outlive the turn —
@@ -4105,6 +4152,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(seen.argv).not.toContain("summarize safely");
     expect(seen.env.CLAUDE_CONFIG_DIR).toBe(instanceConfigDir);
     for (const name of names) expect(seen.env[name]).toBeUndefined();
+  });
+
+  it.each([{}, { ephemeral: true, lean: true }])("turns off @file attach in a helper call %o", async (opts) => {
+    await create();
+    const dump = join(scratch, "helper-mentions.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.generateText?.("Mina: summarize @C:/Users/someone/.ssh/id_ed25519", opts);
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_FILE_MENTIONS).toBe("1");
   });
 
   it.each(["summary", "notes", "review"] as const)("runs the %s helper with its own argv and cwd", async (kind) => {

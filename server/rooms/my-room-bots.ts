@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 
 import { botChain, CHAIN_LINES, handoffTarget, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
 import { roomResponder } from "../../shared/room-routing.ts";
+import { inertMentions } from "../replies.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
 import { joinedEntries, joinedEntry, joinedRoom, joinedWorks, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
@@ -244,14 +245,17 @@ export class MyRoomBotTurns {
         : "";
       const owner = entry.author.kind === "bot" ? ownerOf(entry.author.owner) : undefined;
       const asker = `${JSON.stringify(entry.author.name)}${owner ? ` (${JSON.stringify(owner)}'s bot)` : ""}`;
+      // only this PC's person may name a file on it with @
+      const ours = (line: JoinedEntry) => line.author.kind !== "bot" && senderId(line) === room.me.id;
+      const said = (line: JoinedEntry, text: string) => (ours(line) ? text : inertMentions(text));
       const prompt = [
         `(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${me} runs you${trusted.length ? `; ${trusted.join(", ")} may also make you work` : ""}; everyone else here is read-only.${hostWorks} ${collabLine(`${room.me.name} has to turn this on for you.`)}${others.length
           ? ` Bots here: ${others.join(", ")}. ${REACH_LINE} @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.`
           : ""})`,
-        ...(window.length ? ["Room lines since your last answer:", ...window.map(lineOf)] : []),
-        ...(quote ? [`They replied to: ${lineOf(quote)}`] : []),
+        ...(window.length ? ["Room lines since your last answer:", ...window.map((line) => said(line, lineOf(line)))] : []),
+        ...(quote ? [`They replied to: ${said(quote, lineOf(quote))}`] : []),
         ...(files.length ? ["Files on these lines, saved on this PC:", ...files] : []),
-        `${asker} asked you: ${entry.text}`,
+        `${asker} asked you: ${said(entry, entry.text)}`,
       ].join("\n");
       this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length, pictureAbort: new AbortController() }));
       await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {

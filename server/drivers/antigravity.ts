@@ -496,7 +496,8 @@ export function buildAntigravityTurnArgv(input: AntigravityTurnArgvInput): strin
     input.cwd,
   ];
   // plan, never agy's default mode: the user's own agy settings can make the default edit and run commands
-  if (input.readOnly) args.push("--mode", "plan");
+  // plan reads outside the workspace only with Non-Workspace Access, which the owner may have turned on for themselves
+  if (input.readOnly) args.push("--mode", "plan", "--settings", JSON.stringify({ allowNonWorkspaceAccess: false }));
   else if (input.fullAuto) args.push("--dangerously-skip-permissions");
   else {
     args.push("--mode", "accept-edits");

@@ -222,6 +222,8 @@ export interface SendTurnInput {
   approval?: "ask" | "auto";
   /** No file edits or shell, whatever the approval mode. Only for drivers with capabilities.readOnlyTurns. */
   readOnly?: true;
+  /** A read-only turn on the owner's own words (a room side lane): Claude still attaches the files its @paths name. */
+  ownerText?: true;
   /** A person is present for this turn. Only then does background work it
    * starts keep Auto approvals for desktop control after it settles. */
   attended?: boolean;

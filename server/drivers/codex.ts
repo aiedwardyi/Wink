@@ -217,6 +217,9 @@ type AppServer = {
 const appServerAlive = (server: AppServer) =>
   server.child.exitCode === null && server.child.signalCode === null && !server.child.stdin.destroyed && !server.child.stdout.destroyed;
 
+/** Codex tools that run commands or open files and pages anywhere on the PC (a multi_agent helper takes local_image paths). */
+export const READ_ONLY_FEATURES_OFF = ["shell_tool", "unified_exec", "code_mode", "view_image", "browser_use", "in_app_browser", "computer_use", "multi_agent", "multi_agent_v2"];
+
 // Only a Wink setting overrides; otherwise the user's own codex config decides.
 // untrusted asks before any edit or command that is not read-only.
 function codexPolicy(fullAuto: boolean, turn: AccessTurn) {
@@ -298,6 +301,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     }
     const active = new Map<string, Turn>();
     const lastThread = new Map<string, { cwd: string; model: string | undefined; cursor: string }>();
+    /** codex thread id -> started read-only */
+    const readOnlyThreads = new Map<string, boolean>();
     const incarnation = input.incarnation ?? newId();
     const warmKey = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
     const captured = (threadId: string) => ({ generation: input.account?.generation ?? warmPool.generation(warmKey(threadId)), incarnation, identity: "" });
@@ -982,8 +987,13 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           for (const name of Object.keys(read?.config?.mcp_servers ?? {})) if (name !== "agents" || !turn.integrations?.agents) mcpOff[`mcp_servers.${name}.enabled`] = false;
           for (const id of Object.keys(read?.config?.plugins ?? {})) mcpOff[`plugins.${id}.enabled`] = false;
           Object.assign(mcpOff, { "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
+          // the read-only sandbox fences writes, not reads, and untrusted runs cat or Get-Content unasked: no tool reads past the folder
+          Object.assign(mcpOff, Object.fromEntries(READ_ONLY_FEATURES_OFF.map((name) => [`features.${name}`, false])));
         }
-        if (cursor && !warm) {
+        // a resumed thread keeps the tools it started with (a read-only resume still offers multi_agent): an access change starts fresh
+        const sameAccess = (readOnlyThreads.get(cursor ?? "") ?? false) === (turn.readOnly === true);
+        if (cursor && !warm && !sameAccess) resumeFailed = true;
+        if (cursor && !warm && sameAccess) {
           try {
             const resumed = await request("thread/resume", { threadId: cursor, approvalPolicy, approvalsReviewer, sandbox, ...(turn.readOnly && { config: mcpOff }) });
             codexThreadId = resumed?.thread?.id ?? cursor;
@@ -1009,7 +1019,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           codexThreadId = started?.thread?.id ?? null;
           startedModel = started?.model ?? null;
         }
-        if (codexThreadId) lastThread.set(threadId, { cwd: turn.cwd ?? homedir(), model: turn.model, cursor: codexThreadId });
+        if (codexThreadId) {
+          lastThread.set(threadId, { cwd: turn.cwd ?? homedir(), model: turn.model, cursor: codexThreadId });
+          readOnlyThreads.set(codexThreadId, turn.readOnly === true);
+        }
         emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
         let prompt = resumeFailed ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
         const replay = turn.nativeReplayPrefix;

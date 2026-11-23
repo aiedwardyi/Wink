@@ -73,6 +73,7 @@ async function call(route: (req: IncomingMessage, res: ServerResponse) => Promis
 
 function routes(group = false) {
   return createInternalRoutes({
+    readOnlyTurn: () => false,
     cfg: { imageGen: { key: "test-key" } }, store,
     connectorThread: () => ({ ...(group ? { group: { id: "group" } } : {}) }),
     botOutputRoots: () => [folder],
@@ -109,6 +110,7 @@ async function refused(reason: string) {
 
 describe("a bot's picture in a team room", () => {
   const shared = (roomPicture: (...args: unknown[]) => Promise<unknown>) => createInternalRoutes({
+    readOnlyTurn: () => false,
     cfg: { imageGen: { key: "test-key" } }, store,
     connectorThread: () => ({ group: { id: "group" } }),
     botOutputRoots: () => [folder],
@@ -129,6 +131,7 @@ describe("a bot's picture in a team room", () => {
   it("posts only to the conversation the caller's own token names", async () => {
     const roomPicture = vi.fn(async () => ({ messageId: "room-row", url: "/api/rooms/r1/files/f/preview" }));
     const routes = createInternalRoutes({
+      readOnlyTurn: () => false,
       cfg: { imageGen: { key: "test-key" } }, store,
       connectorThread: () => ({ group: { id: "group" } }),
       botOutputRoots: () => [folder],

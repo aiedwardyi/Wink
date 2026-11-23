@@ -34,7 +34,7 @@ export async function steerRoomSend(
   const threadId = group.threadId;
   const adapter = instanceForBot?.(busy, threadId)?.adapter;
   if (!steersSend(adapter, busy.busy, false)) return null;
-  const steered = await adapter.steer(threadId, promptWithReply(text, replyTo, userName()), undefined, { fromUser: true }).catch(() => false);
+  const steered = await adapter.steer(threadId, promptWithReply(text, replyTo, userName(), true), undefined, { fromUser: true }).catch(() => false);
   if (!steered) return null;
   const current = store.group(group.id);
   if (current?.threadId !== threadId || current.busyBotId !== busy.id) {
