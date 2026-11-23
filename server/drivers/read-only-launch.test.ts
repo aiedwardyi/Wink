@@ -105,7 +105,8 @@ const ENGINES: Record<string, Engine> = {
       const instance = await CodexDriver.create({ instanceId: "ro-codex", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-codex-app-server.ts"), fullAuto: true } });
       live.push(instance);
       const params: Record<string, unknown> = {};
-      for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", "codex-thread-9"]] as const) {
+      // a read-only turn resumes only a thread it started read-only (the fake's first thread)
+      for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", readOnly ? "codex-thread-1" : "codex-thread-9"]] as const) {
         const file = `codex-${method.replace("/", "-")}.json`;
         setEnv("FAKE_CODEX_DUMP", join(scratch, file));
         await run(instance, `t-codex-${method}`, { integrations: { agents }, ...(cursor && { resumeCursor: cursor }), ...(readOnly && { readOnly }) });
@@ -252,7 +253,7 @@ describe("Codex web_read reader turn, which mounts no Wink agents", () => {
 
   it("turns off every inherited MCP server, one named agents included, fresh and resumed", async () => {
     const instance = await codex();
-    for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", "codex-thread-9"]] as const) {
+    for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", "codex-thread-1"]] as const) {
       const file = `reader-${method.replace("/", "-")}.json`;
       setEnv("FAKE_CODEX_DUMP", join(scratch, file));
       await run(instance, `t-reader-${method}`, { readOnly: true, ...(cursor && { resumeCursor: cursor }) });
