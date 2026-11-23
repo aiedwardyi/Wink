@@ -89,7 +89,7 @@ const KEY_VALUE =
 const PROSE_SECRET = /((?:\b(?:wifi[ \t]+password|password|passcode|passphrase)\b[ \t]*(?:is[ \t]+|[:=][ \t]*)|비밀번호(?:는|가)?[ \t]*(?:[:=][ \t]*)?))(["']?)((?!\$\{)[A-Za-z0-9._~+/=!@#$%^*?-]+)\2/gi;
 /** 4+ chars with a digit or symbol; plain words ("stored", "opensesame") stay prose. */
 const PROSE_VALUE = /^(?=.{4}).*[\d!@#$%^*?~+=]/;
-const ROOM_CODE = /(?<![\p{L}\p{N}_#])[2-9A-HJ-NP-Z]{6}(?![\p{L}\p{N}_])/gu;
+const ROOM_CODE = /(?<![\p{L}\p{N}_#])[2-9A-HJ-NP-Z]{6}(?:[2-9A-HJ-NP-Z]{2})?(?![\p{L}\p{N}_])/gu;
 
 const CODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const ENV_REF = /^\$[A-Z_][A-Z0-9_]*$/;

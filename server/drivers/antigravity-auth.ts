@@ -228,7 +228,17 @@ function logAccount(path: string): string | null | undefined {
   return last;
 }
 
-const logDir = (env: Record<string, string | undefined>) => join(env.HOME || env.USERPROFILE || homedir(), ".gemini", "antigravity-cli", "log");
+const appDir = (env: Record<string, string | undefined>) => join(env.HOME || env.USERPROFILE || homedir(), ".gemini", "antigravity-cli");
+const logDir = (env: Record<string, string | undefined>) => join(appDir(env), "log");
+
+/** agy saves its sign-in to this file instead of the keyring over SSH (the phone sign-in sets SSH_CONNECTION), and reads both. */
+export function hasAntigravityTokenFile(env: Record<string, string | undefined> = process.env): boolean {
+  try {
+    return statSync(join(appDir(env), "antigravity-oauth-token")).size > 0;
+  } catch {
+    return false;
+  }
+}
 
 function latestLogEvent(env: Record<string, string | undefined>): string | null | undefined {
   const dir = logDir(env);
