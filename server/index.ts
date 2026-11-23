@@ -5807,7 +5807,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const roomEchoes = roomEchoesSinceLastUserTurn(activeMessages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model);
   const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
-    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
+    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text, roomTaskThreads().has(threadId))
     : [];
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
@@ -9251,9 +9251,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (path === "/api/about-you/decline" && method === "POST") return aboutYouRoutes.decline(res);
     m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);
     if (m && method === "DELETE") {
-      aboutYouRoutes.remove(res, m[1]);
-      for (const bot of store.bots) void memoryLookup.refresh(bot.id);
-      return;
+      // the removed lines are out of every bot's lookup before the removal is answered
+      return aboutYouRoutes.remove(res, m[1], async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
     }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's

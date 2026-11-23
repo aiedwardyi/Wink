@@ -38,12 +38,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function mount(current: Bot, aboutYou: { sources: unknown[]; declined: boolean; imported?: boolean }, post?: (url: string) => Response) {
+async function mount(current: Bot, aboutYou: { sources: unknown[]; declined: boolean; imported?: boolean }, post?: (url: string) => Response, hold?: Promise<void>) {
   vi.stubGlobal("EventSource", FakeEventSource);
-  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => url === "/api/bots?messages=200"
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.startsWith("/api/about-you") && !init?.method) await hold;
+    return url === "/api/bots?messages=200"
     ? Response.json({ bots: [current], groups: [], computerControl: {} })
     : init?.method === "POST" && post ? post(url)
-    : url.startsWith("/api/about-you") ? Response.json(aboutYou) : new Response("{}", { status: 404 })));
+    : url.startsWith("/api/about-you") ? Response.json(aboutYou) : new Response("{}", { status: 404 });
+  }));
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
     unobserve() {}
@@ -111,4 +114,25 @@ it("no row once Import Memory has content or the row was dismissed", async () =>
   await unmount?.();
   const declined = await mount(bot([]), { sources: [], declined: true });
   expect(declined.querySelector("[data-import-card]")).toBeNull();
+});
+
+it("a dismissed row stays gone when its slow lookup answers afterwards", async () => {
+  // an earlier answer already said the row is on offer, so the next chat paints it before its own answer arrives
+  const other = { ...bot([]), id: "dismisser", threadId: "thread-dismisser" };
+  await mount(other, { sources: [], declined: false });
+  await unmount?.();
+  let answer!: () => void;
+  const slow = new Promise<void>((resolve) => {
+    answer = resolve;
+  });
+  const host = await mount(other, { sources: [], declined: false }, undefined, slow);
+  expect(host.querySelector("[data-import-card]")).not.toBeNull();
+  // SAFETY: the selector names the dismiss button, an HTMLElement.
+  await act(async () => (host.querySelector("[data-import-card] button[aria-label=\"Don't import\"]") as HTMLElement).click());
+  expect(host.querySelector("[data-import-card]")).toBeNull();
+  await act(async () => {
+    answer();
+    await slow;
+  });
+  expect(host.querySelector("[data-import-card]")).toBeNull();
 });
