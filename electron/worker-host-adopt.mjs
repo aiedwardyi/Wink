@@ -156,7 +156,8 @@ export async function adoptWorkers({ client, runs, host, mailbox = async () => n
       told = true;
       warn(`worker host unreachable (${client.state().fault?.detail ?? left}): its panes are left alone`);
       for (const run of records.values()) group(run).unreachable.push(run);
-      void report().catch(warn);
+      // Local rows resume in this report: the next pass must not release or recover rows while it runs.
+      await report().catch(warn);
       continue;
     }
     if (!panes) return report();

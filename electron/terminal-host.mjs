@@ -1239,6 +1239,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       return;
     }
     session.pty = pty;
+    // The retry can land in the other place, and nothing rewrites the record until the bot types again.
+    if (session.botPane) paneRuns?.ranLocally(session.id, !pty.hosted?.());
     watchExit(session);
     if (Number.isInteger(pty.pid)) {
       try { setPriority(pty.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}

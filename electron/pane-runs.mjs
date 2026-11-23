@@ -95,6 +95,13 @@ export function createPaneRuns(file) {
       save();
     },
     ended: (id) => mark(id, "ended"),
+    ranLocally(id, local) {
+      const run = runs.get(id);
+      if (!run || prior.has(id) || Boolean(run.local) === local) return;
+      if (local) run.local = true;
+      else delete run.local;
+      save();
+    },
     closed(id) {
       const run = runs.get(id);
       if (!run) return true;

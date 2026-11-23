@@ -563,3 +563,51 @@ test("a pane closed while the worker host was down is neither taken back nor res
   assert.deepEqual([start.resumed, start.client.dropped], [["LIVE"], [closed]]);
   assert.equal(createPaneRuns(file).restarted().size, 0);
 });
+
+test("a worker host back while the panes that ran in the app still resume never tells the bot to redo them", async (t) => {
+  assert.ok(recovery);
+  const f = fixture(t, [record("claude", { label: "HOSTED", kept: true }), record("claude", { label: "LOCAL", local: true })]);
+  let ready = false;
+  let loaded;
+  const loading = new Promise((resolve) => { loaded = resolve; });
+  f.host.workerResumeStatus = () => ready ? "resumed" : "pending";
+  let tick = null;
+  const next = () => { const resolve = tick; tick = null; resolve(); };
+  const client = { reach: "unknown", left: () => client.reach, ended: () => new Map(), prewarm: async () => client.reach === "kept", panes: async () => [],
+    attach: () => null, drop() {}, state: () => ({ fault: { detail: "fixture" } }) };
+  const done = adoptWorkers({ client, runs: f.runs, host: f.host, wait: () => new Promise((resolve) => { tick = resolve; }),
+    recover: (kept) => recovery.recoverWorkers({ ...f.options, kept, wait: (ms) => ms === 500 ? loading : Promise.resolve() }) });
+  await until(() => f.launched.length === 1);
+  // The host answers the next pass, gone with HOSTED, while LOCAL still loads.
+  client.reach = "kept";
+  if (tick) next();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  ready = true;
+  loaded();
+  await until(() => tick || f.notes.length === 2);
+  if (tick) next();
+  await done;
+  assert.deepEqual(f.launched.map((run) => run.label), ["LOCAL", "HOSTED"]);
+  const notes = f.notes.map((note) => note.text).join("\n");
+  assert.match(notes, /RESUMED: LOCAL \(claude\)/);
+  assert.match(notes, /RESUMED: HOSTED \(claude\)/);
+  assert.doesNotMatch(notes, /RESTARTED|FRESH/);
+});
+
+test("a pane the DLL-init retry moves from the app into the worker host is no longer marked as run in the app", async (t) => {
+  const file = path.join(ROOT, randomUUID(), "pane-runs.json");
+  t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const children = [];
+  let hostUp = false;
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT, paneRuns: createPaneRuns(file), platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 8 * 1024 ** 3, setPriority() {},
+    loadPty: () => ({ spawn: () => { const child = { onData() {}, onExit(fn) { child.exit = fn; }, write() {}, resize() {}, kill() {} }; children.push(child); return child; } }),
+    hostPty: () => hostUp ? { pid: 1, ready: Promise.resolve(), onData() {}, onExit() {}, onError() {}, write() {}, resize() {}, kill() {}, hosted: () => true } : null });
+  t.after(() => host.dispose());
+  const pane = await host.openForBot("bot", { label: "MOVED", cwd: ROOT, command: "codex" });
+  const row = () => JSON.parse(fs.readFileSync(file, "utf8")).find((run) => run.id === pane.sessionId);
+  assert.equal(row().local, true);
+  hostUp = true;
+  children[0].exit({ exitCode: 0xC0000142 });
+  await until(() => !row().local);
+});
