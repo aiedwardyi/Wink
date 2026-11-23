@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +11,7 @@ import { copyRoomFile } from "./files.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend, hostSend, liveBotChain, stopBotChain, teamBotSend } from "./send.ts";
 import { addTeamBot, type TeamBot } from "./team-bots.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 let store: Store;
 let group: HostedGroup;
@@ -23,7 +24,7 @@ const person = (who: keyof typeof people) => ({ kind: "person" as const, id: peo
 beforeEach(() => {
   closeRoomsDb();
   closeAsksDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   wink = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
   const helper = store.patchBot(store.createBot().id, { name: "위키" })!.id;

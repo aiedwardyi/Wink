@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import { cancelPeerApprovalsFor, resolvePeerComms } from "./peer-approval.ts";
 import { _resetSteerQueue, cancelQueuedRoomParticipations, drainSteeredMessages, foldQueuedSends, queueMark, queueRoomParticipation, queueSteeredMessage } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 let store: Store;
 let from: ReturnType<Store["createBot"]>;
@@ -22,7 +23,7 @@ const bus = () => ({ store, broadcast: () => {} });
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _resetPending();
   _resetCommsRoots();
   _resetSteerQueue();
@@ -78,6 +79,14 @@ it("refuses a scoped ask after its caller turn settled", async () => {
   await pending;
   expect(output.body()).toEqual({ error: "This turn has ended, so it can't message teammates." });
   expect(ask).not.toHaveBeenCalled();
+});
+
+it.each([
+  [true, "answer"],
+  [false, "(couldn't start that bot: provider process exited before the reader turn could start)"],
+])("an inline ask says whether the peer really replied (%s)", async (replied, text) => {
+  start();
+  expect(await send(request(vi.fn(async () => ({ replied, text }))))).toMatchObject({ text, replied });
 });
 
 it("keeps a receipt root across save and load", () => {

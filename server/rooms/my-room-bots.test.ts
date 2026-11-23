@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,6 +11,7 @@ import { createInternalRoutes } from "../internal-routes.ts";
 import type { BotRecord, Message } from "../store.ts";
 import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, setJoinedWorks, type JoinedEntry } from "./joined.ts";
 import { MyRoomBotTurns, type MyRoomBotDeps } from "./my-room-bots.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const ROOM = "room1";
 const ME = { id: "p1", name: "Peter" };
@@ -34,7 +35,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
   closeJoinedDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   seq = 0;
   thread = [];
@@ -288,6 +289,7 @@ describe("this PC's bot in a joined room", () => {
     await turns.settled("task-1", true);
     await settle();
     expect(deps.startTurn.mock.calls[1]![2]).toContain('"Peter" runs you; "Mina" may also make you work; everyone else here is read-only. "Can make bots work" on "Edward"\'s Wink: "Peter" off, "Mina" on;');
+    expect(deps.startTurn.mock.calls.map((call) => call[6])).toEqual([false, false]);
   });
 
   it("keeps the host and people already in the room at full power after the upgrade, and starts a new joiner read-only", async () => {
@@ -300,6 +302,8 @@ describe("this PC's bot in a joined room", () => {
     turns.heard(ROOM, line({ kind: "host", id: "host", name: "Edward" }, "@Pete-Coder fix the login test", { at: Date.now() }));
     await settle();
     expect(deps.startTurn.mock.calls[0]![5]).toBe(false);
+    // Switched on, the host still isn't this PC's person: a guest turn (web_read borrows no other bot for it).
+    expect(deps.startTurn.mock.calls[0]![6]).toBe(true);
     expect(deps.startTurn.mock.calls[0]![2]).toContain('"Peter" runs you; "Edward", "Mina" may also make you work; everyone else here is read-only.');
     await turns.settled(deps.startTurn.mock.calls[0]![1] as string, true);
     turns.heard(ROOM, line({ kind: "person", id: "p2", name: "Mina" }, "@Pete-Coder rename the file", { at: Date.now() }));

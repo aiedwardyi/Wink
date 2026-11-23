@@ -55,7 +55,9 @@ export function delegationContext(messages: Message[], referenceMessages: Messag
 }
 
 export function delegationRollup(run: ReadonlyArray<{ chip?: { name: string; delegation?: string } }>, name: string): string {
-  return run.filter((unit) => unit.chip?.delegation)
-    .filter((unit) => unit.chip!.name.replace(/^mcp__.+?__/, "") === name).slice(-5)
-    .map((unit) => ` (${unit.chip!.delegation})`).join("");
+  const all = run.filter((unit) => unit.chip?.delegation).filter((unit) => unit.chip!.name.replace(/^mcp__.+?__/, "") === name);
+  const shown = all.slice(-5);
+  const earlier = all.length - shown.length;
+  return shown.map((unit) => ` (${unit.chip!.delegation})`).join("") +
+    (earlier ? ` (+${earlier} earlier delegation${earlier === 1 ? "" : "s"}, check one by id)` : "");
 }

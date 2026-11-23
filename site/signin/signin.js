@@ -11,6 +11,8 @@
   const LAST_PC = "wink-signin-pc";
   const ACCOUNT = "wink-signin-account";
   const OPENING = "wink-signin-opening";
+  // The PC a typed code reached in this browser: its return leg offers that PC's own code form.
+  const TYPED = "wink-signin-typed";
   const EMPTY = "Sign in with Google in Wink on your PC first: Settings, Devices.";
   const OFFLINE = "Could not reach your PC. Check your connection and try again.";
   const BAD_LINK = "That PC link is not valid.";
@@ -25,6 +27,7 @@
   let config = null;
   let listed = [];
   let account = "";
+  let showBoxes = () => {};
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
@@ -128,6 +131,17 @@
     return spin;
   }
 
+  // A browser where Google cannot finish (Meta's glasses web view) still gets in with the PC's own code form, so a PC a typed code reached offers it from the start: no Google outcome is waited for.
+  function offerCode(pc) {
+    try {
+      if (localStorage.getItem(TYPED) !== pc) return;
+    } catch {
+      return;
+    }
+    $("usecode").addEventListener("click", () => location.assign(`https://${pc}.${config.base}/pair`));
+    $("code").hidden = false;
+  }
+
   function opening(name) {
     $("title").replaceChildren(spinner(), `Opening ${name || "Wink"}…`);
   }
@@ -168,6 +182,8 @@
     remember(label);
     holdAccount(label);
     holdName(label, name);
+    // A stopped open leaves this page up, and the code is the other way in.
+    globalThis.navigation?.addEventListener("navigateerror", () => showBoxes(true), { once: true });
     location.assign(`https://${label}.${config.base}/pair${suffix}${name ? `&n=${encodeURIComponent(name)}` : ""}`);
   }
 
@@ -202,6 +218,7 @@
     }
     showList(listed);
     say(`${pc.name} is offline.`, "error");
+    showBoxes(true);
   }
 
   function showList(pcs) {
@@ -226,6 +243,7 @@
   function choose(pcs, pick = false) {
     if (pcs.length === 0) {
       say(EMPTY);
+      showBoxes(true);
       return;
     }
     if (pick) {
@@ -278,6 +296,24 @@
 
   const shortCodeChars = (value) => [...value.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(CODE_KEEP, "");
 
+  // Shown at once but see-through and inert while a remembered PC may open, so the boxes do not flash. Stopping that open fires navigateerror here; with no Navigation API nothing could bring them back, so they are not covered and stay behind the link.
+  function coverCode() {
+    const nav = globalThis.navigation;
+    if (!nav) return () => showBoxes(false);
+    const code = $("code");
+    // A stopped open brings the cursor with the boxes; a probe that fails or Back does not.
+    const uncover = (stopped) => {
+      code.classList.remove("trying");
+      code.removeAttribute("inert");
+      nav.removeEventListener("navigateerror", uncover);
+      showBoxes(Boolean(stopped));
+    };
+    code.classList.add("trying");
+    code.setAttribute("inert", "");
+    nav.addEventListener("navigateerror", uncover);
+    return uncover;
+  }
+
   function showCode() {
     $("code").hidden = false;
     const boxes = [];
@@ -311,6 +347,9 @@
       // Then the same Google check as picking the PC from the list. Not remembered here: the return leg remembers it once Google says it is this account's.
       if (LABEL_RE.test(label)) {
         holdAccount(label);
+        try {
+          localStorage.setItem(TYPED, label);
+        } catch {}
         typed = true;
         location.assign(`https://${label}.${config.base}/pair?g=1`);
         return;
@@ -367,6 +406,15 @@
     }
     render();
     $("boxes").replaceChildren(...boxes);
+    // The boxes stay out of sight, and out of the tab order, until the person asks for them or the way to a PC falls through.
+    // Only when they open: a late failure must not pull the cursor out of boxes already in use.
+    showBoxes = (focus) => {
+      if (!$("boxes").hidden) return;
+      $("usecode").hidden = true;
+      $("boxes").hidden = false;
+      if (focus) focusAt(0);
+    };
+    $("usecode").addEventListener("click", () => showBoxes(true));
     // Back from the PC's page can restore this one as it was left: locked on a code that already went.
     addEventListener("pageshow", (event) => {
       if (!event.persisted) return;
@@ -495,23 +543,42 @@
     });
   }
 
-  async function coldStart(pick) {
+  // A link that carries a code was opened to type one, also when a bookmark only changes this page's hash.
+  const codeLink = () => {
+    if (new URLSearchParams(location.search).has("code") || new URLSearchParams(location.hash.slice(1)).has("code")) showBoxes(false);
+  };
+
+  async function coldStart(pick, signedOut) {
     const last = remembered();
     const saved = LABEL_RE.test(last);
-    if (!pick && saved && await reachable(last)) {
+    const uncover = !pick && !signedOut && saved ? coverCode() : () => {};
+    if (!pick && !signedOut && saved && await reachable(last)) {
+      // Back restores this page from bfcache as it was left, still covered.
+      const restored = (event) => {
+        if (!event.persisted) return;
+        removeEventListener("pageshow", restored);
+        uncover();
+      };
+      addEventListener("pageshow", restored);
       go(last, "?g=1");
       return;
     }
+    uncover();
+    codeLink();
     // From a PC the account is usually known to Google, so try its quiet sign-in before drawing the button.
     if (pick) $("title").textContent = "Choose a PC";
+    if (!gis) gis = await google;
+    // Google would otherwise sign the browser straight back in on the PC's return leg.
+    if (signedOut) gis.disableAutoSelect();
     const token = await requestToken(randomNonce(), pick);
     account = subject(token);
     const listed = await loadPcs(token);
     if (!listed) {
       say(OFFLINE, "error");
+      showBoxes(true);
       return;
     }
-    choose(listed, pick || saved);
+    choose(listed, pick || (saved && !signedOut));
     if (listed.length === 0) refreshWhenBack(token, pick || saved);
   }
 
@@ -569,7 +636,12 @@
     const m = params.get("m");
     if (pc === null && m === null) {
       showCode();
-      void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
+      const signedOut = params.get("signedout") === "1";
+      addEventListener("hashchange", codeLink);
+      void coldStart(params.get("pick") === "1", signedOut).catch(() => {
+        say(GOOGLE_DOWN, "error");
+        showBoxes(true);
+      });
       return;
     }
     // A cold start is already the chooser, so the link would only reload it.
@@ -583,13 +655,20 @@
 
   if (PHONE_RE.test(navigator.userAgent)) $("subtitle").textContent = "Reach Wink on your PC from this phone.";
   const leg = new URLSearchParams(location.search);
-  if (LABEL_RE.test(leg.get("pc") || "") && M_RE.test(leg.get("m") || "")) opening(heldName(leg.get("pc")));
+  config = readConfig();
+  if (LABEL_RE.test(leg.get("pc") || "") && M_RE.test(leg.get("m") || "")) {
+    opening(heldName(leg.get("pc")));
+    if (config) offerCode(leg.get("pc"));
+  }
   // Back from a PC restores this page from bfcache with the PC buttons still opening.
   addEventListener("pageshow", (event) => {
     if (event.persisted && !$("list").hidden) showList(listed);
   });
 
   const ready = googleId();
-  if (ready) run(ready);
-  else void whenGoogle().then(run).catch(() => say(GOOGLE_DOWN, "error"));
+  const google = ready ? Promise.resolve(ready) : whenGoogle();
+  google.catch(() => {});
+  // Typing a PC's code needs no Google, so the front page does not wait for its script; only its Google sign-in does.
+  if (ready || (!leg.has("pc") && !leg.has("m"))) run(ready);
+  else void google.then(run).catch(() => say(GOOGLE_DOWN, "error"));
 })();

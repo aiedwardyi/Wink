@@ -25,6 +25,7 @@ import { readContextCompaction } from "../shared/context-compaction.ts";
 import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
 import { REPLACED_MODELS, replacedModelMoves, type ReplacedModel } from "../shared/replaced-models.ts";
 import { reactionMarkKeys } from "../shared/reactions.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -50,9 +51,12 @@ const taskPacket = (
   ...overrides,
 });
 
+// what older builds seeded into a new chat; old chats still hold it
+const OLD_QUIZ = { title: "What do you mostly want help with?", subtitle: "Pick whatever's closest; we can always expand from there.", options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"] };
+
 describe("Store", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("tool detail survives completion folding and a database restart without a planted key", async () => {
@@ -147,23 +151,19 @@ describe("Store", () => {
     expect(source).toContain("return flagShownImage(redactBotAuthored(message));");
   });
 
-  it("createBot seeds an onboarding card without a fake chat bubble", () => {
+  it("createBot starts an empty chat: no starter quiz, no fake chat bubble", () => {
     const store = new Store(selection);
     const bot = store.createBot();
 
-    const messages = store.messagesFor(bot.threadId);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ role: "bot", kind: "options" });
-    expect(messages[0].card?.options.length).toBeGreaterThan(1);
-    expect(messages.some((message) => message.kind === "text")).toBe(false);
-    expect(JSON.stringify(messages)).not.toMatch(/I'll handle|Nice to meet you|first piece of work/);
+    expect(store.messagesFor(bot.threadId)).toEqual([]);
+    expect(new Store(selection).messagesFor(bot.threadId)).toEqual([]);
     expect(bot.modelSelection).toEqual(selection());
   });
 
   it("a typed message hides the first-run quiz but leaves an ask_user question for the client to settle", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0];
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Hi" });
     const ask = store.appendMessage(bot.threadId, {
       role: "bot",
@@ -227,7 +227,7 @@ describe("Store", () => {
   it("dismisses the onboarding quiz when the user talks, and leaves live asks", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0]!;
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     expect(quiz.card?.dismissed).toBeUndefined();
 
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
@@ -609,7 +609,7 @@ describe("Store", () => {
   it("patchMessage merges card patches and returns null for unknown ids", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const card = store.messagesFor(bot.threadId)[0]!;
+    const card = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
 
     const patched = store.patchMessage(bot.threadId, card.id, {
       card: { ...card.card!, answered: "Work & projects" },
@@ -1263,10 +1263,11 @@ describe("Store", () => {
   it("chains appended messages and keeps the newest as active leaf", () => {
     const store = new Store(selection);
     const bot = store.createBot();
+    const greeting = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "hello" });
     const user = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
 
     const messages = store.messagesFor(bot.threadId);
-    expect(user.parentId).toBe(messages[0].id); // follows the onboarding card
+    expect(user.parentId).toBe(greeting.id);
     expect(store.activeLeaf(bot.threadId)).toBe(user.id);
     expect(store.activePath(bot.threadId).map((m) => m.id)).toEqual(messages.map((m) => m.id));
   });
@@ -1547,7 +1548,8 @@ describe("Store", () => {
   it("deleteBot removes the bot and its durable transcript", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    // the transcript is durable — a fresh Store sees the seeded messages
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+    // the transcript is durable: a fresh Store sees it
     expect(new Store(selection).messagesFor(bot.threadId).length).toBeGreaterThan(0);
 
     expect(store.deleteBot(bot.id)).toBe(true);
@@ -1576,7 +1578,7 @@ describe("Store", () => {
 
 describe("Store change stream", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   const record = (store: Store) => {
@@ -1599,7 +1601,7 @@ describe("Store change stream", () => {
   it("emits a card patch after a user message hides the onboarding quiz", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0]!;
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     const events = record(store);
     const m = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
     expect(events.map((event) => event.type)).toEqual(["message", "message.patch"]);
@@ -1611,13 +1613,11 @@ describe("Store change stream", () => {
     });
   });
 
-  it("announces a new bot before its onboarding messages", () => {
+  it("announces a new bot with no seeded message", () => {
     const store = new Store(selection);
     const events = record(store);
     const bot = store.createBot();
-    expect(events.map((event) => event.type)).toEqual(["bot", "message"]);
-    expect(events[0]).toEqual({ type: "bot", botId: bot.id });
-    expect(events.slice(1).every((event) => event.threadId === bot.threadId)).toBe(true);
+    expect(events).toEqual([{ type: "bot", botId: bot.id }]);
   });
 
   it("every message-tree write emits a message or thread event", () => {
@@ -1725,7 +1725,7 @@ describe("Store change stream", () => {
 
 describe("Store bot activity state", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("derives busy from activity, so every existing busy reader keeps working", () => {
@@ -1771,7 +1771,7 @@ describe("Store model picked mid-reply", () => {
   const next: ModelSelection = { instanceId: "codex", model: "gpt-6-sol", mode: "pinned" };
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetSteerQueue();
   });
 
@@ -1834,7 +1834,7 @@ describe("Store model picked mid-reply", () => {
 
 describe("Store redacts bot-authored secrets on write", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("masks a key in bot text, tools and cards — but never in what the user typed", () => {
@@ -1989,7 +1989,7 @@ describe("Store redacts bot-authored secrets on write", () => {
 
 describe("Store task usage", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("banks each turn's tokens and cost on the task, counting turns", () => {
@@ -2041,7 +2041,7 @@ describe("Store task usage", () => {
 
 describe("Store task working folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("pins the bot's folder onto a task on its first turn, and never again", () => {
@@ -2151,7 +2151,7 @@ describe("Store task working folder", () => {
 
 describe("Store remembered project folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("remembers a resolved project per bot without turning it into a pin", () => {
@@ -2283,7 +2283,7 @@ describe("Store remembered project folder", () => {
 
 describe("Store room working folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("pins the room's folder on its first turn, and never again", () => {
@@ -2318,7 +2318,7 @@ describe("Store room working folder", () => {
 
 describe("Store task working folder — cloud runs", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
   it("a cloud run pins the default so the bot's host folder never shows for that task", () => {
     const store = new Store(selection);

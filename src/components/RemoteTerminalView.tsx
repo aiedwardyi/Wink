@@ -11,6 +11,7 @@ import { lastViewedPanes } from "@/lib/terminal-panes";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { WorkerChip, WorkerMark } from "./WorkerRows";
 
 type RemoteTerminalPane = {
@@ -362,7 +363,11 @@ export function RemoteTerminalView({
     }
   };
   const buttonClass =
-    "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50";
+    "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] max-md:min-h-10 max-md:min-w-10 max-md:px-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50";
+  const phone = useIsPhone();
+  const status = noTerminal ? t("terminal.noSession") : shown?.exited ? t("terminal.exited", { code: shown.exitCode ?? "?" }) : "";
+  // A phone keeps the title on one line with room for the name; only the folder drops, never the exit/no-session status.
+  const detail = [phone ? "" : shown?.cwd, status].filter(Boolean).join(" · ");
   const chip = rosterChip(workers, panes.filter((pane) => !pane.main));
   const paneOrder = workerPaneOrder(panes, workers);
   useLayoutEffect(() => {
@@ -380,13 +385,11 @@ export function RemoteTerminalView({
 
   return (
     <main ref={mainRef} className="flex min-h-0 min-w-0 flex-1 flex-col bg-inset text-ink" aria-label={t("terminal.title")}>
-      <header className={`@container/chathead flex shrink-0 items-center gap-2 border-b border-hairline bg-panel px-2 py-2 md:pl-5 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
+      <header className={`@container/chathead flex shrink-0 items-center gap-2 border-b border-hairline bg-panel px-2 py-2 max-md:gap-0.5 md:pl-5 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
         <TerminalSquare size={16} className="shrink-0 text-accent-text" />
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {watched && <WorkerMark compact provider={paneProvider(workers, watched.sessionId, watched.label)} />}{watchedName}</span></h1>
-          <p className="truncate font-mono text-[11px] text-ink-secondary">
-            {[shown?.cwd, noTerminal ? t("terminal.noSession") : shown?.exited ? t("terminal.exited", { code: shown.exitCode ?? "?" }) : ""].filter(Boolean).join(" · ")}
-          </p>
+        <div className="min-w-0 flex-1 max-md:px-1">
+          <h1 className="truncate text-[13px] font-medium"><span className="max-md:hidden">{t("terminal.title")} </span><span className="text-ink-secondary max-md:text-ink"><span className="max-md:hidden">/ </span>{watched && <WorkerMark compact provider={paneProvider(workers, watched.sessionId, watched.label)} />}{watchedName}</span></h1>
+          {(!phone || detail) && <p className="truncate font-mono text-[11px] text-ink-secondary">{detail}</p>}
         </div>
         {/* A docked terminal hides without the close broadcast, which would also shut the Workers pane taking its spot. */}
         <WorkerChip

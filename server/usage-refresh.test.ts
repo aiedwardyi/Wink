@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { createFixtureHome, removeTestData, testHome } from "./testing/test-home.ts";
 
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
-import { canRefreshUsage, createMuseCheck, createUsageRefresh, isCsrfRejection, museCheckModel, readAntigravityQuota, readAntigravityUsageCommand, readGrokBillingRpc, readMuseUsage, usageRefreshResponse } from "./usage-refresh.ts";
+import { canRefreshUsage, createMuseCheck, createUsageRefresh, isCsrfRejection, museCheckModel, AGY_NOT_A_PLAN, agyNotAPlan, readAntigravityQuota, readAntigravityUsageCommand, readGrokBillingRpc, readMuseUsage, usageRefreshResponse } from "./usage-refresh.ts";
 import type { RateLimitWindow } from "./contracts.ts";
 import { antigravityRateLimitWindows } from "./drivers/rate-limits.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
@@ -53,6 +55,13 @@ it("shares the usage-read availability policy with wait admission", () => {
 });
 
 describe("usage refresh route result", () => {
+  it("omits a background note limit when no usage window was observed", () => {
+    const report = { windows: [], observedAt: reset, noteLimit: { resetsAt: null } };
+    expect(usageRefreshResponse("codex", { report, retryAt: 0 }).report).toBeUndefined();
+    expect(usageRefreshResponse("codex", { report: { ...report, windows: claudeWindows }, retryAt: 0 }).report)
+      .toEqual({ windows: claudeWindows, observedAt: reset, ageMs: expect.any(Number) });
+  });
+
   it("preserves every Codex bucket in a read instead of using only the compatibility bucket", async () => {
     const refresh = createUsageRefresh({ rpc: async () => ({ ...fixtures.codex,
       rateLimitsByLimitId: { spark: { primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Date.parse(reset) / 1000 } } } }) });
@@ -504,7 +513,7 @@ describe("usage refresh route result", () => {
       const spawn = JSON.parse(readFileSync(dump, "utf8"));
       expect(spawn.argv).toEqual(["serve", "--no-session-log", "--disable-shell", "--disable-write"]);
       expect(spawn.cwd).toContain("omb-muse-check-");
-      expect(spawn.cwd).not.toBe(homedir());
+      expect(spawn.cwd).not.toBe(testHome());
       expect(JSON.parse(readFileSync(`${dump}.config.json`, "utf8"))).toEqual([
         { method: "session/start", modelId: "muse-spark-1.3", approvalMode: "denyUnmatched", workspaceRoot: spawn.cwd },
       ]);
@@ -695,11 +704,13 @@ describe("antigravity /usage quota command", () => {
     expect(data).toEqual(groups);
   });
 
-  it("throws refresh on exec failure, garbage, and empty groups — never signin", async () => {
+  it("throws refresh on exec failure and garbage, noplan on empty groups — never signin", async () => {
     await expect(readAntigravityUsageCommand("agy", {}, async () => null)).rejects.toThrow("refresh");
     await expect(readAntigravityUsageCommand("agy", {}, async () => "not json\n")).rejects.toThrow("refresh");
-    await expect(readAntigravityUsageCommand("agy", {}, async () => `${usageLine({ groups: [] })}\n`)).rejects.toThrow("refresh");
+    await expect(readAntigravityUsageCommand("agy", {}, async () => `${usageLine({ groups: [] })}\n`)).rejects.toThrow("noplan");
     await expect(readAntigravityUsageCommand("agy", {}, async () => "")).rejects.toThrow("refresh");
+    const prompted = JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "Here is your usage." } });
+    await expect(readAntigravityUsageCommand("agy", {}, async () => `${prompted}\n`)).rejects.toThrow("refresh");
   });
 
   it("ignores foreign or unnamed command payloads even when they carry quota-shaped data", async () => {
@@ -763,5 +774,145 @@ describe("antigravity /usage quota command", () => {
         throw new Error("refresh");
       },
     })).rejects.toThrow("refresh");
+  });
+});
+
+describe("antigravity /usage as agy 1.5 prints it", () => {
+  const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "testing", "fixtures");
+  // Real `agy -p /usage --output-format stream-json` output from a Google AI Pro plan (11-21).
+  const live = readFileSync(join(fixtureDir, "agy-usage-live.jsonl"), "utf8");
+  // Captured 11-22 from the real agy 1.5.12 with Cloud ADC forced (AGY_ADC_AUTH=1, an empty credentials file, an isolated
+  // profile): exit 1, stderr "authentication required", this one errored result line and no buckets.
+  // The other lines are constructed shapes a Cloud / API-key account could print: error event, empty groups,
+  // an empty bucket list, buckets without a fill level.
+  const constructed = ["{\"event\":\"error\",\"error\":{\"message\":\"/usage is not available with a Gemini API key; see https://aistudio.google.com/usage for the key's usage\"}}","{\"event\":\"command_result\",\"command\":{\"name\":\"usage\",\"data\":{\"description\":\"\",\"groups\":[]}}}","{\"event\":\"command_result\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":[{\"name\":\"Gemini Models\",\"buckets\":[]}]}}}","{\"event\":\"command_result\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":[{\"name\":\"Gemini Models\",\"buckets\":[{\"id\":\"gemini-weekly\",\"name\":\"Weekly Limit Remaining\",\"window\":\"weekly\"},{\"id\":\"gemini-5h\",\"name\":\"Five Hour Limit Remaining\",\"window\":\"5h\"}]}]}}}"];
+  const gcpLines = [readFileSync(join(fixtureDir, "agy-usage-gcp.jsonl"), "utf8").trim(), ...constructed];
+  const quotaOf = (stdout: string | null) => readAntigravityQuota("agy", {}, {
+    usage: (cli, env) => readAntigravityUsageCommand(cli, env, async () => stdout),
+    rpc: async () => { throw new Error("refresh"); },
+  });
+
+  it("reads the plan's two windows through the same path Usage refresh takes", async () => {
+    // The Gemini pool's reset times as the payload itself states them.
+    const buckets = new Map(z.object({ command: z.object({ data: z.object({ groups: z.array(z.object({ buckets: z.array(z.object({ id: z.string(), reset_time: z.string() })) })) }) }) })
+      .parse(JSON.parse(live.split("\n")[0]!)).command.data.groups[0]!.buckets.map((bucket) => [bucket.id, Date.parse(bucket.reset_time)] as const));
+    const windows = antigravityRateLimitWindows(await quotaOf(live));
+    expect(windows).toEqual([
+      { id: "five_hour", usedPercent: 30, resetsAt: buckets.get("gemini-5h"), windowMinutes: 300 },
+      { id: "seven_day", usedPercent: 8.7, resetsAt: buckets.get("gemini-weekly"), windowMinutes: 10_080 },
+    ]);
+  });
+
+  it("shows both bars through refresh", async () => {
+    const refresh = createUsageRefresh({ platform: "linux", antigravity: async () => quotaOf(live) });
+    const result = await refresh("antigravityAgent", { instanceId: "agy" });
+    expect(result.error).toBeUndefined();
+    expect(result.report?.windows.map((window) => [window.id, window.usedPercent])).toEqual([["five_hour", 30], ["seven_day", 8.7]]);
+  });
+
+  it.each(gcpLines.map((_, index) => index))("clears the bar for the Cloud / API-key output line %i (0 is captured)", async (index) => {
+    const line = gcpLines[index];
+    await expect(quotaOf(line)).rejects.toThrow("noplan");
+    const refresh = createUsageRefresh({ platform: "linux", antigravity: async () => quotaOf(line) });
+    const result = await refresh("antigravityAgent", { instanceId: "agy" });
+    expect(result.cleared).toBe(true);
+    expect(result.report).toBeUndefined();
+    expect(result.error).toBeUndefined();
+  });
+
+  it("shows no bar when /usage exits non-zero (API key: code 2) or times out", async () => {
+    await expect(quotaOf(null)).rejects.toThrow("refresh");
+    const refresh = createUsageRefresh({ platform: "linux", antigravity: async () => quotaOf(null) });
+    const result = await refresh("antigravityAgent", { instanceId: "agy" });
+    expect(result.report).toBeUndefined();
+    expect(result.error).toBe("Could not refresh Antigravity limits");
+  });
+});
+
+describe("antigravity /usage: not a plan versus transient failure", () => {
+  const live = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "testing", "fixtures", "agy-usage-live.jsonl"), "utf8");
+  const previous = { windows: [{ id: "five_hour", usedPercent: 30, resetsAt: null }, { id: "seven_day", usedPercent: 9, resetsAt: null }], observedAt: reset };
+  const refreshWith = (run: () => Promise<string | null | typeof AGY_NOT_A_PLAN>) => createUsageRefresh({
+    platform: "linux",
+    antigravity: (cli, env) => readAntigravityQuota(cli, env, {
+      usage: (c, e) => readAntigravityUsageCommand(c, e, run),
+      rpc: async () => { throw new Error("refresh"); },
+    }),
+  });
+
+  it("clears the last report when agy answers that the login has no plan quota", async () => {
+    const result = await refreshWith(async () => AGY_NOT_A_PLAN)("antigravityAgent", { instanceId: "agy" }, previous);
+    expect(result.cleared).toBe(true);
+    expect(result.report).toBeUndefined();
+    expect(result.error).toBeUndefined();
+  });
+
+  it("clears the last report when agy answers with empty groups, exit 0", async () => {
+    const empty = `${JSON.stringify({ event: "command_result", command: { name: "usage", data: { groups: [] } } })}\n`;
+    const result = await refreshWith(async () => empty)("antigravityAgent", { instanceId: "agy" }, previous);
+    expect(result.cleared).toBe(true);
+    expect(result.report).toBeUndefined();
+  });
+
+  it("keeps the last report on a timeout, a spawn failure or any other transient error", async () => {
+    for (const run of [async () => null, async () => "", async () => "not json\n"]) {
+      const result = await refreshWith(run)("antigravityAgent", { instanceId: "agy" }, previous);
+      expect(result.cleared).toBeUndefined();
+      expect(result.report).toEqual(previous);
+      expect(result.error).toBe("Could not refresh Antigravity limits");
+    }
+  });
+
+  it("goes from plan to API key and back through the same refresh, no restart", async () => {
+    let mode: "plan" | "apikey" = "plan";
+    const refresh = refreshWith(async () => (mode === "plan" ? live : AGY_NOT_A_PLAN));
+    const first = await refresh("antigravityAgent", { instanceId: "agy", fresh: true }, undefined);
+    expect(first.report?.windows).toHaveLength(2);
+    mode = "apikey";
+    const second = await refresh("antigravityAgent", { instanceId: "agy", fresh: true }, first.report);
+    expect(second.cleared).toBe(true);
+    expect(second.report).toBeUndefined();
+    mode = "plan";
+    const third = await refresh("antigravityAgent", { instanceId: "agy", fresh: true }, undefined);
+    expect(third.report?.windows).toHaveLength(2);
+  });
+
+  it("answers /usage in both fake agys only when it follows -p", () => {
+    const home = createFixtureHome("omb-agy-usage-flag-");
+    try {
+      writeFileSync(join(home, "agy-usage-mode"), "apikey");
+      writeFileSync(join(home, "agy-usage.jsonl"), live);
+      const env = { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "", USERPROFILE: join(home, "profile"), FAKE_AGY_USAGE_MODE_FILE: join(home, "agy-usage-mode") };
+      const exit = (args: string[]) => spawnSync(process.execPath, args, { input: "", env, encoding: "utf8", timeout: 10_000, windowsHide: true }).status;
+      const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+      const fake = join(root, "server", "testing", "fake-agy-cli.ts");
+      const stub = join(root, ".claude", "skills", "verify-wink", "stub-engine.cjs");
+      expect([exit([fake, "-p", "/usage"]), exit([fake, "/usage"])]).toEqual([2, 0]);
+      expect([exit([stub, "antigravity", "-p", "/usage"]), exit([stub, "antigravity", "/usage"])]).toEqual([2, 0]);
+    } finally {
+      removeTestData(home);
+    }
+  });
+
+  it("asks the language-server leg nothing once agy has said it is not a plan", async () => {
+    let rpcCalls = 0;
+    await expect(readAntigravityQuota("agy", {}, {
+      usage: (c, e) => readAntigravityUsageCommand(c, e, async () => AGY_NOT_A_PLAN),
+      rpc: async () => { rpcCalls++; return {}; },
+    })).rejects.toThrow("noplan");
+    expect(rpcCalls).toBe(0);
+  });
+
+  it("reads exit 2, and exit 1 with \"authentication required\", as agy's not-a-plan answers", () => {
+    const failed = (code: unknown) => Object.assign(new Error("failed"), { code });
+    expect(agyNotAPlan(failed(2))).toBe(true);
+    const captured = "Error: authentication required. Run 'agy.exe' to log in.\nerror: authentication failed or timed out\n";
+    expect(agyNotAPlan(failed(1), captured)).toBe(true);
+    // Everything else stays transient: other exits, a plain exit 1, a timeout or a spawn failure.
+    expect(agyNotAPlan(failed(1))).toBe(false);
+    expect(agyNotAPlan(failed(1), "usage failed\n")).toBe(false);
+    expect(agyNotAPlan(failed(3), captured)).toBe(false);
+    for (const code of [127, "ETIMEDOUT", "ENOENT", undefined]) expect(agyNotAPlan(failed(code), captured)).toBe(false);
+    expect(agyNotAPlan(null, captured)).toBe(false);
   });
 });

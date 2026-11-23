@@ -974,12 +974,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         let resumeFailed = false;
         // Ask must reach the person; otherwise the user's own approvals_reviewer decides.
         const approvalsReviewer = approvalPolicy === "untrusted" ? "user" : undefined;
-        // read-only: every MCP server but Wink's read-only agents proxy, every plugin (they bring their own servers,
+        // read-only: every MCP server but Wink's read-only agents proxy when this turn mounts it, every plugin (they bring their own servers,
         // computer use among them), apps and the owner's hooks are off, so no per-tool approval of the user's applies
         const mcpOff: Record<string, false> = {};
         if (turn.readOnly && !warm) {
           const read = await request("config/read", {});
-          for (const name of Object.keys(read?.config?.mcp_servers ?? {})) if (name !== "agents") mcpOff[`mcp_servers.${name}.enabled`] = false;
+          for (const name of Object.keys(read?.config?.mcp_servers ?? {})) if (name !== "agents" || !turn.integrations?.agents) mcpOff[`mcp_servers.${name}.enabled`] = false;
           for (const id of Object.keys(read?.config?.plugins ?? {})) mcpOff[`plugins.${id}.enabled`] = false;
           Object.assign(mcpOff, { "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
         }
@@ -1012,6 +1012,20 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (codexThreadId) lastThread.set(threadId, { cwd: turn.cwd ?? homedir(), model: turn.model, cursor: codexThreadId });
         emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
         let prompt = resumeFailed ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
+        const replay = turn.nativeReplayPrefix;
+        if (!cursor && replay && prompt.startsWith(replay)) {
+          try {
+            await request("thread/inject_items", {
+              threadId: codexThreadId,
+              items: [{ type: "message", role: "user", content: [{ type: "input_text", text: replay.trimEnd() }] }],
+            });
+            trace?.delivered("native-history", () => ({ history: replay.trimEnd() }));
+            prompt = prompt.slice(replay.length);
+          } catch (error) {
+            // A transport failure leaves the injection outcome unknown.
+            if (typeof (error as { code?: number }).code !== "number") throw error;
+          }
+        }
         if (cursor && !resumeFailed && turn.systemUpdate) {
           // older CLIs lack inject_items; the diff then stays in the prompt
           try {

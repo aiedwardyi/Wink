@@ -50,7 +50,7 @@ type InternalRouteDeps = {
   MAX_COMMS_DEPTH: number;
   MAX_WORKSPACE_BOTS: number;
   computerControl: ComputerControl;
-  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation }) => Promise<AskReply>;
+  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation; reader?: boolean }) => Promise<AskReply>;
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
@@ -65,6 +65,8 @@ type InternalRouteDeps = {
   readOnlyTurn: (botId: string, threadId: string) => boolean;
   /** The user line a running room turn was dispatched to answer. */
   answeredLine: (threadId: string) => string | undefined;
+  /** The last text the bot's current turn in that thread wrote. */
+  turnText?: (botId: string, threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
   boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask">;
@@ -337,6 +339,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
+      const reader = body.reader === true;
       const depth = snapshot?.depth ?? 0;
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       if (toBotId === fromBotId) return json(res, 400, { error: "a bot cannot message itself" });
@@ -371,6 +374,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       let currentFrom = from;
       let currentTarget = target;
       const queueAsk = (approved = false) => {
+        // A queued ask runs later as a normal turn, so web_read's reader is never queued.
+        if (reader) {
+          release(reservation);
+          return json(res, 200, { busy: true });
+        }
         const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth, root: snapshot.rootId ?? undefined }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved, turnId: snapshot.turnId, id: taskId, reservation });
         if (!queued.id) return refuse(200, "no such bot");
         if (deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, deps.runDelegatedTurn);
@@ -422,6 +430,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         taskId,
         commsRoot: snapshot.rootId,
         reservation,
+        ...(reader ? { reader: true } : {}),
       });
       // the peer's real reply reaches the channel and this thread when its turn ends
       if (reply.taskId) {
@@ -431,7 +440,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true, engine: reply.engine }, reply.replied, reply.text, reply.text);
       if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId, requestingTurn);
-      return json(res, 200, { botName: currentTarget.name, text: reply.text, shown });
+      return json(res, 200, { botName: currentTarget.name, text: reply.text, replied: reply.replied, shown });
     },
     react: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
@@ -498,6 +507,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           notifyQuestion: (bot, target, question) => notify(buildNotification("question", bot, target, question)),
           whenSettled: (botId, threadId, post, question, forum) => askHold.whenSettled(botId, threadId, post, question, forum),
           forum: (botId, threadId, question, choices) => deps.boardCalls?.ask(botId, threadId, question, choices) ?? "",
+          turnText: (botId, threadId) => deps.turnText?.(botId, threadId),
         },
         askUserRequestSchema.parse(body),
       );

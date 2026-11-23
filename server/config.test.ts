@@ -25,6 +25,7 @@ import {
   WORKSPACE_CREDENTIAL_ENV,
   type AppConfig,
 } from "./config.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 describe("configuration boundaries", () => {
   it("documents both default-on product switches", () => {
@@ -47,6 +48,15 @@ describe("configuration boundaries", () => {
     expect(loadConfig().liveCall).toEqual({ voice: "Alnilam" });
     expect(["Kore", "Aoede", "Charon", "Achird"].map((voice) => parseStoredConfig({ liveCall: { voice } }).liveCall)).toEqual([{ voice: "Aoede" }, { voice: "Aoede" }, { voice: "Alnilam" }, { voice: "Alnilam" }]);
     expect(parseStoredConfig({ liveCall: { voice: "Nova", language: "ko" } }).liveCall).toEqual({});
+  });
+
+  it("keeps who answers calls beside the voice, and drops an unknown pick", () => {
+    saveConfig(parseConfigPatch({ liveCall: { voice: "Alnilam" } }));
+    saveConfig(parseConfigPatch({ liveCall: { answer: "bot" } }));
+    expect(loadConfig().liveCall).toEqual({ voice: "Alnilam", answer: "bot" });
+    saveConfig(parseConfigPatch({ liveCall: { answer: "gemini" } }));
+    expect(loadConfig().liveCall).toEqual({ voice: "Alnilam", answer: "gemini" });
+    expect(parseStoredConfig({ liveCall: { answer: "robot" } }).liveCall?.answer).toBeUndefined();
   });
 
   it("drops retired browser settings on read and patch", () => {
@@ -339,7 +349,7 @@ describe("legacy OpenCode key sweep", () => {
       expect(sweepLegacyOpencodeKey(dir)).toBe("swept");
       expect(parseStoredConfig(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")))).toEqual({ gemini: { apiKey: "kept" } });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 
@@ -351,7 +361,7 @@ describe("legacy OpenCode key sweep", () => {
       expect(sweepLegacyOpencodeKey(dir)).toBe("absent");
       expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(raw);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 
@@ -365,7 +375,7 @@ describe("legacy OpenCode key sweep", () => {
     try {
       expect(sweepLegacyOpencodeKey(dir)).toBe("failed");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 
@@ -382,7 +392,7 @@ describe("legacy OpenCode key sweep", () => {
       expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(raw);
     } finally {
       chmodSync(dir, 0o755);
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 
@@ -398,7 +408,7 @@ describe("legacy OpenCode key sweep", () => {
       ).toBe("failed");
       expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(raw);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTestData(dir);
     }
   });
 });

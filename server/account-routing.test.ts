@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -20,7 +20,6 @@ import type { JsonValue } from "./schema.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { ProviderReload } from "./harness/provider-reload.ts";
-import { noteGenerator } from "./memory-pass.ts";
 import { mergeSyncedModelSelection } from "./profile-sync.ts";
 import { Store, type BotRecord } from "./store.ts";
 import { makeFakeDriver } from "./testing/fake-driver.ts";
@@ -83,17 +82,17 @@ async function fixture(empty = false, of = "claude") {
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: vi.fn(() => false) };
   const controller = createAccountRuntime(deps);
   controllers.push(controller);
-  const request = async (method: string, path: string, value: unknown = {}) => {
+  const request = async (method: string, path: string, value: unknown = {}, owner?: string) => {
     const req = Object.assign(Readable.from([JSON.stringify(value)]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
     let status = 0;
     let output = "";
     const res = { writeHead: (code: number) => { status = code; }, end: (body: string) => { output = body; } } as unknown as ServerResponse;
-    const handled = await createAccountRoutes(controller, registry)(req, res, method, path);
+    const handled = await createAccountRoutes(controller, registry)(req, res, method, path, owner);
     return { handled, status, body: output ? JSON.parse(output) : undefined };
   };
   const useDefault = (id: string) => request("POST", `/api/accounts/${id}/default`);
   const resolve = () => controller.bots?.resolve(bot) ?? bot.modelSelection;
-  const notes = () => noteGenerator(registry.instances(), controller.bots?.noteAccount());
+  const notes = () => controller.bots!.notes(store.bot(bot.id)!);
   let startup: Promise<unknown> | undefined;
   const routes = createBotRoutes({ cfg: {}, store, registry, accountBots: controller.bots, wireBot: (record: BotRecord) => record,
     checkedModelSelection: (raw: unknown) => {
@@ -125,7 +124,7 @@ describe("engine default account routing", () => {
     expect(instances.find((row) => row.instanceId === "claude")?.loginCapture).toEqual({ url: capture.url });
   });
 
-  it("submits a code only to a managed Claude pending login", async () => {
+  it("submits a code only to a known engine's pending login", async () => {
     const f = await fixture();
     const submit = vi.fn(() => true);
     Object.assign(f.registry.logins, { submit });
@@ -136,10 +135,82 @@ describe("engine default account routing", () => {
     for (const value of [{ generation: 7, code: "a\nb" }, { generation: 7, code: "code\n" }, { generation: 7, code: "" }, { generation: 0, code: "code" }, { code: "code" }]) {
       expect((await f.request("POST", path, value)).status).toBe(400);
     }
-    expect((await f.request("POST", "/api/accounts/claude/sign-in/code", { generation: 7, code: "code" })).status).toBe(404);
+    expect((await f.request("POST", "/api/accounts/missing/sign-in/code", { generation: 7, code: "code" })).status).toBe(404);
     expect(submit).not.toHaveBeenCalled();
+    expect((await f.request("POST", "/api/accounts/claude/sign-in/code", { generation: 7, code: "code" })).status).toBe(200);
+    expect(submit).toHaveBeenCalledExactlyOnceWith("claude", 7, "code");
     submit.mockReturnValue(false);
     expect((await f.request("POST", path, { generation: 7, code: "stale" })).status).toBe(409);
+  });
+
+  it("takes a code or Cancel only from the session that started the sign-in", async () => {
+    const f = await fixture();
+    const id = f.added[0].id;
+    const script = join(f.root, "paste-login.cjs");
+    const received = join(f.root, "received.txt");
+    writeFileSync(script, `process.stdout.write("Paste code here if prompted > ");
+      process.stdin.once("data", (code) => require("node:fs").writeFileSync(${JSON.stringify(received)}, code)); setInterval(() => {}, 1000);`);
+    const phone = `phone:phone-1:${"a".repeat(32)}`;
+    const capture = await f.registry.logins.start(id, `"${process.execPath}" "${script}"`, [], {}, [], { scope: "claudeAgent", paste: true, owner: phone });
+    expect(capture.inputGeneration).toBe(f.registry.logins.generation(id));
+    const cancel = vi.spyOn(f.registry, "cancelSignIn").mockImplementation(async (login) => { await f.registry.logins.cancel(login); return true; });
+    const code = { generation: capture.inputGeneration, code: "other-session#state" };
+    for (const other of [`phone:phone-2:${"a".repeat(32)}`, `pc:${"b".repeat(32)}`, "pc:"]) {
+      expect((await f.request("POST", `/api/accounts/${id}/sign-in/code`, code, other)).status).toBe(403);
+      expect((await f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, other)).status).toBe(403);
+      expect((await f.request("DELETE", `/api/instances/${id}/sign-in`, {}, other)).status).toBe(403);
+    }
+    expect(f.registry.logins.state(id)).toBe("pending");
+    expect(cancel).not.toHaveBeenCalled();
+    expect(f.registry.logins.capture(id).inputGeneration).toBe(capture.inputGeneration);
+    expect(existsSync(received)).toBe(false);
+    expect((await f.request("POST", `/api/accounts/${id}/sign-in/code`, { ...code, code: "own-session#state" }, phone)).status).toBe(200);
+    await vi.waitFor(() => expect(readFileSync(received, "utf8")).toBe("own-session#state\n"));
+    expect((await f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, `pc:${"b".repeat(32)}`)).status).toBe(403);
+    expect(f.registry.logins.state(id)).toBe("pending");
+    expect((await f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, phone)).status).toBe(200);
+    expect(cancel).toHaveBeenCalledExactlyOnceWith(id);
+    expect(f.registry.logins.state(id)).toBe("cancelled");
+  });
+
+  it("lets Sign Out, Remove and a queued Cancel end only the pending sign-in they saw, from the tab that started it", async () => {
+    const f = await fixture();
+    const id = f.added[0].id;
+    const script = join(f.root, "wait-login.cjs");
+    writeFileSync(script, `process.stdout.write("Visit: https://claude.com/cai/oauth/authorize?code=true\\nPaste code here if prompted > "); setInterval(() => {}, 1000);`);
+    const tab = `phone:phone-1:${"a".repeat(32)}`;
+    const otherTab = `phone:phone-1:${"b".repeat(32)}`;
+    const start = () => f.registry.logins.start(id, `"${process.execPath}" "${script}"`, [], {}, [], { scope: "claudeAgent", paste: true, owner: tab });
+    vi.spyOn(f.registry, "cancelSignIn").mockImplementation(async (login) => { await f.registry.logins.cancel(login); return true; });
+    await start();
+    for (const [method, path] of [["POST", `/api/accounts/${id}/sign-out`], ["DELETE", `/api/accounts/${id}`], ["POST", `/api/instances/${id}/sign-out`], ["DELETE", `/api/accounts/${id}/sign-in`]] as const) {
+      expect((await f.request(method, path, {}, otherTab)).body).toMatchObject({ code: "sign-in-elsewhere" });
+    }
+    expect(f.registry.logins.state(id)).toBe("pending");
+    expect(f.accounts.get(id)).toBeDefined();
+    expect(f.logout).not.toHaveBeenCalled();
+    // Hold the account queue, then let this tab's Cancel wait behind it while its sign-in is replaced by a newer one.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(f.registry, "startSignIn").mockImplementationOnce(async () => { await held; throw new Error("held"); });
+    const queued = [vi.spyOn(f.controller, "cancel"), vi.spyOn(f.controller, "remove")];
+    const busy = f.controller.signIn(f.added[1].id).catch(() => {});
+    await vi.waitFor(() => expect(f.registry.startSignIn).toHaveBeenCalled());
+    const cancel = f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, tab);
+    const remove = f.request("DELETE", `/api/accounts/${id}`, {}, tab);
+    await vi.waitFor(() => { for (const spy of queued) expect(spy).toHaveBeenCalled(); });
+    const first = f.registry.logins.generation(id);
+    await f.registry.logins.cancel(id);
+    await start();
+    expect(f.registry.logins.generation(id)).not.toBe(first);
+    release();
+    await busy;
+    expect((await cancel).status).toBe(409);
+    expect((await remove).status).toBe(409);
+    expect(f.registry.logins.state(id)).toBe("pending");
+    expect(f.accounts.get(id)).toBeDefined();
+    expect((await f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, tab)).status).toBe(200);
+    expect(f.registry.logins.state(id)).toBe("cancelled");
   });
 
   it("uses the default for every existing and new bot without publishing account ids", async () => {
@@ -809,7 +880,7 @@ describe("account removal drain", () => {
     await controller.signIn(destination);
     await controller.settled(destination);
     await controller.resumeDrains();
-    expect(login).toHaveBeenCalledExactlyOnceWith(destination, false);
+    expect(login).toHaveBeenCalledExactlyOnceWith(destination, false, undefined);
     expect(accounts.get(source)).toBeUndefined();
     expect(accounts.drains[source]).toBeUndefined();
     expect(controller.bots?.resolve(f.bot).instanceId).toBe(destination);
@@ -957,12 +1028,40 @@ describe("account removal drain", () => {
   });
 });
 
-describe("account-aware Claude notes", () => {
-  it.each(["claude", "codex"])("runs a %s bot's notes on the Claude default", async (engine) => {
+describe("account-aware notes", () => {
+  it("runs a Claude bot's notes on the Claude default", async () => {
     const f = await fixture();
     expect((await f.useDefault(f.added[2].id)).status).toBe(200);
-    if (engine === "codex") f.store.patchBot(f.bot.id, { modelSelection: { instanceId: "codex", model: "codex-1" } });
     await expect(f.notes()?.("notes", new AbortController().signal)).resolves.toBe(f.added[2].id);
+  });
+
+  it("uses a Codex bot's own authenticated account even with Claude Main ready", async () => {
+    const f = await fixture(false, "codex");
+    const own = f.added[0].id;
+    const claude = await f.accounts.add("claude");
+    await f.accounts.identify(claude.id, "claude-main");
+    await f.providers.reload(instanceConfigs({ instances: f.bases }, f.accounts.snapshot));
+    await f.registry.describeCached();
+    expect((await f.useDefault(claude.id)).status).toBe(200);
+    expect((await f.useDefault(own)).status).toBe(200);
+    await expect(f.notes()?.("notes", new AbortController().signal)).resolves.toBe(own);
+    expect(f.generators.get(own)).toHaveBeenCalledExactlyOnceWith("notes", {
+      signal: expect.any(AbortSignal), timeoutMs: 120_000, ephemeral: true, lean: true, model: "codex-1",
+    });
+    await f.accounts.stop(own);
+    expect(f.notes()).toBeNull();
+    expect(f.generators.get(claude.id)).not.toHaveBeenCalled();
+    expect(f.generators.get("codex")).not.toHaveBeenCalled();
+  });
+
+  it("preserves the first enabled Claude when it is signed out and there is no Main", async () => {
+    const f = await fixture(true);
+    vi.spyOn(f.registry.get("claude")!, "snapshot").mockResolvedValue({ state: "available", authenticated: false });
+    await f.registry.describe({ refresh: true });
+    expect(f.registry.accountAvailable("claude")).toBe(false);
+    expect(f.registry.accountAvailable("work")).toBe(true);
+    await expect(f.notes()?.("notes", new AbortController().signal)).resolves.toBe("claude");
+    expect(f.generators.get("work")).not.toHaveBeenCalled();
   });
 
   it("uses the new Claude default for notes while a bot's old turn remains captured", async () => {

@@ -14,7 +14,8 @@ import { applyCredentialAllowlist } from "../config.ts";
 import { findCliCandidates, refreshPathCache, splitCliString } from "../env-path.ts";
 import { clearVersionCache, cliRevision } from "../procs.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
-import { EngineLogin } from "../engine-login.ts";
+import { MISSING_HOME, missingAccountHome } from "../accounts.ts";
+import { EngineLogin, type LoginCapture } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
 import { warmPool as sharedWarmPool, type WarmPool } from "../drivers/warm-pool.ts";
 import { retiredEngineLabel } from "../../shared/model-selection.ts";
@@ -100,7 +101,8 @@ function cliOfRaw(raw: unknown): string | undefined {
 
 export class ProviderRegistry {
   readonly logins = new EngineLogin();
-  private signingOut = new Set<string>();
+  // The sign-out in flight per instance; a press while one runs gets its answer.
+  private signingOut = new Map<string, Promise<boolean>>();
   private accounts = new Map<string, AccountContext>();
   private blockedAccounts = new Set<string>();
   private checkingAccounts = new Set<string>();
@@ -180,7 +182,8 @@ export class ProviderRegistry {
           enabled: entry.enabled ?? true,
           config,
           ...(entry.account ? { account: entry.account } : {}),
-          ...(entry.account && options?.deferAccountAuth ? { deferAccountAuth: true } : {}),
+          // A provider reload defers like a cold load where the check would start the CLI in a missing home; Sign In creates it.
+          ...(entry.account && (options?.deferAccountAuth || missingAccountHome(entry.account)) ? { deferAccountAuth: true } : {}),
         });
         return { entry: { instanceId, live }, rawCli, incarnation } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       } catch (e) {
@@ -323,9 +326,10 @@ export class ProviderRegistry {
     const entry = this.byId.get(id);
     if (entry?.live?.account) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
   }
-  accountAvailable(id: string) {
+  accountAvailable(id: string, confirmed = false) {
     const snapshot = this.probed.get(id)?.snapshot;
-    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
+    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" &&
+      (confirmed ? snapshot?.authenticated === true : snapshot?.authenticated !== false);
   }
   accountBusy(id: string) { return this.probing.has(id) || this.modelRefreshInFlight.has(id) || this.helperWork.has(id) || this.logins.state(id) === "pending" || this.get(id)?.accountBusy?.() === true; }
   invalidateAccount(id: string) { this.holdIdentity(id, "account"); this.get(id)?.invalidateAccount?.(); this.forget(id); }
@@ -379,14 +383,24 @@ export class ProviderRegistry {
     } : null;
   }
 
-  async startSignIn(instanceId: InstanceId, device = false) {
+  async startSignIn(instanceId: InstanceId, device = false, owner?: string) {
     const config = this.loginConfig(instanceId);
     if (!config || this.signingOut.has(instanceId)) return null;
     this.holdIdentity(instanceId, "sign-in");
     const login = config.install?.login;
     const args = device ? login?.deviceArgs : login?.args;
     if (!args) return null;
-    const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true });
+    const env = device ? { ...config.env, ...login?.deviceEnv } : config.env;
+    const paste = device || Boolean(config.account && config.engine === "claudeAgent");
+    const signInEnded = await this.get(instanceId)?.signingIn?.();
+    let capture: LoginCapture;
+    try {
+      capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
+    } catch (error) {
+      signInEnded?.(false);
+      throw error;
+    }
+    if (signInEnded) void this.logins.wait(instanceId).then(() => signInEnded(this.logins.state(instanceId) === "complete"));
     return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
       ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
     };
@@ -400,17 +414,36 @@ export class ProviderRegistry {
     return true;
   }
 
+  /** Whether a sign-out runs for this instance now; a press then joins it (signOut returns its answer). */
+  signingOutNow(instanceId: InstanceId) {
+    return this.signingOut.has(instanceId);
+  }
+
   async signOut(instanceId: InstanceId) {
     const config = this.loginConfig(instanceId);
     if (!config?.install?.logout) return null;
-    if (this.signingOut.has(instanceId)) return false;
-    this.signingOut.add(instanceId);
+    // A second press (another client, the phone, a reload, a retry) waits for the running sign-out and gets its answer.
+    const running = this.signingOut.get(instanceId);
+    if (running) return running;
+    let join!: (out: Promise<boolean>) => void;
+    const shared = new Promise<boolean>((resolve) => { join = resolve; });
+    shared.catch(() => undefined);
+    this.signingOut.set(instanceId, shared);
+    const out = this.signOutOnce(instanceId, config, config.install.logout);
+    join(out);
+    return out;
+  }
+
+  private async signOutOnce(instanceId: InstanceId, config: NonNullable<ReturnType<ProviderRegistry["loginConfig"]>>, logout: string[]) {
     const since = this.holdIdentity(instanceId, "sign-out");
     try {
       await this.logins.cancel(instanceId);
-      await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
+      await this.logins.start(instanceId, config.cli, logout, config.env, [], { scope: config.engine, account: config.account });
       await this.logins.wait(instanceId);
       let success = this.logins.state(instanceId) === "complete";
+      const signingOut = this.get(instanceId);
+      if (success && !config.account) signingOut?.signedOutByCli?.();
+      else if (!success && !config.account && signingOut?.signOutWithoutCli) success = await signingOut.signOutWithoutCli(this.logins.capture(instanceId).error);
       if (success || this.accounts.has(instanceId)) {
         if (success) this.logins.clear(instanceId);
         const previous = this.probed.get(instanceId);
@@ -674,6 +707,11 @@ export class ProviderRegistry {
     const inst = entry.live;
     let snapshot: ProviderSnapshot;
     try {
+      const account = this.accounts.get(inst.instanceId);
+      // Launching would fail (Codex) or create the home (Claude, Grok); Sign In creates it.
+      if (account && missingAccountHome(account)) {
+        return { snapshot: { ...MISSING_HOME, authChecked: true }, cliCandidates: candidatesFor(driver), models: this.cacheDir ? structuredClone(inst.models) : undefined };
+      }
       const discovery = this.modelRefreshInFlight.get(inst.instanceId);
       if (discovery) await discovery;
       const lastRefresh = this.modelRefreshAt.get(inst.instanceId) ?? 0;

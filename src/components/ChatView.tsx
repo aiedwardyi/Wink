@@ -46,7 +46,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
-import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
+import { composerIsBusy, inSendOrder, queuedSendIds, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { useNoReply } from "@/lib/no-reply";
@@ -54,6 +54,7 @@ import { useNoReplySwitch } from "@/lib/no-reply-switch";
 import { hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
 import { useLiveReply, useThreadTurn } from "@/lib/thread-stream";
 import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
+import { ImportMemoryCard, useImportOffer } from "./ImportMemoryCard";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
 import { FolderFix } from "./FolderFix";
@@ -77,7 +78,7 @@ import { ModelPicker } from "./ModelPicker";
 import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
 import { ReactionChips } from "./Reactions";
-import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
+import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
 import { CallOverlay } from "./CallView";
 import { useCallControls } from "./CallControls";
 import { CallCard } from "./CallCard";
@@ -91,6 +92,7 @@ import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, 
 import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
+import { importOfferId } from "@/lib/import-links";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
@@ -98,7 +100,7 @@ import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
-import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, isBottomFollowScroll, newestBelowView, restoreTranscriptScroll, scrollToFollowBottom, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
+import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, isBottomFollowScroll, newestBelowView, onStopFollow, restoreTranscriptScroll, scrollToFollowBottom, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -610,6 +612,7 @@ const MessagesList = memo(function MessagesList({
   livePanes,
   onCall,
   hidden,
+  queuedActions,
 }: {
   bot: Bot;
   messages: Message[];
@@ -634,6 +637,7 @@ const MessagesList = memo(function MessagesList({
   livePanes: Set<string> | null;
   onCall: boolean;
   hidden: boolean;
+  queuedActions: (queueId: string) => MessageMenuTarget["queued"];
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -715,6 +719,10 @@ const MessagesList = memo(function MessagesList({
     }
     return answers;
   }, [transcript]);
+  const importOffer = useMemo(() => importOfferId(transcript), [transcript]);
+  // the import row is for a chat with nothing in it yet; a quiz older builds seeded never shows, so it does not count
+  const empty = useMemo(() => transcript.every(shouldHideOnboardingCard), [transcript]);
+  const importRow = useImportOffer(bot.id, empty);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
@@ -733,9 +741,17 @@ const MessagesList = memo(function MessagesList({
   const focusedId = focus && !focus.consumed && focus.threadId === bot.threadId ? focus.messageId : null;
   // the current find hit shows even when the tool-call setting hides its row
   const findCurrent = useFindCurrentId();
+  const dockTarget = dock ? items.findLast((item, i) => rows[i].visible && item.kind === "message" && item.message.role === "bot" && item.message.kind === "text" && !isVoiceLine(item.message)) : undefined;
+  const slots = new Set<string>();
   return (
     <>
-      {idleAfterOnboarding && !bot.busy && (
+      {importRow.offer && (
+        <div data-import-row className="contents">
+          <DaySeparator at={bot.tasks?.find((task) => task.threadId === bot.threadId)?.createdAt ?? bot.createdAt ?? Date.now()} />
+          <ImportMemoryCard key={bot.threadId} botId={bot.id} onClose={importRow.close} />
+        </div>
+      )}
+      {idleAfterOnboarding && !bot.busy && importRow.offer === false && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
           <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />
           <RenameTitle
@@ -812,7 +828,7 @@ const MessagesList = memo(function MessagesList({
                   />
                 );
               }
-              if (shouldHideOnboardingCard(m, transcript)) return null;
+              if (shouldHideOnboardingCard(m)) return null;
               return <OptionCard botId={bot.id} message={m} />;
             case "routine.run": {
               const executionThreadId = m.routineRun?.executionThreadId;
@@ -882,12 +898,14 @@ const MessagesList = memo(function MessagesList({
                   streaming={streaming}
                   pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)}
                   peerReply={Boolean(replyComm)}
-                  dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
+                  importOffer={m.id === importOffer}
+                  dock={dockTarget === item && dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
                   onSubmitEdit={onSubmitEdit}
                   onRegenerate={m.id === lastBotTextId ? onRegenerate : undefined}
                   replyTarget={m.replyToId ? bot.messages.find((candidate) => candidate.id === m.replyToId) : quickAsks.get(m.id)}
+                  queuedActions={m.placeholder && state.pendingQueued[bot.threadId]?.some((entry) => entry.queueId === m.id) ? queuedActions(m.id) : undefined}
                   onReply={onReply}
                   onMessageMenu={onMessageMenu}
                 />
@@ -896,7 +914,10 @@ const MessagesList = memo(function MessagesList({
         })();
         // a call line that opens a day keeps the divider, now that the card may sit further down
         if (!row && !callHere && !(callId && newDay)) return null;
-        const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
+        const slot = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : null;
+        const fallbackKey = slot ? m.id : m.sendId ?? m.id;
+        const key = slot && !slots.has(slot) ? slot : fallbackKey;
+        slots.add(key);
         return (
           <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
@@ -1045,7 +1066,11 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const accepted = state.acceptedSends[bot.threadId];
   const pending = state.pendingQueued[bot.threadId];
   const canonicalMessages = visibleMessages(bot);
-  const messages = useMemo(() => withAcceptedMessages(canonicalMessages, accepted, pending), [canonicalMessages, accepted, pending]);
+  const canSteer = engine?.capabilities?.queueing === true;
+  const messages = useMemo(
+    () => inSendOrder(withAcceptedMessages(canonicalMessages, accepted, pending), queuedSendIds(accepted, pending, canSteer)),
+    [canonicalMessages, accepted, pending, canSteer],
+  );
 
   // Windowed transcript: only a tail of the thread mounts (screenshots make
   // full threads DOM-heavy). The boundary is anchored per bot+task; a
@@ -1055,7 +1080,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const transcriptKey = `${bot.id}:${bot.threadId}`;
   // an old jump shows its own window; the live pages below keep taking arrivals
   const jump = useJumpWindow(dispatch, transcriptKey, bot.threadId, bot.messages, bot.activeLeafId, state.olderPatches[bot.threadId], state.snapshots, state.focusMessage);
-  const shown = jump.messages ?? messages;
+  const shown = useMemo(() => (jump.messages ? inSendOrder(jump.messages) : messages), [jump.messages, messages]);
   const runs = useMemo(() => workerRuns(messages), [messages]);
   const sessionKey = runs.map((run) => run.sessionId).filter(Boolean).sort().join("\n");
   const livePanes = useLivePanes(bot.id, !preview && (runs.length > 0 || (state.terminalPanes[bot.id]?.length ?? 0) > 0), paneLabelsKey(state.terminalPanes[bot.id]), sessionKey, dispatch, runs);
@@ -1152,7 +1177,6 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   useLayoutEffect(() => {
     windowAnchor.current = { id: windowedMessages[0]?.id, index: startIndex };
   });
-  const canSteer = engine?.capabilities?.queueing === true;
   const { listed, queued } = useMemo(
     () => splitQueuedSends(windowedMessages, accepted, pending, canSteer),
     [canSteer, windowedMessages, accepted, pending],
@@ -1181,6 +1205,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     followRef.current = next;
     setFollow(next);
   }, []);
+  // older rows mounting above a box mid-scroll would leave it short of view
+  const [revealing, setRevealing] = useState(false);
+  useEffect(() => onStopFollow(scrollRef.current, () => { setBottomFollow(false); setRevealing(true); }, () => setRevealing(false)), [setBottomFollow]);
 
   // one message at a time may be in edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1253,6 +1280,14 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   // Stage transitions (Preparing -> Waiting -> Reconnecting) swap presence
   // content while messages, buffers and busy stay put, so the pin watches it.
   const turnSignal = turn.signal;
+  // a held send keeps Send now and Cancel wherever it draws
+  const queuedActions = useCallback((queueId: string): MessageMenuTarget["queued"] => ({
+    // Send now steers this chat's running turn; a preparing turn, or one in a room, has nothing to steer into.
+    sendNow: turnSignal !== "preparing" && pending?.some((entry) => entry.queueId === queueId && entry.sendId && (entry.reason === "sync" || (canSteer && turnSignal !== undefined)))
+      ? () => dispatch({ type: "sendQueuedNow", botId: bot.id, threadId: bot.threadId, queueId })
+      : undefined,
+    cancel: () => dispatch({ type: "cancelQueued", botId: bot.id, threadId: bot.threadId, queueId }),
+  }), [bot.id, bot.threadId, canSteer, dispatch, pending, turnSignal]);
   const toolInFlight = lastMessage?.kind === "activity" && lastMessage.tool?.ok === undefined;
   const phase = turnPhase({ signal: turn.signal, lastMessage, messages: canonicalMessages, streaming: turn.streaming, reasoning: turn.reasoning });
   const noReply = useNoReply(phase === "waiting" ? `${bot.threadId}:${turn.turnId}:${turn.heard}` : null, engine?.driverKind);
@@ -1482,7 +1517,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
       if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
     },
   });
-  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && (!phone || !follow), follow, showEarlier);
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && !revealing && (!phone || !follow), follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1508,6 +1543,10 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     const el = scrollRef.current;
     return !el || el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_FOLLOW_THRESHOLD;
   };
+  // every gesture back at the end resumes here, so a revealing box holds follow off until the reader scrolls the chat
+  const resumeFollow = (back: boolean) => {
+    if (back && !revealing && !jump.messages && laterCount === 0) setBottomFollow(true);
+  };
   // a transcript too short to scroll has no scrollback to read, so an upward swipe there keeps follow
   const breakFollow = () => {
     const el = scrollRef.current;
@@ -1526,7 +1565,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     if (deltaY < 0) breakFollow();
     else {
       advanceLater(deltaY > 0);
-      if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+      resumeFollow(atEnd());
     }
   };
   const latestShown = Boolean(jump.messages || laterCount > 0 || (!follow && newestBelow));
@@ -1752,7 +1791,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
-            if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+            resumeFollow(atEnd());
           }
         }}
         onTouchEnd={() => (reaching.current = false)}
@@ -1772,7 +1811,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
           });
           previousScrollTop.current = scrollTop;
-          if (resume && !jump.messages && laterCount === 0) setBottomFollow(true);
+          resumeFollow(resume);
           measure();
         }}
         onClick={(e) => {
@@ -1828,6 +1867,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             workers={rowWorkers}
             livePanes={livePanes}
             onCall={onLiveCall}
+            queuedActions={queuedActions}
             hidden={hidden}
           />
           {!whatsNewAnchor && <WhatsNewSlot hidden={hidden} last={lastMessage?.id} thread={bot.threadId} />}
@@ -1882,13 +1922,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
                 isLastBotText={false}
                 sendsNext={sendsNext && index === 0}
                 sendsAfterSync={pending?.some((entry) => entry.queueId === m.id && entry.reason === "sync")}
-                queuedActions={{
-                  // Send now steers this chat's running turn; a preparing turn, or one in a room, has nothing to steer into.
-                  sendNow: turnSignal !== "preparing" && pending?.some((entry) => entry.queueId === m.id && entry.sendId && (entry.reason === "sync" || (canSteer && turnSignal !== undefined)))
-                    ? () => dispatch({ type: "sendQueuedNow", botId: bot.id, threadId: bot.threadId, queueId: m.id })
-                    : undefined,
-                  cancel: () => dispatch({ type: "cancelQueued", botId: bot.id, threadId: bot.threadId, queueId: m.id }),
-                }}
+                queuedActions={queuedActions(m.id)}
                 onStartEdit={startEdit}
                 onCancelEdit={cancelEdit}
                 onSubmitEdit={submitEdit}

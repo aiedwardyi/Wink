@@ -10,8 +10,7 @@
 // queued send, not a newline-joined burst) and what it was not (the
 // webhook untrusted-data paragraph an attended turn must never get).
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -41,6 +40,7 @@ import { foldPeerQueuedSends } from "./peer-user-reply.ts";
 import type { BotRecord, Message } from "./store.ts";
 import { startQueuedTurn } from "./chat-error.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
@@ -132,6 +132,24 @@ describe("steer-queue module", () => {
         { queueId: second.id, text: "second", replyToId: "reply-1", reason: "sync" },
       ],
     });
+  });
+
+  it("tells a window when each waiting send was sent and which ones wait for the turn", () => {
+    const plain = queueSteeredMessage("bot-w", "thread-w", "plain", { sendId: "send_1234567890123456", actedAt: 1_000, sendSeq: 1 });
+    const after = queueSteeredMessage("bot-w", "thread-w", "after", { sendId: "send_abcdefghijklmnop", after: true, waited: true, actedAt: 2_000 });
+    expect(waitingSends()["thread-w"]).toEqual([
+      { queueId: plain.id, text: "plain", sendId: "send_1234567890123456", at: 1_000, sendSeq: 1 },
+      { queueId: after.id, text: "after", sendId: "send_abcdefghijklmnop", at: 2_000, waited: true },
+    ]);
+    expect(queuedSteeredMessage("bot-w", "thread-w", "send_abcdefghijklmnop")).toMatchObject({ actedAt: 2_000, waited: true });
+  });
+
+  it("lands a drained send with when it was sent and that it waited", () => {
+    const bot = fakeBot("bot-wd", "thread-wd", false);
+    const store = fakeStore([bot]);
+    queueSteeredMessage(bot.id, bot.threadId, "after", { after: true, waited: true, actedAt: 1_000, sendSeq: 4 });
+    drainSteeredMessages(store, vi.fn());
+    expect(store.messages[0]).toMatchObject({ text: "after", actedAt: 1_000, waited: true, sendSeq: 4 });
   });
 
   it("does not append a queued user message until drain", () => {
@@ -582,6 +600,17 @@ describe("steer-queue module", () => {
     expect(_queuedCount(bot.threadId)).toBe(0);
   });
 
+  it("folds held sends with when they were sent and whether they waited", () => {
+    const bot = fakeBot("bot-fold-wait", "thread-fold-wait", false);
+    const store = fakeStore([bot]);
+    const claim = queueMark();
+    queueSteeredMessage(bot.id, bot.threadId, "plain", { sendId: "send_plain_0987654321", prompt: "plain", actedAt: 2_000, sendSeq: 5 });
+    queueSteeredMessage(bot.id, bot.threadId, "blind", { sendId: "send_blind_0987654321", prompt: "blind", actedAt: 3_000, waited: true });
+    expect(foldQueuedSends(store, bot.id, bot.threadId, claim)).toEqual(["plain", "blind"]);
+    expect(store.messages).toMatchObject([{ text: "plain", actedAt: 2_000, sendSeq: 5 }, { text: "blind", actedAt: 3_000, waited: true }]);
+    expect(store.messages[0]!.waited).toBeUndefined();
+  });
+
   it("folds sends queued during turn setup into the dispatching turn in send order", () => {
     const bot = fakeBot("bot-fold-setup", "thread-fold-setup", true);
     const store = fakeStore([bot]);
@@ -743,7 +772,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
     chmodSync(FAKE_MSP_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-steer-test-"));
+    home = createFixtureHome("omb-steer-test-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     mkdirSync(join(home, "gates"), { recursive: true });
     drainGate = join(home, "gates", "drain.gate");
@@ -843,7 +872,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       child.on("close", () => resolve());
       setTimeout(() => (child.kill("SIGKILL"), resolve()), 5_000).unref?.();
     });
-    rmSync(home, { recursive: true, force: true });
+    removeTestData(home);
   });
 
   it.each(["grokResultFirst", "grokOriginalFirst"])("records a %s steer once, in order, without queue fallback", async (instanceId) => {

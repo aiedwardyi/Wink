@@ -2,13 +2,13 @@
 // by key, newest first or once the load lands: a whole read stalls the server and makes the load quit. cold-turn-hook.ts
 // unloads the chat at each send.
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 import { harnessFetch as fetch, spawnHarness as spawn } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -47,7 +47,7 @@ async function turnWhileLoading(): Promise<{ id: string; threadId: string }> {
 }
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-cold-turn-"));
+  home = createFixtureHome("omb-cold-turn-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   log = join(home, "cold-turn.jsonl");
   gates = join(home, "gates");
@@ -84,7 +84,7 @@ afterAll(async () => {
     if (!child || child.exitCode !== null) return resolve();
     child.on("close", () => resolve());
   });
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 it("runs a turn on a chat Map is still loading without reading it whole, and the load lands with the turn's rows", async () => {

@@ -32,6 +32,8 @@ import { createQuietEnd } from "../quiet-end.ts";
 import { inputDigest } from "../repeat-detector.ts";
 import type { Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
+import { spawnTestNode } from "../testing/harness-auth.ts";
+import { removeTestData } from "../testing/test-home.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
@@ -1243,7 +1245,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1].split(",")).toContain("AskUserQuestion");
 
     const server = seen.mcpConfig.mcpServers.agents;
-    const child = spawnChild(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
+    const child = spawnTestNode(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     const listed = new Promise<{ name: string; description: string; inputSchema: object; _meta?: Record<string, unknown> }[]>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("agents proxy never answered tools/list")), 10_000);
@@ -1262,7 +1264,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     child.kill();
     const eager = tools.filter((tool) => tool._meta?.["anthropic/alwaysLoad"] !== false);
     const chars = JSON.stringify(eager.map((tool) => ({ name: `mcp__agents__${tool.name}`, description: tool.description, input_schema: tool.inputSchema }))).length;
-    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix"]);
+    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["web_read", "board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix"]);
     expect(chars, `Claude re-reads ${chars} chars of agents tool schemas on every call. Defer a rarely used tool (tool-catalog.ts OPTIONAL, deferOptional) or shorten a description; raise this budget only with measured token numbers.`).toBeLessThanOrEqual(16_000);
   });
 
@@ -4135,7 +4137,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
   it("creates the lean helper folder when it is missing", async () => {
     await create();
-    rmSync(join(DATA_DIR, "helper"), { recursive: true, force: true });
+    removeTestData(join(DATA_DIR, "helper"));
     await instance.generateText?.("notes prompt", { ephemeral: true, lean: true });
     expect(readdirSync(join(DATA_DIR, "helper"))).toEqual([]);
   });

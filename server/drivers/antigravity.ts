@@ -46,9 +46,11 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
+import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { antigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn } from "./antigravity-auth.ts";
+import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
+import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 
@@ -62,6 +64,13 @@ const AGY_ACCOUNT_ERROR =
   /unauthorized|unauthenticated|\bforbidden\b|(?<![\w-])40[13](?![\w-])|not logged in|\bsign[\s-]?in\b|authentication failed|permission_denied|permission denied|has not been used in project|\bapi\b[^.\n]{0,120}\bdisabled\b/i;
 const AGY_NOT_ACCOUNT_ERROR = /\brate[\s-]?limit\b|(?<![\w-])429(?![\w-])|\berror-code-(?:429|5\d\d)\b|\btoo many requests\b|resource[ _]exhausted|quota exceeded|exceeded[^.\n]{0,40}\bquota\b|(?<![\w-])5\d\d(?![\w-])|\b5xx\b/i;
 const AGY_TIMEOUT_ERROR = /\b(?:watchdog timeout|timed out|time-out|timeout)\b/i;
+const AGY_TEXT_MODEL = "gemini-3.8-flash-low";
+// agy keeps one conversation store for every account and backend (a Vertex
+// project, a consumer sign-in), but the API only takes back the thought
+// signatures it minted itself. After a sign-in change, every model refuses
+// the older conversation's history with a 400 and never will take it.
+const AGY_SIGNATURES_REFUSED = /\bthought[_ ]signature\b/i;
+const AGY_MODEL_DENIED = /\bpermission\b[^\n]{0,80}\bdenied\b[^\n]{0,200}\bmodels\/|\bmodels\/[^\n]{0,200}\b(?:permission[_ ]denied|not[_ ]found|(?:may|does) not exist)\b/i;
 
 /** Account or permission failure. Rate limits, 5xx, and timeout-only lines are not. */
 export function isAgyAccountError(text: string): boolean {
@@ -241,7 +250,10 @@ function acquireAntigravityMcpLock(exclusive: boolean) {
       else mcpSharedHolders -= 1;
       pumpAntigravityMcpLock();
     };
-    const waiter = { exclusive, grant: () => resolve(release) };
+    const waiter = {
+      exclusive,
+      grant: () => resolve(release),
+    };
     cancel = () => {
       const index = mcpWaiters.indexOf(waiter);
       if (index === -1) return;
@@ -524,6 +536,12 @@ export function measureAntigravityTransportLengths(opts: {
   };
 }
 
+// agy's saved sign-in is one per machine, so every instance shares one keyring sign-out and its running turns.
+const keyringSignOut = antigravityKeyringSignOut(() => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING), {
+  present: () => probeAntigravitySignIn(),
+  mark: signedOutMarkFile(join(DATA_DIR, "gemini-signed-out")),
+});
+
 export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Gemini (Antigravity)", supportsMultipleInstances: true },
@@ -536,7 +554,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     docsUrl: "https://github.com/google-antigravity/antigravity-cli#installation",
     signInCommand: "agy",
     // agy has no login or logout subcommand: a helper runs them over agy's ACP server (see loginConfig).
-    login: { args: ["login"], authHosts: ["accounts.google.com"] },
+    // agy opens no browser over SSH, so a phone gets the link and paste prompt.
+    login: { args: ["login"], deviceArgs: ["login", "--paste"], deviceEnv: { SSH_CONNECTION: "127.0.0.1 50000 127.0.0.1 22" }, authHosts: ["accounts.google.com"] },
     logout: ["logout"],
   },
   models: STATIC_ANTIGRAVITY_MODELS,
@@ -547,6 +566,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const { instanceId, config } = input;
     const env = antigravityEnvironment(input.environment);
     const signIn = antigravitySignIn(undefined, () => readAntigravityLogSignIn(env));
+    const forgetSignedOut = keyringSignOut.onSignedOut(() => signIn.record(false));
+    keyringSignOut.attach();
     const catalogEnv: Record<string, string | undefined> = env;
     let models = STATIC_ANTIGRAVITY_MODELS;
     const refreshModels = async () => {
@@ -571,6 +592,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const emit = (event: RuntimeEvent) => {
       if (event.type === "turn.completed" && event.ok) signIn.record(true);
       else if (event.type === "runtime.error" && event.signIn) signIn.record(false);
+      if (event.type === "turn.started") keyringSignOut.turnStarted(`${instanceId}\0${event.turnId}`);
+      else if (event.type === "turn.completed") keyringSignOut.turnEnded(`${instanceId}\0${event.turnId}`);
       finishNative(event);
       for (const l of [...listeners]) l(event);
     };
@@ -603,9 +626,17 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     // the first id as live and drops events from any other.
     const sendTurn = async (turn: SendTurnInput, relaunchOf?: string, busyResumes = 0, priorUsage: TurnUsage = { input: 0, output: 0 }, shownResponses = new Set<string>()) => {
       const { threadId } = turn;
+      const pendingSignOut = !relaunchOf && keyringSignOut.pending;
+      const signedOut = pendingSignOut && await pendingSignOut;
       if (disposed) throw new Error("Antigravity instance is disposed");
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = relaunchOf ?? newId();
+      if (signedOut) {
+        emit({ ...base(threadId, turnId), type: "turn.started" });
+        emit({ ...base(threadId, turnId), type: "runtime.error", message: "Gemini is not signed in.", setup: true, signIn: true, signedOut: true });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "signed_out", cost: null });
+        return { turnId };
+      }
 
       // Default cwd to a per-thread workspace under DATA_DIR — deliberately
       // NOT homedir(): a bot running unattended should not get the whole home
@@ -644,6 +675,35 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // Assigned once the child exists. A child can emit `result` and then
       // hang, so settling must still arrange for process and MCP cleanup.
       let armPostSettleCleanup = () => {};
+      // A conversation agy cannot continue: the same logical turn starts a new
+      // one seeded with the harness's transcript fallback.
+      const relaunchFresh = (abandoned: string | null) => {
+        settled = true;
+        clearTimeout(watchdog);
+        if (abandoned) systemHeld.forget(abandoned);
+        armPostSettleCleanup();
+        active.delete(threadId);
+        emit({ ...base(threadId, turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
+        void sendTurn({
+          ...turn,
+          text: turn.resumeFallback!.text,
+          resumeCursor: undefined,
+          resumeFallback: undefined,
+        }, turnId).catch((error) => {
+          emit({
+            ...base(threadId, turnId),
+            type: "runtime.error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          emit({
+            ...base(threadId, turnId),
+            type: "turn.completed",
+            ok: false,
+            stopReason: "resume_fallback_failed",
+            cost: null,
+          });
+        });
+      };
       const endAttempt = () => {
         if (settled) return false;
         settled = true;
@@ -690,10 +750,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         },
         turnId,
       });
+      emit({ ...base(threadId, turnId), type: "turn.started" });
       const releaseMcpLock = await mcpLock.granted;
       if (interrupted) {
         releaseMcpLock();
-        emit({ ...base(threadId, turnId), type: "turn.started" });
         settle(false, "interrupted");
         return { turnId };
       }
@@ -869,6 +929,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       };
 
       let cancelledTool = false;
+      let toolRan = false;
       let lastStepType: string | undefined;
       let lastStepState: string | undefined;
       // every text_delta so far, and the shown text already streamed from it
@@ -948,6 +1009,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             lastStepState = payload.state;
             if (payload.step_type === "checkpoint") checkpointed = true;
             if (payload.step_type === "tool") {
+              toolRan = true;
               cancelledTool ||= isCancelledTool(payload);
               const itemId = `${conversationId ?? o.conversation_id ?? "conv"}:${payload.step_index}`;
               if (payload.state === "ACTIVE") {
@@ -980,6 +1042,13 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               agyResultError && !cancelledTool && !interrupted && !isAgyAccountError(agyError)
                 ? busyResumeReason(agyError)
                 : null;
+            if (
+              agyResultError && !realResponse && !toolRan && !interrupted &&
+              resumeCursor && turn.resumeFallback && AGY_SIGNATURES_REFUSED.test(agyError)
+            ) {
+              relaunchFresh(conversationId ?? resumeCursor);
+              break;
+            }
             const recoveredTransient = agyResultError && realResponse && lastStepType === "agent_response" && lastStepState === "DONE"
               && (busyReason !== null || AGY_NOT_ACCOUNT_ERROR.test(agyError) || (AGY_TIMEOUT_ERROR.test(agyError) && !AGY_ACCOUNT_ERROR.test(agyError)));
             if (realResponse && !shownResponses.has(response)) {
@@ -1074,29 +1143,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             isResumeCursorRejected(stderr),
           );
           if (resumeRejected) {
-            settled = true;
-            clearTimeout(watchdog);
-            active.delete(threadId);
-            emit({ ...base(threadId, turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
-            void sendTurn({
-              ...turn,
-              text: turn.resumeFallback!.text,
-              resumeCursor: undefined,
-              resumeFallback: undefined,
-            }, turnId).catch((error) => {
-              emit({
-                ...base(threadId, turnId),
-                type: "runtime.error",
-                message: error instanceof Error ? error.message : String(error),
-              });
-              emit({
-                ...base(threadId, turnId),
-                type: "turn.completed",
-                ok: false,
-                stopReason: "resume_fallback_failed",
-                cost: null,
-              });
-            });
+            relaunchFresh(resumeCursor);
             return;
           }
           emit({
@@ -1128,8 +1175,6 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       }, 61 * 60_000);
       watchdog.unref?.();
 
-      emit({ ...base(threadId, turnId), type: "turn.started" });
-
       return { turnId };
     };
 
@@ -1143,6 +1188,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
       return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
     };
+
+    const textModelDenied = new Set<string>();
 
     return {
       instanceId,
@@ -1158,6 +1205,13 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         cli: `"${process.execPath}" "${SPAWNED_PROXIES.antigravityAuth}"`,
         env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli },
       }),
+      // agy older than 1.5 has no ACP logout, and could not update to get one: delete its saved sign-in instead.
+      signOutWithoutCli: async (failure) => {
+        if (failure !== "update_offline" && failure !== "update_failed") return false;
+        return keyringSignOut.signOut();
+      },
+      signingIn: () => keyringSignOut.signingIn(),
+      signedOutByCli: () => keyringSignOut.signedOutByAgy(),
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {
@@ -1197,27 +1251,36 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           return () => listeners.delete(listener);
         },
       },
-      generateText: async (prompt: string) => {
-        // A shared slot, so a computer turn's box token never reaches this child.
-        const releaseMcpLock = await acquireAntigravityMcpLock(false).granted;
-        let restoreMcp = () => {};
+      generateText: async (prompt, opts) => {
+        const stopped = opts?.signal ?? new AbortController().signal;
+        stopped.throwIfAborted();
+        const pendingSignOut = keyringSignOut.pending;
+        if (pendingSignOut) {
+          if (await pendingSignOut) throw new Error("Gemini is not signed in.");
+          stopped.throwIfAborted();
+        }
         let cwd: string | null = null;
         try {
-          restoreMcp = mountAntigravityMcp(null, env);
-          cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
+          const home = antigravityHelperHome(env);
+          const helperEnv = { ...env, HOME: home, USERPROFILE: home };
+          const dir = cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
+          let denied = false;
           // stdin like a turn: a summary prompt on argv blows the Windows command line
-          const child = spawnCli(
-            config.cli,
-            ["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low"],
-            { cwd, env, stdio: ["pipe", "pipe", "pipe"] },
-          );
-          return await new Promise<string>((resolve, reject) => {
-            let result: { status?: unknown; response?: unknown } | null = null;
+          const run = (model: string) => new Promise<string>((resolve, reject) => {
+            const child = spawnCli(
+              config.cli,
+              ["--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
+              { cwd: dir, env: helperEnv, stdio: ["pipe", "pipe", "pipe"] },
+            );
+            let result: { status?: unknown; response?: unknown; error?: unknown } | null = null;
             let failure: Error | null = null;
-            const timer = setTimeout(() => {
-              failure = new Error("agy summary timed out");
+            const stop = (error: Error) => {
+              failure ??= error;
               killCliTree(child);
-            }, 120_000);
+            };
+            const abort = () => stop(new Error("agy summary aborted"));
+            stopped.addEventListener("abort", abort, { once: true });
+            const timer = setTimeout(() => stop(new Error("agy summary timed out")), opts?.timeoutMs ?? 120_000);
             timer.unref?.();
             let buf = "";
             child.stdout.setEncoding("utf8");
@@ -1242,30 +1305,45 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             });
             child.on("close", (code) => {
               clearTimeout(timer);
+              stopped.removeEventListener("abort", abort);
               const response = typeof result?.response === "string" ? result.response.trim() : "";
+              const error = typeof result?.error === "string" ? result.error : undefined;
+              denied = !failure && !response && AGY_MODEL_DENIED.test(`${error ?? ""}\n${stderr}`);
               if (failure) reject(failure);
-              else if (!result) reject(new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
-              else if (result.status !== "SUCCESS" || !response) reject(new Error(`agy summary failed (${String(result.status)})`));
+              else if (!result) reject(textUsageError(stderr) ?? new Error(`agy exited ${code} before result${stderr ? `: ${stderr.trim()}` : ""}`));
+              else if (result.status !== "SUCCESS" || !response) {
+                reject(textUsageError(error) ?? textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})${error && isAgyAccountError(error) ? `: ${error}` : ""}`));
+              }
               else resolve(response);
             });
             child.stdin.end(antigravityStreamUserLine(prompt));
           });
+          // an account denied the text model writes notes on the bot's own chat model
+          const fallback = opts?.fallbackModel && opts.fallbackModel !== AGY_TEXT_MODEL ? opts.fallbackModel : undefined;
+          const account = fallback ? readAntigravityAccount(env) ?? "" : "";
+          if (fallback && textModelDenied.has(account)) return await run(fallback);
+          try {
+            return await run(AGY_TEXT_MODEL);
+          } catch (error) {
+            if (!fallback || !denied || stopped.aborted) throw error;
+            textModelDenied.add(account);
+            return await run(fallback);
+          }
         } finally {
           try {
-            restoreMcp();
-          } finally {
-            releaseMcpLock();
-            try {
-              if (cwd) rmSync(cwd, { recursive: true, force: true });
-            } catch {}
-          }
+            if (cwd) rmSync(cwd, { recursive: true, force: true });
+          } catch {}
         }
       },
       dispose: async () => {
+        if (disposed) return;
         disposed = true;
+        forgetSignedOut();
         for (const { stop } of active.values()) stop();
         reapChildren(true); // escalate to SIGKILL — disposal must reap every child
         listeners.clear();
+        // Its turns are stopped: a delete waiting on them lands before Wink exits.
+        await keyringSignOut.release((turn) => turn.startsWith(`${instanceId}\0`));
       },
     };
   },

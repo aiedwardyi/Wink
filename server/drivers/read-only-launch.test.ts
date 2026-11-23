@@ -1,10 +1,11 @@
 // Every engine's read-only turn, launched for real against its fake CLI on its most permissive
 // instance (full auto / bypass): the restriction must show in the launch itself, not just a flag.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testHome } from "../testing/test-home.ts";
 
 import { ensureDirs } from "../config.ts";
 import * as procs from "../procs.ts";
@@ -161,8 +162,7 @@ const ENGINES: Record<string, Engine> = {
 
 // The owner's own command hooks, from every settings file and an enabled plugin, each writing a marker.
 const HOOK_SOURCES = ["user", "project", "local", "installed-plugin", "plugin-dir"];
-const hookFixture = () => {
-  const marks = join(scratch, "marks");
+const hookFixture = (marks: string) => {
   const config = join(scratch, "config");
   const project = join(scratch, "project");
   const base = join(scratch, "base");
@@ -189,12 +189,13 @@ const hookFixture = () => {
   writeFileSync(join(base, "settings.json"), JSON.stringify({ enabledPlugins: { "kit@mkt": true } }));
   writeFileSync(join(base, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "kit@mkt": [{ scope: "user", installPath: kit, version: "1.0.0" }] } }));
   const fired = () => readdirSync(marks).map((name) => name.replace(/-(SessionStart|UserPromptSubmit)$/, "")).filter((tag, i, all) => all.indexOf(tag) === i).sort();
-  return { marks, config, project, base, fired };
+  return { config, project, base, fired };
 };
 
 describe("Claude read-only turns run none of the owner's hooks", () => {
   const launch = async (account: boolean) => {
-    const fixture = hookFixture();
+    const marks = join(scratch, "marks");
+    const fixture = hookFixture(marks);
     setEnv("FAKE_CLAUDE_HOOKS", "1");
     if (account) {
       const exec = procs.execCli;
@@ -213,8 +214,8 @@ describe("Claude read-only turns run none of the owner's hooks", () => {
     const turn = async (threadId: string, extra: Partial<SendTurnInput>) => {
       await run(instance, threadId, { cwd: fixture.project, integrations: { agents }, ...extra });
       const fired = fixture.fired();
-      await removeTempDir(fixture.marks);
-      mkdirSync(fixture.marks);
+      await removeTempDir(marks);
+      mkdirSync(marks);
       return fired;
     };
     return turn;
@@ -230,9 +231,44 @@ describe("Claude read-only turns run none of the owner's hooks", () => {
   });
 });
 
+describe("Codex web_read reader turn, which mounts no Wink agents", () => {
+  const INHERITED = { mcp_servers: { github: { url: "https://example.invalid/mcp" }, agents: { command: "inert-user-agents" } } };
+  const codex = async () => {
+    setEnv("FAKE_CODEX_MODE", "resume");
+    setEnv("FAKE_CODEX_CONFIG", JSON.stringify(INHERITED));
+    const instance = await CodexDriver.create({ instanceId: "reader-codex", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-codex-app-server.ts"), fullAuto: true } });
+    live.push(instance);
+    return instance;
+  };
+  const sent = (file: string, method: string) => dumped(file).calls.find((call: { method: string }) => call.method === method)?.params;
+
+  it("turns off every inherited MCP server, one named agents included, fresh and resumed", async () => {
+    const instance = await codex();
+    for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", "codex-thread-9"]] as const) {
+      const file = `reader-${method.replace("/", "-")}.json`;
+      setEnv("FAKE_CODEX_DUMP", join(scratch, file));
+      await run(instance, `t-reader-${method}`, { readOnly: true, ...(cursor && { resumeCursor: cursor }) });
+      const { argv } = dumped(file);
+      expect(argv.join(" ")).not.toContain("mcp_servers.agents.command");
+      expect(sent(file, method)).toMatchObject({ sandbox: "read-only", approvalPolicy: "untrusted", config: { "mcp_servers.github.enabled": false, "mcp_servers.agents.enabled": false } });
+    }
+  });
+
+  it("keeps Wink's own agents server on a read-only turn that mounts it", async () => {
+    const instance = await codex();
+    setEnv("FAKE_CODEX_DUMP", join(scratch, "room.json"));
+    await run(instance, "t-room", { readOnly: true, integrations: { agents } });
+    expect(dumped("room.json").argv.join(" ")).toContain("mcp_servers.agents.command");
+    const config = sent("room.json", "thread/start").config;
+    expect(config).toMatchObject({ "mcp_servers.github.enabled": false });
+    expect(config).not.toHaveProperty("mcp_servers.agents.enabled");
+  });
+
+});
+
 describe("read-only launch contract", () => {
   it("runs with a throwaway HOME", () => {
-    expect(homedir().startsWith(tmpdir())).toBe(true);
+    expect(testHome().startsWith(tmpdir())).toBe(true);
   });
 
   it("covers every registered engine", () => {

@@ -2,9 +2,9 @@
 // written by a newer or differently-built app must load as an
 // unavailable shadow, never crash the fleet. These tests pin that.
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { removeTestData, testHome } from "../testing/test-home.ts";
 
 import { findCliCandidates, refreshPathCache, resetPathCacheForTests } from "../env-path.ts";
 import * as procs from "../procs.ts";
@@ -12,7 +12,6 @@ import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { ProviderRegistry } from "./registry.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { MuseAgentDriver } from "../drivers/acp/muse.ts";
-import { removeTempDir } from "../testing/cleanup.ts";
 import { setWslGateForTests } from "../wsl-gate.ts";
 import { createWarmPool, type Lease } from "../drivers/warm-pool.ts";
 
@@ -195,7 +194,7 @@ describe("ProviderRegistry", () => {
   });
 
   it("preserves auth completion in saved probes across restart", async () => {
-    const cacheDir = mkdtempSync(join(homedir(), "probe-cache-"));
+    const cacheDir = mkdtempSync(join(testHome(), "probe-cache-"));
     const configs = { a: { driver: "fake" } };
     const first = new ProviderRegistry([makeFakeDriver().driver], { cacheDir });
     const next = new ProviderRegistry([makeFakeDriver().driver], { cacheDir });
@@ -208,7 +207,7 @@ describe("ProviderRegistry", () => {
       expect(next.describeSaved()[0].snapshot.authenticated).toBeUndefined();
     } finally {
       await Promise.all([first.disposeAll(), next.disposeAll()]);
-      await removeTempDir(cacheDir);
+      removeTestData(cacheDir);
     }
   });
 
@@ -263,19 +262,19 @@ describe("ProviderRegistry", () => {
     const registry = new ProviderRegistry([driver]);
     const credentials = { ANTHROPIC_API_KEY: "review-anthropic", OPENAI_API_KEY: "review-openai", META_API_KEY: "review-meta", OMB_COMMS_TOKEN: "review-comms", GH_TOKEN: "review-github", FUTURE_PROVIDER_SECRET: "review-future" };
     try {
-      await registry.load({ a: { driver: kind, config: { cli: "missing-review-cli" }, environment: { ...credentials, CLAUDE_CONFIG_DIR: homedir(), CODEX_HOME: homedir() } } });
+      await registry.load({ a: { driver: kind, config: { cli: "missing-review-cli" }, environment: { ...credentials, CLAUDE_CONFIG_DIR: testHome(), CODEX_HOME: testHome() } } });
       const start = vi.spyOn(registry.logins, "start").mockResolvedValue({});
       await registry.startSignIn("a");
       const env = start.mock.calls[0][3]!;
       expect(Object.fromEntries(Object.keys(credentials).filter((key) => env[key] !== undefined).map((key) => [key, env[key]])))
         .toEqual(Object.fromEntries(Object.entries(credentials).filter(([key]) => allowed.includes(key))));
-      expect(env.CLAUDE_CONFIG_DIR).toBe(homedir());
-      expect(env.CODEX_HOME).toBe(homedir());
+      expect(env.CLAUDE_CONFIG_DIR).toBe(testHome());
+      expect(env.CODEX_HOME).toBe(testHome());
     } finally { await registry.disposeAll(); }
   });
 
   it("gates Claude login listeners while keeping cancellation scoped", async () => {
-    const dir = mkdtempSync(join(homedir(), "login-instances-"));
+    const dir = mkdtempSync(join(testHome(), "login-instances-"));
     const script = join(dir, "cli.cjs");
     writeFileSync(script, `
       require('node:fs').writeFileSync(process.env.CLAUDE_CONFIG_DIR, 'started');
@@ -305,12 +304,12 @@ describe("ProviderRegistry", () => {
       expect(rows.find((row) => row.instanceId === "b")?.loginCapture).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
     } finally {
       await registry.disposeAll();
-      await removeTempDir(dir);
+      removeTestData(dir);
     }
   });
 
   it.each(["replace", "remove"])("cancels and clears the login process tree on instance %s", async (action) => {
-    const dir = mkdtempSync(join(homedir(), "login-replace-"));
+    const dir = mkdtempSync(join(testHome(), "login-replace-"));
     const script = join(dir, "cli.cjs");
     writeFileSync(script, `
       const fs = require('node:fs');
@@ -348,7 +347,7 @@ describe("ProviderRegistry", () => {
       expect(JSON.parse(readFileSync(second, "utf8"))[0]).not.toBe(pids[0]);
     } finally {
       await registry.disposeAll();
-      await removeTempDir(dir);
+      removeTestData(dir);
     }
   });
 
@@ -479,7 +478,7 @@ describe("ProviderRegistry", () => {
   });
 
   it("connects and signs out through a fake CLI without persisting captured output", async () => {
-    const dir = mkdtempSync(join(homedir(), "login-registry-"));
+    const dir = mkdtempSync(join(testHome(), "login-registry-"));
     const script = join(dir, "cli.cjs");
     const marker = join(dir, "signed-in");
     writeFileSync(script, `
@@ -513,16 +512,16 @@ describe("ProviderRegistry", () => {
       expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
     } finally {
       await registry.disposeAll();
-      await removeTempDir(dir);
+      removeTestData(dir);
     }
   });
 
   it.each([
-    ["claudeAgent", ["auth", "login"], undefined, ["auth", "logout"]],
+    ["claudeAgent", ["auth", "login"], ["auth", "login", "--claudeai"], ["auth", "logout"]],
     ["codex", ["login"], ["login", "--device-auth"], ["logout"]],
     ["grokAgent", ["login"], ["login", "--device-auth"], ["logout"]],
     ["museAgent", ["login"], ["login"], ["logout"]],
-    ["antigravityAgent", ["login"], undefined, ["logout"]],
+    ["antigravityAgent", ["login"], ["login", "--paste"], ["logout"]],
   ])("exposes fixed login and logout commands for %s", async (kind, args, deviceArgs, logout) => {
     const driver = BUILT_IN_DRIVERS.find((entry) => entry.driverKind === kind)!;
     const fake = makeFakeDriver({ kind: kind as string });
@@ -539,6 +538,22 @@ describe("ProviderRegistry", () => {
     await registry.disposeAll();
   });
 
+  it.each([
+    ["claudeAgent", ["auth", "login"], ["auth", "login", "--claudeai"], "BROWSER", "true"],
+    ["antigravityAgent", ["login"], ["login", "--paste"], "SSH_CONNECTION", "127.0.0.1 50000 127.0.0.1 22"],
+  ])("signs %s in from a phone with a paste prompt and no PC browser, desktop unchanged", async (kind, args, deviceArgs, key, value) => {
+    const driver = BUILT_IN_DRIVERS.find((entry) => entry.driverKind === kind)!;
+    const registry = new ProviderRegistry([{ ...makeFakeDriver({ kind }).driver, install: driver.install, defaultConfig: () => ({ cli: "fake-cli" }) }]);
+    await registry.load({ engine: { driver: kind } });
+    const start = vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://example.com/login", inputGeneration: 1 });
+    await registry.startSignIn("engine");
+    await registry.startSignIn("engine", true);
+    const [desktop, phone] = start.mock.calls;
+    expect([desktop[2], desktop[3]?.[key] === value, desktop[5]?.paste]).toEqual([args, false, false]);
+    expect([phone[2], phone[3]?.[key], phone[5]?.paste]).toEqual([deviceArgs, value, true]);
+    await registry.disposeAll();
+  });
+
   it("runs only registered argv with the configured CLI and environment", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([{ ...fake.driver, install: {
@@ -549,7 +564,7 @@ describe("ProviderRegistry", () => {
     await registry.startSignIn("a", true);
     expect(start).toHaveBeenCalledTimes(1);
     const [id, cli, args, env, hosts, options] = start.mock.calls[0];
-    expect([id, cli, args, hosts, options]).toEqual(["a", "custom-cli", ["device"], ["auth.example"], { scope: "fake", account: undefined, logExit: true }]);
+    expect([id, cli, args, hosts, options]).toEqual(["a", "custom-cli", ["device"], ["auth.example"], { scope: "fake", account: undefined, logExit: true, paste: true }]);
     expect(env?.TEST_ENV).toBe("yes");
     expect(env?.MUSE_LOGIN).toBe("0");
     expect(await registry.startSignIn("missing")).toBeNull();
@@ -589,7 +604,7 @@ describe("ProviderRegistry", () => {
       create: async (input) => ({ ...await fake.driver.create(input), account: input.account }),
     }]);
     try {
-      await registry.load({ added: { driver: "claudeAgent", account: { id: "added", of: "claude", home: homedir(), generation: 1 } } });
+      await registry.load({ added: { driver: "claudeAgent", account: { id: "added", of: "claude", home: testHome(), generation: 1 } } });
       const capture = { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 };
       vi.spyOn(registry.logins, "start").mockResolvedValue({ ...capture, code: "ABCD-EFGH" });
       vi.spyOn(registry.logins, "capture").mockReturnValue({ ...capture, code: "ABCD-EFGH" });
@@ -632,15 +647,18 @@ describe("ProviderRegistry", () => {
     expect(cancel).toHaveBeenCalledWith("a");
     expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object), [], { scope: "fake", account: undefined });
     expect(await registry.startSignIn("a")).toBeNull();
-    expect(await registry.signOut("a")).toBe(false);
+    // A second press while the first runs (another client, a reload, a retry) waits for it and gets its answer.
+    const again = registry.signOut("a");
     finish();
     expect(await logout).toBe(true);
+    expect(await again).toBe(true);
+    expect(start).toHaveBeenCalledTimes(1);
     expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
     expect(await registry.signOut("missing")).toBeNull();
     await registry.disposeAll();
   });
   it("answers from the persisted boot probe while its replacement is pending", async () => {
-    const cacheDir = mkdtempSync(join(homedir(), "probe-cache-"));
+    const cacheDir = mkdtempSync(join(testHome(), "probe-cache-"));
     const configs = { a: { driver: "fake" } };
     const first = countingDriver();
     const previous = new ProviderRegistry([first.driver], { cacheDir });
@@ -689,7 +707,7 @@ describe("ProviderRegistry", () => {
   });
 
   it("reads saved probe rows without probing", async () => {
-    const cacheDir = mkdtempSync(join(homedir(), "probe-cache-"));
+    const cacheDir = mkdtempSync(join(testHome(), "probe-cache-"));
     try {
       const configs = { a: { driver: "fake" }, b: { driver: "fake" } };
       const previous = new ProviderRegistry([makeFakeDriver().driver], { cacheDir });
@@ -705,7 +723,7 @@ describe("ProviderRegistry", () => {
       expect(next.counts.snapshots).toBe(0);
       await registry.disposeAll();
     } finally {
-      rmSync(cacheDir, { recursive: true, force: true });
+      removeTestData(cacheDir);
     }
   });
 
@@ -777,8 +795,8 @@ describe("ProviderRegistry", () => {
   });
 
   it("rediscovers models once a refresh repairs a stale cached CLI path", async () => {
-    const cacheDir = mkdtempSync(join(homedir(), "probe-cache-"));
-    const [moved, installed] = ["moved-bin-", "installed-bin-"].map((dir) => mkdtempSync(join(homedir(), dir)));
+    const cacheDir = mkdtempSync(join(testHome(), "probe-cache-"));
+    const [moved, installed] = ["moved-bin-", "installed-bin-"].map((dir) => mkdtempSync(join(testHome(), dir)));
     const name = "stale-shim-cli";
     const shim = (dir: string) => join(dir, name + (process.platform === "win32" ? ".cmd" : ""));
     process.env.OMB_EXTRA_PATH = [moved, installed].join(delimiter);
