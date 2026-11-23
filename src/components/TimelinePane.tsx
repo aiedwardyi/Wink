@@ -433,9 +433,10 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
   }, []);
 
-  // will-change pins the sheet's bitmap at the scale it first painted, so it is set only while a drag or glide moves it
+  // will-change pins the sheet's bitmap at the scale it first painted, so it is set only while a drag or glide moves it.
+  // Below 1.5x Chromium draws subpixel text only off a layer, so a lift there would flicker the text to grayscale and back.
   const lift = useCallback((on: boolean) => {
-    if (sheet.current) sheet.current.style.willChange = on ? "transform" : "";
+    if (sheet.current) sheet.current.style.willChange = on && devicePixelRatio >= 1.5 ? "transform" : "";
   }, []);
 
   const stopGlide = useCallback(() => {
@@ -556,10 +557,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     if (!last) return;
     const point = spot(event);
     const at = view.current!;
-    if (event.pointerType === "mouse" && !event.buttons) {
-      pointers.current.delete(event.pointerId);
-      return;
-    }
+    if (event.pointerType === "mouse" && !event.buttons) return onPointerUp(event);
     if (pointers.current.size >= 2) {
       // SAFETY: two or more pointers are down, so the first two exist before and after this move.
       const [a, b] = [...pointers.current.values()] as [typeof point, typeof point];
@@ -586,6 +584,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     pointers.current.set(event.pointerId, point);
     show({ ...at, x: at.x + point.x - last.x, y: at.y + point.y - last.y });
   };
+  // also ends a mouse drag whose mouse-up the page never saw
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     pointers.current.delete(event.pointerId);
     if (pointers.current.size) return;
