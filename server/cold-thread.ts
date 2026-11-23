@@ -275,7 +275,13 @@ export async function coldNewestStamp(store: Pick<Store, "adopt" | "loaded">, th
 export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
   let load = loads.get(threadId);
   if (!load) {
-    load = loadPages(store, threadId)
+    load = readPages(store, threadId)
+      .then((read) => {
+        if (!read || store.loaded(threadId)) return;
+        store.adopt(threadId, read);
+        coldReads.delete(threadId);
+        sendIdReads.delete(threadId);
+      })
       .catch((error) => console.error("cold chat load failed; the store loads it when used", threadId, error))
       .finally(() => loads.delete(threadId));
     loads.set(threadId, load);
@@ -283,7 +289,31 @@ export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: strin
   return load;
 }
 
-async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
+const reads = new Map<string, Promise<ColdRead | undefined>>();
+
+type ColdRead = ThreadRows & { chars: number };
+
+/** One read of a chat's pages at a time, shared by a load and a look. */
+function readPages(store: Pick<Store, "loaded">, threadId: string): Promise<ColdRead | undefined> {
+  let read = reads.get(threadId);
+  if (!read) {
+    read = loadPages(store, threadId).finally(() => reads.delete(threadId));
+    reads.set(threadId, read);
+  }
+  return read;
+}
+
+/** An unloaded chat's active path, read as coldLoad reads it but kept only in spare cache room: a look ahead never pushes out a chat in use. */
+export async function coldPath(store: Pick<Store, "activePath" | "loaded" | "look">, threadId: string): Promise<readonly Message[]> {
+  if (!store.loaded(threadId)) {
+    const read = await readPages(store, threadId).catch((error) => console.error("cold path read failed; the store reads it", threadId, error));
+    // a write during the read loaded the chat
+    if (read && !store.loaded(threadId)) return store.look(threadId, read);
+  }
+  return store.activePath(threadId);
+}
+
+async function loadPages(store: Pick<Store, "loaded">, threadId: string): Promise<ColdRead | undefined> {
   // only this handle writes rows (a peer's land through applySyncChanges), so its updates and deletes are all the pages can miss
   const changed = new Set<string>();
   // a new row takes the table's top rowid + 1, so once a page's last row is deleted an insert can land behind the cursor
@@ -369,9 +399,7 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
     }
     const activeLeafId = storedHead(threadId);
     if (activeLeafId === undefined) return;
-    store.adopt(threadId, { messages: gone.size ? messages.filter((_, index) => !gone.has(index)) : messages, activeLeafId, chars });
-    coldReads.delete(threadId);
-    sendIdReads.delete(threadId);
+    return { messages: gone.size ? messages.filter((_, index) => !gone.has(index)) : messages, activeLeafId, chars };
   } finally {
     stop();
   }

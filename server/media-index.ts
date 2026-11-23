@@ -65,8 +65,8 @@ async function linkedSizes(list: MediaList): Promise<MediaList> {
   return list;
 }
 
-/** Builds a chat's index on its first ask and again only after that chat changes. */
-export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) {
+/** Builds a chat's index on its first ask and again only after that chat changes; a held index answers without reading the chat. */
+export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">, pathOf: (threadId: string) => readonly Message[] | Promise<readonly Message[]> = (threadId) => store.activePath(threadId)) {
   const held = new Map<string, MediaIndex>();
   const dirty = new Set<string>();
   const building = new Set<string>();
@@ -85,7 +85,7 @@ export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) 
       dirty.delete(threadId);
       building.add(threadId);
       const build = ++builds;
-      const list = await buildMediaIndex(threadId, store.activePath(threadId)).then(linkedSizes).finally(() => building.delete(threadId));
+      const list = await Promise.resolve(pathOf(threadId)).then((path) => buildMediaIndex(threadId, path)).then(linkedSizes).finally(() => building.delete(threadId));
       index = held.get(threadId);
       if (!index || (builtBy.get(index) ?? 0) < build) {
         if (!index || !same(index, list)) index = { v: `${boot}.${++count}`, ...list };
