@@ -45,7 +45,8 @@ const logouts = () => existsSync(at("logouts")) ? readFileSync(at("logouts"), "u
 const joined = async (clients: string[]) => {
   let early = 0;
   const presses = clients.map((client) => signOut(client).then((press) => { if (!existsSync(at("release"))) early += 1; return press.status; }));
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  // A round trip sent after the presses: once it answers, the server has taken them in.
+  await claudeRow();
   writeFileSync(at("release"), "");
   return { early, statuses: await Promise.all(presses) };
 };
