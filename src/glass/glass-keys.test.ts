@@ -25,6 +25,11 @@ const SPOKEN: [string, string][] = [
 ];
 
 describe("glasses keys", () => {
+  it("both glasses pages ask the device to route D-pad and wrist input to them", () => {
+    const indexSource = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+    for (const page of [indexSource, pairSource]) expect(page).toContain('<meta name="mrbd-web-app-capable" content="yes" />');
+  });
+
   it("ArrowLeft and ArrowRight step chats in the phone's order and stop at both ends", () => {
     const ids = ["juno", "atlas", "orion", "vega"];
     const step = (current: string, key: string) => {
