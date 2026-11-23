@@ -108,11 +108,12 @@ function Glasses() {
           focusGlass("speak");
           break;
         case "models":
+          if (!models.length) break;
           window.history.pushState({ glass: "models" }, "");
           setPicking(Math.max(0, models.findIndex((model) => model.current)));
           break;
         case "model":
-          setPicking((at) => Math.min(Math.max(0, (at ?? 0) + action.dir), models.length - 1));
+          setPicking((at) => Math.max(0, Math.min((at ?? 0) + action.dir, models.length - 1)));
           break;
         case "pick": {
           const model = picking === null ? undefined : models[picking];
@@ -120,6 +121,8 @@ function Glasses() {
           if (model && !(model.current && model.selection.model === shown.model && model.selection.effort === shown.effort)) {
             dispatch({ type: "setModel", botId: bot.id, selection: model.selection });
           }
+          latest.current.picking = null;
+          setPicking(null);
           window.history.back();
           break;
         }
@@ -136,6 +139,8 @@ function Glasses() {
           break;
         case "send":
           if (draft) dispatch({ type: "send", botId: bot.id, text: draft, threadId: bot.threadId, sendId: crypto.randomUUID() });
+          latest.current.draft = null;
+          setDraft(null);
           window.history.back();
           break;
         case "again":

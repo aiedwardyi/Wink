@@ -531,7 +531,8 @@
           const error = await pair("/api/phone/google", JSON.stringify({ credential, name: phoneName() }));
           if (!error) return finish();
           say(t(["wrong-account", "rate-limited", "network"].includes(error) ? error : "google-failed"), "error");
-          showForm();
+          if (glasses) showGlass();
+          else showForm();
         }
 
         input.addEventListener("input", () => {
@@ -605,7 +606,7 @@
         } else if (qrToken) {
           void run(qrToken);
         } else if (goGoogle) {
-          void googleReady(true).then((ready) => (ready ? startGoogle() : showForm(false)));
+          void googleReady(true).then((ready) => (ready ? startGoogle() : glasses ? showGlass() : showForm(false)));
         } else if (glasses) {
           showGlass();
         } else {

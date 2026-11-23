@@ -1,11 +1,13 @@
+import { useI18n } from "@/lib/i18n";
 import { modelFamilyAccent } from "@/lib/model-chip";
 import type { Bot } from "@/state/store";
 import { Chevron, GlassAvatar, MicIcon, replies, useModel } from "./GlassChat";
 
 /** Nothing reaches the bot until Send here; Back drops the draft. */
 export function GlassSpeak({ bot, draft }: { bot: Bot; draft: string }) {
+  const { t } = useI18n();
   const model = useModel(bot);
-  const last = replies(bot, "").filter((reply) => !reply.live).pop();
+  const last = replies(bot, "", t).filter((reply) => !reply.live).pop();
   const line = last?.text.split("\n").map((part) => part.trim()).filter(Boolean).pop();
   return (
     <div className="glass-layer">

@@ -2,7 +2,8 @@ import { useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from
 import { BotAvatar } from "@/components/Avatar";
 import { ProviderBrandMark } from "@/components/ProviderIcons";
 import { agoText } from "@/lib/ago";
-import { useI18n } from "@/lib/i18n";
+import { chatErrorText } from "@/lib/error-text";
+import { useI18n, type Translate } from "@/lib/i18n";
 import { catalogModelLabel, chipPhoneName, modelChipText } from "@/lib/model-chip";
 import { shownModelSelection, useStore, useStreamSelect, visibleMessages, type Bot } from "@/state/store";
 import { linesAbove, replyMove, type ReplyMove } from "./glass-keys";
@@ -19,22 +20,30 @@ const ENGINES = new Map([
 export type Reply = { id: string; you?: string; text: string; at?: number; live?: boolean };
 export type GlassChatHandle = { move: (dir: -1 | 1) => ReplyMove["type"]; reply: () => Reply | undefined };
 
-/** Bot replies oldest first, each with the message you sent before it; a turn still running is the last one. */
-export function replies(bot: Bot, stream: string): Reply[] {
+/** Bot replies oldest first, each with the message you sent before it; a turn still running is the last one, a failed one shows the phone's error line. */
+export function replies(bot: Bot, stream: string, t: Translate): Reply[] {
   const list: Reply[] = [];
   let you: string | undefined;
   let answered = true;
+  let failed: { id: string; text: string; at?: number } | undefined;
   for (const message of visibleMessages(bot)) {
+    const error = message.kind === "activity" ? message.tool?.name : undefined;
+    if (!answered && error?.startsWith("error:")) {
+      const shown = chatErrorText(error.slice(6).trim(), bot.name, t);
+      failed = shown ? { id: message.id, text: shown.text, at: message.at } : undefined;
+    }
     if (message.kind !== "text" || !message.text) continue;
     if (message.role === "user") {
       you = message.text;
       answered = false;
+      failed = undefined;
     } else {
       list.push({ id: message.id, you, text: message.text, at: message.at });
       answered = true;
     }
   }
-  if (stream || !answered) list.push({ id: "live", you, text: stream, live: true });
+  if (stream || (!answered && bot.busy)) list.push({ id: "live", you, text: stream, live: true });
+  else if (!answered && failed) list.push({ ...failed, you });
   return list;
 }
 
@@ -96,7 +105,7 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
   const { t } = useI18n();
   const model = useModel(bot);
   const stream = useStreamSelect((s) => s.streaming[bot.threadId] ?? "");
-  const list = replies(bot, stream);
+  const list = replies(bot, stream, t);
   const [index, setIndex] = useState<number | null>(null);
   const [edge, setEdge] = useState<"top" | "bottom">("bottom");
   const [above, setAbove] = useState(0);

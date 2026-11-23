@@ -8,7 +8,7 @@ import { Chevron, Dots, GlassAvatar, replies, useModel } from "./GlassChat";
 function DeckCard({ bot, off }: { bot: Bot; off: number }) {
   const { t } = useI18n();
   const model = useModel(bot);
-  const last = replies(bot, "").filter((reply) => !reply.live).pop();
+  const last = replies(bot, "", t).filter((reply) => !reply.live).pop();
   const status = bot.busy ? "Running" : bot.unread ? "New reply" : "Ready";
   return (
     <div className={off ? "glass-card side" : "glass-card on"} style={{ transform: "translateX(" + off * 410 + "px) scale(" + (off ? 0.88 : 1) + ")" }}>
