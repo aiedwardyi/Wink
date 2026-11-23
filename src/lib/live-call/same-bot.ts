@@ -274,21 +274,25 @@ export class SameBotCall {
   /** The bot's replies to this call's own sends, each read once and in order once its turn settles; another task or older chat stays unread. */
   observe({ busy, messages }: { busy: boolean; messages: Message[] }) {
     this.busy = busy;
-    if (!busy) {
-      let ours = false;
-      const asked: string[] = [];
-      for (const message of messages) {
-        if (message.role === "user") {
-          ours = Boolean(message.sendId && this.sends.has(message.sendId));
-          if (ours) asked.push(message.sendId!);
-          continue;
-        }
-        if (!isShownMessage(message)) continue;
-        for (const sendId of asked.splice(0)) this.waiting.delete(sendId);
-        if (!ours || message.role !== "bot" || message.kind !== "text" || isVoiceLine(message) || !message.text?.trim() || this.readIds.has(message.id)) continue;
-        this.readIds.add(message.id);
-        this.read(message.text);
+    if (!busy) this.settle(messages);
+    this.refresh();
+  }
+
+  /** A task he has left: its turn ended, and these are its messages. */
+  settle(messages: Message[]) {
+    let ours = false;
+    const asked: string[] = [];
+    for (const message of messages) {
+      if (message.role === "user") {
+        ours = Boolean(message.sendId && this.sends.has(message.sendId));
+        if (ours) asked.push(message.sendId!);
+        continue;
       }
+      if (!isShownMessage(message)) continue;
+      for (const sendId of asked.splice(0)) this.waiting.delete(sendId);
+      if (!ours || message.role !== "bot" || message.kind !== "text" || isVoiceLine(message) || !message.text?.trim() || this.readIds.has(message.id)) continue;
+      this.readIds.add(message.id);
+      this.read(message.text);
     }
     this.refresh();
   }

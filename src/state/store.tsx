@@ -26,7 +26,7 @@ import { answerText } from "../../shared/open-question";
 import { canAnswerCard } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
-import { currentCall } from "@/lib/call";
+import { currentCall, turnCompleted } from "@/lib/call";
 import { queueCancelled } from "@/lib/live-call/active";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
@@ -2565,6 +2565,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             // flush any buffered tail before clearing so no tokens are lost
             flushDeltas();
             clearStream(event.threadId, "completed", event.ok !== false);
+            turnCompleted(event.threadId);
           } else if (event.type === "turn.started" || event.type === "turn.retrying") {
             if (!isReplacementTurnStart(liveTurns.current, event.threadId, event.turnId, event.createdAt)) break;
             liveTurns.current = liveTurnIdAfter(liveTurns.current, event.threadId, event);
