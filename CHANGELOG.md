@@ -2,6 +2,19 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.295] - 2026-11-23
+
+### Added
+- A new chat offers Import Memory instead of the starter quiz.
+- Calls can be answered by the bot you're chatting with: Settings, Answered by, Same bot or Gemini voice.
+
+### Changed
+- Find in a long chat shows matches faster.
+
+### Fixed
+- Helpers keep running after an app update or a Windows restart.
+- Gemini Sign Out works on an older Gemini CLI.
+
 ## [1.0.294] - 2026-11-23
 
 ### Added

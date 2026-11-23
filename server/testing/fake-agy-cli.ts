@@ -11,6 +11,8 @@
 // FAKE_AGY_RESULT_ERROR, when set, is the result.error of a status ERROR turn.
 // FAKE_AGY_RESULT_RESPONSE, with it, is that turn's result.response (else "").
 // While FAKE_AGY_RESULT_ERROR_FILE exists, its text is that result.error.
+// FAKE_AGY_CREDENTIAL_FILE, when set, is agy's saved sign-in, reread for the request as agy before 1.5 does:
+// while it is missing, the turn fails as signed out (401).
 // FAKE_AGY_DENIED_MODEL, when set, is a --model whose turns fail with Vertex's permission denial.
 // FAKE_AGY_USAGE, when set, is the JSON usage on the response step and the result.
 // FAKE_AGY_STREAM=1 streams result.response as two text_delta steps first.
@@ -206,7 +208,9 @@ const errorFile = process.env.FAKE_AGY_RESULT_ERROR_FILE;
 const deniedModel = process.env.FAKE_AGY_DENIED_MODEL && model === process.env.FAKE_AGY_DENIED_MODEL
   ? `Permission 'aiplatform.endpoints.predict' denied on resource '/publishers/google/models/${model.replace(/-low$/, "")}' (or it may not exist).`
   : undefined;
-const resultError = deniedModel || process.env.FAKE_AGY_RESULT_ERROR || (errorFile && existsSync(errorFile) ? readFileSync(errorFile, "utf8") : undefined);
+const credentialFile = process.env.FAKE_AGY_CREDENTIAL_FILE;
+const signedOut = credentialFile && !existsSync(credentialFile) ? "Request failed with status 401: UNAUTHENTICATED" : undefined;
+const resultError = signedOut || deniedModel || process.env.FAKE_AGY_RESULT_ERROR || (errorFile && existsSync(errorFile) ? readFileSync(errorFile, "utf8") : undefined);
 
 // stream-json / --print with no prompt yields no turn (mirrors real CLI).
 if (!prompt) process.exit(0);

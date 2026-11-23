@@ -647,9 +647,12 @@ describe("ProviderRegistry", () => {
     expect(cancel).toHaveBeenCalledWith("a");
     expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object), [], { scope: "fake", account: undefined });
     expect(await registry.startSignIn("a")).toBeNull();
-    expect(await registry.signOut("a")).toBe(false);
+    // A second press while the first runs (another client, a reload, a retry) waits for it and gets its answer.
+    const again = registry.signOut("a");
     finish();
     expect(await logout).toBe(true);
+    expect(await again).toBe(true);
+    expect(start).toHaveBeenCalledTimes(1);
     expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
     expect(await registry.signOut("missing")).toBeNull();
     await registry.disposeAll();

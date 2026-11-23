@@ -5,10 +5,12 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { addToAboutYou, removeAboutYouSource } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
 import { botAsks, buildRecallIndex, createMemoryLookup, RECALL_HEADER, searchable, type MemoryLookup, type MemoryLookupDeps } from "./memory-lookup.ts";
 import { parseJson } from "./schema.ts";
 import type { TaskAsk } from "./task-asks.ts";
+import { removeTestData } from "./testing/test-home.ts";
 import { ensureWorkspace, workspaceDir, writeMemoryFile } from "./workspace.ts";
 
 const FILLER = Array.from({ length: 120 }, (_, n) => `- Filler kettle${n} harbor${n} lantern${n} note`).join("\n");
@@ -499,6 +501,39 @@ describe("log", () => {
   });
 });
 
+describe("Import Memory overflow", () => {
+  const facts = Array.from({ length: 600 }, (_, i) => i === 450
+    ? "The user's favorite tea shop is Moonbrew in Daejeon."
+    : `The user visited town number ${i + 1} on a long walk.`);
+  const paste = `${facts.map((fact) => `- ${fact}`).join("\n")}\nSource: ChatGPT`;
+
+  it("drops a build still running when the overflow is removed, so the removed lines are never recalled", async () => {
+    removeTestData(join(DATA_DIR, "about-you"));
+    addToAboutYou(paste, "2026-11-22");
+    const botId = `bot-${randomUUID()}`;
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+    // the build gives way to the event loop after every 200 rows: hold it there until the removal's own refresh is done
+    const real = globalThis.setImmediate;
+    let second: Promise<void> | undefined;
+    // SAFETY: the build calls setImmediate with only a resolver, the one argument this stand-in reads.
+    vi.spyOn(globalThis, "setImmediate").mockImplementation(((run: () => void) => {
+      if (second) return real(run);
+      removeAboutYouSource("ChatGPT");
+      second = lookup.refresh(botId);
+      void second.then(() => real(run));
+      return real(() => {});
+    }) as typeof setImmediate);
+    try {
+      await lookup.refresh(botId);
+      await second;
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(second).toBeDefined();
+    expect(ask(lookup, botId, "what's my favorite tea shop?")).toEqual([]);
+  });
+});
+
 describe("send path wiring", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const section = (from: string, to: string) => {
@@ -517,13 +552,13 @@ describe("send path wiring", () => {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None },
   }).outputText}\nreturn run;`)() as (scope: object) => string;
 
-  const turn = (opts: object | undefined, driverKind = "claudeAgent", notOwner: string[] = []) => {
+  const turn = (opts: object | undefined, driverKind = "claudeAgent", notOwner: string[] = [], extra: object = {}) => {
     const take = vi.fn((): string[] => ["[recall]"]);
     const scope = {
       opts, memoryLookup: { take }, notOwnerChats: () => new Set(notOwner), instance: { driverKind, instanceId: "i1" }, supportsWorkspaceFiles: (kind: string) => kind !== "boxAgent",
       bot: { id: "b1" }, threadId: "t1", task: { resumeCursors: { i1: "c1" } }, instanceId: "i1", rewound: false, fresh: false, recycled: false, text: "typed words",
       threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
-      accountNotices: { forTurn: () => ({}) }, currentPrompt: "hello",
+      accountNotices: { forTurn: () => ({}) }, currentPrompt: "hello", ...extra,
     };
     return { prompt: run(scope), take };
   };
@@ -550,10 +585,14 @@ describe("send path wiring", () => {
     expect(turn(undefined, "boxAgent").take).not.toHaveBeenCalled();
   });
 
-  it("skips a joined room's or a routine's thread, where the words are not the owner's", () => {
-    const { prompt, take } = turn(undefined, "claudeAgent", ["t1"]);
-    expect(take).not.toHaveBeenCalled();
-    expect(prompt).toBe("hello");
+  it("gives a joined room's or a routine's thread 0 lookups, even when it names a private row", async () => {
+    const { botId, lookup } = await lookupFor("- Dentist: Maple Dental in Daejeon. (noted 2026-11-20)");
+    const take = vi.spyOn(lookup, "take");
+    const at = (threadId: string) => turn(undefined, "claudeAgent", ["room-1", "routine-1"], { bot: { id: botId }, threadId, memoryLookup: lookup, text: "dentist Maple Dental" }).prompt;
+    expect(at("own-chat")).toContain("Maple Dental in Daejeon");
+    expect(at("room-1")).toBe("hello");
+    expect(at("routine-1")).toBe("hello");
+    expect(take).toHaveBeenCalledTimes(1);
   });
 
   it("reads parked asks from the owner's chats only", () => {

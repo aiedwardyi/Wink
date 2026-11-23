@@ -1,11 +1,11 @@
 import { Check, ChevronDown, ChevronRight, ChevronUp, Import, X } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { aboutYouNote, UNNAMED_SOURCE } from "../../shared/about-you-note";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { api, useStore } from "@/state/store";
-import { ImportPromptBox } from "./AboutYouCard";
+import { ImportPromptBox, SkippedLines } from "./AboutYouCard";
 import { DETAILS_INPUT, FitTextarea } from "./BotDetailsRows";
 import { StepMark } from "./DeviceSetupParts";
 import { Fold } from "./Fold";
@@ -14,7 +14,8 @@ import { SegmentedRow } from "./Segmented";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 
 type Scope = "all" | "bot";
-type Added = { source: string; added: number; found: number; hidden: number };
+type Added = { source: string; added: number; found: number; hidden: number; flagged?: string[] };
+type Saved = Added & { scope: Scope; id: number };
 
 // phone hit areas reach 40 px; the look at rest stays the mock's
 const LINK = "relative text-accent-text hover:underline focus-visible:underline focus-visible:outline-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:inset-x-0";
@@ -26,6 +27,8 @@ const SCOPE_HIT = "[@media(pointer:coarse)]:[&_[role=radiogroup]]:overflow-visib
 // the last answers, so a chat opened after them paints the row without waiting
 let offered: boolean | null = null;
 const ownImport = new Set<string>();
+// each dismissal, so a lookup that was already out when the row was dismissed cannot bring it back
+let dismissals = 0;
 
 export type ImportOffer = { offer: boolean | null; close: () => void };
 
@@ -35,7 +38,9 @@ export function useImportOffer(botId: string, fresh: boolean): ImportOffer {
   useEffect(() => {
     if (!fresh) return;
     let gone = false;
+    const asked = dismissals;
     void api(`/api/about-you?bot=${encodeURIComponent(botId)}`).then((body) => {
+      if (dismissals !== asked) return;
       offered = Array.isArray(body?.sources) && !body.sources.length && body.declined !== true;
       if (body?.imported === true) ownImport.add(botId);
       if (!gone) setOffer(offered && !ownImport.has(botId));
@@ -71,10 +76,12 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
   const [scope, setScope] = useState<Scope>("all");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  const [saved, setSaved] = useState<(Added & { scope: Scope }) | null>(null);
+  const [saved, setSaved] = useState<Saved | null>(null);
+  const saves = useRef(0);
 
   const dismiss = () => {
     offered = false;
+    dismissals++;
     onClose();
     void api("/api/about-you/decline", { method: "POST" }).catch(() => {});
   };
@@ -88,17 +95,23 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
     }
   };
 
+  const route = (to: Scope) => (to === "all" ? "/api/about-you" : `/api/bots/${botId}/memory/import`);
+
   const add = async () => {
     if (busy || !text.trim()) return;
     setBusy(true);
     setNote("");
     try {
-      const body: Added = await api(scope === "all" ? "/api/about-you" : `/api/bots/${botId}/memory/import`, { method: "POST", body: JSON.stringify({ text }) });
-      if (!body.added) setNote(aboutYouNote(body, t));
+      const body: Added = await api(route(scope), { method: "POST", body: JSON.stringify({ text }) });
+      // lines held back for Keep still open the saved box, where the user can bring them in
+      if (!body.added && !body.flagged?.length) setNote(aboutYouNote(body, t));
       else {
-        if (scope === "all") offered = false;
-        else ownImport.add(botId);
-        setSaved({ ...body, scope });
+        // the card stays gone once this paste put something in memory; flagged lines alone wait for Keep
+        if (body.added) {
+          if (scope === "all") offered = false;
+          else ownImport.add(botId);
+        }
+        setSaved({ ...body, scope, id: ++saves.current });
         setText("");
         setPrompt(false);
       }
@@ -107,6 +120,18 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
     } finally {
       setBusy(false);
     }
+  };
+
+  // a kept line goes to the scope the paste went to, under the same source
+  const keep = async (line: string) => {
+    if (!saved) return;
+    const body: Added = await api(route(saved.scope), { method: "POST", body: JSON.stringify({ keep: [line], source: saved.source }) });
+    if (body.added) {
+      if (saved.scope === "all") offered = false;
+      else ownImport.add(botId);
+    }
+    // only the box this Keep started from counts it: another import may be on screen by now
+    setSaved((before) => (before?.id === saved.id ? { ...before, added: before.added + body.added } : before));
   };
 
   if (saved) {
@@ -121,6 +146,7 @@ export function ImportMemoryCard({ botId, onClose }: { botId: string; onClose: (
               <span className="text-ink-secondary"> · {saved.scope === "all" ? t("importCard.allBots") : t("importCard.savedThisBot")}</span>
             </div>
             {saved.hidden > 0 && <div className="mt-0.5 text-[12.5px] text-ink-secondary">{t("aboutYou.hidden", { count: saved.hidden })}</div>}
+            {Boolean(saved.flagged?.length) && <SkippedLines lines={saved.flagged!} keep={keep} className="mt-0.5" />}
             <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
               <button type="button" className={LINK} onClick={() => dispatch(saved.scope === "all" ? { type: "toggleAppSettings", open: true, section: "about-you" } : { type: "toggleSettings", open: true, memory: { line: "" } })}>
                 {t("importCard.viewSettings")}

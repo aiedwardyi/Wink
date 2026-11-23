@@ -437,6 +437,7 @@ export interface RateLimitReport {
 export interface InstanceInfo {
   loginState?: "pending" | "complete" | "failed" | "cancelled";
   loginCapture?: { url?: string; code?: string; inputGeneration?: number };
+  loginError?: string;
   instanceId: string;
   driverKind: string;
   accountOf?: string;

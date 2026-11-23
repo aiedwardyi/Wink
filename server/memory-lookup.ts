@@ -481,20 +481,38 @@ async function sideFiles(memoryDir: string, folder = "memory", depth = 0): Promi
   return found.flat().sort();
 }
 
+// the saved lines past the cut, oldest first, as many as the room left in the corpus holds
+function withinBudget(text: string, room: number): string {
+  if (Buffer.byteLength(text) <= room) return text;
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of text.split("\n")) {
+    used += Buffer.byteLength(line) + 1;
+    if (used > room) break;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile[]> {
   const files: NoteFile[] = [];
   let bytes = 0;
   for (const { source, tier, path, mtime, size } of sources) {
-    if (bytes + size > MAX_CORPUS_BYTES) continue;
-    bytes += size;
+    // an import file only counts for the lines past the cut: a big one fills what is left, it is not skipped whole
+    const shared = source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE;
+    if (!shared) {
+      if (bytes + size > MAX_CORPUS_BYTES) continue;
+      bytes += size;
+    }
     if (tier === 0 && source === "MEMORY.md") {
       const past = pastTheCut(botId);
       if (past) files.push({ source, tier, mtime, ...past });
       continue;
     }
-    if (source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE) {
+    if (shared) {
       // the lines before the cut already ride in every prompt
-      const text = source === IMPORT_SOURCE ? botImportPastTheCut(botId) : aboutYouPastTheCut();
+      const text = withinBudget(source === IMPORT_SOURCE ? botImportPastTheCut(botId) : aboutYouPastTheCut(), MAX_CORPUS_BYTES - bytes);
+      bytes += Buffer.byteLength(text);
       if (text) files.push({ source, tier, mtime, text });
       continue;
     }
@@ -551,12 +569,13 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       await loadFlags();
       const overflow = Boolean(aboutYouPastTheCut());
       const ownOverflow = Boolean(botImportPastTheCut(botId));
+      // a build still running for an earlier state must find itself replaced, whether this refresh builds or drops
+      const run = (runs.get(botId) ?? 0) + 1;
+      runs.set(botId, run);
       if (!on(botId) && !overflow && !ownOverflow) {
         drop(botId);
         return;
       }
-      const run = (runs.get(botId) ?? 0) + 1;
-      runs.set(botId, run);
       const sources = await sourcesOf(botId, on(botId), overflow, ownOverflow);
       const asks = on(botId) ? parkedAsksFile(deps.asks?.(botId) ?? [], now()) : null;
       const signature = JSON.stringify([sources, asks?.text]);

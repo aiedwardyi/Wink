@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -38,7 +38,7 @@ describe("About You save", () => {
   it("saves each fact once to the shared file with its source, by code alone", () => {
     const fetch = vi.spyOn(globalThis, "fetch");
     const result = addToAboutYou(paste, "2026-11-16");
-    expect(result).toEqual({ source: "ChatGPT", found: 4, added: 4, duplicates: 0, hidden: 1 });
+    expect(result).toEqual({ source: "ChatGPT", found: 4, added: 4, duplicates: 0, hidden: 0, flagged: ["My password is hunter2-very-secret"] });
     expect(readFileSync(file, "utf8")).toBe([
       "- The user is Dana Park; call her Dana. (from ChatGPT, 2026-11-16)",
       "- Speaks Korean and English. (from ChatGPT, 2026-11-16)",
@@ -66,10 +66,20 @@ describe("About You save", () => {
     expect(facts.every((fact) => Buffer.byteLength(fact) <= 236)).toBe(true);
   });
 
-  it("leaves out a whole long line whose secret would land in a later piece", () => {
+  it("holds back a whole long line whose secret would land in a later piece", () => {
     const head = `Note${" w".repeat(110)} password is`;
     expect(Buffer.byteLength(head)).toBe(236);
-    expect(factsOf(`- ${head} violet-meadow-finch`)).toEqual({ facts: [], hidden: 1 });
+    expect(factsOf(`- ${head} violet-meadow-finch`)).toEqual({ facts: [], hidden: 0, flagged: [`${head} violet-meadow-finch`] });
+  });
+
+  it("drops a whole private key, whatever list marker its rows carry, and offers none of it back", () => {
+    const row = (n: number) => `MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt${n}`.padEnd(64, "x");
+    const key = ["-----BEGIN RSA PRIVATE KEY-----", `- ${row(1)}`, `* ${row(2)}`, `  1. ${row(3)}`, `• ${row(4)}`, "", `- ${row(5)}`, "-----END RSA PRIVATE KEY-----"];
+    const paste = ["- Plays cello on Sundays.", ...key, "- Lives in Seoul."].join("\n");
+    expect(factsOf(paste)).toEqual({ facts: ["Plays cello on Sundays.", "Lives in Seoul."], hidden: 1, flagged: [] });
+    expect(factsOf(paste.replace("-----BEGIN", "- -----BEGIN").replace("-----END", "- -----END"))).toEqual({ facts: ["Plays cello on Sundays.", "Lives in Seoul."], hidden: 1, flagged: [] });
+    const encrypted = ["-----BEGIN RSA PRIVATE KEY-----", "- Proc-Type: 4,ENCRYPTED", "- DEK-Info: AES-128-CBC,0123456789ABCDEF", "", `- ${row(6)}`, "-----END RSA PRIVATE KEY-----"];
+    expect(factsOf(encrypted.join("\n"))).toEqual({ facts: [], hidden: 1, flagged: [] });
   });
 
   it("keeps every byte of a word longer than a memory line", () => {
@@ -95,6 +105,19 @@ describe("About You save", () => {
     const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
     aboutYouRoutes.remove(res, "%");
     expect(status).toBe(400);
+  });
+
+  it("answers a source removal only after what must follow it ran", async () => {
+    addToAboutYou("- Likes short answers.\nSource: ChatGPT", "2026-11-16");
+    const order: string[] = [];
+    // SAFETY: the route only calls writeHead, setHeader and end on the response.
+    const res = { writeHead: () => order.push("sent"), setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
+    await aboutYouRoutes.remove(res, "ChatGPT", async () => {
+      await Promise.resolve();
+      order.push("refreshed");
+    });
+    expect(order).toEqual(["refreshed", "sent"]);
+    expect(aboutYouSources()).toEqual([]);
   });
 
   it("refuses an empty or oversized paste and saves nothing", () => {
@@ -280,6 +303,34 @@ describe("big import", () => {
     const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
     await lookup.refresh("unflagged-bot");
     expect(lookup.take("unflagged-bot", "t1", "s1", "what's my favorite tea shop?").join("\n")).toContain("Moonbrew in Daejeon");
+  });
+
+  it("recalls Import Memory and the bot's own import in its own chat", async () => {
+    const tea = "what's my favorite tea shop?";
+    addToAboutYou(bigPaste, "2026-11-22");
+    addToBotMemory("room-bot", bigPaste.replace("Moonbrew in Daejeon", "Cloudcup in Busan"), "2026-11-22");
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(join(DATA_DIR, "lookup-bots.json"), JSON.stringify(["room-bot"]));
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+    await lookup.refresh("room-bot");
+    expect(lookup.take("room-bot", "own-chat", "s1", tea).join("\n")).toContain("Moonbrew");
+    expect(lookup.take("room-bot", "own-chat", "s1", "what's my favorite tea shop in Busan, Cloudcup?").join("\n")).toContain("Cloudcup");
+  });
+
+  it("keeps the oldest lines past the cut findable when Import Memory outgrows the lookup budget", async () => {
+    const pad = "and then it kept walking past the old harbor until the lamps came on along the whole quiet street";
+    const rows = Array.from({ length: 14_000 }, (_, i) => i === 300
+      ? "The user's favorite tea shop is Moonbrew in Daejeon."
+      : i === 13_999
+        ? "The user's favorite bakery is Zephyrine in Gwangju."
+        : `The user visited town number ${i + 1} ${pad}.`);
+    expect(addToAboutYou(`${rows.map((row) => `- ${row}`).join("\n")}\nSource: ChatGPT`, "2026-11-22")).toMatchObject({ added: 14_000 });
+    expect(statSync(file).size).toBeGreaterThan(2 * 1024 * 1024);
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+    await lookup.refresh("unflagged-bot");
+    expect(lookup.take("unflagged-bot", "t1", "s1", "what's my favorite tea shop?").join("\n")).toContain("Moonbrew in Daejeon");
+    // the budget ends the index at its newest end, never the whole file
+    expect(lookup.take("unflagged-bot", "t2", "s1", "Zephyrine")).toEqual([]);
   });
 
   it("adds no lookup for anyone while Import Memory fits in the prompt", async () => {
