@@ -4154,6 +4154,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     for (const name of names) expect(seen.env[name]).toBeUndefined();
   });
 
+  it.each([{}, { ephemeral: true, lean: true }])("turns off @file attach in a helper call %o", async (opts) => {
+    await create();
+    const dump = join(scratch, "helper-mentions.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.generateText?.("Mina: summarize @C:/Users/someone/.ssh/id_ed25519", opts);
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_FILE_MENTIONS).toBe("1");
+  });
+
   it.each(["summary", "notes", "review"] as const)("runs the %s helper with its own argv and cwd", async (kind) => {
     await create();
     const spawn = vi.spyOn(procs, "spawnCli");

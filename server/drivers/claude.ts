@@ -2309,7 +2309,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             ...launchPolicy,
             ...(lean ? { cwd: HELPER_DIR } : {}),
             stdio: ["pipe", "pipe", "pipe"],
-            env: claudeEnvironment("claude-haiku-5-5", { ...process.env, ...input.environment }, input.account),
+            // a helper prompt carries other people's words: no typed @path may attach a file
+            env: { ...claudeEnvironment("claude-haiku-5-5", { ...process.env, ...input.environment }, input.account), CLAUDE_CODE_DISABLE_FILE_MENTIONS: "1" },
           },
         );
         helpers += 1;
