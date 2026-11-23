@@ -793,6 +793,24 @@ describe("entering a PC's code", () => {
     expect(localStorage.getItem(LAST_PC)).toBeNull();
   });
 
+  it("sends a typed code on the glasses to the PC's code form, since Google cannot finish there", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("aspect-ratio") }));
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/UQ1A.240205.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 Mobile Safari/537.36");
+    open("/signin", []);
+    answer(live);
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "")));
+  });
+
+  it("tells the glasses apart with the PC's pair page check", () => {
+    const query = /matchMedia\?\.\("([^"]+)"\)/;
+    const pairPage = readFileSync(join(ROOT, "public/pair.html"), "utf8");
+    expect(SCRIPT.match(query)?.[1]).toBeTruthy();
+    expect(SCRIPT.match(query)?.[1]).toBe(pairPage.match(query)?.[1]);
+    expect(SCRIPT).toContain("/\\bwv\\b/.test(navigator.userAgent)");
+    expect(SCRIPT).toContain("/Android/.test(navigator.userAgent)");
+  });
+
   it("still lets Google open a typed PC", async () => {
     localStorage.setItem(TYPED, LABEL_A);
     open(RETURN, [{ label: LABEL_A, name: "Ada" }]);
@@ -1154,6 +1172,11 @@ describe("entering a PC's code", () => {
     const rule = CSS.match(/\.boxes input \{([^}]*)\}/)?.[1] ?? "";
     for (const part of ["width: 44px", "height: 44px", "border-radius: var(--radius-lg)", "var(--hairline) 60%", "var(--inset)", "text-align: center", "font: 600 18px ui-monospace"]) expect(rule).toContain(part);
     expect(CSS).toMatch(/\.boxes \{[^}]*gap: 8px/);
+  });
+
+  it("paints no selection or tap mark over a box, so its letter stays readable", () => {
+    expect(CSS).toMatch(/\.boxes input::selection \{[^}]*background: transparent;/);
+    expect(CSS.match(/\.boxes input \{([^}]*)\}/)?.[1]).toContain("-webkit-tap-highlight-color: transparent");
   });
 
   it("rounds the boxes like the app's group join boxes in the skin this page matches", () => {

@@ -156,6 +156,12 @@ button.privacy {
   text-align: center;
   text-transform: uppercase;
   outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+/* A box selects its letter on focus; the highlight would hide which box is which. */
+.boxes input::selection {
+  background: transparent;
+  color: var(--ink);
 }
 .boxes input:focus {
   border-color: var(--accent);
