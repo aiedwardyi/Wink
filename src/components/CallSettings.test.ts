@@ -331,17 +331,29 @@ it("labels the panel in Korean", async () => {
 
 it("an older answer pick that lands late never undoes the newer one", async () => {
   type Config = { liveCall: { voice: string; answer: string } };
+  store.config = { liveCall: { voice: "Aoede" } };
   const landed: Array<(config: Config) => void> = [];
   vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => landed.push((config) => resolve(Response.json(config))))));
   const host = await render(createElement(CallSettings, { bot: ada }));
   const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Answered by"] [role="radio"]')];
   await act(async () => radios[0]!.click());
   await act(async () => radios[1]!.click());
-  await act(async () => landed[0]!({ liveCall: { voice: "Aoede", answer: "bot" } }));
-  expect(store.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "configStatus" }));
-  expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
-  await act(async () => landed[1]!({ liveCall: { voice: "Aoede", answer: "gemini" } }));
-  expect(store.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "configStatus", config: { liveCall: { voice: "Aoede", answer: "gemini" } } });
+  await act(async () => landed[0]!({ liveCall: { voice: "Kore", answer: "bot" } }));
+  expect(store.dispatch).not.toHaveBeenCalledWith({ type: "configStatus", config: { liveCall: { voice: "Kore", answer: "bot" } } });
+  await act(async () => landed[1]!({ liveCall: { voice: "Kore", answer: "gemini" } }));
+  expect(store.dispatch).toHaveBeenLastCalledWith({ type: "configStatus", config: { liveCall: { voice: "Kore", answer: "gemini" } } });
+});
+
+it("a call placed while the answer pick is still saving already uses it, and a failed save puts it back", async () => {
+  const answers: Array<(response: Response) => void> = [];
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => answers.push(resolve))));
+  store.config = { liveCall: { voice: "Aoede" } };
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Answered by"] [role="radio"]')];
+  await act(async () => radios[0]!.click());
+  expect(store.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "configStatus", config: { liveCall: { voice: "Aoede", answer: "bot" } } });
+  await act(async () => answers[0]!(Response.json({ error: "no" }, { status: 500 })));
+  expect(store.dispatch).toHaveBeenLastCalledWith({ type: "configStatus", config: { liveCall: { voice: "Aoede" } } });
 });
 
 it("picks who answers calls for the whole app, Gemini voice until he flips it", async () => {
