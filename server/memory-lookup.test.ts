@@ -427,6 +427,43 @@ describe("Import Memory overflow", () => {
   });
 });
 
+describe("a joined room's lookup", () => {
+  const roomLookup = async (imported: string[], note: string) => {
+    removeTestData(join(DATA_DIR, "about-you"));
+    addToAboutYou(`${imported.map((fact) => `- ${fact}`).join("\n")}\nSource: ChatGPT`, "2026-11-22");
+    const botId = `bot-${randomUUID()}`;
+    flag(botId);
+    const path = notesFile(note);
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => path });
+    await lookup.refresh(botId);
+    return { botId, lookup };
+  };
+  const filler = (at: number, fact: (i: number) => string) => Array.from({ length: 600 }, (_, i) => (at(i) ? fact(i) : `The user visited town number ${i + 1} on a long walk.`));
+
+  it("still finds the bot's own note when many import rows rank ahead of it", async () => {
+    const imported = Array.from({ length: 40 }, (_, i) => `- Dentist ${i}: Cloud Dental office. (from ChatGPT, 2026-11-22)`).join("\n");
+    const index = await buildRecallIndex([
+      { source: "Import Memory", tier: 0, mtime: Date.now(), text: imported },
+      { source: "notes.md", tier: 1, mtime: Date.now(), text: "- Dentist visit: Maple Dental office downtown. (noted 2026-11-20)" },
+    ]);
+    // the same length and the same terms score alike, so the import rows (listed first) fill the 30 candidates
+    expect(index.hits(index.terms("dentist dental")).map((hit) => hit.source)).not.toContain("notes.md");
+    expect(index.hits(index.terms("dentist dental"), true).map((hit) => hit.source)).toEqual(["notes.md"]);
+    index.close();
+  });
+
+  it("still finds the bot's own note when a newer import row shares its topic, and leaves ordinary turns on the newest", async () => {
+    const imported = filler((i) => i === 500, () => "Dentist: Cloud Dental in Busan.");
+    const { botId, lookup } = await roomLookup(imported, "- Dentist: Maple Dental in Daejeon. (noted 2026-11-20)");
+    const inRoom = lookup.take(botId, "room-2", "s1", "dentist Maple Dental", true).join("\n");
+    expect(inRoom).toContain("Maple Dental in Daejeon");
+    expect(inRoom).not.toContain("Cloud Dental");
+    const ordinary = lookup.take(botId, "own-chat", "s1", "dentist Maple Dental").join("\n");
+    expect(ordinary).toContain("Cloud Dental in Busan");
+    expect(ordinary).not.toContain("Maple Dental");
+  });
+});
+
 describe("send path wiring", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const section = (from: string, to: string) => {

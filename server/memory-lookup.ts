@@ -60,7 +60,8 @@ type Terms = { list: string[]; groups: string[][] };
 
 export interface RecallIndex {
   terms(query: string, expired?: () => boolean): Terms;
-  hits(terms: Terms): RecallHit[];
+  /** A joined room sees only what the bot itself wrote, never Import Memory. */
+  hits(terms: Terms, room?: boolean): RecallHit[];
   gate(terms: Terms, hits: RecallHit[]): RecallHit[];
   close(): void;
 }
@@ -175,20 +176,33 @@ function hasNearPair(positions: number[][]): boolean {
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
   const parsed = files.flatMap(piecesOfFile);
+  const imported = (piece: Piece) => piece.source === ABOUT_YOU_SOURCE || piece.source === IMPORT_SOURCE;
   const latest = new Map<string, string>();
-  for (const piece of parsed.flat()) if (piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
-  const rows = parsed.filter((row) => row.every((piece) => piece.date === latest.get(piece.topic)));
+  const latestOwn = new Map<string, string>();
+  for (const piece of parsed.flat()) {
+    if (piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
+    if (!imported(piece) && piece.date > (latestOwn.get(piece.topic) ?? "")) latestOwn.set(piece.topic, piece.date);
+  }
+  const newest = parsed.filter((row) => row.every((piece) => piece.date === latest.get(piece.topic)));
+  const taken = new Set(newest);
+  // the bot's own newest note on a topic a newer import row took over: only a joined room, which never sees the import, reads it
+  const ownOnly = parsed.filter((row) => !taken.has(row) && row.every((piece) => !imported(piece) && piece.date === latestOwn.get(piece.topic)));
+  const rows = [...newest, ...ownOnly];
   const pieces = rows.flat();
+  // 0: every turn, 1: ordinary turns only (an import row), 2: a joined room only
+  const scopes = [...newest.flatMap((row) => row.map((piece) => (imported(piece) ? 1 : 0))), ...ownOnly.flatMap((row) => row.map(() => 2))];
   const db = new DatabaseSync(":memory:");
-  db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, tokenize='porter unicode61')");
-  const insert = db.prepare("INSERT INTO notes(rowid, text) VALUES (?, ?)");
+  db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, scope UNINDEXED, tokenize='porter unicode61')");
+  const insert = db.prepare("INSERT INTO notes(rowid, text, scope) VALUES (?, ?, ?)");
   db.exec("BEGIN");
   for (const [index, piece] of pieces.entries()) {
-    insert.run(index + 1, piece.text);
+    insert.run(index + 1, piece.text, scopes[index]!);
     if ((index + 1) % YIELD_EVERY === 0) await yieldLoop();
   }
   db.exec("COMMIT");
-  const search = db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? ORDER BY bm25(notes), rowid LIMIT ${HIT_LIMIT}`);
+  const search = (hidden: number) => db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? AND scope != ${hidden} ORDER BY bm25(notes), rowid LIMIT ${HIT_LIMIT}`);
+  const ordinary = search(2);
+  const joined = search(1);
 
   const documents = new Map<string, number>();
   for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
@@ -232,11 +246,11 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       const list = [...base, ...joined].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
       return { list, groups: list.map((term) => repair(term, expired)) };
     },
-    hits({ groups }) {
+    hits({ groups }, room = false) {
       const match = [...new Set(groups.flat())].map((term) => `"${term}"`).join(" OR ");
       if (!match) return [];
       // SAFETY: the SELECT above names exactly these two columns.
-      return (search.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
+      return ((room ? joined : ordinary).all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
     },
     gate({ list, groups }, hits) {
       if (list.length < 2) return [];
@@ -466,7 +480,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       entry.reason = "no-words";
       return [];
     }
-    const hits = index.hits(terms).filter((hit) => !room || (hit.source !== ABOUT_YOU_SOURCE && hit.source !== IMPORT_SOURCE));
+    const hits = index.hits(terms, room);
     entry.rows = logged(hits.slice(0, 3));
     if (over()) return [];
     const passed = index.gate(terms, hits);
