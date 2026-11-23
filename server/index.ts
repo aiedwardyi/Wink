@@ -5818,6 +5818,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // A send made while this turn prepared was queued because busy had not
   // flipped yet. Fold it in as steer would have, or it drains after this
   // turn's replies. Synchronous through the busy flip, so nothing slips past.
+  // a failed check rides again wherever the record does, so a new session hears it
+  const askNotes = closes.notes(rewound || fresh || recycled || compactedThisTurn || resumeSessionUnseeded(seedInputs) || recovering || Boolean(unsettled));
   const folded = currentTurnEpoch(bot.id) === epoch && !(opts?.sendId && isSendCancelled(opts.sendId))
     ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
@@ -5861,9 +5863,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  // a failed check rides again wherever the record does, so a new session hears it
-  const recordRides = rewound || fresh || recycled || compactedThisTurn || resumeSessionUnseeded(seedInputs) || recovering || Boolean(unsettled);
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...closes.notes(recordRides), ...syncNotes, ...recallNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...askNotes, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume, nativeReplayPrefix } = buildTurnContext({
@@ -6493,8 +6493,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
-      askPrs.closing(threadId, started.turnId ?? "", closes.ids);
       if (reservation) commit(reservation);
+      askPrs.closing(threadId, started.turnId ?? "", closes.ids);
       if (holdNotes) newestPaneNoteId = undefined;
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded

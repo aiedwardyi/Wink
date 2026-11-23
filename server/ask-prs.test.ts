@@ -360,7 +360,9 @@ describe("a closing turn in index.ts", () => {
     const source = index();
     const notes = source.split("\n").filter((line) => /const (turnNotes|notes) = \[\.\.\.accountNotes, \.\.\.paneNotes/.test(line));
     expect(notes).toHaveLength(2);
-    for (const line of notes) expect(line).toContain("...closes.notes(");
+    expect(notes[0]).toContain("...askNotes,");
+    expect(source).toContain("  const askNotes = closes.notes(");
+    expect(notes[1]).toContain("...closes.notes(true)");
     const room = source.slice(source.indexOf("  const roomContext = ["), source.indexOf("  stampShownAsks(threadId, roomContext);"));
     expect(room).toContain("...closes.notes(");
   });

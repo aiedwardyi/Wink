@@ -98,7 +98,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       currentTurnEpoch: () => 1, epoch: 1, claimMark: queueMark(), isSendCancelled: () => false,
       clearUnattended: () => {}, resumePaneWakes: () => {},
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
-      opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000,
+      opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000, closes: { notes: () => [] },
       taskRecord: undefined, durableTaskRecordText: "",
       providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, opensHostFiles: () => false,
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
