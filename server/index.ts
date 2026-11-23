@@ -331,6 +331,7 @@ import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
   ensureWorkspace,
+  goalsOf,
   workspaceDir,
   memoryHealth,
   memorySystemPrompt,
@@ -341,6 +342,7 @@ import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
+import { goalRoute } from "./goal-route.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -5612,6 +5614,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
+      goals: () => goalsOf(bot.id),
       onSummaryCall: (record) => logSummaryCall({
         botId: bot.id,
         threadId,
@@ -8515,6 +8518,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
         for (const bot of store.bots) void memoryLookup.refresh(bot.id);
         return;
+      }
+      // pin_goal: a standing goal in the bot's timeline, in every prompt until it is done
+      if (method === "POST" && path === "/api/internal/goal") {
+        return await goalRoute(req, res, {
+          caller: (header) => commsCallers.resolve(header),
+          ownerTurn: ({ botId, threadId }) => {
+            const bot = store.bot(botId);
+            return Boolean(bot && !readOnlyTurnThreads.has(threadId) && ownerChats(bot, notOwnerChats()).includes(threadId) && threadHasLiveTurn(threadId));
+          },
+        });
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
         const source = commsCallers.resolve(req.headers.authorization);
