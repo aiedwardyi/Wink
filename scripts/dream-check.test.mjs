@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { fileableNotes, planFiling } from "../server/memory-file.ts";
 import { parseTidy, planTidy } from "../server/memory-sleep.ts";
 import { isMemoryTopicName, loadedMemory } from "../server/workspace.ts";
 import { lostFacts, madeUp, movedBlocks, parseQuestions, pointedTopics, scoreQuiz, TRAP_MEMORY, TRAP_REPLY } from "./dream-check.ts";
@@ -91,6 +92,20 @@ describe("blind quiz", () => {
   });
 });
 
+describe("budget filing", () => {
+  it("leaves every filed line reached, nothing made up, and a pointer the memory check reads as saying when", () => {
+    const raw = memory("## Decisions", "- Ship Fridays", "", "## Notes", ...Array.from({ length: 110 }, (_, n) => `- Launch detail ${n} ${"y".repeat(170)}`));
+    const picked = fileableNotes(raw).slice(0, 4).map(({ at }) => `L${at + 1}`);
+    const plan = planFiling(raw, JSON.stringify({ files: [{ topic: "launch.md", about: "Launch details", when: "before planning a launch post", notes: picked }] }), []);
+    const before = notes(raw);
+    const after = notes(plan.memory, { "memory/launch.md": plan.topics["launch.md"] });
+    expect(lostFacts(before, after, RULES)).toEqual([]);
+    expect(madeUp(before, after)).toEqual([]);
+    expect(movedBlocks(before, after)).toEqual([{ path: "memory/launch.md", lines: plan.filed[0].lines }]);
+    expect(pointedTopics(plan.filed[0].pointer, ["launch.md"])).toEqual(["launch.md"]);
+  });
+});
+
 describe("trap pairs", () => {
   it("moves none of the pairs that both hold, even when the model proposes every one", () => {
     const { duplicates, disagree } = parseTidy(TRAP_REPLY);
@@ -117,7 +132,7 @@ describe("dream-check script", () => {
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     const [row, trap] = JSON.parse(readFileSync(json, "utf8")).results;
-    expect(row).toMatchObject({ name: "Alpha", result: "saved", moved: 1, linesBefore: 5, linesAfter: 4, lost: [], madeUp: [], quiz: { asked: 0, right: 0 }, conflicts: 0 });
+    expect(row).toMatchObject({ name: "Alpha", result: "saved", moved: 1, linesBefore: 5, linesAfter: 4, lost: [], madeUp: [], quiz: { asked: 0, right: 0 }, undone: { asked: 0 }, conflicts: 0 });
     expect(trap).toMatchObject({ trap: true, proposed: 30, moved: 0, lost: [] });
     expect(readFileSync(join(copy, "workspaces", "bot-a", "MEMORY.md"), "utf8")).toContain("(noted 2026-11-01)");
   });

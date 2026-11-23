@@ -1,7 +1,8 @@
 // Dream check: one idle-tidy pass (server/memory-sleep.ts) over copies of each bot's notes, then proof no fact was lost.
 // Reads a copy of ~/.orbit, never the live folder; writes only under a throwaway data dir and Claude config dir.
-// node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--no-model] [--max-tokens 2000000] [--json out.json]
-// The model pass needs CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY, so no engine profile is touched.
+// node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--nights 1] [--no-model] [--max-tokens 2000000] [--json out.json]
+// The model pass needs CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY on a throwaway profile, or CLAUDE_CONFIG_DIR set to an account profile.
+// With the model, a bot near its load budget also gets budget filing (server/memory-file.ts), shadow only: it runs nowhere else.
 // A line counts as kept only where the bot still sees it: MEMORY.md, or a synced side file a loaded line says when to read.
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -14,6 +15,8 @@ import type { NoteGenerator } from "../server/memory-pass.ts";
 
 // the note helper's model (server/drivers/claude.ts runHelper)
 const MODEL = "claude-haiku-5-5";
+// grouping notes across many overlapping side files needs more than Haiku; the quiz stays on Haiku
+const FILER_MODEL = "claude-sonnet-5-5";
 // both true, so a tidy must move neither: rule and exception, two people, two things, a passing state
 const TRAP_PAIRS = [
   ["Prefers short replies at work (noted 2026-11-01)", "Wants detailed answers when learning something new (noted 2026-11-12)"],
@@ -134,7 +137,7 @@ export function quizPrompt(blocks: readonly Block[]): string {
   return [
     `A bot moved each block of notes below out of its always-loaded memory into a side file. For each block, write ${QUESTIONS} questions that only that block's notes answer.`,
     "One of them describes a situation where the bot would need these notes without naming their subject. Each question stands alone; never mention blocks, notes or files.",
-    `Reply with JSON only: {"B1": ["question", "question", "question"]}`,
+    `Reply with JSON only, one key for each of the ${blocks.length} block(s): {"B1": ["question", "question", "question"]${blocks.length > 1 ? ', "B2": ["question", "question", "question"]' : ""}}`,
     "",
     ...blocks.flatMap(({ lines }, index) => [`<block id="B${index + 1}">`, ...lines, "</block>"]),
   ].join("\n");
@@ -188,13 +191,13 @@ function filesUnder(dir: string): string[] {
 
 type Spent = { input: number; output: number };
 
-function claudeGenerator(configDir: string, cwd: string, spent: Spent, cap: number): NoteGenerator {
+function claudeGenerator(configDir: string, cwd: string, spent: Spent, cap: number, model = MODEL): NoteGenerator {
   return (prompt, signal, onUsage) =>
     new Promise<string>((resolve, reject) => {
       if (spent.input + spent.output >= cap) return reject(new Error("model token cap reached"));
       const child = spawn(
         process.env.CLAUDE_CLI ?? "claude",
-        ["-p", "--model", MODEL, "--output-format", "json", "--safe-mode", "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
+        ["-p", "--model", model, "--output-format", "json", "--safe-mode", "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
         { cwd, env: { ...process.env, CLAUDE_CONFIG_DIR: configDir }, signal, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
       );
       let stdout = "";
@@ -222,20 +225,28 @@ function claudeGenerator(configDir: string, cwd: string, spent: Spent, cap: numb
 export type BotResult = {
   id: string;
   name: string;
+  night: number;
   trap: boolean;
   result: string;
   linesBefore: number;
   linesAfter: number;
+  bytesBefore: number;
+  bytesAfter: number;
+  /** loaded into every turn: MEMORY.md as the load budget cuts it */
   tokensBefore: number;
   tokensAfter: number;
   moved: number;
+  filed: number;
   proposed: number;
   lost: string[];
   madeUp: string[];
+  /** kept blocks only; a block with any miss is undone and scored in `undone` */
   quiz: Quiz;
+  undone: Quiz;
   conflicts: number;
   ms: number;
   modelTokens: number;
+  filingTokens: number;
   reply: string;
 };
 
@@ -247,12 +258,14 @@ async function main(): Promise<number> {
     const at = rest.indexOf(`--${name}`);
     return at >= 0 ? rest[at + 1] : undefined;
   };
-  if (!dir) throw new Error("usage: node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--no-model] [--max-tokens 2000000] [--json out.json]");
+  if (!dir) throw new Error("usage: node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--nights 1] [--no-model] [--max-tokens 2000000] [--json out.json]");
   const live = join(homedir(), ".orbit");
   if (existsSync(live) && realpathSync(dir).toLowerCase() === realpathSync(live).toLowerCase()) throw new Error(`${dir} is the live ~/.orbit; copy it first`);
   const model = !rest.includes("--no-model");
-  if (model && !process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) throw new Error("set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or pass --no-model");
+  const token = Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
+  if (model && !token && !process.env.CLAUDE_CONFIG_DIR) throw new Error("set CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or CLAUDE_CONFIG_DIR, or pass --no-model");
   const cap = Number(flag("max-tokens") ?? 2_000_000);
+  const nights = Math.max(1, Number(flag("nights") ?? 1));
 
   const names = new Map<string, string>();
   try {
@@ -267,9 +280,9 @@ async function main(): Promise<number> {
   const root = mkdtempSync(join(tmpdir(), "wink-dream-"));
   // read by server/config.ts at import, so it is set before the engine loads
   process.env.OMB_DATA_DIR = join(root, "data");
-  const configDir = join(root, "claude");
+  const configDir = token || !process.env.CLAUDE_CONFIG_DIR ? join(root, "claude") : process.env.CLAUDE_CONFIG_DIR;
   const helperDir = join(root, "helper");
-  mkdirSync(configDir, { recursive: true });
+  mkdirSync(join(root, "claude"), { recursive: true });
   mkdirSync(helperDir, { recursive: true });
   for (const id of ids) {
     for (const name of ["MEMORY.md", "memory", "memory-history", "imported.md"]) {
@@ -280,11 +293,14 @@ async function main(): Promise<number> {
   writeFileSync(join(root, "data", "workspaces", TRAP_ID, "MEMORY.md"), TRAP_MEMORY);
   const { createMemorySleep, parseTidy, SLEEP_IDLE_MS, SLEEP_TIMEOUT_MS } = await import("../server/memory-sleep.ts");
   const { isMemoryTopicName, loadedMemory, workspaceDir, PARKED_COPY } = await import("../server/workspace.ts");
+  const { filingBytes, filingDue, filingPrompt, fileableNotes, misrouted, planFiling, routePrompt } = await import("../server/memory-file.ts");
   const rules: Rules = { loaded: (raw) => loadedMemory(raw).text, synced: isMemoryTopicName };
 
   const spent: Spent = { input: 0, output: 0 };
   const generator = model ? claudeGenerator(configDir, helperDir, spent, cap) : null;
   const ask = (prompt: string) => generator!(prompt, AbortSignal.timeout(SLEEP_TIMEOUT_MS));
+  const filer = model ? claudeGenerator(configDir, helperDir, spent, cap, FILER_MODEL) : null;
+  const askFiler = (prompt: string) => filer!(prompt, AbortSignal.timeout(SLEEP_TIMEOUT_MS));
   const notesOf = (ws: string): Notes => {
     const historyDir = join(ws, "memory-history");
     const side = filesUnder(ws).filter((path) => !path.startsWith(historyDir) && relative(ws, path) !== "MEMORY.md");
@@ -296,8 +312,10 @@ async function main(): Promise<number> {
   try {
     // a copy has no turns to wait out: the quiet spell and the boot spread fire at once, the model timeout stays
     Object.assign(globalThis, { setTimeout: (fn: () => void, ms?: number) => realSetTimeout(fn, (ms ?? 0) >= SLEEP_IDLE_MS ? 0 : ms) });
-    for (const id of [...ids, TRAP_ID]) {
+    const filing = new Set<string>();
+    for (let night = 1; night <= nights; night += 1) for (const id of [...ids, TRAP_ID]) {
       const trap = id === TRAP_ID;
+      if (trap && night > 1) continue;
       const ws = workspaceDir(id);
       const before = notesOf(ws);
       const parked = Object.keys(before.side).filter((path) => PARKED_COPY.test(path)).length;
@@ -320,37 +338,108 @@ async function main(): Promise<number> {
         enabled: () => true,
         busy: () => false,
         changed: () => {},
+        now: () => Date.now() + (night - 1) * 24 * 60 * 60_000,
       });
       await new Promise((resolve) => realSetTimeout(resolve, 10));
       await sleep.idle();
       sleep.dispose();
       const ms = log?.ms ?? Date.now() - started;
-      const after = notesOf(ws);
+      const tidied = readFileSync(join(ws, "MEMORY.md"), "utf8");
+      const filingFrom = spent.input + spent.output;
+      let filed = 0;
+      const written = new Map<string, string | null>();
+      const restore = () => {
+        writeFileSync(join(ws, "MEMORY.md"), tidied);
+        for (const [path, was] of written) {
+          if (was === null) rmSync(path, { force: true });
+          else writeFileSync(path, was);
+        }
+        written.clear();
+        filed = 0;
+      };
+      const apply = (plan: NonNullable<ReturnType<typeof planFiling>>) => {
+        mkdirSync(join(ws, "memory"), { recursive: true });
+        for (const [name, text] of Object.entries(plan.topics)) {
+          const path = join(ws, "memory", name);
+          const was = existsSync(path) ? readFileSync(path, "utf8") : null;
+          written.set(path, was);
+          writeFileSync(path, was === null ? text : `${was}${was && !was.endsWith("\n") ? "\n" : ""}${text}`);
+        }
+        writeFileSync(join(ws, "MEMORY.md"), plan.memory);
+        filed = plan.bytes;
+      };
+      let filingReply = "";
+      let filingOptions: Parameters<typeof planFiling>[3] = {};
+      let existing: string[] = [];
+      let plan: ReturnType<typeof planFiling> = null;
+      if (filer && !trap && filingDue(tidied, filing.has(id))) {
+        existing = existsSync(join(ws, "memory")) ? readdirSync(join(ws, "memory")) : [];
+        const loaded = rules.loaded(tidied).split("\n");
+        const files = reached(notesOf(ws), rules).map((path) => ({ name: path.slice("memory/".length), line: loaded.find((line) => line.replaceAll("\\", "/").includes(path)) ?? "" })).filter(({ name }) => !PARKED_COPY.test(name));
+        filingReply = await askFiler(filingPrompt(fileableNotes(tidied), filingBytes(tidied), files));
+        // route every candidate first, so the night still fills once misrouted notes drop out
+        const candidates = planFiling(tidied, filingReply, existing, { files, nightBytes: Infinity });
+        const skip = candidates ? misrouted(await askFiler(routePrompt(rules.loaded(candidates.memory), candidates.filed)), candidates.filed) : new Set<string>();
+        filingOptions = { files, skip };
+        plan = planFiling(tidied, filingReply, existing, filingOptions);
+        if (plan) {
+          apply(plan);
+          filing.add(id);
+        }
+      }
+      let after = notesOf(ws);
       const blocks = movedBlocks(before, after);
       let quiz: Quiz = { asked: 0, right: 0, misses: [] };
+      let undone: Quiz = { asked: 0, right: 0, misses: [] };
       if (blocks.length) {
         // a fresh answerer that sees only MEMORY.md after the move must name each block's side file
         const questions = generator ? parseQuestions(await ask(quizPrompt(blocks)), blocks) : blocks.map(() => []);
         quiz = scoreQuiz(blocks, questions, generator ? await ask(answerPrompt(rules.loaded(after.memory), questions.flat())) : "");
+        const missed = new Set(quiz.misses.map(({ path }) => path));
+        if (missed.size && plan) {
+          // undo only the blocks with a miss: refile exactly the notes of the blocks that passed
+          const kept = plan.filed.filter(({ topic }) => !missed.has(`memory/${topic}`));
+          const keep = new Set(kept.flatMap(({ notes }) => notes.map(({ ref }) => ref)));
+          const skip = new Set(fileableNotes(tidied).map(({ at }) => `L${at + 1}`).filter((ref) => !keep.has(ref)));
+          restore();
+          const again = keep.size ? planFiling(tidied, filingReply, existing, { ...filingOptions, skip }) : null;
+          const same = again && JSON.stringify(again.filed) === JSON.stringify(kept);
+          if (same) apply(again);
+          const keptPaths = new Set(same ? kept.map(({ topic }) => `memory/${topic}`) : []);
+          const score = (inKept: boolean): Quiz => {
+            const asked = blocks.filter(({ path }) => keptPaths.has(path) === inKept).length * QUESTIONS;
+            const misses = quiz.misses.filter(({ path }) => keptPaths.has(path) === inKept);
+            return { asked, right: asked - misses.length, misses };
+          };
+          [quiz, undone] = [score(true), score(false)];
+          after = notesOf(ws);
+        }
       }
+      if (!filingDue(readFileSync(join(ws, "MEMORY.md"), "utf8"), true)) filing.delete(id);
       const { duplicates, disagree } = parseTidy(reply);
       results.push({
         id,
         name: trap ? "(trap pairs)" : (names.get(id) ?? id),
+        night,
         trap,
         result: log?.result ?? "no log",
         linesBefore: lineCount(before.memory),
         linesAfter: lineCount(after.memory),
-        tokensBefore: tokens(before.memory),
-        tokensAfter: tokens(after.memory),
+        bytesBefore: Buffer.byteLength(before.memory, "utf8"),
+        bytesAfter: Buffer.byteLength(after.memory, "utf8"),
+        tokensBefore: tokens(rules.loaded(before.memory)),
+        tokensAfter: tokens(rules.loaded(after.memory)),
         moved: log?.moved ?? 0,
+        filed,
         proposed: (duplicates ?? []).reduce((sum, { drop }) => sum + drop.length, 0) + (disagree ?? []).length,
         lost: lostFacts(before, after, rules),
         madeUp: madeUp(before, after),
         quiz,
+        undone,
         conflicts: (log?.result === "conflict" ? 1 : 0) + Object.keys(after.side).filter((path) => PARKED_COPY.test(path)).length - parked,
         ms,
         modelTokens: spent.input + spent.output - used,
+        filingTokens: spent.input + spent.output - filingFrom,
         reply,
       });
     }
@@ -362,16 +451,16 @@ async function main(): Promise<number> {
   const sum = (pick: (row: BotResult) => number) => results.reduce((total, row) => total + pick(row), 0);
   const quizCell = (asked: number, right: number) => (asked ? `${right}/${asked}` : "-");
   const rows = results.map((row) =>
-    `| ${row.name} | ${row.result} | ${row.linesBefore} -> ${row.linesAfter} | ${row.tokensBefore} -> ${row.tokensAfter} | ${row.proposed}/${row.moved} | ${row.lost.length} | ${row.madeUp.length} | ${quizCell(row.quiz.asked, row.quiz.right)} | ${row.conflicts} | ${row.ms} | ${row.modelTokens} |`);
+    `| ${row.name} | ${row.night} | ${row.result} | ${row.linesBefore} -> ${row.linesAfter} | ${row.bytesBefore} -> ${row.bytesAfter} | ${row.tokensBefore} -> ${row.tokensAfter} | ${row.proposed}/${row.moved} | ${row.filed} | ${row.lost.length} | ${row.madeUp.length} | ${quizCell(row.quiz.asked, row.quiz.right)} | ${row.undone.asked / QUESTIONS} | ${row.conflicts} | ${row.ms} | ${row.modelTokens} | ${row.filingTokens} |`);
   const bots = results.filter((row) => !row.trap);
   console.log(
     [
-      `Dream check: ${bots.length} bots, ${model ? MODEL : "no model"}`,
+      `Dream check: ${new Set(bots.map(({ id }) => id)).size} bots, ${nights} night(s), ${model ? `${MODEL}, filer ${FILER_MODEL}` : "no model"}`,
       "",
-      "| bot | result | lines | tokens | proposed/moved | lost | made up | quiz | conflicts | ms | model tok |",
-      "|---|---|---|---|---|---|---|---|---|---|---|",
+      "| bot | night | result | lines | bytes | loaded tok | proposed/moved | filed B | lost | made up | quiz kept | undone blocks | conflicts | ms | model tok | filing tok |",
+      "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
       ...rows,
-      `| total | | ${sum((r) => r.linesBefore)} -> ${sum((r) => r.linesAfter)} | ${sum((r) => r.tokensBefore)} -> ${sum((r) => r.tokensAfter)} | ${sum((r) => r.proposed)}/${sum((r) => r.moved)} | ${sum((r) => r.lost.length)} | ${sum((r) => r.madeUp.length)} | ${quizCell(sum((r) => r.quiz.asked), sum((r) => r.quiz.right))} | ${sum((r) => r.conflicts)} | ${sum((r) => r.ms)} | ${spent.input + spent.output} |`,
+      `| total | | | | | | ${sum((r) => r.proposed)}/${sum((r) => r.moved)} | ${sum((r) => r.filed)} | ${sum((r) => r.lost.length)} | ${sum((r) => r.madeUp.length)} | ${quizCell(sum((r) => r.quiz.asked), sum((r) => r.quiz.right))} | ${sum((r) => r.undone.asked) / QUESTIONS} | ${sum((r) => r.conflicts)} | ${sum((r) => r.ms)} | ${spent.input + spent.output} | ${sum((r) => r.filingTokens)} |`,
     ].join("\n"),
   );
   const json = flag("json");
