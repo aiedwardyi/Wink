@@ -528,6 +528,16 @@ describe("workspace", () => {
       "- 안경 작업 전에 memory/glasses-v1.md 읽기",
     ];
     for (const text of said) expect(memoryHealthOf(text, ["glasses-v1.md"]).untriggered, text).toEqual([]);
+    const real = [
+      "- REPLY CORE (SHORT MID-TURN, CARD STACK, FEWEST WORDS): memory/reply-core.md. Read before any reply with a picture, card or status.",
+      "- SESSION START: read memory/pinned-reply-style.md, memory/rules-1113-16.md and memory/about-edward.md.",
+      "- Never act on (history): history-2026-09.md, history-2026-10.md.",
+      "- AUDIT PICK (11-22): gates = Sol max; Neon second reviewer. Quote: memory/week-1121.md.",
+      "## Added after the rot test (old full copy memory/MEMORY-pre-rot-B-2026-11-18.md, never act on it)",
+    ].join("\n");
+    const names = ["reply-core.md", "pinned-reply-style.md", "rules-1113-16.md", "about-edward.md", "history-2026-09.md", "history-2026-10.md", "MEMORY-pre-rot-B-2026-11-18.md", "week-1121.md"];
+    expect(memoryHealthOf(real, names)).toEqual({ longLines: 0, orphans: [], untriggered: [] });
+    expect(memoryHealthOf(`${real}\n${simLoop}`, [...names, "glasses-v1.md"]).untriggered).toEqual(["glasses-v1.md"]);
     expect(memoryHealthOf("- Builds\n", ["glasses-v1.md"])).toEqual({ longLines: 0, orphans: ["glasses-v1.md"], untriggered: [] });
   });
 
@@ -566,7 +576,6 @@ describe("workspace", () => {
     expect(memorySystemPrompt(BOT)).not.toContain("competitors");
     expect(readMemoryTopic(BOT, "decisions.md")).toContain("- Picked: ~~person brief + top 3 competitors + 1 news line~~\n- Kind: goal");
   });
-
   it("only sends file-backed memory to engines with local workspace files", () => {
     expect(supportsWorkspaceFiles("claudeAgent")).toBe(true);
     expect(supportsWorkspaceFiles("grokAgent")).toBe(true);

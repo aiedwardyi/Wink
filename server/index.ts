@@ -335,7 +335,6 @@ import {
   workspaceDir,
   memoryHealth,
   memorySystemPrompt,
-  pinGoal,
   supportsWorkspaceFiles,
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
@@ -343,6 +342,7 @@ import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
+import { goalRoute } from "./goal-route.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -5608,7 +5608,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
-      goals: goalsOf(bot.id),
+      goals: () => goalsOf(bot.id),
       onSummaryCall: (record) => logSummaryCall({
         botId: bot.id,
         threadId,
@@ -8515,13 +8515,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       // pin_goal: a standing goal in the bot's timeline, in every prompt until it is done
       if (method === "POST" && path === "/api/internal/goal") {
-        const source = commsCallers.resolve(req.headers.authorization);
-        if (!source || !store.bot(source.botId) || readOnlyTurnThreads.has(source.threadId)) return json(res, 403, { error: "unknown sender" });
-        const body = await readBody(req);
-        const name = typeof body.name === "string" ? body.name.trim() : "";
-        const goal = typeof body.goal === "string" ? body.goal.trim() : "";
-        if (!name || (body.done !== true && !goal)) return json(res, 400, { error: "pin_goal needs name, and goal unless done is true." });
-        return json(res, 200, { text: pinGoal(source.botId, { name, goal, done: body.done === true }) });
+        return await goalRoute(req, res, {
+          caller: (header) => commsCallers.resolve(header),
+          ownerTurn: ({ botId, threadId }) => {
+            const bot = store.bot(botId);
+            return Boolean(bot && !readOnlyTurnThreads.has(threadId) && ownerChats(bot, notOwnerChats()).includes(threadId) && threadHasLiveTurn(threadId));
+          },
+        });
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
         const source = commsCallers.resolve(req.headers.authorization);

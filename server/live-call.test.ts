@@ -711,7 +711,19 @@ describe("brief caps", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     const notes = brief.split("YOUR NOTES:\n")[1]!.split("\n\nRECENT CHAT:")[0]!;
     expect(notes).toContain("- note 0 ");
+    expect(notes).toContain("- note 189 ");
     expect(Buffer.byteLength(notes, "utf8")).toBeLessThanOrEqual(NOTES_MAX_BYTES);
+  });
+
+  it("gives a call the 200 lines of an over-cap MEMORY.md a chat loads, newest included", async () => {
+    const h = harness();
+    mkdirSync(workspaceDir(h.bot.id), { recursive: true });
+    writeFileSync(join(workspaceDir(h.bot.id), "MEMORY.md"), Array.from({ length: 250 }, (_, i) => `- note ${i}`).join("\n"));
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const notes = brief.split("YOUR NOTES:\n")[1]!.split("\n\nRECENT CHAT:")[0]!;
+    expect(notes.split("\n").filter((line) => line.startsWith("- note "))).toHaveLength(200);
+    expect(notes).toContain("- note 249");
   });
 });
 

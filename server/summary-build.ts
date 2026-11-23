@@ -274,7 +274,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
       plan,
       messages,
       taskRecordText: ready.taskRecordText,
-      goals: goalsOf(botId),
+      goals: () => goalsOf(botId),
       signal: controller.signal,
       summarize: (prompt) =>
         abortable(instance.generateText!(prompt, { timeoutMs: BUILD_CALL_TIMEOUT_MS, signal: controller.signal }), controller.signal),

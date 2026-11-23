@@ -11,7 +11,7 @@ import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } fro
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
-import { redactSecretsInText } from "./redact.ts";
+import { redactRoomMemory, redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { chatSyncBotId } from "./thread-sync.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
@@ -257,16 +257,21 @@ const SECRET_WORDS =
 // No \b here: it never fires between Hangul syllables.
 const SECRET_WORDS_KO =
   /비밀\s*(?:번호|키)|비번|암호(?!화|학)|패스워드|패스코드|인증\s*(?:번호|코드)|보안\s*코드|일회용\s*(?:코드|번호)|(?:api|에이피아이)\s*키|토큰|개인\s*키(?!보드)|계좌\s*번호|카드\s*번호|주민\s*(?:등록\s*)?번호|핀\s*번호|시크릿/i;
-const TOKEN_PATTERNS = [
-  /«redacted/i,
+const VALUE_PATTERNS = [
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/,
   /\b(?:ghp|gho|ghu|ghs|ghr|github_pat|xox[abposr])[_-][A-Za-z0-9_-]{8,}/,
   /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/,
   /\b(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/,
 ];
+const TOKEN_PATTERNS = [/«redacted/i, ...VALUE_PATTERNS];
 
 export function secretLike(text: string): boolean {
   return redactSecretsInText(text) !== text || SECRET_WORDS.test(text) || SECRET_WORDS_KO.test(text) || TOKEN_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/** The values secretLike flags, masked in place; words like "password" or "tokens" stay, so a goal keeps its sense. */
+export function maskSecretValues(text: string): string {
+  return VALUE_PATTERNS.reduce((out, pattern) => out.replace(new RegExp(pattern.source, "g"), (value) => `«redacted ${value.length} chars»`), redactRoomMemory(text));
 }
 
 function secretValue(text: string): boolean {

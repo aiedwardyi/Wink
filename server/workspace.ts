@@ -86,7 +86,7 @@ export function removeWorkspaceDir(dir: string): void {
  * MEMORY_MAX_BYTES bytes, whichever cuts first. Returns null when the file
  * is missing or effectively empty (seed-only counts as empty). `bytes` and
  * `lines` size the whole file, not the cut. */
-export function loadMemory(botId: string): LoadedMemory | null {
+export function loadMemory(botId: string, maxBytes = MEMORY_MAX_BYTES): LoadedMemory | null {
   let raw: string;
   const end = currentTurnTrace()?.span("memory_read", "MEMORY.md");
   try {
@@ -97,23 +97,23 @@ export function loadMemory(botId: string): LoadedMemory | null {
     return null;
   }
   if (!raw.trim() || raw === MEMORY_SEED) return null;
-  return loadedMemory(raw);
+  return loadedMemory(raw, maxBytes);
 }
 
 /** `text` is the head; past the budget, `newest` holds the last lines and `cut` counts the older lines between them that do not load. */
 export type LoadedMemory = { text: string; truncated: boolean; bytes: number; lines: number; newest?: string; cut?: number };
 
 /** raw cut the way loadMemory cuts it for the prompt: the head, then the newest lines, older lines between them left out. */
-export function loadedMemory(raw: string): LoadedMemory {
+export function loadedMemory(raw: string, maxBytes = MEMORY_MAX_BYTES): LoadedMemory {
   const all = raw.split("\n");
-  const whole = headOf(raw);
+  const whole = headOf(raw, MEMORY_MAX_LINES, maxBytes);
   if (!whole.truncated) return { ...whole, bytes: Buffer.byteLength(raw, "utf8"), lines: all.length };
   const end = all.at(-1) === "" ? all.length - 1 : all.length;
   const size = (line: string) => Buffer.byteLength(line, "utf8") + 1;
   let from = end;
   let newestBytes = 0;
-  while (from > 0 && end - from < MEMORY_MAX_LINES * MEMORY_NEWEST_SHARE && newestBytes + size(all[from - 1]!) <= MEMORY_MAX_BYTES * MEMORY_NEWEST_SHARE) newestBytes += size(all[--from]!);
-  const head = headOf(all.slice(0, from).join("\n"), MEMORY_MAX_LINES - (end - from), MEMORY_MAX_BYTES - newestBytes);
+  while (from > 0 && end - from < MEMORY_MAX_LINES * MEMORY_NEWEST_SHARE && newestBytes + size(all[from - 1]!) <= maxBytes * MEMORY_NEWEST_SHARE) newestBytes += size(all[--from]!);
+  const head = headOf(all.slice(0, from).join("\n"), MEMORY_MAX_LINES - (end - from), maxBytes - newestBytes);
   const cut = from - head.text.split("\n").length;
   // nothing between them: a full file whose last line ends in a break loses nothing
   if (from === end || cut <= 0) return { ...whole, bytes: Buffer.byteLength(raw, "utf8"), lines: all.length };
@@ -334,7 +334,8 @@ export const MEMORY_LINE_MAX_BYTES = 300;
 export type MemoryHealth = { longLines: number; orphans: string[]; untriggered?: string[] };
 
 const NAME_CHAR = /[A-Za-z0-9_-]/;
-const TRIGGER = /\b(?:when|whenever|before|after|if|while|during|first)\b|때|전에|먼저/i;
+// "never act on" and "Quote:" lines carry the rule themselves; the file is history or the user's words
+const TRIGGER = /\b(?:when|whenever|before|after|if|while|during|first|start|never|quotes?)\b|때|전에|먼저/i;
 
 // indexOf, not a regex per name: this runs for every side file after each reply
 function namesStem(text: string, stem: string): boolean {
@@ -351,7 +352,11 @@ export function memoryHealthOf(text: string, names: string[]): MemoryHealth {
   const checked = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE && name !== IMPORT_FILE);
   const orphans = checked.filter((name) => !namesStem(text, name.slice(0, -".md".length)));
   // the prompt's rule reads a side file only when a line says when, so a bare pointer leaves it unread
-  const saysWhen = text.split("\n").filter((line) => TRIGGER.test(line)).flatMap((line) => line.split(/(?<=[.!?]) /)).filter((sentence) => TRIGGER.test(sentence)).join("\n");
+  // "memory/x.md. Read before any reply": the sentence after a pointer can say when
+  const saysWhen = text.split("\n").filter((line) => TRIGGER.test(line)).flatMap((line) => {
+    const sentences = line.split(/(?<=[.!?]) /);
+    return sentences.filter((sentence, index) => TRIGGER.test(sentence) || TRIGGER.test(sentences[index + 1] ?? ""));
+  }).join("\n");
   const untriggered = checked.filter((name) => !orphans.includes(name) && !namesStem(saysWhen, name.slice(0, -".md".length)));
   return { longLines, orphans, untriggered };
 }
@@ -397,7 +402,8 @@ const LESSON_RULE =
   " When the user corrects you or a memory note, or you catch your own mistake, save the lesson as one line in that same turn" +
   " without being asked, replacing any wrong line; never save passwords, keys, tokens or account numbers.";
 
-const shownMemory = (memory: LoadedMemory) => memory.newest
+/** MEMORY.md as a prompt shows it: the head, a line counting the cut, the newest lines. */
+export const shownMemory = (memory: LoadedMemory) => memory.newest
   ? `${memory.text}\n[${memory.cut} older lines of MEMORY.md were cut here; its newest lines follow.]\n${memory.newest}`
   : `${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}`;
 

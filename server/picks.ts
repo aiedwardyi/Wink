@@ -8,11 +8,14 @@ export const PICKS_FILE = "decisions.md";
 export const PICKS_PROMPT_TOKENS = 300;
 /** The open goals' own budget, so a goal never falls into the picks' "+N more". */
 export const GOALS_PROMPT_TOKENS = 400;
+/** Longest goal pin_goal takes; a longer spec belongs in a memory/ side file. */
+export const GOAL_MAX = 4_000;
 // Claude's tokenizer measured 2.6 chars per token on path-heavy English; other scripts run near one token per char
 const CHARS_PER_TOKEN = 2.6;
 const KEY_MAX = 60;
 const PICKED_MAX = 100;
-const GOAL_SHOWN_MIN = 40;
+// a goal shown in words gets at least this much; past that many goals, the oldest are listed by name
+const GOAL_TOKENS_MIN = 16;
 const SAID_MAX = 120;
 const LINE_MAX = 420;
 const TWEAKS_SHOWN = 3;
@@ -27,6 +30,7 @@ const INTRO =
 const LEGACY = "## Older picks, before the timeline (no words kept)";
 const HEADER = `Current picks, newest first: the user's own, each beating older notes unless they changed it since. Build from a pick's picture plus its tweaks, never a new option. History: memory/${PICKS_FILE} (Auto Notes writes it; never edit).`;
 const GOALS_HEADER = "Open goals the user set, in their words: build toward each until they finish or drop it, then call pin_goal with done.";
+const GOALS_CUT = `A goal ending in "..." is cut here; its whole text is in memory/${PICKS_FILE}.`;
 const DONE = "Done";
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
@@ -107,6 +111,9 @@ const pictureText = ({ path, caption }: Picture) => (caption && IMAGE_FILE.test(
 
 /** One question, however it is cased or spaced. */
 export const pickKey = (key: string) => key.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+// goals and picks never replace each other, whatever their keys
+const slotOf = (entry: { kind?: string; key: string }) => `${entry.kind === "goal" ? "goal" : "pick"}\0${pickKey(entry.key)}`;
 
 const stems = (text: string) => new Set(pickKey(text).split(" ").filter((word) => word.length >= 3).map((word) => word.slice(0, 4)));
 
@@ -218,7 +225,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
   for (const change of [...changes].sort((a, b) => a.at - b.at || Number(a.kind === "tweak") - Number(b.kind === "tweak"))) {
     const asked = clip(change.key.replace(/\|/g, "/"), KEY_MAX);
     if (!pickKey(asked)) continue;
-    const current = entries.findLast((entry) => !entry.replacedBy && pickKey(entry.key) === pickKey(asked));
+    const slot = slotOf({ kind: change.kind, key: asked });
+    const current = entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === slot);
     const key = current?.key ?? asked;
     if (change.kind === "goal") {
       // a replayed batch from before the current entry never lands on it
@@ -327,8 +335,27 @@ export function timelineHolds(text: string | null, copy: string): boolean {
   });
 }
 
+/** Current picks, goals left out: they have their own slot and block. */
 export function currentPicks(text: string | null | undefined): PickEntry[] {
-  return text ? parseTimeline(text).entries.filter((entry) => !entry.replacedBy) : [];
+  return text ? parseTimeline(text).entries.filter((entry) => !entry.replacedBy && !entry.kind) : [];
+}
+
+function openGoals(text: string | null | undefined): PickEntry[] {
+  return text ? parseTimeline(text).entries.filter((entry) => !entry.replacedBy && entry.kind === "goal" && !entry.done) : [];
+}
+
+/** The Timeline's entries without finished goals: a goal is not a pick, so once done it leaves the page. */
+export function timelineEntries(entries: PickEntry[]): PickEntry[] {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const finished = (entry: PickEntry) => {
+    const seen = new Set<string>();
+    for (let each: PickEntry | undefined = entry; each && !seen.has(each.id); each = each.replacedBy ? byId.get(each.replacedBy) : undefined) {
+      if (each.done) return true;
+      seen.add(each.id);
+    }
+    return false;
+  };
+  return entries.filter((entry) => entry.kind !== "goal" || !finished(entry));
 }
 
 /** Concurrent PCs can reuse a minute id; content breaks ties and gives each pick a stable slot. */
@@ -397,13 +424,13 @@ export function mergeTimelines(a: string, b: string): string | null {
     ids.add(id);
     entry.id = id;
     entry.replacedBy = undefined;
-    const before = current.get(pickKey(entry.key));
+    const before = current.get(slotOf(entry));
     if (before && entry.tapped && !before.tapped) {
       entry.replacedBy = before.id;
       continue;
     }
     if (before) before.replacedBy = id;
-    current.set(pickKey(entry.key), entry);
+    current.set(slotOf(entry), entry);
   }
   const head = [...new Set(timelines.flatMap(({ head }) => timelineHead(head).split("\n")))].join("\n");
   return renderTimeline({ head, entries });
@@ -442,10 +469,10 @@ function shortLine(entry: PickEntry): string {
 }
 
 /** The other current picks by key, as many as fit in `room` tokens. */
-function keyIndex(entries: PickEntry[], room = Infinity): string {
+function keyIndex(entries: PickEntry[], room = Infinity, lead = "\nAlso current, on file: "): string {
   if (!entries.length) return "";
   const more = (count: number) => (count ? `${count === entries.length ? "" : " "}(+${count} more)` : "");
-  let out = "\nAlso current, on file: ";
+  let out = lead;
   for (const [index, entry] of entries.entries()) {
     const next = `${out}${index ? "; " : ""}${entry.key}`;
     if (promptTokens(next + more(entries.length - index - 1)) > room) return index || promptTokens(out + more(entries.length)) <= room ? out + more(entries.length - index) : "";
@@ -454,32 +481,63 @@ function keyIndex(entries: PickEntry[], room = Infinity): string {
   return out;
 }
 
+const charTokens = (char: string) => (char.charCodeAt(0) < 128 ? 1 / CHARS_PER_TOKEN : 1);
+
 export function promptTokens(text: string): number {
   let tokens = 0;
-  for (const char of text) tokens += char.charCodeAt(0) < 128 ? 1 / CHARS_PER_TOKEN : 1;
+  for (const char of text) tokens += charTokens(char);
   return tokens;
 }
 
-export function pinnedGoals(text: string | null | undefined): PinnedGoal[] {
-  return currentPicks(text).flatMap((entry) => (entry.kind === "goal" && !entry.done ? [{ name: entry.key, goal: entry.picked }] : []));
+/** `text` cut to `max` estimated tokens, "..." included, so Korean is cut by its own cost. */
+function clipTokens(text: string, max: number): string {
+  if (promptTokens(text) <= max) return text;
+  let out = "";
+  let used = promptTokens("...");
+  for (const char of text) {
+    used += charTokens(char);
+    if (used > max) break;
+    out += char;
+  }
+  return `${out.trimEnd()}...`;
 }
 
-/** Every open goal in words, newest first: whole lines within `max`, else each clipped to an even share, never "+N more". */
-function goalsBlock(entries: PickEntry[], max = GOALS_PROMPT_TOKENS): string {
-  const goals = entries.filter((entry) => entry.kind === "goal" && !entry.done).reverse();
+/** Goal lines within `max` estimated tokens, newest first: short ones whole, long ones sharing what is left; past GOAL_TOKENS_MIN each, the oldest by name only. */
+export function goalLines(goals: readonly PinnedGoal[], max: number): string[] {
+  const lines = goals.map(({ name, goal }) => `- ${name}: ${goal}`);
+  const cost = (line: string) => promptTokens(`${line}\n`);
+  if (lines.reduce((sum, line) => sum + cost(line), 0) <= max) return lines;
+  const room = max - cost(GOALS_CUT);
+  const keysRoom = goals.length * GOAL_TOKENS_MIN > room ? Math.floor(room / 4) : 0;
+  const words = Math.max(1, Math.min(goals.length, Math.floor((room - keysRoom) / GOAL_TOKENS_MIN)));
+  const named = goals.slice(words).map(({ name }) => ({ key: name }) as PickEntry);
+  const keys = keyIndex(named, keysRoom, `\nAlso open, whole text in memory/${PICKS_FILE}: `).trimStart();
+  let left = room - (keys ? cost(keys) : 0);
+  const shown = lines.slice(0, words);
+  const order = [...shown.keys()].sort((a, b) => cost(shown[a]!) - cost(shown[b]!));
+  for (const [done, index] of order.entries()) {
+    const share = left / (order.length - done);
+    if (cost(shown[index]!) > share) shown[index] = clipTokens(shown[index]!, share - cost(""));
+    left -= cost(shown[index]!);
+  }
+  return [...shown, ...(keys ? [keys] : []), GOALS_CUT];
+}
+
+export function pinnedGoals(text: string | null | undefined): PinnedGoal[] {
+  return openGoals(text).map((entry) => ({ name: entry.key, goal: entry.picked }));
+}
+
+/** Every open goal in words, newest first, within `max`: never folded into the picks' "+N more". */
+function goalsBlock(text: string | null | undefined, max = GOALS_PROMPT_TOKENS): string {
+  const goals = openGoals(text).reverse();
   if (!goals.length) return "";
-  const lines = goals.map((entry) => `- ${entry.key} (${monthDay(entry.id)}): ${entry.picked}`);
-  const whole = [GOALS_HEADER, ...lines].join("\n");
-  if (promptTokens(whole) <= max) return whole;
-  const share = Math.max(GOAL_SHOWN_MIN, Math.floor(((max - promptTokens(GOALS_HEADER)) / goals.length) * CHARS_PER_TOKEN) - 1);
-  return [GOALS_HEADER, ...lines.map((line) => clip(line, share))].join("\n");
+  return [GOALS_HEADER, ...goalLines(goals.map((entry) => ({ name: `${entry.key} (${monthDay(entry.id)})`, goal: entry.picked })), max - promptTokens(`${GOALS_HEADER}\n`))].join("\n");
 }
 
 /** The prompt's open goals, then its current picks, newest first, within `max` estimated tokens: whole lines while every other key still fits, then the pick alone, then its key. Empty when there are none. */
 export function picksBlock(text: string | null | undefined, max = PICKS_PROMPT_TOKENS): string {
-  const current = currentPicks(text);
-  const goals = goalsBlock(current);
-  const live = current.filter((entry) => !entry.kind).reverse();
+  const goals = goalsBlock(text);
+  const live = currentPicks(text).reverse();
   if (!live.length) return goals;
   let out = HEADER;
   const listed: PickEntry[] = [];
