@@ -668,6 +668,20 @@ const TOOLS = [
     },
   },
   {
+    name: "pin_goal",
+    description: "Pin a goal or spec the user set, in their words, so it stays in every turn and survives summaries. Same name updates it; done: true once finished or dropped.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: { type: "string", pattern: "\\S", description: "A few words, like Glasses v1." },
+        goal: { type: "string", pattern: "\\S", description: "Needed unless done." },
+        done: { type: "boolean" },
+      },
+      required: ["name"],
+    },
+  },
+  {
     name: "no_reply_needed",
     description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
@@ -1205,6 +1219,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };
+  if (name === "pin_goal") {
+    const r = await api("/api/internal/goal", { method: "POST", body: JSON.stringify({ name: args.name, goal: args.goal, done: args.done }) });
+    return r.error ? { text: `Couldn't pin the goal: ${r.error}`, isError: true } : { text: String(r.text) };
+  }
   if (name === "link_room_fix") {
     const r = await api("/api/internal/room-fix", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
     return { text: String(r.text ?? "Linked.") };

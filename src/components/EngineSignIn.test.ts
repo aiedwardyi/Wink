@@ -377,7 +377,7 @@ describe("engine sign-in row", () => {
     const row = instance("codex", { snapshot: { state: "available", authenticated: true } });
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/sign-out")) signedOut = true;
-      return json(url.startsWith("/api/instances?") ? { instances: [{ ...row, snapshot: { state: "available", authenticated: !signedOut } }] } : {});
+      return json(/^\/api\/instances(\?|$)/.test(url) ? { instances: [{ ...row, snapshot: { state: "available", authenticated: !signedOut } }] } : {});
     });
     vi.stubGlobal("fetch", fetchMock);
     await render(createElement(EngineRow, { instance: row }));

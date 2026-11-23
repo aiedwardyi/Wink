@@ -10,7 +10,7 @@ import { DATA_DIR } from "./config.ts";
 import { buildBrief } from "./live-call.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { appendNotes } from "./memory-pass.ts";
-import { ensureWorkspace, memoryFileRaw, workspaceDir } from "./workspace.ts";
+import { memoryFileRaw, workspaceDir } from "./workspace.ts";
 import { Store } from "./store.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
@@ -305,24 +305,16 @@ describe("big import", () => {
     expect(lookup.take("unflagged-bot", "t1", "s1", "what's my favorite tea shop?").join("\n")).toContain("Moonbrew in Daejeon");
   });
 
-  it("never recalls Import Memory into a joined room's turn, and still recalls the bot's own notes there", async () => {
+  it("recalls Import Memory and the bot's own import in its own chat", async () => {
     const tea = "what's my favorite tea shop?";
-    const trip = "when is the spring trip to Lisbon with Marta?";
     addToAboutYou(bigPaste, "2026-11-22");
     addToBotMemory("room-bot", bigPaste.replace("Moonbrew in Daejeon", "Cloudcup in Busan"), "2026-11-22");
-    ensureWorkspace("room-bot");
-    writeFileSync(join(workspaceDir("room-bot"), "memory", "trips.md"), "- Plans the spring trip to Lisbon with Marta.\n");
     mkdirSync(DATA_DIR, { recursive: true });
     writeFileSync(join(DATA_DIR, "lookup-bots.json"), JSON.stringify(["room-bot"]));
     const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
     await lookup.refresh("room-bot");
-    await lookup.refresh("room-bot-peer");
     expect(lookup.take("room-bot", "own-chat", "s1", tea).join("\n")).toContain("Moonbrew");
     expect(lookup.take("room-bot", "own-chat", "s1", "what's my favorite tea shop in Busan, Cloudcup?").join("\n")).toContain("Cloudcup");
-    expect(lookup.take("room-bot", "room-task", "s1", tea, true)).toEqual([]);
-    expect(lookup.take("room-bot", "room-task", "s1", "what's my favorite tea shop in Busan, Cloudcup?", true)).toEqual([]);
-    expect(lookup.take("room-bot", "room-task", "s1", trip, true).join("\n")).toContain("Lisbon");
-    expect(lookup.take("room-bot-peer", "room-task", "s1", tea, true)).toEqual([]);
   });
 
   it("keeps the oldest lines past the cut findable when Import Memory outgrows the lookup budget", async () => {

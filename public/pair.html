@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google" content="notranslate" />
     <meta name="theme-color" content="#121316" />
+    <meta name="mrbd-web-app-capable" content="yes" />
     <meta name="referrer" content="no-referrer" />
     <link rel="icon" type="image/svg+xml" href="/app-icon.svg?v=2" />
     <link rel="manifest" href="/manifest.json" />
@@ -137,6 +138,144 @@
           transform: rotate(360deg);
         }
       }
+      @font-face {
+        font-family: "Geist";
+        src: url(/fonts/Geist-Variable.woff2) format("woff2");
+        font-weight: 100 900;
+      }
+      body.glasses,
+      body.glasses main {
+        display: block;
+        place-items: normal;
+        padding: 0;
+        background: #000;
+      }
+      body.glasses .panel {
+        display: none;
+      }
+      .glass {
+        height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
+        color: #fff;
+        font-family: "Geist", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .glass #g-ask,
+      .glass #g-done {
+        box-sizing: border-box;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 28px 34px 40px;
+        text-align: center;
+      }
+      .g-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(255, 77, 157, 0.2);
+      }
+      .glass h1 {
+        margin: 22px 0 0;
+        font-size: 28px;
+        font-weight: 650;
+        letter-spacing: -0.025em;
+      }
+      .glass p {
+        margin: 10px 0 0;
+        font-size: 18px;
+        font-weight: 430;
+        line-height: 1.4;
+        color: #9aa2b4;
+      }
+      #g-text strong {
+        color: #e2e6f2;
+        font-weight: 580;
+      }
+      .g-code {
+        position: relative;
+        display: flex;
+        gap: 22px;
+        margin-top: 38px;
+      }
+      .g-group {
+        display: flex;
+        gap: 9px;
+      }
+      .g-group span {
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 66px;
+        height: 82px;
+        border-radius: 19px;
+        border: 1.5px solid rgba(255, 255, 255, 0.2);
+        background: linear-gradient(180deg, #191c25 0%, #12141b 100%);
+        font-size: 36px;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
+      }
+      .g-code:focus-within span.next {
+        border: 2.5px solid #fff;
+        box-shadow: 0 0 22px rgba(255, 255, 255, 0.16);
+      }
+      .g-code input {
+        all: unset;
+        position: absolute;
+        inset: 0;
+        color: transparent;
+        caret-color: transparent;
+      }
+      #g-pair {
+        width: 268px;
+        height: 60px;
+        margin-top: 38px;
+        border: none;
+        border-radius: 999px;
+        background: #fff;
+        color: #08090c;
+        font: inherit;
+        font-size: 20px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+      }
+      #g-pair:focus {
+        outline: none;
+        box-shadow: 0 0 26px rgba(255, 255, 255, 0.24);
+      }
+      .glass #g-pair[hidden] {
+        display: block !important;
+        visibility: hidden;
+      }
+      .glass #g-hint {
+        margin-top: 24px;
+        font-size: 15px;
+        font-weight: 450;
+        color: #777f92;
+      }
+      .g-ok {
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 104px;
+        height: 104px;
+        border: 3px solid #5be3a4;
+        border-radius: 50%;
+        color: #5be3a4;
+        box-shadow: 0 0 30px rgba(91, 227, 164, 0.35);
+      }
+      #g-paired {
+        margin-top: 26px;
+        font-size: 28px;
+        font-weight: 650;
+        letter-spacing: -0.025em;
+        color: #fff;
+      }
       [hidden] {
         display: none !important;
       }
@@ -163,6 +302,21 @@
         </form>
         <p id="status" class="status" role="status" aria-live="polite"></p>
       </div>
+      <section id="glass" class="glass" hidden>
+        <div id="g-ask">
+          <img class="g-icon" src="/app-icon.svg?v=2" alt="" />
+          <h1 id="g-title"></h1>
+          <p id="g-text"></p>
+          <label class="g-code"><input id="g-code" type="text" autocomplete="off" spellcheck="false" /><span class="g-group"><span></span><span></span><span></span></span><span class="g-group"><span></span><span></span><span></span></span></label>
+          <button id="g-pair" type="button" hidden></button>
+          <p id="g-hint" role="status" aria-live="polite"></p>
+        </div>
+        <div id="g-done" hidden>
+          <span class="g-ok"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
+          <p id="g-paired"></p>
+          <p id="g-opening"></p>
+        </div>
+      </section>
     </main>
     <script>
       // Pairs this phone with one PC. The QR link carries a 2 minute token in the
@@ -221,6 +375,44 @@
           lang = saved === "ko" ? "ko" : saved === "system" ? system : "en";
         } catch {}
         const t = (key) => COPY[lang][key] || COPY.en[key] || COPY[lang].failed;
+        const GLASS = {
+          en: {
+            title: "Pair with Wink",
+            text: "Enter the 6-digit code from {pc}",
+            pc: "your PC",
+            hint: "Wink on PC › Settings › Devices",
+            heard: "heard “{text}”",
+            pair: "Connect",
+            paired: "Paired",
+            opening: "Opening Wink…",
+          },
+          ko: {
+            title: "Wink와 연결",
+            text: "{pc}에 표시된 6자리 코드를 입력하세요",
+            pc: "PC",
+            hint: "PC의 Wink › 설정 › 기기",
+            heard: "들은 내용 “{text}”",
+            pair: "연결",
+            paired: "연결됨",
+            opening: "Wink 여는 중…",
+          },
+        }[lang];
+        // The glasses browser is an Android web view (Meta's own check: the "wv" token) on a small square; neither alone is the lens.
+        const glasses =
+          /\bwv\b/.test(navigator.userAgent) &&
+          /Android/.test(navigator.userAgent) &&
+          window.matchMedia?.("(max-width: 800px) and (min-aspect-ratio: 4/5) and (max-aspect-ratio: 5/4)").matches === true;
+        const spokenDigits = (text) => {
+          const words = new Map(Object.entries({
+            zero: "0", oh: "0", o: "0", one: "1", won: "1", two: "2", to: "2", too: "2", three: "3",
+            four: "4", for: "4", five: "5", six: "6", seven: "7", eight: "8", ate: "8", nine: "9",
+          }));
+          return text
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .map((word) => (/^\d+$/.test(word) ? word : (words.get(word) ?? "")))
+            .join("");
+        };
         document.documentElement.lang = lang;
 
         const $ = (id) => document.getElementById(id);
@@ -278,7 +470,7 @@
             await navigator.serviceWorker.register("/sw.js");
             await Promise.race([navigator.serviceWorker.ready, wait(3000)]);
           } catch {}
-          location.replace("/");
+          location.replace(glasses ? "/glasses" : "/");
         }
 
         async function pair(path, body) {
@@ -343,7 +535,8 @@
           const error = await pair("/api/phone/google", JSON.stringify({ credential, name: phoneName() }));
           if (!error) return finish();
           say(t(["wrong-account", "rate-limited", "network"].includes(error) ? error : "google-failed"), "error");
-          showForm();
+          if (glasses) showGlass();
+          else showForm();
         }
 
         input.addEventListener("input", () => {
@@ -356,12 +549,70 @@
 
         google.addEventListener("click", startGoogle);
 
+        function showGlass() {
+          const gCode = $("g-code");
+          const gHint = $("g-hint");
+          const gPair = $("g-pair");
+          const cells = [...document.querySelectorAll(".g-group span")];
+          const named = query.get("n") || fragment.get("n");
+          document.body.classList.add("glasses");
+          $("glass").hidden = false;
+          $("g-title").textContent = GLASS.title;
+          const pc = document.createElement("strong");
+          pc.textContent = named || GLASS.pc;
+          const [before, after] = GLASS.text.split("{pc}");
+          $("g-text").replaceChildren(before, pc, after);
+          gPair.textContent = GLASS.pair;
+          $("g-paired").textContent = GLASS.paired;
+          $("g-opening").textContent = GLASS.opening;
+          const hint = (text, tone) => {
+            gHint.textContent = text;
+            gHint.className = tone || "";
+          };
+          const read = () => {
+            const digits = spokenDigits(gCode.value).slice(0, 6);
+            cells.forEach((cell, i) => {
+              cell.textContent = digits[i] || "";
+              cell.classList.toggle("next", i === digits.length);
+            });
+            const said = gCode.value.trim();
+            if (/[a-z]/i.test(said)) hint(GLASS.heard.replace("{text}", () => said), "heard");
+            else hint(GLASS.hint);
+            gPair.hidden = digits.length !== 6;
+            if (!gPair.hidden) gPair.focus();
+            return digits;
+          };
+          gCode.addEventListener("input", read);
+          gCode.addEventListener("change", read);
+          gPair.addEventListener("click", async () => {
+            const digits = read();
+            if (digits.length !== 6) return;
+            gPair.disabled = true;
+            hint(t("pairing"));
+            const error = await pair("/api/phone/pair", JSON.stringify({ credential: digits, name: phoneName(), requestId: randomId() }));
+            gPair.disabled = false;
+            if (!error) {
+              $("g-ask").hidden = true;
+              $("g-done").hidden = false;
+              return finish();
+            }
+            gCode.value = "";
+            read();
+            hint(t(error), "error");
+            gCode.focus();
+          });
+          hint(GLASS.hint);
+          gCode.focus();
+        }
+
         if (googleToken) {
           void runGoogle(googleToken);
         } else if (qrToken) {
           void run(qrToken);
         } else if (goGoogle) {
-          void googleReady(true).then((ready) => (ready ? startGoogle() : showForm(false)));
+          void googleReady(true).then((ready) => (ready ? startGoogle() : glasses ? showGlass() : showForm(false)));
+        } else if (glasses) {
+          showGlass();
         } else {
           showForm();
         }

@@ -331,6 +331,7 @@ import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
   ensureWorkspace,
+  goalsOf,
   workspaceDir,
   memoryHealth,
   memorySystemPrompt,
@@ -341,8 +342,9 @@ import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
+import { goalRoute } from "./goal-route.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
-import { createMemoryLookup } from "./memory-lookup.ts";
+import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
 import { createUnlandedWork } from "./unlanded.ts";
 import { createAskPrs } from "./ask-prs.ts";
@@ -3177,7 +3179,11 @@ startupTiming.afterPaint("unlanded", async () => {
   const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
   for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
 });
-const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
+const memoryLookup = createMemoryLookup({
+  dataDir: DATA_DIR,
+  notesPath: (botId) => store.bot(botId)?.projectNotes,
+  asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),
+});
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
@@ -5608,6 +5614,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
+      goals: () => goalsOf(bot.id),
       onSummaryCall: (record) => logSummaryCall({
         botId: bot.id,
         threadId,
@@ -5806,8 +5813,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId, threadId);
   const roomEchoes = roomEchoesSinceLastUserTurn(activeMessages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model);
   const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
-  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
-    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text, roomTaskThreads().has(threadId))
+  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind) && !notOwnerChats().has(threadId)
+    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
@@ -8511,6 +8518,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
         for (const bot of store.bots) void memoryLookup.refresh(bot.id);
         return;
+      }
+      // pin_goal: a standing goal in the bot's timeline, in every prompt until it is done
+      if (method === "POST" && path === "/api/internal/goal") {
+        return await goalRoute(req, res, {
+          caller: (header) => commsCallers.resolve(header),
+          ownerTurn: ({ botId, threadId }) => {
+            const bot = store.bot(botId);
+            return Boolean(bot && !readOnlyTurnThreads.has(threadId) && ownerChats(bot, notOwnerChats()).includes(threadId) && threadHasLiveTurn(threadId));
+          },
+        });
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
         const source = commsCallers.resolve(req.headers.authorization);
