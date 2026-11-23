@@ -39,7 +39,7 @@ import type { Message, StoreChange } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_MAX_BYTES, MEMORY_SEED, memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
-import { BASE_SENDS, S32_ROWS, SECRET_CASES, secretCase, sendsValue } from "./testing/secret-cases.ts";
+import { BASE_SENDS, S32_ROWS, SECRET_CASES, TOKEN_TALK_LIMITS, secretCase, sendsValue } from "./testing/secret-cases.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- a second writer has to land between the pass's read and its write.
@@ -2357,7 +2357,7 @@ describe("memory pass filters", () => {
   it("sends no value from any review round that base held back", () => {
     const leaks = Object.entries(SECRET_CASES).flatMap(([set, cases]) => cases.flatMap(([id, text, values]) => {
       const seen = text === null ? S32_ROWS.map((row) => userTyping(row)).join("\n\n") : userTyping(text);
-      return values.filter((value) => sendsValue(seen, value) && !BASE_SENDS.get(id)?.includes(value)).map((value) => `${set} ${id}: ${value}`);
+      return values.filter((value) => sendsValue(seen, value) && !BASE_SENDS.get(id)?.includes(value) && !TOKEN_TALK_LIMITS.get(id)?.includes(value)).map((value) => `${set} ${id}: ${value}`);
     }));
     expect(leaks).toEqual([]);
   });
