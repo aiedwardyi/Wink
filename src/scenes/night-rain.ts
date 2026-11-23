@@ -1,4 +1,4 @@
-// Night Rain: a drinking alley in a neon city, in the rain. The alley is a
+// Night Rain: a Seoul alley of pojangmacha tents under neon, in the rain. The alley is a
 // painted plate drawn once per size; a passer-by under a clear umbrella walks
 // away down it from a four-frame strip, lit by the lanterns he passes. The
 // shader adds the rain, ripples, splashes, the shimmer of the wet street, his
@@ -12,39 +12,40 @@ const PERIOD = 60;
 
 // Each alley plate in its own pixels: size, the street's vanishing point and depth scale (fractions), where on screen the vanishing point goes, where its floor meets the walls at the bottom edge, a sign that buzzes, a vent that steams, how far right of the street's middle he walks (m), and plate px rects put out (a sign moved off them).
 const ALLEYS = {
-  wide: { w: 1536, h: 1024, vp: [0.563, 0.484], k: 0.2, aim: 0.67, floor: [-0.01, 0.815], sign: [0.755, 0.09, 0.822, 0.334], vent: [0.762, 0.57], side: 0.9, dark: [1146, 0, 1275, 262] },
-  tall: { w: 1024, h: 1536, vp: [0.71, 0.44], k: 0.2, aim: 0.6, floor: [0.3, 1.1], sign: [0.74, 0.19, 0.8, 0.33], vent: [0.5, 0.52], side: 1.05, dark: [] },
+  wide: { w: 1536, h: 1024, vp: [0.513, 0.561], k: 0.2, aim: 0.52, floor: [-0.06, 0.85], sign: [0.758, 0.027, 0.806, 0.317], vent: [0.869, 0.64], side: 0.6, dark: [] },
+  tall: { w: 1024, h: 1536, vp: [0.576, 0.586], k: 0.2, aim: 0.41, floor: [-1.0, 0.9], sign: [0.859, 0.251, 0.909, 0.417], vent: [0.825, 0.624], side: 0.2, dark: [] },
 };
 type Sign = [number, number, number, number, string, string, string, number];
-// The plates' signs carry made-up script, so each is repainted as a lit box with a real word: its rect in plate px, its glow, its core, the word top to bottom, and how hot it burns.
+// The plates' signs are blank panels, so each is repainted as a lit box with a real word: its rect in plate px, its glow, its core, the word top to bottom, and how hot it burns.
 const SIGNS = {
   wide: [
-    [1000, 60, 1049, 304, "#2fd3ff", "#d8f8ff", "居酒屋", 1],
-    [1066, 200, 1111, 346, "#ff4fb8", "#ffe0f2", "焼鳥", 1],
-    [1160, 92, 1261, 342, "#ff3da6", "#ffe3f3", "酒場", 0.2],
-    [956, 311, 995, 417, "#2fd3ff", "#d8f8ff", "営業中", 1],
-    [922, 356, 941, 422, "#ff6fc8", "#ffe6f5", "BAR", 1],
+    [1164, 28, 1237, 325, "#ff4fb8", "#ffe0f2", "포장마차", 1],
+    [1064, 142, 1114, 381, "#2fd3ff", "#d8f8ff", "노래방", 1],
+    [997, 259, 1032, 432, "#f25ae6", "#ffe3fb", "소주", 1],
+    [954, 334, 985, 464, "#b36eff", "#efe3ff", "호프", 1],
+    [905, 404, 925, 496, "#2fd3ff", "#d8f8ff", "영업중", 1],
   ],
   tall: [
-    [751, 287, 809, 500, "#ff4fb8", "#ffe0f2", "居酒屋", 1],
-    [913, 115, 948, 346, "#ff3da6", "#ffe3f3", "やきとり", 0.8],
-    [863, 368, 900, 505, "#2fd3ff", "#d8f8ff", "営業中", 1],
-    [971, 435, 1002, 594, "#ff5a6e", "#ffe4e8", "酒場", 1],
+    [886, 35, 931, 336, "#ff2fa8", "#ffe0f2", "포장마차", 1],
+    [784, 243, 822, 490, "#2fd3ff", "#d8f8ff", "노래방", 1],
+    [705, 371, 737, 599, "#ff70b8", "#ffe6f3", "소주", 1],
+    [778, 528, 815, 721, "#ff2fc0", "#ffe0f6", "치킨", 1],
+    [880, 385, 931, 640, "#ff3048", "#ffe4e8", "영업중", 1],
   ],
 } satisfies Record<"wide" | "tall", Sign[]>;
-const JP = (px: number) => `700 ${px}px "Yu Gothic", YuGothic, "Hiragino Sans", "Hiragino Kaku Gothic ProN", Meiryo, "Noto Sans CJK JP", "Noto Sans JP", sans-serif`;
-// Without a Japanese font the words would draw as empty boxes: the plate keeps its own signs then.
-function hasJapanese() {
+const KO = (px: number) => `700 ${px}px "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", "Noto Sans CJK KR", sans-serif`;
+// Without a Korean font the words would draw as empty boxes: the plate keeps its own signs then.
+function hasKorean() {
   const c = document.createElement("canvas");
   c.width = c.height = 24;
   const s = c.getContext("2d", { willReadFrequently: true })!;
-  s.font = JP(20);
+  s.font = KO(20);
   const ink = (ch: string) => {
     s.clearRect(0, 0, 24, 24);
     s.fillText(ch, 2, 20);
     return s.getImageData(0, 0, 24, 24).data.join();
   };
-  return ink("酒") !== ink(String.fromCodePoint(0x10fffd));
+  return ink("한") !== ink(String.fromCodePoint(0x10fffd));
 }
 
 // One cell of the walk strip in its own pixels: size, his heel line, his centre, and his umbrella's rim ends, where drips fall from.
@@ -58,6 +59,8 @@ const decode = (url: string) =>
     .catch(() => null);
 const [wide, tall, walk] = "WebGLRenderingContext" in globalThis ? await Promise.all([wideUrl, tallUrl, walkUrl].map(decode)) : [null, null, null];
 
+// Whether a screen px is on one of the plate's sign panels.
+const lit = (k: "wide" | "tall") => SIGNS[k].map(([x0, y0, x1, y1]) => `inBox(s, px, vec4(${[x0 / ALLEYS[k].w, y0 / ALLEYS[k].h, x1 / ALLEYS[k].w, y1 / ALLEYS[k].h].map((v) => v.toFixed(4)).join(", ")}))`).join(" + ");
 const pick = (vec: string, f: (p: (typeof ALLEYS)["wide"]) => number[]) => `s.x < s.y ? ${vec}(${f(ALLEYS.tall).join(", ")}) : ${vec}(${f(ALLEYS.wide).join(", ")})`;
 
 // Shared with the shader: the plate's cover fit, anchored on its bottom right.
@@ -76,6 +79,8 @@ vec3 fit(vec2 s) {
   return vec3(c, aim * s.x - v * p.x * c, s.y - p.y * c);
 }
 vec2 onPlate(vec2 s, vec2 f) { vec3 k = fit(s); return k.yz + f * plateSize(s) * k.x; }
+float inBox(vec2 s, vec2 px, vec4 r) { vec2 a = onPlate(s, r.xy), b = onPlate(s, r.zw); return step(a.x, px.x) * step(px.x, b.x) * step(a.y, px.y) * step(px.y, b.y); }
+float plateLit(vec2 s, vec2 px) { return s.x < s.y ? ${lit("tall")} : ${lit("wide")}; }
 // Three walks away down the street a loop, from the right edge into the haze: his heels, his height to the umbrella's tip (2.05 m, so 0.78 of it is the 1.6 m eye line), and what the haze leaves of him.
 vec4 walker(vec2 s, vec2 vp, float t) {
   float p = fract(t * 3.0 / ${PERIOD}.0 + 0.17);
@@ -107,7 +112,7 @@ function paint(g: Ctx, w: number, h: number) {
       g.fillRect(ox + x0 * c, oy + y0 * c, (x1 - x0) * c, (y1 - y0) * c);
       g.restore();
     }
-    if (hasJapanese()) {
+    if (hasKorean()) {
       // Drawn on their own sheet and softened onto the plate, so they sit in its paint rather than on it.
       const sheet = document.createElement("canvas");
       sheet.width = g.canvas.width;
@@ -146,12 +151,12 @@ function paint(g: Ctx, w: number, h: number) {
         }
         const chars = [...word];
         const size = Math.min(bw * 0.7, (bh * 0.84) / chars.length);
-        s.font = JP(size);
+        s.font = KO(size);
         s.textAlign = "center";
         s.textBaseline = "middle";
         chars.forEach((ch, i) => {
           const cy = y + bh / 2 + (i - (chars.length - 1) / 2) * size * 1.06;
-          for (const [blur, color] of [[24, glow], [10, glow], [4, core]] as const) {
+          for (const [blur, color] of [[24, glow], [8, glow], [2, glow]] as const) {
             s.fillStyle = color;
             s.shadowBlur = blur * c;
             s.fillText(ch, x + bw / 2, cy);
@@ -161,7 +166,7 @@ function paint(g: Ctx, w: number, h: number) {
       }
       g.save();
       g.setTransform(1, 0, 0, 1, 0, 0);
-      g.filter = `blur(${0.6 * dpr}px)`;
+      g.filter = `blur(${0.4 * dpr}px)`;
       g.drawImage(sheet, 0, 0);
       g.restore();
     }
@@ -375,8 +380,8 @@ void main() {
   col = max(col - 0.012, 0.0) * 1.012;
   col = mix(col, smoothstep(0.0, 1.0, col), 0.3);
   col += (h12(gl_FragCoord.xy + fract(t * 7.0) * 311.0) - 0.5) * 0.024;
-  // Under the transcript: dimmed, and its brights held down so text keeps its contrast; he keeps a little of his light.
-  lane *= 1.0 - 0.4 * him;
+  // Under the transcript: dimmed, and its brights held down so text keeps its contrast; he and the signs keep a little of their light.
+  lane *= (1.0 - 0.4 * him) * (1.0 - 0.7 * plateLit(uSize, px));
   col *= mix(1.0, uSize.x > uSize.y ? 0.5 : 0.6, lane);
   col /= 1.0 + 2.4 * dot(col, vec3(0.3, 0.5, 0.2)) * lane;
   col *= 1.0 - 0.6 * (1.0 - smoothstep(20.0, 120.0, px.y));

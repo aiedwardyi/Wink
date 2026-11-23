@@ -56,6 +56,12 @@ describe("night rain", () => {
     expect(frag().match(/\bstruct\b/g) ?? [], "WebGL 1 refuses ternaries and == on structs: pass vectors").toEqual([]);
   });
 
+  it("writes every sign in Hangul", () => {
+    const words = [...source.matchAll(/"#\w{6}", "#\w{6}", "([^"]+)"/g)].map((m) => m[1]);
+    expect(words.length).toBeGreaterThan(0);
+    expect(words.filter((w) => !/^[\uac00-\ud7a3]+$/.test(w)), "the sign font and its check are Korean: other script draws as empty boxes").toEqual([]);
+  });
+
   it("never copies the backdrop's live transform", () => {
     expect(source.match(/getTransform\(\)/g) ?? [], "paint resets it while compositing, so a copy taken later is 1:1 and halves everything on hi-dpi: use g.canvas.width / w").toEqual([]);
   });
