@@ -265,7 +265,19 @@ const VALUE_PATTERNS = [
 ];
 const TOKEN_PATTERNS = [/«redacted/i, ...VALUE_PATTERNS];
 // The last VALUE_PATTERN also matches paths, links, model ids, uuids and shas: words of one case or digits, not a key.
-const PLAIN_RUN = /^[/_-]*(?:[a-z0-9]+|[A-Z]?[a-z]+|[A-Z]+)(?:[/_-]+(?:[a-z0-9]+|[A-Z]?[a-z]+|[A-Z]+))*[/_-]*$/;
+// The part alternatives must not overlap ([A-Z][a-z]+, not [A-Z]?[a-z]+): overlap backtracks exponentially on a long run.
+const PLAIN_RUN = /^[/_-]*(?:[a-z0-9]+|[A-Z][a-z]+|[A-Z]+)(?:[/_-]+(?:[a-z0-9]+|[A-Z][a-z]+|[A-Z]+))*[/_-]*$/;
+const KEY_WORD_BEFORE = /(?:\b(?:keys?|tokens?|secrets?|passwords?|passcodes?|credentials?)|키|토큰|비밀\s*번호|비번|암호)\W{0,3}$/i;
+
+// A sha or uuid is plain; the same lowercase shape is a key after a key word, behind a short prefix (key-, dop_v1_), when not hex, or alone.
+function plainValue(value: string, before: string, all: string): boolean {
+  if (!PLAIN_RUN.test(value) || KEY_WORD_BEFORE.test(before)) return false;
+  const parts = value.split(/[/_-]+/).filter(Boolean);
+  const last = parts.at(-1) ?? "";
+  if (!/^(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-z0-9]{20,}$/.test(last)) return true;
+  const prefixed = parts.length > 1 && parts.length <= 3 && parts.slice(0, -1).every((part) => part.length <= 6);
+  return /^[0-9a-f]+$/.test(last) && !prefixed && all.trim() !== value;
+}
 
 export function secretLike(text: string): boolean {
   return redactSecretsInText(text) !== text || SECRET_WORDS.test(text) || SECRET_WORDS_KO.test(text) || TOKEN_PATTERNS.some((pattern) => pattern.test(text));
@@ -273,8 +285,8 @@ export function secretLike(text: string): boolean {
 
 /** The key values secretLike flags, masked in place; words like "password" or "tokens" and plain names stay, so a goal keeps its sense. */
 export function maskSecretValues(text: string): string {
-  return VALUE_PATTERNS.reduce((out, pattern, i) => out.replace(new RegExp(pattern.source, "g"), (value) =>
-    i === VALUE_PATTERNS.length - 1 && PLAIN_RUN.test(value) ? value : `«redacted ${value.length} chars»`), redactRoomMemory(text));
+  return VALUE_PATTERNS.reduce((out, pattern, i) => out.replace(new RegExp(pattern.source, "g"), (value: string, at: number, all: string) =>
+    i === VALUE_PATTERNS.length - 1 && plainValue(value, all.slice(Math.max(0, at - 40), at), all) ? value : `«redacted ${value.length} chars»`), redactRoomMemory(text));
 }
 
 function secretValue(text: string): boolean {

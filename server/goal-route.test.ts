@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { goalRoute } from "./goal-route.ts";
+import { maskSecretValues } from "./memory-pass.ts";
 import { removeWorkspaceDir, workspaceDir, memorySystemPrompt, readMemoryTopic } from "./workspace.ts";
 
 const BOT = "goal-route-bot";
@@ -66,6 +67,38 @@ describe("pin_goal route", () => {
     expect(await call({ name: "Keys", goal: `Deploy with ${keys.join(" and ")}` })).toEqual({ status: 200, text: expect.stringContaining(`${keys.length} part(s) masked as key-shaped`) });
     const saved = readMemoryTopic(BOT, "decisions.md")!;
     for (const key of keys) expect(saved).not.toContain(key.split(/[/?=]/).pop());
+  });
+
+  it("masks lowercase-only keys after a key word, behind a short prefix, or alone, and keeps shas and uuids", async () => {
+    const hex40 = "3f9a1c7e5b2d8f4a6c0e9b1d7a3f5c8e2b4d6a90";
+    const hex32 = "9b1d7a3f5c8e2b4d6a903f9a1c7e5b2d";
+    const low = "q7wz3k9mxv2rt8lp4nj6hy1bgc5fd0se";
+    const uuid = "7a3b94a0-8352-4e48-b753-65eaad24e840";
+    const keys: [string, string][] = [
+      [`Deepgram key ${hex40} for the call voice`, hex40],
+      [`API key: ${hex32}`, hex32],
+      [`DigitalOcean dop_v1_${hex32}${hex32} for the droplet`, hex32 + hex32],
+      [`Perplexity pplx-${low}${low.slice(0, 16)} for the news line`, low],
+      [`Mailgun key-${low} sends the brief`, low],
+      [`Heroku API key ${uuid} for the deploy`, uuid],
+      [`Use ${low}${hex40.slice(0, 8)} to sign in to the news API`, low],
+      [`Wallet private key ${hex32}${hex32} never leaves this PC`, hex32 + hex32],
+      [`토큰 ${hex32} 으로 뉴스 API 를 부른다`, hex32],
+    ];
+    for (const [goal, key] of keys) {
+      expect(await call({ name: "Low key", goal }), goal).toEqual({ status: 200, text: expect.stringContaining("1 part(s) masked as key-shaped") });
+      expect(readMemoryTopic(BOT, "decisions.md")).not.toContain(key);
+    }
+    expect(await call({ name: "Bare hex", goal: hex40 })).toMatchObject({ status: 400 });
+    expect(maskSecretValues(`Keep commit ${hex40} as the red arm; thread ${uuid} holds the notes`)).toBe(`Keep commit ${hex40} as the red arm; thread ${uuid} holds the notes`);
+  });
+
+  it("checks a long dashed name that ends in a mixed part in linear time", () => {
+    const words = ["how", "to", "run", "the", "ceo", "meeting", "tool", "on", "the", "glasses", "with", "top", "three", "competitors", "and", "one", "news", "line", "per", "topic", "in", "every", "turn", "so", "the", "bot", "never", "loses"];
+    const run = `${words.join("-")}-GlassesV1`;
+    const start = performance.now();
+    expect(maskSecretValues(`Spec: ${run} is the goal`)).toBe(`Spec: «redacted ${run.length} chars» is the goal`);
+    expect(performance.now() - start).toBeLessThan(50);
   });
 
   it("refuses a goal that is only a key", async () => {
