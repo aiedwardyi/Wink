@@ -10,7 +10,7 @@ export interface LoginCapture {
   url?: string;
   code?: string;
   inputGeneration?: number;
-  error?: "device_cap";
+  error?: "device_cap" | "update_offline" | "update_failed";
 }
 
 export class LoginBusyError extends Error {
@@ -267,6 +267,9 @@ export class EngineLogin {
         job.capture.error = "device_cap";
         job.finish("failed");
       }
+      // antigravity-auth-cli's last line when agy is too old for sign-in and could not update itself.
+      const update = job.scope === "antigravityAgent" && /^agy is older than 1\.5 and could not update itself \((offline|failed)\)/.exec(clean);
+      if (update) job.capture.error = update[1] === "offline" ? "update_offline" : "update_failed";
       const url = /^(?:(?:If your browser (?:did not|didn't) open, (?:navigate to this URL|visit)|If the browser didn't open, visit|Visit|Open(?: this URL)?|Sign in(?: at)?|URL|Verification (?:URL|URI))\s*:?\s*)?(https:\/\/[^\s<>"\x00-\x1f]+)$/i.exec(clean);
       const code = /^(?:(?:Enter (?:this |the )?(?:one-time |device |user )?code(?: \(expires in \d+ minutes\))?|(?:Your )?(?:one-time |device |user )?code)\s*:?\s*)?([A-Z0-9]{4}(?:-[A-Z0-9]{4,5}){1,2})$/i.exec(clean);
       if (url && !job.capture.url) {
