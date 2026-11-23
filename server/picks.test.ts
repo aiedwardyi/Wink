@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyPicks, currentOnly, currentPicks, mergeTimelines, parseTimeline, pickKeysList, picksBlock, promptTokens, renderTimeline, type PickChange } from "./picks.ts";
+import { applyPicks, currentOnly, currentPicks, GOALS_PROMPT_TOKENS, mergeTimelines, parseTimeline, pickKeysList, picksBlock, pinnedGoals, promptTokens, renderTimeline, timelineEntries, type PickChange } from "./picks.ts";
 
 const at = (day: number, hour: number, minute = 0) => new Date(2026, 10, day, hour, minute).getTime();
 const pick = (key: string, picked: string, said: string, when: number, extra: Partial<Extract<PickChange, { kind: "pick" }>> = {}): PickChange =>
@@ -214,6 +214,99 @@ describe("picksBlock", () => {
   it("is empty without a current pick", () => {
     expect(picksBlock("")).toBe("");
     expect(picksBlock("# Older decisions\n\n- GIT ROW LOOK (11-14): rows show the branch first\n")).toBe("");
+  });
+});
+
+describe("goals", () => {
+  const GOAL = "Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line";
+  const at = new Date(2026, 10, 22, 15, 38).getTime();
+  const picks = (count: number) => Array.from({ length: count }, (_, i) => ({ kind: "pick" as const, at: at + (i + 1) * 60_000, key: `question ${i}`, picked: `option ${i}`, said: `go with ${i}` }));
+
+  it("shows an open goal in words beside 74 newer picks, until it is done", () => {
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }, ...picks(74)])!.text;
+    expect(text).toContain("## 2026-11-22 15:38 | Glasses v1 | current\n- Picked: Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line\n- Kind: goal");
+    expect(picksBlock(text)).toContain(`- Glasses v1 (11-22): ${GOAL}`);
+    expect(pinnedGoals(text)).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+    expect(picksBlock(text).split("\n\n")[1]!.length).toBe(picksBlock(applyPicks("", picks(74))!.text).length);
+    const done = applyPicks(text, [{ kind: "goal", at: at + 100 * 60_000, key: "glasses v1", done: true }])!.text;
+    expect(picksBlock(done)).not.toContain("competitors");
+    expect(pinnedGoals(done)).toEqual([]);
+    expect(applyPicks(done, [{ kind: "goal", at: at + 101 * 60_000, key: "Glasses v1", done: true }])).toBeNull();
+  });
+
+  it("keeps a goal through a merge and changes nothing when it is pinned again in the same words", () => {
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }])!.text;
+    expect(applyPicks(text, [{ kind: "goal", at: at + 60_000, key: "Glasses v1", goal: ` ${GOAL} ` }])).toBeNull();
+    expect(pinnedGoals(mergeTimelines(text, applyPicks("", picks(3))!.text))).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+  });
+
+  it("shows every one of 12 long goals in words within its own budget", () => {
+    const goals = Array.from({ length: 12 }, (_, i) => ({ kind: "goal" as const, at: at + i * 60_000, key: `goal ${i}`, goal: `${"spec words ".repeat(18)}${i}` }));
+    const block = picksBlock(applyPicks("", goals)!.text);
+    expect(promptTokens(block)).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
+    expect(block).not.toContain("more");
+    for (let i = 0; i < 12; i += 1) expect(block).toContain(`- goal ${i} (11-22): spec words`);
+  });
+
+  it("keeps goal words on every line when 20 open goals have long names", () => {
+    const goals = Array.from({ length: 20 }, (_, i) => ({ kind: "goal" as const, at: at + i * 60_000, key: `${i} Glasses v1 meeting tool for the CEO`, goal: `spec ${i}: person brief + top 3 competitors + 1 news line` }));
+    const block = picksBlock(applyPicks("", goals)!.text);
+    const lines = block.split("\n").filter((line) => line.startsWith("- "));
+    expect(promptTokens(block)).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
+    expect(lines.length).toBeGreaterThan(10);
+    for (const line of lines) expect(line).toMatch(/: spec \d+: person/);
+  });
+
+  it("leaves a goal open when Auto Notes lands a pick on its key", () => {
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }])!.text;
+    expect(pickKeysList(text)).toBe("");
+    const picked = applyPicks(text, [{ kind: "pick", at: at + 60_000, key: "glasses v1", picked: "B - dark frame", said: "b, the dark frame" }])!.text;
+    expect(pinnedGoals(picked)).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+    expect(picksBlock(picked)).toContain(`- Glasses v1 (11-22): ${GOAL}`);
+    expect(currentPicks(picked).map(({ picked }) => picked)).toEqual(["B - dark frame"]);
+    expect(pinnedGoals(mergeTimelines(picked, text))).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+  });
+
+  it("leaves a current pick current when pin_goal uses its key", () => {
+    const text = applyPicks("", [{ kind: "pick", at, key: "Glasses v1", picked: "B - dark frame", said: "b, the dark frame" }])!.text;
+    const pinned = applyPicks(text, [{ kind: "goal", at: at + 60_000, key: "Glasses v1", goal: GOAL }])!.text;
+    expect(pinned).toContain("## 2026-11-22 15:38 | Glasses v1 | current\n- Picked: B - dark frame");
+    expect(currentPicks(pinned).map(({ picked }) => picked)).toEqual(["B - dark frame"]);
+    expect(picksBlock(pinned)).toContain("- Glasses v1 (11-22): B - dark frame");
+    expect(pinnedGoals(pinned)).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+    expect(currentPicks(mergeTimelines(pinned, text)).map(({ picked }) => picked)).toEqual(["B - dark frame"]);
+  });
+
+  it("drops a finished goal from the current entries and the Timeline", () => {
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }, { kind: "goal", at: at + 60_000, key: "Glasses v1", goal: `${GOAL}, dark frame` }])!.text;
+    const done = applyPicks(text, [{ kind: "goal", at: at + 120_000, key: "Glasses v1", done: true }])!.text;
+    expect(currentPicks(done)).toEqual([]);
+    expect(pickKeysList(done)).toBe("");
+    expect(timelineEntries(parseTimeline(done).entries)).toEqual([]);
+    const again = applyPicks(done, [{ kind: "goal", at: at + 180_000, key: "Glasses v1", goal: "Glasses v2" }])!.text;
+    expect(timelineEntries(parseTimeline(again).entries).map(({ picked }) => picked)).toEqual(["Glasses v2"]);
+  });
+
+  it("fits 1, 5, 20 or 100 open goals in about 400 tokens, Korean counted by its own cost", () => {
+    for (const words of [`${GOAL}. `, "안경 v1은 CEO 미팅 도구다: 소개 요약 + 상위 경쟁사 3곳 + 뉴스 한 줄. "]) {
+      for (const count of [1, 5, 20, 100]) {
+        const goals = Array.from({ length: count }, (_, i) => ({ kind: "goal" as const, at: at + i * 60_000, key: `goal ${i}`, goal: words.repeat(12) }));
+        const block = picksBlock(applyPicks("", goals)!.text);
+        expect(promptTokens(block), `${count} ${words}`).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
+        expect(block).toContain(`- goal ${count - 1} (11-22): ${words.slice(0, 10)}`);
+        expect(block).toContain("its whole text is in memory/decisions.md");
+      }
+    }
+  });
+
+  it("keeps a short goal whole and gives a long one what is left", () => {
+    const long = "Glasses v1 is the CEO meeting tool: show a person brief when they say their name, then top 3 competitors and 1 news line per topic. ".repeat(14);
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: long }, { kind: "goal", at: at + 60_000, key: "Ship", goal: "ship the call fix" }])!.text;
+    const block = picksBlock(text);
+    expect(block).toContain("- Ship (11-22): ship the call fix\n");
+    expect(block.split("\n").find((line) => line.startsWith("- Glasses v1"))!.length).toBeGreaterThan(800);
+    expect(block).toContain('A goal ending in "..." is cut here; its whole text is in memory/decisions.md.');
+    expect(promptTokens(block)).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
   });
 });
 

@@ -59,6 +59,17 @@ const KEY_PREFIXES: RegExp[] = [
   /\b[a-f0-9]{8}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, // mailbox pane grant
   /\bwk[pdig]_[A-Za-z0-9_-]{43,}/g, // wink phone pairing / device token, team room invite / guest key
 ];
+/** Each key shape once, without /g, so a test never carries lastIndex over. */
+const KEY_SHAPES = KEY_PREFIXES.map((pattern) => new RegExp(pattern.source));
+/** Shorter forms of the same prefixes, as Import Memory's base filter knows them. */
+const SHORT_KEY_SHAPES = [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/, /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}/, /\bxox[abposr][_-][A-Za-z0-9_-]{8,}/, /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/];
+const PEM_MARK = /-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+
+/** A credential only a machine reads (sk-…, ghp_…, github_pat_…, AKIA…, a JWT, a PEM line): never a fact a person keeps. */
+export function hasMachineKey(text: string): boolean {
+  return PEM_MARK.test(text) || KEY_SHAPES.some((shape) => shape.test(text)) || SHORT_KEY_SHAPES.some((shape) => shape.test(text));
+}
+
 const BEARER = /(\bBearer\s+)([A-Za-z0-9._~+/=-]{12,})/gi;
 const PEM_BLOCK = /(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]*?)(-----END [A-Z ]*PRIVATE KEY-----)/g;
 /** The same block with its END still in flight. PEM_BLOCK cannot match it, so

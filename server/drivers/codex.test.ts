@@ -838,6 +838,21 @@ describe("CodexDriver turns (fake app-server)", () => {
     await Promise.all([warm, last].map((child) => (child.exitCode !== null || child.signalCode !== null ? undefined : once(child, "close"))));
   });
 
+  it("never hands a reader turn the warm app-server a full-access turn left on the thread", async () => {
+    await create({ mode: "resume", fullAuto: true });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const dump = join(scratch, "reader-warm.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const turn = async (extra: Partial<SendTurnInput> = {}) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-reader-warm", text: "hi", ...extra });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+    expect(await turn()).toMatchObject({ ok: true });
+    expect(await turn({ resumeCursor: "codex-thread-1", readOnly: true })).toMatchObject({ ok: true });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(sentCalls(dump).map((call) => call.method)).toEqual(["initialize", "initialized", "config/read", "thread/resume", "turn/start"]);
+  });
+
   it("ends a warm app-server on Stop, so the next turn spawns again", async () => {
     await create({ mode: "steer" });
     const spawn = vi.spyOn(procs, "spawnCli");

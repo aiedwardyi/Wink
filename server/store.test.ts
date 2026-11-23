@@ -53,6 +53,9 @@ const taskPacket = (
   ...overrides,
 });
 
+// what older builds seeded into a new chat; old chats still hold it
+const OLD_QUIZ = { title: "What do you mostly want help with?", subtitle: "Pick whatever's closest; we can always expand from there.", options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"] };
+
 describe("Store", () => {
   beforeEach(() => {
     removeTestData(DATA_DIR);
@@ -150,23 +153,19 @@ describe("Store", () => {
     expect(source).toContain("return flagShownImage(redactBotAuthored(message));");
   });
 
-  it("createBot seeds an onboarding card without a fake chat bubble", () => {
+  it("createBot starts an empty chat: no starter quiz, no fake chat bubble", () => {
     const store = new Store(selection);
     const bot = store.createBot();
 
-    const messages = store.messagesFor(bot.threadId);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ role: "bot", kind: "options" });
-    expect(messages[0].card?.options.length).toBeGreaterThan(1);
-    expect(messages.some((message) => message.kind === "text")).toBe(false);
-    expect(JSON.stringify(messages)).not.toMatch(/I'll handle|Nice to meet you|first piece of work/);
+    expect(store.messagesFor(bot.threadId)).toEqual([]);
+    expect(new Store(selection).messagesFor(bot.threadId)).toEqual([]);
     expect(bot.modelSelection).toEqual(selection());
   });
 
   it("a typed message hides the first-run quiz but leaves an ask_user question for the client to settle", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0];
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Hi" });
     const ask = store.appendMessage(bot.threadId, {
       role: "bot",
@@ -230,7 +229,7 @@ describe("Store", () => {
   it("dismisses the onboarding quiz when the user talks, and leaves live asks", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0]!;
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     expect(quiz.card?.dismissed).toBeUndefined();
 
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
@@ -612,7 +611,7 @@ describe("Store", () => {
   it("patchMessage merges card patches and returns null for unknown ids", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const card = store.messagesFor(bot.threadId)[0]!;
+    const card = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
 
     const patched = store.patchMessage(bot.threadId, card.id, {
       card: { ...card.card!, answered: "Work & projects" },
@@ -1303,10 +1302,11 @@ describe("Store", () => {
   it("chains appended messages and keeps the newest as active leaf", () => {
     const store = new Store(selection);
     const bot = store.createBot();
+    const greeting = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "hello" });
     const user = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
 
     const messages = store.messagesFor(bot.threadId);
-    expect(user.parentId).toBe(messages[0].id); // follows the onboarding card
+    expect(user.parentId).toBe(greeting.id);
     expect(store.activeLeaf(bot.threadId)).toBe(user.id);
     expect(store.activePath(bot.threadId).map((m) => m.id)).toEqual(messages.map((m) => m.id));
   });
@@ -1587,7 +1587,8 @@ describe("Store", () => {
   it("deleteBot removes the bot and its durable transcript", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    // the transcript is durable — a fresh Store sees the seeded messages
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+    // the transcript is durable: a fresh Store sees it
     expect(new Store(selection).messagesFor(bot.threadId).length).toBeGreaterThan(0);
 
     expect(store.deleteBot(bot.id)).toBe(true);
@@ -1639,7 +1640,7 @@ describe("Store change stream", () => {
   it("emits a card patch after a user message hides the onboarding quiz", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0]!;
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     const events = record(store);
     const m = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
     expect(events.map((event) => event.type)).toEqual(["message", "message.patch"]);
@@ -1651,13 +1652,11 @@ describe("Store change stream", () => {
     });
   });
 
-  it("announces a new bot before its onboarding messages", () => {
+  it("announces a new bot with no seeded message", () => {
     const store = new Store(selection);
     const events = record(store);
     const bot = store.createBot();
-    expect(events.map((event) => event.type)).toEqual(["bot", "message"]);
-    expect(events[0]).toEqual({ type: "bot", botId: bot.id });
-    expect(events.slice(1).every((event) => event.threadId === bot.threadId)).toBe(true);
+    expect(events).toEqual([{ type: "bot", botId: bot.id }]);
   });
 
   it("every message-tree write emits a message or thread event", () => {

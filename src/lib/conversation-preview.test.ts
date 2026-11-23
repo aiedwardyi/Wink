@@ -29,13 +29,14 @@ const bot = (messages: Message[], extra: Partial<Bot> = {}): Pick<Bot, "activity
 });
 
 describe("conversationPreview after first-turn ignore", () => {
-  it("shows the open first-turn quiz title", () => {
-    expect(conversationPreview(bot([quiz]))).toBe("What do you mostly want help with?");
+  it("never previews a seeded quiz nobody answered", () => {
+    expect(conversationPreview(bot([quiz]))).toBe("");
+    expect(transcriptIdleAfterOnboarding([quiz])).toBe(true);
   });
 
-  it("follows the UI language for the open quiz and still detects it once answered or ignored", () => {
+  it("still previews the answer to a quiz an older build seeded", () => {
     const ko: Translate = (key, vars) => translate("ko", key, vars);
-    expect(conversationPreview(bot([quiz]), ko)).toBe("주로 어떤 일에 도움이 필요하세요?");
+    expect(conversationPreview(bot([quiz]), ko)).toBe("");
     const answered: Message = { ...quiz, card: { ...quizCard, answered: "업무와 프로젝트", dismissed: true } };
     expect(conversationPreview(bot([answered]), ko)).toBe("업무와 프로젝트");
     expect(transcriptIdleAfterOnboarding([answered])).toBe(false);

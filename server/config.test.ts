@@ -50,6 +50,15 @@ describe("configuration boundaries", () => {
     expect(parseStoredConfig({ liveCall: { voice: "Nova", language: "ko" } }).liveCall).toEqual({});
   });
 
+  it("keeps who answers calls beside the voice, and drops an unknown pick", () => {
+    saveConfig(parseConfigPatch({ liveCall: { voice: "Alnilam" } }));
+    saveConfig(parseConfigPatch({ liveCall: { answer: "bot" } }));
+    expect(loadConfig().liveCall).toEqual({ voice: "Alnilam", answer: "bot" });
+    saveConfig(parseConfigPatch({ liveCall: { answer: "gemini" } }));
+    expect(loadConfig().liveCall).toEqual({ voice: "Alnilam", answer: "gemini" });
+    expect(parseStoredConfig({ liveCall: { answer: "robot" } }).liveCall?.answer).toBeUndefined();
+  });
+
   it("drops retired browser settings on read and patch", () => {
     const legacy = {
       browserProfiles: [{ id: "work", name: "Work" }],

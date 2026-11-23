@@ -1,56 +1,20 @@
-// A new bot's first reply offers to bring in what another AI knows about the user, while Import Memory is empty.
-// The paste is saved by the Settings path from the user's own message; the bot never retypes it.
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+// While Import Memory is empty, a new chat's first few turns get import_memory, so an answer pasted into the chat
+// is saved by the Settings path from the user's own message; the bot never retypes it.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
 
 import { aboutYouNote } from "../shared/about-you-note.ts";
 import { catalogs, type MessageKey } from "../src/lib/i18n-catalog.ts";
-import { IMPORT_OFFER, importOfferFence } from "../src/lib/import-links.ts";
-import { aboutYouFacts, addToAboutYou, day } from "./about-you.ts";
-import { writeFileAtomic } from "./atomic.ts";
-import { DATA_DIR } from "./config.ts";
+import { aboutYouFacts, addToAboutYou, day, declineImport, importDeclined } from "./about-you.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { Message } from "./store.ts";
 
 export const IMPORT_MEMORY_TOOL = "import_memory";
-// the paste can come a message or two after the offer
+// the paste can come a message or two into the chat
 const TOOL_TURNS = 3;
-const NONE = { offer: false, tool: false } as const;
-// beside Import Memory, so the decline travels wherever that folder does
-const declinedFile = () => join(DATA_DIR, "about-you", "declined");
-const pendingDir = () => join(DATA_DIR, "about-you", "pending");
-const pendingFile = (threadId: string) => join(pendingDir(), createHash("sha256").update(threadId).digest("hex"));
-
-// best effort: without the marker a Settings save before the paste only ends the tool early
-export function noteImportOffer(threadId: string): void {
-  try {
-    mkdirSync(pendingDir(), { recursive: true, mode: 0o700 });
-    writeFileAtomic(pendingFile(threadId), "", { mode: 0o600 });
-  } catch (error) {
-    console.warn(`[import-memory] pending note failed (${error instanceof Error ? error.name : "error"})`);
-  }
-}
 
 let locale: "en" | "ko" = "en";
-// Threads whose running turn carries the offer. The model writes the reply, so its row gets stamped; the prompt text alone never earns the buttons.
-const offering = new Set<string>();
 
-/** Called as a turn starts: only an offer turn may stamp a reply. */
-export function noteOfferTurn(threadId: string, offer: boolean): void {
-  if (offer) offering.add(threadId);
-  else offering.delete(threadId);
-}
-
-/** The stamp for the offer turn's reply row: the first one that holds the offer and its prompt box. */
-export function takeImportOffer(threadId: string, text: string): { importOffer: true } | undefined {
-  if (!offering.has(threadId) || importOfferFence(text) < 0) return undefined;
-  offering.delete(threadId);
-  return { importOffer: true };
-}
-
-/** The language of the user's latest send picks the prompt and result wording. */
+/** The language of the user's latest send picks the result wording. */
 export function noteSendLocale(value: unknown): void {
   if (value === "en" || value === "ko") locale = value;
 }
@@ -60,22 +24,12 @@ function t(key: MessageKey, vars?: { count: number }): string {
   return vars ? phrase.replaceAll("{count}", String(vars.count)) : phrase;
 }
 
-/** An owner's 1:1 turn: the offer on a new chat's first typed message, the tool until the paste can have come. Unsent counts a send not in messages yet. */
-export function importMemoryTurn(messages: Iterable<Pick<Message, "role" | "kind">>, unsent = 0, threadId?: string): { offer: boolean; tool: boolean } {
+/** An owner's 1:1 turn gets the tool for a new chat's first few typed messages. Unsent counts a send not in messages yet. */
+export function importMemoryTool(messages: Iterable<Pick<Message, "role" | "kind">>, unsent = 0): boolean {
   let typed = unsent;
   // stops past the first few typed lines, so a long chat costs nothing
-  for (const message of messages) if (message.role === "user" && message.kind === "text" && ++typed > TOOL_TURNS) return NONE;
-  if (!typed || existsSync(declinedFile())) return NONE;
-  const empty = !aboutYouFacts();
-  return { offer: typed === 1 && empty, tool: empty || Boolean(threadId && existsSync(pendingFile(threadId))) };
-}
-
-export function importOfferNote(): string {
-  return [
-    `[Wink] The user has not imported memory from another AI yet. After your answer, end this reply with the offer below word for word, then the prompt below exactly as written in a text code block. Write nothing else about importing. When they paste that answer, call ${IMPORT_MEMORY_TOOL} and tell them its result. If they say no, call ${IMPORT_MEMORY_TOOL} with decline: true. Offer only in this reply.`,
-    IMPORT_OFFER[locale].join("\n"),
-    `\`\`\`text\n${t("aboutYou.prompt")}\n\`\`\``,
-  ].join("\n\n");
+  for (const message of messages) if (message.role === "user" && message.kind === "text" && ++typed > TOOL_TURNS) return false;
+  return Boolean(typed) && !importDeclined() && !aboutYouFacts();
 }
 
 type Caller = { botId: string; threadId: string };
@@ -113,21 +67,14 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
   if (!deps.ownerChat(source)) return json(res, 403, { error: `${IMPORT_MEMORY_TOOL} works only in the user's own chat with you` });
   const body = await readBody(req);
   if (body?.decline === true) {
-    mkdirSync(join(DATA_DIR, "about-you"), { recursive: true, mode: 0o700 });
-    writeFileAtomic(declinedFile(), "", { mode: 0o600 });
+    declineImport();
     return json(res, 200, { text: "Saved: no bot offers this again. Settings > Import Memory still works." });
   }
   const accepted: string[] = [];
   const result = addToAboutYou(pastedAnswer(deps.messages(source.threadId)), day((deps.now ?? Date.now)()), accepted);
-  // one finished import ends every chat's pending offer
-  if (!("error" in result) && aboutYouFacts()) {
-    try {
-      rmSync(pendingDir(), { recursive: true, force: true });
-    } catch (error) {
-      console.warn(`[import-memory] pending clear failed (${error instanceof Error ? error.name : "error"})`);
-    }
-  }
-  const note = !("error" in result) ? aboutYouNote(result, t)
+  // the count only: a line that looked like a password is never echoed into the chat, which is saved and sent on
+  const flagged = !("error" in result) && result.flagged.length ? ` ${t(result.flagged.length === 1 ? "aboutYou.flaggedChatOne" : "aboutYou.flaggedChat", { count: result.flagged.length })}` : "";
+  const note = !("error" in result) ? (aboutYouNote(result, t) + flagged).trim()
     : result.error === "too-large" ? t("aboutYou.tooLarge")
     : result.error === "empty" ? t("aboutYou.noFacts")
     : t("aboutYou.failed");

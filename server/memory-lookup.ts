@@ -1,20 +1,30 @@
 // Automatic recall: before a typed turn, up to 2 matching rows from the bot's
-// own memory and notes ride in the turn text. Off unless the bot is listed in
-// lookup-bots.json. The index is rebuilt after a reply settles, never at send.
-import { readFile, stat } from "node:fs/promises";
+// own memory, notes and parked asks ride in the turn text. On for every bot
+// unless lookup-bots.json exists, which then lists the bots it stays on for; a
+// bot left off still looks up the Import Memory lines past what every prompt
+// carries, and its own import's. The index is rebuilt after a reply settles or
+// an import lands, never at send.
+import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
-import { userTyping } from "./memory-pass.ts";
+import { latestTaskAsks } from "../shared/task-ask-list.ts";
+import { aboutYouFile, aboutYouPastTheCut, botImportFile, botImportPastTheCut } from "./about-you.ts";
+import { secretLike, userTyping, withoutBlocks } from "./memory-pass.ts";
+import { isSyncedFile } from "./memory-sync.ts";
 import { currentOnly, PICKS_FILE } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { appendRotatingLog } from "./rotating-log.ts";
 import { parseJson } from "./schema.ts";
-import { listMemoryTopics, loadMemory, memoryFileRaw, PARKED_COPY, workspaceDir } from "./workspace.ts";
+import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
+import { IMPORT_FILE, loadMemory, memoryFileRaw, PARKED_COPY, workspaceDir } from "./workspace.ts";
 
 // Its own file: bots.json and profile-sync.json are parsed strictly by older builds.
 const PICKS_SOURCE = `memory/${PICKS_FILE}`;
+const ABOUT_YOU_SOURCE = "Import Memory";
+const IMPORT_SOURCE = `memory/${IMPORT_FILE}`;
+const ASKS_SOURCE = "parked asks";
 const FLAG_FILE = "lookup-bots.json";
 const LOG_FILE = "lookup-log.jsonl";
 const LOG_MAX_BYTES = 1024 * 1024;
@@ -33,7 +43,15 @@ const NEAR_WORDS = 10;
 const MIN_COVER = 0.5;
 const RARE_IDF = 3;
 const TITLE_CHARS = 140;
+// the note-taker's paragraph limits
+const PARAGRAPH_CHARS = 400;
+const PARAGRAPH_LINES = 6;
 const YIELD_EVERY = 200;
+const SIDE_DEPTH = 3;
+// past this many postings the search is cheaper than ruling it out
+const SCAN_POSTINGS = 2_000;
+// copies kept for undo: their lines were taken out of memory on purpose
+const BACKUP = /^(?:MEMORY-(?:pre|full)-|pre-drift-fix-)|-history/i;
 const DEADLINE_EVERY = 256;
 
 const STOP = new Set("a an and are as at be but by can could did do does for from had has have how i if in into is it its me my no not of on or our should so than that the their them then there these they this to too us was we were what when where which who why will with would you your ok okay yes yeah please thanks thank hey hi just let lets go some".split(" "));
@@ -54,7 +72,10 @@ export type RecallHit = Piece & { score: number };
 type Terms = { list: string[]; groups: string[][] };
 
 export interface RecallIndex {
-  terms(query: string, expired?: () => boolean): Terms;
+  /** extra: text whose words count only when the notes have them */
+  terms(query: string, expired?: () => boolean, extra?: string): Terms;
+  /** false when no row could pass the gate: fewer than two words in the notes, none rare, or too little of the message covered */
+  possible(terms: Terms): boolean;
   hits(terms: Terms): RecallHit[];
   gate(terms: Terms, hits: RecallHit[]): RecallHit[];
   close(): void;
@@ -119,6 +140,8 @@ function piecesOfFile(file: NoteFile): Piece[][] {
       return;
     }
     if (STRUCK.test(line)) return;
+    // a split could part a label from its value, so the whole row is withheld, as Auto Notes does
+    if (secretLike(line)) return;
     const text = clean(line);
     if (!words(text).length) return;
     const table = line.startsWith("|");
@@ -140,25 +163,41 @@ function piecesOfFile(file: NoteFile): Piece[][] {
   return rows;
 }
 
+// three reused rows: a term is at most MAX_WORD long and a word it can reach at most 2 longer
+const rowA = new Int32Array(MAX_WORD + 8);
+const rowB = new Int32Array(MAX_WORD + 8);
+const rowC = new Int32Array(MAX_WORD + 8);
 function editDistance(a: string, b: string, limit: number): number {
   if (Math.abs(a.length - b.length) > limit) return limit + 1;
-  let before: number[] = [];
-  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  if (b.length >= rowA.length) return limit + 1;
+  let [before, previous, current] = [rowA, rowB, rowC];
+  for (let j = 0; j <= b.length; j++) previous[j] = j;
   for (let i = 1; i <= a.length; i++) {
-    const current = [i];
+    current[0] = i;
     let best = i;
     for (let j = 1; j <= b.length; j++) {
       let cost = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
       if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) cost = Math.min(cost, before[j - 2]! + 1);
-      current.push(cost);
+      current[j] = cost;
       if (cost < best) best = cost;
     }
     if (best > limit) return limit + 1;
-    before = previous;
-    previous = current;
+    [before, previous, current] = [previous, current, before];
   }
   return previous[b.length]!;
 }
+
+// one bit per letter (folded into 32): each edit brings at most one letter the other word lacks
+const letters = (word: string) => {
+  let mask = 0;
+  for (let i = 0; i < word.length; i++) mask |= 1 << (word.charCodeAt(i) % 32);
+  return mask;
+};
+const bits = (mask: number) => {
+  let count = 0;
+  for (let rest = mask; rest; rest &= rest - 1) count++;
+  return count;
+};
 
 const matchesToken = (token: string, option: string) =>
   token === option || (!skipped(token) && token.startsWith(option.slice(0, Math.max(4, option.length - 2))));
@@ -196,24 +235,79 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     return count ? idfOf(count) : maxIdf;
   };
   const rareBar = Math.min(RARE_IDF, idfOf(1));
+  // a word within the repair limit shares its first or second letter (the repair rule) and is at most the limit longer or shorter
+  const near = new Map<string, number[]>();
+  const masks = Int32Array.from(vocabulary, letters);
+  for (const [at, word] of vocabulary.entries()) {
+    if (skipped(word)) continue;
+    for (const key of [`0${word[0]}${word.length}`, `1${word[1]}${word.length}`]) {
+      const bucket = near.get(key);
+      if (bucket) bucket.push(at);
+      else near.set(key, [at]);
+    }
+  }
+  const universe = [...new Set(pieces.flatMap((piece) => [...piece.tokens, ...piece.title]))].sort();
+  // every note token that matchesToken would match to each group, as one bit per group
+  const groupBits = (groups: string[][]) => {
+    const found = new Map<string, number>();
+    for (const [group, options] of groups.entries()) {
+      for (const option of options) {
+        const prefix = option.slice(0, Math.max(4, option.length - 2));
+        let low = 0;
+        let high = universe.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          if (universe[middle]! < prefix) low = middle + 1;
+          else high = middle;
+        }
+        for (let at = low; at < universe.length && universe[at]!.startsWith(prefix); at++) {
+          const token = universe[at]!;
+          if (matchesToken(token, option)) found.set(token, (found.get(token) ?? 0) | (1 << group));
+        }
+      }
+    }
+    return found;
+  };
+  // which pieces hold each note token, in their text and in their title
+  const postings = new Map<string, number[]>();
+  const titled = new Map<string, number[]>();
+  for (const [at, piece] of pieces.entries()) {
+    for (const [map, tokens] of [[postings, piece.tokens], [titled, piece.title]] as const) {
+      for (const token of new Set(tokens)) {
+        const list = map.get(token);
+        if (list) list.push(at);
+        else map.set(token, [at]);
+      }
+    }
+  }
+  const matched = new WeakMap<Terms, Map<string, number>>();
+  const known = (groups: string[][]) => groups.map((group) => group.filter((option) => documents.has(option)));
+  const weight = (options: string[]) => (options.length ? Math.max(...options.map(idf)) : maxIdf);
 
   const repair = (term: string, expired?: () => boolean): string[] => {
     if (term.length < 4 || documents.has(term)) return [term];
     const limit = term.length <= 5 ? 1 : 2;
-    const near: Array<{ word: string; distance: number; count: number }> = [];
-    for (const [at, word] of vocabulary.entries()) {
-      if (at % DEADLINE_EVERY === 0 && expired?.()) break;
-      if ((word[0] !== term[0] && word[1] !== term[1]) || skipped(word)) continue;
-      const distance = editDistance(term, word, limit);
-      if (distance <= limit) near.push({ word, distance, count: documents.get(word)! });
+    const ats = new Set<number>();
+    for (let length = term.length - limit; length <= term.length + limit; length++) {
+      for (const key of [`0${term[0]}${length}`, `1${term[1]}${length}`]) for (const at of near.get(key) ?? []) ats.add(at);
     }
-    near.sort((a, b) => a.distance - b.distance || b.count - a.count);
-    return [term, ...near.slice(0, 3).map((candidate) => candidate.word)];
+    const found: Array<{ word: string; distance: number; count: number }> = [];
+    const mask = letters(term);
+    for (const [checked, at] of [...ats].sort((a, b) => a - b).entries()) {
+      if (checked % DEADLINE_EVERY === 0 && expired?.()) break;
+      if (bits(mask & ~masks[at]!) > limit || bits(masks[at]! & ~mask) > limit) continue;
+      const word = vocabulary[at]!;
+      const distance = editDistance(term, word, limit);
+      if (distance <= limit) found.push({ word, distance, count: documents.get(word)! });
+    }
+    found.sort((a, b) => a.distance - b.distance || b.count - a.count);
+    return [term, ...found.slice(0, 3).map((candidate) => candidate.word)];
   };
 
   return {
-    terms(query, expired) {
+    terms(query, expired, extra = "") {
       const all = words(redactSecretsInText(query));
+      const known = words(redactSecretsInText(extra)).filter((word) => documents.has(word));
       const parts = new Set<string>();
       const joined: string[] = [];
       for (let i = 0; i + 1 < all.length; i++) {
@@ -223,9 +317,31 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
           parts.add(all[i]!).add(all[i + 1]!);
         }
       }
-      const base = [...new Set(all.filter((word) => !skipped(word) && !parts.has(word) && !/^\d+$/.test(word) && word.length <= MAX_WORD))];
+      const base = [...new Set([...all, ...known].filter((word) => !skipped(word) && !parts.has(word) && !/^\d+$/.test(word) && word.length <= MAX_WORD))];
       const list = [...base, ...joined].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
       return { list, groups: list.map((term) => repair(term, expired)) };
+    },
+    possible(terms) {
+      const { list, groups } = terms;
+      const inNotes = known(groups);
+      const found = inNotes.filter((options) => options.length);
+      const whole = inNotes.reduce((sum, options) => sum + weight(options), 0);
+      if (!(list.length >= 2 && found.length >= 2 && found.some((options) => weight(options) >= rareBar) && found.reduce((sum, options) => sum + weight(options), 0) / whole >= MIN_COVER)) return false;
+      // every gate rule but nearness, checked on each piece from the postings, so a turn no piece could pass skips the search
+      const tokens = groupBits(inNotes);
+      matched.set(terms, tokens);
+      const weights = inNotes.map(weight);
+      let scan = 0;
+      for (const token of tokens.keys()) scan += postings.get(token)?.length ?? 0;
+      if (scan > SCAN_POSTINGS) return true;
+      const masks = new Map<number, number>();
+      for (const [token, mask] of tokens) for (const at of postings.get(token) ?? []) masks.set(at, (masks.get(at) ?? 0) | mask);
+      const inTitle = new Set([...tokens.keys()].flatMap((token) => titled.get(token) ?? []));
+      return [...masks].some(([at, mask]) => {
+        if (!inTitle.has(at) || bits(mask) < 2) return false;
+        const groups = weights.flatMap((value, group) => (mask & (1 << group) ? [value] : []));
+        return groups.some((value) => value >= rareBar) && groups.reduce((sum, value) => sum + value, 0) / whole >= MIN_COVER;
+      });
     },
     hits({ groups }) {
       const match = [...new Set(groups.flat())].map((term) => `"${term}"`).join(" OR ");
@@ -233,25 +349,24 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       // SAFETY: the SELECT above names exactly these two columns.
       return (search.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
     },
-    gate({ list, groups }, hits) {
+    gate(terms, hits) {
+      const { list, groups } = terms;
       if (list.length < 2) return [];
-      const known = groups.map((group) => group.filter((option) => documents.has(option)));
-      const weight = (options: string[]) => (options.length ? Math.max(...options.map(idf)) : maxIdf);
-      const whole = known.reduce((sum, options) => sum + weight(options), 0);
+      const inNotes = known(groups);
+      const whole = inNotes.reduce((sum, options) => sum + weight(options), 0);
+      const weights = inNotes.map(weight);
+      const found = matched.get(terms) ?? groupBits(inNotes);
       return hits.filter((hit) => {
-        let cover = 0;
-        let rare = 0;
-        const positions: number[][] = [];
-        for (const options of known) {
-          const at = hit.tokens.flatMap((token, position) => (options.some((option) => matchesToken(token, option)) ? [position] : []));
-          if (!at.length) continue;
-          const value = weight(options);
-          cover += value;
-          if (value >= rareBar) rare++;
-          positions.push(at);
+        if (!hit.title.some((token) => found.has(token))) return false;
+        const at = inNotes.map((): number[] => []);
+        for (const [position, token] of hit.tokens.entries()) {
+          const mask = found.get(token);
+          if (mask) for (const group of at.keys()) if (mask & (1 << group)) at[group]!.push(position);
         }
-        if (positions.length < 2 || rare < 1 || cover / whole < MIN_COVER || !hasNearPair(positions)) return false;
-        return known.flat().some((option) => hit.title.some((token) => matchesToken(token, option)));
+        const positions = at.filter((list) => list.length);
+        const cover = at.reduce((sum, list, group) => sum + (list.length ? weights[group]! : 0), 0);
+        const rare = at.some((list, group) => list.length && weights[group]! >= rareBar);
+        return positions.length >= 2 && rare && cover / whole >= MIN_COVER && hasNearPair(positions);
       });
     },
     close: () => db.close(),
@@ -261,6 +376,8 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
 export interface MemoryLookupDeps {
   dataDir: string;
   notesPath: (botId: string) => string | undefined;
+  /** Every ask in the bot's task records; parked ones are hidden from its asks list, so lookup finds them. */
+  asks?: (botId: string) => readonly TaskAsk[];
   now?: () => number;
   /** High-resolution ms, for the budget. */
   clock?: () => number;
@@ -304,15 +421,99 @@ function pastTheCut(botId: string): { text: string; firstLine: number } | null {
   return { text: raw.slice(loaded.text.length), firstLine: loaded.text.split("\n").length };
 }
 
+/** A bot's asks across its owner's chats, each as its newest record has it; room and routine threads (`notOwner`) hold other people's words. */
+export function botAsks(
+  bot: { threadId: string; tasks?: readonly { threadId: string }[] } | null | undefined,
+  read: (threadId: string) => { updatedAt?: number; asks?: readonly TaskAsk[] } | null,
+  notOwner: ReadonlySet<string>,
+): TaskAsk[] {
+  if (!bot) return [];
+  const threads = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)].filter((threadId) => !notOwner.has(threadId)));
+  return latestTaskAsks([...threads].flatMap((threadId) => read(threadId) ?? []), (ask) => ask.ask);
+}
+
+function parkedAsksFile(asks: readonly TaskAsk[], now: number): NoteFile | null {
+  const parked = asks.filter((ask) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now);
+  if (!parked.length) return null;
+  const text = parked.map((ask) => `- ${ask.ask} (${ask.id}, parked until ${localDay(ask.until!)})`).join("\n");
+  return { source: ASKS_SOURCE, tier: 0, text, mtime: Math.max(...parked.map((ask) => ask.changedAt)) };
+}
+
+// the typed words drop a paragraph over the note-taker's limits; its start is still searched, by the words the notes have
+function clippedParagraphs(text: string): string {
+  const long = withoutBlocks(text).split(/\n\s*\n/)
+    .filter((paragraph) => !paragraph.includes("<") && (paragraph.length > PARAGRAPH_CHARS || paragraph.split("\n").length > PARAGRAPH_LINES));
+  return userTyping(long.map((paragraph) => paragraph.replace(/`/g, "").split("\n").slice(0, PARAGRAPH_LINES).join("\n").slice(0, PARAGRAPH_CHARS).replace(/\s+\S*$/, "")).join("\n\n"), false);
+}
+
+// only a secret's value is held back, never the whole message: a key-shaped word, a secret's label, and what follows a label
+export function searchable(text: string): string {
+  const chunks = text.split(/\s+/).filter(Boolean);
+  const kept: string[] = [];
+  let after: "label" | "value" | null = null;
+  for (const [at, chunk] of chunks.entries()) {
+    // a two-word label ("api key"), never a withheld value plus the next word
+    if (secretLike(chunk) || (after === null && at > 0 && secretLike(`${chunks[at - 1]} ${chunk}`))) {
+      // a key-shaped word is the value itself; a plain word is a label whose value follows
+      after = /\d/.test(chunk) || chunk.length > 24 ? "value" : "label";
+      continue;
+    }
+    // the word after a label, then any number-bearing words that continue it ("4111 1111 1111 1111")
+    if (after === "label" || (after === "value" && /\d/.test(chunk))) {
+      after = "value";
+      continue;
+    }
+    after = null;
+    kept.push(chunk);
+  }
+  return kept.join(" ");
+}
+
+// every side file sync carries: any language, up to 3 folders deep, set-aside copies and undo backups left out
+async function sideFiles(memoryDir: string, folder = "memory", depth = 0): Promise<string[]> {
+  const entries = await readdir(join(memoryDir, ...folder.split("/").slice(1)), { withFileTypes: true }).catch(() => []);
+  const found = await Promise.all(entries.map(async (entry) => {
+    const file = `${folder}/${entry.name}`;
+    if (BACKUP.test(entry.name)) return [];
+    if (entry.isFile()) return isSyncedFile(file) && !PARKED_COPY.test(entry.name) ? [file] : [];
+    return entry.isDirectory() && depth < SIDE_DEPTH ? sideFiles(memoryDir, file, depth + 1) : [];
+  }));
+  return found.flat().sort();
+}
+
+// the saved lines past the cut, oldest first, as many as the room left in the corpus holds
+function withinBudget(text: string, room: number): string {
+  if (Buffer.byteLength(text) <= room) return text;
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of text.split("\n")) {
+    used += Buffer.byteLength(line) + 1;
+    if (used > room) break;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile[]> {
   const files: NoteFile[] = [];
   let bytes = 0;
   for (const { source, tier, path, mtime, size } of sources) {
-    if (bytes + size > MAX_CORPUS_BYTES) continue;
-    bytes += size;
+    // an import file only counts for the lines past the cut: a big one fills what is left, it is not skipped whole
+    const shared = source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE;
+    if (!shared) {
+      if (bytes + size > MAX_CORPUS_BYTES) continue;
+      bytes += size;
+    }
     if (tier === 0 && source === "MEMORY.md") {
       const past = pastTheCut(botId);
       if (past) files.push({ source, tier, mtime, ...past });
+      continue;
+    }
+    if (shared) {
+      // the lines before the cut already ride in every prompt
+      const text = withinBudget(source === IMPORT_SOURCE ? botImportPastTheCut(botId) : aboutYouPastTheCut(), MAX_CORPUS_BYTES - bytes);
+      bytes += Buffer.byteLength(text);
+      if (text) files.push({ source, tier, mtime, text });
       continue;
     }
     const text = await readFile(path, "utf8").catch(() => null);
@@ -326,7 +527,9 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const now = deps.now ?? Date.now;
   const clock = deps.clock ?? (() => performance.now());
   const logFile = join(deps.dataDir, LOG_FILE);
-  let flagged = new Set<string>();
+  // null: no list, so every bot
+  let listed: Set<string> | null = null;
+  const on = (botId: string) => !listed || listed.has(botId);
   const indexes = new Map<string, { index: RecallIndex; signature: string }>();
   const runs = new Map<string, number>();
   const shown = new Map<string, { cursor: string; rows: Set<string> }>();
@@ -335,9 +538,10 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
 
   const loadFlags = async () => {
     const parsed = await readFile(join(deps.dataDir, FLAG_FILE), "utf8")
-      .then((text) => z.array(z.string()).safeParse(parseJson(text)), () => null)
+      .then((text) => z.array(z.string()).safeParse(parseJson(text)), (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : null))
       .catch(() => null);
-    flagged = new Set(parsed?.success ? parsed.data : []);
+    // a list that cannot be read turns lookup off rather than on for bots it may leave out
+    listed = parsed === undefined ? null : new Set(parsed?.success ? parsed.data : []);
   };
 
   const drop = (botId: string) => {
@@ -345,15 +549,17 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     indexes.delete(botId);
   };
 
-  const sourcesOf = async (botId: string): Promise<Source[]> => {
+  const sourcesOf = async (botId: string, own: boolean, overflow: boolean, ownOverflow: boolean): Promise<Source[]> => {
     const memoryDir = join(workspaceDir(botId), "memory");
     const notes = deps.notesPath(botId);
-    const found = await Promise.all([
+    const found = await Promise.all(!own ? [
+      ...(overflow ? [statSource(ABOUT_YOU_SOURCE, 0, aboutYouFile())] : []),
+      ...(ownOverflow ? [statSource(IMPORT_SOURCE, 0, botImportFile(botId))] : []),
+    ] : [
       statSource("MEMORY.md", 0, join(workspaceDir(botId), "MEMORY.md")),
-      ...listMemoryTopics(botId)
-        .filter((topic) => !PARKED_COPY.test(topic.name))
-        .map((topic) => statSource(`memory/${topic.name}`, 0, join(memoryDir, topic.name))),
+      ...(await sideFiles(memoryDir)).map((file) => statSource(file, 0, join(memoryDir, file.slice("memory/".length)))),
       ...(notes ? [statSource(basename(notes), 1, notes)] : []),
+      ...(overflow ? [statSource(ABOUT_YOU_SOURCE, 0, aboutYouFile())] : []),
     ]);
     return found.filter((source) => source !== null);
   };
@@ -361,17 +567,21 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const refresh = async (botId: string) => {
     try {
       await loadFlags();
-      if (!flagged.has(botId)) {
+      const overflow = Boolean(aboutYouPastTheCut());
+      const ownOverflow = Boolean(botImportPastTheCut(botId));
+      // a build still running for an earlier state must find itself replaced, whether this refresh builds or drops
+      const run = (runs.get(botId) ?? 0) + 1;
+      runs.set(botId, run);
+      if (!on(botId) && !overflow && !ownOverflow) {
         drop(botId);
         return;
       }
-      const run = (runs.get(botId) ?? 0) + 1;
-      runs.set(botId, run);
-      const sources = await sourcesOf(botId);
-      const signature = JSON.stringify(sources);
+      const sources = await sourcesOf(botId, on(botId), overflow, ownOverflow);
+      const asks = on(botId) ? parkedAsksFile(deps.asks?.(botId) ?? [], now()) : null;
+      const signature = JSON.stringify([sources, asks?.text]);
       if (indexes.get(botId)?.signature === signature) return;
-      const index = await buildRecallIndex(await readNoteFiles(botId, sources));
-      if (runs.get(botId) !== run || !flagged.has(botId)) {
+      const index = await buildRecallIndex([...await readNoteFiles(botId, sources), ...(asks ? [asks] : [])]);
+      if (runs.get(botId) !== run || (!on(botId) && !overflow && !ownOverflow)) {
         index.close();
         return;
       }
@@ -423,13 +633,14 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       entry.reason = "no-index";
       return [];
     }
-    const terms = index.terms(userTyping(text), over);
+    const terms = index.terms(searchable(userTyping(text, false)), over, searchable(clippedParagraphs(text)));
     entry.words = terms.list;
     if (over()) return [];
     if (!terms.list.length) {
       entry.reason = "no-words";
       return [];
     }
+    if (!index.possible(terms)) return [];
     const hits = index.hits(terms);
     entry.rows = logged(hits.slice(0, 3));
     if (over()) return [];
@@ -462,7 +673,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   return {
     refresh,
     take(botId, threadId, cursor, text) {
-      if (!flagged.has(botId)) return [];
+      if (!on(botId) && !indexes.has(botId)) return [];
       pending.delete(markKey(botId, threadId));
       const entry: LookupLog = { at: now(), botId, words: [], rows: [], ms: 0, fired: false, reason: "no-match" };
       try {

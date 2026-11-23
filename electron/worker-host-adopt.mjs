@@ -78,7 +78,12 @@ export function keptNoteText({ running = [], finished = [], unreachable = [] }) 
  * A host this app cannot reach blocks both: its panes are neither stopped nor started a second time.
  */
 export async function adoptWorkers({ client, runs, host, mailbox = async () => null, botNames = async () => null, recover = async () => {}, warn = () => {}, pacer = createReplayPacer(), wait = sleep, retryMs = RETRY_MS, unknownBotMs = UNKNOWN_BOT_MS, replayMs = REPLAY_MS }) {
-  const records = new Map(runs.left().map((run) => [run.id, run]));
+  const records = new Map();
+  for (const run of runs.left()) {
+    // A pane that ran in the app ended with it: no worker host can hand it back, so it never waits for one.
+    if (!run.local) records.set(run.id, run);
+    else if (run.state !== "running") runs.closed(run.id);
+  }
   const groups = new Map();
   const group = (run) => {
     if (!groups.has(run.botId)) groups.set(run.botId, { pane: run, running: [], finished: [], unreachable: [], close: [] });
@@ -122,8 +127,8 @@ export async function adoptWorkers({ client, runs, host, mailbox = async () => n
     for (const pane of panes) {
       const run = records.get(pane.id);
       records.delete(pane.id);
-      // A pane with no record belongs to nobody: it never becomes a row.
-      if (!run) client.drop(pane.id);
+      // A pane with no record, or one its bot closed while the host was out of reach, belongs to nobody: it never becomes a row.
+      if (!run || !runs.has(run.id)) client.drop(pane.id);
       else if (names && !Object.hasOwn(names, run.botId)) {
         runs.held(run.id);
         strangers.push([run, pane]);
@@ -134,6 +139,7 @@ export async function adoptWorkers({ client, runs, host, mailbox = async () => n
     if (strangers.length) void wait(unknownBotMs).then(async () => {
       const [mail, names] = await Promise.all([Promise.resolve().then(mailbox).catch(() => null), Promise.resolve().then(botNames).catch(() => null)]);
       await Promise.all(strangers.map(([run, pane]) => {
+        if (!runs.has(run.id)) return client.drop(pane.id);
         if (!names || Object.hasOwn(names, run.botId)) return take(run, pane, mail);
         client.drop(run.id);
         return runs.closed(run.id);
@@ -151,7 +157,8 @@ export async function adoptWorkers({ client, runs, host, mailbox = async () => n
       told = true;
       warn(`worker host unreachable (${client.state().fault?.detail ?? left}): its panes are left alone`);
       for (const run of records.values()) group(run).unreachable.push(run);
-      void report().catch(warn);
+      // Local rows resume in this report: the next pass must not release or recover rows while it runs.
+      await report().catch(warn);
       continue;
     }
     if (!panes) return report();

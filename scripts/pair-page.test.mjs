@@ -181,6 +181,70 @@ describe("pair page", () => {
     expect(page.status.className).toBe("status ok");
   });
 
+  describe("on a glasses lens", () => {
+    const GLASSES = "Mozilla/5.0 (Linux; Android 14; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Safari/537.36";
+    const FOLDABLE = "Mozilla/5.0 (Linux; Android 14; SM-F956N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+    const DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+    const lens = (square, ua = GLASSES) => {
+      vi.stubGlobal("matchMedia", (query) => ({ matches: square && query.includes("aspect-ratio"), media: query }));
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(ua);
+    };
+    const glass = () => document.getElementById("glass");
+    afterEach(() => document.body.removeAttribute("class"));
+
+    it.each([
+      ["?g=1 when the PC can't take Google", "/pair?g=1", googlePc({ start: 409 })],
+      ["a refused Google sign-in", "/pair#g=id.token.sig", googlePc({ signIn: () => new Response(JSON.stringify({ error: "wrong-account" }), { status: 403 }) })],
+    ])("falls back to the glasses code screen after %s", async (_, url, answer) => {
+      lens(true);
+      const page = open(url, answer);
+      await vi.waitFor(() => expect(glass().hidden).toBe(false));
+      expect(document.body.classList.contains("glasses")).toBe(true);
+      expect(page.form.hidden).toBe(true);
+      expect(document.activeElement?.id).toBe("g-code");
+    });
+
+    it.each([
+      ["?g=1 when the PC can't take Google", "/pair?g=1", googlePc({ start: 409 })],
+      ["a refused Google sign-in", "/pair#g=id.token.sig", googlePc({ signIn: () => new Response(JSON.stringify({ error: "wrong-account" }), { status: 403 }) })],
+    ])("keeps the phone form after %s on a phone", async (_, url, answer) => {
+      lens(false, FOLDABLE);
+      const page = open(url, answer);
+      await vi.waitFor(() => expect(page.form.hidden).toBe(false));
+      expect(glass().hidden).toBe(true);
+      expect(document.body.classList.contains("glasses")).toBe(false);
+    });
+
+    it("shows the glasses code screen and lands on /glasses in the glasses web view", async () => {
+      const replace = vi.spyOn(location, "replace").mockImplementation(() => {});
+      lens(true);
+      const page = open("/pair", googlePc());
+      expect(glass().hidden).toBe(false);
+      expect(page.form.hidden).toBe(true);
+      open("/pair#k=wkp_token", async () => new Response("{}", { status: 200 }));
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("/glasses"));
+    });
+
+    // A square window alone is an unfolded foldable, a split-screen phone or a small desktop window.
+    it.each([
+      ["an unfolded foldable", FOLDABLE],
+      ["a small desktop window", DESKTOP],
+      ["an iPhone in split view", IPHONE],
+    ])("keeps the phone form, Google and / on a square window in %s", async (_, ua) => {
+      const replace = vi.spyOn(location, "replace").mockImplementation(() => {});
+      lens(true, ua);
+      const page = open("/pair", googlePc());
+      await vi.waitFor(() => expect(page.google.hidden).toBe(false));
+      expect(page.form.hidden).toBe(false);
+      expect(glass().hidden).toBe(true);
+      expect(document.body.classList.contains("glasses")).toBe(false);
+      open("/pair#k=wkp_token", async () => new Response("{}", { status: 200 }));
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+      expect(replace).toHaveBeenCalledWith("/");
+    });
+  });
+
   it("names a wrong account and offers the code field after a refused Google sign-in", async () => {
     for (const [error, text] of [["wrong-account", "Use the Google account this PC is signed in with."], ["nonce-mismatch", "Google sign-in did not work. Try again, or enter the 6 digit code."]]) {
       const page = open("/pair#g=id.token.sig", googlePc({ signIn: () => new Response(JSON.stringify({ error }), { status: 403 }) }));
