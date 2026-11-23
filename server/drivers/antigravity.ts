@@ -44,7 +44,7 @@ import type {
   RuntimeEventListener,
   SendTurnInput,
 } from "../contracts.ts";
-import { newEventId, newId } from "../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
@@ -564,14 +564,15 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
 
   async create(input: DriverCreateInput<AntigravityConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
-    const env = antigravityEnvironment(input.environment);
-    const signIn = antigravitySignIn(undefined, () => readAntigravityLogSignIn(env));
+    // Per call, so agy installed after Wink started is on PATH without a restart.
+    const env = () => antigravityEnvironment(input.environment);
+    const signIn = antigravitySignIn(undefined, () => readAntigravityLogSignIn(env()));
     const forgetSignedOut = keyringSignOut.onSignedOut(() => signIn.record(false));
     keyringSignOut.attach();
-    const catalogEnv: Record<string, string | undefined> = env;
     let models = STATIC_ANTIGRAVITY_MODELS;
     const refreshModels = async () => {
       try {
+        const catalogEnv: Record<string, string | undefined> = env();
         const resolved = await mergeLocalInject(readAntigravityModelCatalog(catalogEnv), catalogEnv);
         if (resolved.options.length) models = resolved;
       } catch {
@@ -764,7 +765,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       }
       let restoreMcp = () => {};
       try {
-        restoreMcp = mountAntigravityMcp(computer, env);
+        restoreMcp = mountAntigravityMcp(computer, env());
       } catch (error) {
         releaseMcpLock();
         emit({
@@ -817,7 +818,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       try {
         child = spawnCli(config.cli, args, {
           cwd,
-          env: { ...env, ...identity },
+          env: { ...env(), ...identity },
           stdio: ["pipe", "pipe", "pipe"], // prompt on stdin as stream-json NDJSON
         });
       } catch (error) {
@@ -1180,13 +1181,13 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
 
     const snapshot = async (opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot> => {
       const version = await new Promise<string | null>((resolve) => {
-        execCli(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
+        execCli(config.cli, ["--version"], { timeout: 8000, env: env() }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),
         );
       });
-      if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
+      if (!version) return cliNotFound(config.cli);
       const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
-      return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env) : undefined };
+      return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env()) : undefined };
     };
 
     const textModelDenied = new Set<string>();
@@ -1203,7 +1204,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       snapshot,
       loginConfig: () => ({
         cli: `"${process.execPath}" "${SPAWNED_PROXIES.antigravityAuth}"`,
-        env: { ...env, ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli },
+        env: { ...env(), ELECTRON_RUN_AS_NODE: "1", OMB_AGY_CLI: config.cli },
       }),
       // agy older than 1.5 has no ACP logout, and could not update to get one: delete its saved sign-in instead.
       signOutWithoutCli: async (failure) => {
@@ -1261,8 +1262,9 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         }
         let cwd: string | null = null;
         try {
-          const home = antigravityHelperHome(env);
-          const helperEnv = { ...env, HOME: home, USERPROFILE: home };
+          const helperEnv = env();
+          const home = antigravityHelperHome(helperEnv);
+          Object.assign(helperEnv, { HOME: home, USERPROFILE: home });
           const dir = cwd = mkdtempSync(join(tmpdir(), "omb-agy-summary-"));
           let denied = false;
           // stdin like a turn: a summary prompt on argv blows the Windows command line
@@ -1320,7 +1322,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           });
           // an account denied the text model writes notes on the bot's own chat model
           const fallback = opts?.fallbackModel && opts.fallbackModel !== AGY_TEXT_MODEL ? opts.fallbackModel : undefined;
-          const account = fallback ? readAntigravityAccount(env) ?? "" : "";
+          const account = fallback ? readAntigravityAccount(env()) ?? "" : "";
           if (fallback && textModelDenied.has(account)) return await run(fallback);
           try {
             return await run(AGY_TEXT_MODEL);

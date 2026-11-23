@@ -228,6 +228,12 @@ describe("ProviderRegistry", () => {
     } finally { await registry.disposeAll(); }
   });
 
+  it.each(["darwin", "linux"] as const)("installs every built-in engine on a fresh %s without Node", (platform) => {
+    for (const driver of BUILT_IN_DRIVERS) {
+      expect(driver.install?.command?.[platform] ?? "", `${driver.driverKind}: a fresh Mac has no Node; use the engine's native installer`).not.toMatch(/(?:^|[\s;&|(])(?:npm|npx|node|pnpm|yarn)(?:\s|$)/);
+    }
+  });
+
   it("has no install when the platform has no driver command", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([{ ...fake.driver, install: { command: {} } }]);

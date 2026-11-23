@@ -573,5 +573,7 @@ export interface ProviderDriver<Config = unknown> {
 export type AnyProviderDriver = ProviderDriver<any>;
 
 let eventCounter = 0;
+// Usage reads cliMissing as Not Installed, so every driver builds this one snapshot.
+export const cliNotFound = (cli: string): ProviderSnapshot => ({ state: "unavailable", reason: `\`${cli}\` CLI not found`, cliMissing: true });
 export const newEventId = () => `ev-${Date.now().toString(36)}-${(eventCounter++).toString(36)}`;
 export const newId = () => crypto.randomUUID();

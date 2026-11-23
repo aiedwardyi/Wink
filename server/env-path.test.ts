@@ -129,6 +129,20 @@ describe("augmentedPath", () => {
     }
   });
 
+  posixIt("finds every native installer's CLI installed after launch", async () => {
+    resetPathCacheForTests();
+    augmentedPath();
+    const installs = [["claude", ".local"], ["codex", ".local"], ["agy", ".local"], ["muse", ".local"], ["grok", ".grok"]] as const;
+    const files = installs.map(([name, dir]) => join(testHome(), dir, "bin", name));
+    for (const file of files) {
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file, "#!/bin/sh\n");
+      chmodSync(file, 0o755);
+    }
+    await paths.refreshPathCache(installs.map(([name]) => name));
+    expect(installs.map(([name]) => paths.findCliCandidates(name)[0])).toEqual(files);
+  });
+
   it("skips known dirs that do not exist", () => {
     resetPathCacheForTests();
     const parts = augmentedPath().split(delimiter);

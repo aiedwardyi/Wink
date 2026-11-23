@@ -35,7 +35,7 @@ import type {
   RuntimeEventListener,
   SendTurnInput,
 } from "../contracts.ts";
-import { newEventId, newId } from "../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../contracts.ts";
 import {
   awaitDyingAppServers,
   codexHome,
@@ -233,8 +233,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
   metadata: { displayName: "Codex", supportsMultipleInstances: true },
   install: {
     command: {
-      darwin: "npm install -g @openai/codex",
-      linux: "npm install -g @openai/codex",
+      darwin: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+      linux: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
       win32: "npm install -g @openai/codex",
     },
     needsNode: true,
@@ -1132,7 +1132,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         resolve(err ? null : stdout.trim()),
       );
     });
-    if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found`, cliMissing: true };
+    if (!version) return cliNotFound(config.cli);
     const force = opts?.rescan || opts?.refresh;
     const authenticated = input.account ? (await accountStatus(force)).authenticated && engineAccount.type === "chatgpt" : await signedIn(force);
     if (input.account) admitted = authenticated === true;
