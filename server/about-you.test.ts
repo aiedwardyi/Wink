@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -310,6 +310,22 @@ describe("big import", () => {
     expect(lookup.take("room-bot", "room-task", "s1", "what's my favorite tea shop in Busan, Cloudcup?", true)).toEqual([]);
     expect(lookup.take("room-bot", "room-task", "s1", trip, true).join("\n")).toContain("Lisbon");
     expect(lookup.take("room-bot-peer", "room-task", "s1", tea, true)).toEqual([]);
+  });
+
+  it("keeps the oldest lines past the cut findable when Import Memory outgrows the lookup budget", async () => {
+    const pad = "and then it kept walking past the old harbor until the lamps came on along the whole quiet street";
+    const rows = Array.from({ length: 14_000 }, (_, i) => i === 300
+      ? "The user's favorite tea shop is Moonbrew in Daejeon."
+      : i === 13_999
+        ? "The user's favorite bakery is Zephyrine in Gwangju."
+        : `The user visited town number ${i + 1} ${pad}.`);
+    expect(addToAboutYou(`${rows.map((row) => `- ${row}`).join("\n")}\nSource: ChatGPT`, "2026-11-22")).toMatchObject({ added: 14_000 });
+    expect(statSync(file).size).toBeGreaterThan(2 * 1024 * 1024);
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+    await lookup.refresh("unflagged-bot");
+    expect(lookup.take("unflagged-bot", "t1", "s1", "what's my favorite tea shop?").join("\n")).toContain("Moonbrew in Daejeon");
+    // the budget ends the index at its newest end, never the whole file
+    expect(lookup.take("unflagged-bot", "t2", "s1", "Zephyrine")).toEqual([]);
   });
 
   it("adds no lookup for anyone while Import Memory fits in the prompt", async () => {
