@@ -231,6 +231,41 @@ describe("Claude read-only turns run none of the owner's hooks", () => {
   });
 });
 
+describe("Codex web_read reader turn, which mounts no Wink agents", () => {
+  const INHERITED = { mcp_servers: { github: { url: "https://example.invalid/mcp" }, agents: { command: "inert-user-agents" } } };
+  const codex = async () => {
+    setEnv("FAKE_CODEX_MODE", "resume");
+    setEnv("FAKE_CODEX_CONFIG", JSON.stringify(INHERITED));
+    const instance = await CodexDriver.create({ instanceId: "reader-codex", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-codex-app-server.ts"), fullAuto: true } });
+    live.push(instance);
+    return instance;
+  };
+  const sent = (file: string, method: string) => dumped(file).calls.find((call: { method: string }) => call.method === method)?.params;
+
+  it("turns off every inherited MCP server, one named agents included, fresh and resumed", async () => {
+    const instance = await codex();
+    for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", "codex-thread-9"]] as const) {
+      const file = `reader-${method.replace("/", "-")}.json`;
+      setEnv("FAKE_CODEX_DUMP", join(scratch, file));
+      await run(instance, `t-reader-${method}`, { readOnly: true, ...(cursor && { resumeCursor: cursor }) });
+      const { argv } = dumped(file);
+      expect(argv.join(" ")).not.toContain("mcp_servers.agents.command");
+      expect(sent(file, method)).toMatchObject({ sandbox: "read-only", approvalPolicy: "untrusted", config: { "mcp_servers.github.enabled": false, "mcp_servers.agents.enabled": false } });
+    }
+  });
+
+  it("keeps Wink's own agents server on a read-only turn that mounts it", async () => {
+    const instance = await codex();
+    setEnv("FAKE_CODEX_DUMP", join(scratch, "room.json"));
+    await run(instance, "t-room", { readOnly: true, integrations: { agents } });
+    expect(dumped("room.json").argv.join(" ")).toContain("mcp_servers.agents.command");
+    const config = sent("room.json", "thread/start").config;
+    expect(config).toMatchObject({ "mcp_servers.github.enabled": false });
+    expect(config).not.toHaveProperty("mcp_servers.agents.enabled");
+  });
+
+});
+
 describe("read-only launch contract", () => {
   it("runs with a throwaway HOME", () => {
     expect(testHome().startsWith(tmpdir())).toBe(true);
