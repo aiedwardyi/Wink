@@ -127,6 +127,7 @@ it("a dismissed row stays gone when its slow lookup answers afterwards", async (
   });
   const host = await mount(other, { sources: [], declined: false }, undefined, slow);
   expect(host.querySelector("[data-import-card]")).not.toBeNull();
+  // SAFETY: the selector names the dismiss button, an HTMLElement.
   await act(async () => (host.querySelector("[data-import-card] button[aria-label=\"Don't import\"]") as HTMLElement).click());
   expect(host.querySelector("[data-import-card]")).toBeNull();
   await act(async () => {

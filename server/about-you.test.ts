@@ -110,6 +110,7 @@ describe("About You save", () => {
   it("answers a source removal only after what must follow it ran", async () => {
     addToAboutYou("- Likes short answers.\nSource: ChatGPT", "2026-11-16");
     const order: string[] = [];
+    // SAFETY: the route only calls writeHead, setHeader and end on the response.
     const res = { writeHead: () => order.push("sent"), setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
     await aboutYouRoutes.remove(res, "ChatGPT", async () => {
       await Promise.resolve();

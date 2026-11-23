@@ -105,6 +105,7 @@ it("a Keep that finishes after another import was saved does not change the new 
     release = resolve;
   });
   const { host } = await mount(createElement(ImportMemoryCard, { botId: "helper", onClose: () => {} }), async ({ body }) => {
+    // SAFETY: the card posts { text } or { keep }, nothing else.
     const sent = body as { keep?: string[]; text?: string };
     if (sent.keep) {
       await late;
