@@ -21,12 +21,14 @@ const BOILERPLATE = [
   /^>\s/,
   /^(?:RUN|FAIL|PASS|SKIP|✓|×|❯)\s/,
   /^(?:test files|tests|test suites|duration|start at|ran \d+ tests?)\b/i,
-  /command failed with exit code|exited with (?:code|status)|returned non-zero exit status|process didn't exit successfully|could not compile|ELIFECYCLE|ERR_PNPM_RECURSIVE_|^error: aborting due to/i,
+  /command failed with exit code|exited with (?:code|status)|terminated with exit code|returned non-zero exit status|process didn't exit successfully|could not compile|ELIFECYCLE|ERR_PNPM_RECURSIVE_|^error: aborting due to/i,
   /^npm (?:error|ERR!)(?: (?:code|errno|path|command|signal|syscall|a complete log|lifecycle)\b|$)/i,
   // a Docker build's wrapper: it names the step that failed, not why (BuildKit, its older executor, compose v1)
   /\bdid not complete successfully: exit code\b|\bexecutor failed running \[|^(?:error: )?service '[^']*' failed to build\b/i,
   // a CI runner's or task runner's footer: it names the job, the build step's image or the target that failed, not why
   /^process completed with exit code\b|^(?:error: )?build step \d+ "[^"]*" failed\b|^nx\s+running targets? .*\bfailed\b|^failed tasks:$/i,
+  // and its epilogue: GitLab's job result and cleanup, its Kubernetes executor's pod, Jenkins' and Travis' result
+  /^error: job failed\b|^cleaning up (?:project directory|file based variables)\b|^(?:using kubernetes|waiting for pod)\b|^(?:error: )?script returned exit code\b|^finished: (?:failure|unstable|aborted)$|^the command ".*" exited with \d+\.?$/i,
   /^found \d+ errors?\b|^\d+ (?:errors?|failed|failing)\b/i,
   /^make(?:\[\d+\])?: \*\*\*/,
 ];
@@ -47,11 +49,15 @@ const FAILURES = /^(?:⎯+ (?:failed (?:tests|suites) \d+|unhandled (?:errors?|r
 const CHAINED = /^(?:during handling of the above exception, another exception occurred|the above exception was the direct cause of the following exception):$/i;
 // BuildKit's plain progress puts "#<step> <seconds> " before each line a build step printed
 const BUILDKIT = /^#\d+ (?:\d+\.\d+ )?/;
-// a CI runner's mark before a line it relays: Cloud Build's 'Step #1 - "build": ', GitHub Actions' "##[error]" and "##[group]"
-const CI_PREFIX = /^(?:Step #\d+(?: - "[^"]*")?: ?|##\[[a-z]+\])/i;
+// a CI runner's mark before a line it relays: Cloud Build's 'Step #1 - "build": ', Azure's and GitHub Actions' "##[error]" and
+// "##[group]", GitHub Actions' workflow commands ("::error::", "::error file=a.ts,line=3::", "::group::"), GitLab's section marks
+const CI_PREFIX = /^(?:Step #\d+(?: - "[^"]*")?: ?|##\[[a-z]+\]|::(?:error|warning|notice|debug|group|endgroup)(?: [^\r\n]*?)?::|section_(?:start|end):\d+:[\w.-]+(?:\[[^\]]*\])?)/i;
 // what a jest assertion expected and received: two failures of one test differ there, and only there
 const ASSERTED = /^(?:expected|received)\b[\w ]*:\s*\S/i;
 const MATCHER = /\bexpect\(received\)/;
+// a Rust assertion says how it compared, and the left and right values under it say what: two failures of one test differ there
+const COMPARED = /\bassertion (?:`left [!=]= right` failed|failed: `\(left [!=]= right\)`)/;
+const SIDE = /^(?:left|right):\s*\S/;
 const WEAK = /\b(?:error|failed|failure|cannot|can't|could not|unable|not found|no such|denied|refused|hang up|timed? ?out|undefined|invalid|unexpected|missing)\b/i;
 // Fail closed: a failure is signed only when it says which failure it is, since a missed handoff costs nothing and a wrong one
 // teaches a bot the wrong fix. That is a failing test with its file, from a runner read below, or an error naming a path with a
@@ -111,17 +117,19 @@ export function errorLine(output: string): string {
   const chained = traceback ? all.findIndex((line) => CHAINED.test(line)) : -1;
   const lines = chained < 0 ? all : all.slice(0, chained);
   const strong = lines.flatMap((line, at) => (STRONG.test(line) ? [at] : []));
-  const asserted = lines.findIndex((line) => ASSERTED.test(line));
-  const at = (traceback ? strong.at(-1) : strong[0]) ?? (asserted >= 0 ? asserted : built ? -1 : lines.findIndex((line) => WEAK.test(line)));
+  const asserted = lines.findIndex((line) => ASSERTED.test(line) || COMPARED.test(line));
+  // an assertion and its values say which failure this is ahead of an error line after it, often the runner's own ("error: test failed")
+  const first = asserted >= 0 && !(strong[0]! < asserted) ? asserted : strong[0];
+  const at = (traceback ? strong.at(-1) : first) ?? (asserted >= 0 ? asserted : built ? -1 : lines.findIndex((line) => WEAK.test(line)));
   const line = lines[at] ?? "";
   // a header with no detail under it says nothing about which failure this is
   if (HEADER.test(line)) return lines[at + 1] ? `${line} ${lines[at + 1]}` : "";
-  // nor does a jest assertion without the values it expected and received
+  // nor does an assertion without the values it expected and received
   let end = at + 1;
-  while (end < lines.length && ASSERTED.test(lines[end]!)) end++;
-  const values = lines.slice(at === asserted ? at : at + 1, end).filter((text) => ASSERTED.test(text));
-  if (at === asserted) return values.join(" ");
-  return MATCHER.test(line) ? (values.length ? `${line} ${values.join(" ")}` : "") : line;
+  while (end < lines.length && (ASSERTED.test(lines[end]!) || SIDE.test(lines[end]!))) end++;
+  const values = lines.slice(at + 1, end);
+  if (at === asserted && ASSERTED.test(line)) return [line, ...values].join(" ");
+  return MATCHER.test(line) || COMPARED.test(line) ? (values.length ? `${line} ${values.join(" ")}` : "") : line;
 }
 
 /** Where a shell call ran: the repo it ran in and the folder inside it. */

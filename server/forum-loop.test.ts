@@ -42,7 +42,7 @@ const CODEX = {
 } as const;
 const vitest = (file: string, test: string) => `Exit code 1\n RUN  v4.1.10 D:/proj\n\n FAIL  ${file} > ${test}\nAssertionError: expected false to be true // Object.is equality\n\n ❯ ${file}:14:27\n\n Test Files  1 failed (1)`;
 const pytest = (file: string, test: string) => `${file} F\n\n____ ${test} ____\n\n>       assert status == 401\nE       assert 200 == 401\n\nFAILED ${file}::${test} - assert 200 == 401`;
-const cargo = (test: string) => `running 2 tests\ntest tests::${test} ... FAILED\n\nfailures:\n\n---- tests::${test} stdout ----\nthread 'tests::${test}' panicked at src/lib.rs:10:5:\nassertion \`left == right\` failed\n\nerror: test failed, to rerun pass \`--lib\``;
+const cargo = (test: string) => `running 2 tests\ntest tests::${test} ... FAILED\n\nfailures:\n\n---- tests::${test} stdout ----\nthread 'tests::${test}' panicked at src/lib.rs:10:5:\nassertion \`left == right\` failed\n  left: 2\n right: 3\n\nerror: test failed, to rerun pass \`--lib\``;
 const CART = ["pnpm vitest run src/cart.test.ts", vitest("src/cart.test.ts", "cart > applies a coupon")] as const;
 const AUTH = ["pnpm vitest run src/auth.test.ts", vitest("src/auth.test.ts", "auth > rejects an expired token")] as const;
 
@@ -1040,6 +1040,50 @@ describe("what tells two failures apart, and what only tells two runs apart", ()
     for (const output of [actions(108), nx(108, "1.9s")]) expect(errorLine(output)).toBe("Expected: 108 Received: 100");
     // a matcher line with no values under it says only which matcher failed
     expect(sig("npx jest", "FAIL src/tax.test.ts\n  ● invoice tax\n    Error: expect(received).toBe(expected) // Object.is equality")).toBeUndefined();
+  });
+
+  it("reads through any CI runner's annotation marks, never signs a runner's footer, and signs a Rust assertion only by its left and right values", () => {
+    const jest = (expected: number, received: number) => ["FAIL src/tax.test.ts", "  ● invoice tax", "", "    expect(received).toBe(expected) // Object.is equality", "", `    Expected: ${expected}`, `    Received: ${received}`, "", "      at Object.toBe (src/tax.test.ts:15:24)", "", "Tests:       1 failed, 1 total"];
+    // GitHub Actions' workflow commands ("::group::", "::error::", "::error file=...::") and Azure's "##[error]" before a line
+    const actions = (expected: number, received: number) => ["::group::Run npm test", "npm test", "::endgroup::", ...jest(expected, received), "::error::Process completed with exit code 1"].join("\n");
+    expect(errorLine(actions(108, 100))).toBe("Expected: 108 Received: 100");
+    expect(sig("npm test", actions(108, 100))).toBeTruthy();
+    expect(sig("npm test", actions(108, 100))).not.toBe(sig("npm test", actions(20, 0)));
+    const tsc = "src/page.tsx(3,8): error TS2307: Cannot find module './icons'.";
+    for (const mark of ["::error::", "::warning::", "##[error]", "::error file=src/page.tsx,line=3,col=8::", "::notice title=tsc::"]) {
+      expect(errorLine(`::group::Run npx tsc\n${mark}${tsc}\n::error::Process completed with exit code 2.`)).toBe(tsc);
+    }
+    // GitLab's job footer and cleanup, under its Kubernetes executor or not
+    const gitlab = (expected: number, received: number, footer: string) => [
+      "Using Kubernetes executor with image node:20 ...", "Waiting for pod gitlab-runner/runner-abc123-project-7-concurrent-0 to be running, status is Pending",
+      "section_start:1763806329:step_script\r", "$ npm test", ...jest(expected, received), "section_end:1763806331:step_script\r",
+      "Cleaning up project directory and file based variables", footer,
+    ].join("\n");
+    for (const footer of ["ERROR: Job failed: command terminated with exit code 1", "ERROR: Job failed: exit code 1"]) {
+      expect(errorLine(gitlab(108, 100, footer))).toBe("Expected: 108 Received: 100");
+      expect(sig("npm test", gitlab(108, 100, footer))).toBeTruthy();
+      expect(sig("npm test", gitlab(108, 100, footer))).not.toBe(sig("npm test", gitlab(20, 0, footer)));
+    }
+    // a runner's footer alone (GitLab, its Kubernetes executor, Jenkins, Travis, GitHub Actions) says only that the job failed
+    for (const footer of ["ERROR: Job failed: command terminated with exit code 1", "ERROR: Job failed (system failure): pod gitlab-runner/runner-abc123 status is Failed", "ERROR: script returned exit code 1", "Finished: FAILURE", "The command \"./deploy.sh\" exited with 1.", "::error::Process completed with exit code 1."]) {
+      expect(errorLine(`$ ./deploy.sh\n${footer}`)).toBe("");
+    }
+    // cargo test: one test, the same panic place and footer, other values
+    const cargo = (left: number, right: number) => [
+      "running 1 test", "test invoice::us_tax ... FAILED", "", "failures:", "", "---- invoice::us_tax stdout ----", "thread 'invoice::us_tax' panicked at src/tax.rs:15:5:",
+      "assertion `left == right` failed", `  left: ${left}`, ` right: ${right}`, "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace", "",
+      "failures:", "    invoice::us_tax", "", "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s", "", "error: test failed, to rerun pass `--lib`",
+    ].join("\n");
+    expect(errorLine(cargo(100, 108))).toBe("assertion `left == right` failed left: 100 right: 108");
+    expect(sig("cargo test", cargo(100, 108))).toBeTruthy();
+    expect(sig("cargo test", cargo(100, 108))).toBe(sig("cargo test", cargo(100, 108)));
+    expect(sig("cargo test", cargo(100, 108))).not.toBe(sig("cargo test", cargo(20, 0)));
+    const panic = (left: number, right: number) => `thread 'invoice::us_tax' panicked at src/tax.rs:15:5:\nassertion \`left != right\` failed: totals\n  left: ${left}\n right: ${right}\nnote: run with \`RUST_BACKTRACE=1\` environment variable to display a backtrace`;
+    expect(sig("cargo test", panic(100, 108))).toBeTruthy();
+    expect(sig("cargo test", panic(100, 108))).not.toBe(sig("cargo test", panic(20, 0)));
+    // with no values the assertion says only that two sides differed
+    expect(errorLine("thread 'invoice::us_tax' panicked at src/tax.rs:15:5:\nassertion `left == right` failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace")).toBe("");
+    expect(sig("cargo test", cargo(100, 108).replace(/\n {0,2}(?:left|right): \d+/g, ""))).toBeUndefined();
   });
 
   it("follows cd -P, cd -L and a WSL /mnt/<drive> path", () => {
