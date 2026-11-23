@@ -473,7 +473,9 @@ export function paneNotesForTurn(
 ): { notes: string[]; newestId?: string; ids?: string[]; tokens?: number } {
   const pending = replaysTranscript && !inlineReplay ? [] : pendingPaneNotes(messages, excludeIds, deliveredId);
   const sent = contextWindow ? fitPaneNotes(pending, contextWindow) : pending;
-  const notes = sent.map((note) => note.text);
+  // held mail replies still reach this turn through mailForTurn
+  const held = pending.slice(sent.length).filter((note) => !note.mail).length;
+  const notes = [...sent.map((note) => note.text), ...(held ? [`[+${held} worker note${held === 1 ? "" : "s"} waiting, next turn]`] : [])];
   // Held-back notes stay pending: the watermark stops at the last one sent.
   const newestId = sent.length < pending.length
     ? sent.at(-1)?.id

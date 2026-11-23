@@ -799,6 +799,8 @@ export class Store {
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
   private threads: ThreadCache;
+  /** Chats a find or jump answered from disk, where the old ones loaded them, with the head that load held: it stays until a head is stored. */
+  private foundOnDisk = new Map<string, string | null>();
   /** Threads a driver still owns after Stop marked its bot idle; the cache keeps them. */
   private heldThreads: () => Iterable<string> = () => [];
   private taskPackets = new Map<string, TaskResumePacket | null>();
@@ -1184,6 +1186,7 @@ export class Store {
   /** Room thread imports write their rows outside the store. */
   syncedGroupThread(groupId: string, threadId: string): void {
     this.threads.delete(threadId);
+    this.foundOnDisk.delete(threadId);
     this.saveGroups();
     this.emit({ type: "group", groupId });
   }
@@ -1221,6 +1224,7 @@ export class Store {
   /** A thread's durable record: DB rows plus any legacy JSON leftovers. `tell` false writes no delete for other PCs. */
   deleteThreadRecord(threadId: string, tell = true) {
     this.threads.delete(threadId);
+    this.foundOnDisk.delete(threadId);
     this.taskPackets.delete(threadId);
     try {
       deleteTaskResumePacket(threadId);
@@ -1344,6 +1348,7 @@ export class Store {
     if (cached) return cached;
     const { state, chars } = this.readState(threadId);
     this.threads.set(threadId, state, chars);
+    this.foundOnDisk.delete(threadId);
     return state;
   }
 
@@ -1352,13 +1357,16 @@ export class Store {
     if (this.threads.has(threadId)) return;
     const { state, chars } = this.readState(threadId);
     this.threads.offer(threadId, state, chars);
+    if (this.threads.has(threadId)) this.foundOnDisk.delete(threadId);
   }
 
   /** Takes a chat read off the server thread, unless a write loaded it first. */
   adopt(threadId: string, read: mdb.ThreadRows & { chars: number }): void {
     if (this.threads.has(threadId)) return;
-    const { state, chars } = this.readState(threadId, read);
+    // the reader picked the stored head; a find or jump from disk kept the one an earlier load held
+    const { state, chars } = this.readState(threadId, this.foundOnDisk.has(threadId) ? { ...read, activeLeafId: this.diskHead(threadId) ?? read.activeLeafId } : read);
     this.threads.set(threadId, state, chars);
+    this.foundOnDisk.delete(threadId);
   }
 
   private readState(threadId: string, read = mdb.readThread(threadId, messagesFile(threadId))): { state: ThreadState; chars: number } {
@@ -1372,7 +1380,9 @@ export class Store {
       if (m.parentId === undefined) m.parentId = prev;
       prev = m.id;
     }
-    if (!activeLeafId) activeLeafId = messages.at(-1)?.id ?? null;
+    // a find or jump from disk kept the head an earlier load fell back to, while it is still there
+    const kept = this.foundOnDisk.get(threadId);
+    if (!activeLeafId) activeLeafId = (kept && messages.some((m) => m.id === kept) ? kept : messages.at(-1)?.id) ?? null;
     return { state: { messages, activeLeafId }, chars };
   }
 
@@ -1406,7 +1416,7 @@ export class Store {
   }
 
   activeLeaf(threadId: string): string | null {
-    const head = this.threads.has(threadId) ? undefined : mdb.storedHead(threadId);
+    const head = this.threads.has(threadId) ? undefined : this.diskHead(threadId);
     return head === undefined ? this.thread(threadId).activeLeafId : head;
   }
 
@@ -1429,9 +1439,42 @@ export class Store {
     return path;
   }
 
+  /** Which of `ids` lie on the active path; a thread not loaded walks its stored path, never reading every row. `head`, from findHead when the find began, is the head a load then would have held. */
+  onActivePath(threadId: string, ids: readonly string[], head?: string | null): Set<string> {
+    if (!this.threads.has(threadId)) {
+      this.readOnDisk(threadId, head);
+      return mdb.onStoredPath(threadId, ids, this.foundOnDisk.get(threadId));
+    }
+    const path = new Set(this.activePath(threadId).map((m) => m.id));
+    return new Set(ids.filter((id) => path.has(id)));
+  }
+
+  /** The rows around `messageId` read from disk for a chat not loaded, which a jump once loaded; null when it is loaded or no stored row has that id. */
+  storedWindow(threadId: string, messageId: string, limit: number): { messages: Message[]; hasMore: boolean } | null {
+    if (this.threads.has(threadId)) return null;
+    const window = mdb.storedWindow(threadId, messageId, limit);
+    if (window) this.readOnDisk(threadId);
+    return window;
+  }
+
+  /** For a chat not loaded, the head a load now would hold: a find reads its hits off this thread, and a sync can land before they come back. */
+  findHead(threadId: string): string | null | undefined {
+    return this.threads.has(threadId) ? undefined : mdb.storedHead(threadId) ?? null;
+  }
+
+  /** Notes a chat a find or jump read from disk; the first read keeps the head a load there would have held. */
+  private readOnDisk(threadId: string, head = mdb.storedHead(threadId) ?? null): void {
+    if (!this.foundOnDisk.has(threadId)) this.foundOnDisk.set(threadId, head);
+  }
+
+  /** The head of a chat not loaded: once a find or jump read it from disk, the head a load there held until a head is stored. */
+  private diskHead(threadId: string): string | null | undefined {
+    return mdb.storedHead(threadId, this.foundOnDisk.get(threadId));
+  }
+
   /** activePath newest first, read lazily from disk when the thread is not loaded. */
   activePathBack(threadId: string): Iterable<Message> {
-    return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
+    return (!this.threads.has(threadId) && mdb.activePathBack(threadId, this.foundOnDisk.get(threadId))) || this.activePath(threadId).toReversed();
   }
 
   /** messagesFor(threadId).findLast(predicate), read newest first from disk when the thread is not loaded. */
@@ -1476,7 +1519,7 @@ export class Store {
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
     // mail is matched by key against every row and a screen frame prunes older ones; both need the transcript
-    const head = this.threads.has(threadId) || message.comm?.mailKey || message.kind === "screen" ? undefined : mdb.storedHead(threadId);
+    const head = this.threads.has(threadId) || message.comm?.mailKey || message.kind === "screen" ? undefined : this.diskHead(threadId);
     if (head !== undefined) return this.appendRow(threadId, message, head);
     const t = this.thread(threadId);
     if (message.comm?.mailKey) {
@@ -2353,6 +2396,7 @@ export class Store {
       }
     });
     this.threads.delete(threadId);
+    this.foundOnDisk.delete(threadId);
     // a client that already painted this chat follows the new parents and leaf
     for (const message of moved.values()) this.emit({ type: "message.patch", threadId, message });
     if (leaf) this.emit({ type: "thread", threadId, activeLeafId: leaf });
@@ -2371,6 +2415,9 @@ export class Store {
         task = { threadId, title: UNTITLED_TASK, createdAt: 0, resumeCursors: {} };
         bot.tasks = [...(bot.tasks ?? []), task];
       }
+      // a parentless row or a null head reads differently from disk than in a loaded chat; read in a chat find left on disk first, as finding it once loaded it
+      const loadedReading = (change: SyncChange) => change.kind === "head" ? change.value === null : change.kind === "row" && (change.value as Message).parentId === undefined;
+      if (this.foundOnDisk.has(threadId) && changes.some(loadedReading)) this.thread(threadId);
       const cached = this.threads.peek(threadId);
       const events: StoreChange[] = [];
       const pathChanged = mdb.withMessageTransaction((db) => {

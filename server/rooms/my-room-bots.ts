@@ -20,8 +20,8 @@ export interface MyRoomBotDeps {
   /** The bot's task thread still exists. */
   hasTask(botId: string, threadId: string): boolean;
   createTask(botId: string, title: string): { threadId: string } | null;
-  /** `prompt` goes to the model; `typed` is the task's user row. `readOnly` when someone other than this PC's person asked. */
-  startTurn(botId: string, threadId: string, prompt: string, typed: string, failed: () => void, readOnly: boolean): Promise<unknown>;
+  /** `prompt` goes to the model; `typed` is the task's user row. `readOnly` when the asker can't make bots work; `guest` when anyone but this PC's person asked. */
+  startTurn(botId: string, threadId: string, prompt: string, typed: string, failed: () => void, readOnly: boolean, guest: boolean): Promise<unknown>;
   /** The bot's engine can run a read-only turn. */
   readOnlyTurns(botId: string, threadId: string): boolean;
   messagesFor(threadId: string): Message[];
@@ -256,7 +256,7 @@ export class MyRoomBotTurns {
       this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length, pictureAbort: new AbortController() }));
       await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {
         if (this.running.get(threadId) === mine) void this.settled(threadId, false);
-      }, readOnly);
+      }, readOnly, readOnly || sender !== room.me.id);
       // a Stop before dispatch cancels the turn without a turn.completed
       if (this.stopped.has(threadId) && this.running.get(threadId) === mine && !this.deps.busy(local.id)) void this.settled(threadId, false);
     } catch (error) {

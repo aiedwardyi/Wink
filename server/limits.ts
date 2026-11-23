@@ -107,6 +107,8 @@ export const KEPT_LIMITS: Limits = {
   "server/verify-app.ts": { MAX_URLS: AUTO },
   "server/verify-doc.ts": { MAX_BYTES: "Crash: the whole document zip is parsed in memory." },
   "server/verify-site.ts": { MAX_FILES: FILE, MAX_FOLDERS: FILE, MAX_FILE_BYTES: FILE, MAX_SITE_BYTES: FILE },
+  "server/web-read-net.ts": { MAX_BODY_BYTES: "Crash: a web page body is held in memory; a bigger page is read up to here, never refused." },
+  "server/web-read.ts": { MAX_HOPS: "Runaway loop: a redirect chain must end; the read stops there and says so." },
   "shared/google-id-token.ts": {
     MAX_TOKEN_CHARS: OUTSIDER,
     MAX_MAX_AGE_SEC: "Security: a provider's cache header cannot pin Google's signing keys for longer than a day.",

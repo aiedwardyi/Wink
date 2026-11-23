@@ -33,6 +33,7 @@
 //   board_post(kind, title, body, …)      → leave a stuck, fix, tip or handoff post on the Board
 //   hand_off()                            → a busy bot's room reply: run the asked work once it is free
 //   import_memory(decline?)               → a new chat: save the user's pasted other-AI answer to Import Memory
+//   web_read(url, own_tool_failed?)       → read a public page as text before saying it can't be read
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -51,6 +52,7 @@ import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from ".
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { recordToolSchemas } from "../turn-timing.ts";
 import { createToolCatalog, deferOptional } from "./tool-catalog.ts";
+import { WEB_READ_TOOL, webRead } from "./web-read-tool.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -62,7 +64,7 @@ const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 // Routine inspection and delegation waits stay callable without proactive prompt guidance.
 const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
 // A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
-export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
+export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed", "web_read"]);
 const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
 const verifyCalls = new Map<unknown, AbortController>();
@@ -275,6 +277,7 @@ const TOOLS = [
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(process.env.OMB_HAND_OFF === "1" ? [HAND_OFF_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
+  WEB_READ_TOOL,
   ...BOARD_TOOLS,
   {
     name: "list_bots",
@@ -794,6 +797,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   if (name === VERIFY_SITE_TOOL.name) {
     const r = await api(VERIFY_ROUTES.tool, { method: "POST", body: JSON.stringify({ entry: args.entry }), signal });
     return { text: String(r.text ?? ""), ...(r.status === "blocked" ? { isError: true } : {}) };
+  }
+  if (name === WEB_READ_TOOL.name) {
+    return await webRead(args, api, (toBotId, message) =>
+      api("/api/internal/ask-bot", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH }) }), READ_ONLY);
   }
   if (name === "report_issue") {
     const r = await api("/api/internal/team-report", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });

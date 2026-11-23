@@ -3,7 +3,7 @@ import { Socket } from "node:net";
 import { beforeEach, expect, it, vi } from "vitest";
 import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { prepareModelContext } from "./context-compaction.ts";
-import { delegationContext } from "./delegation-context.ts";
+import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { loadDelegationReceipts } from "./delegation-ledger.ts";
 import { _resetPending, finishDelegatedTurn, queueDelegation, recordDelegationReceipt } from "./delegations.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
@@ -239,4 +239,10 @@ it("lists only the calling conversation's delegations and resolves every listed 
   const elsewhere = (await check(undefined, bot.id, other.threadId)).body.tasks;
   expect(elsewhere).toEqual([{ id: "other123", peer: "Pokkey", status: "done", gist: "Other thread reply" }]);
   for (const row of elsewhere) expect((await check(row.id, bot.id, other.threadId)).status).toBe(200);
+});
+
+it("names how many earlier delegations a run's rollup leaves out", () => {
+  const run = Array.from({ length: 7 }, (_, i) => ({ chip: { name: "mcp__wink__delegate_bot", delegation: `task t${i}` } }));
+  expect(delegationRollup(run, "delegate_bot")).toBe(" (task t2) (task t3) (task t4) (task t5) (task t6) (+2 earlier delegations, check one by id)");
+  expect(delegationRollup(run.slice(2), "delegate_bot")).toBe(" (task t2) (task t3) (task t4) (task t5) (task t6)");
 });
