@@ -192,7 +192,7 @@ export class RelayClient {
   }
 
   /** Null when the relay is down, old or refuses. Only after a ready that offered room codes: an older relay closes the channel on one. */
-  mintRoomCode(): Promise<{ code: string; exp: number } | null> {
+  mintRoomCode(long = false): Promise<{ code: string; exp: number } | null> {
     const session = this.session;
     if (!session?.ready || !session.roomCodes) return Promise.resolve(null);
     const id = `r${++this.roomCodeSeq}`;
@@ -206,7 +206,7 @@ export class RelayClient {
       };
       session.cancels.add(timeout);
       session.roomCodeWaits.set(id, settle);
-      this.send(session.socket, { type: "roomcode", id });
+      this.send(session.socket, { type: "roomcode", id, ...(long ? { long: true as const } : {}) });
     });
   }
 
