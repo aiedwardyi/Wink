@@ -64,6 +64,9 @@ export function createUsageBoard(deps: Deps) {
   let accountSet = "";
   let epoch = 0;
   let previous = new Map<string, number>();
+  let shownFolds = "";
+  // Accounts the last known runs had workers on: a read without runs keeps that answer instead of flipping rows.
+  const working = new Set<string>();
   const identities = new Map<string, string | null>();
 
   for (const row of deps.accounts.list()) {
@@ -198,6 +201,15 @@ export function createUsageBoard(deps: Deps) {
     const history = deps.history.since(full ? undefined : old.counter);
     const board: UsageBoard = { version: 1, revision, cursor: "", full, at: now(), runs: "unknown", engines: [] };
     const byId = new Map(rows.map((row) => [row.id, row]));
+    // A base signed in as an account added beside it: that account's row stands for both (uuid when both report one, else email).
+    const login = (row: AccountRow) => row.state === "ready" && !row.blocked && !row.credit && row.status?.authenticated === true
+      ? { identity: row.status.accountIdentity, email: row.status.account?.trim().toLowerCase() } : undefined;
+    const sameLogin = (a: AccountRow, b: AccountRow) => {
+      const [x, y] = [login(a), login(b)];
+      return Boolean(x && y && (x.identity && y.identity ? x.identity === y.identity : x.email && x.email === y.email));
+    };
+    const duplicates = new Set(rows.filter((row) => row.id === row.of && rows.some((other) => other.of === row.of && other.id !== row.id
+      && !Object.hasOwn(deps.accounts.drains, other.id) && sameLogin(row, other))).map((row) => row.id));
     for (const row of rows) {
       const engine = engines.get(row.driverKind)!;
       let group = board.engines.find((group) => group.base === row.of);
@@ -249,7 +261,7 @@ export function createUsageBoard(deps: Deps) {
         history: points?.generation === row.generation ? { fine: points.fine, coarse: points.coarse } : { fine: [], coarse: [] },
         bots: accountBots, workers: null, ...(row.credit ? { credit: true as const } : {}), ...(row.codexPromo ? { codexPromo: true as const } : {}) });
     }
-    return { board, rows: rows.map((row) => ({ id: row.id, generation: row.generation })), bots, text, counter: history.counter, accounts: accountSet, epoch };
+    return { board, rows: rows.map((row) => ({ id: row.id, generation: row.generation })), bots, text, counter: history.counter, accounts: accountSet, epoch, duplicates };
   }
 
   async function read(cursor?: string): Promise<UsageBoard> {
@@ -273,6 +285,23 @@ export function createUsageBoard(deps: Deps) {
         account.workers.push({ botId: snapshot.text(run.botId, "bot"), bot: snapshot.bots.find((bot) => bot.id === run.botId)?.name ?? "Bot",
           paneId: snapshot.text(run.paneId, "pane"), label: snapshot.text(run.label, ""), state: run.state });
       }
+      if (account.workers.length) working.add(account.id);
+      else working.delete(account.id);
+    }
+    // Main and its bots, busy bots and running workers keep the base's own row.
+    const folds: string[] = [];
+    for (const group of board.engines) {
+      const folded = group.accounts.filter((account) => snapshot.duplicates.has(account.id) && !account.main && !account.bots.length && !working.has(account.id));
+      if (!folded.length) continue;
+      group.accounts = group.accounts.filter((account) => !folded.includes(account));
+      group.duplicates = folded.map((account) => account.id);
+      folds.push(...group.duplicates);
+    }
+    // Rows come and go without an account change: the next read is a full one, so a returning row brings its whole history.
+    if (folds.join() !== shownFolds) {
+      shownFolds = folds.join();
+      epoch++;
+      bump();
     }
     board.cursor = randomUUID();
     cursors.set(board.cursor, { boot, revision: board.revision, counter: snapshot.counter, accounts: snapshot.accounts, epoch: snapshot.epoch });

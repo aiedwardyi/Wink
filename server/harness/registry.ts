@@ -324,7 +324,7 @@ export class ProviderRegistry {
   cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
-    if (entry?.live?.account) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
+    if (entry?.live) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
   }
   accountAvailable(id: string, confirmed = false) {
     const snapshot = this.probed.get(id)?.snapshot;

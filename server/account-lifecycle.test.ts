@@ -1222,3 +1222,17 @@ describe("account HTTP routes", () => {
     expect((await request(f, "POST", `/api/instances/${added.id}/sign-out`)).status).toBe(409);
   });
 });
+
+describe("base sign-out beside added accounts", () => {
+  it("reads the signed-out base as signed out, never as not installed", async () => {
+    const f = await fixture();
+    await f.add();
+    f.invalidate.mockImplementation((id: string) => f.registry.invalidateAccount(id));
+    await f.controller.remove("claude");
+    expect(f.invalidate).toHaveBeenCalledWith("claude");
+    expect(f.registry.accountStopped("claude")).toBe(true);
+    for (const rows of [await f.registry.describeKnown(), await f.registry.describeCached()]) {
+      expect(rows.find((row) => row.instanceId === "claude")!.snapshot).toMatchObject({ state: "available", authenticated: false });
+    }
+  });
+});
