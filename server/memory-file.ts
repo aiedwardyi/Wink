@@ -13,6 +13,7 @@ const TOPICS_MAX = 3;
 const PROMPT_NOTES_MAX = 32_000;
 const HEADING = /^(#{1,6})\s/;
 const FENCE = /^\s*(?:```|~~~)/;
+const FENCE_MARK = /^\s*(`{3,}|~{3,})(.*)$/;
 const PROMPT_TAGS = /<\/?notes\b[^>]*>/gi;
 // standing orders the bot needs every turn
 const KEPT_SECTION = /\b(?:pin(?:ned|s)?|rules?|decisions?|goals?|lessons?|corrections?)\b/i;
@@ -49,13 +50,16 @@ export function fileableNotes(raw: string): FileNote[] {
   const lines = raw.split("\n");
   const notes: FileNote[] = [];
   const headings: string[] = [];
-  let fenced = false;
+  // the open fence; only the same mark, as long or longer and bare, closes it
+  let fence = "";
   for (let at = 0; at < lines.length; at += 1) {
     const text = lines[at]!;
-    if (FENCE.test(text)) fenced = !fenced;
+    const mark = FENCE_MARK.exec(text);
+    if (mark && !fence) fence = mark[1]!;
+    else if (mark && mark[1]![0] === fence[0] && mark[1]!.length >= fence.length && !mark[2]!.trim()) fence = "";
     const heading = HEADING.exec(text);
-    if (fenced || FENCE.test(text) || heading) {
-      if (heading && !fenced) {
+    if (fence || mark || heading) {
+      if (heading && !fence) {
         headings.length = heading[1]!.length - 1;
         headings.push(text.trimEnd());
       }

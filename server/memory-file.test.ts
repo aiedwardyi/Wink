@@ -53,6 +53,11 @@ describe("fileableNotes", () => {
       ["Plain line\r", "## Project"],
     ]);
   });
+
+  it("keeps a code block open until a fence of its own mark closes it", () => {
+    const raw = ["# Bot memory", "## Project", "~~~~md", "```", "- inside the tildes", "~~~", "- still inside", "~~~~", "- after the block"].join("\n");
+    expect(fileableNotes(raw).map(({ text }) => text)).toEqual(["- after the block"]);
+  });
 });
 
 describe("planFiling", () => {

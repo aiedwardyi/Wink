@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { fileableNotes, planFiling } from "../server/memory-file.ts";
+import { fileableNotes, filingDue, planFiling } from "../server/memory-file.ts";
 import { parseTidy, planTidy } from "../server/memory-sleep.ts";
 import { testHome } from "../server/testing/test-home.ts";
 import { isMemoryTopicName, loadedMemory } from "../server/workspace.ts";
@@ -50,6 +50,15 @@ describe("pointedTopics", () => {
     const text = ["- Video rules: read memory/video.md before making a clip.", "- memory/bare.md", "- Launch notes in memory/launch.md. Read them when planning a post."].join("\n");
     expect(pointedTopics(text, ["video.md", "bare.md", "launch.md", "other.md"])).toEqual(["video.md", "launch.md"]);
   });
+
+  it("matches the whole path, not a longer one that starts or ends with it", () => {
+    expect(pointedTopics("- Read memory/tools.md.bak before builds", ["tools.md"])).toEqual([]);
+    expect(pointedTopics("- Read old/memory/tools.md before builds", ["tools.md"])).toEqual([]);
+    expect(pointedTopics("- Read memory/tools.md/old before builds", ["tools.md"])).toEqual([]);
+    for (const line of ["- Read memory/tools.md.", "- Read `memory/tools.md` before builds", "- Read ./memory/tools.md before builds", '- Before builds read "memory/tools.md"', "- 빌드 전에 memory/tools.md를 읽기"]) {
+      expect(pointedTopics(`${line} before builds`, ["tools.md"])).toEqual(["tools.md"]);
+    }
+  });
 });
 
 describe("madeUp", () => {
@@ -72,7 +81,14 @@ describe("blind quiz", () => {
   it("finds the lines each side file took from MEMORY.md", () => {
     const before = notes(memory(...NOTES), { "memory/tools.md": "- Allergic to peanuts\n" });
     const after = notes(memory(NOTES[0], POINTER), { "memory/tools.md": "- Allergic to peanuts\n- Uses pnpm\n- Allergic to peanuts\n", "imported.md": "- Uses pnpm\n" });
+    expect(movedBlocks(before, after)).toEqual([{ path: "memory/tools.md", lines: ["- Allergic to peanuts", "- Uses pnpm"] }]);
+  });
+
+  it("quizzes a filed note even when its side file already held it", () => {
+    const before = notes(memory(...NOTES), { "memory/tools.md": "- Uses pnpm\n" });
+    const after = notes(memory(NOTES[0], NOTES[2], POINTER), { "memory/tools.md": "- Uses pnpm\n- Uses pnpm\n" });
     expect(movedBlocks(before, after)).toEqual(blocks);
+    expect(madeUp(before, after)).toEqual([]);
   });
 
   it("passes a question only when the answerer names the block's side file", () => {
@@ -115,12 +131,29 @@ describe("trap pairs", () => {
 });
 
 describe("dream-check script", () => {
-  const run = (copy, ...args) => {
-    const tmp = mkdtempSync(join(testHome(), "tmp-"));
-    // run as a user would: outside Vitest's data guard, with its throwaway data dir under the test home
+  const runWith = (extra, copy, ...args) => {
+    const home = testHome();
+    const tmp = mkdtempSync(join(home, "tmp-"));
+    // run as a user would: outside Vitest's data guard, with its home and throwaway data dir in the test home
     const { VITEST: _vitest, ...env } = process.env;
-    return spawnSync(process.execPath, ["--experimental-strip-types", SCRIPT, copy, ...args], { encoding: "utf8", env: { ...env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } });
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", SCRIPT, copy, ...args], {
+      encoding: "utf8",
+      env: { ...env, HOME: home, USERPROFILE: home, TMP: tmp, TEMP: tmp, TMPDIR: tmp, ...extra },
+    });
+    return { ...result, left: readdirSync(tmp) };
   };
+  const run = (copy, ...args) => runWith({}, copy, ...args);
+  // a zero cap fails every model call before it starts: no claude process, no spend
+  const capped = (copy, ...args) => runWith({ CLAUDE_CODE_OAUTH_TOKEN: "unused", CLAUDE_CLI: join(testHome(), "no-claude") }, copy, "--max-tokens", "0", ...args);
+  const copyOf = (raw, setup = () => {}) => {
+    const copy = mkdtempSync(join(testHome(), "orbit-copy-"));
+    mkdirSync(join(copy, "workspaces", "bot-a"), { recursive: true });
+    writeFileSync(join(copy, "bots.json"), JSON.stringify([{ id: "bot-a", name: "Alpha" }]));
+    writeFileSync(join(copy, "workspaces", "bot-a", "MEMORY.md"), raw);
+    setup(join(copy, "workspaces", "bot-a"));
+    return copy;
+  };
+  const DUPES = memory("- Uses pnpm (noted 2026-11-01)", "- Lives in Seoul", "- Uses pnpm (noted 2026-11-20)");
 
   it("runs one real tidy on a copy and reports nothing lost", () => {
     const copy = mkdtempSync(join(testHome(), "orbit-copy-"));
@@ -143,5 +176,68 @@ describe("dream-check script", () => {
     const result = run(live, "--no-model");
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("is the live ~/.orbit; copy it first");
+  });
+
+  it("says to copy first when the copy is missing, not ENOENT", () => {
+    const result = run(join(testHome(), "no-such-copy"), "--no-model");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("does not exist; copy ~/.orbit there first");
+    expect(result.stderr).not.toContain("ENOENT");
+  });
+
+  it("never writes through a link in the copy to the folder it points at", () => {
+    const outside = mkdtempSync(join(testHome(), "live-notes-"));
+    writeFileSync(join(outside, "2026-10.md"), "# Memory history\n");
+    const copy = copyOf(DUPES, (ws) => {
+      symlinkSync(outside, join(ws, "memory-history"), "junction");
+      symlinkSync(outside, join(ws, "memory"), "junction");
+    });
+    const json = join(copy, "out.json");
+    const result = run(copy, "--no-model", "--json", json);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ result: "saved", moved: 1, lost: [] });
+    expect(readdirSync(outside)).toEqual(["2026-10.md"]);
+    expect(readFileSync(join(outside, "2026-10.md"), "utf8")).toBe("# Memory history\n");
+  });
+
+  it("fails the check when the tidy pass errors", () => {
+    const copy = copyOf(DUPES);
+    const json = join(copy, "out.json");
+    const result = capped(copy, "--json", json);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("FAILED Alpha night 1: tidy error");
+    expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "error", moved: 0 });
+    expect(result.left).toEqual([]);
+  });
+
+  it("records a failed filing call, still writes the JSON and removes its temp folder", () => {
+    const raw = memory("## Notes", ...Array.from({ length: 130 }, (_, n) => `- Launch detail ${n} ${"y".repeat(170)}`));
+    expect(filingDue(raw)).toBe(true);
+    const copy = copyOf(raw);
+    const json = join(copy, "out.json");
+    const result = capped(copy, "--json", json);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("FAILED Alpha night 1: tidy error, model token cap reached");
+    const [row] = JSON.parse(readFileSync(json, "utf8")).results;
+    expect(row).toMatchObject({ result: "error", error: "model token cap reached", filed: 0, lost: [], madeUp: [] });
+    expect(readFileSync(join(copy, "workspaces", "bot-a", "MEMORY.md"), "utf8")).toBe(raw);
+    expect(result.left).toEqual([]);
+  });
+
+  it("removes its temp folder when the run throws", () => {
+    // a MEMORY.md that cannot be read throws inside the run
+    const copy = copyOf("", (ws) => {
+      rmSync(join(ws, "MEMORY.md"));
+      mkdirSync(join(ws, "MEMORY.md"));
+    });
+    const result = run(copy, "--no-model");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("EISDIR");
+    expect(result.left).toEqual([]);
+  });
+
+  it("never asserts a model that --no-model leaves null", () => {
+    expect(readFileSync(SCRIPT, "utf8")).not.toMatch(/\b(?:generator|filer)!/);
   });
 });
