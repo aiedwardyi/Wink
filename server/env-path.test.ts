@@ -102,6 +102,20 @@ describe("augmentedPath", () => {
     expect(stdout.trim()).toBe("found-me");
   });
 
+  posixIt("finds every native installer's CLI installed after launch", async () => {
+    resetPathCacheForTests();
+    augmentedPath();
+    const installs = [["claude", ".local"], ["codex", ".local"], ["agy", ".local"], ["muse", ".local"], ["grok", ".grok"]] as const;
+    const files = installs.map(([name, dir]) => join(testHome(), dir, "bin", name));
+    for (const file of files) {
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file, "#!/bin/sh\n");
+      chmodSync(file, 0o755);
+    }
+    await paths.refreshPathCache(installs.map(([name]) => name));
+    expect(installs.map(([name]) => paths.findCliCandidates(name)[0])).toEqual(files);
+  });
+
   posixIt("keeps the last login-shell PATH available during a rescan", async () => {
     const shell = join(testHome(), "fake-login-shell");
     const rcOnlyBin = join(testHome(), "rc-only", "bin");
@@ -127,20 +141,6 @@ describe("augmentedPath", () => {
       else process.env.VITEST = previousVitest;
       resetPathCacheForTests();
     }
-  });
-
-  posixIt("finds every native installer's CLI installed after launch", async () => {
-    resetPathCacheForTests();
-    augmentedPath();
-    const installs = [["claude", ".local"], ["codex", ".local"], ["agy", ".local"], ["muse", ".local"], ["grok", ".grok"]] as const;
-    const files = installs.map(([name, dir]) => join(testHome(), dir, "bin", name));
-    for (const file of files) {
-      mkdirSync(join(file, ".."), { recursive: true });
-      writeFileSync(file, "#!/bin/sh\n");
-      chmodSync(file, 0o755);
-    }
-    await paths.refreshPathCache(installs.map(([name]) => name));
-    expect(installs.map(([name]) => paths.findCliCandidates(name)[0])).toEqual(files);
   });
 
   it("skips known dirs that do not exist", () => {

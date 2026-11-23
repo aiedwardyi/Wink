@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderDriver } from "../contracts.ts";
 import { resolveDataDir } from "../data-dir.ts";
 import { refreshPathCache, resetPathCacheForTests } from "../env-path.ts";
-import { testHome } from "../testing/test-home.ts";
+import { removeTestData, testHome } from "../testing/test-home.ts";
 import { GrokAgentDriver } from "./acp/grok.ts";
 import { AntigravityDriver } from "./antigravity.ts";
 import { BUILT_IN_DRIVERS } from "./builtIn.ts";
@@ -39,7 +39,8 @@ describe("missing engine CLI", () => {
   it.skipIf(process.platform === "win32").each(BUILT_IN_DRIVERS.filter((driver) => driver.install).map((driver) => [driver.driverKind, driver] as const))(
     "%s finds its CLI installed after Wink started, without a restart",
     async (kind, driver) => {
-      for (const dir of [join(testHome(), ".local"), join(testHome(), ".grok"), join(resolveDataDir("server/drivers/cli-missing.test.ts"), "path-cache.json")]) rmSync(dir, { recursive: true, force: true });
+      for (const dir of [".local", ".grok"]) removeTestData(join(testHome(), dir));
+      rmSync(join(resolveDataDir("server/drivers/cli-missing.test.ts"), "path-cache.json"), { force: true });
       resetPathCacheForTests();
       // SAFETY: every built-in CLI driver config carries cli.
       const typed = driver as ProviderDriver<{ cli: string }>;
