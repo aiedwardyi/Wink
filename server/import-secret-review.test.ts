@@ -120,6 +120,8 @@ describe("machine keys are always dropped and never offered for Keep", () => {
     ["AKIA", `- AWS key id ${AWS}`],
     ["JWT", `- Session ${JWT}`],
     ["bare sk- in prose", `- The user's key is ${OPENAI} for the bot`],
+    ["pk-", "- Publishable key pk-Ab7c9D2e"],
+    ["Slack token, short", "- Slack xoxb-Ab7c9D2e"],
   ])("%s", (_name, line) => {
     const { facts, flagged, hidden } = factsOf(`${line}\n- Likes tea.`);
     expect(facts).toEqual(["Likes tea."]);

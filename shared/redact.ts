@@ -62,7 +62,7 @@ const KEY_PREFIXES: RegExp[] = [
 /** Each key shape once, without /g, so a test never carries lastIndex over. */
 const KEY_SHAPES = KEY_PREFIXES.map((pattern) => new RegExp(pattern.source));
 /** Shorter forms of the same prefixes, as Import Memory's base filter knows them. */
-const SHORT_KEY_SHAPES = [/\b(?:sk|rk)-[A-Za-z0-9_-]{8,}/, /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}/, /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/];
+const SHORT_KEY_SHAPES = [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/, /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}/, /\bxox[abposr][_-][A-Za-z0-9_-]{8,}/, /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/];
 const PEM_MARK = /-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
 
 /** A credential only a machine reads (sk-…, ghp_…, github_pat_…, AKIA…, a JWT, a PEM line): never a fact a person keeps. */
