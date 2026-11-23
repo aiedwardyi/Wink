@@ -3022,3 +3022,97 @@ describe("Antigravity Windows long-prompt transport", () => {
     expect(procs.describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
   });
 });
+
+describe("agy's token file", () => {
+  // agy 1.5 saves its sign-in to this file instead of the keyring over SSH (the phone sign-in sets SSH_CONNECTION) and reads both.
+  const tokenHome = () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-token-"));
+    mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+    return { home, token: join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token") };
+  };
+  beforeEach(() => {
+    vi.spyOn(auth, "probeAntigravitySignIn").mockResolvedValue(false);
+    vi.mocked(auth.antigravitySignIn).mockImplementation((probe, unprobed) => createSignIn(probe ?? auth.probeAntigravitySignIn, unprobed));
+  });
+
+  async function load(home: string, fake: string) {
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    await registry.load({ agy: { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false }, environment: { HOME: home, USERPROFILE: home } } });
+    return registry;
+  }
+
+  it("finishes a phone sign-in that agy saved to its token file", async () => {
+    const { home, token } = tokenHome();
+    const fake = join(home, "fake-agy.cjs");
+    writeFileSync(fake, `
+if (process.argv.includes("--version")) { console.log("1.5.14"); process.exit(0); }
+process.stdout.write("Open this link in a browser to log in with Google:\\n  https://accounts.google.com/o/oauth2/auth?x=1\\nThen paste the authorization code, or the full URL of the page you land on, and press Enter:\\n");
+require("node:readline").createInterface({ input: process.stdin }).once("line", () => {
+  require("node:fs").writeFileSync(${JSON.stringify(token)}, "{}");
+  process.exit(0);
+});
+`);
+    const registry = await load(home, fake);
+    try {
+      expect(await geminiShown(registry, "agy")).toBe(false);
+      const capture = await registry.startSignIn("agy", true);
+      expect(capture?.inputGeneration).toBeDefined();
+      expect(registry.logins.submit("agy", capture!.inputGeneration!, "4/fake-code")).toBe(true);
+      await registry.logins.wait("agy");
+      expect(registry.logins.state("agy")).toBe("complete");
+      await registry.describeCached();
+      expect(registry.logins.state("agy")).toBe("complete");
+      expect(await geminiShown(registry, "agy")).toBe(true);
+    } finally {
+      await registry.disposeAll();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("finishes a computer sign-in that agy answers from its token file with no browser", async () => {
+    const { home, token } = tokenHome();
+    const fake = join(home, "fake-agy.cjs");
+    writeFileSync(fake, `
+if (process.argv.includes("--version")) { console.log("1.5.14"); process.exit(0); }
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "authenticate" && !require("node:fs").existsSync(${JSON.stringify(token)})) process.exit(1);
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    const registry = await load(home, fake);
+    try {
+      writeFileSync(token, "{}");
+      await registry.startSignIn("agy");
+      await registry.logins.wait("agy");
+      expect(registry.logins.state("agy")).toBe("complete");
+      await registry.describeCached();
+      expect(registry.logins.state("agy")).toBe("complete");
+      expect(await geminiShown(registry, "agy")).toBe(true);
+    } finally {
+      await registry.disposeAll();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("sees an agy sign-in made outside Wink without a restart, and an empty or missing file as none", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const { home, token } = tokenHome();
+    const instance = await AntigravityDriver.create({
+      instanceId: "agy-outside", displayName: undefined, environment: { HOME: home, USERPROFILE: home }, enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await instance.snapshot({ refresh: true })).authenticated).toBe(false);
+      writeFileSync(token, "");
+      expect((await instance.snapshot({ refresh: true })).authenticated).toBe(false);
+      writeFileSync(token, "{}");
+      expect((await instance.snapshot({ refresh: true })).authenticated).toBe(true);
+      rmSync(token);
+      expect((await instance.snapshot({ refresh: true })).authenticated).toBe(false);
+    } finally {
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
