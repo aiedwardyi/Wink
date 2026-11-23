@@ -854,6 +854,21 @@ describe("memory sync", () => {
     }
   });
 
+  it("syncs a note moved into a folder whose name ends in .md", () => {
+    const [a, b] = pcs();
+    edit(a, "# Memory\n- x\n");
+    edit(a, "# Plan\n- p\n", "memory/plan.md");
+    sync(a);
+    settle(a, b);
+    expect(read(b, "memory/plan.md")).toBe("# Plan\n- p\n");
+    rmSync(join(a.workspace, "memory/plan.md"));
+    edit(a, "# Plan\n- p\n", "memory/archive.md/plan.md");
+    sync(a);
+    settle(a, b);
+    expect(read(b, "memory/archive.md/plan.md")).toBe("# Plan\n- p\n");
+    expect(read(b, "memory/plan.md")).toBeNull();
+  });
+
   it("keeps a line deleted on the other PC out of a copy this PC kept after losing its ledger", () => {
     const facts = Array.from({ length: 10 }, (_, n) => `- fact ${n + 1}`);
     const full = `# Memory\n\n${facts.join("\n")}\n`;

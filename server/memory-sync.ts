@@ -171,8 +171,9 @@ function memoryFiles(root: string): string[] | undefined {
     try {
       for (const entry of readdirSync(join(root, folder), { withFileTypes: true })) {
         const file = `${folder}/${entry.name}`;
-        if (isSyncedFile(file)) files.push(file);
-        else if (entry.isDirectory() && depth < TOPIC_DEPTH && TOPIC_FOLDER.test(entry.name) && !walk(file, depth + 1)) return false;
+        if (entry.isDirectory()) {
+          if (depth < TOPIC_DEPTH && TOPIC_FOLDER.test(entry.name) && !walk(file, depth + 1)) return false;
+        } else if (isSyncedFile(file)) files.push(file);
       }
       return true;
     } catch {

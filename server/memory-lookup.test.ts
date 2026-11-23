@@ -310,6 +310,17 @@ describe("corpus", () => {
     expect(ask(lookup, botId, long)[0]).toContain("memory/glasses-v1.md");
   });
 
+  it("does not search a long paragraph inside a pasted block", async () => {
+    const botId = `bot-${randomUUID()}`;
+    sideFile(botId, "glasses-v1.md", "# Glasses v1\n\n- CEO meeting tool: person brief + top 3 competitors + 1 recent news line, shown before the meeting\n");
+    const { lookup } = await lookupFor(FILLER, { botId });
+    const long = `glasses v1 person brief, 3 competitors and 1 news line. ${"Then we walk through how the room reacts and what we say next. ".repeat(8)}`;
+    for (const tag of ["pasted-text", "pasted_content"]) {
+      const text = `Summarize this document.\n\n<${tag} id="1">\nintro\n\n${long}\n\noutro\n</${tag}>`;
+      expect(ask(lookup, botId, text, tag), tag).toEqual([]);
+    }
+  });
+
   it("does not see an edit until a reply settles", async () => {
     const { botId, lookup, path } = await lookupFor(FILLER);
     writeFileSync(path!, `${FILLER}\n- GINGER COMET: added after the build\n`);

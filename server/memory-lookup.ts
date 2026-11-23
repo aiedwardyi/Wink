@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { latestTaskAsks } from "../shared/task-ask-list.ts";
 import { aboutYouFile, aboutYouPastTheCut, botImportFile, botImportPastTheCut } from "./about-you.ts";
-import { secretLike, userTyping } from "./memory-pass.ts";
+import { secretLike, userTyping, withoutBlocks } from "./memory-pass.ts";
 import { isSyncedFile } from "./memory-sync.ts";
 import { currentOnly, PICKS_FILE } from "./picks.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -441,7 +441,7 @@ function parkedAsksFile(asks: readonly TaskAsk[], now: number): NoteFile | null 
 
 // the typed words drop a paragraph over the note-taker's limits; its start is still searched, by the words the notes have
 function clippedParagraphs(text: string): string {
-  const long = text.replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1").split(/\n\s*\n/)
+  const long = withoutBlocks(text).split(/\n\s*\n/)
     .filter((paragraph) => !paragraph.includes("<") && (paragraph.length > PARAGRAPH_CHARS || paragraph.split("\n").length > PARAGRAPH_LINES));
   return userTyping(long.map((paragraph) => paragraph.replace(/`/g, "").split("\n").slice(0, PARAGRAPH_LINES).join("\n").slice(0, PARAGRAPH_CHARS).replace(/\s+\S*$/, "")).join("\n\n"), false);
 }
