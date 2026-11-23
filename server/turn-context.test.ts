@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -27,6 +29,9 @@ import {
 import { isRecoveringPacket, unsettledRequest } from "./task-recovery-flush.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stampTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { applyPicks } from "./picks.ts";
+import { asksBlock } from "./task-asks.ts";
+import { ensureWorkspace, memorySystemPrompt } from "./workspace.ts";
 
 const transcript = [
   { role: "user" as const, text: "my dog is named Biscuit" },
@@ -1251,5 +1256,32 @@ describe("replay engine provenance", () => {
     expect(replayMessageText(message, engine)).toBe(message.text);
     expect(replayMessageText({ ...message, engine: undefined }, driverKind)).toBe(message.text);
     expect(replayMessageText({ ...message, role: "user" }, driverKind)).toBe(message.text);
+  });
+});
+
+describe("the 11-22 23:11 turn, rebuilt", () => {
+  it("keeps the glasses goal in view beside the 22:40 summary, a buried pointer, a parked ask and 74 picks", () => {
+    const bot = "bot-turn-2311";
+    const dir = ensureWorkspace(bot);
+    const notes = Array.from({ length: 160 }, (_, i) => `- RULE ${i} (11-2${i % 3}): keep replies short and check the board before card ${i}.`);
+    notes[13] = "- SIM LOOP (11-21): run the sim before you call a build done, on phone and desktop. Glasses v1 spec: memory/glasses-v1.md.";
+    writeFileSync(join(dir, "MEMORY.md"), `# Memory\n${notes.join("\n")}\n`);
+    writeFileSync(join(dir, "memory", "glasses-v1.md"), "Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line\n");
+    const start = new Date(2026, 10, 22, 15, 38).getTime();
+    const picks = applyPicks("", Array.from({ length: 74 }, (_, i) => ({ kind: "pick" as const, at: start + (i + 1) * 60_000, key: `question ${i}`, picked: `option ${i}`, said: `go with ${i}` })))!.text;
+    const first = picks.indexOf("\n## ");
+    writeFileSync(join(dir, "memory", "decisions.md"), `${picks.slice(0, first)}\n\n## 2026-11-22 15:38 | Glasses v1 | current\n- Picked: Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line\n- Kind: goal${picks.slice(first)}`);
+    const now = new Date(2026, 10, 22, 23, 11).getTime();
+    const asks = asksBlock([{ id: "A961", ask: "glasses prompter demo", status: "open", until: now + 3 * 86_400_000, at: now - 86_400_000, changedAt: now - 86_400_000 }], now);
+    const summary = "[Wink durable context summary]\nEdward wants Wink to be like the ceo watching over all of them. Meta glasses: Edward playing with the glasses UI; a helper ran a glasses-UI competitor check. Workers shipped the sign-in fix.";
+    const { turnText } = buildTurnContext({
+      text: "ok whats the plan for the ceo meeting thing on the glasses?",
+      transcript: [{ role: "assistant", text: summary }, { role: "user", text: "ship the sign-in fix" }, { role: "assistant", text: "Shipped." }],
+      rewound: false,
+      fresh: true,
+      replaysNatively: false,
+      taskRecordText: asks,
+    });
+    expect(`${memorySystemPrompt(bot)}\n${turnText}`).toContain("competitors");
   });
 });

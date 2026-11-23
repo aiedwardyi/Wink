@@ -41,6 +41,12 @@ it("lets a busy bot's own token hand a room ask off", () => {
   expect(botRoute("/api/internal/hand-off", "b1")).toBe(true);
 });
 
+it("lets a bot's own token pin a goal and read the web", () => {
+  const callers = new CommsCallers();
+  const header = `Bearer ${callers.token("b1", "home")}`;
+  for (const path of ["/api/internal/goal", "/api/internal/web-read"]) expect(callers.allows(header, path, () => false), path).toBe(true);
+});
+
 it("answers a bot's web_read through the real gate with the page, not 401", async () => {
   const callers = new CommsCallers();
   const header = `Bearer ${callers.token("b1", "home")}`;

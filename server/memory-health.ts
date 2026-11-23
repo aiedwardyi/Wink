@@ -23,11 +23,14 @@ function listed(names: string[]): string {
 const notes = (count: number) => (count === 1 ? "1 auto note" : `${count} auto notes`);
 
 export function memoryNotice(health: MemoryHealth, dropped?: DroppedNotes): string {
-  const { longLines, orphans } = health;
+  const { longLines, orphans, untriggered = [] } = health;
   const parts = [
     longLines === 1 ? `1 line is over ${MEMORY_LINE_MAX_BYTES} bytes` : longLines ? `${longLines} lines are over ${MEMORY_LINE_MAX_BYTES} bytes` : "",
     orphans.length
       ? `${listed(orphans.map((name) => `memory/${name}`))} ${orphans.length === 1 ? "has" : "have"} no pointer line in MEMORY.md`
+      : "",
+    untriggered.length
+      ? `${listed(untriggered.map((name) => `memory/${name}`))} ${untriggered.length === 1 ? "has a pointer line" : "have pointer lines"} that never ${untriggered.length === 1 ? "says" : "say"} when to read ${untriggered.length === 1 ? "it" : "them"}`
       : "",
     dropped?.lost?.dropped
       ? `${notes(dropped.lost.dropped)} since ${monthDay(dropped.lost.since)} ${dropped.lost.dropped === 1 ? "was" : "were"} not saved because the file is full`
@@ -39,6 +42,7 @@ export function memoryNotice(health: MemoryHealth, dropped?: DroppedNotes): stri
   const fix = [
     move ? "This session, move details into memory/ side files, one topic each, with a short pointer line in MEMORY.md saying when to read it. Keep every fact and exact value whole." : "",
     orphans.length ? (move ? "Add the missing pointer lines too." : "This session, add a short pointer line in MEMORY.md for each, saying when to read it.") : "",
+    untriggered.length ? `This session, end each of those pointer lines with when to read the file, like "read memory/${untriggered[0]} before X".` : "",
     "Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.",
   ].filter(Boolean).join(" ");
   return `[Memory check: ${parts.join("; ")}. ${fix}]`;
