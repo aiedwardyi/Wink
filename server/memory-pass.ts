@@ -264,14 +264,17 @@ const VALUE_PATTERNS = [
   /\b(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/,
 ];
 const TOKEN_PATTERNS = [/«redacted/i, ...VALUE_PATTERNS];
+// The last VALUE_PATTERN also matches paths, links, model ids, uuids and shas: words of one case or digits, not a key.
+const PLAIN_RUN = /^[/_-]*(?:[a-z0-9]+|[A-Z]?[a-z]+|[A-Z]+)(?:[/_-]+(?:[a-z0-9]+|[A-Z]?[a-z]+|[A-Z]+))*[/_-]*$/;
 
 export function secretLike(text: string): boolean {
   return redactSecretsInText(text) !== text || SECRET_WORDS.test(text) || SECRET_WORDS_KO.test(text) || TOKEN_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-/** The values secretLike flags, masked in place; words like "password" or "tokens" stay, so a goal keeps its sense. */
+/** The key values secretLike flags, masked in place; words like "password" or "tokens" and plain names stay, so a goal keeps its sense. */
 export function maskSecretValues(text: string): string {
-  return VALUE_PATTERNS.reduce((out, pattern) => out.replace(new RegExp(pattern.source, "g"), (value) => `«redacted ${value.length} chars»`), redactRoomMemory(text));
+  return VALUE_PATTERNS.reduce((out, pattern, i) => out.replace(new RegExp(pattern.source, "g"), (value) =>
+    i === VALUE_PATTERNS.length - 1 && PLAIN_RUN.test(value) ? value : `«redacted ${value.length} chars»`), redactRoomMemory(text));
 }
 
 function secretValue(text: string): boolean {

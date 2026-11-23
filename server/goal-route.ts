@@ -7,6 +7,8 @@ import { GOAL_MAX } from "./picks.ts";
 import { pinGoal } from "./workspace.ts";
 
 type Caller = { botId: string; threadId: string };
+const MASK = /«redacted \d+ chars»/g;
+const masks = (text: string) => text.match(MASK)?.length ?? 0;
 export type GoalDeps = {
   caller: (header: string | string[] | undefined) => Caller | undefined;
   /** the user's own chat with this bot, its turn still running: a token outlives its turn */
@@ -26,5 +28,12 @@ export async function goalRoute(req: IncomingMessage, res: ServerResponse, deps:
   if (!done && goal.length > GOAL_MAX) {
     return json(res, 400, { error: `The goal is ${goal.length} characters, over ${GOAL_MAX}. Pin the spec in the user's words in under ${GOAL_MAX}, and keep the rest in a memory/ side file.` });
   }
-  return json(res, 200, { text: pinGoal(source.botId, { name: maskSecretValues(name), goal: maskSecretValues(goal), done }) });
+  const safeName = maskSecretValues(name);
+  const safeGoal = maskSecretValues(goal);
+  if (!done && !/[\p{L}\p{N}]/u.test(safeGoal.replace(MASK, ""))) {
+    return json(res, 400, { error: "The goal is only key-shaped text. A key never goes in a goal; pin what the user wants done, in their words." });
+  }
+  const masked = masks(safeName) + masks(safeGoal) - masks(name) - masks(goal);
+  const text = pinGoal(source.botId, { name: safeName, goal: safeGoal, done });
+  return json(res, 200, { text: masked ? `${text} ${masked} part(s) masked as key-shaped.` : text });
 }
