@@ -524,6 +524,24 @@ describe("memory pass", () => {
     await pass.idle();
   });
 
+  it("keeps a letters-only Hugging Face key from the note-taker", async () => {
+    const key = `${"hf" + "_"}${"AbCdEfGhIjKlMnOpQ".repeat(2)}`;
+    say("t1", "i'm 38");
+    say("t1", `usage doubled since i pasted ${key} into the config`);
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]![0]).not.toContain(key.slice(3));
+  });
+
+  it("keeps a Hugging Face key with digits from the note-taker", async () => {
+    const key = `${"hf" + "_"}${"AbCd3fGhIjK1mNoPqR".repeat(2)}`;
+    say("t1", "i'm 38");
+    say("t1", `usage doubled since i pasted ${key} into the config`);
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]![0]).not.toContain(key.slice(3));
+  });
+
   it("never takes notes from rows imported by thread sync", async () => {
     store.appendMessage("t1", { role: "user", kind: "text", text: "i'm 38" }, true);
     await settle("t1", 3 * MINUTE);

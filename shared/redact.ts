@@ -55,6 +55,7 @@ const KEY_PREFIXES: RegExp[] = [
   /\bxai-[A-Za-z0-9]{16,}/g, // xai
   /\b[sr]k_(?:live_|test_)?[A-Za-z0-9]{24,}/g, // elevenlabs / stripe
   /\bak_[A-Za-z0-9_-]{16,}/g, // composio
+  /\b(?:hf|api_org)_[A-Za-z0-9]{34,}/g, // hugging face user / org
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // jwt
   /\b[a-f0-9]{8}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, // mailbox pane grant
   /\bwk[pdig]_[A-Za-z0-9_-]{43,}/g, // wink phone pairing / device token, team room invite / guest key
@@ -134,7 +135,7 @@ const PEM_TAIL_HOLD = 96;
 const STREAM_MATCHERS: RegExp[] = [PEM_BLOCK, ...KEY_PREFIXES, BEARER, KEY_VALUE, CONFIG_KEY_FIELD];
 
 /** A literal every content pattern above needs; text with none has nothing to mask. */
-const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|wk[pdig]_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
+const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|hf_|api_org_|wk[pdig]_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
 
 const WORD_CHAR = /[A-Za-z0-9_]/;
 const JWT_SEG_CHAR = /[A-Za-z0-9_-]/;
@@ -181,6 +182,8 @@ const KEY_STARTERS: Array<readonly [string, RegExp]> = [
   ["sk_", /[A-Za-z0-9]/],
   ["rk_", /[A-Za-z0-9]/],
   ["ak_", /[A-Za-z0-9_-]/],
+  ["hf_", /[A-Za-z0-9]/],
+  ["api_org_", /[A-Za-z0-9]/],
   ["wkp_", /[A-Za-z0-9_-]/],
   ["wkd_", /[A-Za-z0-9_-]/],
   ["wki_", /[A-Za-z0-9_-]/],
