@@ -13,7 +13,7 @@ const TOPICS_MAX = 3;
 const PROMPT_NOTES_MAX = 32_000;
 const HEADING = /^(#{1,6})\s/;
 const FENCE = /^\s*(?:```|~~~)/;
-const FENCE_MARK = /^\s*(`{3,}|~{3,})(.*)$/;
+const FENCE_MARK = /^\s*(`{3,}|~{3,})(.*?)\r?$/;
 const PROMPT_TAGS = /<\/?notes\b[^>]*>/gi;
 // standing orders the bot needs every turn
 const KEPT_SECTION = /\b(?:pin(?:ned|s)?|rules?|decisions?|goals?|lessons?|corrections?)\b/i;
