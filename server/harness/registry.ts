@@ -414,6 +414,11 @@ export class ProviderRegistry {
     return true;
   }
 
+  /** Whether a sign-out runs for this instance now; a press then joins it (signOut returns its answer). */
+  signingOutNow(instanceId: InstanceId) {
+    return this.signingOut.has(instanceId);
+  }
+
   async signOut(instanceId: InstanceId) {
     const config = this.loginConfig(instanceId);
     if (!config?.install?.logout) return null;
