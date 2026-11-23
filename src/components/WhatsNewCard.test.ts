@@ -216,6 +216,12 @@ describe("whats new card", () => {
     expect(tile.querySelector(".whats-new-show")!.hasAttribute("aria-expanded")).toBe(false);
   });
 
+  it("opens Settings > Devices, where the glasses pair, from the glasses tile's Show me", () => {
+    const { tile, text } = showMe("1.0.296", "Wink on your Meta glasses");
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "toggleAppSettings", open: true, section: "companion" });
+    expect(tile.textContent).toBe(text);
+  });
+
   it.each(["1.0.273", "1.0.276"])("plays the themes tile in %s as a moving clip", (release) => {
     const clip = WHATS_NEW[release].tiles[0].clip;
     expect(readFileSync(join(".", clip)).includes("ANMF"), `${clip} is a still: the tile shows the themes moving`).toBe(true);

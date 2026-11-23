@@ -14,6 +14,7 @@ import forumClip from "@/assets/whats-new/1.0.282-forum.webp";
 import forumLightClip from "@/assets/whats-new/1.0.282-forum-light.webp";
 import picksClip from "@/assets/whats-new/1.0.287-timeline.webp";
 import forumFirstClip from "@/assets/whats-new/1.0.287-forum.webp";
+import glassesClip from "@/assets/whats-new/1.0.296-glasses.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -21,7 +22,7 @@ import type { SkinId } from "./skins";
 type Copy = Record<LocaleId, string>;
 
 /** What Show me opens in this chat. */
-export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | "timeline" | "forum" | { skins: SkinId[] };
+export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | "timeline" | "forum" | "devices" | { skins: SkinId[] };
 
 /** Every tile after 1.0.278 is a moving clip plus a Show me that opens the feature; whats-new.test.ts enforces it. `how` and `still` only keep older tiles as they shipped. */
 export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
@@ -171,6 +172,18 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
   "1.0.293": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
   "1.0.294": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
   "1.0.295": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.296": {
+    title: { en: "New in Wink 1.0.296", ko: "Wink 1.0.296 새 기능" },
+    tiles: [
+      {
+        clip: glassesClip,
+        title: { en: "Wink on your Meta glasses", ko: "Meta 안경에서도 Wink를" },
+        line: { en: "On the glasses, open app.getwink.dev and enter your PC's codes.", ko: "안경에서 app.getwink.dev를 열고 PC의 코드를 입력해요." },
+        show: "devices",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */

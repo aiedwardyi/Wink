@@ -159,6 +159,7 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
                       if (thread) showTimeline(thread);
                     } else if (target === "forum") dispatch({ type: "select", id: FORUM_SELECTION, reveal: true });
                     else if (target === "models") window.dispatchEvent(new Event("orbit:open-model-picker"));
+                    else if (target === "devices") dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
                     else dispatch({ type: "toggleAppSettings", open: true, section: "themes", skins: target.skins });
                   }}
                 />
