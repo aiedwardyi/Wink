@@ -669,13 +669,13 @@ const TOOLS = [
   },
   {
     name: "pin_goal",
-    description: "Pin a goal or spec the user set (what to build and what it must hold) in their words, so it shows in every turn and survives chat summaries. The same name updates it; done: true when they finish or drop it.",
+    description: "Pin a goal or spec the user set, in their words, so it stays in every turn and survives summaries. Same name updates it; done: true once finished or dropped.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        name: { type: "string", minLength: 1, maxLength: 60, pattern: "\\S", description: "A few words, like Glasses v1." },
-        goal: { type: "string", minLength: 1, maxLength: 200, pattern: "\\S", description: "The goal in the user's words, at most 200 characters. Needed unless done." },
+        name: { type: "string", pattern: "\\S", description: "A few words, like Glasses v1." },
+        goal: { type: "string", pattern: "\\S", description: "Needed unless done." },
         done: { type: "boolean" },
       },
       required: ["name"],

@@ -12,7 +12,6 @@ export const GOALS_PROMPT_TOKENS = 400;
 const CHARS_PER_TOKEN = 2.6;
 const KEY_MAX = 60;
 const PICKED_MAX = 100;
-const GOAL_MAX = 200;
 const GOAL_SHOWN_MIN = 40;
 const SAID_MAX = 120;
 const LINE_MAX = 420;
@@ -225,7 +224,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       // a replayed batch from before the current entry never lands on it
       if (current && change.at < entryTime(current)) continue;
       const open = current?.kind === "goal" && !current.done ? current : undefined;
-      const goal = change.done ? open && DONE : clip(change.goal ?? "", GOAL_MAX);
+      const goal = change.done ? open && DONE : flat(change.goal ?? "");
       if (!goal || (open && !change.done && same(open.picked, goal))) continue;
       const id = fresh(pickStamp(change.at));
       if (current) {
