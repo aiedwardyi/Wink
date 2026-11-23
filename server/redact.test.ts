@@ -192,6 +192,8 @@ describe("redactSecretsInText", () => {
       [`stripe ${"sk" + "_"}live_51H${alpha.slice(0, 30)}`, /sk_live_/],
       [`stripe ${"sk" + "_"}test_4eC39HqLyjWDarjtT1zdp7dc`, /sk_test_/],
       [`stripe restricted ${"rk" + "_"}live_51H${alpha.slice(0, 30)}`, /rk_live_/],
+      [`hugging face ${"hf" + "_"}${"AbCdEfGhIjKlMnOpQ".repeat(2)}`, /hf_[A-Z]/],
+      [`hugging face org ${"api_org" + "_"}${"AbCdEfGhIjKlMnOpQ".repeat(2)}`, /api_org_[A-Z]/],
     ];
     for (const [input, leak] of cases) {
       const out = redactSecretsInText(input);
@@ -602,6 +604,8 @@ describe("StreamSecretMasker incremental safety", () => {
     ["stripe", `prose ${"sk" + "_"}live_51H${alpha.slice(0, 30)} tail`, `${"sk" + "_"}live_51H${alpha.slice(0, 30)}`],
     ["stripe-rk", `prose ${"rk" + "_"}live_51H${alpha.slice(0, 30)} tail`, `${"rk" + "_"}live_51H${alpha.slice(0, 30)}`],
     ["composio", `prose ${"ak" + "_"}${alpha.slice(0, 26)} tail`, `${"ak" + "_"}${alpha.slice(0, 26)}`],
+    ["huggingface", `prose ${"hf" + "_"}${"AbCdEfGhIjKlMnOpQ".repeat(2)} tail`, `${"hf" + "_"}${"AbCdEfGhIjKlMnOpQ".repeat(2)}`],
+    ["huggingface-org", `prose ${"api_org" + "_"}${"AbCdEfGhIjKlMnOpQ".repeat(2)} tail`, `${"api_org" + "_"}${"AbCdEfGhIjKlMnOpQ".repeat(2)}`],
     ["jwt", `prose ${jwt} tail`, jwt],
     ["bearer", `prose Bearer abcdefghijklmnop_0123 tail`, "abcdefghijklmnop_0123"],
     ["password", `prose password=abcdefgh!@suffix tail`, "abcdefgh!@suffix"],
