@@ -3,6 +3,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import type { Message, Store } from "./store.ts";
 import { abortable, logSummaryCall, type SummaryCallContext } from "./summary-repair.ts";
 import type { NativePrompt } from "./turn-context.ts";
+import { goalsOf } from "./workspace.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 const MAX_BUILD_RUNS = 2;
@@ -273,6 +274,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
       plan,
       messages,
       taskRecordText: ready.taskRecordText,
+      goals: goalsOf(botId),
       signal: controller.signal,
       summarize: (prompt) =>
         abortable(instance.generateText!(prompt, { timeoutMs: BUILD_CALL_TIMEOUT_MS, signal: controller.signal }), controller.signal),

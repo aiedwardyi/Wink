@@ -6,6 +6,7 @@ import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import { TYPED_VALUES_HEADER, typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
+import type { PinnedGoal } from "./picks.ts";
 import type { Message, OptionCardData } from "./store.ts";
 import type { NativePrompt, ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
@@ -48,6 +49,7 @@ const SUMMARY_PREVIOUS_SHARE = 0.75;
 const FALLBACK_SUMMARY_NOTICE = "Model summary unavailable; full transcript retained by Wink.";
 const SUMMARY_TRIMMED = "[summary trimmed to fit]";
 const SUMMARY_MAX_CHARS = 32_000;
+const GOALS_HEADER = "Open goals the user set, kept word for word by Wink:";
 const VALUES_CAP_TOKENS = 4_000;
 // The block's own room, taken from the tail so the summary text is never cut for it.
 const VALUES_ROOM_TOKENS = 2_400;
@@ -920,6 +922,7 @@ function summaryPrompt(input: {
     `Start with the line ${SUMMARY_SENTINEL}, then plain text only, and keep it under ${Math.floor(input.summaryTokens * 3 * SUMMARY_ASK_SHARE / SUMMARY_BYTES_PER_WORD)} words.`,
     `The summary covers the conversation up to ${boundaryLabel(input.coveredAt)}; everything after that is replayed verbatim.`,
     "Record what happened up to that time: decisions, completed work, tool outcomes, evidence, artifacts and failures.",
+    "Keep every standing goal or spec the user set (what to build and what it must hold) in their words until they finish or drop it.",
     "Keep names, numbers, ids and other values the user gave verbatim. A request to keep something in this conversation only or not to save it limits memory and files, never this summary.",
     "Keep work that is built but not landed word for word: PR numbers, branch names, shas and their state (green, pushed, not merged).",
     "Do not write Next Actions, Workers or Blockers sections; current status lives in the task record.",
@@ -1299,10 +1302,23 @@ export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number
   return prepared;
 }
 
-function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
+const plain = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** The summarizer is asked to keep goals but can drop them, so code puts back each one it lost, inside the row's length limit. */
+function withGoals(summary: string, goals: readonly PinnedGoal[]): string {
+  const kept = plain(summary);
+  const lost = goals.filter(({ goal }) => !kept.includes(plain(goal)));
+  if (!lost.length) return summary;
+  const block = [GOALS_HEADER, ...lost.map(({ name, goal }) => `- ${name}: ${goal}`)].join("\n");
+  const room = SUMMARY_MAX_CHARS - block.length - 2;
+  const head = summary.length <= room ? summary : `${summary.slice(0, room - SUMMARY_TRIMMED.length - 1).replace(/\n[^\n]*$/, "").trimEnd()}\n${SUMMARY_TRIMMED}`;
+  return `${head}\n\n${block}`;
+}
+
+function compactionRecord(plan: CompactionNeeded, summary: string, goals: readonly PinnedGoal[] = []): ContextCompactionV1 {
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
-    summary: withTypedValues(summary, plan.typedLines, plan.summaryBudget + plan.valuesRoom),
+    summary: withTypedValues(withGoals(summary, goals), plan.typedLines, plan.summaryBudget + plan.valuesRoom),
     coveredThroughId: plan.coveredThrough.id,
     firstKeptId: plan.tail.find((unit) => !plan.deferredMail?.some((row) => row.id === unit.id))?.id ?? null,
     contextWindow: plan.contextWindow,
@@ -1331,6 +1347,8 @@ export async function prepareModelContext(input: {
   summaryGrace?: SummaryGrace;
   /** the caller's own plan for these same inputs, so a send plans once */
   plan?: CompactionPlan;
+  /** the bot's open goals, put back in a new summary that lost them */
+  goals?: readonly PinnedGoal[];
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {
   const plan = input.plan ?? planCompaction(input);
@@ -1426,7 +1444,7 @@ export async function prepareModelContext(input: {
     }
   }
 
-  const record = compactionRecord(plan, summary);
+  const record = compactionRecord(plan, summary, input.goals);
   const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(replayMessage)];
   const estimatedTokens = estimateContextTokens(transcript);
   if (estimatedTokens > budgetTokens) {
@@ -1456,6 +1474,7 @@ export async function buildCompaction(input: {
   messages: Message[];
   taskRecordText: string;
   summarize: (prompt: string) => Promise<string>;
+  goals?: readonly PinnedGoal[];
   signal?: AbortSignal;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<BuiltModelContext> {
@@ -1474,7 +1493,7 @@ export async function buildCompaction(input: {
   });
   if (segment.status === "too-large") return { status: "failed", result: "error" };
   if (segment.status === "error") return { status: "failed", result: segment.result };
-  const record = compactionRecord(plan, segment.summary);
+  const record = compactionRecord(plan, segment.summary, input.goals);
   const transcript = [summaryMessage(record.summary, plan.coveredThrough.at), ...plan.tail.map(replayMessage)];
   if (estimateContextTokens(transcript) > plan.budgetTokens) return { status: "failed", result: "over-budget" };
   const validated = readContextCompaction({ value: record });

@@ -6,10 +6,14 @@ import { holdSources, sharedSources, type PickBinding } from "./pick-sources.ts"
 export const PICKS_FILE = "decisions.md";
 /** Estimated tokens of the current-picks block in the prompt, header included. */
 export const PICKS_PROMPT_TOKENS = 300;
+/** The open goals' own budget, so a goal never falls into the picks' "+N more". */
+export const GOALS_PROMPT_TOKENS = 400;
 // Claude's tokenizer measured 2.6 chars per token on path-heavy English; other scripts run near one token per char
 const CHARS_PER_TOKEN = 2.6;
 const KEY_MAX = 60;
 const PICKED_MAX = 100;
+const GOAL_MAX = 200;
+const GOAL_SHOWN_MIN = 40;
 const SAID_MAX = 120;
 const LINE_MAX = 420;
 const TWEAKS_SHOWN = 3;
@@ -23,10 +27,12 @@ const INTRO =
   "The user's picks in their own words, oldest first. Auto Notes writes this file from the chat; bots read it and never edit it. A newer pick on the same question replaces the old one, which stays here struck out with a pointer to the newer pick. A tweak adds to the pick it changes. Only current picks load into the bot's prompt.";
 const LEGACY = "## Older picks, before the timeline (no words kept)";
 const HEADER = `Current picks, newest first: the user's own, each beating older notes unless they changed it since. Build from a pick's picture plus its tweaks, never a new option. History: memory/${PICKS_FILE} (Auto Notes writes it; never edit).`;
+const GOALS_HEADER = "Open goals the user set, in their words: build toward each until they finish or drop it, then call pin_goal with done.";
+const DONE = "Done";
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question|Binding): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Kind|Done|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question|Binding): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -42,6 +48,9 @@ export type PickEntry = {
   key: string;
   replacedBy?: string;
   picked: string;
+  /** A standing goal or spec: shown in every prompt in words until a done entry replaces it. */
+  kind?: "goal";
+  done?: boolean;
   picture?: Picture;
   over: string[];
   overPictures: Picture[];
@@ -77,7 +86,9 @@ export type PickChange =
       tapped?: boolean;
       legacy?: { day: string; line: string };
     }
-  | { kind: "tweak"; at: number; key: string; said: string };
+  | { kind: "tweak"; at: number; key: string; said: string }
+  | { kind: "goal"; at: number; key: string; goal?: string; done?: boolean };
+export type PinnedGoal = { name: string; goal: string };
 
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 const clip = (text: string, max: number) => {
@@ -135,6 +146,8 @@ export function parseTimeline(text: string): Timeline {
     const [, field, value = ""] = (!tweak && FIELD.exec(line)) || [];
     if (tweak) entry.tweaks.push({ at: tweak[1]!, said: tweak[2]! });
     else if (field === "Picked") entry.picked = value.replace(/^~~(.*)~~$/, "$1");
+    else if (field === "Kind" && value === "goal") entry.kind = "goal";
+    else if (field === "Done" && value === "yes") entry.done = true;
     else if (field === "Picture") entry.picture = value ? pictureOf(value) : undefined;
     else if (field === "Over") entry.over = list(value);
     else if (field === "Over pictures") entry.overPictures = list(value).map(pictureOf);
@@ -158,6 +171,8 @@ export function renderTimeline({ head, entries }: Timeline): string {
     [
       `## ${entry.id} | ${entry.key} | ${entry.replacedBy ? `replaced by ${entry.replacedBy}` : "current"}`,
       `- Picked: ${entry.replacedBy ? `~~${entry.picked}~~` : entry.picked}`,
+      ...(entry.kind ? [`- Kind: ${entry.kind}`] : []),
+      ...(entry.done ? ["- Done: yes"] : []),
       ...(entry.picture ? [`- Picture: ${pictureText(entry.picture)}`] : []),
       ...(entry.over.length ? [`- Over: ${entry.over.join(SEPARATOR)}`] : []),
       ...(entry.overPictures.length ? [`- Over pictures: ${entry.overPictures.map(pictureText).join(SEPARATOR)}`] : []),
@@ -206,6 +221,21 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     if (!pickKey(asked)) continue;
     const current = entries.findLast((entry) => !entry.replacedBy && pickKey(entry.key) === pickKey(asked));
     const key = current?.key ?? asked;
+    if (change.kind === "goal") {
+      // a replayed batch from before the current entry never lands on it
+      if (current && change.at < entryTime(current)) continue;
+      const open = current?.kind === "goal" && !current.done ? current : undefined;
+      const goal = change.done ? open && DONE : clip(change.goal ?? "", GOAL_MAX);
+      if (!goal || (open && !change.done && same(open.picked, goal))) continue;
+      const id = fresh(pickStamp(change.at));
+      if (current) {
+        current.replacedBy = id;
+        replaced += 1;
+      }
+      entries.push({ id, key, picked: goal, kind: "goal", ...(change.done ? { done: true } : {}), over: [], overPictures: [], files: [], tweaks: [], extra: [] });
+      picks += 1;
+      continue;
+    }
     const said = clip(change.said, SAID_MAX);
     const stamp = pickStamp(change.at);
     const tapped = change.kind === "pick" && Boolean(change.tapped);
@@ -431,10 +461,27 @@ export function promptTokens(text: string): number {
   return tokens;
 }
 
-/** The prompt's current picks, newest first, within `max` estimated tokens: whole lines while every other key still fits, then the pick alone, then its key. Empty when there are none. */
+export function pinnedGoals(text: string | null | undefined): PinnedGoal[] {
+  return currentPicks(text).flatMap((entry) => (entry.kind === "goal" && !entry.done ? [{ name: entry.key, goal: entry.picked }] : []));
+}
+
+/** Every open goal in words, newest first: whole lines within `max`, else each clipped to an even share, never "+N more". */
+function goalsBlock(entries: PickEntry[], max = GOALS_PROMPT_TOKENS): string {
+  const goals = entries.filter((entry) => entry.kind === "goal" && !entry.done).reverse();
+  if (!goals.length) return "";
+  const lines = goals.map((entry) => `- ${entry.key} (${monthDay(entry.id)}): ${entry.picked}`);
+  const whole = [GOALS_HEADER, ...lines].join("\n");
+  if (promptTokens(whole) <= max) return whole;
+  const share = Math.max(GOAL_SHOWN_MIN, Math.floor(((max - promptTokens(GOALS_HEADER)) / goals.length) * CHARS_PER_TOKEN) - 1);
+  return [GOALS_HEADER, ...lines.map((line) => clip(line, share))].join("\n");
+}
+
+/** The prompt's open goals, then its current picks, newest first, within `max` estimated tokens: whole lines while every other key still fits, then the pick alone, then its key. Empty when there are none. */
 export function picksBlock(text: string | null | undefined, max = PICKS_PROMPT_TOKENS): string {
-  const live = currentPicks(text).reverse();
-  if (!live.length) return "";
+  const current = currentPicks(text);
+  const goals = goalsBlock(current);
+  const live = current.filter((entry) => !entry.kind).reverse();
+  if (!live.length) return goals;
   let out = HEADER;
   const listed: PickEntry[] = [];
   for (const [index, entry] of live.entries()) {
@@ -444,7 +491,7 @@ export function picksBlock(text: string | null | undefined, max = PICKS_PROMPT_T
     if (line || !index) out += `\n${line ?? shortLine(entry)}`;
     else listed.push(entry);
   }
-  return out + keyIndex(listed, max - promptTokens(out));
+  return `${goals ? `${goals}\n\n` : ""}${out}${keyIndex(listed, max - promptTokens(out))}`;
 }
 
 /** The file with replaced entries blanked, so recall never finds an old pick and line numbers still match. */

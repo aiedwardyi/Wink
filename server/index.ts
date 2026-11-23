@@ -331,9 +331,11 @@ import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
   ensureWorkspace,
+  goalsOf,
   workspaceDir,
   memoryHealth,
   memorySystemPrompt,
+  pinGoal,
   supportsWorkspaceFiles,
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
@@ -5607,6 +5609,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
+      goals: goalsOf(bot.id),
       onSummaryCall: (record) => logSummaryCall({
         botId: bot.id,
         threadId,
@@ -8513,6 +8516,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
         });
+      }
+      // pin_goal: a standing goal in the bot's timeline, in every prompt until it is done
+      if (method === "POST" && path === "/api/internal/goal") {
+        const source = commsCallers.resolve(req.headers.authorization);
+        if (!source || !store.bot(source.botId) || readOnlyTurnThreads.has(source.threadId)) return json(res, 403, { error: "unknown sender" });
+        const body = await readBody(req);
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        const goal = typeof body.goal === "string" ? body.goal.trim() : "";
+        if (!name || (body.done !== true && !goal)) return json(res, 400, { error: "pin_goal needs name, and goal unless done is true." });
+        return json(res, 200, { text: pinGoal(source.botId, { name, goal, done: body.done === true }) });
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
         const source = commsCallers.resolve(req.headers.authorization);

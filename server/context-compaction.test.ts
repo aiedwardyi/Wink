@@ -2626,6 +2626,19 @@ describe("typed values block", () => {
     expect(built.status === "ready" && built.compaction.summary).toBe(`built text\n\n${BLOCK}`);
   });
 
+  it("puts back a pinned goal the summarizer dropped, and asks it to keep goals", async () => {
+    const messages = planted();
+    const plan = planCompaction({ messages, contextWindow: 200_000 });
+    if (!plan.needed) throw new Error("expected a plan");
+    const goals = [{ name: "Glasses v1", goal: "CEO meeting tool: person brief + top 3 competitors + 1 news line" }];
+    const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nbuilt text");
+    const built = await buildCompaction({ plan, messages, taskRecordText: "Goal: launch", goals, summarize });
+    expect(built.status === "ready" && built.compaction.summary).toBe(`built text\n\nOpen goals the user set, kept word for word by Wink:\n- Glasses v1: ${goals[0]!.goal}\n\n${BLOCK}`);
+    expect(summarize.mock.calls[0]![0]).toContain("Keep every standing goal or spec the user set");
+    const kept = await buildCompaction({ plan, messages, taskRecordText: "Goal: launch", goals, summarize: async () => `SUMMARY\nGlasses: ${goals[0]!.goal.toUpperCase()}` });
+    expect(kept.status === "ready" && kept.compaction.summary).not.toContain("Open goals the user set");
+  });
+
   it("gives the summarizer the last summary without its block and rebuilds one block", async () => {
     const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nmodel text two");
     const result = await prepareModelContext({

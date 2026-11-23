@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
-import { PICKS_FILE, picksBlock, timelineHolds } from "./picks.ts";
+import { applyPicks, PICKS_FILE, picksBlock, pinnedGoals, timelineHolds, type PinnedGoal } from "./picks.ts";
 import { currentTurnTrace } from "./turn-timing.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
@@ -31,6 +31,8 @@ export const MEMORY_MAX_LINES = 200;
 export const MEMORY_MAX_BYTES = 24_000;
 /** Either budget this full puts a trim notice in the prompt, before anything is cut. */
 const MEMORY_WARN_SHARE = 0.8;
+/** Past the budget, this share of it goes to the newest lines: Auto Notes appends at the bottom. */
+const MEMORY_NEWEST_SHARE = 0.25;
 /** A copy memory sync set aside when one file changed on two PCs (memory-sync.ts park). */
 export const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
 
@@ -82,9 +84,7 @@ export function removeWorkspaceDir(dir: string): void {
  * MEMORY_MAX_BYTES bytes, whichever cuts first. Returns null when the file
  * is missing or effectively empty (seed-only counts as empty). `bytes` and
  * `lines` size the whole file, not the cut. */
-export function loadMemory(
-  botId: string,
-): { text: string; truncated: boolean; bytes: number; lines: number } | null {
+export function loadMemory(botId: string): LoadedMemory | null {
   let raw: string;
   const end = currentTurnTrace()?.span("memory_read", "MEMORY.md");
   try {
@@ -98,17 +98,36 @@ export function loadMemory(
   return loadedMemory(raw);
 }
 
-/** raw cut the way loadMemory cuts it for the prompt. */
-export function loadedMemory(raw: string) {
+/** `text` is the head; past the budget, `newest` holds the last lines and `cut` counts the older lines between them that do not load. */
+export type LoadedMemory = { text: string; truncated: boolean; bytes: number; lines: number; newest?: string; cut?: number };
+
+/** raw cut the way loadMemory cuts it for the prompt: the head, then the newest lines, older lines between them left out. */
+export function loadedMemory(raw: string): LoadedMemory {
+  const all = raw.split("\n");
+  const whole = headOf(raw);
+  if (!whole.truncated) return { ...whole, bytes: Buffer.byteLength(raw, "utf8"), lines: all.length };
+  const end = all.at(-1) === "" ? all.length - 1 : all.length;
+  const size = (line: string) => Buffer.byteLength(line, "utf8") + 1;
+  let from = end;
+  let newestBytes = 0;
+  while (from > 0 && end - from < MEMORY_MAX_LINES * MEMORY_NEWEST_SHARE && newestBytes + size(all[from - 1]!) <= MEMORY_MAX_BYTES * MEMORY_NEWEST_SHARE) newestBytes += size(all[--from]!);
+  const head = headOf(all.slice(0, from).join("\n"), MEMORY_MAX_LINES - (end - from), MEMORY_MAX_BYTES - newestBytes);
+  const cut = from - head.text.split("\n").length;
+  // nothing between them: a full file whose last line ends in a break loses nothing
+  if (from === end || cut <= 0) return { ...whole, bytes: Buffer.byteLength(raw, "utf8"), lines: all.length };
+  return { text: head.text, truncated: true, bytes: Buffer.byteLength(raw, "utf8"), lines: all.length, newest: all.slice(from, end).join("\n"), cut };
+}
+
+function headOf(raw: string, maxLines = MEMORY_MAX_LINES, maxBytes = MEMORY_MAX_BYTES) {
   let truncated = false;
   let text = raw;
   const lines = text.split("\n");
-  if (lines.length > MEMORY_MAX_LINES) {
-    text = lines.slice(0, MEMORY_MAX_LINES).join("\n");
+  if (lines.length > maxLines) {
+    text = lines.slice(0, maxLines).join("\n");
     truncated = true;
   }
-  if (Buffer.byteLength(text, "utf8") > MEMORY_MAX_BYTES) {
-    text = Buffer.from(text, "utf8").subarray(0, MEMORY_MAX_BYTES).toString("utf8");
+  if (Buffer.byteLength(text, "utf8") > maxBytes) {
+    text = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
     // a multi-byte character sliced in half decodes as U+FFFD — drop it
     text = text.replace(/�+$/, "");
     // end on the last whole line; only a lone line over budget stays cut mid-line
@@ -116,7 +135,7 @@ export function loadedMemory(raw: string) {
     if (lastBreak > 0) text = text.slice(0, lastBreak).trimEnd();
     truncated = true;
   }
-  return { text, truncated, bytes: Buffer.byteLength(raw, "utf8"), lines: lines.length };
+  return { text, truncated };
 }
 
 /** Cap on what the memory API will write to MEMORY.md. Far above the load
@@ -309,9 +328,11 @@ export function listMemoryTopics(botId: string): Array<{ name: string; bytes: nu
 
 export const MEMORY_LINE_MAX_BYTES = 300;
 
-export type MemoryHealth = { longLines: number; orphans: string[] };
+/** `untriggered`: side files named only in sentences that never say when to read them. */
+export type MemoryHealth = { longLines: number; orphans: string[]; untriggered?: string[] };
 
 const NAME_CHAR = /[A-Za-z0-9_-]/;
+const TRIGGER = /\b(?:when|whenever|before|after|if|while|during|first)\b|때|전에|먼저/i;
 
 // indexOf, not a regex per name: this runs for every side file after each reply
 function namesStem(text: string, stem: string): boolean {
@@ -321,12 +342,16 @@ function namesStem(text: string, stem: string): boolean {
   return false;
 }
 
-/** Loaded lines over the one-rule size, and side files no loaded line names. */
+/** Loaded lines over the one-rule size, side files no loaded line names, and side files whose pointers never say when to read them. */
 export function memoryHealthOf(text: string, names: string[]): MemoryHealth {
   const longLines = text.split("\n").filter((line) => Buffer.byteLength(line, "utf8") > MEMORY_LINE_MAX_BYTES).length;
   // a parked copy already gets its own notice, and the timeline is named by the picks in the prompt
-  const orphans = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE && !namesStem(text, name.slice(0, -".md".length)));
-  return { longLines, orphans };
+  const checked = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE);
+  const orphans = checked.filter((name) => !namesStem(text, name.slice(0, -".md".length)));
+  // the prompt's rule reads a side file only when a line says when, so a bare pointer leaves it unread
+  const saysWhen = text.split("\n").filter((line) => TRIGGER.test(line)).flatMap((line) => line.split(/(?<=[.!?]) /)).filter((sentence) => TRIGGER.test(sentence)).join("\n");
+  const untriggered = checked.filter((name) => !orphans.includes(name) && !namesStem(saysWhen, name.slice(0, -".md".length)));
+  return { longLines, orphans, untriggered };
 }
 
 export function memoryHealth(botId: string): MemoryHealth {
@@ -340,7 +365,8 @@ export function memoryHealth(botId: string): MemoryHealth {
   } catch {
     names = [];
   }
-  return memoryHealthOf(loadMemory(botId)?.text ?? "", names);
+  const memory = loadMemory(botId);
+  return memoryHealthOf(memory ? [memory.text, memory.newest ?? ""].join("\n") : "", names);
 }
 
 /** Read one topic file. The name gate runs here too, not only in the HTTP
@@ -368,6 +394,22 @@ function readOptionalMemoryTopic(botId: string, name: string): string | null {
 const LESSON_RULE =
   " When the user corrects you or a memory note, or you catch your own mistake, save the lesson as one line in that same turn" +
   " without being asked, replacing any wrong line; never save passwords, keys, tokens or account numbers.";
+
+const shownMemory = (memory: LoadedMemory) => memory.newest
+  ? `${memory.text}\n[${memory.cut} older lines of MEMORY.md were cut here; its newest lines follow.]\n${memory.newest}`
+  : `${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}`;
+
+/** The pin_goal tool: lands a goal, or finishes one, in the timeline every prompt reads. */
+export function pinGoal(botId: string, change: { name: string; goal?: string; done?: boolean }, now = Date.now()): string {
+  const landed = applyPicks(readMemoryTopic(botId, PICKS_FILE) ?? "", [{ kind: "goal", at: now, key: change.name, goal: change.goal, done: change.done }]);
+  if (landed) writeFileAtomic(join(ensureWorkspace(botId), "memory", PICKS_FILE), landed.text, { mode: 0o600 });
+  if (change.done) return landed ? `Finished the goal "${change.name}".` : `No open goal is named "${change.name}".`;
+  return landed ? `Pinned the goal "${change.name}": it shows in every turn until it is done.` : `The goal "${change.name}" is already pinned in those words.`;
+}
+
+export function goalsOf(botId: string): PinnedGoal[] {
+  return pinnedGoals(readOptionalMemoryTopic(botId, PICKS_FILE));
+}
 
 /** The current picks block, the one copy chats and calls both read. */
 export function picksPrompt(botId: string): string {
@@ -402,7 +444,7 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
       readRules + rules +
       laneNotice +
       (!readOnly && parked.length ? `\n\nMemory sync set aside copies: ${parked.join(", ")}.` : "") +
-      (memory ? `\n\nYour memory (MEMORY.md):\n${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}` : "") +
+      (memory ? `\n\nYour memory (MEMORY.md):\n${shownMemory(memory)}` : "") +
       picks
     );
   }
@@ -411,7 +453,7 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
     return (
       ` Your private long-term memory file is ${JSON.stringify(memoryFile)}, with longer notes in ${JSON.stringify(topicDir)}.` +
       " Read it as you need; this turn runs beside your busy 1:1 chat, so leave memory edits, and files your 1:1 is editing, to your 1:1." +
-      (memory ? `\n\nYour memory (MEMORY.md):\n${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}` : "") +
+      (memory ? `\n\nYour memory (MEMORY.md):\n${shownMemory(memory)}` : "") +
       picks
     );
   }
@@ -455,10 +497,9 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
     memory.lines >= MEMORY_MAX_LINES * MEMORY_WARN_SHARE;
   // above the notes: a notice at the cut, after 24 KB of notes, gets missed
   const notice = memory.truncated
-    ? `\n\n[${size}, over ${budget}, so its end was not loaded. Trim it this session: ${trim}]`
+    ? `\n\n[${size}, over ${budget}, so ${memory.newest ? `${memory.cut} older lines from its middle were` : "its end was"} not loaded. Trim it this session: ${trim}]`
     : near
       ? `\n\n[${size}, near ${budget}; past it, the end stops loading. Trim it soon: ${trim}]`
       : "";
-  const cut = memory.truncated ? "\n[MEMORY.md was cut off here.]" : "";
-  return `${guidance}${notice}${conflicts}\n\nYour memory (MEMORY.md):\n${memory.text}${cut}${picks}`;
+  return `${guidance}${notice}${conflicts}\n\nYour memory (MEMORY.md):\n${shownMemory(memory)}${picks}`;
 }
