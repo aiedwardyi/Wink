@@ -139,6 +139,7 @@ export async function adoptWorkers({ client, runs, host, mailbox = async () => n
     if (strangers.length) void wait(unknownBotMs).then(async () => {
       const [mail, names] = await Promise.all([Promise.resolve().then(mailbox).catch(() => null), Promise.resolve().then(botNames).catch(() => null)]);
       await Promise.all(strangers.map(([run, pane]) => {
+        if (!runs.has(run.id)) return client.drop(pane.id);
         if (!names || Object.hasOwn(names, run.botId)) return take(run, pane, mail);
         client.drop(run.id);
         return runs.closed(run.id);
