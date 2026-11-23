@@ -16,7 +16,7 @@ class FakeEventSource {
 
 const models = { default: "claude-opus-5-5", options: [{ id: "claude-opus-5-5", label: "Opus 5.5" }, { id: "claude-sonnet-5-5", label: "Sonnet 5.5" }] };
 const ready: InstanceInfo = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available" }, models };
-const missing: InstanceInfo = { ...ready, snapshot: { state: "missing" } };
+const missing: InstanceInfo = { ...ready, snapshot: { state: "unavailable" } };
 const chat: Message[] = [{ id: "u1", at: 1, role: "user", kind: "text", text: "hi" }, { id: "b1", at: 2, role: "bot", kind: "text", text: "Hello" }];
 const atlas = (extra: Partial<Bot> = {}): Bot => ({
   id: "atlas", threadId: "thread-atlas", name: "Atlas", title: "", description: "", notifications: false, color: "blue", unread: false,
