@@ -115,13 +115,16 @@ function CallAnswerRow() {
   const { state, dispatch } = useStore();
   const onCall = Boolean(useActiveCall());
   const [picked, setPicked] = useState<CallAnswer>();
+  const latest = useRef(0);
   const value = picked ?? state.config?.liveCall?.answer ?? "gemini";
   const pick = (answer: CallAnswer) => {
+    const mine = ++latest.current;
     setPicked(answer);
+    // Only the newest pick lands: an older answer arriving late would undo it.
     void api("/api/config", { method: "PATCH", body: JSON.stringify({ liveCall: { answer } }) }).then(
-      (config: ConfigStatus) => dispatch({ type: "configStatus", config }),
+      (config: ConfigStatus) => mine === latest.current && dispatch({ type: "configStatus", config }),
       () => {},
-    ).finally(() => setPicked(undefined));
+    ).finally(() => mine === latest.current && setPicked(undefined));
   };
   return (
     <SegmentedRow<CallAnswer> label={t("callMenu.answer")} hint={onCall ? t("callMenu.answer.next") : undefined} value={value}

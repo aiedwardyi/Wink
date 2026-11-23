@@ -257,6 +257,12 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     writeFileAtomic(picksPath, JSON.stringify(Object.fromEntries(Object.entries(kept).slice(-CALL_PICKS_KEPT))));
   };
 
+  const keepPicks = (callId: string, botId: string, picks: { voice: LiveVoice; style: CallStyle; language: "en" | "ko" }) =>
+    savePicks((kept) => {
+      delete kept[callId];
+      kept[callId] = { botId, picks };
+    });
+
   // A pick changed mid-call opens a new session beside the live one: the call so far rides its brief.
   // A swap carries the picks themselves: the bot's own save may still be in flight.
   const briefFor = async (bot: BotRecord, callId: string, locale: unknown, swap: boolean, picks = bot.call, room?: CallRoom, tail?: RoomVoiceTail) => {
@@ -272,10 +278,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     briefs.delete(callId);
     briefs.set(callId, entry);
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
-    savePicks((kept) => {
-      delete kept[callId];
-      kept[callId] = { botId: bot.id, picks: { voice, style, language: app } };
-    });
+    keepPicks(callId, bot.id, { voice, style, language: app });
     return entry;
   };
 
@@ -313,9 +316,11 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const picks = swap || body.callId === undefined ? callPrefsSchema.safeParse(body.call).data ?? bot.call : own?.botId === bot.id ? own.picks : bot.call;
     // A same-bot call sends no brief: the voice only hears him and reads the bot's replies.
     const sameBot = body.mode === "bot" && !room;
+    const sameLocale = picks?.language ?? (body.locale === "ko" ? "ko" : "en");
     const { brief, locale, voice, style } = sameBot
-      ? { brief: "", locale: picks?.language ?? (body.locale === "ko" ? "ko" : "en"), voice: picks?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE, style: picks?.style ?? "normal" }
+      ? { brief: "", locale: sameLocale, voice: picks?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE, style: picks?.style ?? "normal" }
       : await briefFor(bot, callId, body.locale, swap, picks, room, tail);
+    if (sameBot) keepPicks(callId, bot.id, { voice, style, language: sameLocale });
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;

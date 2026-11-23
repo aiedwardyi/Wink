@@ -53,16 +53,17 @@ function setup(token: Posted = { status: 200, data: { callId: "c-0123456789ab", 
   const ids: string[] = [];
   const rejects: Array<(stopped?: boolean) => void> = [];
   const audio = fakeAudio();
+  let minted = token;
   let clock = 1_000;
   const call = new SameBotCall({
     botId: "b1",
     engine: () => { const engine = new FakeEngine(); engines.push(engine); return engine; },
     audio,
     now: () => clock,
-    post: async (path, body) => { posts.push({ path, body }); return path.endsWith("/call/token") ? token : { status: 200, data: {} }; },
+    post: async (path, body) => { posts.push({ path, body }); return path.endsWith("/call/token") ? minted : { status: 200, data: {} }; },
     send: (text, sendId, onError) => { sent.push(text); ids.push(sendId); rejects.push(onError); },
   });
-  return { call, audio, posts, sent, ids, rejects, engines, engine: () => engines.at(-1)!, tick: (ms: number) => { clock += ms; } };
+  return { call, audio, posts, sent, ids, rejects, engines, mint: (next: Posted) => { minted = next; }, engine: () => engines.at(-1)!, tick: (ms: number) => { clock += ms; } };
 }
 
 async function started() {
@@ -233,6 +234,51 @@ describe("same-bot call", () => {
     await vi.waitFor(() => expect(s.engines).toHaveLength(2));
     s.engine().events.ready();
     expect(s.engine().texts).toEqual(["[READ]\nReconnect reply."]);
+  });
+
+  it("a reply the server cuts in on drops the rest of that reply, as a tap does", async () => {
+    const s = await started();
+    answered(s, "First part of a long reply here. Second part that he cut in on. Third part as well.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.interrupted();
+    say(s, "actually wait");
+    expect(s.sent).toEqual(["tell me", "actually wait"]);
+    expect(s.engine().texts).toHaveLength(1);
+  });
+
+  it("keeps hearing him while a reply waits for his sentence to end", async () => {
+    const s = await started();
+    say(s, "tell me");
+    s.audio.mic!(loudFrame());
+    s.engine().events.heard("and also ");
+    s.call.observe({ busy: false, messages: [user("u1", "tell me", s.ids.at(-1)), bot("b9", "The reply that arrives mid-sentence.")] });
+    expect(s.engine().texts).toEqual([]);
+    expect(s.call.state().status).toBe("listening");
+    s.audio.mic!(loudFrame());
+    expect(s.engine().frames).toBe(3);
+    s.engine().events.heard("run the tests");
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    expect(s.sent).toEqual(["tell me", "and also run the tests"]);
+    expect(s.engine().texts).toEqual(["[READ]\nThe reply that arrives mid-sentence."]);
+  });
+
+  it("a keyless try's late mic does not stop the mic a retry is using", async () => {
+    const s = setup({ status: 409, data: {} });
+    const grants: Array<() => void> = [];
+    s.audio.capture = async function (onFrame) { this.mic = onFrame; await new Promise<void>((grant) => grants.push(grant)); };
+    const stopped = vi.spyOn(s.audio, "stopMic");
+    await s.call.start();
+    expect(s.call.state().status).toBe("needsKey");
+    s.mint({ status: 200, data: { callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" } });
+    const retry = s.call.start();
+    await vi.waitFor(() => expect(grants).toHaveLength(2));
+    grants[1]!();
+    await retry;
+    grants[0]!();
+    for (let tick = 0; tick < 6; tick++) await Promise.resolve();
+    expect(stopped).not.toHaveBeenCalled();
   });
 
   it("leaves Working and says the line was not sent when the send never reached the bot", async () => {

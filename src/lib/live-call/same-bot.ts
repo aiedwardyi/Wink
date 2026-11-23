@@ -36,6 +36,7 @@ export class SameBotCall {
   private engine: LiveEngine | null = null;
   private connected = false;
   private callId?: string;
+  private attempts = 0;
   private handle?: string;
   private reconnects = 0;
   private readyTimer?: ReturnType<typeof setTimeout>;
@@ -91,7 +92,7 @@ export class SameBotCall {
 
   /** Half-duplex: while a reply is read the mic sends nothing, so the voice never hears itself. */
   private get speaking() {
-    return this.deps.audio.playing || (!this.cut && (this.turn === "read" || this.asked || this.reads.length > 0));
+    return this.deps.audio.playing || (!this.cut && (this.turn === "read" || this.asked));
   }
 
   private refresh() {
@@ -102,6 +103,7 @@ export class SameBotCall {
   }
 
   async start() {
+    const attempt = ++this.attempts;
     this.set({ status: "starting", error: undefined });
     const mic = this.deps.audio.capture((pcm) => this.frame(pcm)).then((played) => {
       if (played === false) {
@@ -112,7 +114,7 @@ export class SameBotCall {
     }, (error) => error ?? new Error("mic failed"));
     const session = await this.token();
     if (!session) {
-      void mic.then(() => { if (!this.connected) this.deps.audio.stopMic(); });
+      void mic.then(() => { if (attempt === this.attempts && !this.connected) this.deps.audio.stopMic(); });
       return;
     }
     const error = await mic;
@@ -213,6 +215,7 @@ export class SameBotCall {
         if (this.turn === "read") {
           this.deps.audio.flush();
           this.reading = undefined;
+          this.reads = [];
         }
         this.turn = null;
         this.refresh();

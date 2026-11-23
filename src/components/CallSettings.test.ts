@@ -329,6 +329,21 @@ it("labels the panel in Korean", async () => {
   expect(host.querySelector('[role="radiogroup"][aria-label="목소리"]')).not.toBeNull();
 });
 
+it("an older answer pick that lands late never undoes the newer one", async () => {
+  type Config = { liveCall: { voice: string; answer: string } };
+  const landed: Array<(config: Config) => void> = [];
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => landed.push((config) => resolve(Response.json(config))))));
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Answered by"] [role="radio"]')];
+  await act(async () => radios[0]!.click());
+  await act(async () => radios[1]!.click());
+  await act(async () => landed[0]!({ liveCall: { voice: "Aoede", answer: "bot" } }));
+  expect(store.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "configStatus" }));
+  expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => landed[1]!({ liveCall: { voice: "Aoede", answer: "gemini" } }));
+  expect(store.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "configStatus", config: { liveCall: { voice: "Aoede", answer: "gemini" } } });
+});
+
 it("picks who answers calls for the whole app, Gemini voice until he flips it", async () => {
   const fetch = vi.fn(async (_path: string, _init?: RequestInit) => Response.json({ liveCall: { voice: "Aoede", answer: "bot" } }));
   vi.stubGlobal("fetch", fetch);

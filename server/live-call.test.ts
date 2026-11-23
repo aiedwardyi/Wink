@@ -384,6 +384,17 @@ describe("call token", () => {
     expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm.");
   });
 
+  it("a same-bot call resumes with the voice and language it started with, not the bot's newer ones", async () => {
+    const h = harness();
+    const first = await h.post("token", { mode: "bot", call: { voice: "Erinome", language: "ko" } });
+    h.store.patchBot(h.bot.id, { call: { voice: "Puck", language: "en" } });
+    const resumed = await h.post("token", { mode: "bot", callId: first.data.callId, resume: true, locale: "en" });
+    expect(resumed.data).toMatchObject({ voice: "Erinome", locale: "ko" });
+    expect(h.sent(1).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+    await h.post("end", { callId: first.data.callId, stats: {} });
+    expect(JSON.parse(readFileSync(join(h.dir, CALL_PICKS_FILE), "utf8"))).toEqual({});
+  });
+
   it("a finished call leaves no picks behind", async () => {
     const h = harness();
     const first = await h.post("token", { call: { voice: "Fenrir" } });
