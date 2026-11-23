@@ -2,7 +2,7 @@
 // painted plate drawn once per size; a passer-by under a clear umbrella walks
 // away down it from a four-frame strip, lit by the lanterns he passes. The
 // shader adds the rain, ripples, splashes, the shimmer of the wet street, his
-// reflection, haze, steam and drips, and a sign that buzzes while Wink works.
+// reflection, haze, steam and drips, and signs that buzz while Wink works.
 import { flowScene } from "./flow";
 import tallUrl from "./plates/night-rain-alley-tall.webp";
 import wideUrl from "./plates/night-rain-alley-wide.webp";
@@ -10,43 +10,28 @@ import walkUrl from "./plates/night-rain-walk.webp";
 
 const PERIOD = 60;
 
-// Each alley plate in its own pixels: size, the street's vanishing point and depth scale (fractions), where on screen the vanishing point goes, where its floor meets the walls at the bottom edge, a sign that buzzes, a vent that steams, how far right of the street's middle he walks (m), and plate px rects put out (a sign moved off them).
+// Each alley plate in its own pixels: size, the street's vanishing point and depth scale (fractions), where on screen the vanishing point goes, where its floor meets the walls at the bottom edge, a vent that steams, how far right of the street's middle he walks (m; wide keeps him clear of the man painted in its middle), and plate px rects put out.
 const ALLEYS = {
-  wide: { w: 1536, h: 1024, vp: [0.513, 0.561], k: 0.2, aim: 0.52, floor: [-0.06, 0.85], sign: [0.758, 0.027, 0.806, 0.317], vent: [0.869, 0.64], side: 0.6, dark: [] },
-  tall: { w: 1024, h: 1536, vp: [0.576, 0.586], k: 0.2, aim: 0.41, floor: [-1.0, 0.9], sign: [0.859, 0.251, 0.909, 0.417], vent: [0.825, 0.624], side: 0.2, dark: [] },
+  wide: { w: 1536, h: 1024, vp: [0.384, 0.576], k: 0.2, aim: 0.384, floor: [-0.23, 0.8], vent: [0.82, 0.68], side: 1.6, dark: [] },
+  tall: { w: 1024, h: 1536, vp: [0.439, 0.579], k: 0.2, aim: 0.25, floor: [-0.28, 0.85], vent: [0.923, 0.658], side: 0.3, dark: [] },
 };
-type Sign = [number, number, number, number, string, string, string, number];
-// The plates' signs are blank panels, so each is repainted as a lit box with a real word: its rect in plate px, its glow, its core, the word top to bottom, and how hot it burns.
+// The lit neon signs painted into each plate, in plate px: each buzzes on its own clock while Wink works, and keeps some light under the chat column.
 const SIGNS = {
   wide: [
-    [1164, 28, 1237, 325, "#ff4fb8", "#ffe0f2", "포장마차", 1],
-    [1064, 142, 1114, 381, "#2fd3ff", "#d8f8ff", "노래방", 1],
-    [997, 259, 1032, 432, "#f25ae6", "#ffe3fb", "소주", 1],
-    [954, 334, 985, 464, "#b36eff", "#efe3ff", "호프", 1],
-    [905, 404, 925, 496, "#2fd3ff", "#d8f8ff", "영업중", 1],
+    [957, 20, 1032, 300],
+    [859, 150, 922, 328],
+    [717, 321, 762, 421],
+    [880, 342, 930, 442],
+    [711, 449, 756, 478],
   ],
   tall: [
-    [886, 35, 931, 336, "#ff2fa8", "#ffe0f2", "포장마차", 1],
-    [784, 243, 822, 490, "#2fd3ff", "#d8f8ff", "노래방", 1],
-    [705, 371, 737, 599, "#ff70b8", "#ffe6f3", "소주", 1],
-    [778, 528, 815, 721, "#ff2fc0", "#ffe0f6", "치킨", 1],
-    [880, 385, 931, 640, "#ff3048", "#ffe4e8", "영업중", 1],
+    [768, 28, 859, 330],
+    [667, 191, 751, 430],
+    [765, 364, 858, 528],
+    [667, 466, 751, 628],
+    [761, 563, 848, 611],
   ],
-} satisfies Record<"wide" | "tall", Sign[]>;
-const KO = (px: number) => `700 ${px}px "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", "Noto Sans CJK KR", sans-serif`;
-// Without a Korean font the words would draw as empty boxes: the plate keeps its own signs then.
-function hasKorean() {
-  const c = document.createElement("canvas");
-  c.width = c.height = 24;
-  const s = c.getContext("2d", { willReadFrequently: true })!;
-  s.font = KO(20);
-  const ink = (ch: string) => {
-    s.clearRect(0, 0, 24, 24);
-    s.fillText(ch, 2, 20);
-    return s.getImageData(0, 0, 24, 24).data.join();
-  };
-  return ink("한") !== ink(String.fromCodePoint(0x10fffd));
-}
+} satisfies Record<"wide" | "tall", number[][]>;
 
 // One cell of the walk strip in its own pixels: size, his heel line, his centre, and his umbrella's rim ends, where drips fall from.
 const WALK = { w: 440, h: 772, heel: 765, cx: 190, rim: [[12, 130], [368, 135]] };
@@ -59,8 +44,8 @@ const decode = (url: string) =>
     .catch(() => null);
 const [wide, tall, walk] = "WebGLRenderingContext" in globalThis ? await Promise.all([wideUrl, tallUrl, walkUrl].map(decode)) : [null, null, null];
 
-// Whether a screen px is on one of the plate's sign panels.
-const lit = (k: "wide" | "tall") => SIGNS[k].map(([x0, y0, x1, y1]) => `inBox(s, px, vec4(${[x0 / ALLEYS[k].w, y0 / ALLEYS[k].h, x1 / ALLEYS[k].w, y1 / ALLEYS[k].h].map((v) => v.toFixed(4)).join(", ")}))`).join(" + ");
+// A GLSL sum over the plate's signs, each given its rect in plate fractions and its index.
+const each = (k: "wide" | "tall", f: (r: string, i: number) => string) => SIGNS[k].map(([x0, y0, x1, y1], i) => f(`vec4(${[x0 / ALLEYS[k].w, y0 / ALLEYS[k].h, x1 / ALLEYS[k].w, y1 / ALLEYS[k].h].map((v) => v.toFixed(4)).join(", ")})`, i)).join(" + ");
 const pick = (vec: string, f: (p: (typeof ALLEYS)["wide"]) => number[]) => `s.x < s.y ? ${vec}(${f(ALLEYS.tall).join(", ")}) : ${vec}(${f(ALLEYS.wide).join(", ")})`;
 
 // Shared with the shader: the plate's cover fit, anchored on its bottom right.
@@ -69,7 +54,6 @@ vec2 plateSize(vec2 s) { return ${pick("vec2", (p) => [p.w, p.h])}; }
 vec3 plateVp(vec2 s) { return ${pick("vec3", (p) => [...p.vp, p.k])}; }
 float plateAim(vec2 s) { return s.x < s.y ? ${ALLEYS.tall.aim} : ${ALLEYS.wide.aim}; }
 vec2 plateFloor(vec2 s) { return ${pick("vec2", (p) => p.floor)}; }
-vec4 plateSign(vec2 s) { return ${pick("vec4", (p) => p.sign)}; }
 vec2 plateVent(vec2 s) { return ${pick("vec2", (p) => p.vent)}; }
 // Covering the screen, scaled up if need be so the vanishing point lands on its aim: scale, then the plate's top left.
 vec3 fit(vec2 s) {
@@ -80,7 +64,15 @@ vec3 fit(vec2 s) {
 }
 vec2 onPlate(vec2 s, vec2 f) { vec3 k = fit(s); return k.yz + f * plateSize(s) * k.x; }
 float inBox(vec2 s, vec2 px, vec4 r) { vec2 a = onPlate(s, r.xy), b = onPlate(s, r.zw); return step(a.x, px.x) * step(px.x, b.x) * step(a.y, px.y) * step(px.y, b.y); }
-float plateLit(vec2 s, vec2 px) { return s.x < s.y ? ${lit("tall")} : ${lit("wide")}; }
+float inCol(vec2 s, vec2 px, vec4 r) { vec2 a = onPlate(s, r.xy), b = onPlate(s, r.zw); return step(a.x - 12.0, px.x) * step(px.x, b.x + 12.0); }
+float plateLit(vec2 s, vec2 px) { return s.x < s.y ? ${each("tall", (r) => `inBox(s, px, ${r})`)} : ${each("wide", (r) => `inBox(s, px, ${r})`)}; }
+// Two quick drops every few seconds, then a dim stutter.
+float buzz(float t) { float b = mod(t, 6.0); return step(1.0, b) * step(b, 1.12) + step(1.25, b) * step(b, 1.32) + step(1.5, b) * step(b, 1.9) * 0.5; }
+// How much of a sign is out at px, each on its own clock: its glass, and its streak on the wet street below the horizon vy.
+float plateBuzz(vec2 s, vec2 px, float t, float vy) {
+  float st = step(vy, px.y);
+  return s.x < s.y ? ${each("tall", (r, i) => `buzz(t + ${(i * 2.3).toFixed(1)}) * (inBox(s, px, ${r}) + 0.6 * st * inCol(s, px, ${r}))`)} : ${each("wide", (r, i) => `buzz(t + ${(i * 2.3).toFixed(1)}) * (inBox(s, px, ${r}) + 0.6 * st * inCol(s, px, ${r}))`)};
+}
 // Three walks away down the street a loop, from the right edge into the haze: his heels, his height to the umbrella's tip (2.05 m, so 0.78 of it is the 1.6 m eye line), and what the haze leaves of him.
 vec4 walker(vec2 s, vec2 vp, float t) {
   float p = fract(t * 3.0 / ${PERIOD}.0 + 0.17);
@@ -110,64 +102,6 @@ function paint(g: Ctx, w: number, h: number) {
       g.shadowBlur = 30 * c;
       g.globalAlpha = 0.9;
       g.fillRect(ox + x0 * c, oy + y0 * c, (x1 - x0) * c, (y1 - y0) * c);
-      g.restore();
-    }
-    if (hasKorean()) {
-      // Drawn on their own sheet and softened onto the plate, so they sit in its paint rather than on it.
-      const sheet = document.createElement("canvas");
-      sheet.width = g.canvas.width;
-      sheet.height = g.canvas.height;
-      const dpr = g.canvas.width / w;
-      const s = sheet.getContext("2d")!;
-      s.setTransform(dpr, 0, 0, dpr, 0, 0);
-      for (const [x0, y0, x1, y1, glow, core, word, hot] of SIGNS[w < h ? "tall" : "wide"]) {
-        const x = ox + x0 * c;
-        const y = oy + y0 * c;
-        const bw = (x1 - x0) * c;
-        const bh = (y1 - y0) * c;
-        // Its light on the wall around it.
-        g.save();
-        g.globalCompositeOperation = "lighter";
-        g.globalAlpha = 0.3 * hot;
-        g.shadowColor = glow;
-        g.shadowBlur = 60 * c;
-        g.fillStyle = glow;
-        g.fillRect(x, y, bw, bh);
-        g.restore();
-        s.save();
-        // Dark glass, washed by its own tubes.
-        s.fillStyle = "#08050d";
-        s.fillRect(x, y, bw, bh);
-        s.globalAlpha = 0.16 * hot;
-        s.fillStyle = glow;
-        s.fillRect(x, y, bw, bh);
-        s.globalAlpha = 0.3 + 0.7 * hot;
-        s.shadowColor = glow;
-        for (const [lw, blur, color] of [[2.6, 16, glow], [1, 4, core]] as const) {
-          s.strokeStyle = color;
-          s.lineWidth = lw * c;
-          s.shadowBlur = blur * c;
-          s.strokeRect(x + 3 * c, y + 3 * c, bw - 6 * c, bh - 6 * c);
-        }
-        const chars = [...word];
-        const size = Math.min(bw * 0.7, (bh * 0.84) / chars.length);
-        s.font = KO(size);
-        s.textAlign = "center";
-        s.textBaseline = "middle";
-        chars.forEach((ch, i) => {
-          const cy = y + bh / 2 + (i - (chars.length - 1) / 2) * size * 1.06;
-          for (const [blur, color] of [[24, glow], [8, glow], [2, glow]] as const) {
-            s.fillStyle = color;
-            s.shadowBlur = blur * c;
-            s.fillText(ch, x + bw / 2, cy);
-          }
-        });
-        s.restore();
-      }
-      g.save();
-      g.setTransform(1, 0, 0, 1, 0, 0);
-      g.filter = `blur(${0.4 * dpr}px)`;
-      g.drawImage(sheet, 0, 0);
       g.restore();
     }
   }
@@ -317,14 +251,9 @@ void main() {
   // The chat column, easing out at its edges so the dim leaves no seam.
   float lx = px.x - uLaneX + uLaneW;
   float lane = smoothstep(-100.0, 40.0, lx) * (1.0 - smoothstep(2.0 * uLaneW - 150.0, 2.0 * uLaneW - 40.0, lx));
-  // The sign buzzes: two quick drops every few seconds while Wink works.
-  vec4 ps = plateSign(uSize);
-  vec2 s0 = onPlate(uSize, ps.xy), s1 = onPlate(uSize, ps.zw);
-  float bz = mod(t, 6.0);
-  float off = (step(1.0, bz) * step(bz, 1.12) + step(1.25, bz) * step(bz, 1.32) + step(1.5, bz) * step(bz, 1.9) * 0.5) * uFlow;
-  float inSign = step(s0.x, px.x) * step(px.x, s1.x) * step(s0.y, px.y) * step(px.y, s1.y);
-  float inRefl = step(s0.x - 12.0, px.x) * step(px.x, s1.x + 12.0) * step(vp.y, px.y);
-  col *= 1.0 - 0.6 * off * (inSign + 0.6 * inRefl) * smoothstep(0.2, 0.6, dot(col, vec3(0.33)));
+  // The signs buzz while Wink works; their streaks overlap on the street, so the sum is held to 1.
+  float off = min(plateBuzz(uSize, px, t, vp.y), 1.0) * uFlow;
+  col *= 1.0 - 0.6 * off * smoothstep(0.2, 0.6, dot(col, vec3(0.33)));
   // Drifting haze, thicker toward the far end.
   float fogN = n2(vec2((px.x + t * uSize.y * 0.4 * 8.0 / ${PERIOD}.0) / (uSize.y * 0.4), px.y / (uSize.y * 0.18)), 8.0);
   float deep = exp(-length((px - vp) * vec2(0.7, 1.4)) / (uSize.y * 0.3));

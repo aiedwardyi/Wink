@@ -56,10 +56,8 @@ describe("night rain", () => {
     expect(frag().match(/\bstruct\b/g) ?? [], "WebGL 1 refuses ternaries and == on structs: pass vectors").toEqual([]);
   });
 
-  it("writes every sign in Hangul", () => {
-    const words = [...source.matchAll(/"#\w{6}", "#\w{6}", "([^"]+)"/g)].map((m) => m[1]);
-    expect(words.length).toBeGreaterThan(0);
-    expect(words.filter((w) => !/^[\uac00-\ud7a3]+$/.test(w)), "the sign font and its check are Korean: other script draws as empty boxes").toEqual([]);
+  it("draws no lettering over the plates", () => {
+    expect(source.match(/\b(fillText|strokeText)\(/g) ?? [], "the signs are painted into the plates: words drawn on top read as pasted on").toEqual([]);
   });
 
   it("clamps the sign light, a sum over overlapping panels", () => {
