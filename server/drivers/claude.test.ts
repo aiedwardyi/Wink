@@ -263,11 +263,11 @@ describe("ClaudeDriver.decodeConfig", () => {
     expect(ClaudeDriver.decodeConfig(undefined)).toEqual({ cli: "claude", permissionMode: "acceptEdits" });
   });
 
-  it("publishes the native Windows installer and npm on macOS/Linux", () => {
+  it("publishes the native installers, which need no Node", () => {
     expect(ClaudeDriver.install).toMatchObject({
       command: {
-        darwin: "npm install -g @anthropic-ai/claude-code",
-        linux: "npm install -g @anthropic-ai/claude-code",
+        darwin: "curl -fsSL https://claude.ai/install.sh | bash",
+        linux: "curl -fsSL https://claude.ai/install.sh | bash",
         win32: "irm https://claude.ai/install.ps1 | iex",
       },
       docsUrl: "https://claude.com/claude-code",

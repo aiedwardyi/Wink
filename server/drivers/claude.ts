@@ -47,7 +47,7 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { computerProxyEnv } from "../container-computer.ts";
-import { newEventId, newId } from "../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../contracts.ts";
 import {
   classifyError,
   computeBackoff,
@@ -803,15 +803,13 @@ const elideImageData = (content: ClaudeUserContent) =>
 export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Claude", supportsMultipleInstances: true },
-  // Native Windows PowerShell installer. macOS/Linux stay on npm until a
-  // later slice verifies those native one-liners.
+  // Anthropic's native installers; none needs Node.
   install: {
     command: {
-      darwin: "npm install -g @anthropic-ai/claude-code",
-      linux: "npm install -g @anthropic-ai/claude-code",
+      darwin: "curl -fsSL https://claude.ai/install.sh | bash",
+      linux: "curl -fsSL https://claude.ai/install.sh | bash",
       win32: "irm https://claude.ai/install.ps1 | iex",
     },
-    needsNode: true,
     docsUrl: "https://claude.com/claude-code",
     signInCommand: "claude auth login",
     // --claudeai is the CLI's default; BROWSER=true is its own "open nothing" value, so a phone gets the link and paste prompt.
@@ -2274,7 +2272,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const snapshot = async (opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot> => {
       const env = claudeEnvironment(undefined, { ...process.env, ...input.environment }, input.account);
       const version = await new Promise<string | null>((resolve) => cliVersion(config.cli, { timeout: 8000, env, ...launchPolicy }, resolve));
-      if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found`, cliMissing: true };
+      if (!version) return cliNotFound(config.cli);
       const { signedIn: authenticated, account, identity, engineSignedIn } = await authStatus(opts?.rescan || opts?.refresh);
       if (input.account) admitted = authenticated === true;
       // claudeEnvironment strips ANTHROPIC_API_KEY, so turns run on the

@@ -133,7 +133,9 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
       ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${signInEnv}${signIn}`, "utf16le").toString("base64")}`] : []),
     ].join("\n");
   }
-  return signIn ? `{\n${command}\n} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command;
+  // Native installers only edit rc files, which this already-open shell has read.
+  const path = 'export PATH="$HOME/.local/bin:$HOME/.grok/bin:$PATH"';
+  return signIn ? `{\n${command}\n} && ${path} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command;
 }
 
 export async function openInstallTerminal(install, platform = process.platform, run = execFile) {
