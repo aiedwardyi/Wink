@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { forgetMedia } from "@/lib/media-index";
+import { PANE_TAB_KEY } from "@/lib/show-pane";
 import { StoreProvider, type Bot } from "@/state/store";
 
 import { ChatView } from "./ChatView";
@@ -51,7 +52,7 @@ describe("ChatView media warm", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    const show = (current: Bot) => act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: current }))));
+    const show = (current: Bot, props: { onOpenTerminal?: () => void } = {}) => act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: current, ...props }))));
     const run = () => act(async () => { for (const next of idle.splice(0)) next(); await new Promise((resolve) => setTimeout(resolve, 0)); });
     return { asked, host, root, show, run };
   }
@@ -75,6 +76,24 @@ describe("ChatView media warm", () => {
       expect(pane.querySelector("[data-show-media]")?.hasAttribute("aria-busy")).toBe(false);
       await act(async () => paneRoot.unmount());
       pane.remove();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("asks nothing for a chat whose pane button opens another tab", async () => {
+    const { asked, host, root, show, run } = setup();
+    localStorage.setItem(PANE_TAB_KEY, JSON.stringify({ "thread-D": "timeline", "thread-E": "workers", "thread-F": "media" }));
+    try {
+      await show(bot("D"));
+      await run();
+      await show(bot("E"), { onOpenTerminal: () => {} });
+      await run();
+      expect(asked).toEqual([]);
+      await show(bot("F"), { onOpenTerminal: () => {} });
+      await run();
+      expect(asked).toEqual(["/api/threads/thread-F/media"]);
     } finally {
       await act(async () => root.unmount());
       host.remove();

@@ -115,6 +115,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "no such conversation" });
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
+      // the side pane asks as a long chat opens; a whole-chat read here held every other request, as the turns route found
+      if (!store.loaded(threadId)) await coldLoad(store, threadId);
       mediaIndex ??= createMediaIndex(store);
       return json(res, 200, await mediaIndex(threadId, url.searchParams.get("v")));
     },

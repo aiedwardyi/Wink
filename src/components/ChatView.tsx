@@ -47,7 +47,7 @@ import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, inSendOrder, queuedSendIds, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
-import { picturedReplies } from "@/lib/show-pane";
+import { paneOpensOnMedia, picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { warmMedia } from "@/lib/media-index";
 import { useNoReply } from "@/lib/no-reply";
@@ -68,7 +68,7 @@ import { TurnRail } from "./TurnRail";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
-import { ShowPaneButton } from "./ShowPaneButton";
+import { paneWorkers, ShowPaneButton } from "./ShowPaneButton";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
 import { WorkerRow, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
@@ -1041,12 +1041,6 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     setMenu(null);
   }
   useEffect(() => preview ? undefined : endSelectMode, [bot.threadId, preview]);
-  // The side pane opens on Media, which waits for the whole chat's list: ask once the page is idle, with no turn live and nothing typed.
-  useEffect(() => {
-    if (preview || hidden || bot.busy) return;
-    const idle = window.requestIdleCallback?.(() => { if (!composerInputRef.current?.value) warmMedia(bot.threadId); });
-    return () => { if (idle !== undefined) window.cancelIdleCallback(idle); };
-  }, [bot.threadId, bot.busy, preview, hidden]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
       if (findBlocked || preview) return;
@@ -1082,6 +1076,16 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const sessionKey = runs.map((run) => run.sessionId).filter(Boolean).sort().join("\n");
   const livePanes = useLivePanes(bot.id, !preview && (runs.length > 0 || (state.terminalPanes[bot.id]?.length ?? 0) > 0), paneLabelsKey(state.terminalPanes[bot.id]), sessionKey, dispatch, runs);
   const workers = useMemo(() => runs.map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })), [runs, livePanes, bot.id]);
+  const paneMap = listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle";
+  const paneSource = { name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal };
+  const paneWorkerTab = paneWorkers(paneSource);
+  const mediaNext = useMemo(() => paneOpensOnMedia(bot.threadId, paneMap, paneWorkerTab), [bot.threadId, paneMap, paneWorkerTab]);
+  // The side pane opens on Media, which waits for the whole chat's list: ask once the page is idle, with no turn live and nothing typed, only when the button would open Media.
+  useEffect(() => {
+    if (preview || hidden || bot.busy || !mediaNext) return;
+    const idle = window.requestIdleCallback?.(() => { if (!composerInputRef.current?.value) warmMedia(bot.threadId); });
+    return () => { if (idle !== undefined) window.cancelIdleCallback(idle); };
+  }, [bot.threadId, bot.busy, preview, hidden, mediaNext]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(messages, jump.messages).map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })) : workers, [messages, jump.messages, livePanes, workers, bot.id]);
   const skin = useSkin();
   const scene = sceneOf(skin);
@@ -1667,7 +1671,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           )}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
 
-          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} workers={{ name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal }} />
+          <ShowPaneButton threadId={bot.threadId} map={paneMap} workers={paneSource} />
           </ChatPeekPart>
         </div>
       </div>

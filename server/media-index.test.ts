@@ -29,7 +29,16 @@ describe("media index", () => {
     mkdirSync(DATA_DIR, { recursive: true });
   });
 
-  it("lists a whole chat in one answer, newest first, each file once", () => {
+  it("lets the server answer other requests while a long chat's list builds", async () => {
+    let ran = false;
+    const built = buildMediaIndex("t1", Array.from({ length: 10_000 }, (_, n) => shot(n))).then((index) => ({ index, ran }));
+    setImmediate(() => { ran = true; });
+    const { index, ran: answered } = await built;
+    expect(answered).toBe(true);
+    expect(index.ids).toHaveLength(10_000);
+  });
+
+  it("lists a whole chat in one answer, newest first, each file once", async () => {
     const path: Message[] = [
       { id: "u1", at: START - HOUR, role: "user", kind: "text", text: upload },
       ...Array.from({ length: 5_000 }, (_, n) => shot(n)),
@@ -37,7 +46,7 @@ describe("media index", () => {
       { id: "b2", at: START + 5_001 * HOUR, role: "bot", kind: "text", text: "[gone.png](C:\\w\\gone.png)", summarized: true },
     ];
 
-    const index = buildMediaIndex("t1", path);
+    const index = await buildMediaIndex("t1", path);
 
     expect(index.ids).toHaveLength(5_004);
     expect(index.ids.slice(0, 4)).toEqual(["b1", "b1", "b1", "m4999"]);

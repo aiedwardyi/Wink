@@ -26,11 +26,14 @@ type MediaList = Omit<MediaIndex, "v">;
 const HELD = 16;
 const boot = Date.now().toString(36);
 const refsOf = new WeakMap<Message, MediaRef[]>();
+// rows read between turns: a 208k-row chat's list held the server ~150 ms in one go
+const SLICE = 4096;
 
-export function buildMediaIndex(threadId: string, path: readonly Message[]): MediaList {
+export async function buildMediaIndex(threadId: string, path: readonly Message[]): Promise<MediaList> {
   const index: MediaList = { ids: [], at: [], kind: "", name: [], ref: [], size: [] };
   const seen = new Set<string>();
   for (let i = path.length - 1; i >= 0; i--) {
+    if (i % SLICE === 0 && i) await new Promise((resolve) => setImmediate(resolve));
     const message = path[i]!;
     let refs = refsOf.get(message);
     if (!refs) refsOf.set(message, refs = messageRefs(message));
@@ -82,7 +85,7 @@ export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) 
       dirty.delete(threadId);
       building.add(threadId);
       const build = ++builds;
-      const list = await linkedSizes(buildMediaIndex(threadId, store.activePath(threadId))).finally(() => building.delete(threadId));
+      const list = await buildMediaIndex(threadId, store.activePath(threadId)).then(linkedSizes).finally(() => building.delete(threadId));
       index = held.get(threadId);
       if (!index || (builtBy.get(index) ?? 0) < build) {
         if (!index || !same(index, list)) index = { v: `${boot}.${++count}`, ...list };
