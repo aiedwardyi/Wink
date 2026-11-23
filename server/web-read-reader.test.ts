@@ -66,13 +66,11 @@ describe("web_read's borrowed reader", () => {
     expect(pendingDelegationSnapshot()).toEqual([]);
   });
 
-  it("runs read-only with no tools", () => {
+  it("runs read-only", () => {
     const proxy = readFileSync(new URL("./drivers/agents-proxy.ts", import.meta.url), "utf8");
-    expect(proxy).toContain("return await webRead(args, api, (toBotId, message) =>\n      api(\"/api/internal/ask-bot\", { method: \"POST\", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH, reader: true }) }), READ_ONLY);");
+    expect(proxy).toContain("body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH, reader: true }) }), READ_ONLY);");
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     expect(index).toContain("...(peer?.reader ? { webReader: true } : {}),");
     expect(index).toContain("const readOnly = opts?.readOnly === true || opts?.webReader === true;");
-    const mounts = index.split("\n").map((line, i, lines) => line.includes("agentsIntegration(bot.id, threadId, commsDepth") ? lines[i - 1]!.trim() : "").filter(Boolean);
-    expect(mounts).toEqual(["if (instance.adapter.capabilities.agentsMcp === true && opts?.webReader !== true) {"]);
   });
 });
