@@ -378,12 +378,13 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       await loadFlags();
       const overflow = Boolean(aboutYouPastTheCut());
       const ownOverflow = Boolean(botImportPastTheCut(botId));
+      // a build still running for an earlier state must find itself replaced, whether this refresh builds or drops
+      const run = (runs.get(botId) ?? 0) + 1;
+      runs.set(botId, run);
       if (!flagged.has(botId) && !overflow && !ownOverflow) {
         drop(botId);
         return;
       }
-      const run = (runs.get(botId) ?? 0) + 1;
-      runs.set(botId, run);
       const sources = await sourcesOf(botId, flagged.has(botId), overflow, ownOverflow);
       const signature = JSON.stringify(sources);
       if (indexes.get(botId)?.signature === signature) return;

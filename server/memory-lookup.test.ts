@@ -5,9 +5,11 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { addToAboutYou, removeAboutYouSource } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
 import { buildRecallIndex, createMemoryLookup, RECALL_HEADER, type MemoryLookup, type MemoryLookupDeps } from "./memory-lookup.ts";
 import { parseJson } from "./schema.ts";
+import { removeTestData } from "./testing/test-home.ts";
 import { ensureWorkspace, workspaceDir, writeMemoryFile } from "./workspace.ts";
 
 const FILLER = Array.from({ length: 120 }, (_, n) => `- Filler kettle${n} harbor${n} lantern${n} note`).join("\n");
@@ -389,6 +391,39 @@ describe("log", () => {
     await settle();
     expect(statSync(file).size).toBeLessThan(10_000);
     expect(existsSync(`${file}.1`)).toBe(true);
+  });
+});
+
+describe("Import Memory overflow", () => {
+  const facts = Array.from({ length: 600 }, (_, i) => i === 450
+    ? "The user's favorite tea shop is Moonbrew in Daejeon."
+    : `The user visited town number ${i + 1} on a long walk.`);
+  const paste = `${facts.map((fact) => `- ${fact}`).join("\n")}\nSource: ChatGPT`;
+
+  it("drops a build still running when the overflow is removed, so the removed lines are never recalled", async () => {
+    removeTestData(join(DATA_DIR, "about-you"));
+    addToAboutYou(paste, "2026-11-22");
+    const botId = `bot-${randomUUID()}`;
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+    // the build gives way to the event loop after every 200 rows: hold it there until the removal's own refresh is done
+    const real = globalThis.setImmediate;
+    let second: Promise<void> | undefined;
+    // SAFETY: the build calls setImmediate with only a resolver, the one argument this stand-in reads.
+    vi.spyOn(globalThis, "setImmediate").mockImplementation(((run: () => void) => {
+      if (second) return real(run);
+      removeAboutYouSource("ChatGPT");
+      second = lookup.refresh(botId);
+      void second.then(() => real(run));
+      return real(() => {});
+    }) as typeof setImmediate);
+    try {
+      await lookup.refresh(botId);
+      await second;
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(second).toBeDefined();
+    expect(ask(lookup, botId, "what's my favorite tea shop?")).toEqual([]);
   });
 });
 
