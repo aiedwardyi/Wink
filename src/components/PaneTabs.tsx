@@ -105,7 +105,7 @@ export function PaneToolList({ rows, onPick }: { rows: readonly ToolRow[]; onPic
   return (
     <div className="show-pane-tools" data-pane-tools>
       <p>{t("show.addTool")}</p>
-      <div ref={list} role="menu" aria-label={t("show.addTool")} className="w-56 rounded-xl border border-hairline/50 bg-card py-1.5" onKeyDown={(event) => menuKeyDown(list, event)}>
+      <div ref={list} role="menu" aria-label={t("show.addTool")} className={cn(MENU_CLASS, "static z-auto w-56 animate-none shadow-none")} onKeyDown={(event) => menuKeyDown(list, event)}>
         <ToolRows rows={rows} onPick={onPick} />
       </div>
     </div>

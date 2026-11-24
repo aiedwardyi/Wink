@@ -9,8 +9,11 @@
 .show-pane-tab > [role="tab"] { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 168px; height: 100%; padding: 0 2px 0 10px; outline-offset: -2px; cursor: default; }
 .show-pane-tab > [role="tab"] > span { overflow: hidden; text-overflow: ellipsis; }
 .show-pane-tab-close { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 18px; height: 18px; margin-right: 4px; border-radius: 4px; color: var(--color-ink-secondary); opacity: 0; cursor: default; }
-.show-pane-tab:hover .show-pane-tab-close, .show-pane-tab:focus-within .show-pane-tab-close { opacity: 1; }
-.show-pane-tab-close:hover { background: var(--color-control); color: var(--color-ink); }
+.show-pane-tab:focus-within .show-pane-tab-close { opacity: 1; }
+@media (hover: hover) {
+  .show-pane-tab:hover .show-pane-tab-close { opacity: 1; }
+  .show-pane-tab-close:hover { background: var(--color-control); color: var(--color-ink); }
+}
 .show-pane-tab[data-slot] { visibility: hidden; }
 .show-pane-tab[data-ghost] { position: fixed; z-index: 60; background: var(--color-raised); color: var(--color-ink); scale: 1.03; box-shadow: 0 8px 24px rgb(0 0 0 / .35); pointer-events: none; will-change: translate; }
 /* A page's frame would swallow the pointer mid-drag. */
