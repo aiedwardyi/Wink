@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 
@@ -7,6 +7,8 @@ vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 
 type Asked = { src: string; signal?: AbortSignal };
 const asked: Asked[] = [];
+// an img request: open until it loads, fails or its src is cleared
+const pics: Array<{ src: string; open: boolean }> = [];
 const decoded: number[] = [];
 let page: { onmessage: ((event: MessageEvent) => void) | null } | undefined;
 // vite resolves the worker's URL against self.location
@@ -23,10 +25,46 @@ class InlineWorker {
   terminate() {}
 }
 const aborted = (signal: AbortSignal | undefined) => new Promise<never>((_, fail) => signal?.addEventListener("abort", () => fail(signal.reason)));
-// "/stall/*" never answers, like a stalled remote socket; "/slow/*" sends 6 bytes, one every 4 s
+let cutAt = 0;
+let freeAt = 0;
+// when a request settles, in ms from now, and whether it answers; undefined never settles
+// "/dead/*" never answers, "/cut/*" hangs until cutAt and then fails, "/busy/*" waits for a free connection until freeAt
+function line(src: string): [number, boolean] | undefined {
+  const now = Date.now();
+  if (src.startsWith("/dead/")) return;
+  if (src.startsWith("/cut/")) return now < cutAt ? [cutAt - now, false] : [0, true];
+  if (src.startsWith("/busy/")) return [Math.max(0, freeAt - now), true];
+  return [0, true];
+}
+class FakeImage {
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  #pic?: { src: string; open: boolean };
+  set src(src: string) {
+    const pic = { src, open: true };
+    pics.push((this.#pic = pic));
+    const at = line(src);
+    if (at) setTimeout(() => {
+      if (!pic.open) return;
+      pic.open = false;
+      (at[1] ? this.onload : this.onerror)?.();
+    }, at[0]);
+  }
+  removeAttribute(name: string) {
+    if (name === "src" && this.#pic) this.#pic.open = false;
+  }
+}
+const open = () => asked.filter((each) => !each.signal?.aborted).length + pics.filter((each) => each.open).length;
+// "/stall/*" never answers the preview's fetch, like a stalled remote socket, but its img loads; "/slow/*" sends 6 bytes, one every 4 s
 function serve(src: string, init?: RequestInit) {
-  asked.push({ src, signal: init?.signal ?? undefined });
-  if (src.startsWith("/stall/")) return aborted(init?.signal ?? undefined);
+  const signal = init?.signal ?? undefined;
+  asked.push({ src, signal });
+  if (src.startsWith("/stall/") || src.startsWith("/dead/")) return aborted(signal);
+  if (src.startsWith("/404/")) return Promise.resolve(new Response(new ReadableStream({ start: (control) => void aborted(signal).catch((error) => control.error(error)) }), { status: 404 }));
+  if (/^\/(cut|busy)\//.test(src)) {
+    const at = line(src)!;
+    return Promise.race([aborted(signal), new Promise<Response>((done, fail) => setTimeout(() => at[1] ? done(new Response(new Uint8Array(4), { headers: { "content-type": "image/png" } })) : fail(new TypeError("Failed to fetch")), at[0]))]);
+  }
   let sent = 0;
   const body = new ReadableStream<Uint8Array>({
     start: (control) => void aborted(init?.signal ?? undefined).catch((error) => control.error(error)),
@@ -45,6 +83,7 @@ beforeAll(async () => {
   vi.stubGlobal("self", scope);
   vi.stubGlobal("fetch", serve);
   vi.stubGlobal("Worker", InlineWorker);
+  vi.stubGlobal("Image", FakeImage);
   vi.stubGlobal("createImageBitmap", async (source: Blob | object) => {
     if (source instanceof Blob) decoded.push(source.size);
     return { width: 640, height: 480, close() {} };
@@ -63,11 +102,30 @@ afterAll(() => {
 
 async function grid(srcs: string[]) {
   const shown: Record<string, string | undefined> = {};
-  const Cell = ({ src }: { src: string }) => { shown[src] = useThumb(src); return null; };
+  const drawn: Record<string, string> = {};
+  // same shape as ShowMedia's MediaCell: its img asks for an address on its own and nothing ends it
+  const Cell = ({ src }: { src: string }) => {
+    const url = (shown[src] = useThumb(src));
+    useEffect(() => {
+      if (!url) return;
+      if (url.startsWith("blob:")) return void (drawn[src] = "thumb");
+      const img = new FakeImage();
+      img.onload = () => void (drawn[src] = "full");
+      img.onerror = () => void (drawn[src] = "broken");
+      img.src = url;
+    }, [src, url]);
+    return null;
+  };
   const root = createRoot(document.createElement("div"));
   await act(async () => root.render(srcs.map((src) => createElement(Cell, { key: src, src }))));
-  return { shown, unmount: () => root.unmount() };
+  return { shown, drawn, unmount: () => act(() => root.unmount()) };
 }
+// a second at a time, so each cell's effect and img run as they would between frames
+async function pass(ms: number) {
+  for (let left = ms; left > 0; left -= 1_000) await act(() => vi.advanceTimersByTimeAsync(Math.min(1_000, left)));
+}
+const start = () => { asked.length = 0; pics.length = 0; };
+const names = (dir: string, n: number) => Array.from({ length: n }, (_, i) => `/${dir}/${i + 1}.png`);
 
 it("a preview fetch that goes silent is ended, frees its slot and the cell draws the picture itself", async () => {
   const srcs = ["/stall/1.png", "/stall/2.png", "/stall/3.png", "/stall/4.png", "/stall/5.png"];
@@ -88,4 +146,52 @@ it("a slow preview still sending past the bound keeps its thumbnail", async () =
   expect(decoded).toEqual([6]);
   expect(shown["/slow/1.png"]).toMatch(/^blob:/);
   unmount();
+});
+
+it("a picture whose own request stalls too holds at most 3 requests and none once the grid closes", async () => {
+  start();
+  const { shown, unmount } = await grid(names("dead", 12));
+  let most = 0;
+  for (let t = 0; t < 120; t++) {
+    most = Math.max(most, open());
+    await pass(1_000);
+  }
+  expect(most).toBe(3);
+  expect(Object.values(shown).every((url) => url === undefined)).toBe(true);
+  await unmount();
+  await pass(10_000);
+  expect(open()).toBe(0);
+});
+
+it("a stall that ends with the connections cut draws every square once the link is back", async () => {
+  start();
+  cutAt = Date.now() + 30_000;
+  const { drawn, unmount } = await grid(names("cut", 12));
+  await pass(120_000);
+  expect(Object.keys(drawn)).toHaveLength(12);
+  expect(Object.values(drawn).every((each) => each === "thumb" || each === "full")).toBe(true);
+  await unmount();
+});
+
+it("a preview ended only by waiting for a connection makes its thumbnail on the next open", async () => {
+  start();
+  freeAt = Date.now() + 25_000;
+  const srcs = names("busy", 6);
+  const first = await grid(srcs);
+  await pass(60_000);
+  expect(Object.keys(first.drawn)).toHaveLength(6);
+  await first.unmount();
+  const next = await grid(srcs);
+  await pass(1_000);
+  expect(srcs.map((src) => next.drawn[src])).toEqual(srcs.map(() => "thumb"));
+  await next.unmount();
+});
+
+it("a preview answered with an error ends its download and the cell draws the picture", async () => {
+  start();
+  const { shown, unmount } = await grid(["/404/1.png"]);
+  await pass(100);
+  expect(shown["/404/1.png"]).toBe("/404/1.png");
+  expect(asked[0].signal?.aborted).toBe(true);
+  await unmount();
 });

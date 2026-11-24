@@ -7,6 +7,8 @@ const SIZE = 320;
 // about 8 MB of previews; the least recently drawn go first
 const KEEP = 400;
 const AT_ONCE = 3;
+// a stalled remote socket never answers or errors, so the preview and the picture after it end after this much silence
+const QUIET_MS = 10_000;
 // a little past the start, where many clips are still black
 const FRAME_AT = 0.5;
 const FRAME_MS = 10_000;
@@ -19,20 +21,23 @@ let moving: ReturnType<typeof setTimeout> | undefined;
 let asked = 0;
 const made = new Map<string, string>();
 const failed = new Set<string>();
+// picture asks for the cells now waiting: a preview that only went quiet is asked again on the next open
+const pictures = new Map<string, number>();
+const drawing = new Map<string, () => void>();
 const clips = new Set<string>();
 const busy = new Set<string>();
 // newest wish last, so the cells a fast scroll just reached go first
 const queue: string[] = [];
 const waiting = new Map<string, Set<(url: string) => void>>();
-const replies = new Map<number, (blob: Blob | null) => void>();
+const replies = new Map<number, (blob: Blob | null | "quiet") => void>();
 
 const makes = () => !broken && "Worker" in globalThis && "OffscreenCanvas" in globalThis;
 
 function shrinker(): Worker {
   if (worker) return worker;
   const started = new Worker(new URL("./media-thumbs.worker.ts", import.meta.url), { type: "module" });
-  started.onmessage = ({ data }: MessageEvent<{ id: number; blob: Blob | null }>) => {
-    replies.get(data.id)?.(data.blob);
+  started.onmessage = ({ data }: MessageEvent<{ id: number; blob: Blob | null; quiet: boolean }>) => {
+    replies.get(data.id)?.(data.quiet ? "quiet" : data.blob);
     replies.delete(data.id);
   };
   started.onerror = () => {
@@ -75,14 +80,14 @@ function firstFrame(src: string): Promise<VideoFrame | ImageBitmap | null> {
   });
 }
 
-async function shrink(src: string): Promise<Blob | null> {
+async function shrink(src: string): Promise<Blob | null | "quiet"> {
   const frame = clips.has(src) ? await firstFrame(src) : undefined;
   if (frame === null) return null;
   return new Promise((reply) => {
     const id = ++asked;
     replies.set(id, reply);
     try {
-      shrinker().postMessage({ id, src, size: SIZE, frame }, frame ? [frame] : []);
+      shrinker().postMessage({ id, src, size: SIZE, quiet: QUIET_MS, frame }, frame ? [frame] : []);
     } catch {
       broken = true;
       frame?.close();
@@ -112,25 +117,64 @@ function pump() {
     queue.splice(i, 1);
     if (!waiting.has(src) || busy.has(src) || made.has(src)) continue;
     busy.add(src);
-    void shrink(src).then((blob) => {
+    void make(src).then((url) => {
       busy.delete(src);
-      clips.delete(src);
-      let url = src;
-      if (blob) {
-        url = URL.createObjectURL(blob);
-        made.set(src, url);
-        if (made.size > KEEP) {
-          const [old, oldUrl] = made.entries().next().value!;
-          made.delete(old);
-          URL.revokeObjectURL(oldUrl);
-        }
-      } else failed.add(src);
-      const done = waiting.get(src);
-      waiting.delete(src);
-      done?.forEach((each) => each(url));
+      if (url) {
+        clips.delete(src);
+        pictures.delete(src);
+        const done = waiting.get(src);
+        waiting.delete(src);
+        done?.forEach((each) => each(url));
+      } else if (!waiting.has(src)) pictures.delete(src);
       pump();
     });
   }
+}
+
+/** The preview, else the picture itself; a picture that does not load gets one more ask, behind the rest. */
+async function make(src: string): Promise<string | undefined> {
+  let asks = pictures.get(src);
+  if (asks === undefined) {
+    const blob = await shrink(src);
+    if (blob === "quiet") {
+      if (!waiting.has(src)) return;
+      asks = 0;
+    } else if (blob) {
+      const url = URL.createObjectURL(blob);
+      made.set(src, url);
+      if (made.size > KEEP) {
+        const [old, oldUrl] = made.entries().next().value!;
+        made.delete(old);
+        URL.revokeObjectURL(oldUrl);
+      }
+      return url;
+    } else {
+      failed.add(src);
+      return src;
+    }
+  }
+  pictures.set(src, ++asks);
+  if (await picture(src)) return src;
+  if (asks < 2 && waiting.has(src)) queue.unshift(src);
+}
+
+// an img shows no bytes as they come, so the picture gets the preview's bound whole; clearing its src ends the download
+function picture(src: string): Promise<boolean> {
+  return new Promise((done) => {
+    const img = new Image();
+    const end = (loaded: boolean) => {
+      clearTimeout(timer);
+      drawing.delete(src);
+      img.onload = img.onerror = null;
+      if (!loaded) img.removeAttribute("src");
+      done(loaded);
+    };
+    const timer = setTimeout(() => end(false), QUIET_MS);
+    img.onload = () => end(true);
+    img.onerror = () => end(false);
+    drawing.set(src, () => end(false));
+    img.src = src;
+  });
 }
 
 /** The preview if one is made, the picture or clip itself where none can be. */
@@ -165,6 +209,8 @@ function want(src: string, clip: boolean, done: (url: string) => void): () => vo
     if (!set.size && waiting.get(src) === set) {
       waiting.delete(src);
       clips.delete(src);
+      pictures.delete(src);
+      drawing.get(src)?.();
     }
   };
 }
