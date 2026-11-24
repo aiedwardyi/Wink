@@ -115,6 +115,35 @@ it("sends no screencast frame the link would drop, so the capture fallback still
   cast.stop();
 });
 
+it.each([["after", 300, [2]], ["within the 250 ms throttle of", 100, [2, 3]]])("captures the page when a click's frame is too big %s the last accepted frame", async (_when, gap, sessions) => {
+  vi.useFakeTimers();
+  const events = new EventEmitter(), frames = [], capturePage = vi.fn(async () => ({ getSize: () => ({ width: 1280, height: 720 }), resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }));
+  const cast = startCast({ cdp: { send: async () => {}, on: (name, cb) => { events.on(name, cb); return () => events.off(name, cb); } }, page: { capturePage }, tile: "desktop", started: Date.now(), frame: f => frames.push(f) });
+  events.emit("Page.screencastFrame", { data: "/9j/4A==", sessionId: 1 });
+  await vi.advanceTimersByTimeAsync(gap);
+  for (const sessionId of sessions) events.emit("Page.screencastFrame", { data: "A".repeat(192 * 1024), sessionId });
+  cast.readerStop();
+  await vi.advanceTimersByTimeAsync(250);
+  expect(frames.map(f => f.data)).toEqual(["/9j/4A==", "/9j/2Q=="]);
+  expect(capturePage).toHaveBeenCalledTimes(1);
+  cast.stop();
+  vi.useRealTimers();
+});
+
+it("drops a held capture retry on stop", async () => {
+  vi.useFakeTimers();
+  const events = new EventEmitter(), frames = [], capturePage = vi.fn(async () => ({ getSize: () => ({ width: 1280, height: 720 }), resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }));
+  const cast = startCast({ cdp: { send: async () => {}, on: (name, cb) => { events.on(name, cb); return () => events.off(name, cb); } }, page: { capturePage }, tile: "desktop", started: Date.now(), frame: f => frames.push(f) });
+  events.emit("Page.screencastFrame", { data: "/9j/4A==", sessionId: 1 });
+  await vi.advanceTimersByTimeAsync(100);
+  events.emit("Page.screencastFrame", { data: "A".repeat(192 * 1024), sessionId: 2 });
+  cast.stop();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(capturePage).not.toHaveBeenCalled();
+  expect(frames).toHaveLength(1);
+  vi.useRealTimers();
+});
+
 it("captures a frame on demand for the scroll stop it was asked at", async () => {
   const frame = vi.fn(), capturePage = vi.fn(async () => ({ getSize: () => ({ width: 1280, height: 720 }), resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }));
   const cast = startCast({ cdp: { send: async () => {}, on: () => () => {} }, page: { capturePage }, tile: "desktop", started: Date.now(), frame });

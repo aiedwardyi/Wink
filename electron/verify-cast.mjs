@@ -1,10 +1,10 @@
 import { VERIFY_GEOMETRY } from "./verify-protocol.mjs";
 
-// The link drops a cast frame of 192 KiB base64 or more.
+// A JPEG at most this size is ~187 KiB base64 (x 4/3), under the link's 192 KiB frame cap.
 const FRAME_BYTES = 140 * 1024;
 
 export function startCast({ cdp, page, tile, started, frame }) {
-  let stopped = false, received = false, capturing = false, last = -Infinity;
+  let stopped = false, received = false, capturing = false, wanted = false, retry = null, last = -Infinity;
   const timers = new Set();
   const { cssW, cssH, dpr } = VERIFY_GEOMETRY[tile], size = { maxWidth: cssW * dpr, maxHeight: cssH * dpr };
   const jpeg = image => {
@@ -24,11 +24,25 @@ export function startCast({ cdp, page, tile, started, frame }) {
     last = Date.now();
     frame({ tile, ms: Math.max(0, Date.now() - started), data });
   };
+  // A frame too big for the link is replaced by a capture once the throttle allows, even after accepted frames.
+  const fallback = () => {
+    if (stopped || !wanted || capturing || retry || !page.capturePage) return;
+    const wait = last + 250 - Date.now();
+    if (wait > 0) { retry = setTimeout(() => { retry = null; fallback(); }, wait); return; }
+    wanted = false;
+    capturing = true;
+    void page.capturePage().then(image => {
+      if (!stopped) emit(jpeg(image));
+    }).catch(() => {}).finally(() => { capturing = false; fallback(); });
+  };
   const off = cdp.on("Page.screencastFrame", ({ data, sessionId }) => {
     if (stopped) return;
     if (data.length <= FRAME_BYTES * 4 / 3) {
       received = true;
       try { emit(data); } catch {}
+    } else {
+      wanted = true;
+      fallback();
     }
     const timer = setTimeout(() => {
       timers.delete(timer);
@@ -43,7 +57,7 @@ export function startCast({ cdp, page, tile, started, frame }) {
       capturing = true;
       void page.capturePage().then(image => {
         if (!stopped && !received) emit(jpeg(image));
-      }).catch(() => {}).finally(() => { capturing = false; });
+      }).catch(() => {}).finally(() => { capturing = false; fallback(); });
     },
     async shot() {
       if (stopped || !page.capturePage) return;
@@ -55,6 +69,7 @@ export function startCast({ cdp, page, tile, started, frame }) {
     stop() {
       stopped = true;
       off();
+      clearTimeout(retry);
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       void cdp.send("Page.stopScreencast").catch(() => {});
