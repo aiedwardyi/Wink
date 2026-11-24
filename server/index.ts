@@ -187,7 +187,7 @@ import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.t
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, coldLoad, coldLoading, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldLoading, coldQuickAsks, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -9900,8 +9900,8 @@ setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
-// the boot drain has already run by the time the worker replies
-void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).catch((error: unknown) => console.warn("[quick] recovery failed", error))
+// the boot drain has already run by the time the worker replies; a send before then reads only its own chat
+void recoverQuickAsks(store, bootReads().then((rows) => rows.asks), { read: coldQuickAsks, drain: drainQueuedSends }).catch((error: unknown) => console.warn("[quick] recovery failed", error))
   .then(drainQueuedSends).catch((error: unknown) => console.warn("[quick] drain after recovery failed", error));
 const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();

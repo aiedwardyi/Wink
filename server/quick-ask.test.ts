@@ -14,6 +14,8 @@ import { _resetPeerUserReplies, drainPeerUserReplies, persistPeerUserReply, sett
 import { createQuietTurns } from "./quiet-turn.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, quickAskThreads, recoverQuickAsks, routesAck, routesQuick, type QuickGate } from "./quick-ask.ts";
 import { bootRowsNow } from "./testing/boot-rows.ts";
+import { coldQuickAsks } from "./cold-thread.ts";
+import { createStartupTiming } from "./startup-timing.ts";
 import type { QuickResult } from "./side-chat.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { drainSteeredMessages, foldQueuedSends, initializeSteerQueue, queueMark, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
@@ -44,11 +46,16 @@ const ANSWER: QuickResult = { route: "answer", text: "Port 8787.", usage: { inpu
 
 const COVERED = /^\[Wink note, automated, not from the person\. A fast reply in your voice answers the message below/;
 
-function harness(opts: { busy?: boolean; consumed?: boolean; queueing?: boolean; result?: QuickResult; quick?: boolean; taken?: boolean } = {}) {
+function harness(opts: { busy?: boolean; consumed?: boolean; queueing?: boolean; result?: QuickResult; quick?: boolean; taken?: boolean; restart?: (store: Store, threadId: string) => void } = {}) {
   const selection = { instanceId: "claude", model: "opus", effort: "max" as const };
-  const store = new Store(() => selection);
+  let store = new Store(() => selection);
   const bot = store.createBot({}, { seedMessages: false });
   store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build the settings page" });
+  // the rows the last run left, read by a fresh store as after a restart
+  if (opts.restart) {
+    opts.restart(store, bot.threadId);
+    store = new Store(() => selection);
+  }
   if (opts.busy !== false) store.setActivity(bot.id, "working", bot.threadId);
   const steer = vi.fn(async (_threadId: string, _text: string, consumed?: (taken: boolean) => void) => {
     consumed?.(opts.taken ?? true);
@@ -962,6 +969,40 @@ describe("boot recovery", () => {
     expect(_queuedCount(other.threadId)).toBe(0);
     await h.settled();
     expect(_queuedCount(own)).toBe(1);
+  });
+
+  it.each([false, true])("starts a send before paint at once, recovering its own chat once (loaded: %s)", async (loaded) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let ask!: Message;
+      const h = harness({ busy: false, restart: (store, threadId) => { ask = store.appendMessage(threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } }); } });
+      if (loaded) h.store.messagesFor(h.bot.threadId);
+      expect(h.store.loaded(h.bot.threadId)).toBe(loaded);
+      // the boot worker read the ask before the send, and replies only once the 5 s paint fallback lets it start
+      const found = bootRowsNow([...quickAskThreads(h.store).keys()]);
+      const timing = createStartupTiming({ write: () => {} });
+      const boot = new Promise<typeof found>((resolve) => timing.afterPaint("bootReads", async () => resolve(found)));
+      const read = vi.fn(coldQuickAsks);
+      const drain = vi.fn();
+      const walks = vi.spyOn(h.store, "activePathBack");
+      const recovered = recoverQuickAsks(h.store, boot.then((rows) => rows.asks), { read, drain });
+      timing.serving();
+      let sent = false;
+      void h.send({ text: "hello" }).then(() => { sent = true; });
+      for (const until = performance.now() + 2_000; !sent && performance.now() < until;) await new Promise((resolve) => setImmediate(resolve));
+      expect(sent).toBe(true);
+      expect(read).toHaveBeenCalledTimes(loaded ? 0 : 1);
+      expect(_queuedCount(h.bot.threadId)).toBe(1);
+      expect(h.store.row(h.bot.threadId, ask.id)?.quick).toEqual({ state: "handoff" });
+      // the recovered ask is handed to the queue before the send starts its turn
+      expect(drain.mock.invocationCallOrder[0]).toBeLessThan(h.startTurn.mock.invocationCallOrder[0]!);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await recovered;
+      expect(_queuedCount(h.bot.threadId)).toBe(1);
+      expect(walks.mock.calls.filter(([threadId]) => threadId === h.bot.threadId)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
