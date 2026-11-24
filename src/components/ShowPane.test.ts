@@ -7,7 +7,7 @@ import type { VerifyCardData } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
 import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeShow, closeTab, paneTabs, showCheck, showItem, showMap, showMedia, showTimeline, tabKey, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { applyPicks, parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
@@ -51,7 +51,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); closeShow(); closeVerifyWatch(); applyLocale("en"); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); closeShow(); closeVerifyWatch(); for (const tab of paneTabs("t1")) closeTab("t1", tabKey(tab), null); applyLocale("en"); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const render = (props: Parameters<typeof ShowPane>[0]) => act(async () => root.render(createElement(ShowPane, props)));
 const until = async (done: () => boolean | undefined) => {
@@ -238,7 +238,7 @@ it("hosts the checker with its Maximize and pane toggle in the header", async ()
   expect(host.querySelectorAll(".show-pane-head [data-show-pane-button]")).toHaveLength(1);
   expect(host.querySelectorAll('button[aria-label="Maximize"]')).toHaveLength(1);
   expect(host.querySelector(".verify-watch-bar button[aria-label='Close']")).toBeNull();
-  expect(host.querySelector("aside")!.hasAttribute("data-wide")).toBe(false);
+  expect(host.querySelector("aside")!.hasAttribute("data-wide")).toBe(true);
   await act(async () => button("Maximize")!.click());
   expect(host.querySelector(".verify-watch-frame")!.hasAttribute("data-maximized")).toBe(true);
 });
@@ -249,7 +249,7 @@ it("docks files wide and closes from the header", async () => {
   const aside = host.querySelector("aside")!;
   expect(aside.hasAttribute("data-wide")).toBe(true);
   expect(aside.classList.contains("md:animate-panel-slide")).toBe(true);
-  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Show");
+  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("a.png");
   await act(async () => host.querySelector<HTMLButtonElement>(".show-pane-head [data-show-pane-button]")!.click());
   let shown: ShowItem | null = item("x", "image");
   function Probe() { shown = useShowItem(); return null; }
@@ -263,7 +263,7 @@ it.each([false, true])("closes from the far right of the header, phone %s", asyn
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
   const head = document.querySelector(".show-pane-head")!;
   const buttons = [...head.querySelectorAll<HTMLButtonElement>(":scope > button")];
-  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Close"] : ["Maximize", "Show and media"]);
+  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Open a tool", "Close"] : ["Open a tool", "Maximize", "Show and media"]);
   expect(head.lastElementChild).toBe(buttons.at(-1));
   expect(head.querySelector(".lucide-chevron-right")).toBeNull();
   await act(async () => buttons.at(-1)!.click());
@@ -276,10 +276,10 @@ it.each([false, true])("closes from the far right of the header, phone %s", asyn
 it("speaks Korean", async () => {
   applyLocale("ko");
   await render({ item: item("C:\\w\\sync-flow.html", "page"), hidden: false });
-  expect(host.querySelector('[role="tab"]')?.textContent).toBe("보기");
+  expect(button("도구 열기")).not.toBeNull();
   expect(button("새로고침")).not.toBeNull();
   expect(button("보기와 미디어")).not.toBeNull();
-  expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(2);
+  expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(3);
 });
 
 it("shares one pane with the checker, and Bot Details still takes the spot", async () => {
@@ -301,13 +301,15 @@ it("shares one pane with the checker, and Bot Details still takes the spot", asy
   await act(async () => root.render(createElement(Slot)));
   expect(seen.at(-1)).toEqual([false, false]);
   const app = readFileSync("src/App.tsx", "utf8");
-  expect(app).toContain('...(watch || show || media || mapping || crewThread || timelineThread ? ["show" as const] : [])');
+  expect(app).toContain("const paneThreads = [watch?.threadId, show?.threadId, media, mapping, crewThread, timelineThread, toolsThread];");
+  expect(app).toContain('...(paneThreads.some(Boolean) ? ["show" as const] : [])');
 });
 
 const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role='tab']")].map((tab) => tab.textContent);
 const selected = () => host.querySelector(".show-pane-tabs [aria-selected='true']")?.textContent;
 const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".show-pane-tabs [role='tab']")].find((el) => el.textContent === name)!;
 const source = { threadId: "t1", messages: [], hasMore: false };
+const openTabs = () => act(async () => { showItem(item("C:\\w\\a.png", "image")); for (const open of [showMedia, showCheck, showMap, showTimeline]) open("t1"); closeShow(); });
 const probe = async (read: () => void) => {
   const box = createRoot(document.createElement("div"));
   function Probe() { read(); return null; }
@@ -316,25 +318,29 @@ const probe = async (read: () => void) => {
 };
 
 it("has no Check tab without a check", async () => {
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Map", "Timeline"]);
 });
 
 it("renders the Map tab in Korean with the surrounding labels", async () => {
   await act(async () => applyLocale("ko"));
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["보기", "미디어", "맵", "타임라인"]);
+  expect(tabs()).toEqual(["a.png", "미디어", "맵", "타임라인"]);
 });
 
 it("the checker opens on Check, and Show keeps its file", async () => {
   const shown = item("C:\\w\\a.png", "image");
+  await openTabs();
   await act(async () => showItem(shown));
+  await render({ item: shown, source, botId: "b1", hidden: false });
   await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
   let check: string | null = null;
   await probe(() => { check = useCheckThread(); });
   expect(check).toBe("t1");
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
   expect(selected()).toBe("Check");
   const aside = host.querySelector("aside")!;
   expect(aside.dataset.tab).toBe("check");
@@ -345,18 +351,19 @@ it("the checker opens on Check, and Show keeps its file", async () => {
 it("switching tabs keeps the check alive and never reloads Show's file", async () => {
   const shown = item("C:\\w\\a.png", "image");
   await act(async () => showItem(shown));
+  await render({ item: shown, source, botId: "b1", hidden: false });
   await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
   const img = host.querySelector("img")!;
   const checker = host.querySelector(".verify-watch-frame:not(.show-frame)")!;
-  await act(async () => tab("Show").click());
+  await act(async () => tab("a.png").click());
   let check: string | null = "x";
   let watching = false;
   await probe(() => { check = useCheckThread(); watching = Boolean(useVerifyWatch()); });
   expect(check).toBeNull();
   expect(watching).toBe(true);
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
-  expect(selected()).toBe("Show");
+  expect(selected()).toBe("a.png");
   expect(host.querySelector("aside")!.dataset.tab).toBe("show");
   expect(host.querySelector("img")).toBe(img);
   expect(host.querySelector(".verify-watch-frame:not(.show-frame)")).toBe(checker);
@@ -369,8 +376,9 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
 
 it("the Check tab opens the chat's finished check", async () => {
   const done = { ...card, live: undefined, replay: ["run-0"] };
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), card: done, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
   await act(async () => tab("Check").click());
   let watching: unknown = null;
   await probe(() => { watching = useVerifyWatch(); });
@@ -397,9 +405,9 @@ it("speaks Korean on the Check tab", async () => {
   expect(selected()).toBe("검사");
 });
 
-it("hides only Show and Check behind the other tabs, never the Media list", () => {
+it("hides Check behind the other tabs, never the Media list", () => {
   const css = readFileSync("src/components/ShowPane.css", "utf8");
-  const rule = css.slice(css.indexOf(".show-pane:not([data-tab"), css.indexOf("{ display: none; }"));
+  const rule = css.slice(css.indexOf(".show-pane:not([data-tab")).split("{ display: none; }")[0];
   expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers, .timeline-pane)');
 });
 
@@ -408,7 +416,8 @@ it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row
   const row = css.match(/^\.show-pane-tabs \{[^}]*\}/m)![0];
   expect(row).toContain("min-width: 0");
   expect(row).toContain("overflow-x: auto");
-  expect(css).toMatch(/\.show-pane-tabs button \{[^}]*flex-shrink: 0[^}]*white-space: nowrap[^}]*outline-offset: -2px/);
+  expect(css).toMatch(/\.show-pane-tab \{[^}]*flex-shrink: 0[^}]*white-space: nowrap/);
+  expect(css).toMatch(/\.show-pane-tab > \[role="tab"\] \{[^}]*outline-offset: -2px/);
   expect(css).toContain('html[data-orbit-caption="win32"] .verify-watch.show-pane { top: var(--orbit-caption-height); }');
 });
 
@@ -420,10 +429,11 @@ it("the tab row never scrolls up and down: the phone tap area hangs past the but
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), card: running, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Map", "Timeline"]);
   await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
 });
 
 it.each([["en", "Save a copy"], ["ko", "사본 저장"]] as const)("saves the shown file through the desktop dialog in %s", async (locale, label) => {

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { forgetMedia, type MediaWire } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
-import { closeShow, showFolder, showItem, showMedia, useMediaThread, useShowItem, type FolderListing, type ShowItem } from "@/lib/show-pane";
+import { closeShow, showFolder, showItem, showMap, showMedia, useMediaThread, useShowItem, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import type { MediaSource } from "@/lib/show-media";
 import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
@@ -107,6 +107,7 @@ const render = (source: MediaSource) => act(async () => root.render(createElemen
 const settle = () => act(async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0)); });
 const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((each) => each.textContent === name)!;
 const click = (el: Element | null) => act(async () => (el as HTMLElement).click());
+const openTool = async (name: string) => { await click(host.querySelector("[data-pane-add]")); await click(document.querySelector(`[data-pane-tools-menu] [data-pane-tool="${name}"]`)); };
 const thumbs = () => [...host.querySelectorAll("[data-media-grid] img")].map((img) => img.getAttribute("src")!);
 const months = () => [...host.querySelectorAll("[data-media-month]")].map((head) => head.textContent);
 const names = () => [...host.querySelectorAll("[data-media-file]")].map((row) => row.querySelector("span span")!.textContent);
@@ -144,13 +145,13 @@ const deck: ShowItem = { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" };
 it("switches between Show and Media", async () => {
   await act(async () => showItem(deck));
   await render(chat);
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
-  await click(tab("Media"));
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
+  await openTool("media");
   await settle();
   expect(tab("Media").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector("[data-show-media]")).not.toBeNull();
-  await click(tab("Show"));
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  await click(tab("deck.pdf"));
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("deck.pdf");
 });
 
@@ -158,7 +159,7 @@ it("lists a chat's images and files newest first, the ones since it loaded on to
   media.t1 = wire([["u1", 1, "a", "abc-1.png", ""], ["u1", 1, "f", "notes.docx", "C:\\att\\notes.docx"]]);
   await act(async () => showItem(deck));
   await render(chat);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   expect(thumbs()).toEqual([
     "/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\chart.png"),
@@ -187,7 +188,7 @@ it("an image opens full size, a showable file shows, the rest open as before", a
   window.ogb = { openFile } as unknown as typeof window.ogb;
   await act(async () => showItem(deck));
   await render(chat);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   await click(host.querySelector("[data-media-grid] button"));
   expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
@@ -196,7 +197,7 @@ it("an image opens full size, a showable file shows, the rest open as before", a
   await click(row("data.zip"));
   expect(openFile).toHaveBeenCalledWith("C:\\w\\data.zip");
   await click(row("deck.pdf"));
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
   expect(shown).toEqual(deck);
 });
 
@@ -206,13 +207,13 @@ it("asks for the whole timeline only once Media opens, then for its version alon
   await render({ ...chat, hasMore: true });
   await settle();
   expect(calls).toEqual([]);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   expect(calls).toEqual(["/api/threads/t1/media"]);
   await click(tab("Files"));
   expect(names().at(-1)).toBe("first.pdf");
-  await click(tab("Show"));
-  await click(tab("Media"));
+  await act(async () => closeShow());
+  await act(async () => showMedia("t1"));
   await settle();
   expect(calls).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
   expect(names().at(-1)).toBe("first.pdf");
@@ -274,7 +275,7 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   await render(source);
   const { togglePane } = await import("@/lib/show-pane");
   await act(async () => togglePane("r-thread"));
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   expect(calls).toContain("/api/rooms/r1/files");
   expect(host.querySelector("[data-media-grid] img")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id(3)}/preview`);
@@ -291,6 +292,7 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
 
 it("a room's pane has no Map tab, a bot chat's does", async () => {
   const room: MediaSource = { threadId: "r-thread", roomId: "r1", messages: [] };
+  await act(async () => { showMap("r-thread"); showMap("t1"); closeShow(); });
   await act(async () => root.render(createElement(ShowPane, { media: true, source: room, hidden: false })));
   expect(tab("Map")).toBeUndefined();
   await act(async () => root.render(createElement(ShowPane, { media: true, source: chat, botId: "b1", hidden: false })));
@@ -303,7 +305,7 @@ it("says so when there are no files yet, in English and Korean", async () => {
   await render({ threadId: "t9", messages: [] });
   await settle();
   expect(host.querySelector("[data-show-media]")?.textContent).toBe("No files yet");
-  expect(tab("Show").disabled).toBe(true);
+  expect([...host.querySelectorAll(".show-pane-tabs [role=tab]")].map((each) => each.textContent)).toEqual(["Media"]);
   applyLocale("ko");
   await render({ threadId: "t9", roomId: "r1", messages: [] });
   await settle();
@@ -692,7 +694,7 @@ it("a linked folder shows in Show, and its pictures step with the arrow keys", a
   await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
   await render(chat);
   await settle();
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("forum-look-mock-2").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("forum-look-mock-2");
   expect(calls).toContain(`/api/threads/t1/linked-folder?path=${encodeURIComponent(mock)}`);
   expect(tiles()).toEqual(["icon-31-wink.png", "icon-25-pixel-bot.png", "icon-22-radar-rings.png"]);
@@ -762,10 +764,10 @@ it("clicking an open folder's link again draws the fresh listing, even behind an
   await act(async () => showFolder("t1", folder, added));
   await settle();
   expect(tiles()).toEqual(["icon-37-job-code.png", ...listing.files.slice(0, 3).map((file) => file.name)]);
-  await click(tab("Media"));
+  await openTool("media");
   await act(async () => showFolder("t1", folder, listing));
   await settle();
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("forum-look-mock-2-again").getAttribute("aria-selected")).toBe("true");
   expect(tiles()).toHaveLength(3);
   expect(calls.filter((url) => url.includes("/linked-folder?"))).toEqual([]);
 });
