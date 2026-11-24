@@ -1,22 +1,26 @@
 // Dream check: one idle-tidy pass (server/memory-sleep.ts) over copies of each bot's notes, then proof no fact was lost.
 // Reads a copy of ~/.orbit, never the live folder; writes only under a throwaway data dir and Claude config dir.
-// node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--nights 1] [--no-model] [--max-tokens 2000000] [--json out.json]
+// node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--nights 1] [--no-model] [--max-tokens 2000000] [--json summary.json] [--detail detail.json] [--build sha] [--ledger dir --date yyyy-mm-dd] [--topics 1 --practice dir]
+// --json gets counts, codes, bot ids and sha8s only (server/memory-clean.ts nightSummarySchema); note text goes only to --detail, kept in dream-practice.
 // The model pass needs CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY on a throwaway profile, or CLAUDE_CONFIG_DIR set to an account profile.
 // With the model, a bot near its load budget also gets budget filing (server/memory-file.ts), shadow only: it runs nowhere else.
 // A line counts as kept only where the bot still sees it: MEMORY.md, or a synced side file a loaded line says when to read.
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { homedir, hostname, tmpdir, userInfo } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 
 import type { NoteGenerator } from "../server/memory-pass.ts";
+import { type CallKind, Ledger, nightDate } from "./dream-ledger.ts";
 
 // the note helper's model (server/drivers/claude.ts runHelper)
 const MODEL = "claude-haiku-5-5";
 // grouping notes across many overlapping side files needs more than Haiku; the quiz stays on Haiku
 const FILER_MODEL = "claude-sonnet-5-5";
+// a cleaner call starts only if its prompt estimate and this output cap are left in the night ledger
+const OUTPUT_CAP = 8_000;
 // both true, so a tidy must move neither: rule and exception, two people, two things, a passing state
 const TRAP_PAIRS = [
   ["Prefers short replies at work (noted 2026-11-01)", "Wants detailed answers when learning something new (noted 2026-11-12)"],
@@ -52,6 +56,9 @@ const replySchema = z.object({
   usage: z.object({ input_tokens: count, cache_read_input_tokens: count, cache_creation_input_tokens: count, output_tokens: count }).default({ input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 }),
 });
 const sleepLogSchema = z.object({ result: z.string(), moved: z.number().optional(), ms: z.number() });
+const ROOT_PREFIX = "wink-dream-";
+// a hard kill skips finally; a root this old outlived run.ps1's 2 h task kill, so no run still uses it
+const STALE_MS = 2 * 60 * 60_000;
 
 /** A bot's notes: MEMORY.md, and every other file beside it but the history by its path from the workspace, with / between folders. */
 export type Notes = { memory: string; side: Record<string, string> };
@@ -202,15 +209,33 @@ function filesUnder(dir: string): string[] {
   return readdirSync(dir, { recursive: true, encoding: "utf8" }).map((name) => join(dir, name)).filter((path) => statSync(path).isFile());
 }
 
-type Spent = { input: number; output: number };
+/** input counts cache reads too (processed); fresh leaves them out. */
+type Spent = { input: number; output: number; fresh: number };
 
-function claudeGenerator(configDir: string, cwd: string, spent: Spent, cap: number, model = MODEL): NoteGenerator {
+/** Removes every older root of a killed run under `dir`, each by its exact path. */
+export function sweepStale(dir: string, now = Date.now()): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((name) => name.startsWith(ROOT_PREFIX)).map((name) => join(dir, name)).filter((path) => {
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat?.isDirectory() || now - stat.mtimeMs < STALE_MS) return false;
+    rmSync(path, { recursive: true, force: true });
+    return true;
+  });
+}
+
+type Spend = { spent: Spent; cap: number; ledger: Ledger | null; kind: CallKind };
+
+function claudeGenerator(configDir: string, cwd: string, { spent, cap, ledger, kind }: Spend, model = MODEL): NoteGenerator {
   return (prompt, signal, onUsage) =>
     new Promise<string>((resolve, reject) => {
       if (spent.input + spent.output >= cap) return reject(new Error("model token cap reached"));
+      if (ledger && !ledger.callFits(prompt.length, OUTPUT_CAP)) return reject(new Error("night cap reached"));
+      const cli = process.env.CLAUDE_CLI ?? "claude";
+      // a .mjs stand-in (the tests' stub engine) runs under this node
+      const [command, lead] = /\.m?js$/i.test(cli) ? [process.execPath, [cli]] : [cli, []];
       const child = spawn(
-        process.env.CLAUDE_CLI ?? "claude",
-        ["-p", "--model", model, "--output-format", "json", "--safe-mode", "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
+        command,
+        [...lead, "-p", "--model", model, "--output-format", "json", "--safe-mode", "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
         { cwd, env: { ...process.env, CLAUDE_CONFIG_DIR: configDir }, signal, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
       );
       let stdout = "";
@@ -225,6 +250,8 @@ function claudeGenerator(configDir: string, cwd: string, spent: Spent, cap: numb
           const used = { input: usage.input_tokens, cachedInput: usage.cache_read_input_tokens, cacheCreation: usage.cache_creation_input_tokens, output: usage.output_tokens };
           spent.input += used.input + used.cachedInput + used.cacheCreation;
           spent.output += used.output;
+          spent.fresh += used.input + used.cacheCreation + used.output;
+          ledger?.add(kind, { fresh: used.input + used.cacheCreation + used.output, processed: used.input + used.cachedInput + used.cacheCreation + used.output });
           onUsage?.(used);
           resolve(result);
         } catch (error) {
@@ -250,6 +277,8 @@ export type BotResult = {
   tokensAfter: number;
   moved: number;
   filed: number;
+  /** fileable notes cleanerSkip kept in place */
+  skipped: number;
   proposed: number;
   lost: string[];
   madeUp: string[];
@@ -267,6 +296,9 @@ export type BotResult = {
 
 const failures = (row: BotResult) =>
   row.lost.length + row.madeUp.length + row.quiz.misses.length + (row.trap ? row.moved : 0) + (TIDY_RAN.has(row.result) ? 0 : 1) + (row.error ? 1 : 0);
+
+/** A bot's topic stays open until dream-practice.ts marks it done. */
+export const openTopic = (botDir: string) => existsSync(botDir) && readdirSync(botDir).some((name) => /^topic-[0-9a-f]{8}$/.test(name) && !existsSync(join(botDir, name, "done")));
 
 async function main(): Promise<number> {
   const [dir, ...rest] = process.argv.slice(2);
@@ -294,7 +326,8 @@ async function main(): Promise<number> {
   const picked = flag("bots")?.split(",");
   const ids = readdirSync(source).filter((id) => id !== TRAP_ID && existsSync(join(source, id, "MEMORY.md")) && (picked ? picked.includes(id) : names.size === 0 || names.has(id)));
 
-  const root = mkdtempSync(join(tmpdir(), "wink-dream-"));
+  sweepStale(tmpdir());
+  const root = mkdtempSync(join(tmpdir(), ROOT_PREFIX));
   const realSetTimeout = globalThis.setTimeout;
   const realInfo = console.info;
   try {
@@ -317,17 +350,27 @@ async function main(): Promise<number> {
     writeFileSync(join(root, "data", "workspaces", TRAP_ID, "MEMORY.md"), TRAP_MEMORY);
     const { createMemorySleep, parseTidy, SLEEP_IDLE_MS, SLEEP_TIMEOUT_MS } = await import("../server/memory-sleep.ts");
     const { isMemoryTopicName, loadedMemory, workspaceDir, PARKED_COPY } = await import("../server/workspace.ts");
-    const { filingBytes, filingDue, filingPrompt, fileableNotes, misrouted, planFiling, routePrompt } = await import("../server/memory-file.ts");
+    const { applyMove, filingBytes, filingDue, filingPrompt, fileableNotes, misrouted, movePlan, planFiling, routePrompt, TOPICS_MAX } = await import("../server/memory-file.ts");
+    const { BOT_ID, cleanerSkip, errorCode, historyBlock, historyFile, HISTORY_DIR, nightSummarySchema, quizBlocks, runIdOf, sha8, tidyResult } = await import("../server/memory-clean.ts");
+    const topics = Number(flag("topics") ?? TOPICS_MAX);
+    const practice = flag("practice");
+    // this PC's id in a history file name; the copy is the only place it is written
+    const pc = sha8(`${hostname()}\0${userInfo().username}\0${homedir()}`);
+    // the night that planned a topic: one a night, across bots
+    let plannedNight = 0;
     const rules: Rules = { loaded: (raw) => loadedMemory(raw).text, synced: isMemoryTopicName };
 
-    const spent: Spent = { input: 0, output: 0 };
-    const generator = model ? claudeGenerator(configDir, helperDir, spent, cap) : null;
+    const spent: Spent = { input: 0, output: 0, fresh: 0 };
+    const ledgerDir = flag("ledger");
+    const ledger = ledgerDir ? new Ledger(ledgerDir, flag("date") ?? nightDate()) : null;
+    const spend = (kind: CallKind): Spend => ({ spent, cap, ledger, kind });
+    const generator = model ? claudeGenerator(configDir, helperDir, spend("tidy")) : null;
     const asking = (generate: NoteGenerator) => (prompt: string) => generate(prompt, AbortSignal.timeout(SLEEP_TIMEOUT_MS));
     // the quiz and the filer, both null under --no-model
-    const models = generator ? { ask: asking(generator), file: asking(claudeGenerator(configDir, helperDir, spent, cap, FILER_MODEL)) } : null;
+    const models = generator ? { ask: asking(claudeGenerator(configDir, helperDir, spend("check"))), file: asking(claudeGenerator(configDir, helperDir, spend("plan"), FILER_MODEL)) } : null;
     const notesOf = (ws: string): Notes => {
-      const historyDir = join(ws, "memory-history");
-      const side = filesUnder(ws).filter((path) => !path.startsWith(historyDir) && relative(ws, path) !== "MEMORY.md");
+      const historyDirs = [join(ws, "memory-history"), join(ws, HISTORY_DIR)];
+      const side = filesUnder(ws).filter((path) => !historyDirs.some((dir) => path.startsWith(dir)) && relative(ws, path) !== "MEMORY.md");
       return { memory: readFileSync(join(ws, "MEMORY.md"), "utf8"), side: Object.fromEntries(side.map((path) => [relative(ws, path).replaceAll("\\", "/"), readFileSync(path, "utf8")])) };
     };
     const results: BotResult[] = [];
@@ -369,7 +412,10 @@ async function main(): Promise<number> {
       const filingFrom = spent.input + spent.output;
       let filed = 0;
       const written = new Map<string, string | null>();
+      // the practice topic waits until the quiz keeps the move
+      let staged: { plan: ReturnType<typeof movePlan>; before: Notes; block: string } | null = null;
       const restore = () => {
+        staged = null;
         writeFileSync(join(ws, "MEMORY.md"), tidied);
         for (const [path, was] of written) {
           if (was === null) rmSync(path, { force: true });
@@ -378,16 +424,26 @@ async function main(): Promise<number> {
         written.clear();
         filed = 0;
       };
-      const apply = (plan: NonNullable<ReturnType<typeof planFiling>>) => {
-        mkdirSync(join(ws, "memory"), { recursive: true });
-        for (const [name, text] of Object.entries(plan.topics)) {
-          const path = join(ws, "memory", name);
-          const was = existsSync(path) ? readFileSync(path, "utf8") : null;
-          written.set(path, was);
-          writeFileSync(path, was === null ? text : `${was}${was && !was.endsWith("\n") ? "\n" : ""}${text}`);
-        }
-        writeFileSync(join(ws, "MEMORY.md"), plan.memory);
-        filed = plan.bytes;
+      const track = (path: string, text: string) => {
+        if (!written.has(path)) written.set(path, existsSync(path) ? readFileSync(path, "utf8") : null);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, text);
+      };
+      // a Move applies plan.json, not the filing: a note changed since the plan is skipped, and a second run appends nothing twice
+      const apply = (filing: NonNullable<ReturnType<typeof planFiling>>) => {
+        const plan = movePlan(tidied, filing, sha8(tidied));
+        const side = Object.fromEntries(Object.keys(filing.topics).map((name) => [name, existsSync(join(ws, "memory", name)) ? readFileSync(join(ws, "memory", name), "utf8") : ""]));
+        const before = { memory: tidied, side: notesOf(ws).side };
+        const moved = applyMove(tidied, side, plan);
+        for (const [name, text] of Object.entries(moved.side)) if (text !== side[name]) track(join(ws, "memory", name), text);
+        writeFileSync(join(ws, "MEMORY.md"), moved.memory);
+        const at = Date.now();
+        const history = join(ws, historyFile(at, pc));
+        const files = ["MEMORY.md", ...new Set(moved.moved.map(({ target }) => target))];
+        const block = historyBlock({ runId: runIdOf(pc, id, at), pc, bot: id, at, files, beforeBytes: Buffer.byteLength(tidied), afterBytes: Buffer.byteLength(moved.memory), merged: 0, replaced: 0, moved: moved.moved.length, notes: moved.moved.map((note) => ({ op: "move" as const, ...note })) });
+        track(history, `${existsSync(history) ? readFileSync(history, "utf8") : "# Moves\n\n"}${block}`);
+        filed = moved.bytes;
+        staged = { plan, before, block };
       };
       let filingReply = "";
       let filingOptions: Parameters<typeof planFiling>[3] = {};
@@ -402,11 +458,13 @@ async function main(): Promise<number> {
           existing = existsSync(join(ws, "memory")) ? readdirSync(join(ws, "memory")) : [];
           const loaded = rules.loaded(tidied).split("\n");
           const files = reached(notesOf(ws), rules).map((path) => ({ name: path.slice("memory/".length), line: loaded.find((line) => line.replaceAll("\\", "/").includes(path)) ?? "" })).filter(({ name }) => !PARKED_COPY.test(name));
-          filingReply = await models.file(filingPrompt(fileableNotes(tidied), filingBytes(tidied), files));
+          filingReply = await models.file(filingPrompt(fileableNotes(tidied), filingBytes(tidied), files, topics));
+          // a side file no loaded line points at may take a new pointer; a parked copy never does
+          const repoint = existing.filter((name) => name.endsWith(".md") && !PARKED_COPY.test(name) && !files.some((file) => file.name === name));
           // route every candidate first, so the night still fills once misrouted notes drop out
-          const candidates = planFiling(tidied, filingReply, existing, { files, nightBytes: Infinity });
+          const candidates = planFiling(tidied, filingReply, existing, { files, nightBytes: Infinity, topics, repoint });
           const skip = candidates ? misrouted(await models.file(routePrompt(rules.loaded(candidates.memory), candidates.filed)), candidates.filed) : new Set<string>();
-          filingOptions = { files, skip };
+          filingOptions = { files, skip, topics, repoint };
           plan = planFiling(tidied, filingReply, existing, filingOptions);
           if (plan) {
             apply(plan);
@@ -414,7 +472,7 @@ async function main(): Promise<number> {
           }
         }
         after = notesOf(ws);
-        const blocks = movedBlocks(before, after);
+        const blocks = quizBlocks(movedBlocks(before, after));
         if (blocks.length) {
           // a fresh answerer that sees only MEMORY.md after the move must name each block's side file
           const questions = models ? parseQuestions(await models.ask(quizPrompt(blocks)), blocks) : blocks.map(() => []);
@@ -446,6 +504,24 @@ async function main(): Promise<number> {
         [quiz, undone] = [{ asked: 0, right: 0, misses: [] }, { asked: 0, right: 0, misses: [] }];
         after = notesOf(ws);
       }
+      // one bot plans a topic a night, only once its last topic is done (dream-practice.ts marks it) and only for a move the quiz kept
+      if (staged && practice && BOT_ID.test(id) && plannedNight !== night && !openTopic(join(practice, id))) {
+        const topic = join(practice, id, `topic-${sha8(JSON.stringify(staged.plan))}`);
+        // a plan already checked is not planned again, and leaves the night's slot to another bot
+        if (!existsSync(join(topic, "done"))) {
+          plannedNight = night;
+          for (const [sideName, notes] of [["before", staged.before], ["after", notesOf(ws)]] as const) {
+            mkdirSync(join(topic, sideName), { recursive: true });
+            writeFileSync(join(topic, sideName, "MEMORY.md"), notes.memory);
+            for (const [path, text] of Object.entries(notes.side)) {
+              mkdirSync(dirname(join(topic, sideName, path)), { recursive: true });
+              writeFileSync(join(topic, sideName, path), text);
+            }
+          }
+          writeFileSync(join(topic, "plan.json"), `${JSON.stringify(staged.plan, null, 1)}\n`);
+          writeFileSync(join(topic, "history.md"), staged.block);
+        }
+      }
       if (!filingDue(readFileSync(join(ws, "MEMORY.md"), "utf8"), true)) filing.delete(id);
       const { duplicates, disagree } = parseTidy(reply);
       results.push({
@@ -462,6 +538,7 @@ async function main(): Promise<number> {
         tokensAfter: tokens(rules.loaded(after.memory)),
         moved: log?.moved ?? 0,
         filed,
+        skipped: fileableNotes(tidied).filter(({ text }) => cleanerSkip(text)).length,
         proposed: (duplicates ?? []).reduce((sum, { drop }) => sum + drop.length, 0) + (disagree ?? []).length,
         lost: lostFacts(before, after, rules),
         madeUp: madeUp(before, after),
@@ -493,13 +570,50 @@ async function main(): Promise<number> {
         ...failed.flatMap((row, index) => [...(index ? [] : [""]), `FAILED ${row.name} night ${row.night}: tidy ${row.result}${row.error ? `, ${row.error}` : ""}`]),
       ].join("\n"),
     );
+    const detail = flag("detail");
+    if (detail) writeFileSync(detail, `${JSON.stringify({ model: model ? MODEL : null, spent, results }, null, 2)}\n`);
     const json = flag("json");
-    if (json) writeFileSync(json, `${JSON.stringify({ model: model ? MODEL : null, spent, results }, null, 2)}\n`);
+    const summary = {
+      build: flag("build") ?? null,
+      model,
+      nights,
+      spent: { fresh: spent.fresh, processed: spent.input + spent.output },
+      failed: failed.length,
+      bots: results.map((row) => ({
+        bot: row.id,
+        night: row.night,
+        trap: row.trap,
+        result: tidyResult(row.result),
+        linesBefore: row.linesBefore,
+        linesAfter: row.linesAfter,
+        bytesBefore: row.bytesBefore,
+        bytesAfter: row.bytesAfter,
+        tokensBefore: row.tokensBefore,
+        tokensAfter: row.tokensAfter,
+        proposed: row.proposed,
+        moved: row.moved,
+        filed: row.filed,
+        skipped: row.skipped,
+        lost: row.lost.map(sha8),
+        madeUp: row.madeUp.map(sha8),
+        quizAsked: row.quiz.asked,
+        quizRight: row.quiz.right,
+        undoneBlocks: row.undone.asked / QUESTIONS,
+        conflicts: row.conflicts,
+        error: row.error === null ? null : errorCode(row.error),
+        errorSha: row.error === null ? null : sha8(row.error),
+        ms: row.ms,
+        modelTokens: row.modelTokens,
+        filingTokens: row.filingTokens,
+      })),
+    };
+    if (json) writeFileSync(json, `${JSON.stringify(nightSummarySchema.parse(summary), null, 2)}\n`);
     return sum(failures) ? 1 : 0;
   } finally {
     globalThis.setTimeout = realSetTimeout;
     console.info = realInfo;
     rmSync(root, { recursive: true, force: true });
+    sweepStale(tmpdir());
   }
 }
 

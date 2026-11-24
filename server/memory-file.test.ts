@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FILE_NIGHT_BYTES, fileableNotes, filingDue, filingPrompt, misrouted, planFiling, routePrompt } from "./memory-file.ts";
+import { applyMove, FILE_NIGHT_BYTES, fileableNotes, filingDue, filingPrompt, misrouted, movePlan, movePlanSchema, parseFiling, planFiling, routePrompt } from "./memory-file.ts";
 
 const note = (n: number, length = 190) => `- Detail ${n} ${"x".repeat(length - 12 - String(n).length)}`;
 const memory = (...sections: Array<[string, string[]]>) => ["# Bot memory", "", ...sections.flatMap(([heading, lines]) => [heading, ...lines, ""])].join("\n");
@@ -130,5 +130,91 @@ describe("planFiling", () => {
     expect(planFiling(raw, reply({ topic: "a.md", when: "launch posts", notes }), [])).toBeNull();
     expect(planFiling(raw, reply({ topic: "a.md", notes: ["L3", "L999"] }), [])).toBeNull();
     expect(planFiling(raw, "not json", [])).toBeNull();
+  });
+});
+
+describe("secret skip", () => {
+  const LABELLED = "- Router login for the upstairs box\n  sunflowerfield";
+  const COST = "- Daily spend limit is $5 for research runs";
+  const raw = memory(["## Decisions", ["- Ship Fridays"]], ["## Notes", [LABELLED, COST, ...Array.from({ length: 110 }, (_, n) => note(n))]]);
+  const [labelled, cost] = fileableNotes(raw);
+
+  it("keeps a label line and the value on its indented line out of the filer prompt and the filing, and still files a cost note", () => {
+    expect([labelled!.text, cost!.text]).toEqual([LABELLED, COST]);
+    const prompt = filingPrompt(fileableNotes(raw), 4_000);
+    expect(prompt).not.toContain("sunflowerfield");
+    expect(prompt).toContain(COST.slice(2));
+    const plan = planFiling(raw, reply({ topic: "home.md", about: "Home and budget", when: "before planning a purchase", notes: [`L${labelled!.at + 1}`, `L${cost!.at + 1}`] }), []);
+    expect(plan?.memory).toContain(LABELLED);
+    expect(plan?.filed.flatMap(({ notes }) => notes.map(({ text }) => text))).toEqual([COST]);
+  });
+});
+
+describe("one topic and a safe Move", () => {
+  const raw = memory(["## Decisions", ["- Ship Fridays"]], ["## Notes", Array.from({ length: 120 }, (_, n) => note(n))]);
+  const notes = fileableNotes(raw);
+  const ref = (at: number) => `L${notes[at]!.at + 1}`;
+  const launch = reply({ topic: "launch.md", about: "Launch work", when: "before launch work", notes: [ref(0), ref(1)] });
+  const filing = planFiling(raw, launch, [])!;
+  const plan = movePlan(raw, filing, "0a1b2c3d");
+
+  it("plans one topic when the night allows one, in the prompt, the schema and the plan together", () => {
+    const topics = (...names: string[]) => reply(...names.map((name, at) => ({ topic: `${name}.md`, about: `About ${name}`, when: `before ${name} work`, notes: [ref(at)] })));
+    const [two, three] = [topics("alpha", "beta"), topics("alpha", "beta", "gamma")];
+    expect(filingPrompt(notes, 4_000, [], 1)).toContain("in at most 1 topic, ");
+    expect(filingPrompt(notes, 4_000)).toContain("in at most 3 topics, ");
+    expect(planFiling(raw, two, [], { topics: 1 })?.filed.map(({ topic }) => topic)).toEqual(["alpha.md"]);
+    expect(planFiling(raw, three, [])?.filed).toHaveLength(3);
+    expect(parseFiling(three, 1)).toEqual({});
+  });
+
+  it("writes plan.json with shas, match counts, targets, one pointer and bytes, never note text", () => {
+    expect(movePlanSchema.parse(plan)).toEqual(plan);
+    expect(plan.notes.map(({ matches, target, pointer, bytes }) => [matches, target, pointer !== null, bytes])).toEqual([[1, "memory/launch.md", true, 188], [1, "memory/launch.md", true, 188]]);
+    expect(JSON.stringify(plan)).not.toContain("Detail 0");
+  });
+
+  it("applies a plan as the filing it came from", () => {
+    const moved = applyMove(raw, {}, plan);
+    expect([moved.memory, moved.side, moved.skipped, moved.bytes]).toEqual([filing.memory, filing.topics, 0, 376]);
+  });
+
+  it("changes nothing on a second run, and a lost tie appends nothing again", () => {
+    const once = applyMove(raw, {}, plan);
+    const twice = applyMove(once.memory, once.side, plan);
+    expect([twice.memory, twice.side, twice.moved, twice.skipped]).toEqual([once.memory, once.side, [], 2]);
+    // the side file kept the notes while MEMORY.md lost the tie and still holds them
+    const tie = applyMove(raw, once.side, plan);
+    expect([tie.memory, tie.side]).toEqual([once.memory, once.side]);
+  });
+
+  it("skips a note changed or doubled since the plan", () => {
+    const changed = applyMove(raw.replace(note(0), `${note(0)} edited`), {}, plan);
+    expect([changed.skipped, changed.moved.map(({ sha8 }) => sha8)]).toEqual([1, [plan.notes[1]!.sha256.slice(0, 8)]]);
+    expect(changed.side["launch.md"]).not.toContain("Detail 0 ");
+    // the pointer goes with the first note that moves
+    expect(changed.memory.split("\n").filter((line) => line.includes("memory/launch.md"))).toEqual(["- Launch work: read memory/launch.md before launch work."]);
+    expect(applyMove(raw.replace(note(1), `${note(1)}\n${note(1)}`), {}, plan).skipped).toBe(1);
+  });
+
+  it("moves into any side file name the app loads, and leaves one a history line cannot name", () => {
+    const named = (topic: string) => movePlan(raw, { ...filing, filed: filing.filed.map((file) => ({ ...file, topic })) }, "0a1b2c3d").notes.map(({ target }) => target);
+    expect(named("Pokkey_Notes.md")).toEqual(["memory/Pokkey_Notes.md", "memory/Pokkey_Notes.md"]);
+    expect(named("Launch notes.md")).toEqual([]);
+  });
+
+  it("writes the pointer when a kept line names a longer path, and none when it names the target", () => {
+    const longer = raw.replace("- Ship Fridays", "- Ship Fridays\n- The old launch list is in memory/launch.md.bak");
+    expect(applyMove(longer, {}, movePlan(longer, filing, "0a1b2c3d")).memory).toContain("- Launch work: read memory/launch.md before launch work.");
+    const named = raw.replace("- Ship Fridays", "- Ship Fridays\n- Launch list: memory/launch.md");
+    expect(applyMove(named, {}, movePlan(named, filing, "0a1b2c3d")).memory).not.toContain("- Launch work: read memory/launch.md before launch work.");
+  });
+
+  it("re-points an existing side file no line points at, appending to it", () => {
+    expect(planFiling(raw, launch, ["launch.md"])).toBeNull();
+    const repointed = planFiling(raw, launch, ["launch.md"], { repoint: ["launch.md"] })!;
+    const moved = applyMove(raw, { "launch.md": "- Older launch note\n" }, movePlan(raw, repointed, "0a1b2c3d"));
+    expect(moved.side["launch.md"]).toBe(`- Older launch note\n${note(0)}\n${note(1)}\n`);
+    expect(moved.memory).toContain("- Launch work: read memory/launch.md before launch work.");
   });
 });

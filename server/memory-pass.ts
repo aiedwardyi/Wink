@@ -297,14 +297,16 @@ export function maskSecretValues(text: string): string {
 const valueWord = (word: string) => word.length >= 6 && /\p{L}/u.test(word) &&
   (/\d/.test(word) || /\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+){2,}/u.test(word) || (/\p{L}[!@#$%^&*=~|<>{}]+\p{L}/u.test(word) && !/:\/\/|^\W*[\w.+-]+@[\w-]+\.[\w.-]+\W*$/.test(word)));
 // Tr0ub4dor&3xQ, Tr@ub!dor&xQ, Blue-Horse-Staple, card or account digits, or a value spelled out letter by letter
-const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some(valueWord) || /\d(?:[ -]?\d){9,}/.test(paragraph) || /(?<!\S)(?:\S[ \t]+){5,}\S(?!\S)/u.test(paragraph);
+export const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some(valueWord) || /\d(?:[ -]?\d){9,}/.test(paragraph) || /(?<!\S)(?:\S[ \t]+){5,}\S(?!\S)/u.test(paragraph);
 // LLM token talk, only after a plain word or sentence punctuation: "the hf token" and "(github) token" name a credential
 const TOKEN_TALK = [
   /(?<=(?:^|\n|\(|[,;.!?][ \t]|\b(?:the|my|our|your|their|its|this|that|these|those|a|an|of|per|in|on|at|for|and|or|but|so|to|with|by|from|about|watch|check|track|cut|lower|reduce|total|daily|weekly|monthly|high|higher|low|big|huge|llm|model|prompt|output|input|claude|gpt|opus|sonnet|haiku|ai|is|was|are|were)\b)[ \t]*)\btokens?\s+(?:costs?|usage|counts?(?!\s+down)|budgets?|limits?|spend(?:ing)?|bills?|totals?|intensive|heavy)\b/gi,
   /(?<![\d.,])\b\d[\d.,]*[ \t]?(?:[kmb]|million|billion|thousand)\s+tokens?\b/gi,
 ];
+// login, lock and key-name words; the nightly cleaner (memory-clean.ts) skips a note holding one
+export const LABEL_WORDS = /\b(?:pw|pwd|pass|passphrase|passkey|p\/w|log[- ]?in|sign[- ]?in|user ?name|admin|wi-?fi|router|modem|nas|door|gate|lock|unlock|safe|vault|alarm|garage|locker|combo|ssh|ftp|sftp)\b|\b(?:license|product|encryption|recovery|backup|secret|access|security|auth)\s+(?:keys?|codes?|phrase|answer|word)\b|\b[A-Z][A-Z0-9]*_(?:PASS|PWD|KEY|SECRET|TOKEN)\w*|로그인|아이디|와이파이|공유기|도어락|현관|금고|비밀/i;
 // token talk clears a message base drops only when no login word, value handed over on its line or bare code sits in it
-const VALUE_HINT = /\b(?:pw|pwd|pass|passphrase|passkey|p\/w|log[- ]?in|sign[- ]?in|user ?name|admin|wi-?fi|router|modem|nas|door|gate|lock|unlock|safe|vault|alarm|garage|locker|combo|ssh|ftp|sftp)\b|\b(?:license|product|encryption|recovery|backup|secret|access|security|auth)\s+(?:keys?|codes?|phrase|answer|word)\b|\b[A-Z][A-Z0-9]*_(?:PASS|PWD|KEY|SECRET|TOKEN)\w*|로그인|아이디|와이파이|공유기|도어락|현관|금고|비밀|\b(?:below|next line|last line|coming|incoming|here(?:'s| is| are))\b|:[ \t]*\S|(?<![\w#$.,:/-])(?<!\bPR )\d{4,9}(?![\w%.,:/-])/i;
+const VALUE_HINT = new RegExp(`${LABEL_WORDS.source}|\\b(?:below|next line|last line|coming|incoming|here(?:'s| is| are))\\b|:[ \\t]*\\S|(?<![\\w#$.,:/-])(?<!\\bPR )\\d{4,9}(?![\\w%.,:/-])`, "i");
 
 export function secretValue(text: string): boolean {
   const plain = text
