@@ -1363,10 +1363,25 @@ export class Store {
   /** Takes a chat read off the server thread, unless a write loaded it first. */
   adopt(threadId: string, read: mdb.ThreadRows & { chars: number }): void {
     if (this.threads.has(threadId)) return;
-    // the reader picked the stored head; a find or jump from disk kept the one an earlier load held
-    const { state, chars } = this.readState(threadId, this.foundOnDisk.has(threadId) ? { ...read, activeLeafId: this.diskHead(threadId) ?? read.activeLeafId } : read);
+    const { state, chars } = this.readState(threadId, this.coldRead(threadId, read));
     this.threads.set(threadId, state, chars);
     this.foundOnDisk.delete(threadId);
+  }
+
+  /** The active path of a chat read off the server thread, kept only in spare cache room, as warm keeps it. */
+  look(threadId: string, read: mdb.ThreadRows & { chars: number }): Message[] {
+    if (this.threads.has(threadId)) return this.activePath(threadId);
+    const { state, chars } = this.readState(threadId, this.coldRead(threadId, read));
+    const rows = walkPath(state.messages, state.activeLeafId);
+    Object.freeze(rows);
+    state.path = { leafId: state.activeLeafId, rows };
+    if (this.threads.offer(threadId, state, chars)) this.foundOnDisk.delete(threadId);
+    return rows;
+  }
+
+  // the reader picked the stored head; a find or jump from disk kept the one an earlier load held
+  private coldRead(threadId: string, read: mdb.ThreadRows & { chars: number }): mdb.ThreadRows & { chars: number } {
+    return this.foundOnDisk.has(threadId) ? { ...read, activeLeafId: this.diskHead(threadId) ?? read.activeLeafId } : read;
   }
 
   private readState(threadId: string, read = mdb.readThread(threadId, messagesFile(threadId))): { state: ThreadState; chars: number } {

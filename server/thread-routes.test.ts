@@ -111,6 +111,71 @@ describe("turn index of an unloaded chat", () => {
   });
 });
 
+describe("media of an unloaded chat", () => {
+  async function mediaOf(store: Store, threadId: string) {
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+    const answered = route.media(res, ["", threadId] as RegExpMatchArray, new URL("http://localhost/media"));
+    const loadedAtOnce = store.loaded(threadId);
+    await answered;
+    const { v: _v, ...list } = JSON.parse(body);
+    return { loadedAtOnce, list };
+  }
+
+  it("loads the chat without holding other requests", async () => {
+    removeTestData(DATA_DIR);
+    const writer = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = writer.createBot({ name: "Long" }, { seedMessages: false });
+    for (let i = 0; i < 300; i++) writer.appendMessage(bot.threadId, { role: i % 3 ? "bot" : "user", kind: "text", text: i % 7 ? `line ${i}` : `[shot-${i}.png](C:\\w\\shot-${i}.png)`, at: i * 1000 });
+    const loaded = await mediaOf(writer, bot.threadId);
+
+    const cold = await mediaOf(new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" })), bot.threadId);
+
+    expect(cold.loadedAtOnce).toBe(false);
+    expect(loaded.list.ids.length).toBeGreaterThan(20);
+    expect(cold.list).toEqual(loaded.list);
+  });
+
+  function threeChats() {
+    removeTestData(DATA_DIR);
+    const writer = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const threads = ["A", "B", "C"].map((name) => writer.createBot({ name }, { seedMessages: false }).threadId);
+    for (const threadId of threads) for (let i = 0; i < 100; i++) writer.appendMessage(threadId, { role: i % 3 ? "bot" : "user", kind: "text", text: i % 7 ? `line ${i}` : `[shot-${i}.png](C:\\w\\shot-${i}.png)`, at: i * 1000 });
+    // a cache with room for no chat beyond the two newest
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }), { threadCacheChars: 1 });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    const ask = async (threadId: string, v?: string) => {
+      let body = "";
+      const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.media(res, ["", threadId] as RegExpMatchArray, new URL(`http://localhost/media${v ? `?v=${v}` : ""}`));
+      return JSON.parse(body);
+    };
+    return { store, threads, ask };
+  }
+
+  it("keeps the chats in use when a look ahead finds no room", async () => {
+    const { store, threads: [a, b, c], ask } = threeChats();
+    store.messagesFor(a!);
+    store.messagesFor(b!);
+
+    expect((await ask(c!)).ids.length).toBeGreaterThan(5);
+
+    expect([a, b, c].map((threadId) => store.loaded(threadId!))).toEqual([true, true, false]);
+  });
+
+  it("answers a held list without reading a chat that was pushed out", async () => {
+    const { store, threads: [a, b, c], ask } = threeChats();
+    const { v } = await ask(c!);
+    store.messagesFor(a!);
+    store.messagesFor(b!);
+
+    expect(await ask(c!, v)).toEqual({ v });
+
+    expect(store.loaded(c!)).toBe(false);
+  });
+});
+
 describe("search", () => {
   it("returns live hits past a trashed bot's", async () => {
     removeTestData(DATA_DIR);

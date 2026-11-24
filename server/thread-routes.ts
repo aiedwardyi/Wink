@@ -8,7 +8,7 @@ import { EVENTS_DIR, NATIVE_DIR, type AppConfig } from "./config.ts";
 import { paneNoteText } from "./context-compaction.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
-import { coldLoad, coldPageBefore, findInChat } from "./cold-thread.ts";
+import { coldLoad, coldPageBefore, coldPath, findInChat } from "./cold-thread.ts";
 import { createMediaIndex } from "./media-index.ts";
 import { searchHaystack, searchMessages, searchSnippet, type SearchHit } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -115,7 +115,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "no such conversation" });
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
-      mediaIndex ??= createMediaIndex(store);
+      // the side pane asks ahead as a long chat opens: a whole-chat read here held every other request, and a load evicted the chat in use
+      mediaIndex ??= createMediaIndex(store, (id) => coldPath(store, id));
       return json(res, 200, await mediaIndex(threadId, url.searchParams.get("v")));
     },
     messageImage: async (res: ServerResponse, m: RegExpMatchArray) => {
