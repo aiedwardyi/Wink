@@ -326,7 +326,7 @@ describe("repos a bot works in", () => {
   });
 
   it("learns repos into the bot record, reading pane remotes apart from report text, and keeps them off the wire", () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     expect(source).toContain("createKnownRepos({ saved: (botId) => store.bot(botId)?.knownRepos ?? [], save: (botId, repos) => store.rememberRepos(botId, repos),");
     expect(source).toContain("...reports]), ...remotes.flatMap((url) => remoteRepo(url) ?? [])];");
     expect(source).toContain("    knownRepos: _knownRepos,\n");
