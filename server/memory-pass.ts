@@ -561,7 +561,8 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
     if (!line || line.length > (decision || tweak ? DECISION_MAX : FACT_MAX) || !said || said.length > QUOTE_MAX) return null;
     if (!paragraphs.some((paragraph) => quotes(paragraph, said))) return null;
     const sensitive = decision || tweak || goal ? secretValue : secretLike;
-    if (sensitive(line) || sensitive(said)) return null;
+    // the "Goal:" label's colon reads as a value handed over
+    if (sensitive(stated) || sensitive(said)) return null;
     const quoting = sources.filter(({ text }) => quotes(text, said));
     const identified = decision && fact.message_id != null ? quoting.filter(({ id }) => id === fact.message_id) : quoting;
     const own = identified.length ? identified : quoting;

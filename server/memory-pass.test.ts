@@ -2368,6 +2368,7 @@ describe("memory pass filters", () => {
     expect(acceptFacts([{ kind: "goal", fact: "Glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line", quote: "glasses v1 is a CEO meeting tool" }], text, ""))
       .toEqual([{ line: "Goal: Glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line" }]);
     expect(acceptFacts([{ kind: "goal", fact: "Wifi password is hunter22", quote: "my wifi password is hunter22" }], "my wifi password is hunter22", "")).toEqual([]);
+    expect(acceptFacts([{ kind: "goal", fact: "Reduce token cost", quote: "Reduce token cost" }], "Reduce token cost", "")).toEqual([{ line: "Goal: Reduce token cost" }]);
   });
 
   it("masks secrets before text leaves Wink", () => {
