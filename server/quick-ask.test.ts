@@ -1004,6 +1004,66 @@ describe("boot recovery", () => {
       vi.useRealTimers();
     }
   });
+
+  // index.ts takes the worker's askThreads when paint releases the boot reads, after a send may have rewritten quick-asks.json
+  const bootAtPaint = (store: Store) => {
+    const timing = createStartupTiming({ write: () => {} });
+    const boot = new Promise<ReturnType<typeof bootRowsNow>>((resolve) => timing.afterPaint("bootReads", async () => resolve(bootRowsNow([...quickAskThreads(store).keys()]))));
+    return { timing, asks: boot.then((rows) => rows.asks) };
+  };
+  const ticks = async (done: () => boolean) => { for (const until = performance.now() + 2_000; !done() && performance.now() < until;) await new Promise((resolve) => setImmediate(resolve)); };
+  // a crash left this ask running in a task the bot has since switched away from
+  const leftInOtherTask = (store: Store) => {
+    const second = store.createBot({}, { seedMessages: false });
+    const threadId = second.threadId;
+    store.appendMessage(threadId, { role: "user", kind: "text", text: "build it" });
+    const ask = store.appendMessage(threadId, { role: "user", kind: "text", text: "which branch?", quick: { state: "asked" } });
+    store.createTask(second.id);
+    writeFileSync(join(DATA_DIR, "quick-asks.json"), JSON.stringify([{ botId: second.id, threadId }]));
+    return { threadId, ask };
+  };
+
+  it("recovers an ask left in another task when a send before paint recovers its own chat", async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    let other!: ReturnType<typeof leftInOtherTask>;
+    const h = harness({ busy: false, restart: (store, threadId) => {
+      store.appendMessage(threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+      other = leftInOtherTask(store);
+    } });
+    const { timing, asks } = bootAtPaint(h.store);
+    const recovered = recoverQuickAsks(h.store, asks, { read: coldQuickAsks, drain: vi.fn() });
+    timing.serving();
+    let sent = false;
+    void h.send({ text: "hello" }).then(() => { sent = true; });
+    await ticks(() => sent);
+    expect(sent).toBe(true);
+    // the send's own recovery has rewritten quick-asks.json by now
+    await new Promise((resolve) => setImmediate(resolve));
+    timing.paint();
+    await recovered;
+    expect(_queuedCount(h.bot.threadId)).toBe(1);
+    expect(_queuedCount(other.threadId)).toBe(1);
+    expect(h.store.row(other.threadId, other.ask.id)?.quick).toEqual({ state: "handoff" });
+  });
+
+  it("recovers an ask left in another task when a quick ask is tracked before paint", async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    let other!: ReturnType<typeof leftInOtherTask>;
+    const h = harness({ restart: (store) => { other = leftInOtherTask(store); } });
+    const { timing, asks } = bootAtPaint(h.store);
+    const recovered = recoverQuickAsks(h.store, asks, { read: coldQuickAsks, drain: vi.fn() });
+    timing.serving();
+    let sent = false;
+    void h.send({ text: QUESTION }).then(() => { sent = true; });
+    await ticks(() => sent);
+    expect(sent).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    timing.paint();
+    await recovered;
+    h.release();
+    expect(_queuedCount(other.threadId)).toBe(1);
+    expect(h.store.row(other.threadId, other.ask.id)?.quick).toEqual({ state: "handoff" });
+  });
 });
 
 describe("Gate 0", () => {

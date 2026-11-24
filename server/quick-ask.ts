@@ -226,10 +226,14 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
   }
 }
 
+// the last run's index, read once per store: this run's sends rewrite the file before the boot reads take their list
+const lastRun = new WeakMap<object, Array<{ botId: string; threadId: string }>>();
+
 /** The open chats plus the threads of asks still running at shutdown; no other thread can hold a recovered ask. */
 export function quickAskThreads(store: Pick<Store, "bots" | "taskByThread">): Map<string, string> {
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
-  for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
+  if (!lastRun.has(store)) lastRun.set(store, savedThreads());
+  for (const { botId, threadId } of lastRun.get(store)!) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   return threads;
 }
 
