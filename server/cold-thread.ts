@@ -271,6 +271,12 @@ export async function coldNewestStamp(store: Pick<Store, "adopt" | "loaded">, th
   }
 }
 
+/** A chat's open quick asks as the boot reads find them, read on the reader: a send before those land recovers its own chat. */
+export async function coldQuickAsks(threadId: string): Promise<Array<{ id: string; at: number }>> {
+  await committed();
+  return (reader ??= startReader())({ threadId, asks: true });
+}
+
 /** Loads an unloaded chat into the store, a worker reading its pages and this thread parsing one per turn: else the first send after Map's cold read reads it all at once. */
 export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
   let load = loads.get(threadId);

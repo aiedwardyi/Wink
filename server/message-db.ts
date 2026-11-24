@@ -557,6 +557,24 @@ export function newestStampOn(handle: DatabaseSync, threadId: string): number {
   return Math.max(0, row?.at ?? 0, row?.acted ?? 0);
 }
 
+/** A chat's unanswered quick asks on its active path, as quick-ask.ts recovers them after a restart. */
+export function quickAsksOn(handle: DatabaseSync, threadId: string): Array<{ id: string; at: number }> {
+  // SAFETY: The query selects the message table's typed ids and time.
+  const found = handle.prepare(`SELECT id, at FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
+    AND json_extract(json, '$.quick.state') = 'asked'
+    AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
+      AND json_extract(json, '$.quick.askId') IS NOT NULL)`).all(threadId, threadId) as Array<{ id: string; at: number }>;
+  // without a saved leaf main reads the path whole (Store.activePath), so every ask stays
+  if (!found.length || !handle.prepare("SELECT 1 FROM thread_state WHERE thread_id = ? AND active_leaf_id IS NOT NULL").get(threadId)) return found;
+  // only asks on the active path: main walks back until it sees each one, so an ask on a dropped branch would walk it to the root
+  // SAFETY: The query selects the message table's typed id.
+  const onPath = new Set((handle.prepare(`WITH RECURSIVE path(id) AS (
+      SELECT active_leaf_id FROM thread_state WHERE thread_id = ?
+      UNION SELECT json_extract(m.json, '$.parentId') FROM messages m JOIN path ON m.id = path.id WHERE m.thread_id = ?
+    ) SELECT id FROM path WHERE id IN (SELECT value FROM json_each(?))`).all(threadId, threadId, JSON.stringify(found.map((row) => row.id))) as Array<{ id: string }>).map((row) => row.id));
+  return found.filter((row) => onPath.has(row.id));
+}
+
 /** Newest message time without loading the transcript. */
 export function lastMessageAt(threadId: string): number | null {
   const row = db().prepare("SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { at: number | null } | undefined;
