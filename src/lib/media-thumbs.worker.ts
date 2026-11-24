@@ -1,6 +1,24 @@
+// a stalled remote socket never answers or errors, so silence ends the download; bytes still coming keep a slow link's preview
+const QUIET_MS = 10_000;
+
 async function picture(src: string): Promise<ImageBitmap | null> {
-  const res = await fetch(src);
-  return res.ok ? createImageBitmap(await res.blob()) : null;
+  const stop = new AbortController();
+  let quiet = setTimeout(() => stop.abort(), QUIET_MS);
+  try {
+    const res = await fetch(src, { signal: stop.signal });
+    if (!res.ok || !res.body) return null;
+    const parts: Uint8Array<ArrayBuffer>[] = [];
+    const reader = res.body.getReader();
+    for (let read = await reader.read(); !read.done; read = await reader.read()) {
+      clearTimeout(quiet);
+      quiet = setTimeout(() => stop.abort(), QUIET_MS);
+      parts.push(read.value);
+    }
+    return await createImageBitmap(new Blob(parts, { type: res.headers.get("content-type") ?? "" }));
+  } finally {
+    clearTimeout(quiet);
+    stop.abort();
+  }
 }
 
 // null sends the cell back to the picture itself

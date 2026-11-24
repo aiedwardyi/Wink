@@ -10,8 +10,6 @@ const AT_ONCE = 3;
 // a little past the start, where many clips are still black
 const FRAME_AT = 0.5;
 const FRAME_MS = 10_000;
-// a preview that never answers, as on a remote PC's stalled socket, gives its slot back and the cell draws the picture itself
-const SHRINK_MS = 10_000;
 const STILL_MS = 200;
 
 let worker: Worker | undefined;
@@ -82,20 +80,12 @@ async function shrink(src: string): Promise<Blob | null> {
   if (frame === null) return null;
   return new Promise((reply) => {
     const id = ++asked;
-    const late = setTimeout(() => {
-      replies.delete(id);
-      reply(null);
-    }, SHRINK_MS);
-    replies.set(id, (blob) => {
-      clearTimeout(late);
-      reply(blob);
-    });
+    replies.set(id, reply);
     try {
       shrinker().postMessage({ id, src, size: SIZE, frame }, frame ? [frame] : []);
     } catch {
       broken = true;
       frame?.close();
-      clearTimeout(late);
       replies.delete(id);
       reply(null);
     }
