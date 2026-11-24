@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
 import { act, createElement, useRef, type CSSProperties } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { useI18n } from "@/lib/i18n";
 import { closeShow, paneTabs, showMap, showMedia, showTimeline, usePaneTabs, type PaneTool } from "@/lib/show-pane";
-import { PANE_WIDTH_KEY, PaneEdge, PaneTabs, TOOL_ICON, TOOL_LABEL, usePaneWidth, type TabView } from "./PaneTabs";
+import { PANE_WIDTH_KEY, PaneEdge, PaneTabs, PaneToolMenu, TOOL_ICON, TOOL_LABEL, usePaneWidth, type TabView } from "./PaneTabs";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -93,4 +94,12 @@ it("Esc cancels an edge resize, the arrow keys step the width and a double-click
   expect([width(), localStorage.getItem(PANE_WIDTH_KEY)]).toEqual(["520px", "520"]);
   await act(async () => { edge.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
   expect([width(), localStorage.getItem(PANE_WIDTH_KEY)]).toEqual(["", null]);
+});
+
+it("opens the + menu above the phone sheet", async () => {
+  const sheet = Number(readFileSync("src/components/ShowPane.css", "utf8").match(/\.verify-watch\.show-pane \{[^}]*z-index: (\d+)/)![1]);
+  await act(async () => root.render(createElement(PaneToolMenu, { rows: [{ tool: "media" }], onPick() {} })));
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-pane-add]")!.click());
+  const menu = document.querySelector("[data-pane-tools-menu]")!;
+  expect(Number(menu.className.match(/\bz-\[?(\d+)\]?/)![1])).toBeGreaterThan(sheet);
 });

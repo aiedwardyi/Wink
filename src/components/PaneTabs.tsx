@@ -89,7 +89,7 @@ export function PaneToolMenu({ rows, onPick }: { rows: readonly ToolRow[]; onPic
         <Plus size={18} />
       </button>
       {at && createPortal(
-        <div ref={menu} role="menu" data-pane-tools-menu className={cn(MENU_CLASS, "w-56")} style={{ left: at.left, top: at.top }} onKeyDown={(event) => menuKeyDown(menu, event)}>
+        <div ref={menu} role="menu" data-pane-tools-menu className={cn(MENU_CLASS, "z-[60] w-56")} style={{ left: at.left, top: at.top }} onKeyDown={(event) => menuKeyDown(menu, event)}>
           <ToolRows rows={rows} onPick={(tool) => { setAt(null); onPick(tool); }} />
         </div>,
         document.body,
