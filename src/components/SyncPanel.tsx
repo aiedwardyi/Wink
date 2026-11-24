@@ -58,7 +58,7 @@ function statusLabel(status: SyncStatus["status"], t: ReturnType<typeof useI18n>
 // api() drops the status, so a build without the Google route shows up as the server's "no route" error
 const missingRoute = (cause: unknown) => cause instanceof Error && /^(no route|404\b)/.test(cause.message);
 
-export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string | null) => void }) {
+export function SyncPanel({ onAccountEmail, rowOnly }: { onAccountEmail?: (email: string | null) => void; rowOnly?: boolean }) {
   const { t } = useI18n();
   const [google, setGoogle] = useState<GoogleSync | null>(null);
   const [folder, setFolder] = useState<SyncStatus | null>(null);
@@ -242,12 +242,14 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
   const shown = notice || (ready ? line : loadError);
   const off = !signingIn && (folderView ? folder?.configured === false : state === "signed-out");
   const desktop = Boolean(window.ogb);
+  const row = ready && desktop && (account.length > 0 || accountError) ? (
+    <AccountRow email={google?.email ?? ""} actions={account} error={accountError} busy={busy} className="mb-4" />
+  ) : null;
+  if (rowOnly) return row;
 
   return (
     <div className="min-w-0">
-      {ready && desktop && (account.length > 0 || accountError) ? (
-        <AccountRow email={google?.email ?? ""} actions={account} error={accountError} busy={busy} className="mb-4" />
-      ) : null}
+      {row}
       <div className="text-[15px] font-medium text-ink">{t("settings.section.sync")}</div>
       <div className="mt-0.5 text-[13px] leading-relaxed text-ink-secondary">{t(off ? "settings.sync.offSubtitle" : "settings.sync.subtitle")}</div>
       {shown || (ready && desktop && (main || quiets.length > 0)) ? (

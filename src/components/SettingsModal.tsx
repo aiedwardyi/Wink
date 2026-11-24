@@ -624,7 +624,7 @@ export function SettingsModal({
             {section === "account" && (
               <>
                 <Card>
-                  {phone && signInSite && <BrowserAccount site={signInSite} className="mb-4" />}
+                  {phone && (signInSite ? <BrowserAccount site={signInSite} className="mb-4" /> : <SyncPanel rowOnly onAccountEmail={setAccountEmail} />)}
                   <div className="flex items-center gap-6">
                     <div className="min-w-0 flex-1 md:min-w-[13rem] lg:min-w-[19rem]"><ProfileFields /></div>
                     {!phone && (

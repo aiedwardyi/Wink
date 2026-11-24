@@ -376,4 +376,18 @@ describe("signing a browser out from Settings > Account", () => {
     expect(replace).not.toHaveBeenCalled();
     expect(signOutCalls()).toHaveLength(0);
   });
+
+  it.each([600, 767, 768, 1440])("shows the desktop app one Sign Out in Account at %s px", async (width) => {
+    Reflect.set(window, "ogb", { platform: "win32", googleAccount: { signIn: vi.fn(), cancel: vi.fn(), signOut: vi.fn() } });
+    const sync = { state: "up-to-date", email: EMAIL, boundEmail: null, join: null, progress: null, lastSyncAt: 1 };
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (path, init) => String(path).includes("/api/google-sync") ? Response.json(sync) : base(path, init));
+    await renderSidebar("127.0.0.1:3000");
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: width <= Number(/max-width:\s*([\d.]+)px/.exec(query)?.[1] ?? -1), media: query, addEventListener() {}, removeEventListener() {} }));
+    await click(avatar());
+    await settle();
+    const signOuts = [...document.querySelectorAll('[role="dialog"] button')].filter((button) => button.textContent === "Sign Out");
+    expect(signOuts).toHaveLength(1);
+    expect(account()?.textContent).toBe(`${EMAIL}Sign Out`);
+  });
 });
