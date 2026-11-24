@@ -116,6 +116,7 @@ import {
 } from "@/lib/transcript-window";
 import { timelineEvents } from "@/lib/taskTimeline";
 import { useReplyDraft } from "@/lib/drafts";
+import { useReplyFocus } from "@/lib/reply-focus";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { usageAccount } from "@/lib/accounts";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
@@ -1028,11 +1029,12 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   });
   const find = useSearchFindSeed(bot.threadId, !preview);
   const findOpen = find.findOpen;
-  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
+  const { replyTo, selectReply: pickReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     bot.threadId,
     `bot:${bot.id}:${bot.threadId}`,
     bot.messages,
   );
+  const selectReply = useReplyFocus(pickReply);
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
     dispatch({
