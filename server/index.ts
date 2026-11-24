@@ -3206,11 +3206,8 @@ const askPrs = createAskPrs({
 startupTiming.afterPaint("unlanded", async () => {
   // the worker read each chat's reports; a chat loaded since then has them in memory
   const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
-  for (const bot of store.bots) {
-    const reports = store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId);
-    await unlandedWork.refresh(bot.id, bot.threadId, reports);
-    await knownRepos.cite(bot.id, reports);
-  }
+  for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+  for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
 });
 const memoryLookup = createMemoryLookup({
   dataDir: DATA_DIR,

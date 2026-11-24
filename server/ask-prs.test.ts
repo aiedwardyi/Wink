@@ -332,7 +332,7 @@ describe("repos a bot works in", () => {
     expect(source).toContain("  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? \"\"), ...reports]);\n} });");
     expect(source).toContain("    knownRepos: _knownRepos,\n");
     const unlanded = source.slice(source.indexOf('startupTiming.afterPaint("unlanded"'), source.indexOf("const memoryLookup = createMemoryLookup("));
-    expect(unlanded, "a restart reads the cited repos off the send path, from boot's reports").toContain("    await knownRepos.cite(bot.id, reports);\n");
+    expect(unlanded, "a restart reads the cited repos off the send path, from boot's reports").toContain("  for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));\n");
   });
 
   describe("a bare PR from a bot folder that is not a repo", () => {
