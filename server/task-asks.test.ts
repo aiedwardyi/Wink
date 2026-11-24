@@ -143,6 +143,17 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     expect(new Set([...ids, ...next]).size).toBe(600);
   });
 
+  it("keeps parked asks under the byte ceiling and rotates them with the open ones", () => {
+    const parked = Array.from({ length: 1_000 }, (_, index) => ask(index + 1, { ask: "가".repeat(80), until: NOW + DAY + index }));
+    for (const block of [asksBlock(parked, NOW), asksNudge(parked, NOW, "status?")]) {
+      expect(Buffer.byteLength(listed(block).join("\n"), "utf8")).toBeLessThanOrEqual(MAX_STATUS_ASKS_BYTES);
+    }
+    const ids = rotatedAsks(parked, NOW)!;
+    expect(ids).toEqual(listed(asksBlock(parked, NOW)).map((line) => line.split(" ")[1]));
+    const next = listed(asksBlock(parked.map((item) => ids.includes(item.id) ? { ...item, shown: NOW } : item), NOW + 1)).map((line) => line.split(" ")[1]);
+    expect(next[0]).not.toBe(ids[0]);
+  });
+
   it.each(["open", "building", "waiting-for-user"] as const)("flags a %s ask with no ref and no change for 3 days as needing a verdict", (status) => {
     const fresh = ask(1, { status, changedAt: NOW - ASK_VERDICT_MS + 1 });
     const due = ask(2, { status, changedAt: NOW - ASK_VERDICT_MS });
@@ -278,6 +289,14 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       expect(tokens(named)).toBeLessThanOrEqual(100);
       expect(asksNudge(asks, NOW, "what did I ask you to change on the header?")).toBe("");
       expect(asksNudge(asks, NOW, "ship the alpha build tonight")).toBe("");
+    });
+
+    it("clips a named ask too long for the budget instead of dropping it", () => {
+      const title = "가나다라마바사아자차".repeat(8);
+      const named = asksNudge([ask(1, { ask: title }), ask(2)], NOW, title);
+      expect(named).toContain("- A1 open 11-12: 가나다라마바사아자차");
+      expect(Buffer.byteLength(named, "utf8")).toBeLessThanOrEqual(300);
+      expect(asksNudge([ask(1, { ask: "make the header smaller on phone" })], NOW, "the header on phone")).toContain("- A1 open 11-12: make the header smaller on phone\n".trimEnd());
     });
 
     it("brings the bot's asks from its other chats, without their ids", () => {

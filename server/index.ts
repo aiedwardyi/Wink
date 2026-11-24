@@ -5824,6 +5824,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
+  const elsewhereAsks = commsDepth === 0 ? store.otherChatAsks(bot.id, threadId, notOwnerChats()) : [];
+  // the durable record holds only this chat's asks
+  const recordText = [durableTaskRecordText, asksNudge(undefined, Date.now(), text, elsewhereAsks)].filter(Boolean).join("\n") || undefined;
   const { turnText, resume, nativeReplayPrefix } = buildTurnContext({
     driverKind: instance.driverKind,
     model,
@@ -5836,11 +5839,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     replaysNatively,
     nativeReplay: codexHistory && summaryGrace.fresh,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
-    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, store.otherChatAsks(bot.id, threadId, notOwnerChats())) : "",
+    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks) : "",
   });
   stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
@@ -5849,7 +5852,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     text: turnPrompt,
     transcript: turnTranscript,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
   });
   const systemRecycleText = (compaction = false) => buildTurnContext({
     driverKind: instance.driverKind,
@@ -5862,7 +5865,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recycleReason: compaction ? "compaction" : "system",
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   }).turnText;

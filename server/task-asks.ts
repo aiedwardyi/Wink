@@ -156,45 +156,45 @@ const askLine = (ask: TaskAsk, now: number) => isParked(ask, now)
   ? `- ${ask.id} parked back ${day(ask.until!)}: ${ask.ask}`
   : `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
 
-/** Open asks, needing a verdict first and then oldest, all of them; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
+/** Open asks, needing a verdict first and then oldest, then parked ones by return day; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
 function listed(asks: readonly TaskAsk[] | undefined, now: number) {
   const open = (asks ?? []).filter((ask) => isOpenAsk(ask) && !isParked(ask, now));
+  const parked = (asks ?? []).filter((ask) => isParked(ask, now)).sort((left, right) => left.until! - right.until!);
   const byAge = (left: TaskAsk, right: TaskAsk) => left.at - right.at;
   const due = open.filter((ask) => needsVerdict(ask, now)).sort(byAge);
   const rest = open.filter((ask) => !needsVerdict(ask, now)).sort(byAge);
   const ordered = [...due, ...rest.filter((ask) => !isQuestion(ask)), ...rest.filter(isQuestion)];
   const line = (ask: TaskAsk) => askLine(ask, now);
   const bytes = (ask: TaskAsk) => Buffer.byteLength(line(ask), "utf8") + 1;
-  if (ordered.reduce((sum, ask) => sum + bytes(ask), 0) <= MAX_STATUS_ASKS_BYTES) return { ordered, due, shown: ordered, line };
+  const all = [...ordered, ...parked];
+  if (all.reduce((sum, ask) => sum + bytes(ask), 0) <= MAX_STATUS_ASKS_BYTES) return { ordered, parked, due, shown: all, line };
   const picked = new Set<TaskAsk>();
   let used = 0;
-  for (const ask of ordered.toSorted((left, right) => (left.shown ?? 0) - (right.shown ?? 0))) {
+  for (const ask of all.toSorted((left, right) => (left.shown ?? 0) - (right.shown ?? 0))) {
     if ((used += bytes(ask)) > MAX_STATUS_ASKS_BYTES) break;
     picked.add(ask);
   }
-  return { ordered, due, shown: ordered.filter((ask) => picked.has(ask)), line };
+  return { ordered, parked, due, shown: all.filter((ask) => picked.has(ask)), line };
 }
 
-/** The ids a list past MAX_STATUS_ASKS_BYTES shows, to stamp shown on; null when every open ask fits. */
+/** The ids a list past MAX_STATUS_ASKS_BYTES shows, to stamp shown on; null when every open and parked ask fits. */
 export function rotatedAsks(asks: readonly TaskAsk[] | undefined, now: number): string[] | null {
-  const { ordered, shown } = listed(asks, now);
-  return shown.length < ordered.length ? shown.map((ask) => ask.id) : null;
+  const { ordered, parked, shown } = listed(asks, now);
+  return shown.length < ordered.length + parked.length ? shown.map((ask) => ask.id) : null;
 }
 
 /** Every open ask, then each parked one with the day it comes back. Empty when none is open. */
 export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false): string {
-  const parked = (asks ?? []).filter((ask) => isParked(ask, now));
-  const { ordered, due, shown, line } = listed(asks, now);
+  const { ordered, parked, due, shown, line } = listed(asks, now);
   if (!ordered.length && !parked.length) return "";
   const them = due.length === 1 ? "it" : "them";
   const flagged = due.length ? `, ${due.length} need${due.length === 1 ? "s" : ""} a verdict: no ref and no change in 3+ days, so build, park or close ${them} yourself, and ask the user about at most 3 at a time` : "";
-  const waiting = ordered.length - shown.length;
+  const waiting = ordered.length + parked.length - shown.length;
   const rotated = waiting ? ` ${waiting} more wait for the next turn, least recently shown first.` : "";
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
   return [
     `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
     ...shown.map(line),
-    ...parked.toSorted((left, right) => left.until! - right.until!).map(line),
   ].join("\n");
 }
 
@@ -247,9 +247,16 @@ export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, tex
     ].filter(Boolean).join("\n");
   };
   let picked: TaskAsk[] = [];
+  let hits = "";
   for (const ask of named([...mine, ...elsewhere], text)) {
     if (picked.length === NAMED_MAX) break;
-    if (Buffer.byteLength(render([...picked, ask]), "utf8") <= NAMED_BYTES) picked = [...picked, ask];
+    const next = render([...picked, ask]);
+    if (Buffer.byteLength(next, "utf8") <= NAMED_BYTES) [picked, hits] = [[...picked, ask], next];
+    // the best match alone past the budget is clipped, never dropped
+    else if (!picked.length) {
+      hits = `${Buffer.from(next, "utf8").subarray(0, NAMED_BYTES - 3).toString("utf8").replace(/\uFFFD+$/u, "")}…`;
+      break;
+    }
   }
-  return [block, render(picked)].filter(Boolean).join("\n");
+  return [block, hits].filter(Boolean).join("\n");
 }
