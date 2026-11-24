@@ -3189,10 +3189,10 @@ const knownRepos = createKnownRepos({ saved: (botId) => store.bot(botId)?.knownR
   const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
   const remotes = await Promise.all([...new Set(panes.map((pane) => pane.cwd).filter(Boolean))].map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
   return remotes.flatMap((url) => remoteRepo(url) ?? []);
-}, cited: async (botId) => {
+}, cited: async (botId, boot) => {
   const bot = store.bot(botId);
   if (!bot) return [];
-  const reports = [...reportNotes(store.notesBack(bot.threadId))].map((row) => row.text ?? "");
+  const reports = [...reportNotes(boot ?? store.notesBack(bot.threadId))].map((row) => row.text ?? "");
   return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports]);
 } });
 const askPrs = createAskPrs({
@@ -3206,7 +3206,11 @@ const askPrs = createAskPrs({
 startupTiming.afterPaint("unlanded", async () => {
   // the worker read each chat's reports; a chat loaded since then has them in memory
   const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
-  for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+  for (const bot of store.bots) {
+    const reports = store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId);
+    await unlandedWork.refresh(bot.id, bot.threadId, reports);
+    await knownRepos.cite(bot.id, reports);
+  }
 });
 const memoryLookup = createMemoryLookup({
   dataDir: DATA_DIR,
