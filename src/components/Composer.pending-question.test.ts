@@ -58,6 +58,8 @@ const bot = (messages: Message[]): Bot => ({
   modelSelection: { instanceId: "claude", model: "claude" },
 });
 
+const screen = (phone: boolean) => vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+
 let focused: ReturnType<typeof useStore>["state"]["focusMessage"] = null;
 function Probe() {
   focused = useStore().state.focusMessage;
@@ -235,6 +237,62 @@ describe("pinned ask_user question", () => {
     resized();
     expect(card()!.style.maxHeight).toBe("106px");
     expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["22px", "auto"]);
+  });
+
+  it("lifts the tray's own cap, so a phone keeps three lines of the question with every choice in sight", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(true);
+    const sheet = document.head.appendChild(document.createElement("style"));
+    sheet.textContent = "[data-composer-tray] { overflow-y: auto; }";
+    const isPane = (el: Element) => el.matches("[data-composer-tray]");
+    const tall = 170;
+    const need = tall + 128;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : this.matches("[data-pending-question]") ? need : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : isPane(this) ? need : 0; });
+    // a phone's 30dvh tray cap at 844 is 253px, below the card's 298px
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return isPane(this) ? (this.style.maxHeight === "none" ? need : 253) : 0; });
+    await mount({ bot: bot([question]) });
+    const tray = host!.querySelector<HTMLElement>("[data-composer-tray]")!;
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    const choices = card()!.querySelector<HTMLElement>("[data-term-choices]")!;
+    expect(body.style.minHeight).toBe("66px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["", ""]);
+    expect(tray.style.maxHeight).toBe("none");
+    await act(async () => root!.unmount());
+    root = null;
+    expect(tray.style.maxHeight).toBe("");
+    sheet.remove();
+  });
+
+  it("ends a cut question on a whole line, never half of one", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(true);
+    let shown = 113;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 0, this.matches("[data-question-body]") ? shown : 0); });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 132 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.style.maxHeight).toBe("110px");
+    shown = 110;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("");
+    shown = 120;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("110px");
+    shown = 132;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("");
+  });
+
+  it("keeps a desktop card's window and the tray's cap as they were", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(false);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 0, this.matches("[data-question-body]") ? 174 : 0); });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 1078 : 0; });
+    await mount({ bot: bot([ask({ options: ["Prod", "Staging", "Both"] })]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.style.maxHeight).toBe("");
+    expect(host!.querySelector<HTMLElement>("[data-composer-tray]")!.style.maxHeight).toBe("");
   });
 
   it("fades a cut question at its foot until it is scrolled to its end", async () => {
