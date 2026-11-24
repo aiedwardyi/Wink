@@ -300,6 +300,12 @@ describe("revert index", () => {
     expect(sync, "sync fs in server/revert-index.ts blocks the whole server on a folder that never answers (a dead network share): use stat, readFile and readdir from node:fs/promises").toEqual([]);
   });
 
+  it("refreshes the pane folders a bot's repos are learned from", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const discover = source.slice(source.indexOf("createKnownRepos({"), source.indexOf("}, cited:"));
+    expect(discover, "dropping this loop leaves pane folders unchecked, and no test of the repo list notices").toContain("for (const cwd of [...cwds, ...bot.cwd ? [bot.cwd] : []]) void revertIndex.refresh(cwd);");
+  });
+
   it.skipIf(process.platform !== "win32")("treats a common dir in another letter case as the same repo", async () => {
     const repos = gitRepos();
     const { git, passes } = counted();

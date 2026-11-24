@@ -2,6 +2,19 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.298] - 2026-11-24
+
+### Fixed
+- Glasses: the D-pad reaches the 6 code boxes, the first box shows a ring when the page opens, and a lens that already knows your PC needs only the 6 numbers.
+- The first message after Wink opens starts at once instead of waiting a few seconds.
+- The side pane opens at once on a long chat.
+- Timeline stays sharp after you zoom.
+- Phone: tapping Reply opens the keyboard.
+- Bot notes keep your goals and plain talk about tokens, and every open ask stays in view.
+- Bots see every pick you made in full, not only the newest.
+- A bot's asks close once all the work they point to is merged.
+- Hugging Face keys are hidden like other keys.
+
 ## [1.0.297] - 2026-11-24
 
 ### Fixed
