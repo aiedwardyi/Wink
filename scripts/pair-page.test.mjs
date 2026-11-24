@@ -242,6 +242,15 @@ describe("pair page", () => {
       expect(SOURCE).toMatch(/\.g-code \{[^}]*-webkit-tap-highlight-color: transparent;/);
     });
 
+    it("marks the first code box as selected on arrival, with the field focused", () => {
+      lens(true);
+      open("/pair", googlePc());
+      expect(document.activeElement?.id).toBe("g-code");
+      const [first, ...rest] = document.querySelectorAll(".g-group span");
+      expect(first.classList.contains("next")).toBe(true);
+      expect(rest.some((cell) => cell.classList.contains("next"))).toBe(false);
+    });
+
     it("moves focus with the lens D-pad: any arrow to the field, Down to Connect once it shows", () => {
       lens(true);
       open("/pair", googlePc());
