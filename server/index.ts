@@ -3183,7 +3183,7 @@ const unlandedWork = createUnlandedWork({
 });
 const revertIndex = createRevertIndex();
 startupTiming.afterPaint("reverts", async () => {
-  for (const cwd of new Set(store.bots.map((bot) => bot.cwd).filter((cwd) => cwd !== undefined))) await revertIndex.refresh(cwd);
+  await Promise.all([...new Set(store.bots.map((bot) => bot.cwd).filter((cwd) => cwd !== undefined))].map((cwd) => revertIndex.refresh(cwd)));
 });
 // where a bare "PR n" may be when the bot's folder is not a repo: its asks, its workers' reports and its panes' remotes
 const knownRepos = createKnownRepos({ discover: async (botId) => {
@@ -3192,7 +3192,7 @@ const knownRepos = createKnownRepos({ discover: async (botId) => {
   const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, null, undefined, { panesOnly: true });
   const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
   const cwds = [...new Set(panes.map((pane) => pane.cwd).filter(Boolean))];
-  for (const cwd of [...cwds, bot.cwd ?? ""]) void revertIndex.refresh(cwd);
+  for (const cwd of [...cwds, ...bot.cwd ? [bot.cwd] : []]) void revertIndex.refresh(cwd);
   const remotes = await Promise.all(cwds.map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
   const reports = [...reportNotes(store.notesBack(bot.threadId))].map((row) => row.text ?? "");
   return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports, ...remotes]);

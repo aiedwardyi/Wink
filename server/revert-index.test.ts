@@ -1,9 +1,12 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { createRevertIndex, gitHome, parseRevertLog, revertHit } from "./revert-index.ts";
+import { mapGit } from "./map-git.ts";
+import { createRevertIndex, gitHome, parseRevertLog, revertHit, type RevertGit } from "./revert-index.ts";
+import { removeTempDir } from "./testing/cleanup.ts";
 
 const at = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 const commit = (sha: string, when: string, subject: string, body: string, files: string[]) => `\x1e${sha.padEnd(40, "0")}\x1f${at(when)}\x1f${subject}\x1f${body}\x1f\n\n${files.join("\n")}\n`;
@@ -18,6 +21,50 @@ const BLUR_LOG = [
 ].join("");
 
 const NOW = Date.parse("2026-11-24T04:00:00Z");
+
+const roots: string[] = [];
+afterEach(async () => { for (const root of roots.splice(0)) await removeTempDir(root); });
+
+// main has #1595 reverting #1587; old forked before the revert; each worker has its own commit
+function gitRepos(workers = 0) {
+  const root = mkdtempSync(join(tmpdir(), "revert-git-"));
+  roots.push(root);
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { windowsHide: true, encoding: "utf8" }).trim();
+  const commit = (cwd: string, path: string, text: string, message: string) => {
+    mkdirSync(join(cwd, path, ".."), { recursive: true });
+    writeFileSync(join(cwd, path), text);
+    git(cwd, "add", "-A");
+    git(cwd, "commit", "-qm", message);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+  const main = join(root, "main");
+  const old = join(root, "old");
+  git(root, "init", "-q", "--bare", "-b", "main", "origin.git");
+  git(root, "clone", "-q", join(root, "origin.git"), main);
+  commit(main, "electron/verify-cast.mjs", "v1\n", "feat: watch done-checks live (#1098)");
+  commit(main, "docs/가이드.md", "v1\n", "docs: guide (#1100)");
+  const fix = commit(main, "electron/verify-cast.mjs", "v2\n", "fix: Live Verify checks a slow page once it has loaded (#1587)");
+  commit(main, "docs/가이드.md", "v2\n", "docs: guide again (#1588)");
+  git(main, "worktree", "add", "-q", "-b", "feat/old", old, fix);
+  commit(main, "electron/verify-cast.mjs", "v1\n", "revert: Live Verify load wait fails healthy animated pages (#1595)\n\nReverts #1587.");
+  commit(main, "docs/가이드.md", "v1\n", 'Revert "docs: guide again (#1588)" (#1596)');
+  git(main, "push", "-q", "origin", "main");
+  const others = Array.from({ length: workers }, (_, index) => {
+    const dir = join(root, `w${index}`);
+    git(main, "worktree", "add", "-q", "-b", `feat/w${index}`, dir, "main");
+    commit(dir, `w${index}.txt`, "w\n", `wip: ${index}`);
+    return dir;
+  });
+  return { main, old, others };
+}
+
+function counted() {
+  let passes = 0;
+  const git: RevertGit = (cwd, args) => { passes += 1; return mapGit(cwd, args, 64 * 1024 * 1024); };
+  return { git, passes: () => passes };
+}
+
+const SHARP = "## Purpose\nSharpen electron/verify-cast.mjs:20 frames.\n";
 
 function repo(head = "ref: refs/heads/main") {
   const dir = mkdtempSync(join(tmpdir(), "revert-index-"));
@@ -72,7 +119,7 @@ describe("revert index", () => {
     writeFileSync(join(worktree, ".git"), `gitdir: ${own}\n`);
     mkdirSync(join(worktree, "src"));
     expect(gitHome(join(worktree, "src"))?.common).toBe(join(main, ".git"));
-    expect(gitHome(main)).toEqual({ common: join(main, ".git"), key: `ref: refs/heads/main\0${"1".repeat(40)}` });
+    expect(gitHome(main)).toEqual({ common: join(main, ".git"), key: `ref: refs/heads/main\0${"1".repeat(40)}`, refs: "--branches", shallow: false });
     expect(gitHome(mkdtempSync(join(tmpdir(), "revert-none-")))).toBeUndefined();
     expect(gitHome("")).toBeUndefined();
     expect(gitHome("relative/dir")).toBeUndefined();
@@ -107,5 +154,103 @@ describe("revert index", () => {
     writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/other\n");
     await expect(index.refresh(dir)).resolves.toBeUndefined();
     expect(index.hit(dir, "electron/verify-cast.mjs")?.revert.pr).toBe(1595);
+  });
+  it("matches file names with spaces, brackets and non-folder roots, and a folder file only by its whole path", () => {
+    const files = ["docs/my guide.md", "src/app/users/[id]/page.tsx", "src/app/(dashboard)/page.tsx", "root-file.ts", "index.ts"];
+    const log = parseRevertLog(files.map((file, index) => commit(`c${index}`, "2026-11-20T10:00:00Z", `revert: undo ${index} (#${2000 + index})`, "", [file])).join(""));
+    for (const file of files) expect(revertHit(log, `Edit \`${file}\`.`, NOW)?.file, file).toBe(file);
+    expect(revertHit(log, 'Edit "docs/my guide.md" and src/app/users/[id]/page.tsx.', NOW)?.file).toBe("docs/my guide.md");
+    expect(revertHit(log, "Edit src/app/(dashboard)/page.tsx:12.", NOW)?.file).toBe("src/app/(dashboard)/page.tsx");
+    expect(revertHit(log, String.raw`Read D:\wink\wt\x\root-file.ts and D:\wink\wt\x\src\app\users\[id]\page.tsx.`, NOW)?.file).toBe("src/app/users/[id]/page.tsx");
+    expect(revertHit(log, String.raw`Read D:\wink\wt\x\root-file.ts.`, NOW)?.file).toBe("root-file.ts");
+    for (const miss of ["Edit server/index.ts.", "Edit my-root-file.ts.", "Edit root-file.tsx.", "Edit index.ts.bak.", "Edit docs/my guide.mdx."]) expect(revertHit(log, miss, NOW), miss).toBeUndefined();
+  });
+
+  it("reads what a revert undid from a sha-only body, a direct revert and a Reverts line", () => {
+    const undoneBySha = parseRevertLog(commit("aaaa111", "2026-11-20T10:00:00Z", 'Revert "fix: blur" (#1595)', `This reverts commit ${"bbbb222".padEnd(40, "0")}.`, ["a/b.ts"]) + commit("bbbb222", "2026-11-19T10:00:00Z", "fix: blur (#1587)", "", ["a/b.ts"]));
+    expect(undoneBySha.reverts[0]!.undid.prs).toEqual([1587]);
+    expect(revertHit(undoneBySha, "Edit a/b.ts. Look-first: #1587", NOW)).toBeUndefined();
+    const direct = parseRevertLog(commit("aaaa111", "2026-11-20T10:00:00Z", "revert: undo (#1587)", "", ["a/b.ts"]) + commit("bbbb222", "2026-11-19T10:00:00Z", "fix: blur (#1587)", "", ["a/b.ts"]));
+    expect(direct.reverts[0]).toMatchObject({ undid: { prs: [1587], subject: "fix: blur (#1587)" } });
+    expect(direct.reverts[0]!.pr).toBeUndefined();
+    const plural = parseRevertLog(commit("aaaa111", "2026-11-20T10:00:00Z", "Reverts #1587 (#1595)", "", ["a/b.ts"]) + commit("cccc333", "2026-11-20T09:00:00Z", "revert: blur (#1594)", "Reverts #1587.", ["a/b.ts"]) + commit("bbbb222", "2026-11-19T10:00:00Z", "fix: blur (#1587)", "", ["a/b.ts"]));
+    expect(plural.reverts.map((revert) => [revert.pr, revert.undid.prs])).toEqual([[1595, [1587]], [1594, [1587]]]);
+  });
+
+  it("drops a revert that a newer revert undid, and both of the pair", () => {
+    const log = parseRevertLog([
+      commit("cccc333", "2026-11-16T10:00:00Z", 'Revert "revert: blur (#1595)" (#1610)', "Reverts #1595.", ["electron/verify-cast.mjs"]),
+      commit("bbbb222", "2026-11-14T11:00:00Z", "revert: blur (#1595)", "Reverts #1587.", ["electron/verify-cast.mjs"]),
+      commit("aaaa111", "2026-11-14T10:00:00Z", "fix: blur (#1587)", "", ["electron/verify-cast.mjs"]),
+    ].join(""));
+    expect(log.reverts).toEqual([]);
+    expect(revertHit(log, SHARP, NOW)).toBeUndefined();
+    const again = parseRevertLog(commit("dddd444", "2026-11-18T10:00:00Z", 'Revert "Revert "revert: blur (#1595)" (#1610)" (#1620)', "Reverts #1610.", ["electron/verify-cast.mjs"]) + commit("cccc333", "2026-11-16T10:00:00Z", 'Revert "revert: blur (#1595)" (#1610)', "Reverts #1595.", ["electron/verify-cast.mjs"]) + commit("bbbb222", "2026-11-14T11:00:00Z", "revert: blur (#1595)", "Reverts #1587.", ["electron/verify-cast.mjs"]) + commit("aaaa111", "2026-11-14T10:00:00Z", "fix: blur (#1587)", "", ["electron/verify-cast.mjs"]));
+    expect(again.reverts.map((revert) => revert.pr)).toEqual([1595]);
+  });
+
+  it("checks every worktree against the same history, so one forked before a revert never hides it", async () => {
+    for (const order of [["old", "main"], ["main", "old"]] as const) {
+      const repos = gitRepos();
+      const { git, passes } = counted();
+      const index = createRevertIndex({ git });
+      for (const name of order) await index.refresh(repos[name]);
+      expect(index.hit(repos.main, SHARP)?.revert.pr, order.join(">")).toBe(1595);
+      expect(index.hit(repos.old, SHARP)?.revert.pr, order.join(">")).toBe(1595);
+      const warmed = passes();
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        await Promise.all([repos.old, repos.main].map((cwd) => index.refresh(cwd)));
+        expect(index.hit(repos.main, SHARP)?.revert.pr).toBe(1595);
+        await index.refresh(repos.main);
+      }
+      expect(passes() - warmed).toBe(0);
+    }
+  });
+
+  it("indexes worktrees of one repo with one pass at boot, and names non-ASCII files as git wrote them", async () => {
+    const repos = gitRepos(5);
+    const serial = counted();
+    const index = createRevertIndex({ git: serial.git });
+    for (const cwd of repos.others) await index.refresh(cwd);
+    expect(serial.passes()).toBe(1);
+    const burst = counted();
+    const fresh = createRevertIndex({ git: burst.git });
+    await Promise.all(repos.others.map((cwd) => fresh.refresh(cwd)));
+    expect(burst.passes()).toBe(1);
+    expect(index.hit(repos.others[0]!, "Edit docs/가이드.md.")).toMatchObject({ file: "docs/가이드.md", revert: { pr: 1596 } });
+  });
+
+  it.skipIf(process.platform !== "win32")("treats a common dir in another letter case as the same repo", async () => {
+    const repos = gitRepos();
+    const { git, passes } = counted();
+    const index = createRevertIndex({ git });
+    const flip = (path: string) => path.replace(/^[a-z]:/i, (drive) => drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase());
+    await Promise.all([index.refresh(repos.main), index.refresh(flip(repos.main))]);
+    await index.refresh(flip(repos.main));
+    expect(passes()).toBe(1);
+  });
+
+  it("gives no hit in a shallow repo and does not run git there", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, ".git", "shallow"), "1".repeat(40));
+    const calls: string[][] = [];
+    const index = createRevertIndex({ git: async (_cwd, args) => { calls.push(args); return BLUR_LOG; }, now: () => NOW });
+    await index.refresh(dir);
+    expect(index.hit(dir, "electron/verify-cast.mjs")).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("waits out the refresh interval after a failed pass instead of running git on every hit", async () => {
+    const dir = repo();
+    let now = NOW;
+    let calls = 0;
+    const index = createRevertIndex({ git: async () => { calls += 1; throw new Error("spawn git ENOENT"); }, now: () => now });
+    await index.refresh(dir);
+    for (let hit = 0; hit < 3; hit += 1) expect(index.hit(dir, "electron/verify-cast.mjs")).toBeUndefined();
+    await index.refresh(dir);
+    expect(calls).toBe(1);
+    now += 10 * 60_000;
+    await index.refresh(dir);
+    expect(calls).toBe(2);
   });
 });
