@@ -347,7 +347,7 @@ import { createMemoryHealthCheck } from "./memory-health.ts";
 import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
 import { createUnlandedWork, reportNotes } from "./unlanded.ts";
-import { closedAskLine, createAskPrs, createKnownRepos, reposIn, withClosed } from "./ask-prs.ts";
+import { closedAskLine, createAskPrs, createKnownRepos, remoteRepo, reposIn, withClosed } from "./ask-prs.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -1452,6 +1452,7 @@ const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
     projectFolderClearedAt: _projectFolderClearedAt,
     paneWakePaused: _paneWakePaused,
     lastProjectCwd: _lastProjectCwd,
+    knownRepos: _knownRepos,
     tasks,
     ...rest
   } = bot;
@@ -3181,14 +3182,14 @@ const unlandedWork = createUnlandedWork({
   version: process.env.OMB_APP_VERSION ?? "",
 });
 // where a bare "PR n" may be when the bot's folder is not a repo: its asks, its workers' reports and its panes' remotes
-const knownRepos = createKnownRepos({ discover: async (botId) => {
+const knownRepos = createKnownRepos({ saved: (botId) => store.bot(botId)?.knownRepos ?? [], save: (botId, repos) => store.rememberRepos(botId, repos), discover: async (botId) => {
   const bot = store.bot(botId);
   if (!bot) return [];
   const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, null, undefined, { panesOnly: true });
   const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
   const remotes = await Promise.all([...new Set(panes.map((pane) => pane.cwd).filter(Boolean))].map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
   const reports = [...reportNotes(store.notesBack(bot.threadId))].map((row) => row.text ?? "");
-  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports, ...remotes]);
+  return [...reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports]), ...remotes.flatMap((url) => remoteRepo(url) ?? [])];
 } });
 const askPrs = createAskPrs({
   repoDir: (botId, threadId) => {

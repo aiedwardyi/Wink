@@ -592,6 +592,8 @@ export interface BotRecord {
    * Cleared when chat rules that folder out, and when Settings Clear
    * drops the pin so the next task is the private workspace. */
   lastProjectCwd?: string;
+  /** GitHub repos learned from PR links, owner/repo#n refs and pane remotes, where a bare "PR n" is looked up when the folder is not a repo. */
+  knownRepos?: string[];
   /** When Settings Clear last dropped the folder. Chat lines from before it
    * are spent: no later turn may re-derive the cleared folder from them. */
   projectFolderClearedAt?: number;
@@ -2171,6 +2173,13 @@ export class Store {
     const bot = this.bot(botId);
     if (!bot || !cwd || bot.lastProjectCwd === cwd) return;
     bot.lastProjectCwd = cwd;
+    this.saveBotsSoon();
+  }
+
+  rememberRepos(botId: string, repos: string[]): void {
+    const bot = this.bot(botId);
+    if (!bot) return;
+    bot.knownRepos = repos;
     this.saveBotsSoon();
   }
 

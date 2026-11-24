@@ -9,7 +9,7 @@ import { NOT_FOUND, UNLANDED_REFRESH_MS } from "./unlanded.ts";
 const PR_URL = /(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#][^\s;,+]*)?/gi;
 const REPO_PR = /\b([\w.-]+\/[\w.-]+)#(\d+)\b/g;
 const PR_REF = /\bPR\s*#?(\d{1,6})\b/gi;
-const GITHUB_REPO = /github\.com[:/]([\w.-]+\/[\w.-]+)/gi;
+const GITHUB_REMOTE = /github\.com[:/]([\w.-]+\/[\w.-]+)/i;
 const SHA = /\b[0-9a-f]{7,40}\b/gi;
 const NOT_REPO = /not a git repository/i;
 const REASON_MAX = 120;
@@ -43,23 +43,24 @@ export function askPr(ref: string | undefined): Pr | null {
   return refPrs(ref)[0] ?? null;
 }
 
-/** Repos named by PR links, owner/repo#n refs and GitHub remotes, lowercase, first seen first. */
+/** Repos named by PR links and owner/repo#n refs, lowercase, first seen first. A plain github.com/o/r link names none: reports cite other repos' docs. */
 export function reposIn(texts: readonly string[]): string[] {
-  const repos = new Set<string>();
-  for (const text of texts) {
-    for (const match of text.matchAll(GITHUB_REPO)) repos.add(match[1]!.replace(/\.git$/i, "").toLowerCase());
-    for (const match of text.matchAll(REPO_PR)) repos.add(match[1]!.toLowerCase());
-  }
-  return [...repos];
+  return [...new Set(texts.flatMap((text) => refPrs(text).flatMap((pr) => pr.repo ? [pr.repo] : [])))];
 }
 
-/** Repos each bot works in, found off the send path; get() never waits. */
-export function createKnownRepos(deps: { discover: (botId: string) => Promise<string[]> }) {
-  const known = new Map<string, string[]>();
+/** The GitHub repo a git remote URL points at, lowercase; undefined for any other. */
+export function remoteRepo(url: string): string | undefined {
+  return GITHUB_REMOTE.exec(url)?.[1]!.replace(/\.git$/i, "").toLowerCase();
+}
+
+/** Repos each bot works in, found off the send path; get() never waits. A refresh only adds, so one that finds less keeps what was saved. */
+export function createKnownRepos(deps: { discover: (botId: string) => Promise<string[]>; saved: (botId: string) => readonly string[]; save: (botId: string, repos: string[]) => void }) {
   return {
-    get: (botId: string): string[] => known.get(botId) ?? [],
+    get: (botId: string): string[] => [...deps.saved(botId)],
     async refresh(botId: string): Promise<void> {
-      known.set(botId, await deps.discover(botId).catch(() => known.get(botId) ?? []));
+      const saved = deps.saved(botId);
+      const repos = [...new Set([...saved, ...await deps.discover(botId).catch(() => [])])];
+      if (repos.length > saved.length) deps.save(botId, repos);
     },
   };
 }

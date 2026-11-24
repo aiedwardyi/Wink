@@ -300,28 +300,78 @@ describe("ask PR closes the bot can see", () => {
 describe("repos a bot works in", () => {
   const mod = askPrsModule as {
     reposIn?: (texts: readonly string[]) => string[];
-    createKnownRepos?: (deps: { discover: (botId: string) => Promise<string[]> }) => { get(botId: string): string[]; refresh(botId: string): Promise<void> };
+    remoteRepo?: (url: string) => string | undefined;
+    createKnownRepos?: (deps: { discover: (botId: string) => Promise<string[]>; saved: (botId: string) => readonly string[]; save: (botId: string, repos: string[]) => void }) => { get(botId: string): string[]; refresh(botId: string): Promise<void> };
   };
 
   it("reads repos from PR links, owner/repo#n refs and git remotes", () => {
-    expect(mod.reposIn?.([
-      "https://github.com/AiEdwardYi/Wink/pull/2138",
-      "AiEdwardYi/orbit-releases#12 merged",
-      "git@github.com:aiedwardyi/quorum.git",
-      "https://github.com/aiedwardyi/wink.git",
-      "PR 2140",
-    ])).toEqual(["aiedwardyi/wink", "aiedwardyi/orbit-releases", "aiedwardyi/quorum"]);
+    expect(mod.reposIn?.(["https://github.com/AiEdwardYi/Wink/pull/2138", "AiEdwardYi/orbit-releases#12 merged", "PR 2140"])).toEqual(["aiedwardyi/wink", "aiedwardyi/orbit-releases"]);
+    expect(["git@github.com:aiedwardyi/quorum.git\n", "https://github.com/AiEdwardYi/Wink.git\n", "https://gitlab.com/o/r.git"].map((url) => mod.remoteRepo?.(url))).toEqual(["aiedwardyi/quorum", "aiedwardyi/wink", undefined]);
   });
 
   it("answers take() from a cache filled after a reply settles", async () => {
     let calls = 0;
-    const known = mod.createKnownRepos?.({ discover: async () => { calls++; return ["aiedwardyi/wink"]; } });
+    const saved = new Map<string, string[]>();
+    const known = mod.createKnownRepos?.({ discover: async () => { calls++; return ["aiedwardyi/wink"]; }, saved: (botId) => saved.get(botId) ?? [], save: (botId, repos) => saved.set(botId, repos) });
     expect(known?.get("bot")).toEqual([]);
     expect(calls).toBe(0);
     await known?.refresh("bot");
     expect(known?.get("bot")).toEqual(["aiedwardyi/wink"]);
     known?.get("bot");
     expect(calls).toBe(1);
+  });
+
+  it("reads no repo from a plain github.com link a report cites", () => {
+    expect(mod.reposIn?.(["LENS-VOICE: followed https://github.com/meta/meta-wearables-webapp/blob/main/AGENTS.md", "see github.com/o/r"])).toEqual([]);
+  });
+
+  it("learns repos into the bot record, reading pane remotes apart from report text, and keeps them off the wire", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    expect(source).toContain("createKnownRepos({ saved: (botId) => store.bot(botId)?.knownRepos ?? [], save: (botId, repos) => store.rememberRepos(botId, repos),");
+    expect(source).toContain("...reports]), ...remotes.flatMap((url) => remoteRepo(url) ?? [])];");
+    expect(source).toContain("    knownRepos: _knownRepos,\n");
+  });
+
+  describe("a bare PR from a bot folder that is not a repo", () => {
+    const META = "meta/meta-wearables-webapp";
+    const WINK = "aiedwardyi/wink";
+    function bot(found: string[][], saved: Map<string, string[]>) {
+      const known = mod.createKnownRepos!({ discover: async () => found.shift() ?? [], saved: (botId) => saved.get(botId) ?? [], save: (botId, repos) => saved.set(botId, repos) });
+      const prs = createAskPrs({
+        repoDir: () => "C:/Users/me/Desktop",
+        repos: known.get,
+        gh: async (_cwd, args) => {
+          if (args[1] === "view" && !args.includes("--repo")) throw new Error("failed to run git: fatal: not a git repository (or any of the parent directories): .git");
+          if (`${args[args.indexOf("--repo") + 1]}|${args[2]}` !== `${WINK}|2161`) throw new Error("GraphQL: Could not resolve to a PullRequest with the number of 2161. (repository.pullRequest)");
+          return JSON.stringify({ state: "MERGED" });
+        },
+      });
+      return { known, prs };
+    }
+    const asks = [ask(1057, { ref: "PR 2161 merged 8e3752db8" })];
+    const check = async ({ prs }: ReturnType<typeof bot>) => {
+      prs.take("bot", "thread", asks);
+      await prs.settled();
+      prs.take("bot", "thread", asks);
+      await prs.settled();
+      return { taken: prs.take("bot", "thread", asks), failed: prs.failedNote("bot", "thread", asks, true) };
+    };
+
+    it("keeps a repo a pane remote taught it after a refresh that found less", async () => {
+      const saved = new Map<string, string[]>();
+      const live = bot([[META, WINK], [META]], saved);
+      await live.known.refresh("bot");
+      await live.known.refresh("bot");
+      expect(await check(live)).toEqual({ taken: ["A1057"], failed: "" });
+    });
+
+    it("keeps that repo across a restart with no panes open", async () => {
+      const saved = new Map<string, string[]>();
+      await bot([[WINK]], saved).known.refresh("bot");
+      const restarted = bot([[]], saved);
+      await restarted.known.refresh("bot");
+      expect(await check(restarted)).toEqual({ taken: ["A1057"], failed: "" });
+    });
   });
 });
 
