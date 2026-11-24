@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 
-import { buildInstallScript, openBlankTerminal, openSignInTerminal } from "./terminal-launch.mjs";
+import { buildInstallScript, openBlankTerminal, openInstallTerminal, openSignInTerminal } from "./terminal-launch.mjs";
 
 describe("install PATH refresh", () => {
   it("merges registry paths with the inherited session PATH before checking npm", () => {
@@ -49,6 +49,18 @@ describe("blank terminal launcher", () => {
     const fake = launcher(["spawn"]);
     expect(await openSignInTerminal({ driverKind: "antigravityAgent", command: "agy" }, "darwin", fake.run)).toBe(true);
     expect(fake.calls[0].args.join(" ")).toContain('do script "AGY_CLI_DISABLE_AUTO_UPDATE=true agy"');
+  });
+
+  it.each([
+    ["sign-in", (run) => openSignInTerminal({ driverKind: "antigravityAgent", command: "agy" }, "darwin", run)],
+    ["install", (run) => openInstallTerminal({ command: "curl -fsSL https://antigravity.google/install.sh | bash", signInCommand: "agy", driverKind: "antigravityAgent" }, "darwin", run)],
+  ])("opens the macOS %s Terminal big enough for agy's code box", async (_, open) => {
+    const fake = launcher(["spawn"]);
+    expect(await open(fake.run)).toBe(true);
+    const script = fake.calls[0].args.filter((_, index) => index % 2).join("\n");
+    const size = (what) => Number(script.match(new RegExp(`set number of ${what} of (\\w+) to (\\d+)`))?.[2] ?? 0);
+    expect(script).toMatch(/set (\w+) to do script "[^\n]*agy/);
+    expect([size("columns") >= 100, size("rows") >= 34]).toEqual([true, true]);
   });
 
   it("keeps unsupported Linux sign-in on the copy path", async () => {

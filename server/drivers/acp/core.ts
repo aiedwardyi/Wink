@@ -122,7 +122,7 @@ import type {
   PrepareTurn,
   ProviderErrorCode,
 } from "../../contracts.ts";
-import { newEventId, newId } from "../../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../../contracts.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
 
@@ -1491,7 +1491,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           const gated = support.wslProbeWrapper !== undefined && !wslProbeAllowed();
           const probed = await resolveCli(env);
           if (!probed && gated) return lastSnapshot ?? { state: "unavailable", reason: wslBlockedReason(support.displayName) };
-          if (!probed) return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
+          if (!probed) return cliNotFound(effectiveCli());
           const authenticated = await support.isAuthenticated(env, config);
           lastCapture = authenticated ? capture() : null;
           if (input.account) admitted = authenticated === true;

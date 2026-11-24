@@ -1248,29 +1248,29 @@ describe("Usage desk", () => {
     expect(mainPosts()).toEqual([]);
   });
 
-  it("folds an engine with no ready account by default, sums it up with its Main's state, and a stored fold wins", async () => {
+  it("opens every engine by default, signed in or not, sums up a folded one with its Main's state, and a stored fold wins", async () => {
     engineOf(server.board, "codex").mainId = CODEX_2;
     accountOf(server.board, "codex").signIn = "signed-out";
     accountOf(server.board, CODEX_2).signIn = "draining";
     accountOf(server.board, "grok").signIn = "signing-in";
     const expanded = () => ["claude", "codex", "grok", "gemini"].map((engine) => fold(engine)?.getAttribute("aria-expanded"));
     await mount();
-    expect(expanded()).toEqual(["true", "false", "false", "true"]);
-    expect(["claude", "codex", "grok", "gemini"].map((engine) => summary(engine))).toEqual(["", "Finishing work", "Signing in", ""]);
-    expect([row("codex"), row(CODEX_2), row("grok")]).toEqual([null, null, null]);
-    expect(localStorage.getItem(FOLDS)).toBeNull();
-    await reload();
-    localStorage.setItem(FOLDS, JSON.stringify({ claude: true, codex: false }));
-    await mount();
-    expect(expanded()).toEqual(["false", "true", "false", "true"]);
-    expect(summary()).toBe("5h 34% left · 7d 59% left");
+    expect(expanded()).toEqual(["true", "true", "true", "true"]);
     expect(visible("codex")).toEqual(["codex", CODEX_2]);
     expect(text(row(CODEX_2)?.querySelector("[data-row-status]"))).toBe("Finishing work");
+    expect(row("grok")).not.toBeNull();
+    expect(localStorage.getItem(FOLDS)).toBeNull();
+    await reload();
+    localStorage.setItem(FOLDS, JSON.stringify({ claude: true, codex: true, grok: true }));
+    await mount();
+    expect(expanded()).toEqual(["false", "false", "false", "true"]);
+    expect(["claude", "codex", "grok", "gemini"].map((engine) => summary(engine))).toEqual(["5h 34% left · 7d 59% left", "Finishing work", "Signing in", ""]);
+    expect([row("codex"), row(CODEX_2), row("grok")]).toEqual([null, null, null]);
     for (const bad of ["{", JSON.stringify({ claude: "yes", codex: false })]) {
       await reload();
       localStorage.setItem(FOLDS, bad);
       await mount();
-      expect(expanded(), bad).toEqual(["true", "false", "false", "true"]);
+      expect(expanded(), bad).toEqual(["true", "true", "true", "true"]);
     }
   });
 

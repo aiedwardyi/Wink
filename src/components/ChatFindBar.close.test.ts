@@ -8,15 +8,19 @@ interface Page {
   more: boolean;
 }
 
-const mock = vi.hoisted(() => ({ landed: new Array<string>(), pages: new Array<(body: Page) => void>() }));
+const mock = vi.hoisted(() => ({ landed: new Array<string>(), pages: new Array<(body: Page) => void>(), dispatch: () => {} }));
 
-const hit = (messageId: string) => ({ threadId: "t", messageId, at: 1, role: "bot", kind: "text", snippet: "q", matchStart: 0, matchLength: 1, matches: 1 });
+const hit = (messageId: string) => ({ threadId: "t", messageId, at: 1, row: 1, role: "bot", kind: "text", snippet: "q", matchStart: 0, matchLength: 1, matches: 1 });
 const page = Array.from({ length: 100 }, (_, i) => hit(`m${i}`));
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- the bar talks to the API and the store; this test releases one page by hand.
 vi.mock("@/state/store", () => ({
-  useStore: () => ({ state: {}, dispatch: () => {} }),
-  api: (path: string) => (path.includes("&before=") ? new Promise<Page>((resolve) => { mock.pages.push(resolve); }) : Promise.resolve({ hits: page, more: true })),
+  // the store's dispatch is stable, as useReducer's is
+  useStore: () => ({ state: {}, dispatch: mock.dispatch }),
+  // the newest hit, then the first page again from just past it; any later page waits for the test
+  api: (path: string) => (path.includes("&before=m0&") ? Promise.resolve({ hits: page, more: true })
+    : path.includes("&before=") ? new Promise<Page>((resolve) => { mock.pages.push(resolve); })
+      : Promise.resolve({ hits: page.slice(0, 1), more: true })),
 }));
 // oxlint-disable-next-line anti-slop/no-module-mocking -- landing scrolls the real transcript; only the call is recorded.
 vi.mock("@/lib/focus-message", () => ({

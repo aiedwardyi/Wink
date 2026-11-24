@@ -228,6 +228,12 @@ describe("ProviderRegistry", () => {
     } finally { await registry.disposeAll(); }
   });
 
+  it.each(["darwin", "linux"] as const)("installs every built-in engine on a fresh %s without Node", (platform) => {
+    for (const driver of BUILT_IN_DRIVERS) {
+      expect(driver.install?.command?.[platform] ?? "", `${driver.driverKind}: a fresh Mac has no Node; use the engine's native installer`).not.toMatch(/(?:^|[\s;&|(])(?:npm|npx|node|pnpm|yarn)(?:\s|$)/);
+    }
+  });
+
   it("has no install when the platform has no driver command", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([{ ...fake.driver, install: { command: {} } }]);
@@ -647,9 +653,12 @@ describe("ProviderRegistry", () => {
     expect(cancel).toHaveBeenCalledWith("a");
     expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object), [], { scope: "fake", account: undefined });
     expect(await registry.startSignIn("a")).toBeNull();
-    expect(await registry.signOut("a")).toBe(false);
+    // A second press while the first runs (another client, a reload, a retry) waits for it and gets its answer.
+    const again = registry.signOut("a");
     finish();
     expect(await logout).toBe(true);
+    expect(await again).toBe(true);
+    expect(start).toHaveBeenCalledTimes(1);
     expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
     expect(await registry.signOut("missing")).toBeNull();
     await registry.disposeAll();

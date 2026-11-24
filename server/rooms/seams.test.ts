@@ -65,7 +65,7 @@ describe("team rooms on the phone", () => {
     const phone = { res: { write: vi.fn() }, screens: true };
     const desktop = { res: { write: vi.fn() }, screens: true };
     const write = load("writeBroadcastFrame", {
-      lastSeq: 0, STREAM_ID: "s", REPLAY_MAX: 500, replayBuffer, sseClients: new Set([phone, desktop]), wants,
+      lastSeq: 0, STREAM_ID: "s", REPLAY_MAX: 1000, replayBuffer, replayFloor: 0, replaySlot: load("replaySlot", { replayBuffer, STREAM_ID: "s" }), sseClients: new Set([phone, desktop]), wants,
       maskRuntimePayload: (p: unknown) => p, redactSecrets: (p: unknown) => p, store,
     });
     write({ kind: "message", threadId: hosted.threadId, message: { text: "room line" } });

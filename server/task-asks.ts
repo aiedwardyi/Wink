@@ -9,7 +9,7 @@ export const MAX_STATUS_ASKS_BYTES = 128 * 1024;
 export const ASKS_LIST = "[Wink asks list";
 
 export const TASK_ASKS_PROMPT =
-  "Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet. Close it as done or declined as soon as it settles; never drop one. Keep three lists for asks and work only: the plan is the to-do for now, asks marked building are the sprint, and the asks list holds every open ask; never start a separate list file, and keep your other records. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them. Wink lists every open ask each time and merges a repeat into the ask it matches. Park an ask with until when it waits on a date. An ask with no ref and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.";
+  "Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet. Close it as done or declined as soon as it settles; never drop one. Keep three lists for asks and work only: the plan is the to-do for now, asks marked building are the sprint, and the asks list holds every open ask; never start a separate list file, and keep your other records. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them. Wink lists every open ask in a fresh session and on a status question, otherwise the asks the user's words name, and merges a repeat into the ask it matches. Park an ask with until when it waits on a date. An ask with no ref and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.";
 
 export const taskAskSchema = z.object({
   id: z.string().regex(/^A\d{1,6}$/),
@@ -88,7 +88,7 @@ export function mergeTaskAsks(
     const text = update.ask?.trim() ?? "";
     const target = id
       ? asks.find((ask) => ask.id === id)
-      : text ? asks.find((ask) => isOpenAsk(ask) && !isParked(ask, now) && words(ask.ask) === words(text)) : undefined;
+      : text ? asks.find((ask) => isOpenAsk(ask) && words(ask.ask) === words(text)) : undefined;
     if (id && !target) {
       return { error: `Unknown ask id ${id}. Open asks: ${asks.filter(isOpenAsk).map((ask) => ask.id).join(", ") || "none"}.` };
     }
@@ -152,51 +152,112 @@ function day(at: number): string {
   return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-/** Open asks, needing a verdict first and then oldest, all of them; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
+const askLine = (ask: TaskAsk, now: number) => isParked(ask, now)
+  ? `- ${ask.id} parked back ${day(ask.until!)}: ${ask.ask}`
+  : `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+
+/** Open asks, needing a verdict first and then oldest, then parked ones by return day; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
 function listed(asks: readonly TaskAsk[] | undefined, now: number) {
   const open = (asks ?? []).filter((ask) => isOpenAsk(ask) && !isParked(ask, now));
+  const parked = (asks ?? []).filter((ask) => isParked(ask, now)).sort((left, right) => left.until! - right.until!);
   const byAge = (left: TaskAsk, right: TaskAsk) => left.at - right.at;
   const due = open.filter((ask) => needsVerdict(ask, now)).sort(byAge);
   const rest = open.filter((ask) => !needsVerdict(ask, now)).sort(byAge);
   const ordered = [...due, ...rest.filter((ask) => !isQuestion(ask)), ...rest.filter(isQuestion)];
-  const line = (ask: TaskAsk) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  const line = (ask: TaskAsk) => askLine(ask, now);
   const bytes = (ask: TaskAsk) => Buffer.byteLength(line(ask), "utf8") + 1;
-  if (ordered.reduce((sum, ask) => sum + bytes(ask), 0) <= MAX_STATUS_ASKS_BYTES) return { ordered, due, shown: ordered, line };
+  const all = [...ordered, ...parked];
+  if (all.reduce((sum, ask) => sum + bytes(ask), 0) <= MAX_STATUS_ASKS_BYTES) return { ordered, parked, due, shown: all, line };
   const picked = new Set<TaskAsk>();
   let used = 0;
-  for (const ask of ordered.toSorted((left, right) => (left.shown ?? 0) - (right.shown ?? 0))) {
+  for (const ask of all.toSorted((left, right) => (left.shown ?? 0) - (right.shown ?? 0))) {
     if ((used += bytes(ask)) > MAX_STATUS_ASKS_BYTES) break;
     picked.add(ask);
   }
-  return { ordered, due, shown: ordered.filter((ask) => picked.has(ask)), line };
+  return { ordered, parked, due, shown: all.filter((ask) => picked.has(ask)), line };
 }
 
-/** The ids a list past MAX_STATUS_ASKS_BYTES shows, to stamp shown on; null when every open ask fits. */
+/** The ids a list past MAX_STATUS_ASKS_BYTES shows, to stamp shown on; null when every open and parked ask fits. */
 export function rotatedAsks(asks: readonly TaskAsk[] | undefined, now: number): string[] | null {
-  const { ordered, shown } = listed(asks, now);
-  return shown.length < ordered.length ? shown.map((ask) => ask.id) : null;
+  const { ordered, parked, shown } = listed(asks, now);
+  return shown.length < ordered.length + parked.length ? shown.map((ask) => ask.id) : null;
 }
 
-/** Every open ask but the parked ones, which count in one line. Empty when none is open. */
-export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false): string {
-  const parked = (asks ?? []).filter((ask) => isParked(ask, now));
-  const { ordered, due, shown, line } = listed(asks, now);
+/** Every open ask, then each parked one with the day it comes back, or with verdictOnly just the asks needing a verdict. Empty when none is open. */
+export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false, verdictOnly = false): string {
+  const { ordered, parked, due, shown: listShown, line } = listed(asks, now);
   if (!ordered.length && !parked.length) return "";
+  const shown = verdictOnly ? listed(due, now).shown : listShown;
   const them = due.length === 1 ? "it" : "them";
   const flagged = due.length ? `, ${due.length} need${due.length === 1 ? "s" : ""} a verdict: no ref and no change in 3+ days, so build, park or close ${them} yourself, and ask the user about at most 3 at a time` : "";
-  const waiting = ordered.length - shown.length;
-  const rotated = waiting ? ` ${waiting} more wait for the next turn, least recently shown first.` : "";
+  const waiting = ordered.length + parked.length - shown.length;
+  const rotated = !waiting ? "" : verdictOnly ? ` ${waiting} more show on a status question.` : ` ${waiting} more wait for the next turn, least recently shown first.`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
-  const back = Math.min(...parked.map((ask) => ask.until!));
   return [
     `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
     ...shown.map(line),
-    ...(parked.length ? [`${parked.length} parked, next back ${day(back)}`] : []),
   ].join("\n");
 }
 
-/** For a turn the record does not ride: every open ask on a status turn, otherwise only once one needs a verdict. */
-export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, text: string): string {
-  if (isStatusTurn(text)) return asksBlock(asks, now, true);
-  return (asks ?? []).some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now) : "";
+const SKIPPED_TERMS = new Set("about again also asked being change could does doing done from have into just like list make more need next please really should still that them then there they thing things this want what when where which will with would your".split(" "));
+const terms = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+  .filter((word) => word.length >= (/^[a-z0-9]+$/.test(word) ? 4 : 2) && !SKIPPED_TERMS.has(word))
+  .map((word) => word.replace(/(?<=[a-z]{3})s$/, "")));
+
+const NAMED_MAX = 3;
+// about 100 tokens at three bytes a token
+const NAMED_BYTES = 300;
+
+/** The user's open or parked asks sharing 2+ uncommon words with the message, or its only word, most shared first; a word more than NAMED_MAX asks hold is common. */
+function named(asks: readonly TaskAsk[], text: string): TaskAsk[] {
+  const said = terms(text);
+  const pool = asks.filter((ask) => isOpenAsk(ask) && !isQuestion(ask)).map((ask) => ({ ask, terms: [...terms(ask.ask)] }));
+  const held = new Map<string, number>();
+  for (const { terms } of pool) for (const term of terms) held.set(term, (held.get(term) ?? 0) + 1);
+  const need = Math.min(2, said.size);
+  return pool
+    .map(({ ask, terms }) => ({ ask, shared: terms.filter((term) => said.has(term) && held.get(term)! <= NAMED_MAX).length }))
+    .filter(({ shared }) => need && shared >= need)
+    .sort((left, right) => right.shared - left.shared)
+    .map(({ ask }) => ask);
+}
+
+// another chat's ids mean nothing here, so its asks show without them
+function elsewhereBlock(asks: readonly TaskAsk[], now: number): string {
+  if (!asks.length) return "";
+  const shown = asks.slice(0, ASK_LIMITS.kept);
+  const more = asks.length - shown.length;
+  return [
+    `[Wink asks from the user's other chats with you - ${asks.length}; update them in that chat.${more ? ` ${more} more not shown.` : ""}]`,
+    ...shown.map((ask) => askLine(ask, now).replace(/^- A\d+ /, "- ")),
+  ].join("\n");
+}
+
+/** For a turn the record does not ride: every open ask on a status turn, the asks needing a verdict on any other, and up to NAMED_MAX asks the message names in NAMED_BYTES; asks from the bot's other chats ride the same way. */
+export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, text: string, elsewhere: readonly TaskAsk[] = []): string {
+  const status = isStatusTurn(text);
+  const own = asks ?? [];
+  if (status) return [asksBlock(asks, now, true), elsewhereBlock(elsewhere.filter(isOpenAsk), now)].filter(Boolean).join("\n");
+  const block = own.some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now, false, true) : "";
+  const mine = new Set(own.filter((ask) => !needsVerdict(ask, now)));
+  const render = (picked: readonly TaskAsk[]) => {
+    const hits = picked.filter((ask) => mine.has(ask));
+    return [
+      hits.length ? [`[Wink asks the user's message names - ${hits.length} of ${own.filter(isOpenAsk).length} open; a status question lists them all.]`, ...hits.map((ask) => askLine(ask, now))].join("\n") : "",
+      elsewhereBlock(picked.filter((ask) => !mine.has(ask)), now),
+    ].filter(Boolean).join("\n");
+  };
+  let picked: TaskAsk[] = [];
+  let hits = "";
+  for (const ask of named([...mine, ...elsewhere], text)) {
+    if (picked.length === NAMED_MAX) break;
+    const next = render([...picked, ask]);
+    if (Buffer.byteLength(next, "utf8") <= NAMED_BYTES) [picked, hits] = [[...picked, ask], next];
+    // the best match alone past the budget is clipped, never dropped
+    else if (!picked.length) {
+      hits = `${Buffer.from(next, "utf8").subarray(0, NAMED_BYTES - 3).toString("utf8").replace(/\uFFFD+$/u, "")}…`;
+      break;
+    }
+  }
+  return [block, hits].filter(Boolean).join("\n");
 }

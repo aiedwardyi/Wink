@@ -1,9 +1,11 @@
-// A short room code typed as six boxes, like a sign-up verify code.
+// A short room code typed as eight boxes, like a sign-up verify code.
 import { useEffect, useRef } from "react";
 
-export const SHORT_CODE_LENGTH = 6;
+export const SHORT_CODE_LENGTH = 8;
+/** Codes minted before 8 characters still work until they expire: a paste or Enter sends one. */
+const OLD_LENGTH = 6;
 const KEEP = /[^2-9A-HJ-NP-Z]/g;
-const PASTED = /^[2-9A-HJ-NP-Z]{1,6}$/;
+const PASTED = /^[2-9A-HJ-NP-Z]{1,8}$/;
 
 // With Korean input on, letters arrive as Hangul; NFKD turns IME jamo and syllables into conjoining jamo, keyed here by 2-set layout.
 const HANGUL_KEYS: Array<[number, string[]]> = [
@@ -19,7 +21,7 @@ const keyOf = (ch: string) => {
 
 export const shortCodeChars = (text: string) => [...text.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(KEEP, "");
 
-export const BOX = "size-11 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold text-ink";
+export const BOX = "h-11 min-w-0 flex-1 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold text-ink";
 
 export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }: {
   value: string;
@@ -40,15 +42,15 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
     want.current = null;
   });
 
-  const put = (from: number, chars: string, keep = false) => {
+  const put = (from: number, chars: string, keep = false, pasted = false) => {
     const next = (value.slice(0, from) + chars + (keep ? value.slice(from + chars.length) : "")).slice(0, SHORT_CODE_LENGTH);
     onChange(next);
     focus(from + chars.length);
-    if (next.length === SHORT_CODE_LENGTH && !next.includes(" ")) onDone(next);
+    if ((next.length === SHORT_CODE_LENGTH || (pasted && next.length === OLD_LENGTH)) && !next.includes(" ")) onDone(next);
   };
 
   return (
-    <div role="group" aria-label={label} className="flex justify-between gap-2">
+    <div role="group" aria-label={label} className="flex justify-between gap-1.5">
       {Array.from({ length: SHORT_CODE_LENGTH }, (_, i) => (
         <input
           key={i}
@@ -75,10 +77,11 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
             e.preventDefault();
             const text = e.clipboardData.getData("text/plain").trim();
             const chars = text.toUpperCase().replace(/[\s-]/g, "");
-            if (PASTED.test(chars)) put(0, chars);
+            if (PASTED.test(chars)) put(0, chars, false, true);
             else onOther(text);
           }}
           onKeyDown={(e) => {
+            if (e.key === "Enter" && value.length === OLD_LENGTH && !value.includes(" ")) return onDone(value);
             if (e.key !== "Backspace") return;
             e.preventDefault();
             const at = value[i]?.trim() ? i : i - 1;

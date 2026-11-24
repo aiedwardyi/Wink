@@ -553,7 +553,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     };
     const locked = { sandbox: "read-only", approvalPolicy: "untrusted", approvalsReviewer: "user" };
     expect(await policyOf("thread/start")).toEqual(locked);
-    expect(await policyOf("thread/resume", "codex-thread-9")).toEqual(locked);
+    expect(await policyOf("thread/resume", "codex-thread-1")).toEqual(locked);
     expect(instance.adapter.access!({ approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
   });
 
@@ -836,6 +836,44 @@ describe("CodexDriver turns (fake app-server)", () => {
     await instance.dispose();
     // no app-server outlives its instance: the stale one died at the first respawn, the idle one on dispose
     await Promise.all([warm, last].map((child) => (child.exitCode !== null || child.signalCode !== null ? undefined : once(child, "close"))));
+  });
+
+  it("never hands a reader turn the warm app-server a full-access turn left on the thread", async () => {
+    await create({ mode: "resume", fullAuto: true });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const dump = join(scratch, "reader-warm.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const turn = async (extra: Partial<SendTurnInput> = {}) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-reader-warm", text: "hi", ...extra });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+    expect(await turn()).toMatchObject({ ok: true });
+    expect(await turn({ resumeCursor: "codex-thread-1", readOnly: true })).toMatchObject({ ok: true });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(sentCalls(dump).map((call) => call.method)).toEqual(["initialize", "initialized", "config/read", "thread/start", "turn/start"]);
+  });
+
+  it("starts a fresh thread when the turn's access differs from the thread's, so a guest never keeps the owner's helper tools", async () => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "access-change.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    let n = 0;
+    // a new Wink thread each turn, so no warm app-server carries a thread over
+    const turn = async (extra: Partial<SendTurnInput> = {}) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: `t-access-${n++}`, text: "go", resumeFallback: { text: "history\n\ngo" }, ...extra });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      const calls = sentCalls(dump);
+      return { methods: calls.map((call) => call.method).filter((method) => method.startsWith("thread/")), input: calls.find((call) => call.method === "turn/start")?.params.input };
+    };
+    const guest = { readOnly: true as const, approval: "ask" as const };
+    const fresh = { methods: ["thread/start"], input: [{ type: "text", text: "history\n\ngo" }] };
+    // a cursor from before a restart may be an owner's thread
+    expect(await turn({ resumeCursor: "codex-thread-9", ...guest })).toEqual(fresh);
+    expect(await turn({ resumeCursor: "codex-thread-1", ...guest })).toEqual({ methods: ["thread/resume"], input: [{ type: "text", text: "go" }] });
+    // the owner gets a thread with its own tools back
+    expect(await turn({ resumeCursor: "codex-thread-1" })).toEqual(fresh);
+    expect(await turn({ resumeCursor: "codex-thread-1", ...guest })).toEqual(fresh);
+    expect(await turn({ resumeCursor: "codex-thread-9" })).toMatchObject({ methods: ["thread/resume"] });
   });
 
   it("ends a warm app-server on Stop, so the next turn spawns again", async () => {

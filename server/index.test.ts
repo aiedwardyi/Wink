@@ -1319,7 +1319,6 @@ describe("harness HTTP API", () => {
 
   it("stores a room reply as a flat reference and rejects foreign targets", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
-    const foreign = (await api("POST", "/api/bots")).body.bot;
     const room = (await api("POST", "/api/groups", { name: "Reply room", memberIds: [bot.id] })).body.group;
     try {
       await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" });
@@ -1339,12 +1338,11 @@ describe("harness HTTP API", () => {
       expect(current.messages.at(-1)).toMatchObject({ text: "Following up", replyToId: original.id });
       expect((await api("POST", `/api/groups/${room.id}/messages`, {
         text: "Wrong conversation",
-        replyToId: foreign.messages[0].id,
+        replyToId: "cancel-card",
       })).status).toBe(404);
     } finally {
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${bot.id}`);
-      await api("DELETE", `/api/bots/${foreign.id}`);
     }
   });
 
@@ -3237,15 +3235,6 @@ describe("harness HTTP API", () => {
     await api("DELETE", `/api/bots/${bot.id}`);
   });
 
-  it("persists an answered onboarding card", async () => {
-    const { body } = await api("GET", "/api/bots");
-    const bot = body.bots[0];
-    const card = bot.messages.find((m: { kind: string }) => m.kind === "options");
-    const res = await api("PATCH", `/api/bots/${bot.id}/cards/${card.id}`, { answered: card.card.options[0] });
-    expect(res.status).toBe(200);
-    expect(res.body.message.card.answered).toBe(card.card.options[0]);
-  });
-
   it("validates approval decisions and reports a request that is no longer open", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
@@ -3321,27 +3310,29 @@ describe("harness HTTP API", () => {
     const send = await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello?" });
     expect(send.status).toBe(409);
     expect(send.body.error).toContain("unavailable");
-    // a failed send never landed a user message, so the first-run quiz stays
+    // a failed send never landed a user message
     const afterFail = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
-    expect(afterFail.messages.find((m: { kind: string }) => m.kind === "options")?.card.dismissed).toBeFalsy();
+    expect(afterFail.messages.some((m: { role: string }) => m.role === "user")).toBe(false);
   });
 
   it("refuses to fork a message when the provider is unavailable, without mutating", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     const before = bot.messages.length;
 
-    // the first-run quiz is a bot card — not an editable user message
-    const quiz = bot.messages.find((m: { kind: string }) => m.kind === "options");
-    expect((await api("POST", `/api/bots/${bot.id}/messages/${quiz.id}/edit`, { text: "x" })).status).toBe(404);
-    expect((await api("POST", `/api/bots/${bot.id}/messages/${quiz.id}/edit`, { text: "  " })).status).toBe(400);
+    expect((await api("POST", `/api/bots/${bot.id}/messages/nope/edit`, { text: "x" })).status).toBe(404);
+    expect((await api("POST", `/api/bots/${bot.id}/messages/nope/edit`, { text: "  " })).status).toBe(400);
 
     const after = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
     expect(after.messages.length).toBe(before);
   });
 
   it("switches the active branch and reports the new leaf", async () => {
-    const { body } = await api("GET", "/api/bots");
-    const bot = body.bots[0];
+    const created = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "claudeHappy", model: "claude-fake" } });
+    expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "hello" })).status).toBe(202);
+    const settled = async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === created.id);
+    await expect.poll(async () => { const b = await settled(); return !b.busy && b.messages.length >= 2; }, { timeout: 15_000 }).toBe(true);
+    const bot = await settled();
     expect(bot.activeLeafId).toBe(bot.messages.at(-1).id);
 
     // pointing at the first message descends back to the newest leaf on
@@ -4735,7 +4726,7 @@ describe("resumable event stream", () => {
     }
   });
 
-  it("replays exactly what a disconnected client missed", async () => {
+  it("replays what a disconnected client missed, in order", async () => {
     const { body } = await api("GET", "/api/bots");
     const botId = body.bots[0].id;
 
@@ -4758,16 +4749,14 @@ describe("resumable event stream", () => {
       // ...and an old cursor still replays them, in order, without a hydrate
       const back = await resumed.until((f) => f.kind === "hello");
       expect(back.resumed).toBe(true);
-      // This file shares one server. Leftover runtime traffic can occupy
-      // sequence numbers between nudges, so the missed bot frames are not
-      // always seen.seq+1..+3. Wait for the three nudges themselves.
-      await resumed.until(
-        () => resumed.frames.filter((f) => f.kind === "bot" && f.bot?.id === botId && f.seq > seen.seq).length >= 3,
-      );
+      // A bot frame carries the whole bot, so the ring keeps only the newest
+      // of the three nudges. This file shares one server, so other numbered
+      // frames can sit between them.
+      await resumed.until((f) => f.kind === "bot" && f.bot?.id === botId && f.seq > seen.seq);
       const replayed = resumed.frames
         .filter((f) => f.kind === "bot" && f.bot?.id === botId)
         .map((f) => f.seq);
-      expect(replayed.length).toBeGreaterThanOrEqual(3);
+      expect(replayed.length).toBeGreaterThanOrEqual(1);
       expect(replayed.every((seq) => seq > seen.seq)).toBe(true);
       expect(replayed).toEqual([...replayed].sort((a, b) => a - b));
     } finally {

@@ -34,12 +34,37 @@ describe("turn setup", () => {
       { token: () => "fixture-token" }, { prompt: () => "" },
     );
     const integrations: Record<string, { env: Record<string, string> }> = {};
-    const run = new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "MAX_COMMS_DEPTH", "agentsIntegration", "searchable", "works", "readOnly", "handoff", "importMemory", mounts[index]!.getText(source));
-    run(integrations, { adapter: { capabilities: { agentsMcp: capable } } }, { id: "peer" }, "peer-thread", depth, depth, 1, agentsIntegration, false, true, false, null, { tool: false });
+    const run = new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "MAX_COMMS_DEPTH", "agentsIntegration", "searchable", "works", "readOnly", "handoff", "importMemory", "opts", "guestReadOnly", mounts[index]!.getText(source));
+    run(integrations, { adapter: { capabilities: { agentsMcp: capable } } }, { id: "peer" }, "peer-thread", depth, depth, 1, agentsIntegration, false, true, false, null, { tool: false }, {}, false);
     if (capable) expect(integrations.agents?.env).toMatchObject({
       OMB_BOT_ID: "peer", OMB_THREAD_ID: "peer-thread", OMB_COMMS_TOKEN: "fixture-token", OMB_TURN_DEPTH: String(depth),
     });
     else expect(integrations.agents).toBeUndefined();
+  });
+
+  it.each([
+    ["the owner", false, false, true, false],
+    ["a teammate who works, on an Auto bot", true, true, true, false],
+    ["a teammate who works, on an Ask bot", true, false, true, true],
+    ["a teammate who can't make bots work", true, true, false, true],
+  ] as const)("mounts the room's Wink tools read-only exactly when the turn is read-only for %s", (_, guestAsked, autoApprove, works, readOnly) => {
+    const room = nodes(ts.isIfStatement).filter((node) => node.thenStatement.getText(source).includes("integrations.agents = agentsIntegration("))[1]!;
+    const guest = nodes(ts.isVariableDeclaration).find((node) => node.name.getText(source) === "guestReadOnly")!;
+    const integrations: Record<string, { env: Record<string, string> }> = {};
+    const agentsIntegration = (...args: unknown[]) => ({ env: args[4] ? { OMB_READ_ONLY_TURN: "1" } : {} });
+    new Function("integrations", "instance", "bot", "threadId", "hop", "agentsIntegration", "searchable", "works", "handoff", "guestAsked",
+      `const guestReadOnly = ${guest.initializer!.getText(source)}; ${room.getText(source)}`)(
+      integrations, { adapter: { capabilities: { agentsMcp: true } } }, { id: "b", autoApprove }, "t", 0, agentsIntegration, false, works, null, guestAsked);
+    expect(integrations.agents?.env.OMB_READ_ONLY_TURN === "1").toBe(readOnly);
+  });
+
+  it("mounts no agents for web_read's borrowed reader", () => {
+    const mount = nodes(ts.isIfStatement).find((node) => node.thenStatement.getText(source).includes("integrations.agents = agentsIntegration(bot.id, threadId, commsDepth"))!;
+    const integrations: Record<string, unknown> = {};
+    new Function("integrations", "instance", "bot", "threadId", "commsDepth", "readOnly", "importMemory", "agentsIntegration", "opts", mount.getText(source))(
+      integrations, { adapter: { capabilities: { agentsMcp: true } } }, { id: "reader" }, "reader-thread", 1, true, false, () => ({}), { webReader: true },
+    );
+    expect(integrations.agents).toBeUndefined();
   });
 
   it.each([0, 1])("keeps coordination limits with agents mounted on path %s", (index) => {
