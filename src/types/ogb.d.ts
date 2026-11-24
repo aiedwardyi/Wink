@@ -179,6 +179,8 @@ declare global {
       setUnreadCount?(count: number): void;
       /** Windows taskbar progress while any bot turn is running. */
       setTaskbarBusy?(busy: boolean): void;
+      /** Window zoom factor (Ctrl/Cmd +/-); devicePixelRatio is this times the display scale. */
+      zoomFactor?(): number;
       /** Open image preview takes Ctrl/Cmd +/-/0 until it closes. */
       imageZoom?: {
         own(owned: boolean): void;
