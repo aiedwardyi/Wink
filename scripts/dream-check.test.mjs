@@ -273,6 +273,49 @@ describe("dream-check script", () => {
 });
 
 describe("topic night", () => {
+  const worldOf = (bots = ["bot-a", "bot-b"]) => {
+    const world = mkdtempSync(join(testHome(), "topic-"));
+    const [copy, practice, tmp, home] = ["copy", "dream-practice", "tmp", "home"].map((name) => join(world, name));
+    for (const dir of [practice, tmp, home]) mkdirSync(dir, { recursive: true });
+    for (const id of bots) {
+      mkdirSync(join(copy, "workspaces", id), { recursive: true });
+      writeFileSync(join(copy, "workspaces", id, "MEMORY.md"), memory("## Notes", ...Array.from({ length: 130 }, (_, at) => `- Launch detail ${at} for ${id} ${"y".repeat(170)}`)));
+    }
+    writeFileSync(join(copy, "bots.json"), JSON.stringify(bots.map((id) => ({ id }))));
+    const { VITEST: _vitest, ...env } = process.env;
+    const night = (args = [], extra = {}) => spawnSync(process.execPath, ["--experimental-strip-types", SCRIPT, copy, "--topics", "1", "--practice", practice, "--json", join(world, "summary.json"), ...args], {
+      encoding: "utf8",
+      env: { ...env, HOME: home, USERPROFILE: home, TMP: tmp, TEMP: tmp, TMPDIR: tmp, CLAUDE_CONFIG_DIR: join(world, "login"), CLAUDE_CLI: STUB, ...extra },
+    });
+    const topics = () => readdirSync(practice, { recursive: true, encoding: "utf8" }).filter((name) => /topic-[0-9a-f]{8}$/.test(name)).map((name) => name.replaceAll("\\", "/")).sort();
+    return { practice, night, topics };
+  };
+
+  it("leaves no practice topic for a move its quiz undid", () => {
+    const w = worldOf(["bot-a"]);
+    const result = w.night([], { DREAM_STUB_FAIL: "write 3 questions" });
+    expect(result.status).toBe(1);
+    expect(w.topics()).toEqual([]);
+  });
+
+  it("plans no topic a check already finished, and leaves the night's slot to another bot", () => {
+    const w = worldOf();
+    expect(w.night().status).toBe(0);
+    const [first] = w.topics();
+    expect(first).toMatch(/^bot-a\//);
+    writeFileSync(join(w.practice, first, "done"), "");
+    // the same copy gives bot-a the same plan, so the same topic
+    expect(w.night().status).toBe(0);
+    expect(w.topics().map((topic) => topic.split("/")[0])).toEqual(["bot-a", "bot-b"]);
+    expect(readdirSync(join(w.practice, first))).toContain("done");
+  });
+
+  it("plans one topic each night of a --nights run", () => {
+    const w = worldOf();
+    expect(w.night(["--nights", "2"]).status).toBe(0);
+    expect(w.topics().map((topic) => topic.split("/")[0])).toEqual(["bot-a", "bot-b"]);
+  });
+
   it("plans one topic for one bot, writes plan.json, both copies and the history block, and plans no other while it is open", async () => {
     const { movePlanSchema } = await import("../server/memory-file.ts");
     const { parseHistory } = await import("../server/memory-clean.ts");

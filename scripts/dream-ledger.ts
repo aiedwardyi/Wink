@@ -1,6 +1,6 @@
 // One night's model spend in counts: dream-practice\ledger\<date>.json. The week cap adds the six nights before it.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { z } from "zod";
 
 export const NIGHT_CAP = 350_000;
@@ -25,23 +25,30 @@ export const kindsSchema = ledgerSchema.pick({ kinds: true });
 export type LedgerData = z.infer<typeof ledgerSchema>;
 
 const dayBefore = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) - days * 86_400_000).toISOString().slice(0, 10);
-const read = (file: string) => (existsSync(file) ? ledgerSchema.safeParse(JSON.parse(readFileSync(file, "utf8"))) : null);
+// a ledger that fails its schema may still hold real spend: the night stops rather than count it as zero
+const read = (file: string) => {
+  if (!existsSync(file)) return null;
+  const parsed = ledgerSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
+  if (!parsed.success) throw new Error(`ledger ${basename(file)} fails its schema; fix or remove it`);
+  return parsed.data;
+};
+
+/** The night's date when --date is left out: the local day, in both nightly scripts. */
+export const nightDate = (now = new Date()) => `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
 export class Ledger {
   readonly file: string;
   readonly data: LedgerData;
   readonly week: number;
+  private readonly before: { count: number; fresh: number };
 
   constructor(dir: string, date: string) {
     mkdirSync(dir, { recursive: true });
     this.file = join(dir, `${date}.json`);
-    const before = Array.from({ length: 6 }, (_, at) => read(join(dir, `${dayBefore(date, at + 1)}.json`)));
-    const seen = before.flatMap((night) => (night?.success ? [night.data] : []));
-    const today = read(this.file);
-    this.data = today?.success
-      ? today.data
-      : { date, reserve: Math.max(RESERVE_SEED, ...seen.map((night) => night.reserve)), turns: { count: 0, fresh: 0 }, kinds: kindsSchema.parse({ kinds: Object.fromEntries(CALL_KINDS.map((kind) => [kind, { calls: 0, fresh: 0, processed: 0 }])) }).kinds };
+    const seen = Array.from({ length: 6 }, (_, at) => read(join(dir, `${dayBefore(date, at + 1)}.json`))).filter((night) => night !== null);
+    this.data = read(this.file) ?? { date, reserve: Math.max(RESERVE_SEED, ...seen.map((night) => night.reserve)), turns: { count: 0, fresh: 0 }, kinds: kindsSchema.parse({ kinds: Object.fromEntries(CALL_KINDS.map((kind) => [kind, { calls: 0, fresh: 0, processed: 0 }])) }).kinds };
     this.week = seen.reduce((sum, night) => sum + Ledger.fresh(night), 0);
+    this.before = seen.reduce((sum, night) => ({ count: sum.count + night.turns.count, fresh: sum.fresh + night.turns.fresh }), { count: 0, fresh: 0 });
     this.save();
   }
 
@@ -62,9 +69,11 @@ export class Ledger {
     return this.left() >= this.data.reserve;
   }
 
-  /** A pair starts only when its 6 turns can finish tonight: 5 typical turns and the reserve for the last. */
+  /** A pair starts only when its 6 turns look able to finish tonight: 5 mean turns of the week so far and the reserve for the last. An estimate:
+   * a pair cut short is unfinished and starts over from its baseline on a later night, where its dearer turns have raised the mean. */
   pairFits() {
-    const mean = this.data.turns.count ? this.data.turns.fresh / this.data.turns.count : TURN_SEED;
+    const count = this.data.turns.count + this.before.count;
+    const mean = count ? (this.data.turns.fresh + this.before.fresh) / count : TURN_SEED;
     return this.left() >= 5 * mean + this.data.reserve;
   }
 

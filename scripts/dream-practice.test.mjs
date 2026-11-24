@@ -1,18 +1,20 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { sendsValue } from "../server/testing/secret-cases.ts";
 import { testHome } from "../server/testing/test-home.ts";
 import { Ledger, NIGHT_CAP, RESERVE_SEED } from "./dream-ledger.ts";
-import { admitted, afterVerdict, fence, itemPrompt, kitSummarySchema, kitToken, night, prepareArm, sweepPractice } from "./dream-practice.ts";
+import { admitted, afterVerdict, fence, itemPrompt, kitSummarySchema, kitToken, night, prepareArm, sweepPractice, winkEngine } from "./dream-practice.ts";
 
 const KIT = fileURLToPath(new URL("./dream-practice.ts", import.meta.url));
 const CHECK = fileURLToPath(new URL("./dream-check.ts", import.meta.url));
 const STUB = fileURLToPath(new URL("./testing/dream-stub-claude.mjs", import.meta.url));
+const FAKE_WINK = fileURLToPath(new URL("./testing/dream-fake-wink.mjs", import.meta.url));
+const PRELOAD = fileURLToPath(new URL("./dream-engine-env.cjs", import.meta.url));
 const MOVED = ["- The launch runs from the east studio", "- Launch slides live in the team drive"];
 const DAY = 86_400_000;
 
@@ -118,8 +120,21 @@ describe("practice night", () => {
     const ledger = new Ledger(join(practice, "ledger"), "2026-11-24");
     const outcome = await nightIn(practice, engineWith({ cost: () => 40_000 }), { ledger });
     expect(ledger.night.fresh).toBeLessThanOrEqual(NIGHT_CAP);
-    expect([ledger.turnFits() && ledger.pairFits(), ledger.data.reserve]).toEqual([false, RESERVE_SEED]);
+    // a turn would still fit; no pair can finish, so none starts
+    expect([ledger.turnFits(), ledger.pairFits(), ledger.data.reserve]).toEqual([true, false, RESERVE_SEED]);
     expect(outcome.items.some(({ result }) => result === "waiting")).toBe(true);
+  });
+
+  it("starts no grade whose bound is not left after its check, so the night never passes the cap", async () => {
+    const practice = practiceDir();
+    topicIn(practice);
+    const ledger = new Ledger(join(practice, "ledger"), "2026-11-24");
+    let turns = 0;
+    // the twelfth check leaves 1k, less than any grade's prompt and output cap
+    const engine = engineWith({ cost: () => (++turns === 12 ? ledger.left() - 1_000 : 10_000) });
+    const outcome = await nightIn(practice, engine, { ledger });
+    expect(ledger.night.fresh).toBeLessThanOrEqual(NIGHT_CAP);
+    expect([engine.calls.filter(([call]) => call === "grade").length, resultOf(outcome)]).toEqual([11, { blind: "passed", cued: "unfinished" }]);
   });
 
   it("checks a bot's sentinels once, not again for its next topic", async () => {
@@ -181,6 +196,25 @@ describe("ledger", () => {
     expect([night.left(), night.turnFits(), night.night]).toEqual([60_000, false, { fresh: 290_000, processed: 1_000_000 }]);
     for (const day of ["19", "20", "21", "22", "23"]) new Ledger(dir, `2026-11-${day}`).add("check", { fresh: 400_000, processed: 400_000 });
     expect(new Ledger(dir, "2026-11-24").left()).toBe(160_000);
+  });
+
+  it("admits tonight's pairs on the week's mean turn, so a turn dearer than the seed stops a pair that cannot finish", () => {
+    const dir = join(practiceDir(), "ledger");
+    const first = new Ledger(dir, "2026-11-24");
+    expect(first.pairFits()).toBe(true);
+    for (let turn = 0; turn < 5; turn++) first.turn(57_000);
+    // 5 x 57k and the 66k reserve is past 350k
+    expect(new Ledger(dir, "2026-11-25").pairFits()).toBe(false);
+  });
+
+  it("stops on a ledger that fails its schema and leaves it as it was, tonight's or a night before", () => {
+    const dir = join(practiceDir(), "ledger");
+    mkdirSync(dir, { recursive: true });
+    const broken = JSON.stringify({ date: "2026-11-24", kinds: { tidy: { calls: 3, fresh: 290_000, processed: 900_000 } } });
+    writeFileSync(join(dir, "2026-11-24.json"), broken);
+    expect(() => new Ledger(dir, "2026-11-24")).toThrow(/2026-11-24\.json/);
+    expect(readFileSync(join(dir, "2026-11-24.json"), "utf8")).toBe(broken);
+    expect(() => new Ledger(dir, "2026-11-25")).toThrow(/2026-11-24\.json/);
   });
 });
 
@@ -246,15 +280,26 @@ describe("practice folder", () => {
     const [open, done] = [topicIn(practice), topicIn(practice, "bot-a", { name: "topic-1a2b3c4d" })];
     mkdirSync(join(practice, "bot-a", "sentinels"), { recursive: true });
     mkdirSync(join(practice, "bot-a", "check"), { recursive: true });
-    const [old, sentinel, fresh, openItems] = [join(practice, "bot-a", "check", "pairs.json"), join(practice, "bot-a", "sentinels", "0a1b2c3d.json"), join(practice, "bot-a", "check", "rows.jsonl"), join(open, "items.json")];
-    for (const path of [old, sentinel, fresh, openItems, join(done, "done")]) writeFileSync(path, "[]");
+    const [old, sentinel, fresh, openItems, pairs] = [join(practice, "bot-a", "check", "rows.jsonl"), join(practice, "bot-a", "sentinels", "0a1b2c3d.json"), join(practice, "bot-a", "check", "server-blind-before.log"), join(open, "items.json"), join(practice, "bot-a", "check", "pairs.json")];
+    for (const path of [old, sentinel, fresh, openItems, pairs, join(done, "done")]) writeFileSync(path, "[]");
     const stale = new Date(Date.now() - 15 * DAY);
-    for (const path of [old, sentinel, openItems, join(open, "before", "MEMORY.md"), join(done, "before", "MEMORY.md")]) utimesSync(path, stale, stale);
+    for (const path of [old, sentinel, openItems, pairs, join(open, "before", "MEMORY.md"), join(done, "before", "MEMORY.md")]) utimesSync(path, stale, stale);
     sweepPractice(practice);
-    expect([old, sentinel, fresh, openItems, join(open, "before", "MEMORY.md"), done].map(existsSync)).toEqual([false, true, true, true, true, true]);
+    // pairs.json keeps the sentinels' results with their definitions
+    expect([old, sentinel, fresh, openItems, pairs, join(open, "before", "MEMORY.md"), done].map(existsSync)).toEqual([false, true, true, true, true, true, true]);
     utimesSync(join(done, "done"), stale, stale);
     sweepPractice(practice);
     expect([existsSync(done), existsSync(open)]).toEqual([false, true]);
+  });
+
+  it("gives the item writer a moved note in any form the filer moves, not just a dash bullet", () => {
+    const practice = practiceDir();
+    const topic = topicIn(practice, "bot-a", { moved: ["* The launch runs from the east studio", "+ Launch slides live in the team drive", "The launch party is on the roof"] });
+    const prompt = itemPrompt(topic, true);
+    expect(prompt).toContain("* The launch runs from the east studio");
+    expect(prompt).toContain("+ Launch slides live in the team drive");
+    expect(prompt).toContain("The launch party is on the roof");
+    expect(prompt?.split("Kept:")[1]).not.toContain("# Memory");
   });
 
   it("keeps a skipped note out of the item writer", () => {
@@ -299,6 +344,22 @@ describe("kit script", () => {
     expect(existsSync(join(w["dream-practice"], "bot-a", "topic-0a1b2c3d", "items.json"))).toBe(false);
   });
 
+  it("files the cleaner's and the kit's spend under one night when --date is left out", () => {
+    const w = world();
+    mkdirSync(join(w.copy, "workspaces", "bot-a"), { recursive: true });
+    writeFileSync(join(w.copy, "workspaces", "bot-a", "MEMORY.md"), "# Memory\n\n## Notes\n- Uses pnpm\n");
+    // 03:50 in Seoul, still the day before in UTC
+    const at = Date.parse("2026-11-23T18:50:00Z");
+    const clock = `data:text/javascript,${encodeURIComponent(`const Real = Date; const shift = ${at} - Real.now(); globalThis.Date = class extends Real { constructor(...args) { super(...(args.length ? args : [Real.now() + shift])); } };`)}`;
+    const { VITEST: _vitest, ...env } = process.env;
+    const start = (script, args) => spawnSync(process.execPath, ["--import", clock, "--experimental-strip-types", script, ...args], { encoding: "utf8", env: { ...env, HOME: w.home, USERPROFILE: w.home, TMP: w.tmp, TEMP: w.tmp, TMPDIR: w.tmp } });
+    const ledger = join(w["dream-practice"], "ledger");
+    start(CHECK, [w.copy, "--no-model", "--ledger", ledger, "--json", join(w.results, "summary.json")]);
+    expect(start(KIT, ["--practice", w["dream-practice"], "--json", join(w.results, "kit.json")]).status).toBe(0);
+    const local = new Date(at);
+    expect(readdirSync(ledger)).toEqual([`${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}.json`]);
+  });
+
   it("leaves no note text outside dream-practice and no scratch, from an engine that echoes it everywhere", () => {
     const w = world();
     topicIn(w["dream-practice"], "bot-a", { moved: [`- The ${MARKER} launch runs from the east studio`, "- Launch slides live in the team drive"] });
@@ -320,5 +381,121 @@ describe("kit script", () => {
     expect(readdirSync(w.tmp)).toEqual([]);
     const leaks = [...after.keys()].filter((path) => !path.startsWith(w["dream-practice"]) && sendsValue(readFileSync(path, "utf8"), MARKER));
     expect(leaks.map((path) => relative(w.root, path))).toEqual([]);
+  });
+});
+
+describe("wink engine", () => {
+  afterEach(() => {
+    delete process.env.FAKE_WINK;
+    delete process.env.FAKE_WINK_LOG;
+  });
+  // a checkout whose server/index.ts is the fake Wink server
+  const kitWith = (fault = "") => {
+    const root = mkdtempSync(join(testHome(), "wink-kit-"));
+    mkdirSync(join(root, "code", "server"), { recursive: true });
+    writeFileSync(join(root, "code", "server", "index.ts"), `import ${JSON.stringify(pathToFileURL(FAKE_WINK).href)};\n`);
+    const log = join(root, "fake.jsonl");
+    Object.assign(process.env, { FAKE_WINK: fault, FAKE_WINK_LOG: log });
+    const topic = topicIn(join(root, "practice"));
+    return {
+      root,
+      topic,
+      engine: () => winkEngine({ root, code: join(root, "code"), token: "kit-token", logs: () => root }),
+      arm: (kind) => prepareArm(join(root, "kit"), kind, "before", "bot-a", join(topic, "before")),
+      rows: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []),
+    };
+  };
+
+  it("asks every run of an arm on a new bot and thread, and restarts a cued arm's server so recall has that bot", async () => {
+    const kit = kitWith();
+    const engine = kit.engine();
+    const [blind, cued] = [kit.arm("blind"), kit.arm("cued")];
+    try {
+      for (const arm of [blind, blind, cued, cued]) expect((await engine.turn("bot-a", arm, "Where does the launch run?")).error).toBeUndefined();
+    } finally {
+      await engine.close();
+    }
+    const turns = kit.rows().filter((row) => row.turn);
+    expect(turns.map(({ prior }) => prior)).toEqual([0, 0, 0, 0]);
+    expect(new Set(turns.map(({ threadId }) => threadId)).size).toBe(4);
+    expect(turns.slice(2).map(({ indexed }) => indexed)).toEqual([true, true]);
+  });
+
+  it("starts a new server after one that died before ready", async () => {
+    const kit = kitWith("die-first");
+    const engine = kit.engine();
+    const arm = kit.arm("blind");
+    try {
+      expect((await engine.turn("bot-a", arm, "Q")).error).toMatch(/exited before ready/);
+      expect((await engine.turn("bot-a", arm, "Q")).error).toBeUndefined();
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it("boots a checkout given as a relative path", () => {
+    const kit = kitWith();
+    const arm = join(kit.root, "kit");
+    const script = [
+      `import { prepareArm, winkEngine } from ${JSON.stringify(pathToFileURL(KIT).href)};`,
+      `const engine = winkEngine({ root: ${JSON.stringify(kit.root)}, code: "code", token: "kit-token", logs: () => ${JSON.stringify(kit.root)} });`,
+      `const reply = await engine.turn("bot-a", prepareArm(${JSON.stringify(arm)}, "blind", "before", "bot-a", ${JSON.stringify(join(kit.topic, "before"))}), "Q");`,
+      "await engine.close();",
+      "process.stdout.write(JSON.stringify(reply));",
+    ].join("\n");
+    const { VITEST: _vitest, ...env } = process.env;
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { cwd: kit.root, encoding: "utf8", env });
+    expect(JSON.parse(result.stdout).error).toBeUndefined();
+  });
+
+  it("clears its permission poller when the send fails", async () => {
+    const kit = kitWith("send-drop");
+    const engine = kit.engine();
+    const live = new Set();
+    const [set, clear] = [globalThis.setInterval, globalThis.clearInterval];
+    globalThis.setInterval = (...args) => {
+      const id = set(...args);
+      live.add(id);
+      return id;
+    };
+    globalThis.clearInterval = (id) => {
+      live.delete(id);
+      clear(id);
+    };
+    let leaked;
+    try {
+      expect((await engine.turn("bot-a", kit.arm("blind"), "Q")).error).toBeTruthy();
+    } finally {
+      await engine.close();
+      Object.assign(globalThis, { setInterval: set, clearInterval: clear });
+      leaked = live.size;
+      for (const id of live) clear(id);
+    }
+    expect(leaked).toBe(0);
+  });
+
+  it("keeps a completed turn's usage when reading its answer fails", async () => {
+    const kit = kitWith("read-drop");
+    const engine = kit.engine();
+    try {
+      const reply = await engine.turn("bot-a", kit.arm("blind"), "Q");
+      expect([Boolean(reply.error), reply.usage]).toEqual([true, { fresh: 1_100, processed: 1_100 }]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it("puts the kit login only on a claude launch, never on a program that takes claude as an argument", () => {
+    const dir = mkdtempSync(join(testHome(), "hook-"));
+    const print = "process.stdout.write(process.env.CLAUDE_CODE_OAUTH_TOKEN ?? 'none');\n";
+    const [other, shim, npm] = [join(dir, "print.js"), join(dir, "claude.js"), join(dir, "claude-code", "cli.js")];
+    for (const path of [other, shim, npm]) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, print);
+    }
+    const script = `const { spawnSync } = require("node:child_process"); const run = (args) => spawnSync(process.execPath, args, { encoding: "utf8" }).stdout; process.stdout.write(JSON.stringify([run([${JSON.stringify(other)}, "claude"]), run([${JSON.stringify(shim)}]), run([${JSON.stringify(npm)}, "-p"])]));`;
+    const { CLAUDE_CODE_OAUTH_TOKEN: _token, ...env } = process.env;
+    const result = spawnSync(process.execPath, ["--require", PRELOAD, "-e", script], { encoding: "utf8", env: { ...env, EVAL_CLAUDE_OAUTH: "kit-token", EVAL_CLAUDE_CONFIG: dir } });
+    expect(JSON.parse(result.stdout)).toEqual(["none", "kit-token", "kit-token"]);
   });
 });

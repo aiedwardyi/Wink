@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 
 import type { NoteGenerator } from "../server/memory-pass.ts";
-import { type CallKind, Ledger } from "./dream-ledger.ts";
+import { type CallKind, Ledger, nightDate } from "./dream-ledger.ts";
 
 // the note helper's model (server/drivers/claude.ts runHelper)
 const MODEL = "claude-haiku-5-5";
@@ -356,12 +356,13 @@ async function main(): Promise<number> {
     const practice = flag("practice");
     // this PC's id in a history file name; the copy is the only place it is written
     const pc = sha8(`${hostname()}\0${userInfo().username}\0${homedir()}`);
-    let plannedTonight = false;
+    // the night that planned a topic: one a night, across bots
+    let plannedNight = 0;
     const rules: Rules = { loaded: (raw) => loadedMemory(raw).text, synced: isMemoryTopicName };
 
     const spent: Spent = { input: 0, output: 0, fresh: 0 };
     const ledgerDir = flag("ledger");
-    const ledger = ledgerDir ? new Ledger(ledgerDir, flag("date") ?? new Date().toISOString().slice(0, 10)) : null;
+    const ledger = ledgerDir ? new Ledger(ledgerDir, flag("date") ?? nightDate()) : null;
     const spend = (kind: CallKind): Spend => ({ spent, cap, ledger, kind });
     const generator = model ? claudeGenerator(configDir, helperDir, spend("tidy")) : null;
     const asking = (generate: NoteGenerator) => (prompt: string) => generate(prompt, AbortSignal.timeout(SLEEP_TIMEOUT_MS));
@@ -411,7 +412,10 @@ async function main(): Promise<number> {
       const filingFrom = spent.input + spent.output;
       let filed = 0;
       const written = new Map<string, string | null>();
+      // the practice topic waits until the quiz keeps the move
+      let staged: { plan: ReturnType<typeof movePlan>; before: Notes; block: string } | null = null;
       const restore = () => {
+        staged = null;
         writeFileSync(join(ws, "MEMORY.md"), tidied);
         for (const [path, was] of written) {
           if (was === null) rmSync(path, { force: true });
@@ -439,21 +443,7 @@ async function main(): Promise<number> {
         const block = historyBlock({ runId: runIdOf(pc, id, at), pc, bot: id, at, files, beforeBytes: Buffer.byteLength(tidied), afterBytes: Buffer.byteLength(moved.memory), merged: 0, replaced: 0, moved: moved.moved.length, notes: moved.moved.map((note) => ({ op: "move" as const, ...note })) });
         track(history, `${existsSync(history) ? readFileSync(history, "utf8") : "# Moves\n\n"}${block}`);
         filed = moved.bytes;
-        // one bot plans a topic a night, and only once its last topic is done (dream-practice.ts marks it)
-        if (practice && BOT_ID.test(id) && !plannedTonight && !openTopic(join(practice, id))) {
-          plannedTonight = true;
-          const topic = join(practice, id, `topic-${sha8(JSON.stringify(plan))}`);
-          for (const [sideName, notes] of [["before", before], ["after", notesOf(ws)]] as const) {
-            mkdirSync(join(topic, sideName), { recursive: true });
-            writeFileSync(join(topic, sideName, "MEMORY.md"), notes.memory);
-            for (const [path, text] of Object.entries(notes.side)) {
-              mkdirSync(dirname(join(topic, sideName, path)), { recursive: true });
-              writeFileSync(join(topic, sideName, path), text);
-            }
-          }
-          writeFileSync(join(topic, "plan.json"), `${JSON.stringify(plan, null, 1)}\n`);
-          writeFileSync(join(topic, "history.md"), block);
-        }
+        staged = { plan, before, block };
       };
       let filingReply = "";
       let filingOptions: Parameters<typeof planFiling>[3] = {};
@@ -513,6 +503,24 @@ async function main(): Promise<number> {
         restore();
         [quiz, undone] = [{ asked: 0, right: 0, misses: [] }, { asked: 0, right: 0, misses: [] }];
         after = notesOf(ws);
+      }
+      // one bot plans a topic a night, only once its last topic is done (dream-practice.ts marks it) and only for a move the quiz kept
+      if (staged && practice && BOT_ID.test(id) && plannedNight !== night && !openTopic(join(practice, id))) {
+        const topic = join(practice, id, `topic-${sha8(JSON.stringify(staged.plan))}`);
+        // a plan already checked is not planned again, and leaves the night's slot to another bot
+        if (!existsSync(join(topic, "done"))) {
+          plannedNight = night;
+          for (const [sideName, notes] of [["before", staged.before], ["after", notesOf(ws)]] as const) {
+            mkdirSync(join(topic, sideName), { recursive: true });
+            writeFileSync(join(topic, sideName, "MEMORY.md"), notes.memory);
+            for (const [path, text] of Object.entries(notes.side)) {
+              mkdirSync(dirname(join(topic, sideName, path)), { recursive: true });
+              writeFileSync(join(topic, sideName, path), text);
+            }
+          }
+          writeFileSync(join(topic, "plan.json"), `${JSON.stringify(staged.plan, null, 1)}\n`);
+          writeFileSync(join(topic, "history.md"), staged.block);
+        }
       }
       if (!filingDue(readFileSync(join(ws, "MEMORY.md"), "utf8"), true)) filing.delete(id);
       const { duplicates, disagree } = parseTidy(reply);

@@ -14,7 +14,7 @@ import { z } from "zod";
 
 import { BOT_ID, cleanerSkip, noteGroups, sha8 } from "../server/memory-clean.ts";
 import { sweepStale } from "./dream-check.ts";
-import { kindsSchema, Ledger, type Usage } from "./dream-ledger.ts";
+import { kindsSchema, Ledger, nightDate, type Usage } from "./dream-ledger.ts";
 
 export const KIT_PREFIX = "wink-dream-kit-";
 const SWEEP_MS = 14 * 86_400_000;
@@ -22,6 +22,8 @@ const RETRIES = 2;
 const TURN_MODEL = { model: "claude-opus-5-5", effort: "high" };
 const GRADER_MODEL = "claude-sonnet-5-5";
 const TURN_MS = 240_000;
+// the output a grade or item call may take, beside its prompt estimate, before it starts
+const ASK_CAP = 4_000;
 const PRELOAD = fileURLToPath(new URL("./dream-engine-env.cjs", import.meta.url));
 
 export type ItemKind = "blind" | "cued" | "sentinel";
@@ -106,7 +108,8 @@ export function sweepPractice(practice: string, now = Date.now()) {
   const old = (path: string) => now - (statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? now) > SWEEP_MS;
   for (const name of readdirSync(practice, { recursive: true, encoding: "utf8" })) {
     const parts = name.split(/[\\/]/);
-    if (parts.includes("sentinels")) continue;
+    // pairs.json holds no note text and keeps the sentinels' results beside their definitions
+    if (parts.includes("sentinels") || parts.slice(-2).join("/") === "check/pairs.json") continue;
     const at = parts.findIndex((part) => TOPIC_DIR.test(part));
     if (at !== -1) {
       const topic = join(practice, ...parts.slice(0, at + 1));
@@ -123,7 +126,8 @@ const filesOf = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir, {
 /** The copy pair a topic's turns all run on; rows carry it beside the item and the build. */
 export const copySha = (topic: string) => sha8(["before", "after"].flatMap((side) => filesOf(join(topic, side)).map((name) => `${side}/${name.replaceAll("\\", "/")}\0${readFileSync(join(topic, side, name), "utf8")}`)).join("\0"));
 
-const notesOf = (file: string) => (existsSync(file) ? noteGroups(readFileSync(file, "utf8").split(/\r?\n/)).map((note) => note.join("\n")).filter((note) => note.startsWith("- ")) : []);
+// any top-level note the filer may move, whatever its bullet; a heading or a blank line is not one
+const notesOf = (file: string) => (existsSync(file) ? noteGroups(readFileSync(file, "utf8").split(/\r?\n/)).map((note) => note.join("\n")).filter((note) => /^\S/.test(note) && !/^#{1,6}(?:\s|$)/.test(note)) : []);
 
 /** The item writer's prompt: notes the topic moved and notes it kept, never a skipped one. */
 export function itemPrompt(topic: string, sentinels: boolean): string | null {
@@ -234,7 +238,7 @@ export async function night({ practice, root, engine, ledger, build, date }: Nig
           const prompt = itemPrompt(topic, !sentinels().length);
           let written: z.infer<typeof writtenSchema> | null = null;
           if (prompt) {
-            if (!ledger.callFits(prompt.length, 4_000)) break;
+            if (!ledger.callFits(prompt.length, ASK_CAP)) break;
             const reply = await engine.ask(prompt);
             ledger.add("item", reply.usage);
             written = parseWith(writtenSchema, reply.text);
@@ -310,7 +314,13 @@ async function runPair(o: Night & { arms: Map<string, Arm> }, bot: string, topic
       let pass: boolean | null = null;
       let grade: Reply | null = null;
       if (!fault) {
-        grade = await o.engine.ask(gradePrompt(item, reply.text));
+        const prompt = gradePrompt(item, reply.text);
+        // a grade starts only while its bound is left; the check's spend stands and the pair waits for a later night
+        if (!o.ledger.callFits(prompt.length, ASK_CAP)) {
+          o.ledger.turn(reply.usage.fresh);
+          return null;
+        }
+        grade = await o.engine.ask(prompt);
         o.ledger.add("grade", grade.usage);
         pass = grade.error ? null : (parseWith(gradeSchema, grade.text)?.pass ?? null);
       }
@@ -410,85 +420,113 @@ const createdSchema = z.object({ bot: z.object({ id: z.string(), threadId: z.str
 const messagesSchema = z.object({ messages: z.array(z.object({ sendId: z.string().nullish(), role: z.string().optional(), kind: z.string().optional(), text: z.string().nullish() })) });
 const lookupRowSchema = z.object({ botId: z.string(), at: z.number(), reason: z.string() });
 type Body = { [key: string]: string | boolean | string[] | Body | undefined };
-type Server = { child: ChildProcess; base: string; auth: string; events: { at: number; ev: ServerEvent }[]; abort: AbortController; instanceId: string; bots: Map<string, { id: string; threadId: string }> };
+type Server = { child: ChildProcess; base: string; auth: string; events: { at: number; ev: ServerEvent }[]; abort: AbortController; instanceId: string };
 
 /** Typed turns on POST /api/bots/:id/messages, a server from the code checkout per arm folder (DESIGN-v4 5.1), as rot-check-2's run.mjs drove them. */
 export function winkEngine(o: { root: string; code: string; token: string; logs: (bot: string) => string }): Engine {
+  const code = resolve(o.code);
   const config = join(o.root, "claude");
   mkdirSync(config, { recursive: true });
   const servers = new Map<string, Server>();
+  let ports = 0;
   const call = async (server: Server, path: string, method = "GET", body?: Body) => {
     const response = await fetch(server.base + path, { method, headers: { "content-type": "application/json", authorization: `Bearer ${server.auth}` }, body: body && JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
     return { status: response.status, text: await response.text() };
   };
-  const boot = async (bot: string, arm: Arm): Promise<Server> => {
-    const key = arm.data;
-    const running = servers.get(key);
-    if (running) return running;
+  const stop = async (server: Server) => {
+    server.abort.abort();
+    if (server.child.exitCode !== null) return;
+    const exited = new Promise((done) => {
+      server.child.once("exit", done);
+      setTimeout(done, 10_000);
+    });
+    if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(server.child.pid), "/T", "/F"], { windowsHide: true });
+    else server.child.kill("SIGKILL");
+    await exited;
+  };
+  const start = async (bot: string, arm: Arm): Promise<Server> => {
     const profile = join(arm.data, "..", "profile");
     for (const dir of [profile, join(profile, "AppData", "Roaming"), join(profile, "AppData", "Local")]) mkdirSync(dir, { recursive: true });
-    const port = 47_950 + servers.size;
+    // a restarted arm takes a new port, never one another arm's server still holds
+    const port = 47_950 + ports++;
     const auth = randomBytes(24).toString("hex");
     const env = { ...cleanEnv(), HOME: profile, USERPROFILE: profile, APPDATA: join(profile, "AppData", "Roaming"), LOCALAPPDATA: join(profile, "AppData", "Local"), OMB_DATA_DIR: arm.data, OMB_PORT: String(port), OMB_COMMS_TOKEN: auth, EVAL_CLAUDE_OAUTH: o.token, EVAL_CLAUDE_CONFIG: config };
-    const child = spawn(process.execPath, ["--experimental-strip-types", "--require", PRELOAD, join(o.code, "server", "index.ts")], { cwd: o.code, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(process.execPath, ["--experimental-strip-types", "--require", PRELOAD, join(code, "server", "index.ts")], { cwd: code, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const log = join(o.logs(bot), `server-${arm.kind}-${arm.side}.log`);
     child.stdout!.on("data", (chunk) => appendFileSync(log, chunk));
     child.stderr!.on("data", (chunk) => appendFileSync(log, chunk));
-    const server: Server = { child, base: `http://127.0.0.1:${port}`, auth, events: [], abort: new AbortController(), instanceId: "", bots: new Map() };
-    servers.set(key, server);
-    for (const started = Date.now(); ; await new Promise((done) => setTimeout(done, 250))) {
-      if (child.exitCode !== null) throw new Error("kit server exited before ready");
-      if (await call(server, "/api/bots?messages=0").then(({ status }) => status === 200, () => false)) break;
-      if (Date.now() - started > 90_000) throw new Error("kit server not ready");
-    }
-    const stream = await fetch(server.base + "/api/events", { headers: { authorization: `Bearer ${auth}` }, signal: server.abort.signal });
-    void (async () => {
-      const reader = stream.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        for (let end = buffer.indexOf("\n\n"); end !== -1; end = buffer.indexOf("\n\n")) {
-          for (const line of buffer.slice(0, end).split("\n")) {
-            const frame = line.startsWith("data:") ? parseWith(frameSchema, line.slice(5)) : null;
-            const event = frame?.event ?? (frame && parseWith(eventSchema, line.slice(5)));
-            if (frame?.kind !== "hello" && event) server.events.push({ at: Date.now(), ev: event });
-          }
-          buffer = buffer.slice(end + 2);
-        }
+    const server: Server = { child, base: `http://127.0.0.1:${port}`, auth, events: [], abort: new AbortController(), instanceId: "" };
+    try {
+      for (const started = Date.now(); ; await new Promise((done) => setTimeout(done, 250))) {
+        if (child.exitCode !== null) throw new Error("kit server exited before ready");
+        if (await call(server, "/api/bots?messages=0").then(({ status }) => status === 200, () => false)) break;
+        if (Date.now() - started > 90_000) throw new Error("kit server not ready");
       }
-    })();
-    const instances = parseWith(instancesSchema, (await call(server, "/api/instances")).text)?.instances ?? [];
-    server.instanceId = instances.find((each) => each.driverKind === "claudeAgent")?.instanceId ?? "";
-    if (!server.instanceId) throw new Error("kit server has no claudeAgent instance");
+      const stream = await fetch(server.base + "/api/events", { headers: { authorization: `Bearer ${auth}` }, signal: server.abort.signal });
+      void (async () => {
+        const reader = stream.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          for (let end = buffer.indexOf("\n\n"); end !== -1; end = buffer.indexOf("\n\n")) {
+            for (const line of buffer.slice(0, end).split("\n")) {
+              const frame = line.startsWith("data:") ? parseWith(frameSchema, line.slice(5)) : null;
+              const event = frame?.event ?? (frame && parseWith(eventSchema, line.slice(5)));
+              if (frame?.kind !== "hello" && event) server.events.push({ at: Date.now(), ev: event });
+            }
+            buffer = buffer.slice(end + 2);
+          }
+        }
+      })();
+      const instances = parseWith(instancesSchema, (await call(server, "/api/instances")).text)?.instances ?? [];
+      server.instanceId = instances.find((each) => each.driverKind === "claudeAgent")?.instanceId ?? "";
+      if (!server.instanceId) throw new Error("kit server has no claudeAgent instance");
+      return server;
+    } catch (error) {
+      await stop(server);
+      throw error;
+    }
+  };
+  // a server is kept only once it is ready, so a retry after a failed start boots a new one
+  const boot = async (bot: string, arm: Arm) => {
+    const running = servers.get(arm.data);
+    if (running) return running;
+    const server = await start(bot, arm);
+    servers.set(arm.data, server);
     return server;
   };
-  const botIn = async (server: Server, bot: string, arm: Arm) => {
-    const made = server.bots.get(bot);
-    if (made) return made;
+  // every run asks a new bot, as rot-check-2 did, so no run sees another's question or answer
+  const freshBot = async (server: Server, arm: Arm) => {
     const created = await call(server, "/api/bots", "POST", { cwd: arm.workspace, modelSelection: { instanceId: server.instanceId, model: TURN_MODEL.model, mode: "pinned", effort: TURN_MODEL.effort } });
     const fresh = parseWith(createdSchema, created.text)?.bot;
     if (!fresh) throw new Error(`create bot ${created.status}`);
     const patched = await call(server, `/api/bots/${fresh.id}`, "PATCH", { memoryNotes: false, autoApprove: false, leanStartup: true, alwaysAllow: [], hidden: true });
     if (patched.status !== 200) throw new Error(`patch bot ${patched.status}`);
     cpSync(arm.workspace, join(arm.data, "workspaces", fresh.id), { recursive: true });
-    const handle = { id: fresh.id, threadId: fresh.threadId };
-    server.bots.set(bot, handle);
-    return handle;
+    return { id: fresh.id, threadId: fresh.threadId };
   };
   const none = { fresh: 0, processed: 0 };
   return {
     async turn(bot, arm, question) {
+      let answer: ReturnType<typeof setInterval> | undefined;
+      let spent: Usage = none;
       try {
-        const server = await boot(bot, arm);
-        const handle = await botIn(server, bot, arm);
+        let server = await boot(bot, arm);
+        const handle = await freshBot(server, arm);
+        if (arm.kind === "cued") {
+          // recall indexes the bots it finds at start (server/index.ts) and after a settled turn, so the new bot needs a restart
+          servers.delete(arm.data);
+          await stop(server);
+          server = await boot(bot, arm);
+        }
         const since = server.events.length;
         const started = Date.now();
         const mine = () => server.events.slice(since).filter(({ ev }) => ev.threadId === handle.threadId);
         const answered = new Set<unknown>();
-        const answer = setInterval(() => {
+        answer = setInterval(() => {
           for (const { ev } of mine().filter(({ ev }) => ev.type === "request.opened" && !answered.has(ev.requestId))) {
             answered.add(ev.requestId);
             const allow = fence(ev, join(arm.data, ".."));
@@ -497,10 +535,7 @@ export function winkEngine(o: { root: string; code: string; token: string; logs:
         }, 300);
         const sendId = randomBytes(8).toString("hex");
         const sent = await call(server, `/api/bots/${handle.id}/messages`, "POST", { text: question, sendId });
-        if (sent.status < 200 || sent.status >= 300) {
-          clearInterval(answer);
-          return { text: "", usage: none, error: `send ${sent.status}` };
-        }
+        if (sent.status < 200 || sent.status >= 300) return { text: "", usage: none, error: `send ${sent.status}` };
         const until = async (ms: number) => {
           for (const end = Date.now() + ms; Date.now() < end; await new Promise((done) => setTimeout(done, 300))) {
             const done = mine().find(({ ev }) => ev.type === "turn.completed");
@@ -514,41 +549,28 @@ export function winkEngine(o: { root: string; code: string; token: string; logs:
           await call(server, `/api/bots/${handle.id}/interrupt`, "POST", {}).catch(() => {});
           done = await until(30_000);
         }
-        clearInterval(answer);
+        const usage = done?.usage ?? { input: 0, cachedInput: 0, output: 0 };
+        spent = { fresh: usage.input - usage.cachedInput + usage.output, processed: usage.input + usage.output };
         const messages = parseWith(messagesSchema, (await call(server, `/api/threads/${handle.threadId}/messages?limit=60`)).text)?.messages ?? [];
         const at = messages.findIndex((message) => message.sendId === sendId);
         const text = (at === -1 ? [] : messages.slice(at + 1)).filter((message) => message.role === "bot" && message.kind === "text" && message.text).map((message) => message.text).join("\n\n");
-        const usage = done?.usage ?? { input: 0, cachedInput: 0, output: 0 };
         const lookups = arm.kind === "cued" ? readFileSync(join(arm.data, "lookup-log.jsonl"), { encoding: "utf8", flag: "a+" }).split("\n").map((line) => parseWith(lookupRowSchema, line)) : [];
-        // recall's index is built after start: a cued turn that met no index is retried, not graded
+        // a cued turn that still met no index is retried, not graded
         const noIndex = lookups.some((row) => row?.botId === handle.id && row.at >= started && row.reason === "no-index");
-        return { text, usage: { fresh: usage.input - usage.cachedInput + usage.output, processed: usage.input + usage.output }, stopped, noIndex, error: done?.ok === false ? "turn failed" : undefined };
+        return { text, usage: spent, stopped, noIndex, error: done?.ok === false ? "turn failed" : undefined };
       } catch (error) {
-        return { text: "", usage: none, error: String(error) };
+        // a completed turn's spend stands when reading its answer fails
+        return { text: "", usage: spent, error: String(error) };
+      } finally {
+        clearInterval(answer);
       }
     },
     ask: (prompt) => claudeOnce(prompt, o.root, GRADER_MODEL, config, o.token),
     async close() {
-      for (const server of servers.values()) {
-        server.abort.abort();
-        if (server.child.exitCode === null) {
-          const exited = new Promise((done) => {
-            server.child.once("exit", done);
-            setTimeout(done, 10_000);
-          });
-          if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(server.child.pid), "/T", "/F"], { windowsHide: true });
-          else server.child.kill("SIGKILL");
-          await exited;
-        }
-      }
+      for (const server of servers.values()) await stop(server);
     },
   };
 }
-
-const today = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-};
 
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
@@ -559,7 +581,7 @@ async function main(): Promise<number> {
   const practice = flag("practice");
   const json = flag("json");
   if (!practice || !json) throw new Error("usage: node --experimental-strip-types scripts/dream-practice.ts --practice <dir> --json <summary.json> [--build sha] [--date yyyy-mm-dd] [--check-turns --live <orbit dir> --code <checkout> [--engine wink|cli]]");
-  const date = flag("date") ?? today();
+  const date = flag("date") ?? nightDate();
   const build = flag("build") ?? null;
   const checkTurns = args.includes("--check-turns");
   mkdirSync(practice, { recursive: true });

@@ -203,6 +203,14 @@ export function misrouted(output: string, filed: readonly Filed[]): Set<string> 
 }
 
 const flat = (text: string) => text.replaceAll("\r", "");
+// the path token goes on past the name: memory/launch.md.bak and old/memory/launch.md are other files
+const PATH_BEFORE = /(?:^|[^a-z0-9_./-])(?:\.\/)?$/i;
+const PATH_AFTER = /^(?:[a-z0-9_/-]|\.[a-z0-9_-])/i;
+const names = (line: string, target: string) => {
+  const text = line.replaceAll("\\", "/");
+  for (let at = text.indexOf(target); at !== -1; at = text.indexOf(target, at + 1)) if (PATH_BEFORE.test(text.slice(0, at)) && !PATH_AFTER.test(text.slice(at + target.length))) return true;
+  return false;
+};
 // any side file the app would load, as long as a history line can name it
 const planTarget = (target: string) => target.startsWith("memory/") && isMemoryTopicName(target.slice("memory/".length)) && historyTarget(target);
 const count = z.number().int().nonnegative();
@@ -248,7 +256,7 @@ export function applyMove(raw: string, side: Readonly<Record<string, string>>, p
     const have = flat(out[name] ?? "");
     if (!noteGroups(have.split("\n")).some((group) => sha256(group.join("\n")) === planned.sha256)) out[name] = `${out[name] ?? ""}${have && !have.endsWith("\n") ? "\n" : ""}${flat(note.text)}\n`;
     for (let index = note.at; index < note.end; index++) gone.add(index);
-    const pointed = lines.some((line, index) => !gone.has(index) && line.replaceAll("\\", "/").includes(planned.target)) || [...pointers.values()].some((line) => line.includes(planned.target));
+    const pointed = lines.some((line, index) => !gone.has(index) && names(line, planned.target)) || [...pointers.values()].some((line) => names(line, planned.target));
     // a pointer keeps the line ending of the note it replaces
     if (planned.pointer && !pointed) pointers.set(note.at, lines[note.at]!.endsWith("\r") ? `${planned.pointer}\r` : planned.pointer);
     moved.push({ sha8: planned.sha256.slice(0, 8), bytes: planned.bytes, target: planned.target });

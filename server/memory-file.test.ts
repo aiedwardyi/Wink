@@ -203,6 +203,13 @@ describe("one topic and a safe Move", () => {
     expect(named("Launch notes.md")).toEqual([]);
   });
 
+  it("writes the pointer when a kept line names a longer path, and none when it names the target", () => {
+    const longer = raw.replace("- Ship Fridays", "- Ship Fridays\n- The old launch list is in memory/launch.md.bak");
+    expect(applyMove(longer, {}, movePlan(longer, filing, "0a1b2c3d")).memory).toContain("- Launch work: read memory/launch.md before launch work.");
+    const named = raw.replace("- Ship Fridays", "- Ship Fridays\n- Launch list: memory/launch.md");
+    expect(applyMove(named, {}, movePlan(named, filing, "0a1b2c3d")).memory).not.toContain("- Launch work: read memory/launch.md before launch work.");
+  });
+
   it("re-points an existing side file no line points at, appending to it", () => {
     expect(planFiling(raw, launch, ["launch.md"])).toBeNull();
     const repointed = planFiling(raw, launch, ["launch.md"], { repoint: ["launch.md"] })!;
