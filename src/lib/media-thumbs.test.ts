@@ -29,9 +29,11 @@ let cutAt = 0;
 let freeAt = 0;
 // when a request settles, in ms from now, and whether it answers; undefined never settles
 // "/dead/*" never answers, "/cut/*" hangs until cutAt and then fails, "/busy/*" waits for a free connection until freeAt
+// "/slowpic/*" sends its first bytes after 1 s and ends at 70 s, "/half/*" sends its first bytes and then nothing
 function line(src: string): [number, boolean] | undefined {
   const now = Date.now();
-  if (src.startsWith("/dead/")) return;
+  if (src.startsWith("/dead/") || src.startsWith("/half/")) return;
+  if (src.startsWith("/slowpic/")) return [70_000, true];
   if (src.startsWith("/cut/")) return now < cutAt ? [cutAt - now, false] : [0, true];
   if (src.startsWith("/busy/")) return [Math.max(0, freeAt - now), true];
   return [0, true];
@@ -40,10 +42,14 @@ class FakeImage {
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
   #pic?: { src: string; open: boolean };
+  #sized = false;
+  get naturalWidth() { return this.#sized ? 640 : 0; }
   set src(src: string) {
     const pic = { src, open: true };
     pics.push((this.#pic = pic));
     const at = line(src);
+    const first = /^\/(slowpic|half)\//.test(src) ? 1_000 : at?.[1] ? at[0] : undefined;
+    if (first !== undefined) setTimeout(() => void (this.#sized = pic.open), first);
     if (at) setTimeout(() => {
       if (!pic.open) return;
       pic.open = false;
@@ -59,7 +65,7 @@ const open = () => asked.filter((each) => !each.signal?.aborted).length + pics.f
 function serve(src: string, init?: RequestInit) {
   const signal = init?.signal ?? undefined;
   asked.push({ src, signal });
-  if (src.startsWith("/stall/") || src.startsWith("/dead/")) return aborted(signal);
+  if (/^\/(stall|dead|slowpic|half)\//.test(src)) return aborted(signal);
   if (src.startsWith("/404/")) return Promise.resolve(new Response(new ReadableStream({ start: (control) => void aborted(signal).catch((error) => control.error(error)) }), { status: 404 }));
   if (/^\/(cut|busy)\//.test(src)) {
     const at = line(src)!;
@@ -194,4 +200,62 @@ it("a preview answered with an error ends its download and the cell draws the pi
   expect(shown["/404/1.png"]).toBe("/404/1.png");
   expect(asked[0].signal?.aborted).toBe(true);
   await unmount();
+});
+
+it("a fallback picture still without bytes after the bound frees its slot for the rest", async () => {
+  start();
+  freeAt = 0;
+  const fine = names("busy/free", 9);
+  const dead = names("dead/first", 3);
+  const { drawn, unmount } = await grid([...dead, ...fine]);
+  await pass(15_000);
+  expect(Object.keys(drawn)).toHaveLength(0);
+  await pass(10_000);
+  expect(fine.map((src) => drawn[src])).toEqual(fine.map(() => "thumb"));
+  await unmount();
+});
+
+it("a fallback picture whose first bytes came runs past a minute and draws", async () => {
+  start();
+  const { shown, unmount } = await grid(["/slowpic/1.png"]);
+  await pass(65_000);
+  expect(shown["/slowpic/1.png"]).toBeUndefined();
+  await pass(20_000);
+  expect(shown["/slowpic/1.png"]).toBe("/slowpic/1.png");
+  await unmount();
+});
+
+it("a fallback picture silent after its first bytes keeps its slot until the grid closes", async () => {
+  start();
+  const { unmount } = await grid([...names("half", 3), "/dead/behind.png"]);
+  await pass(120_000);
+  expect(pics.map((each) => [each.src, each.open])).toEqual(names("half", 3).map((src) => [src, true]));
+  await unmount();
+  expect(open()).toBe(0);
+});
+
+it("a dead picture is asked twice and then left alone", async () => {
+  start();
+  const srcs = names("dead/twice", 3);
+  const { unmount } = await grid(srcs);
+  await pass(300_000);
+  expect(srcs.map((src) => pics.filter((each) => each.src === src).length)).toEqual([2, 2, 2]);
+  expect(asked).toHaveLength(3);
+  expect(open()).toBe(0);
+  await unmount();
+});
+
+it("asks used up during an outage start over on the next open", async () => {
+  start();
+  cutAt = Date.now() + 200_000;
+  const srcs = names("cut/again", 3);
+  const first = await grid(srcs);
+  await pass(60_000);
+  expect(Object.keys(first.drawn)).toHaveLength(0);
+  await first.unmount();
+  await pass(150_000);
+  const next = await grid(srcs);
+  await pass(2_000);
+  expect(srcs.map((src) => next.drawn[src])).toEqual(srcs.map(() => "thumb"));
+  await next.unmount();
 });

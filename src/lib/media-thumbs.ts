@@ -158,7 +158,7 @@ async function make(src: string): Promise<string | undefined> {
   if (asks < 2 && waiting.has(src)) queue.unshift(src);
 }
 
-// an img shows no bytes as they come, so the picture gets the preview's bound whole; clearing its src ends the download
+// an img shows no bytes as they come, only its size once the first land: one still sizeless after the bound is ended (clearing its src), one with bytes runs to its end
 function picture(src: string): Promise<boolean> {
   return new Promise((done) => {
     const img = new Image();
@@ -169,7 +169,7 @@ function picture(src: string): Promise<boolean> {
       if (!loaded) img.removeAttribute("src");
       done(loaded);
     };
-    const timer = setTimeout(() => end(false), QUIET_MS);
+    const timer = setTimeout(() => img.naturalWidth || end(false), QUIET_MS);
     img.onload = () => end(true);
     img.onerror = () => end(false);
     drawing.set(src, () => end(false));
