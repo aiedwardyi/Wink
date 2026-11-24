@@ -592,7 +592,7 @@ export interface BotRecord {
    * Cleared when chat rules that folder out, and when Settings Clear
    * drops the pin so the next task is the private workspace. */
   lastProjectCwd?: string;
-  /** GitHub repos learned from PR links, owner/repo#n refs and pane remotes, where a bare "PR n" is looked up when the folder is not a repo. */
+  /** GitHub repos of the bot's pane origin remotes, where a bare "PR n" is looked up when the folder is not a repo. */
   knownRepos?: string[];
   /** When Settings Clear last dropped the folder. Chat lines from before it
    * are spent: no later turn may re-derive the cleared folder from them. */

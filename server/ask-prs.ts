@@ -53,13 +53,17 @@ export function remoteRepo(url: string): string | undefined {
   return GITHUB_REMOTE.exec(url)?.[1]!.replace(/\.git$/i, "").toLowerCase();
 }
 
-/** Repos each bot works in, found off the send path; get() never waits. A refresh only adds, so one that finds less keeps what was saved. */
-export function createKnownRepos(deps: { discover: (botId: string) => Promise<string[]>; saved: (botId: string) => readonly string[]; save: (botId: string, repos: string[]) => void }) {
+/** Repos each bot works in, found off the send path; get() never waits. Remotes from discover are saved and only added to, so a refresh that finds less keeps them; repos cited in asks and reports last until the next refresh, so a cited link goes when its report leaves. */
+export function createKnownRepos(deps: { discover: (botId: string) => Promise<string[]>; cited: (botId: string) => Promise<string[]>; saved: (botId: string) => readonly string[]; save: (botId: string, repos: string[]) => void }) {
+  const cited = new Map<string, string[]>();
   return {
-    get: (botId: string): string[] => [...deps.saved(botId)],
+    get: (botId: string): string[] => [...new Set([...deps.saved(botId), ...cited.get(botId) ?? []])],
     async refresh(botId: string): Promise<void> {
+      const found = await deps.discover(botId).catch(() => []);
+      cited.set(botId, await deps.cited(botId).catch(() => cited.get(botId) ?? []));
+      // read after the awaits: an overlapping refresh may have saved since this one began
       const saved = deps.saved(botId);
-      const repos = [...new Set([...saved, ...await deps.discover(botId).catch(() => [])])];
+      const repos = [...new Set([...saved, ...found])];
       if (repos.length > saved.length) deps.save(botId, repos);
     },
   };

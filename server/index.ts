@@ -3188,8 +3188,12 @@ const knownRepos = createKnownRepos({ saved: (botId) => store.bot(botId)?.knownR
   const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, null, undefined, { panesOnly: true });
   const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
   const remotes = await Promise.all([...new Set(panes.map((pane) => pane.cwd).filter(Boolean))].map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
+  return remotes.flatMap((url) => remoteRepo(url) ?? []);
+}, cited: async (botId) => {
+  const bot = store.bot(botId);
+  if (!bot) return [];
   const reports = [...reportNotes(store.notesBack(bot.threadId))].map((row) => row.text ?? "");
-  return [...reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports]), ...remotes.flatMap((url) => remoteRepo(url) ?? [])];
+  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports]);
 } });
 const askPrs = createAskPrs({
   repoDir: (botId, threadId) => {
