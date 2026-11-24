@@ -793,13 +793,41 @@ describe("entering a PC's code", () => {
     expect(localStorage.getItem(LAST_PC)).toBeNull();
   });
 
-  it("sends a typed code on the glasses to the PC's code form, since Google cannot finish there", async () => {
+  const onLens = () => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("aspect-ratio") }));
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/UQ1A.240205.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 Mobile Safari/537.36");
+  };
+  const lensPage = (label: string) => `https://${label}.${BASE}/glasses`;
+
+  it("sends a typed code on the glasses to the PC's lens page, since Google cannot finish there", async () => {
+    onLens();
     open("/signin", []);
     answer(live);
     enter("ABCDEF");
-    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "")));
+    await vi.waitFor(() => expect(location.href).toBe(lensPage(LABEL_A)));
+    expect(localStorage.getItem(TYPED)).toBe(LABEL_A);
+    expect(localStorage.getItem(LAST_PC)).toBeNull();
+  });
+
+  it("reopens the typed PC's lens page on the next visit from the glasses, so no letters are said again", async () => {
+    onLens();
+    localStorage.setItem(TYPED, LABEL_A);
+    open("/signin", []);
+    await vi.waitFor(() => expect(location.href).toBe(lensPage(LABEL_A)));
+    expect(probes).toHaveLength(1);
+    expect(probes[0]).toContain(`https://${LABEL_A}.${BASE}/app-icon.svg`);
+  });
+
+  it.each([
+    ["Choose another PC", "/signin?pick=1", "up"],
+    ["a signed out visit", "/signin?signedout=1", "up"],
+    ["a PC that is off", "/signin", "down"],
+  ])("reopens no typed PC on the glasses for %s", async (_, url, probe) => {
+    onLens();
+    localStorage.setItem(TYPED, LABEL_A);
+    open(url, [], undefined, probe);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(location.href).not.toContain("/glasses");
   });
 
   it("tells the glasses apart with the PC's pair page check", () => {

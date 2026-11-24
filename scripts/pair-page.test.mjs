@@ -233,9 +233,29 @@ describe("pair page", () => {
       field.dispatchEvent(new Event("input"));
     };
 
-    it("never shows the field under the code boxes, so no selection, voice mark or tap mark covers them", () => {
-      expect(SOURCE).toMatch(/\.g-code input \{[^}]*opacity: 0;/);
+    // The lens moves its D-pad focus only onto what it can see: an opacity 0 field left the boxes out of reach (1.0.297).
+    it("draws the field under the code boxes with no room for text, so the lens can land on it and no selection, voice mark or tap mark covers them", () => {
+      const rule = SOURCE.match(/\.g-code input \{([^}]*)\}/)?.[1];
+      expect(rule).toContain("padding-left: 100%;");
+      expect(rule).toContain("caret-color: transparent;");
+      expect(rule).not.toMatch(/opacity|visibility|display|font-size/);
       expect(SOURCE).toMatch(/\.g-code \{[^}]*-webkit-tap-highlight-color: transparent;/);
+    });
+
+    it("moves focus with the lens D-pad: any arrow to the field, Down to Connect once it shows", () => {
+      lens(true);
+      open("/pair", googlePc());
+      const field = document.getElementById("g-code");
+      const press = (key) => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      field.blur();
+      press("ArrowDown");
+      expect(document.activeElement).toBe(field);
+      say("123456");
+      expect(document.activeElement?.id).toBe("g-pair");
+      press("ArrowUp");
+      expect(document.activeElement).toBe(field);
+      press("ArrowDown");
+      expect(document.activeElement?.id).toBe("g-pair");
     });
 
     it.each(["123456", "1 2 3 4 5 6", "123 456.", "one two three four five six", "won to three for five six", "SXUMBB. 123456"])(

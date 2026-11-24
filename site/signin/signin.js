@@ -11,7 +11,7 @@
   const LAST_PC = "wink-signin-pc";
   const ACCOUNT = "wink-signin-account";
   const OPENING = "wink-signin-opening";
-  // The PC a typed code reached in this browser: its return leg offers that PC's own code form.
+  // The PC a typed code reached in this browser: its return leg offers that PC's own code form, and on the glasses a cold start reopens it.
   const TYPED = "wink-signin-typed";
   // Same check as public/pair.html: Google cannot finish in Meta's glasses web view.
   const GLASSES =
@@ -74,6 +74,14 @@
   function remembered() {
     try {
       return localStorage.getItem(LAST_PC) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function typedPc() {
+    try {
+      return localStorage.getItem(TYPED) || "";
     } catch {
       return "";
     }
@@ -349,14 +357,14 @@
       lock(true);
       say("");
       const label = await codeLabel(code);
-      // Then the same Google check as picking the PC from the list, or on the glasses the PC's code form. Not remembered here: the return leg remembers it once Google says it is this account's.
+      // Then the same Google check as picking the PC from the list, or on the glasses the PC's lens page, which sends an unpaired lens to its code form. Not remembered here: the return leg remembers it once Google says it is this account's.
       if (LABEL_RE.test(label)) {
         holdAccount(label);
         try {
           localStorage.setItem(TYPED, label);
         } catch {}
         typed = true;
-        location.assign(`https://${label}.${config.base}/pair${GLASSES ? "" : "?g=1"}`);
+        location.assign(`https://${label}.${config.base}/${GLASSES ? "glasses" : "pair?g=1"}`);
         return;
       }
       reset();
@@ -554,7 +562,8 @@
   };
 
   async function coldStart(pick, signedOut) {
-    const last = remembered();
+    // Google cannot finish on the glasses, so there the PC a typed code reached is the one to reopen, and only the PC's 6 numbers are left to say.
+    const last = GLASSES ? typedPc() : remembered();
     const saved = LABEL_RE.test(last);
     const uncover = !pick && !signedOut && saved ? coverCode() : () => {};
     if (!pick && !signedOut && saved && await reachable(last)) {
@@ -565,7 +574,8 @@
         uncover();
       };
       addEventListener("pageshow", restored);
-      go(last, "?g=1");
+      if (GLASSES) location.assign(`https://${last}.${config.base}/glasses`);
+      else go(last, "?g=1");
       return;
     }
     uncover();

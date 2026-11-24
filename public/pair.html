@@ -228,8 +228,11 @@
         all: unset;
         position: absolute;
         inset: 0;
-        /* Unseen, not just see-through: a selection or a voice keyboard's mark would paint over the boxes. */
-        opacity: 0;
+        /* Drawn but with no room for text: the lens skips an unseen field, and a selection or a voice keyboard's mark would paint over the boxes. */
+        box-sizing: border-box;
+        padding-left: 100%;
+        color: transparent;
+        caret-color: transparent;
       }
       #g-pair {
         width: 268px;
@@ -589,6 +592,12 @@
             if (!gPair.hidden && !composing) gPair.focus();
             return digits;
           };
+          // The lens D-pad arrives as arrow keys and moves no focus by itself: Down reaches Connect once it shows, any other way the field.
+          addEventListener("keydown", (event) => {
+            if (!event.key.startsWith("Arrow")) return;
+            event.preventDefault();
+            (event.key === "ArrowDown" && !gPair.hidden ? gPair : gCode).focus();
+          });
           gCode.addEventListener("input", read);
           gCode.addEventListener("change", read);
           gCode.addEventListener("compositionstart", () => {
