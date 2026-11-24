@@ -1,6 +1,6 @@
 // Reverts in each repo's last 90 days and how often each file changed there, for the worker-launch gate.
 // hit() never waits on git: it reads what the last pass found.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 
 import { mapGit } from "./map-git.ts";
@@ -13,6 +13,8 @@ const RECENT = 30 * DAY;
 // server/index.ts has hundreds of commits in 90 days: a revert touching it says nothing about one card
 const COLD = 10;
 const LOG_LIMIT = 64 * 1024 * 1024;
+// a hit stats every ref folder, so it looks at most this often; boot and turn-settle refreshes always look
+const REFS_CHECK_MS = 5_000;
 const TITLE_MAX = 80;
 const FORMAT = "--format=%x1e%H%x1f%ct%x1f%s%x1f%b%x1f";
 
@@ -125,8 +127,8 @@ function mtime(path: string): number {
   }
 }
 
-/** The git common dir the cwd's checkout shares with its worktrees, the refs to log and when to log them again, read with no git spawn. */
-export function gitHome(cwd: string): { common: string; key: string; refs: string; shallow: boolean } | undefined {
+/** The git common dir the cwd's checkout shares with its worktrees and the refs to log, read with no git spawn. */
+export function gitHome(cwd: string): { common: string; refs: string; shallow: boolean } | undefined {
   if (!isAbsolute(cwd) && !win32.isAbsolute(cwd)) return undefined;
   for (let dir = resolve(cwd); ; dir = dirname(dir)) {
     const dot = join(dir, ".git");
@@ -144,40 +146,57 @@ export function gitHome(cwd: string): { common: string; key: string; refs: strin
     if (head === undefined) return undefined;
     const shallow = existsSync(join(common, "shallow"));
     // every worktree logs the same refs, so one forked before a revert never hides it
-    if (/^\s*\[remote "origin"\]/m.test(readText(join(common, "config")) ?? "")) return { common, key: `fetch\0${mtime(join(common, "FETCH_HEAD"))}`, refs: "--remotes=origin", shallow };
-    // a packed ref reads empty here: the refresh interval catches its moves
-    const ref = /^ref:\s*(.+)$/.exec(head)?.[1];
-    return { common, key: `${head}\0${ref ? readText(join(common, ref)) ?? "" : ""}`, refs: "--branches", shallow };
+    const origin = /^\s*\[remote "origin"\]/m.test(readText(join(common, "config")) ?? "");
+    return { common, refs: origin ? "--remotes=origin" : "--branches", shallow };
   }
+}
+
+const folders = new Map<string, { at: number; subs: string[] }>();
+
+/** Changes when any worktree moves a ref the log reads: git writes a loose ref as a lock file renamed into its folder. */
+function refsKey(common: string, refs: string): string {
+  const times = [mtime(join(common, "packed-refs"))];
+  const walk = (dir: string) => {
+    const at = mtime(dir);
+    times.push(at);
+    let known = folders.get(dir);
+    if (known?.at !== at) {
+      let subs: string[] = [];
+      try {
+        subs = readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name));
+      } catch {}
+      known = { at, subs };
+      folders.set(dir, known);
+    }
+    for (const sub of known.subs) walk(sub);
+  };
+  walk(join(common, refs === "--branches" ? "refs/heads" : "refs/remotes/origin"));
+  return times.join(",");
 }
 
 export function createRevertIndex(deps: { git?: RevertGit; now?: () => number } = {}) {
   const git = deps.git ?? ((cwd, args) => mapGit(cwd, args, LOG_LIMIT));
   const now = deps.now ?? Date.now;
-  // keys: checkout states the last pass covered
-  const repos = new Map<string, { keys: Set<string>; at: number; log: RevertLog }>();
-  const running = new Map<string, { keys: Set<string>; job: Promise<void> }>();
+  const repos = new Map<string, { key: string; at: number; checked: number; log: RevertLog }>();
+  const running = new Map<string, Promise<void>>();
   const repoId = (common: string) => process.platform === "win32" ? common.toLowerCase() : common;
 
   function refresh(cwd: string, home = gitHome(cwd)): Promise<void> {
     // a shallow history undercounts how often a file changed
     if (!home || home.shallow) return Promise.resolve();
     const id = repoId(home.common);
+    const key = refsKey(home.common, home.refs);
     const known = repos.get(id);
-    const fresh = known && now() - known.at < UNLANDED_REFRESH_MS;
-    if (fresh && known.keys.has(home.key)) return Promise.resolve();
+    if (known) known.checked = now();
+    if (known?.key === key && now() - known.at < UNLANDED_REFRESH_MS) return Promise.resolve();
     const prior = running.get(id);
-    if (prior) {
-      prior.keys.add(home.key);
-      return prior.job;
-    }
-    const keys = new Set([...fresh ? known.keys : [], home.key]);
+    if (prior) return prior;
     // a failed pass keeps the last one until the interval passes
     const job = git(cwd, ["-c", "core.quotePath=false", "log", "--no-color", "--no-renames", "--since=90.days", "--name-only", FORMAT, home.refs, "--"])
       .then(parseRevertLog, () => known?.log ?? EMPTY)
-      .then((log) => { repos.set(id, { keys, at: now(), log }); })
+      .then((log) => { repos.set(id, { key, at: now(), checked: now(), log }); })
       .finally(() => running.delete(id));
-    running.set(id, { keys, job });
+    running.set(id, job);
     return job;
   }
 
@@ -186,8 +205,8 @@ export function createRevertIndex(deps: { git?: RevertGit; now?: () => number } 
     hit(cwd: string, card: string): RevertHit | undefined {
       const home = gitHome(cwd);
       if (!home || home.shallow) return undefined;
-      void refresh(cwd, home);
       const known = repos.get(repoId(home.common));
+      if (!known || now() - known.checked >= REFS_CHECK_MS) void refresh(cwd, home);
       return known ? revertHit(known.log, card, now()) : undefined;
     },
   };

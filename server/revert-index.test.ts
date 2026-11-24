@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -66,6 +66,13 @@ function counted() {
 
 const SHARP = "## Purpose\nSharpen electron/verify-cast.mjs:20 frames.\n";
 
+// like git: a lock file renamed over the ref
+function moveRef(dir: string, sha: string) {
+  const ref = join(dir, ".git", "refs", "heads", "main");
+  writeFileSync(`${ref}.lock`, sha);
+  renameSync(`${ref}.lock`, ref);
+}
+
 function repo(head = "ref: refs/heads/main") {
   const dir = mkdtempSync(join(tmpdir(), "revert-index-"));
   mkdirSync(join(dir, ".git", "refs", "heads"), { recursive: true });
@@ -119,13 +126,13 @@ describe("revert index", () => {
     writeFileSync(join(worktree, ".git"), `gitdir: ${own}\n`);
     mkdirSync(join(worktree, "src"));
     expect(gitHome(join(worktree, "src"))?.common).toBe(join(main, ".git"));
-    expect(gitHome(main)).toEqual({ common: join(main, ".git"), key: `ref: refs/heads/main\0${"1".repeat(40)}`, refs: "--branches", shallow: false });
+    expect(gitHome(main)).toEqual({ common: join(main, ".git"), refs: "--branches", shallow: false });
     expect(gitHome(mkdtempSync(join(tmpdir(), "revert-none-")))).toBeUndefined();
     expect(gitHome("")).toBeUndefined();
     expect(gitHome("relative/dir")).toBeUndefined();
   });
 
-  it("runs one git pass per repo and runs again only when HEAD moves or the interval passes", async () => {
+  it("runs one git pass per repo and runs again only when a ref moves or the interval passes", async () => {
     const dir = repo();
     let now = NOW;
     const calls: string[][] = [];
@@ -137,7 +144,7 @@ describe("revert index", () => {
     expect(index.hit(dir, "electron/verify-cast.mjs")?.revert.pr).toBe(1595);
     await index.refresh(dir);
     expect(calls).toHaveLength(1);
-    writeFileSync(join(dir, ".git", "refs", "heads", "main"), "2".repeat(40));
+    moveRef(dir, "2".repeat(40));
     await index.refresh(dir);
     expect(calls).toHaveLength(2);
     now += 10 * 60_000;
@@ -151,7 +158,7 @@ describe("revert index", () => {
     const index = createRevertIndex({ git: async () => { if (fail) throw new Error("git gone"); return BLUR_LOG; }, now: () => NOW });
     await index.refresh(dir);
     fail = true;
-    writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/other\n");
+    moveRef(dir, "2".repeat(40));
     await expect(index.refresh(dir)).resolves.toBeUndefined();
     expect(index.hit(dir, "electron/verify-cast.mjs")?.revert.pr).toBe(1595);
   });
@@ -218,6 +225,52 @@ describe("revert index", () => {
     await Promise.all(repos.others.map((cwd) => fresh.refresh(cwd)));
     expect(burst.passes()).toBe(1);
     expect(index.hit(repos.others[0]!, "Edit docs/가이드.md.")).toMatchObject({ file: "docs/가이드.md", revert: { pr: 1596 } });
+  });
+
+  it("sees a revert fetched from a linked worktree without waiting out the interval", async () => {
+    const repos = gitRepos();
+    const { git, passes } = counted();
+    const index = createRevertIndex({ git });
+    await index.refresh(repos.main);
+    const card = "Edit src/lens.ts.";
+    expect(index.hit(repos.main, card)).toBeUndefined();
+    const upstream = join(repos.main, "..", "upstream");
+    const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { windowsHide: true, encoding: "utf8" });
+    run(join(repos.main, ".."), "clone", "-q", join(repos.main, "..", "origin.git"), upstream);
+    for (const [text, message] of [["v1\n", "feat: lens (#1700)"], ["v0\n", "revert: lens (#1701)"]]) {
+      mkdirSync(join(upstream, "src"), { recursive: true });
+      writeFileSync(join(upstream, "src", "lens.ts"), text!);
+      run(upstream, "add", "-A");
+      run(upstream, "commit", "-qm", message!);
+    }
+    run(upstream, "push", "-q", "origin", "main");
+    run(repos.old, "fetch", "-q", "origin");
+    await index.refresh(repos.main);
+    expect(index.hit(repos.main, card)?.revert.pr).toBe(1701);
+    expect(passes()).toBe(2);
+  });
+
+  it("checks a branch moved back against its own history, and reuses the log while no ref moves", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "revert-local-"));
+    roots.push(dir);
+    const run = (...args: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { windowsHide: true, encoding: "utf8" }).trim();
+    const save = (text: string, message: string) => { writeFileSync(join(dir, "lens.ts"), text); run("add", "-A"); run("commit", "-qm", message); return run("rev-parse", "HEAD"); };
+    run("init", "-q", "-b", "main");
+    const a = save("v1\n", "feat: lens (#1700)");
+    const { git, passes } = counted();
+    const index = createRevertIndex({ git });
+    const card = "Edit lens.ts.";
+    await index.refresh(dir);
+    expect(index.hit(dir, card)).toBeUndefined();
+    save("v0\n", "revert: lens (#1701)");
+    await index.refresh(dir);
+    expect(index.hit(dir, card)?.revert.pr).toBe(1701);
+    run("reset", "-q", "--hard", a);
+    await index.refresh(dir);
+    expect(index.hit(dir, card)).toBeUndefined();
+    await index.refresh(dir);
+    await index.refresh(dir);
+    expect(passes()).toBe(3);
   });
 
   it.skipIf(process.platform !== "win32")("treats a common dir in another letter case as the same repo", async () => {
