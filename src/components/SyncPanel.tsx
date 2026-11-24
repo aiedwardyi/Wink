@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { googleSignInError } from "@/lib/google-signin-error";
+import { AccountRow } from "./AccountRow";
 
 type SyncStatus = {
   configured: boolean;
@@ -63,6 +64,7 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
   const [folder, setFolder] = useState<SyncStatus | null>(null);
   const [loadError, setLoadError] = useState("");
   const [notice, setNotice] = useState("");
+  const [accountError, setAccountError] = useState("");
   const [busy, setBusy] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [showFolder, setShowFolder] = useState(false);
@@ -114,17 +116,18 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
     }
   };
 
-  const signIn = async () => {
+  const signIn = async (fromRow = false) => {
     const account = window.ogb?.googleAccount;
     if (!account || signingIn) return;
     const attempt = ++attempts.current;
     setSigningIn(true);
     setNotice("");
+    setAccountError("");
     const result = await account.signIn().catch(() => ({ ok: false as const, error: "exchange-failed" as const }));
     if (attempt !== attempts.current) return;
     setSigningIn(false);
     const failure = result.ok ? null : googleSignInError(result.error);
-    if (failure) setNotice(t(failure));
+    if (failure) (fromRow ? setAccountError : setNotice)(t(failure));
     await refresh();
   };
 
@@ -170,6 +173,7 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
   let line: string | null = null;
   let main: Action | undefined;
   const quiets: Action[] = [];
+  const account: Action[] = [];
   let ready = false;
 
   if (signingIn && google) {
@@ -192,12 +196,12 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
   } else if (google) {
     ready = true;
     const email = google.email ?? "";
-    const signInAction = { label: t("settings.sync.signIn"), run: () => void signIn() };
+    const signInAction = { label: t("settings.sync.signIn"), run: () => void signIn(true) };
     const signOutAction = { label: t("settings.sync.signOut"), run: () => void signOut() };
     const folderAction = { label: t("settings.sync.useFolder"), run: revealFolder };
     const refused = Boolean(google.move && google.problem);
     if (google.state === "signed-out") {
-      main = signInAction;
+      account.push(signInAction);
       quiets.push(folderAction);
     } else if (google.state === "ready") {
       if (refused) line = t("settings.sync.otherWorkspace");
@@ -205,34 +209,33 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
       else if (google.join.first) line = t("settings.sync.firstPc", { email });
       else line = t("settings.sync.joining", { email, pcs: google.join.pcs });
       if (!refused) main = { label: t("settings.sync.start"), run: () => void start() };
-      quiets.push(signOutAction);
+      account.push(signOutAction);
     } else if (google.state === "joining" || google.state === "syncing") {
       line = google.progress
         ? t("settings.sync.syncing", { done: google.progress.done, total: google.progress.total })
         : t("settings.sync.syncingNoProgress");
-      quiets.push(signOutAction);
+      account.push(signOutAction);
     } else if (google.state === "up-to-date") {
       line = t("settings.sync.upToDateAs", { email });
-      quiets.push(signOutAction);
+      account.push(signOutAction);
     } else if (google.state === "offline") {
       line = t("settings.sync.offline");
-      quiets.push(signOutAction);
+      account.push(signOutAction);
     } else if (google.state === "drive-full") {
       line = t("settings.sync.driveFull");
-      quiets.push(signOutAction);
+      account.push(signOutAction);
     } else if (google.state === "needs-sign-in") {
       line = t("settings.sync.needsSignIn");
-      main = signInAction;
-      quiets.push(signOutAction);
+      account.push(signInAction, signOutAction);
     } else if (google.state === "blocked") {
       line = t("settings.sync.blocked");
       quiets.push(folderAction);
     } else if (google.state === "other-account") {
       line = t("settings.sync.otherAccount", { boundEmail: google.boundEmail ?? "" });
-      quiets.push(signOutAction);
+      account.push(signOutAction);
     } else {
       line = t("settings.sync.error");
-      quiets.push(signOutAction);
+      account.push(signOutAction);
     }
   }
 
@@ -242,6 +245,9 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
 
   return (
     <div className="min-w-0">
+      {ready && desktop && (account.length > 0 || accountError) ? (
+        <AccountRow email={google?.email ?? ""} actions={account} error={accountError} busy={busy} className="mb-4" />
+      ) : null}
       <div className="text-[15px] font-medium text-ink">{t("settings.section.sync")}</div>
       <div className="mt-0.5 text-[13px] leading-relaxed text-ink-secondary">{t(off ? "settings.sync.offSubtitle" : "settings.sync.subtitle")}</div>
       {shown || (ready && desktop && (main || quiets.length > 0)) ? (

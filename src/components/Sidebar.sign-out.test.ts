@@ -1,20 +1,24 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, Fragment } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
-import { StoreProvider } from "@/state/store";
+import { StoreProvider, useStore } from "@/state/store";
+import type { GoogleAccountStatus } from "../../server/google-account.ts";
 
+import { SettingsModal } from "./SettingsModal";
 import { Sidebar } from "./Sidebar";
 
 const RELAY = "aaaaaaaaaaaaaaaa.app.getwink.dev";
+const EMAIL = "edward.kim.longname@example.com";
 const liveEvents = () => new Response("", { headers: { "content-type": "text/event-stream" } });
 let host: HTMLDivElement;
 let root: Root;
 let signOut: () => Promise<Response>;
 let events: () => Promise<Response>;
 let offline = false;
+let googleAccount: GoogleAccountStatus;
 let streams: Array<{ onopen: (() => void) | null; onerror: (() => void) | null; onmessage: ((event: { data: string }) => void) | null; close: () => void }> = [];
 
 beforeEach(() => {
@@ -32,10 +36,12 @@ beforeEach(() => {
   });
   signOut = async () => new Response('{"ok":true}', { status: 200 });
   events = async () => liveEvents();
+  googleAccount = { state: "signed-in", email: EMAIL };
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     if (offline) throw new TypeError("Failed to fetch");
     if (String(path).includes("/api/phone/sign-out")) return signOut();
     if (String(path).includes("/api/events")) return events();
+    if (String(path).includes("/api/google-account")) return Response.json(googleAccount);
     if (String(path).includes("/api/bots")) return new Response(JSON.stringify({ bots: [], groups: [], computerControl: {} }));
     return new Response("{}", { status: 200 });
   }));
@@ -56,12 +62,17 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+function Shell() {
+  const { state } = useStore();
+  return createElement(Fragment, null, createElement(Sidebar, { open: true, onClose: () => {} }), state.appSettingsOpen && createElement(SettingsModal));
+}
+
 async function renderSidebar(hostname: string, phone = false, locale: "en" | "ko" = "en") {
   const replace = vi.fn();
   vi.stubGlobal("location", Object.assign(new URL(`https://${hostname}/`), { replace }));
   vi.stubGlobal("matchMedia", (query: string) => ({ matches: phone && query.includes("max-width"), media: query, addEventListener() {}, removeEventListener() {} }));
   applyLocale(locale);
-  await act(async () => root.render(createElement(StoreProvider, null, createElement(Sidebar, { open: true, onClose: () => {} }))));
+  await act(async () => root.render(createElement(StoreProvider, null, createElement(Shell))));
   await act(async () => {
     await Promise.all(vi.mocked(fetch).mock.results.map((result) => result.value));
   });
@@ -74,10 +85,14 @@ async function click(element: Element | null | undefined) {
 }
 
 const avatar = () => document.querySelector("[data-sidebar-profile-row] button");
-const menuItems = () => [...document.querySelectorAll('[data-profile-menu] [role="menuitem"]')];
+const account = () => document.querySelector("[data-account-row]");
 const settle = () => act(async () => {
   for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 });
+async function signOutFromAccount() {
+  await click(avatar());
+  await click(account()?.querySelector("button"));
+}
 const signOutCalls = () => vi.mocked(fetch).mock.calls.filter(([path]) => String(path).includes("/api/phone/sign-out"));
 // A lost reply lost its Clear-Site-Data, so the page asks again before it leaves.
 function postsWhenLeaving(replace: ReturnType<typeof vi.fn>) {
@@ -88,38 +103,33 @@ function postsWhenLeaving(replace: ReturnType<typeof vi.fn>) {
   return () => posts;
 }
 
-describe("signing a browser out from the avatar", () => {
+describe("signing a browser out from Settings > Account", () => {
   it.each([
-    ["en", false, ["Account", "Sign Out"]],
-    ["en", true, ["Account", "Sign Out"]],
-    ["ko", false, ["계정", "로그아웃"]],
-  ] as const)("ends the avatar menu with Sign Out and lands on the sign-in page (%s, phone %s)", async (locale, phone, labels) => {
+    ["en", false, "Sign Out"],
+    ["en", true, "Sign Out"],
+    ["ko", false, "로그아웃"],
+  ] as const)("opens Account from the picture with the PC's Google email and Sign Out, and lands on the sign-in page (%s, phone %s)", async (locale, phone, label) => {
     const replace = await renderSidebar(RELAY, phone, locale);
     await click(avatar());
-    expect(document.querySelector('[data-profile-menu][role="menu"]')).not.toBeNull();
-    expect(menuItems().map((item) => item.textContent)).toEqual(labels);
-    await click(menuItems().at(-1));
+    await settle();
+    expect(avatar()?.hasAttribute("aria-haspopup")).toBe(false);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(account()?.textContent).toBe(`${EMAIL}${label}`);
+    const column = document.querySelector(".border-l");
+    if (phone) expect(account()?.parentElement?.firstElementChild).toBe(account());
+    else expect(column?.children.length === 1 && column.firstElementChild === account()).toBe(true);
+    await click(account()?.querySelector("button"));
     await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
     expect(signOutCalls()).toHaveLength(1);
     expect(signOutCalls()[0]?.[1]).toMatchObject({ method: "POST" });
   });
 
-  it.each([
-    ["near the right edge", window.innerWidth - 56, window.innerWidth - 216],
-    ["with room", 12, 12],
-  ])("keeps the avatar menu on screen %s", async (_case, avatarLeft, menuLeft) => {
-    await renderSidebar(RELAY);
-    vi.spyOn(avatar()!, "getBoundingClientRect").mockReturnValue(new DOMRect(avatarLeft, 800, 40, 40));
-    await click(avatar());
-    expect(document.querySelector<HTMLElement>("[data-profile-menu]")?.style.left).toBe(`${menuLeft}px`);
-  });
-
-  it("closes the avatar menu on Escape in the wide layout", async () => {
+  it.each(["pending", "signed-out", "unavailable"] as const)("shows Sign Out alone while the PC's Google account is %s", async (state) => {
+    googleAccount = { state };
     await renderSidebar(RELAY);
     await click(avatar());
-    expect(avatar()?.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    expect(avatar()?.getAttribute("aria-expanded")).toBe("false");
+    await settle();
+    expect(account()?.textContent).toBe("Sign Out");
   });
 
   it("keeps the page and says so when the PC can't be reached", async () => {
@@ -127,8 +137,7 @@ describe("signing a browser out from the avatar", () => {
       throw new TypeError("Failed to fetch");
     };
     const replace = await renderSidebar(RELAY);
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
     expect(replace).not.toHaveBeenCalled();
   });
@@ -140,8 +149,7 @@ describe("signing a browser out from the avatar", () => {
     events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
     const replace = await renderSidebar(RELAY);
     const postsAtLeave = postsWhenLeaving(replace);
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
     expect(replace).toHaveBeenCalledTimes(1);
     expect(postsAtLeave()).toBe(2);
@@ -159,8 +167,7 @@ describe("signing a browser out from the avatar", () => {
     events = gone;
     const replace = await renderSidebar(RELAY);
     await act(async () => streams.at(-1)?.onopen?.());
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await settle();
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
     expect(replace).not.toHaveBeenCalled();
@@ -186,8 +193,7 @@ describe("signing a browser out from the avatar", () => {
     const replace = await renderSidebar(RELAY);
     const postsAtLeave = postsWhenLeaving(replace);
     await act(async () => streams.at(-1)?.onopen?.());
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await settle();
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
     expect(replace).not.toHaveBeenCalled();
@@ -206,8 +212,7 @@ describe("signing a browser out from the avatar", () => {
       offline = true;
       throw new TypeError("Failed to fetch");
     };
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -227,8 +232,7 @@ describe("signing a browser out from the avatar", () => {
       offline = true;
       return new Response('{"ok":true}', { status: 200 });
     };
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -253,8 +257,7 @@ describe("signing a browser out from the avatar", () => {
       return gone();
     };
     const replace = await renderSidebar(RELAY);
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain("Couldn't sign out"));
     expect(replace).not.toHaveBeenCalled();
   });
@@ -269,8 +272,7 @@ describe("signing a browser out from the avatar", () => {
       throw new TypeError("Failed to fetch");
     };
     events = async () => new Response("Bad gateway", { status: 502 });
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await ping();
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
     expect(streams.at(-1)).not.toBe(oldStream);
@@ -290,8 +292,7 @@ describe("signing a browser out from the avatar", () => {
     };
     const held: Array<(response: Response) => void> = [];
     events = () => new Promise((resolve) => held.push(resolve));
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await settle();
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
 
@@ -313,8 +314,7 @@ describe("signing a browser out from the avatar", () => {
     events = async () => {
       throw new TypeError("Failed to fetch");
     };
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await settle();
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
     expect(replace).not.toHaveBeenCalled();
@@ -331,22 +331,49 @@ describe("signing a browser out from the avatar", () => {
     signOut = async () => new Response('{"error":"save-failed"}', { status: 500 });
     events = async () => new Response('{"error":"unauthorized","code":"SIGNED_OUT"}', { status: 401 });
     const replace = await renderSidebar(RELAY);
-    await click(avatar());
-    await click(menuItems().at(-1));
+    await signOutFromAccount();
     await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("https://app.getwink.dev/?signedout=1"));
     expect(document.querySelector('[role="status"]')?.textContent ?? "").not.toContain("Couldn't sign out");
   });
 
   it.each([
-    ["the desktop app", "127.0.0.1:3000", () => { Reflect.set(window, "ogb", { platform: "win32" }); }],
     ["another PC's desktop window", RELAY, () => { vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 Wink/1.0 Electron/43.4.0"); }],
     ["the tailnet", "home.tail1234.ts.net", () => {}],
-  ] as const)("has no Sign Out in %s, where the avatar still opens Account", async (_where, hostname, setUp) => {
+  ] as const)("has no Sign Out in %s, where the avatar opens Account with Sync", async (_where, hostname, setUp) => {
     setUp();
     await renderSidebar(hostname);
     await click(avatar());
-    expect(document.querySelector("[data-profile-menu]")).toBeNull();
-    expect(document.body.textContent).not.toContain("Sign Out");
+    await settle();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(account()).toBeNull();
+    expect(document.querySelector(".border-l")?.textContent).toContain("Sync");
+    expect(signOutCalls()).toHaveLength(0);
+  });
+
+  it("signs the desktop app out of Google from the account row, and stays open", async () => {
+    const googleSignOut = vi.fn(async () => ({ ok: true as const }));
+    Reflect.set(window, "ogb", { platform: "win32", googleAccount: { signIn: vi.fn(), cancel: vi.fn(), signOut: googleSignOut } });
+    const signedIn = { state: "up-to-date", email: EMAIL, boundEmail: null, join: null, progress: null, lastSyncAt: 1 };
+    const signedOut = { ...signedIn, state: "signed-out", email: null };
+    let sync: typeof signedIn | typeof signedOut = signedIn;
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (path, init) => String(path).includes("/api/google-sync") ? Response.json(sync) : base(path, init));
+    const replace = await renderSidebar("127.0.0.1:3000");
+    await click(avatar());
+    await settle();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    const column = document.querySelector(".border-l");
+    expect(column?.querySelector("[data-account-row]")).toBe(account());
+    expect(account()?.textContent).toBe(`${EMAIL}Sign Out`);
+    expect([...column!.querySelectorAll("button")].filter((button) => button.textContent === "Sign Out")).toHaveLength(1);
+
+    sync = signedOut;
+    await click(account()?.querySelector("button"));
+    await settle();
+    expect(googleSignOut).toHaveBeenCalledOnce();
+    expect(account()?.textContent).toBe("Google Sign-in");
+    expect(document.querySelector("[data-sidebar-profile-row]")).not.toBeNull();
+    expect(replace).not.toHaveBeenCalled();
     expect(signOutCalls()).toHaveLength(0);
   });
 });

@@ -40,6 +40,8 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { SyncPanel } from "./SyncPanel";
+import { BrowserAccount } from "./BrowserAccount";
+import { relaySignInSite } from "@/lib/devices-setup";
 import { StartFreshRow } from "./StartFreshRow";
 import { ErrorReportsRow } from "./ErrorReportsRow";
 import { AnalyticsRow } from "./AnalyticsRow";
@@ -435,6 +437,7 @@ export function SettingsModal({
     [phoneAvailable, teamOwner, phone],
   );
   const visibleSections = SECTIONS.filter(sectionShown);
+  const signInSite = section === "account" ? relaySignInSite() : null;
 
   useEffect(() => {
     if (!closing && teamOwner) prefetchQuorum();
@@ -621,11 +624,12 @@ export function SettingsModal({
             {section === "account" && (
               <>
                 <Card>
+                  {phone && signInSite && <BrowserAccount site={signInSite} className="mb-4" />}
                   <div className="flex items-center gap-6">
                     <div className="min-w-0 flex-1 md:min-w-[13rem] lg:min-w-[19rem]"><ProfileFields /></div>
                     {!phone && (
                       <div className="min-w-0 self-stretch border-l border-hairline/40 pl-6">
-                        <SyncPanel onAccountEmail={setAccountEmail} />
+                        {signInSite ? <BrowserAccount site={signInSite} /> : <SyncPanel onAccountEmail={setAccountEmail} />}
                       </div>
                     )}
                   </div>
