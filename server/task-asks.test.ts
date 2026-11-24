@@ -173,6 +173,8 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     ]);
     expect(asksNudge(asks.slice(0, 20), NOW, "thanks")).toBe("");
     expect(listed(asksNudge(asks, NOW, "status?"))).toHaveLength(21);
+    const backlog = Array.from({ length: 1_000 }, (_, index) => ask(index + 1, { ask: "가".repeat(80), changedAt: 0 }));
+    expect(Buffer.byteLength(listed(asksNudge(backlog, NOW, "thanks")).join("\n"), "utf8")).toBeLessThanOrEqual(MAX_STATUS_ASKS_BYTES);
     expect(listed(taskRecordBlock(record(asks), 6_000, { now: NOW }))).toHaveLength(21);
     const header = [...asks.slice(0, 20), ask(22, { ask: "make the header smaller on phone" }), ask(21, { changedAt: 0 })];
     expect(listed(asksNudge(header, NOW, "the header on phone"))).toEqual(["- A21 open needs verdict 11-12: ask number 21", "- A22 open 11-12: make the header smaller on phone"]);

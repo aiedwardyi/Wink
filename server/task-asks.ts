@@ -185,9 +185,9 @@ export function rotatedAsks(asks: readonly TaskAsk[] | undefined, now: number): 
 
 /** Every open ask, then each parked one with the day it comes back, or with verdictOnly just the asks needing a verdict. Empty when none is open. */
 export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false, verdictOnly = false): string {
-  const { ordered, parked, due, shown: all, line } = listed(asks, now);
+  const { ordered, parked, due, shown: listShown, line } = listed(asks, now);
   if (!ordered.length && !parked.length) return "";
-  const shown = verdictOnly ? due : all;
+  const shown = verdictOnly ? listed(due, now).shown : listShown;
   const them = due.length === 1 ? "it" : "them";
   const flagged = due.length ? `, ${due.length} need${due.length === 1 ? "s" : ""} a verdict: no ref and no change in 3+ days, so build, park or close ${them} yourself, and ask the user about at most 3 at a time` : "";
   const waiting = ordered.length + parked.length - shown.length;
