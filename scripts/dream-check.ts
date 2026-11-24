@@ -1,14 +1,14 @@
 // Dream check: one idle-tidy pass (server/memory-sleep.ts) over copies of each bot's notes, then proof no fact was lost.
 // Reads a copy of ~/.orbit, never the live folder; writes only under a throwaway data dir and Claude config dir.
-// node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--nights 1] [--no-model] [--max-tokens 2000000] [--json summary.json] [--detail detail.json] [--build sha] [--ledger dir --date yyyy-mm-dd]
+// node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--nights 1] [--no-model] [--max-tokens 2000000] [--json summary.json] [--detail detail.json] [--build sha] [--ledger dir --date yyyy-mm-dd] [--topics 1 --practice dir]
 // --json gets counts, codes, bot ids and sha8s only (server/memory-clean.ts nightSummarySchema); note text goes only to --detail, kept in dream-practice.
 // The model pass needs CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY on a throwaway profile, or CLAUDE_CONFIG_DIR set to an account profile.
 // With the model, a bot near its load budget also gets budget filing (server/memory-file.ts), shadow only: it runs nowhere else.
 // A line counts as kept only where the bot still sees it: MEMORY.md, or a synced side file a loaded line says when to read.
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { homedir, hostname, tmpdir, userInfo } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 
@@ -297,6 +297,9 @@ export type BotResult = {
 const failures = (row: BotResult) =>
   row.lost.length + row.madeUp.length + row.quiz.misses.length + (row.trap ? row.moved : 0) + (TIDY_RAN.has(row.result) ? 0 : 1) + (row.error ? 1 : 0);
 
+/** A bot's topic stays open until dream-practice.ts marks it done. */
+export const openTopic = (botDir: string) => existsSync(botDir) && readdirSync(botDir).some((name) => /^topic-[0-9a-f]{8}$/.test(name) && !existsSync(join(botDir, name, "done")));
+
 async function main(): Promise<number> {
   const [dir, ...rest] = process.argv.slice(2);
   const flag = (name: string) => {
@@ -347,8 +350,13 @@ async function main(): Promise<number> {
     writeFileSync(join(root, "data", "workspaces", TRAP_ID, "MEMORY.md"), TRAP_MEMORY);
     const { createMemorySleep, parseTidy, SLEEP_IDLE_MS, SLEEP_TIMEOUT_MS } = await import("../server/memory-sleep.ts");
     const { isMemoryTopicName, loadedMemory, workspaceDir, PARKED_COPY } = await import("../server/workspace.ts");
-    const { filingBytes, filingDue, filingPrompt, fileableNotes, misrouted, planFiling, routePrompt } = await import("../server/memory-file.ts");
-    const { cleanerSkip, errorCode, nightSummarySchema, quizBlocks, sha8, tidyResult } = await import("../server/memory-clean.ts");
+    const { applyMove, filingBytes, filingDue, filingPrompt, fileableNotes, misrouted, movePlan, planFiling, routePrompt, TOPICS_MAX } = await import("../server/memory-file.ts");
+    const { BOT_ID, cleanerSkip, errorCode, historyBlock, historyFile, HISTORY_DIR, nightSummarySchema, quizBlocks, runIdOf, sha8, tidyResult } = await import("../server/memory-clean.ts");
+    const topics = Number(flag("topics") ?? TOPICS_MAX);
+    const practice = flag("practice");
+    // this PC's id in a history file name; the copy is the only place it is written
+    const pc = sha8(`${hostname()}\0${userInfo().username}\0${homedir()}`);
+    let plannedTonight = false;
     const rules: Rules = { loaded: (raw) => loadedMemory(raw).text, synced: isMemoryTopicName };
 
     const spent: Spent = { input: 0, output: 0, fresh: 0 };
@@ -360,8 +368,8 @@ async function main(): Promise<number> {
     // the quiz and the filer, both null under --no-model
     const models = generator ? { ask: asking(claudeGenerator(configDir, helperDir, spend("check"))), file: asking(claudeGenerator(configDir, helperDir, spend("plan"), FILER_MODEL)) } : null;
     const notesOf = (ws: string): Notes => {
-      const historyDir = join(ws, "memory-history");
-      const side = filesUnder(ws).filter((path) => !path.startsWith(historyDir) && relative(ws, path) !== "MEMORY.md");
+      const historyDirs = [join(ws, "memory-history"), join(ws, HISTORY_DIR)];
+      const side = filesUnder(ws).filter((path) => !historyDirs.some((dir) => path.startsWith(dir)) && relative(ws, path) !== "MEMORY.md");
       return { memory: readFileSync(join(ws, "MEMORY.md"), "utf8"), side: Object.fromEntries(side.map((path) => [relative(ws, path).replaceAll("\\", "/"), readFileSync(path, "utf8")])) };
     };
     const results: BotResult[] = [];
@@ -412,16 +420,40 @@ async function main(): Promise<number> {
         written.clear();
         filed = 0;
       };
-      const apply = (plan: NonNullable<ReturnType<typeof planFiling>>) => {
-        mkdirSync(join(ws, "memory"), { recursive: true });
-        for (const [name, text] of Object.entries(plan.topics)) {
-          const path = join(ws, "memory", name);
-          const was = existsSync(path) ? readFileSync(path, "utf8") : null;
-          written.set(path, was);
-          writeFileSync(path, was === null ? text : `${was}${was && !was.endsWith("\n") ? "\n" : ""}${text}`);
+      const track = (path: string, text: string) => {
+        if (!written.has(path)) written.set(path, existsSync(path) ? readFileSync(path, "utf8") : null);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, text);
+      };
+      // a Move applies plan.json, not the filing: a note changed since the plan is skipped, and a second run appends nothing twice
+      const apply = (filing: NonNullable<ReturnType<typeof planFiling>>) => {
+        const plan = movePlan(tidied, filing, sha8(tidied));
+        const side = Object.fromEntries(Object.keys(filing.topics).map((name) => [name, existsSync(join(ws, "memory", name)) ? readFileSync(join(ws, "memory", name), "utf8") : ""]));
+        const before = { memory: tidied, side: notesOf(ws).side };
+        const moved = applyMove(tidied, side, plan);
+        for (const [name, text] of Object.entries(moved.side)) if (text !== side[name]) track(join(ws, "memory", name), text);
+        writeFileSync(join(ws, "MEMORY.md"), moved.memory);
+        const at = Date.now();
+        const history = join(ws, historyFile(at, pc));
+        const files = ["MEMORY.md", ...new Set(moved.moved.map(({ target }) => target))];
+        const block = historyBlock({ runId: runIdOf(pc, id, at), pc, bot: id, at, files, beforeBytes: Buffer.byteLength(tidied), afterBytes: Buffer.byteLength(moved.memory), merged: 0, replaced: 0, moved: moved.moved.length, notes: moved.moved.map((note) => ({ op: "move" as const, ...note })) });
+        track(history, `${existsSync(history) ? readFileSync(history, "utf8") : "# Moves\n\n"}${block}`);
+        filed = moved.bytes;
+        // one bot plans a topic a night, and only once its last topic is done (dream-practice.ts marks it)
+        if (practice && BOT_ID.test(id) && !plannedTonight && !openTopic(join(practice, id))) {
+          plannedTonight = true;
+          const topic = join(practice, id, `topic-${sha8(JSON.stringify(plan))}`);
+          for (const [sideName, notes] of [["before", before], ["after", notesOf(ws)]] as const) {
+            mkdirSync(join(topic, sideName), { recursive: true });
+            writeFileSync(join(topic, sideName, "MEMORY.md"), notes.memory);
+            for (const [path, text] of Object.entries(notes.side)) {
+              mkdirSync(dirname(join(topic, sideName, path)), { recursive: true });
+              writeFileSync(join(topic, sideName, path), text);
+            }
+          }
+          writeFileSync(join(topic, "plan.json"), `${JSON.stringify(plan, null, 1)}\n`);
+          writeFileSync(join(topic, "history.md"), block);
         }
-        writeFileSync(join(ws, "MEMORY.md"), plan.memory);
-        filed = plan.bytes;
       };
       let filingReply = "";
       let filingOptions: Parameters<typeof planFiling>[3] = {};
@@ -436,11 +468,13 @@ async function main(): Promise<number> {
           existing = existsSync(join(ws, "memory")) ? readdirSync(join(ws, "memory")) : [];
           const loaded = rules.loaded(tidied).split("\n");
           const files = reached(notesOf(ws), rules).map((path) => ({ name: path.slice("memory/".length), line: loaded.find((line) => line.replaceAll("\\", "/").includes(path)) ?? "" })).filter(({ name }) => !PARKED_COPY.test(name));
-          filingReply = await models.file(filingPrompt(fileableNotes(tidied), filingBytes(tidied), files));
+          filingReply = await models.file(filingPrompt(fileableNotes(tidied), filingBytes(tidied), files, topics));
+          // a side file no loaded line points at may take a new pointer; a parked copy never does
+          const repoint = existing.filter((name) => name.endsWith(".md") && !PARKED_COPY.test(name) && !files.some((file) => file.name === name));
           // route every candidate first, so the night still fills once misrouted notes drop out
-          const candidates = planFiling(tidied, filingReply, existing, { files, nightBytes: Infinity });
+          const candidates = planFiling(tidied, filingReply, existing, { files, nightBytes: Infinity, topics, repoint });
           const skip = candidates ? misrouted(await models.file(routePrompt(rules.loaded(candidates.memory), candidates.filed)), candidates.filed) : new Set<string>();
-          filingOptions = { files, skip };
+          filingOptions = { files, skip, topics, repoint };
           plan = planFiling(tidied, filingReply, existing, filingOptions);
           if (plan) {
             apply(plan);

@@ -198,7 +198,7 @@ export type KitSummary = z.infer<typeof kitSummarySchema>;
 type Night = { practice: string; root: string; engine: Engine; ledger: Ledger; build: string; date: string };
 
 const topicsOf = (botDir: string) =>
-  readdirSync(botDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && /^topic-[0-9a-f]{8}$/.test(entry.name)).map((entry) => join(botDir, entry.name)).sort((a, b) => statSync(a).birthtimeMs - statSync(b).birthtimeMs || a.localeCompare(b));
+  readdirSync(botDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && /^topic-[0-9a-f]{8}$/.test(entry.name) && !existsSync(join(botDir, entry.name, "done"))).map((entry) => join(botDir, entry.name)).sort((a, b) => statSync(a).birthtimeMs - statSync(b).birthtimeMs || a.localeCompare(b));
 
 /** One night: per bot, fullest first, its oldest open topic; a pair starts only when it can finish tonight, and one left running is voided at the end. */
 export async function night({ practice, root, engine, ledger, build, date }: Night) {
@@ -242,6 +242,7 @@ export async function night({ practice, root, engine, ledger, build, date }: Nig
         // a topic whose two items cannot both run is not checked, so nothing moves
         if (topicItems.length < 2) {
           topicsUnchecked++;
+          writeFileSync(join(topic, "done"), "");
           continue;
         }
         const queue = [...sentinels(), ...topicItems];
@@ -249,8 +250,9 @@ export async function night({ practice, root, engine, ledger, build, date }: Nig
           const pair = await runPair({ practice, root, engine, ledger, build, date }, bot, topic, copy, item, pairs, save, checkDir);
           items.push({ bot, topic: topicSha, item: item.sha8, copy, kind: item.kind, result: pair?.result === "running" ? "unfinished" : (pair?.result ?? "waiting"), baseline: pair?.baseline.filter(Boolean).length ?? 0, baselineRuns: pair?.baseline.length ?? 0, after: pair?.after.filter(Boolean).length ?? 0, afterRuns: pair?.after.length ?? 0, errors: pair?.errors ?? 0 });
         }
-        // one open topic a bot a night
+        // one open topic a bot a night; dream-check plans the next only once this one is done
         if (queue.some((item) => !Object.values(pairs).some((pair) => pair.item === item.sha8 && pair.copy === copy && FINISHED.has(pair.result)))) break;
+        writeFileSync(join(topic, "done"), "");
       }
     } finally {
       for (const pair of Object.values(pairs)) if (pair.result === "running") pair.result = "unfinished";

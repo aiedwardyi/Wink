@@ -241,6 +241,11 @@ describe("dream-check script", () => {
     expect(result.left).toEqual([]);
   });
 
+  it("loads server code only after OMB_DATA_DIR points at its throwaway root", () => {
+    // a static import would read the live data dir in server/config.ts before main() sets it
+    expect(readFileSync(SCRIPT, "utf8").split("\n").filter((line) => /^import (?!type ).* from "\.\.\/server\//.test(line))).toEqual([]);
+  });
+
   it("writes counts, codes, bot ids and sha8s to --json, note text only to --detail", () => {
     const copy = copyOf(DUPES);
     const [json, detail] = [join(copy, "summary.json"), join(copy, "detail.json")];
@@ -264,6 +269,46 @@ describe("dream-check script", () => {
 
   it("never asserts a model that --no-model leaves null", () => {
     expect(readFileSync(SCRIPT, "utf8")).not.toMatch(/\b(?:generator|filer)!/);
+  });
+});
+
+describe("topic night", () => {
+  it("plans one topic for one bot, writes plan.json, both copies and the history block, and plans no other while it is open", async () => {
+    const { movePlanSchema } = await import("../server/memory-file.ts");
+    const { parseHistory } = await import("../server/memory-clean.ts");
+    const world = mkdtempSync(join(testHome(), "topic-"));
+    const [copy, practice, tmp, home] = ["copy", "dream-practice", "tmp", "home"].map((name) => join(world, name));
+    for (const dir of [practice, tmp, home]) mkdirSync(dir, { recursive: true });
+    for (const id of ["bot-a", "bot-b"]) {
+      mkdirSync(join(copy, "workspaces", id), { recursive: true });
+      writeFileSync(join(copy, "workspaces", id, "MEMORY.md"), memory("## Notes", ...Array.from({ length: 130 }, (_, at) => `- Launch detail ${at} for ${id} ${"y".repeat(170)}`)));
+    }
+    writeFileSync(join(copy, "bots.json"), JSON.stringify([{ id: "bot-a", name: "Alpha" }, { id: "bot-b", name: "Beta" }]));
+    const { VITEST: _vitest, ...env } = process.env;
+    const night = () => spawnSync(process.execPath, ["--experimental-strip-types", SCRIPT, copy, "--topics", "1", "--practice", practice, "--json", join(world, "summary.json")], {
+      encoding: "utf8",
+      env: { ...env, HOME: home, USERPROFILE: home, TMP: tmp, TEMP: tmp, TMPDIR: tmp, CLAUDE_CONFIG_DIR: join(world, "login"), CLAUDE_CLI: STUB },
+    });
+    expect(night().status).toBe(0);
+    const topics = readdirSync(practice, { recursive: true, encoding: "utf8" }).filter((name) => /topic-[0-9a-f]{8}$/.test(name));
+    expect(topics).toHaveLength(1);
+    const topic = join(practice, topics[0]);
+    const plan = movePlanSchema.parse(JSON.parse(readFileSync(join(topic, "plan.json"), "utf8")));
+    expect(readFileSync(join(topic, "plan.json"), "utf8")).not.toContain("Launch detail");
+    expect(plan.notes.map(({ target }) => target)).toEqual(["memory/stub-notes.md", "memory/stub-notes.md"]);
+    const [run] = parseHistory(readFileSync(join(topic, "history.md"), "utf8"));
+    expect([run.moved, run.notes.map(({ sha8 }) => sha8)]).toEqual([2, plan.notes.map(({ sha256 }) => sha256.slice(0, 8))]);
+    expect(readFileSync(join(topic, "after", "MEMORY.md"), "utf8")).toContain("read memory/stub-notes.md before stub work");
+    expect(readFileSync(join(topic, "before", "MEMORY.md"), "utf8")).not.toContain("memory/stub-notes.md");
+    // the history block sits in the copy's memory folder, never counted as a note
+    const summary = nightSummarySchema.parse(JSON.parse(readFileSync(join(world, "summary.json"), "utf8")));
+    expect(summary.bots.filter(({ trap }) => !trap).map(({ moved, filed, lost, madeUp }) => [moved > 0 || filed > 0, lost, madeUp])).toEqual([[true, [], []], [true, [], []]]);
+    // the next night plans the other bot; the open topic keeps its bot from a second one
+    const topicsNow = () => readdirSync(practice, { recursive: true, encoding: "utf8" }).filter((name) => /topic-[0-9a-f]{8}$/.test(name)).map((name) => name.replaceAll("\\", "/").split("/")[0]);
+    expect(night().status).toBe(0);
+    expect(topicsNow().sort()).toEqual(["bot-a", "bot-b"]);
+    expect(night().status).toBe(0);
+    expect(topicsNow().sort()).toEqual(["bot-a", "bot-b"]);
   });
 });
 
