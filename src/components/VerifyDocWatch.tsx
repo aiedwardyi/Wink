@@ -7,7 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { docCamera, type DocView } from "@/lib/verify-doc-camera";
-import { VerifyDocShow, type DocCursor } from "@/lib/verify-doc-show";
+import { docCols, VerifyDocShow, type DocCursor } from "@/lib/verify-doc-show";
 import { readReplay, type VerifyReplayMark } from "@/lib/verify-replay";
 import { verifyLiveGate } from "@/lib/verify-watch";
 import { CURSOR_ARROW, glideEase, tagSpot } from "@/lib/verify-watch-show";
@@ -80,16 +80,26 @@ function linesInView(stage: HTMLElement): [number, number] | null {
   return shown.length ? [Number(shown[0]!.dataset.n), Number(shown.at(-1)!.dataset.n)] : null;
 }
 
+/** Columns one drawn row of the sheet holds. */
+function perRow(stage: HTMLElement, lines: unknown): number {
+  const line = stage.querySelector<HTMLElement>(".verify-doc-line"), ctx = document.createElement("canvas").getContext?.("2d"), sample = Array.isArray(lines) ? lines.join(" ").slice(0, 2_000) : "";
+  if (!line || !ctx || !sample.trim()) return Infinity;
+  const style = getComputedStyle(line), width = line.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+  ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  const col = ctx.measureText(sample).width / docCols(sample);
+  return width > 0 && col > 0 ? width / col : Infinity;
+}
+
 /** The checkers' cursors: plain elements moved by transform, outside React, so a glide costs no render. `leading`: the first line of the chunk the view reads, none when it no longer follows. `glide`: a camera moves the view. */
-function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, leading: () => number | undefined, glide: boolean, front: (now: number) => number | null) {
+function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, leading: () => number | undefined, glide: boolean, front: (now: number) => number | null, wrap: Pick<VerifyDocShow, "row" | "lineAt">) {
   // Numbering skims for the rules without the view; it leads only on its way to a quote.
   const reads = (c: DocCursor) => c.kind !== "numbering" || c.quote !== undefined, follows = (c: DocCursor, band = leading()) => c.band === band && reads(c);
   const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; fromX: number; at: number; ms: number; doc: DocCursor; find: boolean; curve: readonly number[]; animation?: Animation; rows?: { from: number; to: number; adj: number } }>(), fading = new Set<ReturnType<typeof setTimeout>>();
   let offset = 0, frame = 0;
+  // Within the line's own box: the next line may start a sheet not laid out yet.
   const lineY = (line: number) => {
-    const view = stage.getBoundingClientRect().top - stage.scrollTop, top = (n: number) => stage.querySelector<HTMLElement>(`[data-n="${n}"]`)?.getBoundingClientRect().top;
-    const a = top(Math.floor(line)), b = top(Math.floor(line) + 1) ?? a;
-    return a === undefined ? undefined : a + (b! - a) * (line % 1) - view;
+    const view = stage.getBoundingClientRect().top - stage.scrollTop, box = stage.querySelector<HTMLElement>(`[data-n="${Math.floor(line)}"]`)?.getBoundingClientRect();
+    return box === undefined ? undefined : box.top + box.height * (line % 1) - view;
   };
   // A skim reader rides the same front the view sweeps with, a few rows below it; only its place among those rows glides.
   const ride = (now: number) => {
@@ -97,7 +107,7 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, le
     const at = front(now);
     for (const c of shown.values()) {
       if (!c.rows || at === null) continue;
-      const k = c.ms ? Math.min(1, Math.max(0, (now - c.at) / c.ms)) : 1, y = lineY(at + c.rows.from + (c.rows.to - c.rows.from) * k);
+      const k = c.ms ? Math.min(1, Math.max(0, (now - c.at) / c.ms)) : 1, y = lineY(wrap.lineAt(wrap.row(at) + c.rows.from + (c.rows.to - c.rows.from) * k));
       if (y !== undefined) c.el.style.transform = `translate(${c.fromX + (c.x - c.fromX) * k}px,${y - offset + c.rows.adj}px)`;
     }
     if ([...shown.values()].some(c => c.rows)) frame = requestAnimationFrame(ride);
@@ -137,11 +147,12 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, le
       el.style.transform = `translate(${x}px,${y}px)`;
       const curve = c.ride ? RIDE : EASE, animation = c.duration && !c.ride ? el.animate?.(EASE.map(e => ({ transform: `translate(${fx + (x - fx) * e}px,${fy + (y - fy) * e}px)` })), c.duration) : undefined;
       if (c.ride) cursor.animation?.cancel();
-      const now = performance.now(), arrive = c.ride ? front(now + c.duration) : null, rowY = c.ride ? lineY(c.line) : undefined;
-      const rows = arrive === null || rowY === undefined ? undefined : { from: cursor.rows ? cursor.rows.from + (cursor.rows.to - cursor.rows.from) * Math.min(1, cursor.ms ? (now - cursor.at) / cursor.ms : 1) : c.line - front(now)!, to: c.line - arrive, adj: y - (rowY - offset) };
+      // A rider keeps its rows below the front, so drawing that ran late here cannot leave it behind the view.
+      const now = performance.now(), edge = c.ride ? front(now) : null, place = c.line + c.along, rowY = c.ride ? lineY(place) : undefined;
+      const rows = edge === null || rowY === undefined || c.ahead === undefined ? undefined : { from: cursor.rows ? cursor.rows.from + (cursor.rows.to - cursor.rows.from) * Math.min(1, cursor.ms ? (now - cursor.at) / cursor.ms : 1) : wrap.row(place) - wrap.row(edge), to: c.ahead, adj: y - (rowY - offset) };
       Object.assign(cursor, { x, y, from: fy, fromX: fx, at: now, ms: c.duration, doc: c, find: c.quote !== undefined, curve, animation, rows });
       if (rows) {
-        const at = front(now), start = at === null ? undefined : lineY(at + rows.from);
+        const at = front(now), start = at === null ? undefined : lineY(wrap.lineAt(wrap.row(at) + rows.from));
         if (start !== undefined) el.style.transform = `translate(${fx}px,${start - offset + rows.adj}px)`;
         if (!frame) frame = requestAnimationFrame(ride);
       }
@@ -227,7 +238,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
     if (!runId) { setPhase("expired"); return; }
     const abort = new AbortController(), stage = stageRef.current!;
     const doc = new VerifyDocShow(live, reducedMotion(), () => linesInView(stage));
-    const cursors = cursorsRef.current = docCursors(stage, kind => tags.current[kind], () => follow.current ? leadLine.current : undefined, !live, now => front.current(now));
+    const cursors = cursorsRef.current = docCursors(stage, kind => tags.current[kind], () => follow.current ? leadLine.current : undefined, !live, now => front.current(now), doc);
     let timer: ReturnType<typeof setTimeout> | undefined, last = performance.now();
     front.current = now => doc.front(doc.clock + Math.max(0, now - last));
     // One timer to the next thing due: a glide starts or a mark lands. Nothing runs per frame.
@@ -266,8 +277,11 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
       if (abort.signal.aborted) return;
       if (live) doc.finish(total, blocked, performance.now() - last);
       else {
+        // The show paces the rows this stage draws, so the text is on the page before it plans.
+        const text = marks.find(mark => mark.kind === "doc-text");
+        if (text) flushSync(() => setShow(show => apply(show, text)));
         setPhase("play");
-        doc.plan(marks, total, blocked);
+        doc.plan(marks, total, blocked, perRow(stage, text?.lines));
         last = performance.now();
       }
       pump();

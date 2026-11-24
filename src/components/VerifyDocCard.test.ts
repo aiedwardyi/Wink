@@ -375,6 +375,106 @@ it.each([0, 30])("skims a 100-page replay with %i blank lines in a row: the view
   vi.restoreAllMocks();
 });
 
+it("skims a long-line script on a phone by the rows it draws: the view keeps pace with the readers", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
+  // Like a real notes file: 215 lines, most a paragraph that wraps to dozens of rows in a 360 px column.
+  const ROW = 20, VIEW = 460, COL = 7, WIDTH = 360, n = 215, lines = Array.from({ length: n }, (_, i) => i % 5 === 4 ? "" : `Note ${i + 1}: ${"word ".repeat(40 + (i * 37) % 300)}`);
+  const tops = lines.reduce((at, line) => [...at, at.at(-1)! + Math.max(1, Math.ceil(line.length * COL / WIDTH)) * ROW], [0]), height = tops.at(-1)!;
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ measureText: (s: string) => ({ width: s.length * COL }) } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("verify-doc-line") ? WIDTH : 0; });
+  const bytes = [chunk(0, { runId: "run-123456", site: "SCRIPT.md", page: "" }), chunk(2, { ms: 0, kind: "doc-text", lines, pageStarts: [] })];
+  // The run reads three chunks side by side, like server/verify-doc.ts.
+  for (let c = 0; c < 9; c++) {
+    const at = 20 + Math.floor(c / 3) * 15_000 + (c % 3) * 10, from = c * 24 + 1, to = Math.min(n, from + 23);
+    bytes.push(chunk(2, { ms: at, kind: "doc-chunk", from, to, state: "start" }));
+    bytes.push(chunk(2, { ms: at + 12_000, kind: "doc-chunk", from, to, state: "done" }));
+  }
+  bytes.push(chunk(3, { status: "completed", ms: 45_100, issues: [], notChecked: [] }));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({ start(stream) { for (const part of bytes) stream.enqueue(part); stream.close(); } }))));
+  let top = 0, glide: { from: number; to: number; at: number } | null = null;
+  const max = height - VIEW, clamp = (y: number) => Math.min(max, Math.max(0, y));
+  const scrolled = () => {
+    if (glide) {
+      const k = Math.min(1, (performance.now() - glide.at) / 300);
+      top = glide.from + (glide.to - glide.from) * (k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2);
+      if (k === 1) glide = null;
+    }
+    return top;
+  };
+  const rect = (y: number, h: number) => ({ top: y, bottom: y + h, left: 0, right: 600, width: 600, height: h, x: 0, y }) as DOMRect;
+  // Pages of 4 lines: one below the view lays out its own lines but holds the pages after it 720 px down.
+  const placed = (n: number) => {
+    const sheet = Math.floor((n - 1) / 4) * 4;
+    let y = 0;
+    for (let k = 0; k < sheet; k += 4) y += tops[k]! - scrolled() > VIEW ? 720 : tops[k + 4]! - tops[k]!;
+    return y + tops[n - 1]! - tops[sheet]!;
+  };
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const el = this as HTMLElement, n = Number(el.dataset.n);
+    if (el.classList.contains("verify-doc-stage")) return rect(0, VIEW);
+    if (el.classList.contains("verify-doc-line")) return rect(placed(n) - scrolled(), tops[n]! - tops[n - 1]!);
+    return rect(-scrolled(), height);
+  });
+  // A character sits on the row its line wraps it to.
+  vi.spyOn(Range.prototype, "getClientRects").mockImplementation(function (this: Range) {
+    const n = Number(this.startContainer.parentElement!.dataset.n);
+    return [rect(placed(n) + Math.floor(this.startOffset * COL / WIDTH) * ROW - scrolled(), ROW)] as unknown as DOMRectList;
+  });
+  const drawn = new Map<Element, { frames: Keyframe[]; at: number; ms: number }>(), leaving = new Set<Element>();
+  Element.prototype.animate = function (this: Element, frames: Keyframe[], ms: number | KeyframeAnimationOptions) {
+    if (frames[0]?.transform) drawn.set(this, { frames, at: performance.now(), ms: typeof ms === "number" ? ms : Number(ms.duration) });
+    if (frames.at(-1)?.opacity === 0) leaving.add(this);
+    const el = this;
+    return { cancel() { drawn.delete(el); }, get currentTime() { return 0; } } as unknown as Animation;
+  };
+  const yOf = (transform: unknown) => Number(/,(-?[\d.]+)px\)/.exec(String(transform))![1]);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(createElement(VerifyDocWatchFrame, { card: card({ site: "SCRIPT.md", replay: ["run-123456"] }), threadId: "thread", live: false, hidden: false, onClose() {} })));
+  const stage = host.querySelector<HTMLElement>(".verify-doc-stage")!;
+  Object.defineProperties(stage, {
+    clientHeight: { get: () => VIEW },
+    scrollHeight: { get: () => height },
+    scrollTop: { get: scrolled, set: (y: number) => { glide = null; top = clamp(y); } },
+  });
+  stage.scrollTo = ((options: ScrollToOptions) => {
+    const to = clamp(options.top ?? scrolled());
+    if (options.behavior === "smooth") glide = { from: scrolled(), to, at: performance.now() };
+    else stage.scrollTop = to;
+  }) as typeof stage.scrollTo;
+  const steps: number[] = [];
+  let previous = 0, reading = 0, out = 0;
+  for (let ms = 0; ms < 4_000; ms += 16) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+    const y = scrolled();
+    expect(y).toBeGreaterThanOrEqual(previous);
+    if (y > previous) steps.push(y - previous);
+    previous = y;
+    const cursors = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => !leaving.has(el));
+    if (!cursors.length) continue;
+    reading++;
+    const positions = cursors.map(el => {
+      const flight = drawn.get(el), k = flight ? Math.max(0, Math.min(1, (performance.now() - flight.at) / flight.ms)) * (flight.frames.length - 1) : 0;
+      if (!flight || k >= flight.frames.length - 1) return yOf(el.style.transform);
+      const i = Math.floor(k), a = yOf(flight.frames[i]!.transform), b = yOf(flight.frames[i + 1]!.transform);
+      return a + (b - a) * (k - i);
+    });
+    if (positions.some(p => p < y || p + 21 > y + VIEW)) out++;
+  }
+  const mean = steps.reduce((a, b) => a + b, 0) / steps.length;
+  expect(previous).toBeGreaterThan(height * 0.8);
+  expect(reading).toBeGreaterThan(150);
+  expect(out).toBe(0);
+  expect(Math.max(...steps)).toBeLessThan(2 * mean);
+  await act(async () => root.unmount());
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
 it("follows an 18-chunk replay with a finding in every chunk to the end, never a long stretch with every cursor out of view", async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "requestAnimationFrame", "cancelAnimationFrame"] });
