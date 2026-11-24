@@ -2,6 +2,7 @@
 // leaving one pointer line that says when to read it. It only moves lines; scripts/dream-check.ts runs it on copies.
 import { z } from "zod";
 
+import { cleanerSkip } from "./memory-clean.ts";
 import { MEMORY_LINE_MAX_BYTES, MEMORY_MAX_BYTES, MEMORY_MAX_LINES } from "./workspace.ts";
 
 /** Filing starts this full, the share of the load budget that brings the trim notice. */
@@ -85,7 +86,7 @@ export const openFiles = (files: readonly SideFile[]) => files.filter(({ line })
 export function filingPrompt(notes: readonly FileNote[], bytes: number, files: readonly SideFile[] = []): string {
   let used = 0;
   const open = openFiles(files);
-  const shown = notes.filter((note) => (used += note.bytes + 24) <= PROMPT_NOTES_MAX);
+  const shown = notes.filter((note) => !cleanerSkip(note.text) && (used += note.bytes + 24) <= PROMPT_NOTES_MAX);
   return [
     "You file a bot's notes into side files so the memory it loads every session gets shorter. The bot opens a side file only when its pointer line says when.",
     "Pick notes that are reference detail needed only in some situations: a project, a tool, a person, a place, a past event, the steps for one kind of task. Prefer older notes.",
@@ -125,7 +126,7 @@ export type FilingOptions = { files?: readonly SideFile[]; skip?: ReadonlySet<st
 /** What the model's picks file: whole fileable notes into new side files, FILE_NIGHT_BYTES at most, stopping at FILE_TO_BYTES and FILE_TO_LINES. Each topic's pointer takes its first note's place. Null when nothing qualifies. */
 export function planFiling(raw: string, reply: string, existing: readonly string[], { files = [], skip = new Set(), nightBytes = FILE_NIGHT_BYTES }: FilingOptions = {}): Filing | null {
   const lines = raw.split("\n");
-  const notes = new Map<string, FileNote>(fileableNotes(raw).filter((note) => !skip.has(`L${note.at + 1}`)).map((note) => [`L${note.at + 1}`, note]));
+  const notes = new Map<string, FileNote>(fileableNotes(raw).filter((note) => !skip.has(`L${note.at + 1}`) && !cleanerSkip(note.text)).map((note) => [`L${note.at + 1}`, note]));
   const taken = new Set(existing.map((name) => name.toLowerCase()));
   const open = new Map(openFiles(files).map(({ name }) => [name.toLowerCase(), name]));
   let [bytes, count, moved] = [size(raw), lines.length, 0];

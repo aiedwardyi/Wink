@@ -132,3 +132,20 @@ describe("planFiling", () => {
     expect(planFiling(raw, "not json", [])).toBeNull();
   });
 });
+
+describe("secret skip", () => {
+  const LABELLED = "- Router login for the upstairs box\n  sunflowerfield";
+  const COST = "- Daily spend limit is $5 for research runs";
+  const raw = memory(["## Decisions", ["- Ship Fridays"]], ["## Notes", [LABELLED, COST, ...Array.from({ length: 110 }, (_, n) => note(n))]]);
+  const [labelled, cost] = fileableNotes(raw);
+
+  it("keeps a label line and the value on its indented line out of the filer prompt and the filing, and still files a cost note", () => {
+    expect([labelled!.text, cost!.text]).toEqual([LABELLED, COST]);
+    const prompt = filingPrompt(fileableNotes(raw), 4_000);
+    expect(prompt).not.toContain("sunflowerfield");
+    expect(prompt).toContain(COST.slice(2));
+    const plan = planFiling(raw, reply({ topic: "home.md", about: "Home and budget", when: "before planning a purchase", notes: [`L${labelled!.at + 1}`, `L${cost!.at + 1}`] }), []);
+    expect(plan?.memory).toContain(LABELLED);
+    expect(plan?.filed.flatMap(({ notes }) => notes.map(({ text }) => text))).toEqual([COST]);
+  });
+});

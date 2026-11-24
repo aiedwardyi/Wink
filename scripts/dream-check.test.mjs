@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -8,9 +9,12 @@ import { fileableNotes, filingDue, planFiling } from "../server/memory-file.ts";
 import { parseTidy, planTidy } from "../server/memory-sleep.ts";
 import { testHome } from "../server/testing/test-home.ts";
 import { isMemoryTopicName, loadedMemory } from "../server/workspace.ts";
+import { nightSummarySchema } from "../server/memory-clean.ts";
+import { sendsValue } from "../server/testing/secret-cases.ts";
 import { lostFacts, madeUp, movedBlocks, parseQuestions, pointedTopics, scoreQuiz, TRAP_MEMORY, TRAP_REPLY } from "./dream-check.ts";
 
 const SCRIPT = fileURLToPath(new URL("./dream-check.ts", import.meta.url));
+const STUB = fileURLToPath(new URL("./testing/dream-stub-claude.mjs", import.meta.url));
 const memory = (...lines) => `# Memory\n\n${lines.join("\n")}\n`;
 const NOTES = ["- Lives in Seoul (noted 2026-11-01)", "- Uses pnpm", "- Allergic to peanuts"];
 const history = (...entries) => `# Memory history\n\n## 2026-11-23 03:00\n${entries.join("\n")}\n`;
@@ -131,9 +135,8 @@ describe("trap pairs", () => {
 });
 
 describe("dream-check script", () => {
-  const runWith = (extra, copy, ...args) => {
+  const runIn = (tmp, extra, copy, ...args) => {
     const home = testHome();
-    const tmp = mkdtempSync(join(home, "tmp-"));
     // run as a user would: outside Vitest's data guard, with its home and throwaway data dir in the test home
     const { VITEST: _vitest, ...env } = process.env;
     const result = spawnSync(process.execPath, ["--experimental-strip-types", SCRIPT, copy, ...args], {
@@ -142,6 +145,7 @@ describe("dream-check script", () => {
     });
     return { ...result, left: readdirSync(tmp) };
   };
+  const runWith = (extra, copy, ...args) => runIn(mkdtempSync(join(testHome(), "tmp-")), extra, copy, ...args);
   const run = (copy, ...args) => runWith({}, copy, ...args);
   // a zero cap fails every model call before it starts: no claude process, no spend
   const capped = (copy, ...args) => runWith({ CLAUDE_CODE_OAUTH_TOKEN: "unused", CLAUDE_CLI: join(testHome(), "no-claude") }, copy, "--max-tokens", "0", ...args);
@@ -161,7 +165,7 @@ describe("dream-check script", () => {
     writeFileSync(join(copy, "bots.json"), JSON.stringify([{ id: "bot-a", name: "Alpha" }]));
     writeFileSync(join(copy, "workspaces", "bot-a", "MEMORY.md"), memory("- Uses pnpm (noted 2026-11-01)", "- Lives in Seoul", "- Uses pnpm (noted 2026-11-20)"));
     const json = join(copy, "out.json");
-    const result = run(copy, "--no-model", "--json", json);
+    const result = run(copy, "--no-model", "--detail", json);
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     const [row, trap] = JSON.parse(readFileSync(json, "utf8")).results;
@@ -193,7 +197,7 @@ describe("dream-check script", () => {
       symlinkSync(outside, join(ws, "memory"), "junction");
     });
     const json = join(copy, "out.json");
-    const result = run(copy, "--no-model", "--json", json);
+    const result = run(copy, "--no-model", "--detail", json);
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ result: "saved", moved: 1, lost: [] });
@@ -204,7 +208,7 @@ describe("dream-check script", () => {
   it("fails the check when the tidy pass errors", () => {
     const copy = copyOf(DUPES);
     const json = join(copy, "out.json");
-    const result = capped(copy, "--json", json);
+    const result = capped(copy, "--detail", json);
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("FAILED Alpha night 1: tidy error");
     expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "error", moved: 0 });
@@ -216,7 +220,7 @@ describe("dream-check script", () => {
     expect(filingDue(raw)).toBe(true);
     const copy = copyOf(raw);
     const json = join(copy, "out.json");
-    const result = capped(copy, "--json", json);
+    const result = capped(copy, "--detail", json);
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("FAILED Alpha night 1: tidy error, model token cap reached");
     const [row] = JSON.parse(readFileSync(json, "utf8")).results;
@@ -237,7 +241,68 @@ describe("dream-check script", () => {
     expect(result.left).toEqual([]);
   });
 
+  it("writes counts, codes, bot ids and sha8s to --json, note text only to --detail", () => {
+    const copy = copyOf(DUPES);
+    const [json, detail] = [join(copy, "summary.json"), join(copy, "detail.json")];
+    const result = run(copy, "--no-model", "--json", json, "--detail", detail, "--build", "9f2983532");
+    expect(result.status).toBe(0);
+    const summary = nightSummarySchema.parse(JSON.parse(readFileSync(json, "utf8")));
+    expect(summary.bots[0]).toMatchObject({ bot: "bot-a", result: "saved", moved: 1, lost: [], madeUp: [], error: null });
+    expect(readFileSync(json, "utf8")).not.toContain("Alpha");
+    expect(JSON.parse(readFileSync(detail, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "saved" });
+  });
+
+  it("removes a killed night's temp root and leaves a running one", () => {
+    const tmp = mkdtempSync(join(testHome(), "tmp-"));
+    for (const name of ["wink-dream-killed", "wink-dream-running"]) mkdirSync(join(tmp, name, "data"), { recursive: true });
+    const killed = new Date(Date.now() - 3 * 60 * 60_000);
+    utimesSync(join(tmp, "wink-dream-killed"), killed, killed);
+    const result = runIn(tmp, {}, copyOf(DUPES), "--no-model");
+    expect(result.status).toBe(0);
+    expect(result.left).toEqual(["wink-dream-running"]);
+  });
+
   it("never asserts a model that --no-model leaves null", () => {
     expect(readFileSync(SCRIPT, "utf8")).not.toMatch(/\b(?:generator|filer)!/);
+  });
+});
+
+describe("night canary", () => {
+  const MARKER = "plumquartzhelix";
+  const FAIL = "orchidfailnote";
+  const files = (dir) => new Map(readdirSync(dir, { recursive: true, encoding: "utf8" }).map((name) => join(dir, name)).filter((path) => statSync(path).isFile()).map((path) => [path, createHash("sha256").update(readFileSync(path)).digest("hex")]));
+
+  it("leaves no note text outside dream-practice, from an engine that echoes it into replies, errors, stderr and traces", () => {
+    const world = mkdtempSync(join(testHome(), "night-"));
+    const [copy, tmp, results, practice, login, home] = ["copy", "tmp", "results", "dream-practice", "login", "home"].map((name) => join(world, name));
+    for (const dir of [tmp, results, practice, login, home]) mkdirSync(dir, { recursive: true });
+    const filler = (n) => Array.from({ length: n }, (_, at) => `- Launch detail ${at} ${"y".repeat(170)}`);
+    for (const [id, first] of [["bot-a", `- The ${MARKER} launch runs from the east studio`], ["bot-b", `- The ${MARKER} recap waits on ${FAIL}`]]) {
+      mkdirSync(join(copy, "workspaces", id), { recursive: true });
+      writeFileSync(join(copy, "workspaces", id, "MEMORY.md"), memory("## Notes", first, ...filler(130)));
+    }
+    writeFileSync(join(copy, "bots.json"), JSON.stringify([{ id: "bot-a", name: `Alpha ${MARKER}` }, { id: "bot-b", name: "Beta" }]));
+    const before = files(world);
+    const { VITEST: _vitest, ...env } = process.env;
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", SCRIPT, copy, "--json", join(results, "summary.json"), "--detail", join(practice, "detail.json"), "--build", "9f2983532"], {
+      encoding: "utf8",
+      env: { ...env, HOME: home, USERPROFILE: home, TMP: tmp, TEMP: tmp, TMPDIR: tmp, CLAUDE_CONFIG_DIR: login, CLAUDE_CLI: STUB, DREAM_STUB_MARKER: MARKER, DREAM_STUB_FAIL: FAIL },
+    });
+    // run.ps1 sends the check's stdout and stderr to dream-practice, never to results
+    writeFileSync(join(practice, "run.log"), `${result.stdout}${result.stderr}`);
+    const detail = readFileSync(join(practice, "detail.json"), "utf8");
+    expect(JSON.parse(detail).results.map(({ filed, error }) => [filed > 0, Boolean(error)])).toEqual([[true, false], [false, true], [false, false]]);
+    expect(detail).toContain(`stub claude failed on ${MARKER}`);
+    expect(detail).toContain(`"disagree\\":[]} ${MARKER}`);
+
+    const after = files(world);
+    const changed = [...after].filter(([path, hash]) => before.get(path) !== hash).map(([path]) => relative(world, path).replaceAll("\\", "/"));
+    expect(changed.filter((path) => !path.startsWith("results/") && !path.startsWith("dream-practice/"))).toEqual([]);
+    expect(changed.filter((path) => path.startsWith("results/"))).toEqual(["results/summary.json"]);
+    expect(readdirSync(tmp)).toEqual([]);
+    const leaks = [...after.keys()].filter((path) => !path.startsWith(practice) && !path.startsWith(copy) && sendsValue(readFileSync(path, "utf8"), MARKER));
+    expect(leaks.map((path) => relative(world, path))).toEqual([]);
+    const summary = nightSummarySchema.parse(JSON.parse(readFileSync(join(results, "summary.json"), "utf8")));
+    expect(summary.bots.map(({ bot, error }) => [bot, error])).toEqual([["bot-a", null], ["bot-b", "engine"], ["dream-trap", null]]);
   });
 });
