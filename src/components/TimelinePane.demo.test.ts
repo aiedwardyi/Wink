@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -71,7 +73,7 @@ describe("TimelinePane demo", () => {
 
   it("holds will-change only while a drag moves the sheet, so it re-rasters sharp when it stops", () => {
     vi.stubGlobal("devicePixelRatio", 1.5);
-    expect(readFileSync("src/components/TimelinePane.css", "utf8")).not.toMatch(/will-change/);
+    expect(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "TimelinePane.css"), "utf8")).not.toMatch(/will-change/);
     expect(sheet().style.willChange).toBe("");
     pointer("pointerdown", 100, 100);
     pointer("pointermove", 100, 160);
@@ -99,6 +101,19 @@ describe("TimelinePane demo", () => {
       expect(sheet().style.willChange).toBe(lifted);
       pointer("pointerup", 100, 160);
     }
+  });
+
+  it("lifts the sheet for a two-finger pinch and drops it when the last finger lifts", () => {
+    vi.stubGlobal("devicePixelRatio", 2);
+    const second = { pointerType: "touch", pointerId: 2 };
+    pointer("pointerdown", 100, 100);
+    pointer("pointerdown", 200, 100, second);
+    pointer("pointermove", 240, 100, second);
+    expect(sheet().style.willChange).toBe("transform");
+    pointer("pointerup", 240, 100, second);
+    expect(sheet().style.willChange).toBe("transform");
+    pointer("pointerup", 100, 100);
+    expect(sheet().style.willChange).toBe("");
   });
 
   it("ends a mouse drag whose mouse-up never arrived like one that did", () => {
