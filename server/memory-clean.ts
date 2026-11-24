@@ -49,6 +49,7 @@ export const HISTORY_DIR = "memory/cleaner-history";
 export const HISTORY_OPS = ["move", "merge", "replace", "retire", "putback"] as const;
 const count = z.number().int().nonnegative();
 const cleanFile = z.string().regex(CLEAN_FILE);
+export const historyTarget = (target: string) => CLEAN_FILE.test(target);
 
 // the header carries src/lib/memory-clean.ts's MemoryCleanRun fields, so the app reads a run without the notes
 const historyHeader = z.object({

@@ -170,7 +170,7 @@ describe("one topic and a safe Move", () => {
 
   it("writes plan.json with shas, match counts, targets, one pointer and bytes, never note text", () => {
     expect(movePlanSchema.parse(plan)).toEqual(plan);
-    expect(plan.notes.map(({ matches, target, pointer, bytes }) => [matches, target, pointer !== null, bytes])).toEqual([[1, "memory/launch.md", true, 188], [1, "memory/launch.md", false, 188]]);
+    expect(plan.notes.map(({ matches, target, pointer, bytes }) => [matches, target, pointer !== null, bytes])).toEqual([[1, "memory/launch.md", true, 188], [1, "memory/launch.md", true, 188]]);
     expect(JSON.stringify(plan)).not.toContain("Detail 0");
   });
 
@@ -192,7 +192,15 @@ describe("one topic and a safe Move", () => {
     const changed = applyMove(raw.replace(note(0), `${note(0)} edited`), {}, plan);
     expect([changed.skipped, changed.moved.map(({ sha8 }) => sha8)]).toEqual([1, [plan.notes[1]!.sha256.slice(0, 8)]]);
     expect(changed.side["launch.md"]).not.toContain("Detail 0 ");
+    // the pointer goes with the first note that moves
+    expect(changed.memory.split("\n").filter((line) => line.includes("memory/launch.md"))).toEqual(["- Launch work: read memory/launch.md before launch work."]);
     expect(applyMove(raw.replace(note(1), `${note(1)}\n${note(1)}`), {}, plan).skipped).toBe(1);
+  });
+
+  it("moves into any side file name the app loads, and leaves one a history line cannot name", () => {
+    const named = (topic: string) => movePlan(raw, { ...filing, filed: filing.filed.map((file) => ({ ...file, topic })) }, "0a1b2c3d").notes.map(({ target }) => target);
+    expect(named("Pokkey_Notes.md")).toEqual(["memory/Pokkey_Notes.md", "memory/Pokkey_Notes.md"]);
+    expect(named("Launch notes.md")).toEqual([]);
   });
 
   it("re-points an existing side file no line points at, appending to it", () => {

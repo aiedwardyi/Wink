@@ -2,8 +2,8 @@
 // leaving one pointer line that says when to read it. It only moves lines; scripts/dream-check.ts runs it on copies.
 import { z } from "zod";
 
-import { cleanerSkip, noteGroups, sha256 } from "./memory-clean.ts";
-import { MEMORY_LINE_MAX_BYTES, MEMORY_MAX_BYTES, MEMORY_MAX_LINES } from "./workspace.ts";
+import { cleanerSkip, historyTarget, noteGroups, sha256 } from "./memory-clean.ts";
+import { isMemoryTopicName, MEMORY_LINE_MAX_BYTES, MEMORY_MAX_BYTES, MEMORY_MAX_LINES } from "./workspace.ts";
 
 /** Filing starts this full, the share of the load budget that brings the trim notice. */
 const FILE_FROM_SHARE = 0.8;
@@ -203,12 +203,13 @@ export function misrouted(output: string, filed: readonly Filed[]): Set<string> 
 }
 
 const flat = (text: string) => text.replaceAll("\r", "");
-const PLAN_TARGET = /^memory\/[a-z0-9][a-z0-9-]{0,59}\.md$/;
+// any side file the app would load, as long as a history line can name it
+const planTarget = (target: string) => target.startsWith("memory/") && isMemoryTopicName(target.slice("memory/".length)) && historyTarget(target);
 const count = z.number().int().nonnegative();
 /** plan.json: each note by its sha256 and how often its text sits in MEMORY.md (1 to apply), never the text itself. */
 export const movePlanSchema = z.object({
   copy: z.string().regex(/^[0-9a-f]{8}$/),
-  notes: z.array(z.object({ sha256: z.string().regex(/^[0-9a-f]{64}$/), matches: count, target: z.string().regex(PLAN_TARGET), pointer: z.string().nullable(), bytes: count }).strict()),
+  notes: z.array(z.object({ sha256: z.string().regex(/^[0-9a-f]{64}$/), matches: count, target: z.string().refine(planTarget), pointer: z.string().nullable(), bytes: count }).strict()),
 }).strict();
 export type MovePlan = z.infer<typeof movePlanSchema>;
 
@@ -216,9 +217,10 @@ export function movePlan(raw: string, filing: Filing, copy: string): MovePlan {
   const text = flat(raw);
   return movePlanSchema.parse({
     copy,
-    notes: filing.filed.flatMap(({ topic, pointer, notes }) =>
-      notes.map((note, index) => ({ sha256: sha256(flat(note.text)), matches: text.split(flat(note.text)).length - 1, target: `memory/${topic}`, pointer: index ? null : pointer, bytes: Buffer.byteLength(flat(note.text)) })),
-    ),
+    // a side file no history line could name is left where it is; every note carries the pointer, and applyMove writes it once, at the first note that moves
+    notes: filing.filed
+      .filter(({ topic }) => planTarget(`memory/${topic}`))
+      .flatMap(({ topic, pointer, notes }) => notes.map((note) => ({ sha256: sha256(flat(note.text)), matches: text.split(flat(note.text)).length - 1, target: `memory/${topic}`, pointer, bytes: Buffer.byteLength(flat(note.text)) }))),
   });
 }
 

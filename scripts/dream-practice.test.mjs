@@ -122,6 +122,40 @@ describe("practice night", () => {
     expect(outcome.items.some(({ result }) => result === "waiting")).toBe(true);
   });
 
+  it("checks a bot's sentinels once, not again for its next topic", async () => {
+    const practice = practiceDir();
+    topicIn(practice);
+    topicIn(practice, "bot-a", { name: "topic-1a2b3c4d", moved: ["- The launch party is on the roof"] });
+    mkdirSync(join(practice, "bot-a", "sentinels"), { recursive: true });
+    const sentinel = { sha8: "5e5e5e5e", kind: "sentinel", question: "Q sentinel", rubric: "R" };
+    writeFileSync(join(practice, "bot-a", "sentinels", "5e5e5e5e.json"), JSON.stringify(sentinel));
+    const engine = engineWith({ cost: () => 3_000 });
+    await nightIn(practice, engine);
+    expect(readdirSync(join(practice, "bot-a")).filter((name) => existsSync(join(practice, "bot-a", name, "done"))).sort()).toEqual(["topic-0a1b2c3d", "topic-1a2b3c4d"]);
+    expect(engine.calls.filter(([call, , , question]) => call === "turn" && question === "Q sentinel")).toHaveLength(6);
+  });
+
+  it("sets each arm up once a night, so its kit server never loses its folder between items", async () => {
+    const practice = practiceDir();
+    topicIn(practice);
+    mkdirSync(join(practice, "bot-a", "sentinels"), { recursive: true });
+    writeFileSync(join(practice, "bot-a", "sentinels", "5e5e5e5e.json"), JSON.stringify({ sha8: "5e5e5e5e", kind: "sentinel", question: "Q sentinel", rubric: "R" }));
+    const boots = [];
+    // the engine boots a server on an arm's folder the first time it sees it, as winkEngine does
+    const engine = engineWith({
+      turn: (arm) => {
+        if (!existsSync(join(arm.data, "server.pid"))) {
+          writeFileSync(join(arm.data, "server.pid"), "");
+          boots.push(`${arm.kind}-${arm.side}`);
+        }
+        return {};
+      },
+      cost: () => 3_000,
+    });
+    await nightIn(practice, engine);
+    expect(boots.sort()).toEqual(["blind-after", "blind-before", "cued-after", "cued-before"]);
+  });
+
   it("keeps items, rubrics and rows in the bot's practice folder", async () => {
     const practice = practiceDir();
     const topic = topicIn(practice);
@@ -207,17 +241,20 @@ describe("kit login", () => {
 });
 
 describe("practice folder", () => {
-  it("sweeps files past 14 days but keeps sentinels", () => {
+  it("sweeps files past 14 days but keeps sentinels and open topics, and drops a topic whole 14 days after it is done", () => {
     const practice = practiceDir();
-    const topic = topicIn(practice);
+    const [open, done] = [topicIn(practice), topicIn(practice, "bot-a", { name: "topic-1a2b3c4d" })];
     mkdirSync(join(practice, "bot-a", "sentinels"), { recursive: true });
-    const [old, sentinel, fresh] = [join(topic, "items.json"), join(practice, "bot-a", "sentinels", "0a1b2c3d.json"), join(practice, "bot-a", "check", "rows.jsonl")];
     mkdirSync(join(practice, "bot-a", "check"), { recursive: true });
-    for (const path of [old, sentinel, fresh]) writeFileSync(path, "[]");
+    const [old, sentinel, fresh, openItems] = [join(practice, "bot-a", "check", "pairs.json"), join(practice, "bot-a", "sentinels", "0a1b2c3d.json"), join(practice, "bot-a", "check", "rows.jsonl"), join(open, "items.json")];
+    for (const path of [old, sentinel, fresh, openItems, join(done, "done")]) writeFileSync(path, "[]");
     const stale = new Date(Date.now() - 15 * DAY);
-    for (const path of [old, sentinel]) utimesSync(path, stale, stale);
+    for (const path of [old, sentinel, openItems, join(open, "before", "MEMORY.md"), join(done, "before", "MEMORY.md")]) utimesSync(path, stale, stale);
     sweepPractice(practice);
-    expect([old, sentinel, fresh].map(existsSync)).toEqual([false, true, true]);
+    expect([old, sentinel, fresh, openItems, join(open, "before", "MEMORY.md"), done].map(existsSync)).toEqual([false, true, true, true, true, true]);
+    utimesSync(join(done, "done"), stale, stale);
+    sweepPractice(practice);
+    expect([existsSync(done), existsSync(open)]).toEqual([false, true]);
   });
 
   it("keeps a skipped note out of the item writer", () => {

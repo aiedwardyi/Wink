@@ -56,6 +56,7 @@ export function prepareArm(root: string, kind: Arm["kind"], side: Side, bot: str
   return { kind, side, data, workspace };
 }
 
+const TOPIC_DIR = /^topic-[0-9a-f]{8}$/;
 const READ_TOOLS = /^(?:Read|Glob|Grep|LS)$/;
 const PATH_KEYS = new Set(["file_path", "path", "notebook_path"]);
 
@@ -99,11 +100,19 @@ export function kitToken(live: string, now = Date.now(), home = homedir()): stri
   return credentials.claudeAiOauth.accessToken;
 }
 
-/** Files past 14 days go; sentinels stay while their bot practices. */
+/** Files past 14 days go; sentinels stay while their bot practices. A topic goes whole, 14 days after it is done, so an open topic keeps its copies and items. */
 export function sweepPractice(practice: string, now = Date.now()) {
   if (!existsSync(practice)) return;
+  const old = (path: string) => now - (statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? now) > SWEEP_MS;
   for (const name of readdirSync(practice, { recursive: true, encoding: "utf8" })) {
-    if (name.split(/[\\/]/).includes("sentinels")) continue;
+    const parts = name.split(/[\\/]/);
+    if (parts.includes("sentinels")) continue;
+    const at = parts.findIndex((part) => TOPIC_DIR.test(part));
+    if (at !== -1) {
+      const topic = join(practice, ...parts.slice(0, at + 1));
+      if (at === parts.length - 1 && existsSync(join(topic, "done")) && old(join(topic, "done"))) rmSync(topic, { recursive: true, force: true });
+      continue;
+    }
     const path = join(practice, name);
     const stat = statSync(path, { throwIfNoEntry: false });
     if (stat?.isFile() && now - stat.mtimeMs > SWEEP_MS) rmSync(path, { force: true });
@@ -198,11 +207,12 @@ export type KitSummary = z.infer<typeof kitSummarySchema>;
 type Night = { practice: string; root: string; engine: Engine; ledger: Ledger; build: string; date: string };
 
 const topicsOf = (botDir: string) =>
-  readdirSync(botDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && /^topic-[0-9a-f]{8}$/.test(entry.name) && !existsSync(join(botDir, entry.name, "done"))).map((entry) => join(botDir, entry.name)).sort((a, b) => statSync(a).birthtimeMs - statSync(b).birthtimeMs || a.localeCompare(b));
+  readdirSync(botDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && TOPIC_DIR.test(entry.name) && !existsSync(join(botDir, entry.name, "done"))).map((entry) => join(botDir, entry.name)).sort((a, b) => statSync(a).birthtimeMs - statSync(b).birthtimeMs || a.localeCompare(b));
 
 /** One night: per bot, fullest first, its oldest open topic; a pair starts only when it can finish tonight, and one left running is voided at the end. */
 export async function night({ practice, root, engine, ledger, build, date }: Night) {
   const items: KitSummary["items"] = [];
+  const arms = new Map<string, Arm>();
   let topicsUnchecked = 0;
   const bots = (existsSync(practice) ? readdirSync(practice) : []).filter((name) => BOT_ID.test(name) && existsSync(join(practice, name)) && statSync(join(practice, name)).isDirectory() && topicsOf(join(practice, name)).length);
   const size = (bot: string) => statSync(join(topicsOf(join(practice, bot))[0]!, "before", "MEMORY.md"), { throwIfNoEntry: false })?.size ?? 0;
@@ -247,11 +257,11 @@ export async function night({ practice, root, engine, ledger, build, date }: Nig
         }
         const queue = [...sentinels(), ...topicItems];
         for (const item of queue) {
-          const pair = await runPair({ practice, root, engine, ledger, build, date }, bot, topic, copy, item, pairs, save, checkDir);
+          const pair = await runPair({ practice, root, engine, ledger, build, date, arms }, bot, topic, copy, item, pairs, save, checkDir);
           items.push({ bot, topic: topicSha, item: item.sha8, copy, kind: item.kind, result: pair?.result === "running" ? "unfinished" : (pair?.result ?? "waiting"), baseline: pair?.baseline.filter(Boolean).length ?? 0, baselineRuns: pair?.baseline.length ?? 0, after: pair?.after.filter(Boolean).length ?? 0, afterRuns: pair?.after.length ?? 0, errors: pair?.errors ?? 0 });
         }
         // one open topic a bot a night; dream-check plans the next only once this one is done
-        if (queue.some((item) => !Object.values(pairs).some((pair) => pair.item === item.sha8 && pair.copy === copy && FINISHED.has(pair.result)))) break;
+        if (queue.some((item) => !Object.values(pairs).some((pair) => sameRun(pair, item, copy) && FINISHED.has(pair.result)))) break;
         writeFileSync(join(topic, "done"), "");
       }
     } finally {
@@ -268,8 +278,11 @@ export async function night({ practice, root, engine, ledger, build, date }: Nig
   };
 }
 
-async function runPair(o: Night, bot: string, topic: string, copy: string, item: Item, pairs: Record<string, Pair>, save: () => void, checkDir: string): Promise<Pair | null> {
-  const mine = Object.values(pairs).filter((pair) => pair.item === item.sha8 && pair.copy === copy);
+// a sentinel is checked once per bot, whatever topic is open; an item belongs to its topic's copy pair
+const sameRun = (pair: Pair, item: Item, copy: string) => pair.item === item.sha8 && (item.kind === "sentinel" || pair.copy === copy);
+
+async function runPair(o: Night & { arms: Map<string, Arm> }, bot: string, topic: string, copy: string, item: Item, pairs: Record<string, Pair>, save: () => void, checkDir: string): Promise<Pair | null> {
+  const mine = Object.values(pairs).filter((pair) => sameRun(pair, item, copy));
   const finished = mine.find((pair) => FINISHED.has(pair.result));
   if (finished) return finished;
   // an unfinished pair from an earlier night or build is void; tonight starts it over from the baseline
@@ -279,7 +292,14 @@ async function runPair(o: Night, bot: string, topic: string, copy: string, item:
   pairs[`${item.sha8}-${copy}-${o.build}-${o.date}`] = pair;
   save();
   const armKind = item.kind === "cued" ? "cued" : "blind";
-  const arm = (side: Side) => prepareArm(join(o.root, bot), armKind, side, bot, join(topic, side));
+  // an arm is set up once a night: its kit server keeps running on it between items
+  const arm = (side: Side) => {
+    const root = join(o.root, bot, copy);
+    const key = join(root, armKind, side);
+    const made = o.arms.get(key) ?? prepareArm(root, armKind, side, bot, join(topic, side));
+    o.arms.set(key, made);
+    return made;
+  };
   const once = async (side: Side, at: Arm): Promise<boolean | "void" | null> => {
     for (let errors = 0; ; ) {
       if (!o.ledger.turnFits()) return null;
