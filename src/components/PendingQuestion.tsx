@@ -12,7 +12,7 @@ import type { Message } from "@/state/store";
 import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
+import { isPhone, lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
 import { markCut } from "@/lib/scroll-cut";
 import { Fold } from "./Fold";
 import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
@@ -294,8 +294,13 @@ function fitChoices(card: HTMLDivElement | null) {
   let pane = card.parentElement;
   while (pane && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
   const fit = () => {
+    const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
+    const phone = isPhone();
+    // the tray's own cap (30dvh on a phone) is below what three lines and the choices need, and would read as no room
+    if (choices && pane) pane.style.maxHeight = phone ? "none" : "";
+    // the last fit's snap would be read back as the window's own height
+    body.style.maxHeight = "";
     if (choices) {
-      const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
       // the last fit's min-height would be read back as the text's own height
       body.style.minHeight = "";
       const kept = Math.min(body.scrollHeight, KEPT_LINES * line);
@@ -316,6 +321,10 @@ function fitChoices(card: HTMLDivElement | null) {
         }
       }
     }
+    // a cut question on a phone ends on a whole line, never half of one; a desktop card keeps its 30dvh window
+    const shown = body.getBoundingClientRect().height;
+    const whole = Math.floor(shown / line + 0.02) * line;
+    if (phone && body.scrollHeight > shown + 1 && whole >= line && whole < shown) body.style.maxHeight = `${whole}px`;
     markCut(body);
   };
   fit();
@@ -329,6 +338,7 @@ function fitChoices(card: HTMLDivElement | null) {
     watch.disconnect();
     window.removeEventListener("resize", fit);
     fold?.removeEventListener("animationend", fit);
+    if (choices && pane) pane.style.maxHeight = "";
   };
 }
 
