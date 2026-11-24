@@ -97,6 +97,26 @@ it("keeps every cursor on a line of a chunk being checked, one per checker, each
   expect([...kinds.get(31)!].sort()).toEqual(["grammar", "names", "numbering!", "spelling", "translation"]);
 });
 
+const paragraph = "이 문단은 줄바꿈 없이 이어집니다. 문서의 끝도 스크롤해서 볼 수 있어야 합니다. ".repeat(500).slice(0, 16_000) + " 끝";
+it.each([["one paragraph", [paragraph]], ["a heading and a paragraph", ["Opening heading", paragraph]]])("sweeps the front down the rows of a last line that wraps to hundreds: %s", (_, doc) => {
+  const show = new VerifyDocShow(false), fronts: number[] = [];
+  show.plan([{ ms: 0, kind: "doc-text", lines: doc, pageStarts: [] }, band(20, 1, doc.length, "start"), band(1_000, 1, doc.length, "done")], 1_000, false, 45);
+  play(show, () => fronts.push(show.front()!));
+  fronts.slice(1).forEach((front, i) => expect(front).toBeGreaterThanOrEqual(fronts[i]!));
+  expect(fronts[fronts.length >> 1]).toBeGreaterThan(doc.length + 0.3);
+  expect(Math.max(...fronts)).toBeGreaterThan(doc.length + 0.99);
+});
+
+it("shows the numbering cursor on the chunk its rules ran with, then lets it go, when the show skims the rows a phone draws", () => {
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} ${"of a paragraph that wraps on a phone ".repeat(12)}`);
+  const show = new VerifyDocShow(false);
+  let numbering = 0;
+  show.plan([{ ms: 0, kind: "doc-text", lines: long, pageStarts: [] }, band(20, 1, 30, "start"), band(30, 31, 60, "start"), band(9_000, 1, 30, "done"), band(9_001, 31, 60, "done")], 9_001, false, 45);
+  play(show, () => { if ([...show.cursors.values()].some(c => c.kind === "numbering")) numbering++; });
+  expect(numbering).toBeGreaterThan(10);
+  expect([...show.cursors.values()].filter(c => c.kind === "numbering")).toEqual([]);
+});
+
 it("lands a finding when its checker's cursor reaches the quote, before the chunk closes", () => {
   const show = new VerifyDocShow(false), landed: string[] = [];
   show.plan(short(2_000, hit(1_990, "spelling", 5, "card"), hit(1_990, "grammar", 16), hit(1_990, "numbering", 9)), 2_000, false);

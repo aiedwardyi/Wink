@@ -98,8 +98,10 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, le
   let offset = 0, frame = 0;
   // Within the line's own box: the next line may start a sheet not laid out yet.
   const lineY = (line: number) => {
-    const view = stage.getBoundingClientRect().top - stage.scrollTop, box = stage.querySelector<HTMLElement>(`[data-n="${Math.floor(line)}"]`)?.getBoundingClientRect();
-    return box === undefined ? undefined : box.top + box.height * (line % 1) - view;
+    const view = stage.getBoundingClientRect().top - stage.scrollTop, box = (n: number) => stage.querySelector<HTMLElement>(`[data-n="${n}"]`)?.getBoundingClientRect();
+    // A front past the last line sits at its bottom.
+    const own = box(Math.floor(line)), end = own || line % 1 ? undefined : box(line - 1);
+    return own ? own.top + own.height * (line % 1) - view : end && end.bottom - view;
   };
   // A skim reader rides the same front the view sweeps with, a few rows below it; only its place among those rows glides.
   const ride = (now: number) => {

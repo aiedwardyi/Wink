@@ -127,7 +127,7 @@ export class VerifyDocShow {
   /** A skim's reading front, a fractional line; null when the readers read on their own. */
   front(at = this.clock): number | null {
     const c = this.sweep.findLast(row => row.s <= at) ?? this.sweep[0];
-    return c ? Math.min(c.to + 1, this.tops.length - 1, this.lineAt(this.row(c.from) + Math.min(1, Math.max(0, at - c.s) / Math.max(1, c.e - c.s)) * this.span(c))) : null;
+    return c ? Math.min(c.to + 1, this.tops.length, this.lineAt(this.row(c.from) + Math.min(1, Math.max(0, at - c.s) / Math.max(1, c.e - c.s)) * this.span(c))) : null;
   }
 
   /** Drawn rows above line `n`, fractional within a line. */
@@ -166,7 +166,8 @@ export class VerifyDocShow {
           if (lane.next <= this.clock) { this.turn(band, lane); busy = true; }
         }
         if (band.closing === undefined || band.hold > this.clock || band.lanes.some(lane => lane.landing || lane.queue.length)) continue;
-        if (band.compare || !this.sweep.some(c => c.from > band.from)) for (const lane of band.lanes) this.away(band, lane);
+        const last = band.compare || !this.sweep.some(c => c.from > band.from);
+        for (const lane of band.lanes) if (last || lane.kind === "numbering") this.away(band, lane);
         if (band.done) this.marks.push(band.done);
         this.bands.splice(this.bands.indexOf(band), 1);
         if (!band.compare && !this.bands.length) this.idle = this.clock;
@@ -227,7 +228,8 @@ export class VerifyDocShow {
   }
 
   private open(from: number, to: number, at: number, early: boolean, until?: number) {
-    const kinds: VerifyDocKind[] = early && !this.sweep.length ? [...READERS, "numbering"] : READERS, step = CURSOR_MS / kinds.length, rows = this.rows(from, to);
+    // A skim shares one cursor per checker across chunks, so numbering rides only the first.
+    const kinds: VerifyDocKind[] = early && (!this.sweep.length || from === this.sweep[0]!.from) ? [...READERS, "numbering"] : READERS, step = CURSOR_MS / kinds.length, rows = this.rows(from, to);
     // A replay reads the chunk once, top to bottom, in the time it has; live reads it once at the glide pace, then rests until the done mark.
     const reads = until === undefined ? 0 : Math.floor(Math.max(0, until - at - CURSOR_REST_MS) / GLIDE_MS) + 2;
     const rounds = until === undefined ? Math.min(8, Math.max(2, Math.ceil(rows.length / READERS.length))) : Math.ceil(reads / 2);
