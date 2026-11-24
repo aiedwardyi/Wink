@@ -22,7 +22,7 @@ import type {
   RuntimeEventListener,
   SendTurnInput,
 } from "../../contracts.ts";
-import { newEventId, newId } from "../../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../../contracts.ts";
 import { applyCredentialAllowlist } from "../../config.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { guardInput } from "../../auto-approve.ts";
@@ -1507,7 +1507,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             cliResolved = resolved ? Promise.resolve(true) : null;
             if (!resolved) {
               if (gated) return lastSnapshot ?? { state: "unavailable", reason: wslBlockedReason(support.displayName) };
-              return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
+              return cliNotFound(effectiveCli());
             }
             const version = await probe(effectiveCli(), env);
             const authenticated = await support.isAuthenticated(env, config);

@@ -16,6 +16,7 @@ export interface DeviceItem {
   deviceId: string;
   name: string;
   host: string;
+  relayHost?: string;
   current: boolean;
   offline: boolean;
   checking?: boolean;
@@ -213,7 +214,7 @@ export function DeviceSwitcher({
                       // A browser sent to an offline PC lands on a raw error, so say so in place.
                       if (!deviceWindow && device.offline) return setOfflineNote(t("chrome.deviceOfflineNote", { name: device.name }));
                       if (!deviceWindow) return navigate(`https://${device.host}/`);
-                      void deviceWindow.open(device.host, device.name).then((opened) => {
+                      void deviceWindow.open(device.host, device.name, device.relayHost).then((opened) => {
                         if (!opened) dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
                       }).catch(() => {});
                       close();

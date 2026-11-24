@@ -706,7 +706,7 @@ export function SettingsPanel({
       </div>
 
       <div ref={pagesRef} className={cn("relative min-h-0 flex-1 overflow-hidden", paging && "pointer-events-none")}>
-        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
+        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 [&>:first-child]:mt-4">
           {rows > 0 && (
             <>
               <KeepGoingCard bot={bot} />
@@ -846,7 +846,7 @@ export function SettingsPanel({
             </>
           )}
         </div>
-        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
+        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 [&>:first-child]:mt-4">
           {rows > 0 && <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />}
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { sendNow } from "./save-defer.ts";
 import { Store } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const BOTS = join(DATA_DIR, "bots.json");
 const SLOW_MS = 200;
@@ -70,7 +71,7 @@ async function openStream() {
 
 describe("saves off the reply path", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
   afterEach(() => {
     vi.restoreAllMocks();

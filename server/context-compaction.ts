@@ -4,10 +4,11 @@ import { endsNoteWindow, isWakeNote } from "./pane-wake.ts";
 import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
-import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
+import { ENGINE_SUMMARY_PREFIX, inertMentions, replyExcerpt, transcriptText, typedByHost } from "./replies.ts";
+import { TYPED_VALUES_HEADER, typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
+import { goalLines, type PinnedGoal } from "./picks.ts";
 import type { Message, OptionCardData } from "./store.ts";
-import type { ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
+import type { NativePrompt, ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
   CONTEXT_COMPACTION_VERSION,
   readContextCompaction,
@@ -48,6 +49,9 @@ const SUMMARY_PREVIOUS_SHARE = 0.75;
 const FALLBACK_SUMMARY_NOTICE = "Model summary unavailable; full transcript retained by Wink.";
 const SUMMARY_TRIMMED = "[summary trimmed to fit]";
 const SUMMARY_MAX_CHARS = 32_000;
+const GOALS_HEADER = "Open goals the user set, kept word for word by Wink:";
+// the goals' share of the summary row, so no goal size can fail a build
+const GOALS_SUMMARY_TOKENS = 2_000;
 const VALUES_CAP_TOKENS = 4_000;
 // The block's own room, taken from the tail so the summary text is never cut for it.
 const VALUES_ROOM_TOKENS = 2_400;
@@ -89,6 +93,8 @@ export interface ApplicableCompaction {
   value: ContextCompactionV1;
 }
 
+type ReplaySummaryPatch = { compaction: ContextCompactionV1 };
+
 export type PreparedModelContext =
   | {
       status: "ready";
@@ -99,6 +105,7 @@ export type PreparedModelContext =
       compaction?: ContextCompactionV1;
       /** message id of the reused summary; absent when `compaction` is new */
       compactionId?: string;
+      replaySummary?: ReplaySummaryPatch;
       /** the window grew past the summary's, so the original history replaced it */
       expanded?: boolean;
     }
@@ -198,6 +205,22 @@ function contextBudget(contextWindow: number): number {
 
 export function estimateContextTokens(messages: Array<{ text: string }>): number {
   return messages.reduce((total, message) => total + messageTokens(message), 0);
+}
+
+export function nativeReplayBudget(contextWindow: number): number {
+  return Math.floor(contextWindow * SUMMARY_GRACE_INPUT_SHARE);
+}
+
+export function codexResumeReplayRoom(
+  task: { resumeCursors: Record<string, unknown>; resumeSeed?: ResumeSeed; nativePrompt?: NativePrompt },
+  instanceId: string,
+  model: string,
+): number {
+  const cursor = task.resumeCursors[instanceId];
+  const { resumeSeed: seed, nativePrompt: prompt } = task;
+  if (cursor === undefined || !seed?.nativeReplay || seed.instanceId !== instanceId || seed.cursor !== cursor ||
+      prompt?.cursor !== cursor || prompt.window?.model !== model) return 0;
+  return Math.max(0, nativeReplayBudget(prompt.window.tokens) - prompt.last - Math.max(0, prompt.growth ?? 0));
 }
 
 /** Longest prefix that fits, ending at a line end, else at whitespace, else anywhere. */
@@ -409,7 +432,8 @@ export function routineCardsSinceLastUserTurn(messages: Message[], excludeIds: R
   }
   if (since === undefined) return lines;
   const late: string[] = [];
-  for (const message of messages.slice(0, index)) {
+  for (let earlier = 0; earlier < index; earlier++) {
+    const message = messages[earlier]!;
     const card = message.kind === "routine.run" && !excludeIds.has(message.id) ? message.routineRun : undefined;
     if (!card || !routineCardLanded(card) || (card.finishedAt ?? 0) <= since) continue;
     const text = routineRunText(card);
@@ -453,7 +477,9 @@ export function paneNotesForTurn(
 ): { notes: string[]; newestId?: string; ids?: string[]; tokens?: number } {
   const pending = replaysTranscript && !inlineReplay ? [] : pendingPaneNotes(messages, excludeIds, deliveredId);
   const sent = contextWindow ? fitPaneNotes(pending, contextWindow) : pending;
-  const notes = sent.map((note) => note.text);
+  // held mail replies still reach this turn through mailForTurn
+  const held = pending.slice(sent.length).filter((note) => !note.mail).length;
+  const notes = [...sent.map((note) => note.text), ...(held ? [`[+${held} worker note${held === 1 ? "" : "s"} waiting, next turn]`] : [])];
   // Held-back notes stay pending: the watermark stops at the last one sent.
   const newestId = sent.length < pending.length
     ? sent.at(-1)?.id
@@ -566,7 +592,7 @@ function replayUnits(
   const through = new Map(throughMail.map((row) => [row.id, row.upto]));
   const from = pending.size ? 0 : offset;
   const delegations = delegationContext(messages.slice(from).filter((row) => !excludeIds.has(row.id)), referenceMessages);
-  return messages.slice(from).flatMap((message, index): ReplayUnit[] => {
+  const units = messages.slice(from).flatMap((message, index): ReplayUnit[] => {
     const pathIndex = from + index;
     if (pathIndex < offset && !pending.has(message.id)) return [];
     if (excludeIds.has(message.id) || message.restated) return [];
@@ -577,7 +603,7 @@ function replayUnits(
     // the app's own call notice: the bot never said it and never got the send
     if (message.call?.notice) return [];
     if (message.kind === "text" && message.text?.trim()) {
-      const body = transcriptText(message, messagesById, userName);
+      const body = transcriptText(message, messagesById, userName, includeSpeakers);
       const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : message.role === "bot" && message.call?.voice ? `${message.call.unheard ? VOICE_UNHEARD : VOICE_SAID} ${body}` : body;
       const speaker = message.role === "user" ? (message.author?.kind === "person" ? message.author.name : userName) : (message.from?.name ?? "Bot");
       const unit: ReplayUnit = {
@@ -631,6 +657,10 @@ function replayUnits(
     }
     return [];
   });
+  if (!includeSpeakers) return units;
+  // in a group only the host's own lines may name a file with @
+  const host = new Set(messages.flatMap((message) => (message.kind === "text" && typedByHost(message) ? [message.id] : [])));
+  return units.map((unit) => (host.has(unit.id) ? unit : { ...unit, text: inertMentions(unit.text) }));
 }
 
 /** One line per run of one speaker's tool chips, ending at the run's last chip. */
@@ -693,34 +723,38 @@ function compactionAt(
   return { messageId: message.id, pathIndex, coveredIndex, value: parsed.value };
 }
 
+/** A row's index by id, read back from `from`: ids are unique on a path and a summary's bounds sit just before it, so this finds what findIndex would without reading a long chat from its start. */
+function indexNear(messages: readonly Message[], id: string, from: number): number {
+  for (let index = from - 1; index >= 0; index--) if (messages[index]!.id === id) return index;
+  for (let index = from; index < messages.length; index++) if (messages[index]!.id === id) return index;
+  return -1;
+}
+
 export function applicableCompaction(
   messages: Message[],
 ): ApplicableCompaction | { unsupported: true; messageId: string; version: number } | null {
   for (let pathIndex = messages.length - 1; pathIndex >= 0; pathIndex--) {
-    const found = compactionAt(messages, pathIndex, (id) => messages.findIndex((candidate) => candidate.id === id));
+    const found = compactionAt(messages, pathIndex, (id) => indexNear(messages, id, pathIndex));
     if (found) return found;
   }
   return null;
 }
 
-function pathCompactions(
-  messages: Message[],
-): Array<ApplicableCompaction | { unsupported: true; messageId: string; version: number }> {
-  const at: number[] = [];
-  const wanted = new Set<string>();
-  messages.forEach((message, pathIndex) => {
-    if (message.kind !== "compaction") return;
-    at.push(pathIndex);
-    const parsed = readContextCompaction({ value: message.compaction });
-    if (parsed.status !== "valid") return;
-    wanted.add(parsed.value.coveredThroughId);
-    if (parsed.value.firstKeptId !== null) wanted.add(parsed.value.firstKeptId);
-  });
-  const indexes = new Map<string, number>();
-  messages.forEach((message, pathIndex) => {
-    if (wanted.has(message.id) && !indexes.has(message.id)) indexes.set(message.id, pathIndex);
-  });
-  return at.flatMap((pathIndex) => compactionAt(messages, pathIndex, (id) => indexes.get(id) ?? -1) ?? []);
+type PathCompaction = ApplicableCompaction | { unsupported: true; messageId: string; version: number };
+// a turn and its summary check read the same frozen path more than once
+const compactionsByPath = new WeakMap<readonly Message[], readonly PathCompaction[]>();
+
+function pathCompactions(messages: Message[]): readonly PathCompaction[] {
+  const known = compactionsByPath.get(messages);
+  if (known) return known;
+  const found: PathCompaction[] = [];
+  for (let pathIndex = 0; pathIndex < messages.length; pathIndex++) {
+    if (messages[pathIndex]!.kind !== "compaction") continue;
+    const row = compactionAt(messages, pathIndex, (id) => indexNear(messages, id, pathIndex));
+    if (row) found.push(row);
+  }
+  if (Object.isFrozen(messages)) compactionsByPath.set(messages, found);
+  return found;
 }
 
 function validCompactions(found: ReturnType<typeof pathCompactions>): ApplicableCompaction[] {
@@ -790,10 +824,11 @@ function boundaryLabel(at: number): string {
   return Number.isFinite(at) ? new Date(at).toISOString() : "an earlier message";
 }
 
-function summaryMessage(summary: string, coveredAt: number): ModelContextMessage {
+// a group's summary is model text, so its @ names no file
+function summaryMessage(summary: string, coveredAt: number, group = false): ModelContextMessage {
   return {
     role: "assistant",
-    text: `${SUMMARY_HEADER}\nCovers the conversation up to ${boundaryLabel(coveredAt)}; everything after it follows verbatim.\n${summary}`,
+    text: `${SUMMARY_HEADER}\nCovers the conversation up to ${boundaryLabel(coveredAt)}; everything after it follows verbatim.\n${group ? inertMentions(summary) : summary}`,
   };
 }
 
@@ -894,6 +929,7 @@ function summaryPrompt(input: {
     `Start with the line ${SUMMARY_SENTINEL}, then plain text only, and keep it under ${Math.floor(input.summaryTokens * 3 * SUMMARY_ASK_SHARE / SUMMARY_BYTES_PER_WORD)} words.`,
     `The summary covers the conversation up to ${boundaryLabel(input.coveredAt)}; everything after that is replayed verbatim.`,
     "Record what happened up to that time: decisions, completed work, tool outcomes, evidence, artifacts and failures.",
+    "Keep every standing goal or spec the user set (what to build and what it must hold) in their words until they finish or drop it.",
     "Keep names, numbers, ids and other values the user gave verbatim. A request to keep something in this conversation only or not to save it limits memory and files, never this summary.",
     "Keep work that is built but not landed word for word: PR numbers, branch names, shas and their state (green, pushed, not merged).",
     "Do not write Next Actions, Workers or Blockers sections; current status lives in the task record.",
@@ -1036,6 +1072,8 @@ export type CompactionPlan =
       transcript: ModelContextMessage[];
       budgetTokens: number;
       estimatedTokens: number;
+      nativeReplay?: true;
+      replaySummary?: ReplaySummaryPatch;
     }
   | { needed: false; status: "unsupported"; messageId: string; version: number }
   | { needed: false; status: "failed"; error: string };
@@ -1057,6 +1095,7 @@ export function planCompaction(input: {
   nativePrompt?: NativePromptSize;
   /** this native cycle already has its summary */
   nativeCycleBuilt?: boolean;
+  resumeNativeReplay?: { compactionId: string | null; budgetTokens: number };
 }): CompactionPlan {
   const window = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
     ? input.contextWindow
@@ -1089,7 +1128,7 @@ export function planCompaction(input: {
     input.includeSpeakers ?? false,
   );
   const currentTranscript = [
-    ...(previous ? [summaryMessage(storedSummary, input.messages[previous.coveredIndex]!.at)] : []),
+    ...(previous ? [summaryMessage(storedSummary, input.messages[previous.coveredIndex]!.at, input.includeSpeakers)] : []),
     ...units.map(replayMessage),
   ];
   const currentTokens = estimateContextTokens(currentTranscript);
@@ -1100,11 +1139,18 @@ export function planCompaction(input: {
   const near = real && !input.nativeCycleBuilt && nearNativeCompact({ ...real, nativeAt: input.nativeAt ?? null }) ? real : undefined;
   const fits: CompactionPlan = { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
   if ((real ? !near : currentTokens <= budgetTokens) && currentTurns <= MAX_CONTEXT_MESSAGES) return fits;
+  const typedLines = typedValueLines(input.messages, input.excludeIds);
+  const replay = input.resumeNativeReplay;
+  if (replay && replay.compactionId === (previous?.messageId ?? null) && currentTokens <= replay.budgetTokens) {
+    const projection = replayWithTypedValues(currentTranscript, currentTokens, previous, typedLines);
+    if (projection && projection.estimatedTokens <= replay.budgetTokens) {
+      return { ...fits, ...projection, budgetTokens: replay.budgetTokens, nativeReplay: true };
+    }
+  }
   const summaryBudget = Math.max(
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
   );
-  const typedLines = typedValueLines(input.messages, input.excludeIds);
   const valuesRoom = valuesRoomFor(typedLines, budgetTokens);
   const tailBudget = budgetTokens - summaryBudget - valuesRoom;
   let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : Math.floor(tailBudget * TAIL_FILL_SHARE));
@@ -1128,7 +1174,7 @@ export function planCompaction(input: {
   return {
     needed: true,
     previous,
-    previousSummary: withoutTypedValues(storedSummary),
+    previousSummary: withoutGoals(withoutTypedValues(storedSummary)),
     old,
     tail,
     coveredThrough: input.messages[coveredThroughIndex]!,
@@ -1219,10 +1265,79 @@ function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, s
   return [...head, ...transcript.slice(start)];
 }
 
-function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
+function replayWithTypedValues(
+  transcript: ModelContextMessage[], estimatedTokens: number, previous: ApplicableCompaction | null, lines: readonly TypedLine[],
+): { transcript: ModelContextMessage[]; estimatedTokens: number; replaySummary?: ReplaySummaryPatch } | undefined {
+  // Rooms skip fallback rows and older Wink reads only the summary field, so skipping the summarizer needs a model summary that holds the values.
+  if (!previous || isFallbackSummary(previous.value.summary)) return undefined;
+  const summary = transcript[0];
+  const stored = redactSecretsInText(previous.value.summary);
+  const text = withoutTypedValues(stored);
+  const room = Math.min(VALUES_CAP_TOKENS * 3, SUMMARY_MAX_CHARS - text.length - 2);
+  const covered = typedValuesBlock(lines.filter(({ index }) => index <= previous.coveredIndex), VALUES_CAP_TOKENS * 3);
+  if (covered && Buffer.byteLength(covered, "utf8") > room) return undefined;
+  const head = covered || TYPED_VALUES_HEADER;
+  const kept = new Set(head.split("\n"));
+  const newer = lines.filter(({ index }) => index > previous.coveredIndex);
+  const fitted = typedValuesBlock(newer, room - Buffer.byteLength(head, "utf8") + Buffer.byteLength(TYPED_VALUES_HEADER, "utf8"));
+  // Rooms read only this field, so a newer value with no room sends the turn down the summarizer path.
+  if (fitted !== typedValuesBlock(newer, Infinity)) return undefined;
+  const later = fitted.split("\n").filter((line) => line.startsWith("- ") && !kept.has(line));
+  const block = later.length ? [head, ...later].join("\n") : covered;
+  const next = `${text}\n\n${block}`;
+  if (!summary || !block || next === stored) return { transcript, estimatedTokens };
+  const enriched = { ...summary, text: summary.text.slice(0, summary.text.length - stored.length) + next };
+  return {
+    transcript: [enriched, ...transcript.slice(1)],
+    estimatedTokens: estimatedTokens + messageTokens(enriched) - messageTokens(summary),
+    replaySummary: { compaction: { ...previous.value, summary: next } },
+  };
+}
+
+export function prepareNativeReplay(plan: CompactionNeeded, budgetTokens: number): Extract<PreparedModelContext, { status: "ready" }> | undefined {
+  if (plan.estimatedTokensBefore > budgetTokens) return undefined;
+  const previous = plan.previous;
+  const projection = replayWithTypedValues(plan.transcript, plan.estimatedTokensBefore, previous, plan.typedLines);
+  if (!projection || projection.estimatedTokens > budgetTokens) return undefined;
+  const prepared: Extract<PreparedModelContext, { status: "ready" }> = {
+    status: "ready",
+    ...projection,
+    budgetTokens,
+    compacted: Boolean(previous),
+  };
+  if (previous) prepared.compactionId = previous.messageId;
+  return prepared;
+}
+
+const plain = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** An older summary's goal block, echoed or carried, so a finished goal or old words never ride on beside the new block. */
+function withoutGoals(summary: string): string {
+  let lines = summary.split("\n");
+  for (let at = lines.findIndex((line) => line.trim() === GOALS_HEADER); at >= 0; at = lines.findIndex((line) => line.trim() === GOALS_HEADER)) {
+    const end = lines.findIndex((line, index) => index > at && !line.trim());
+    lines = [...lines.slice(0, at), ...(end < 0 ? [] : lines.slice(end + 1))];
+  }
+  return lines.length === summary.split("\n").length ? summary : lines.join("\n").trimEnd();
+}
+
+/** The summarizer is asked to keep goals but can drop them, so code puts back each one it lost, inside the summary's budget and the row's length limit. */
+function withGoals(summary: string, goals: readonly PinnedGoal[], summaryBudget: number): string {
+  const text = withoutGoals(summary);
+  const kept = plain(text);
+  const lost = goals.filter(({ goal }) => !kept.includes(plain(goal)));
+  if (!lost.length) return text;
+  const block = [GOALS_HEADER, ...goalLines(lost, Math.min(GOALS_SUMMARY_TOKENS, Math.floor(summaryBudget / 4)))].join("\n");
+  const fits = (head: string) => head.length + block.length + 2 <= SUMMARY_MAX_CHARS && messageTokens(summaryMessage(`${head}\n\n${block}`, 0)) <= summaryBudget;
+  const head = fits(text) ? text : `${fittingHead(text, (cut) => fits(`${cut}\n${SUMMARY_TRIMMED}`)).trimEnd()}\n${SUMMARY_TRIMMED}`;
+  return `${head}\n\n${block}`;
+}
+
+/** `goals` is read once the summary is back, so a goal finished during the build is not written as open. */
+function compactionRecord(plan: CompactionNeeded, summary: string, goals?: () => readonly PinnedGoal[]): ContextCompactionV1 {
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
-    summary: withTypedValues(summary, plan.typedLines, plan.summaryBudget + plan.valuesRoom),
+    summary: withTypedValues(withGoals(summary, goals?.() ?? [], plan.summaryBudget), plan.typedLines, plan.summaryBudget + plan.valuesRoom),
     coveredThroughId: plan.coveredThrough.id,
     firstKeptId: plan.tail.find((unit) => !plan.deferredMail?.some((row) => row.id === unit.id))?.id ?? null,
     contextWindow: plan.contextWindow,
@@ -1251,6 +1366,8 @@ export async function prepareModelContext(input: {
   summaryGrace?: SummaryGrace;
   /** the caller's own plan for these same inputs, so a send plans once */
   plan?: CompactionPlan;
+  /** the bot's open goals, put back in a new summary that lost them */
+  goals?: () => readonly PinnedGoal[];
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {
   const plan = input.plan ?? planCompaction(input);
@@ -1263,6 +1380,7 @@ export async function prepareModelContext(input: {
       estimatedTokens: plan.needed ? plan.estimatedTokensBefore : plan.estimatedTokens,
       compacted: Boolean(plan.previous),
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+      ...(!plan.needed && plan.replaySummary ? { replaySummary: plan.replaySummary } : {}),
     };
   }
   if (!plan.needed) {
@@ -1275,6 +1393,7 @@ export async function prepareModelContext(input: {
       estimatedTokens: plan.estimatedTokens,
       compacted: Boolean(plan.previous),
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
+      ...(plan.replaySummary ? { replaySummary: plan.replaySummary } : {}),
     };
   }
   const { previous, previousSummary, old, tail, coveredThrough, budgetTokens, summaryBudget, contextWindow, typedLines, valuesRoom } = plan;
@@ -1293,7 +1412,7 @@ export async function prepareModelContext(input: {
     let history = old;
     if (isFallbackSummary(chain)) {
       const good = repairTarget(input.messages)?.good ?? null;
-      previousText = good ? withoutTypedValues(redactSecretsInText(good.value.summary)) : "";
+      previousText = good ? withoutGoals(withoutTypedValues(redactSecretsInText(good.value.summary))) : "";
       history = spanUnits(input, good?.coveredIndex ?? -1, Math.max(old.at(-1)?.pathIndex ?? -1, previous?.coveredIndex ?? -1), good?.value.deferredMail, plan.deferredMail);
     }
     // Sizes the text only: compactionRecord rebuilds the block in what the text leaves of summaryBudget + valuesRoom, so the two never overflow it.
@@ -1344,8 +1463,8 @@ export async function prepareModelContext(input: {
     }
   }
 
-  const record = compactionRecord(plan, summary);
-  const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(replayMessage)];
+  const record = compactionRecord(plan, summary, input.goals);
+  const transcript = [summaryMessage(record.summary, coveredThrough.at, input.includeSpeakers), ...tail.map(replayMessage)];
   const estimatedTokens = estimateContextTokens(transcript);
   if (estimatedTokens > budgetTokens) {
     return failedContext("Context summarization could not fit the selected model window.", previous);
@@ -1374,6 +1493,7 @@ export async function buildCompaction(input: {
   messages: Message[];
   taskRecordText: string;
   summarize: (prompt: string) => Promise<string>;
+  goals?: () => readonly PinnedGoal[];
   signal?: AbortSignal;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<BuiltModelContext> {
@@ -1392,7 +1512,7 @@ export async function buildCompaction(input: {
   });
   if (segment.status === "too-large") return { status: "failed", result: "error" };
   if (segment.status === "error") return { status: "failed", result: segment.result };
-  const record = compactionRecord(plan, segment.summary);
+  const record = compactionRecord(plan, segment.summary, input.goals);
   const transcript = [summaryMessage(record.summary, plan.coveredThrough.at), ...plan.tail.map(replayMessage)];
   if (estimateContextTokens(transcript) > plan.budgetTokens) return { status: "failed", result: "over-budget" };
   const validated = readContextCompaction({ value: record });

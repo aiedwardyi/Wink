@@ -1,9 +1,9 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import type { AccountContext } from "./account-policy.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -494,7 +494,7 @@ describe("trusted worker accounts", () => {
       delete f.bases.codex.environment;
       f.turns.capture("bot", "thread", { instanceId: "codex", driverKind: "codex" });
       expect(await f.prepare(f.input)).toMatchObject({ account: { id: "codex", generation: 0 },
-        environment: { CODEX_HOME: join(homedir(), ".codex"), CODEX_SQLITE_HOME: join(homedir(), ".codex", "state") } });
+        environment: { CODEX_HOME: join(testHome(), ".codex"), CODEX_SQLITE_HOME: join(testHome(), ".codex", "state") } });
       expect(f.refresh).toHaveBeenCalledExactlyOnceWith("codex", undefined);
     } finally { vi.unstubAllEnvs(); }
   });
@@ -503,9 +503,9 @@ describe("trusted worker accounts", () => {
     const f = await fixture();
     vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
     try {
-      f.bases.claude.environment = { [selector]: join(homedir(), ".claude") };
+      f.bases.claude.environment = { [selector]: join(testHome(), ".claude") };
       expect(await f.prepare({ ...f.input, command: "claude 'task'" })).toMatchObject({
-        environment: { CLAUDE_CONFIG_DIR: join(homedir(), ".claude") },
+        environment: { CLAUDE_CONFIG_DIR: join(testHome(), ".claude") },
       });
     } finally { vi.unstubAllEnvs(); }
   });
@@ -776,7 +776,7 @@ describe("trusted worker accounts", () => {
     const usage = vi.fn(async (): Promise<{ line?: string }> => ({ line: "ready" }));
     const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases, available: f.available, usage, resumeAccount });
     const nativeId = "00000000-0000-4000-8000-000000000002";
-    const flags = engine === "claude" ? ["--dangerously-skip-permissions", "--settings", join(homedir(), ".orbit", "bin", "claude-worker.json"), "--session-id", nativeId]
+    const flags = engine === "claude" ? ["--dangerously-skip-permissions", "--settings", join(DATA_DIR, "bin", "claude-worker.json"), "--session-id", nativeId]
       : ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_provider=custom"];
     const resume = { engine, nativeId, accountId: engine, accountGeneration: 0, unrouted: true as const, template: { executable: engine, args: ["--model", "original", ...flags, "old task"] } };
     const launch = await prepare({ ...f.input, command: engine, resume });

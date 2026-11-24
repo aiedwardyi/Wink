@@ -51,6 +51,7 @@ export interface MemorySleepDeps {
   /** Every bot at boot, so a tidy owed before a restart still runs. */
   bots(): string[];
   generate(botId: string): NoteGenerator | null;
+  requiresGenerator?(botId: string): boolean;
   /** The bot's Auto notes switch, read live; false on a PC that does not tidy this bot. */
   enabled(botId: string): boolean;
   /** Any turn of the bot running. */
@@ -364,6 +365,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     const raw = memoryFileRaw(botId);
     const memory = readMemoryFile(botId);
     const generate = deps.generate(botId);
+    if (!generate && deps.requiresGenerator?.(botId)) return;
     const digest = digestOf(raw, Boolean(generate));
     if (record.digest === digest) return;
     const waited = now() - (record.at ?? -Infinity);

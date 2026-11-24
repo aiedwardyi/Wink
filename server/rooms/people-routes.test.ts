@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -18,6 +18,7 @@ import type { DoorFrame } from "./door-streams.ts";
 import { closeInvitesDb, createInvite, roomInvites } from "./invites.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { peopleRoute } from "./people-routes.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const HOST = "abcdefghijklmnop.wink.test";
 const ORIGIN = `https://${HOST}`;
@@ -182,7 +183,7 @@ beforeEach(() => {
   clock = Math.max(clock, Date.now()) + 60_000;
   vi.setSystemTime(clock);
   close();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   relayHost = HOST;
   reached.length = 0;
   store = new Store(() => ({ instanceId: "fake", model: "m" }));

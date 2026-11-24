@@ -1,21 +1,26 @@
 // Workspace + file memory contract: the workspace is created idempotently,
 // MEMORY.md loads under a hard budget, and an empty file gets only a starter
 // block in the first-turn prompt.
-import { existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as atomic from "./atomic.ts";
 import { applyPicks, mergeTimelines } from "./picks.ts";
 import { traceClaimedTurn } from "./turn-timing.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 import {
   ensureWorkspace,
   isMemoryTopicName,
   listMemoryTopics,
+  loadedMemory,
   loadMemory,
   memoryHealth,
   memoryHealthOf,
   memoryRevision,
   memorySystemPrompt,
+  pinGoal,
   readMemoryFile,
   readMemoryTopic,
   saveMemoryFile,
@@ -45,7 +50,7 @@ describe("workspace", () => {
     expect(memorySystemPrompt(BOT)).not.toContain("decisions.conflict-0123abcd.md");
   });
   beforeEach(() => {
-    rmSync(WORKSPACES_DIR, { recursive: true, force: true });
+    removeTestData(WORKSPACES_DIR);
   });
 
   it("preserves memory prompt and durable bytes with tracing on and off", async () => {
@@ -101,9 +106,10 @@ describe("workspace", () => {
     writeFileSync(join(dir, "MEMORY.md"), lines.join("\n"));
     const memory = loadMemory(BOT);
     expect(memory?.truncated).toBe(true);
-    expect(memory?.text.split("\n")).toHaveLength(MEMORY_MAX_LINES);
-    expect(memory?.text).toContain(`- fact ${MEMORY_MAX_LINES - 1}`);
-    expect(memory?.text).not.toContain(`- fact ${MEMORY_MAX_LINES}\n`);
+    expect(memory!.text.split("\n").length + memory!.newest!.split("\n").length).toBe(MEMORY_MAX_LINES);
+    expect(memory?.text).toContain("- fact 0\n");
+    expect(memory?.newest?.endsWith(`- fact ${MEMORY_MAX_LINES + 49}`)).toBe(true);
+    expect(memory?.cut).toBe(50);
   });
 
   it("cuts at the byte budget without leaving a torn multi-byte character", () => {
@@ -203,7 +209,7 @@ describe("workspace", () => {
     });
     expect(readMemoryFile(BOT).text).toBe("- likes tea and jazz\n");
     // a fresh workspace saves against the empty revision
-    rmSync(WORKSPACES_DIR, { recursive: true, force: true });
+    removeTestData(WORKSPACES_DIR);
     expect(saveMemoryFile(BOT, "- first\n", memoryRevision("")).conflict).toBe(false);
   });
 
@@ -211,6 +217,77 @@ describe("workspace", () => {
     writeMemoryFile(BOT, "- newer from another PC\n");
     expect(saveMemoryFile(BOT, "- older client\n")).toMatchObject({ conflict: false, revision: memoryRevision("- older client\n") });
     expect(readMemoryFile(BOT).text).toBe("- older client\n");
+  });
+
+  describe("saveMemoryFile while another process writes MEMORY.md", () => {
+    const path = () => join(workspaceDir(BOT), "MEMORY.md");
+    const run = (code: string) => execFileSync(process.execPath, ["-e", `const fs = require("node:fs"), p = process.argv[1]; ${code}`, path()], { windowsHide: true });
+    const parked = () => {
+      const memory = join(workspaceDir(BOT), "memory");
+      return readdirSync(memory).filter((name) => name.startsWith("MEMORY.conflict-")).map((name) => readFileSync(join(memory, name), "utf8"));
+    };
+    // each write of MEMORY.md takes the next step: a writer just before it lands, and one just after
+    const writers = (...steps: Array<{ before?: string; after?: string }>) => {
+      const write = atomic.writeFileAtomic;
+      vi.spyOn(atomic, "writeFileAtomic").mockImplementation((target, ...args) => {
+        const step = target === path() ? steps.shift() : undefined;
+        if (step?.before) run(step.before);
+        write(target, ...args);
+        if (step?.after) run(step.after);
+      });
+    };
+    // off Windows a rename lands over a file another process still has open; a second name stands in for that writer
+    const offWindows = <T>(save: () => T): T => {
+      const own = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        return save();
+      } finally {
+        Object.defineProperty(process, "platform", { value: own });
+      }
+    };
+    afterEach(() => vi.restoreAllMocks());
+
+    it("keeps a note appended once the save lands, and parks the edit made in place before it", () => {
+      writeMemoryFile(BOT, "# Memory\n- Initial\n");
+      const initial = readMemoryFile(BOT);
+      writers({ before: 'fs.writeFileSync(p, "# Memory\\n- First hand edit\\n")', after: 'fs.appendFileSync(p, "- Second bot note\\n")' });
+      expect(saveMemoryFile(BOT, `${initial.text}- Page edit\n`, initial.revision)).toMatchObject({ conflict: false, text: "# Memory\n- Initial\n- Page edit\n- Second bot note\n" });
+      expect(parked()).toEqual(["# Memory\n- First hand edit\n"]);
+    });
+
+    it("parks a file another writer is partway through off Windows, never putting its first bytes back", () => {
+      writeMemoryFile(BOT, "# Memory\n- Initial\n");
+      const initial = readMemoryFile(BOT);
+      const held = `${path()}.held`;
+      linkSync(path(), held);
+      writers({ before: `fs.writeFileSync(${JSON.stringify(held)}, "# Memory\\n- A")` });
+      expect(offWindows(() => saveMemoryFile(BOT, `${initial.text}- Page edit\n`, initial.revision))).toMatchObject({ conflict: false, text: "# Memory\n- Initial\n- Page edit\n" });
+      appendFileSync(held, "nother hand edit\n");
+      rmSync(held);
+      expect(readMemoryFile(BOT).text).toBe("# Memory\n- Initial\n- Page edit\n");
+      expect(parked()).toEqual(["# Memory\n- Another hand edit\n"]);
+    });
+
+    it("parks a line another writer is partway through appending off Windows, never carrying a cut line", () => {
+      writeMemoryFile(BOT, "# Memory\n- Initial\n");
+      const initial = readMemoryFile(BOT);
+      const held = `${path()}.held`;
+      linkSync(path(), held);
+      writers({ before: `fs.appendFileSync(${JSON.stringify(held)}, "- Second bot no")` });
+      expect(offWindows(() => saveMemoryFile(BOT, `${initial.text}- Page edit\n`, initial.revision))).toMatchObject({ conflict: false, text: "# Memory\n- Initial\n- Page edit\n" });
+      appendFileSync(held, "te\n");
+      rmSync(held);
+      expect(parked()).toEqual(["# Memory\n- Initial\n- Second bot note\n"]);
+    });
+
+    it.skipIf(process.platform !== "win32")("puts back a file changed in place while the save lands, with a note appended to the save meanwhile", () => {
+      writeMemoryFile(BOT, "# Memory\n- Initial\n");
+      const initial = readMemoryFile(BOT);
+      writers({ before: 'fs.writeFileSync(p, "# Memory\\n- First hand edit\\n")' }, { before: 'fs.appendFileSync(p, "- Second bot note\\n")' });
+      expect(saveMemoryFile(BOT, `${initial.text}- Page edit\n`, initial.revision)).toMatchObject({ conflict: true, text: "# Memory\n- First hand edit\n- Second bot note\n" });
+      expect(parked()).toEqual([]);
+    });
   });
 
   it("accepts plain single-segment topic names and nothing else", () => {
@@ -335,7 +412,7 @@ describe("workspace", () => {
       const size = `about ${Math.ceil(Buffer.byteLength(text, "utf8") / 1_000) * 1_000} bytes`;
       expect(prompt, size).toContain(size);
       expect(prompt.indexOf(size)).toBeLessThan(prompt.indexOf("Your memory (MEMORY.md):"));
-      expect(prompt.includes("its end was not loaded"), size).toBe(cut);
+      expect(prompt.includes("were not loaded"), size).toBe(cut);
     }
   });
 
@@ -402,15 +479,15 @@ describe("workspace", () => {
     for (const name of ["deploys.md", "auth.md", "billing.md", "MEMORY.conflict-e059d14f.md"]) {
       writeFileSync(join(dir, "memory", name), "notes\n");
     }
-    expect(memoryHealth(BOT)).toEqual({ longLines: 1, orphans: ["billing.md"] });
+    expect(memoryHealth(BOT)).toEqual({ longLines: 1, orphans: ["billing.md"], untriggered: ["auth.md"] });
   });
 
   it("memoryHealth is clean for a healthy or empty memory", () => {
-    expect(memoryHealth(BOT)).toEqual({ longLines: 0, orphans: [] });
+    expect(memoryHealth(BOT)).toEqual({ longLines: 0, orphans: [], untriggered: [] });
     const dir = ensureWorkspace(BOT);
     writeFileSync(join(dir, "MEMORY.md"), "# Memory\n- the user prefers pnpm\n- deploys: read memory/deploys.md first\n");
     writeFileSync(join(dir, "memory", "deploys.md"), "notes\n");
-    expect(memoryHealth(BOT)).toEqual({ longLines: 0, orphans: [] });
+    expect(memoryHealth(BOT)).toEqual({ longLines: 0, orphans: [], untriggered: [] });
   });
 
   it("memoryHealthOf counts a topic as named only by its whole name", () => {
@@ -435,12 +512,70 @@ describe("workspace", () => {
     const line = (i: number) => `- note ${i} ${names[i % 40]} ${"z".repeat(119)}`.slice(0, 119);
     const text = Array.from({ length: MEMORY_MAX_LINES }, (_, i) => line(i)).join("\n");
     expect(Buffer.byteLength(`${text}\n`)).toBe(MEMORY_MAX_BYTES);
-    expect(memoryHealthOf(text, names)).toEqual({ longLines: 0, orphans: [] });
+    expect(memoryHealthOf(text, names)).toEqual({ longLines: 0, orphans: [], untriggered: names });
     const started = performance.now();
     for (let i = 0; i < 500; i += 1) memoryHealthOf(text, names);
     expect((performance.now() - started) / 500).toBeLessThan(0.2);
   });
 
+  it("memoryHealthOf names a side file whose pointer never says when to read it", () => {
+    const simLoop = "- SIM LOOP (11-21): run the sim before you call a build done, on phone and desktop. Glasses v1 spec: memory/glasses-v1.md.";
+    expect(memoryHealthOf(simLoop, ["glasses-v1.md"]).untriggered).toEqual(["glasses-v1.md"]);
+    const said = [
+      "- Read memory/glasses-v1.md before any glasses work.",
+      "- Full lines: memory/glasses-v1.md; read it at session start and when a line feels unclear.",
+      "- deploys: read memory/glasses-v1.md first",
+      "- 안경 작업 전에 memory/glasses-v1.md 읽기",
+    ];
+    for (const text of said) expect(memoryHealthOf(text, ["glasses-v1.md"]).untriggered, text).toEqual([]);
+    const real = [
+      "- REPLY CORE (SHORT MID-TURN, CARD STACK, FEWEST WORDS): memory/reply-core.md. Read before any reply with a picture, card or status.",
+      "- SESSION START: read memory/pinned-reply-style.md, memory/rules-1113-16.md and memory/about-edward.md.",
+      "- Never act on (history): history-2026-09.md, history-2026-10.md.",
+      "- AUDIT PICK (11-22): gates = Sol max; Neon second reviewer. Quote: memory/week-1121.md.",
+      "## Added after the rot test (old full copy memory/MEMORY-pre-rot-B-2026-11-18.md, never act on it)",
+    ].join("\n");
+    const names = ["reply-core.md", "pinned-reply-style.md", "rules-1113-16.md", "about-edward.md", "history-2026-09.md", "history-2026-10.md", "MEMORY-pre-rot-B-2026-11-18.md", "week-1121.md"];
+    expect(memoryHealthOf(real, names)).toEqual({ longLines: 0, orphans: [], untriggered: [] });
+    expect(memoryHealthOf(`${real}\n${simLoop}`, [...names, "glasses-v1.md"]).untriggered).toEqual(["glasses-v1.md"]);
+    expect(memoryHealthOf("- Builds\n", ["glasses-v1.md"])).toEqual({ longLines: 0, orphans: ["glasses-v1.md"], untriggered: [] });
+  });
+
+  it("keeps the newest notes when MEMORY.md is over the budget and says what it cut", () => {
+    const lines = Array.from({ length: 163 }, (_, i) => `- note ${i} ${"x".repeat(148)}`.slice(0, 156));
+    lines[162] = "- Likes running a mix of several AI models together (noted 2026-11-21)";
+    const raw = `${lines.join("\n")}\n`;
+    expect(Buffer.byteLength(raw)).toBeGreaterThan(MEMORY_MAX_BYTES);
+    const loaded = loadedMemory(raw);
+    expect(loaded.text.startsWith(lines[0]!)).toBe(true);
+    expect(loaded.newest?.endsWith(lines[162]!)).toBe(true);
+    expect(Buffer.byteLength(`${loaded.text}\n${loaded.newest}`)).toBeLessThanOrEqual(MEMORY_MAX_BYTES);
+    expect(loaded.text.split("\n").length + loaded.cut! + loaded.newest!.split("\n").length).toBe(163);
+    writeMemoryFile(BOT, raw);
+    const prompt = memorySystemPrompt(BOT);
+    expect(prompt).toContain(lines[162]);
+    expect(prompt).toContain(`\n[${loaded.cut} older lines of MEMORY.md were cut here; its newest lines follow.]\n`);
+    expect(prompt).toContain(`so ${loaded.cut} older lines from its middle were not loaded`);
+  });
+
+  it("shows a goal pinned among 74 saved picks in words every turn", () => {
+    const goal = "Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line";
+    const start = new Date(2026, 10, 22, 15, 38).getTime();
+    const text = applyPicks("", Array.from({ length: 74 }, (_, i) => ({ kind: "pick" as const, at: start + (i + 1) * 60_000, key: `question ${i}`, picked: `option ${i}`, said: `go with ${i}` })))!.text;
+    const first = text.indexOf("\n## ");
+    const dir = ensureWorkspace(BOT);
+    writeFileSync(join(dir, "memory", "decisions.md"), `${text.slice(0, first)}\n\n## 2026-11-22 15:38 | Glasses v1 | current\n- Picked: ${goal}\n- Kind: goal${text.slice(first)}`);
+    expect(memorySystemPrompt(BOT)).toContain("3 competitors");
+  });
+
+  it("pins and finishes a goal through the timeline", () => {
+    expect(pinGoal(BOT, { name: "Glasses v1", goal: "person brief + top 3 competitors + 1 news line" })).toContain("Pinned");
+    expect(memorySystemPrompt(BOT)).toContain("- Glasses v1 (");
+    expect(pinGoal(BOT, { name: "Glasses v1", goal: "person brief + top 3 competitors + 1 news line" })).toContain("already pinned");
+    expect(pinGoal(BOT, { name: "glasses v1", done: true })).toContain("Finished");
+    expect(memorySystemPrompt(BOT)).not.toContain("competitors");
+    expect(readMemoryTopic(BOT, "decisions.md")).toContain("- Picked: ~~person brief + top 3 competitors + 1 news line~~\n- Kind: goal");
+  });
   it("only sends file-backed memory to engines with local workspace files", () => {
     expect(supportsWorkspaceFiles("claudeAgent")).toBe(true);
     expect(supportsWorkspaceFiles("grokAgent")).toBe(true);

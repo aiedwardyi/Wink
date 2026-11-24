@@ -16,6 +16,7 @@ import { closeInvitesDb } from "./invites.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend, hostSend } from "./send.ts";
 import { saveRoomFile } from "./files.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -76,7 +77,7 @@ const close = () => {
 
 beforeEach(() => {
   close();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   wink = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
   engine = { sendTurn: vi.fn(), generateText: vi.fn(), generateReview: vi.fn(), answerWords: vi.fn() };

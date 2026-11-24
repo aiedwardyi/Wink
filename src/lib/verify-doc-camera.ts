@@ -7,12 +7,17 @@ const TOP = 8;
 const BOTTOM = 40;
 
 /** In the stage's scroll space: the leading reader, `y` where it is now and `to` where its glide ends; `stop`: the names cursor, never pushed out the top. */
-export interface DocView { lead?: { y: number; to: number }; stop?: number }
+export interface DocView { lead?: { y: number; to: number }; stop?: number; /** a skim's reading front: the view sweeps with it at its even pace */ sweep?: number }
 export interface DocCamera { x: number; v: number; speed: number; to?: number }
 
 /** One frame of the view: the readers' average speed plus a catch-up to their next stop, so their hops read as one glide; walls keep them in. */
-export function cameraStep(cam: DocCamera, { lead, stop }: DocView, view: number, max: number, ms: number): DocCamera {
-  const dt = Math.min(100, Math.max(1, ms)), ease = 1 - Math.exp(-dt / EASE_MS), wall = (y: number) => (y - TOP - cam.x) * 1000 / WALL_MS;
+export function cameraStep(cam: DocCamera, { lead, stop, sweep }: DocView, view: number, max: number, ms: number): DocCamera {
+  const dt = Math.min(100, Math.max(1, ms));
+  if (sweep !== undefined) {
+    const x = Math.max(0, Math.min(max, Math.max(cam.x, sweep - view / 3)));
+    return { x, v: (x - cam.x) * 1000 / dt, speed: 0 };
+  }
+  const ease = 1 - Math.exp(-dt / EASE_MS), wall = (y: number) => (y - TOP - cam.x) * 1000 / WALL_MS;
   const held = stop === undefined ? Infinity : Math.max(0, wall(stop));
   let v: number, speed = 0;
   if (!lead) v = Math.min(cam.v * (1 - ease), held);

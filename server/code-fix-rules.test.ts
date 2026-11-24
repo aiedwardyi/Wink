@@ -4,14 +4,15 @@
 // the repeat-mistakes rule, the decision-notes rule, the Forum rule and the model picks. Boots
 // the real server on each engine's fake CLI and reads what the CLI received.
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const fake = (name: string) => join(SERVER_DIR, "testing", name);
@@ -29,7 +30,7 @@ const RULES = [
 ];
 const PLAIN_WORDS = "Talk to people in plain words: no board or PR numbers, worker, pane or card names, or 'my 1:1'; say 'a helper is fixing it'.";
 const REPEAT_MISTAKES = "When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
-const FORUM = "After something took 2+ tries, board_post kind fix: the error and the line that fixed it.";
+const FORUM = `After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 const CUSTOM = "Keep build notes in the team wiki.";
 const DECISIONS = [
   "In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date",
@@ -70,7 +71,7 @@ describe("code-fix rules on every engine", () => {
     return existsSync(dir) ? readdirSync(dir).map((file) => readFileSync(join(dir, file), "utf8")).join("\n") : "";
   };
   const sendAndRead = async (engine: Engine, path: string, text: string) => {
-    rmSync(dumpDir(engine), { recursive: true, force: true });
+    removeTestData(dumpDir(engine));
     mkdirSync(dumpDir(engine), { recursive: true });
     expect((await api("POST", path, { text })).status).toBe(202);
     const deadline = Date.now() + 20_000;
@@ -93,7 +94,7 @@ describe("code-fix rules on every engine", () => {
   };
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-code-fix-rules-"));
+    home = createFixtureHome("omb-code-fix-rules-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     const instances = Object.fromEntries(ENGINE_NAMES.map((engine) => {
       const spec = ENGINES[engine];
@@ -131,7 +132,7 @@ describe("code-fix rules on every engine", () => {
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    removeTestData(home);
   });
 
   it.each(ENGINE_NAMES)("reach a custom bot on %s in a 1:1 and a room", async (engine) => {

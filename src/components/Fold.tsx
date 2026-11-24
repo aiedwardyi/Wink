@@ -1,11 +1,11 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 
-/** Opens and closes its content by its height on the shared fold motion (motion.css); closed, the content unmounts. Open at mount, it shows at once. `className` places the fold in its parent; a margin there stays put while the content folds. With an `id`, an empty hidden box keeps that id while closed, so `aria-controls` always has a target. `soft` is the longer, flat-landing motion for a fold whose rows below travel far. `keep` shows the last open content while it closes, for content that empties the moment it closes. `instant` opens and closes with no motion. `fade` opens by opacity only, so the rows below never move per frame. */
-export function Fold({ open, id, className, soft, keep, instant, fade, children }: { open: boolean; id?: string; className?: string; soft?: boolean; keep?: boolean; instant?: boolean; fade?: boolean; children: ReactNode }) {
+/** Opens and closes its content by its height on the shared fold motion (motion.css); closed, the content unmounts. Open at mount, it shows at once. `className` places the fold in its parent; a margin there stays put while the content folds. With an `id`, an empty hidden box keeps that id while closed, so `aria-controls` always has a target. `soft` is the longer, flat-landing motion for a fold whose rows below travel far. `keep` shows the last open content while it closes, for content that empties the moment it closes. `instant` opens and closes with no motion. `fade` opens by opacity only, so the rows below never move per frame. `onOpened` runs once the content is at full height (after the open motion, at once when there is none), never for a fold open at mount: a scroll started before that stops short, as the page has not grown yet. */
+export function Fold({ open, id, className, soft, keep, instant, fade, onOpened, children }: { open: boolean; id?: string; className?: string; soft?: boolean; keep?: boolean; instant?: boolean; fade?: boolean; onOpened?: () => void; children: ReactNode }) {
   const { mounted, closing } = usePresence(open, soft ? MOTION_LARGE_MS : undefined);
   const [was, setWas] = useState(open);
   const [opening, setOpening] = useState(false);
@@ -17,6 +17,14 @@ export function Fold({ open, id, className, soft, keep, instant, fade, children 
     setOpening(open && !reducedMotion() && !instant);
     setLanded(false);
   }
+  const full = open && !opening;
+  const wasFull = useRef(full);
+  const latest = useRef(onOpened);
+  latest.current = onOpened;
+  useEffect(() => {
+    if (full && !wasFull.current) latest.current?.();
+    wasFull.current = full;
+  }, [full]);
   if (!mounted || (instant && !open)) return id ? <div id={id} hidden /> : null;
   return (
     <div

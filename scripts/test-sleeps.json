@@ -51,6 +51,7 @@
   "server/thread-sync-v2-store.test.ts": 2,
   "server/verify-doc.test.ts": 17,
   "server/verify-site.test.ts": 3,
+  "server/web-read-net.test.ts": 1,
   "src/App.back-navigation.test.ts": 1,
   "src/App.bots-unreadable.test.ts": 1,
   "src/App.first-run.test.ts": 1,

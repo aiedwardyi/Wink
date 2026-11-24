@@ -61,6 +61,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   count,
   index = count - 1,
   onStep,
+  onJump,
   typed = "",
   attached = 0,
   replying = false,
@@ -76,6 +77,8 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   index?: number;
   /** shows the question `step` places away */
   onStep?: (step: number) => void;
+  /** scrolls the chat to the message behind this question; absent when none is there */
+  onJump?: () => void;
   /** the message box's text and attachment count: a change after arrival shrinks the card */
   typed?: string;
   attached?: number;
@@ -262,7 +265,12 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
                 {controls(true)}
               </div>
               {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
-              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]">{card.subtitle}</div>
+              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} onClick={onJump && (() => { if (!window.getSelection()?.toString()) onJump(); })} onKeyDown={onJump && ((event) => {
+                // Space scrolls a question that overflows, so only Enter jumps from there
+                const body = event.currentTarget;
+                const key = event.key === "Enter" || (event.key === " " && body.scrollHeight <= body.clientHeight);
+                if (event.target === body && key && !window.getSelection()?.toString()) { event.preventDefault(); onJump(); }
+              })} className={cn(onJump && "cursor-pointer", "mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>{card.subtitle}</div>
               <AskChoices options={card.options} onPick={onPick} />
             </div>
           </div>

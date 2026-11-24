@@ -163,14 +163,25 @@ export const lastShown = (threadId: string) => last.get(threadId);
 /** The header button: shuts this chat's pane, or opens Workers while the chat lists any, else the tab last picked in it, else Map while a worker is live, else Media. Only a bot chat has a `map` and a Workers tab; a room's runs on each person's own PC. */
 export function togglePane(threadId: string, map?: "idle" | "live", workers?: "listed" | "tab") {
   if (showing?.threadId === threadId || media === threadId || mapping === threadId || working === threadId || timeline === threadId) return closeShow();
-  if (workers === "listed") return openWorkers(threadId);
-  const tab = picked.get(threadId) ?? picks()[threadId] ?? (map === "live" ? "map" : "media");
-  if (tab === "workers" && workers) openWorkers(threadId);
-  else if (tab === "map" && map) openMap(threadId);
-  else if (tab === "timeline" && map) openTimeline(threadId);
-  else if (tab === "map" || tab === "workers" || tab === "timeline") openMedia(threadId);
+  const tab = nextTab(threadId, map, workers);
+  if (tab === "workers") openWorkers(threadId);
+  else if (tab === "map") openMap(threadId);
+  else if (tab === "timeline") openTimeline(threadId);
   else if (tab === "media") openMedia(threadId);
-  else openItem(last.get(threadId) ?? tab);
+  else openItem(tab);
+}
+
+/** Whether the header button would open this chat's pane on Media. */
+export const paneOpensOnMedia = (threadId: string, map?: "idle" | "live", workers?: "listed" | "tab") => nextTab(threadId, map, workers) === "media";
+
+function nextTab(threadId: string, map?: "idle" | "live", workers?: "listed" | "tab"): PaneTab {
+  if (workers === "listed") return "workers";
+  const tab = picked.get(threadId) ?? picks()[threadId] ?? (map === "live" ? "map" : "media");
+  if (tab === "workers" && workers) return "workers";
+  if (tab === "map" && map) return "map";
+  if (tab === "timeline" && map) return "timeline";
+  if (tab === "map" || tab === "workers" || tab === "timeline" || tab === "media") return "media";
+  return last.get(threadId) ?? tab;
 }
 
 export function useShowItem(): ShowItem | null {

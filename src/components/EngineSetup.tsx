@@ -216,6 +216,10 @@ export function CommandRow({ command, actionLabel, signInInstanceId, installInst
 
 const DIDNT_FINISH: MessageKey = "engines.didntFinish";
 
+function loginFailure(instance: InstanceInfo): MessageKey {
+  return instance.loginError === "update_offline" ? "engines.updateOffline" : instance.loginError === "update_failed" ? "engines.updateFailed" : DIDNT_FINISH;
+}
+
 function refusal(error: unknown): MessageKey {
   const code = (error as { code?: unknown } | null)?.code;
   return code === "account-busy" ? "engines.signInBusy" : code === "login-busy" ? "engines.signInOther"
@@ -225,7 +229,7 @@ function refusal(error: unknown): MessageKey {
 export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: InstanceInfo) => void) {
   const [current, setCurrent] = useState(instance);
   const [waiting, setWaiting] = useState(instance.loginState === "pending");
-  const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && DIDNT_FINISH);
+  const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && loginFailure(instance));
   const [capture, setCapture] = useState(instance.loginCapture ?? {});
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
@@ -243,7 +247,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
 
   useEffect(() => {
     setWaiting(instance.loginState === "pending");
-    setFailed(instance.loginState === "failed" && DIDNT_FINISH);
+    setFailed(instance.loginState === "failed" && loginFailure(instance));
     setCapture(instance.loginCapture ?? {});
     setBusy(false);
     cancelled.current = false;
@@ -266,7 +270,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setCapture(next.loginCapture ?? {});
     onUpdated?.(next);
     if (accountReady(next)) { setWaiting(false); setFailed(false); }
-    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled" && DIDNT_FINISH); }
+    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled" && loginFailure(next)); }
   });
 
   const start = async () => {
