@@ -1079,13 +1079,26 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const paneMap = listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle";
   const paneSource = { name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal };
   const paneWorkerTab = paneWorkers(paneSource);
-  const mediaNext = useMemo(() => paneOpensOnMedia(bot.threadId, paneMap, paneWorkerTab), [bot.threadId, paneMap, paneWorkerTab]);
   // The side pane opens on Media, which waits for the whole chat's list: ask once the page is idle, with no turn live and nothing typed, only when the button would open Media.
   useEffect(() => {
-    if (preview || hidden || bot.busy || !mediaNext) return;
-    const idle = window.requestIdleCallback?.(() => { if (!composerInputRef.current?.value) warmMedia(bot.threadId); });
-    return () => { if (idle !== undefined) window.cancelIdleCallback(idle); };
-  }, [bot.threadId, bot.busy, preview, hidden, mediaNext]);
+    if (preview || hidden || bot.busy || !window.requestIdleCallback) return;
+    const box = composerInputRef.current;
+    let idle: number | undefined;
+    // the pick and the draft are read when idle, since neither re-renders this view
+    const ask = () => {
+      if (idle !== undefined || box?.value) return;
+      idle = window.requestIdleCallback(() => {
+        idle = undefined;
+        if (!box?.value && paneOpensOnMedia(bot.threadId, paneMap, paneWorkerTab)) warmMedia(bot.threadId);
+      });
+    };
+    ask();
+    box?.addEventListener("input", ask);
+    return () => {
+      box?.removeEventListener("input", ask);
+      if (idle !== undefined) window.cancelIdleCallback(idle);
+    };
+  }, [bot.threadId, bot.busy, preview, hidden, paneMap, paneWorkerTab]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(messages, jump.messages).map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })) : workers, [messages, jump.messages, livePanes, workers, bot.id]);
   const skin = useSkin();
   const scene = sceneOf(skin);

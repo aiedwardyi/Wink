@@ -10,10 +10,11 @@ import { Store, type Message } from "./store.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
 // a test can hold every disk size read until it lets go
-const disk = vi.hoisted(() => ({ hold: undefined as Promise<void> | undefined }));
+type Disk = { hold?: Promise<void>; arrived?: () => void };
+const disk = vi.hoisted((): Disk => ({}));
 vi.mock("node:fs/promises", async (load) => {
   const real = await load<typeof import("node:fs/promises")>();
-  return { ...real, stat: async (...args: Parameters<typeof real.stat>) => { await disk.hold; return real.stat(...args); } };
+  return { ...real, stat: async (...args: Parameters<typeof real.stat>) => { disk.arrived?.(); await disk.hold; return real.stat(...args); } };
 });
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -130,8 +131,11 @@ describe("media index", () => {
 
     let release!: () => void;
     disk.hold = new Promise((resolve) => { release = resolve; });
+    const stalled = new Promise<void>((resolve) => { disk.arrived = resolve; });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[b.pdf](C:\\w\\b.pdf)" });
     const older = media(threadId);
+    await stalled;
+    disk.arrived = undefined;
     disk.hold = undefined;
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[c.pdf](C:\\w\\c.pdf)" });
     const newer = await media(threadId);

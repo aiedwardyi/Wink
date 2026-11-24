@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { forgetMedia } from "@/lib/media-index";
-import { PANE_TAB_KEY } from "@/lib/show-pane";
+import { closeShow, PANE_TAB_KEY, showWorkers } from "@/lib/show-pane";
 import { StoreProvider, type Bot } from "@/state/store";
 
 import { ChatView } from "./ChatView";
@@ -94,6 +94,37 @@ describe("ChatView media warm", () => {
       await show(bot("F"), { onOpenTerminal: () => {} });
       await run();
       expect(asked).toEqual(["/api/threads/thread-F/media"]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("asks nothing once Workers is picked before the page goes idle", async () => {
+    const { asked, host, root, show, run } = setup();
+    try {
+      await show(bot("G"), { onOpenTerminal: () => {} });
+      await act(async () => { showWorkers("thread-G"); closeShow(); });
+      await run();
+      expect(asked).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("asks once a held draft is cleared in the same chat", async () => {
+    const { asked, host, root, show, run } = setup();
+    try {
+      await show(bot("H"));
+      const box = host.querySelector<HTMLTextAreaElement>("textarea[data-orbit-composer]")!;
+      box.value = "half a sentence";
+      await run();
+      expect(asked).toEqual([]);
+      box.value = "";
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      await run();
+      expect(asked).toEqual(["/api/threads/thread-H/media"]);
     } finally {
       await act(async () => root.unmount());
       host.remove();
