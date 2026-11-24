@@ -405,10 +405,17 @@ it("speaks Korean on the Check tab", async () => {
   expect(selected()).toBe("검사");
 });
 
-it("hides Check behind the other tabs, never the Media list", () => {
-  const css = readFileSync("src/components/ShowPane.css", "utf8");
-  const rule = css.slice(css.indexOf(".show-pane:not([data-tab")).split("{ display: none; }")[0];
-  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers, .timeline-pane)');
+it("keeps Check behind the other tabs like any kept tab, never display: none, which replays the pane's fade-in", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  const open = () => [...host.querySelectorAll("aside > .verify-watch-frame:not([data-kept])")].map((body) => body.matches(".show-frame") ? "a.png" : "Check");
+  expect(open()).toEqual(["Check"]);
+  await act(async () => tab("a.png").click());
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
+  expect(open()).toEqual(["a.png"]);
+  expect(readFileSync("src/components/ShowPane.css", "utf8")).not.toMatch(/\.show-pane[^{}]*>[^{}]*\{[^}]*display:\s*none/);
 });
 
 it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row, and the sheet starts under the Windows caption", () => {

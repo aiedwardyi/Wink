@@ -199,7 +199,7 @@ function useVisibility() {
   return visibility;
 }
 
-export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inline = false, hosted, onClose }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean; closing?: boolean; inline?: boolean; hosted?: { maximized: boolean }; onClose(): void }) {
+export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inline = false, hosted, kept, onClose }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean; closing?: boolean; inline?: boolean; hosted?: { maximized: boolean }; kept?: boolean; onClose(): void }) {
   const { locale } = useI18n();
   const c = copy[locale], d = docCopy[locale];
   const phone = useIsPhone();
@@ -326,7 +326,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const stop = () => { follow.current = false; };
 
   return (
-    <div className="verify-watch-frame verify-doc-watch" data-inline={inline || undefined} data-maximized={expanded || undefined}>
+    <div className="verify-watch-frame verify-doc-watch" data-inline={inline || undefined} data-maximized={expanded || undefined} data-kept={kept}>
       <div className="verify-watch-bar">
         <span className="verify-watch-dots" aria-hidden="true"><i /><i /><i /></span>
         <span className="verify-watch-grow" />

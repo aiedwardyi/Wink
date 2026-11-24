@@ -206,6 +206,8 @@ export function MapPane({ botId, maximized = false, active = true, kept }: { bot
   // Git rows ask after the tree and the code: each row runs git and gh, and asked together they held both back by seconds.
   const [rows, setRows] = useState(false);
   if (!rows && worker && (paths || lost || !repoWorker) && (loaded || failed || !worker.git || !chosen.path)) setRows(true);
+  // The server answers Git rows only for an open stream, which a kept Map reopens on the way back.
+  const streamed = active && liveReady.current;
   const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
   const unfold = (line: number) => {
     if (!loaded || held) return;
@@ -264,7 +266,7 @@ export function MapPane({ botId, maximized = false, active = true, kept }: { bot
         {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
       <MapSplit target={topRef} rows />
-      <MapGitFlow base={base} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} open={active} active={active && rows} />
+      <MapGitFlow base={base} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} open={streamed} active={streamed && rows} />
       {worker.git && files.length > 0 && <>
         <MapSplit target={topRef} />
         <div ref={barRef} className="map-crumbs">

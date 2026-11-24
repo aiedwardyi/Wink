@@ -177,8 +177,8 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
         ? <ShowFolder key={`${entry.threadId}:${entry.path}`} item={entry} maximized={expanded} kept={hides(entry)} />
         : <ShowFrame key={`${entry.threadId}:${entry.src ?? entry.path}`} item={entry} maximized={expanded} kept={hides(entry)} />)}
       {watch && (watch.card.doc
-        ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
-        : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />)}
+        ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} kept={hides("check")} onClose={closeVerifyWatch} />
+        : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} kept={hides("check")} onClose={closeVerifyWatch} />)}
       {tab === "tools" && <PaneToolList rows={rows} onPick={open} />}
       {keep.includes("media") && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} kept={hides("media")} />}
       {keep.includes("workers") && <WorkerPage source={crew} maximized={expanded} kept={hides("workers")} onClose={closePane} />}
