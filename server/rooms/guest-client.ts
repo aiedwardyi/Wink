@@ -767,7 +767,10 @@ export class GuestClient {
     if (!reply.ok && reply.status === 401) this.end(roomId, creds.key);
     const snapshot = reply.ok ? snapshotSchema.safeParse(reply.value) : null;
     if (!snapshot?.success) return false;
-    if (host !== creds.relayHost) moveJoined(roomId, creds.key, host);
+    if (host !== creds.relayHost) {
+      moveJoined(roomId, creds.key, host);
+      sync.tries = 0;
+    }
     addJoinedEntries(roomId, snapshot.data.entries, snapshot.data.head);
     setJoinedState(roomId, snapshot.data.state);
     sync.needsSnapshot = false;

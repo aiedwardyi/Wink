@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { join } from "node:path";
+import { createSecureContext, type SecureContext } from "node:tls";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { botChain } from "../../shared/bot-chain.ts";
@@ -17,6 +18,7 @@ import { removeTestData } from "../testing/test-home.ts";
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
+const MOVED = "abcdefghijklmnop.app.test";
 const SECRET = `wki_${"s".repeat(43)}`;
 const KEY = `wkg_${"k".repeat(43)}`;
 const CODE = `wkr1:${HOST}:inv1.${SECRET}`;
@@ -25,6 +27,7 @@ const STATE = { version: 1, roomName: "Team", instructions: "", host: "Edward", 
 
 let server: Server;
 let tls: { key: string; cert: string; ca: string };
+let moved: SecureContext;
 let https: GuestClientDeps["https"];
 let seen: Array<{ method: string; url: string; headers: IncomingMessage["headers"]; body: string }> = [];
 let route: (req: IncomingMessage, res: ServerResponse, body: string) => void;
@@ -34,13 +37,14 @@ beforeAll(async () => {
   const ca = await TestCa.create();
   const { keyPem, certPem } = await ca.issue(HOST);
   tls = { key: keyPem, cert: certPem, ca: ca.certPem };
+  moved = createSecureContext(await ca.issue(MOVED).then(({ keyPem, certPem }) => ({ key: keyPem, cert: certPem })));
 });
 
 // A server per test: a stopped client's request still in flight meets a closed port, not the next test's `seen`.
 beforeEach(async () => {
   removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
-  server = createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
+  server = createServer({ key: tls.key, cert: tls.cert, SNICallback: (name, cb) => cb(null, name === MOVED ? moved : undefined) }, (req, res) => {
     let body = "";
     req.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
     req.on("end", () => {
@@ -413,6 +417,16 @@ describe("sync", () => {
     expect(joinedKey("r1")).toBeNull();
     expect(await client!.send("r1", "hi")).toEqual({ ok: false, status: 409, error: "this room is read-only" });
     expect(JSON.stringify(changed.mock.calls)).not.toContain(KEY);
+  });
+
+  it("streams from the moved host that answered the snapshot", async () => {
+    route = (req, res) => (req.headers.host === HOST ? reply(res, 503, { error: "unavailable" }) : quietDoor(req, res));
+    saveJoined("r1", HOST, STATE.me, KEY);
+    const c = guest({ bases: () => [BASE, "app.test"], timing: { retryMs: 20 } });
+    c.start();
+    await until(() => c.rooms()[0]?.link === "live");
+    expect(joinedKey("r1")?.relayHost).toBe(MOVED);
+    expect(seen.filter((row) => row.url.includes("/stream")).map((row) => row.headers.host)).toEqual([MOVED]);
   });
 
   it("goes offline and backs off while the host is unreachable", async () => {

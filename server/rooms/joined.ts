@@ -280,7 +280,7 @@ export function moveJoined(roomId: string, key: string, relayHost: string): void
   transaction((database) => {
     const moved = database.prepare("UPDATE joined SET relay_host = ? WHERE room_id = ? AND key = ? AND status = 'joined'").run(relayHost, roomId, key).changes > 0;
     const code = moved ? joinedCode(roomId) : null;
-    if (code) saveJoinedCode(roomId, code.replace(/^wkr1:[^:]+/, `wkr1:${relayHost}`));
+    if (code) saveJoinedCode(roomId, code.replace(/^wkr1:[^:]+/, () => `wkr1:${relayHost}`));
   });
 }
 
