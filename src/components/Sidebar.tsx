@@ -11,7 +11,6 @@ import {
   FolderMinus,
   FolderPlus,
   Loader2,
-  LogOut,
   Pencil,
   PanelLeftClose,
   PanelLeftOpen,
@@ -24,7 +23,6 @@ import {
   Search,
   Settings,
   Trash2,
-  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -64,9 +62,6 @@ import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./Sideba
 import { confirmRoomDelete, TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
-import { relaySignInSite } from "@/lib/devices-setup";
-import { leaveSignedOut, sessionState, sessionStreamLive, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -128,8 +123,6 @@ import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
-/** The profile menu's w-52. */
-const PROFILE_MENU_WIDTH = 208;
 
 export { compactSidebarModelLabel } from "./SidebarConversations";
 
@@ -595,8 +588,6 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useSidebarRooms();
-  const { reconnectLive } = useStore();
-  const signingOut = useRef(false);
   const profile = shownProfile(state);
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
@@ -620,12 +611,6 @@ export function Sidebar({
   const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   useEffect(() => { if (plusOpen) trackScreen("new-menu"); }, [plusOpen]);
-  const [signInSite] = useState(relaySignInSite);
-  const [profileMenu, setProfileMenu] = useState<{ left: number; bottom: number } | null>(null);
-  const profileMenuPresence = usePresence(profileMenu);
-  const profileMenuRef = useRef<HTMLDivElement>(null);
-  const closeProfileMenu = useCallback(() => setProfileMenu(null), []);
-  useListMenuDismiss("[data-profile-menu]", "[data-sidebar-list]", !profileMenu, closeProfileMenu);
   const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   useEffect(() => { if (teamLibraryOpen) trackScreen("teams-library"); }, [teamLibraryOpen]);
@@ -684,7 +669,7 @@ export function Sidebar({
   const density: SidebarDensity = sidebarCollapsed ? "icons" : "comfortable";
   const backOverlay = deleteTarget ? "delete" : sectionPicker ? "section" : roomSectionPicker ? "room-section"
     : menu ? "menu" : roomMenu ? "room-menu" : wizard ? "wizard" : archivedBotsOpen ? "archived"
-    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : profileMenu ? "profile-menu" : null;
+    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
   useEffect(() => {
     onOverlayChange?.(backOverlay);
   }, [backOverlay, onOverlayChange]);
@@ -700,7 +685,6 @@ export function Sidebar({
       else if (trashOpen) setTrashOpen(false);
       else if (teamLibraryOpen) { setTeamLibraryOpen(false); setTeamInstallUrl(null); }
       else if (plusOpen) setPlusOpen(false);
-      else if (profileMenu) setProfileMenu(null);
     };
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
@@ -980,34 +964,6 @@ export function Sidebar({
       refreshTrash();
     } catch (cause) {
       setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
-    }
-  };
-
-  const signOut = async (site: string) => {
-    if (signingOut.current) return;
-    signingOut.current = true;
-    setTeamFeedback(null);
-    signedOutLanding(`${site}/?signedout=1`);
-    const confirmation = new AbortController();
-    try {
-      await api("/api/phone/sign-out", { method: "POST" });
-      return leaveSignedOut(true);
-    } catch {
-      const live = sessionStreamLive(confirmation.signal);
-      const probe = new AbortController();
-      const state = await Promise.race([sessionState(probe), live]);
-      probe.abort();
-      if (state === "gone") return leaveSignedOut();
-      if (state === "unknown") {
-        // The old stream can outlive a revoke or a gateway outage on new requests.
-        reconnectLive();
-        await live;
-      }
-      signedOutLanding();
-      setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
-    } finally {
-      confirmation.abort();
-      signingOut.current = false;
     }
   };
 
@@ -1922,14 +1878,7 @@ export function Sidebar({
         <CallWidgetSlot narrow={density === "icons"} className="mb-2 max-md:hidden" />
         <div className={cn("flex min-w-0 items-center", density === "icons" && "justify-center")} data-sidebar-profile-row>
           <button
-            onClick={(event) => {
-              if (!signInSite) return dispatch({ type: "toggleAppSettings", open: true, section: "account" });
-              const rect = event.currentTarget.getBoundingClientRect();
-              const left = Math.max(8, Math.min(rect.left, window.innerWidth - PROFILE_MENU_WIDTH - 8));
-              setProfileMenu(profileMenu ? null : { left, bottom: window.innerHeight - rect.top + 4 });
-            }}
-            aria-haspopup={signInSite ? "menu" : undefined}
-            aria-expanded={signInSite ? Boolean(profileMenu) : undefined}
+            onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "account" })}
             className={cn("flex min-w-0 items-center rounded-xl py-2 text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-3")}
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
@@ -1965,50 +1914,6 @@ export function Sidebar({
         </div>
       </div>
 
-      {profileMenuPresence.value && signInSite && createPortal(
-        <>
-          {!profileMenuPresence.closing && <div className="fixed inset-0 z-50" onMouseDown={() => setProfileMenu(null)} />}
-          <div
-            ref={profileMenuRef}
-            role="menu"
-            aria-label={t("settings.section.account")}
-            data-profile-menu
-            data-closing={profileMenuPresence.closing || undefined}
-            inert={profileMenuPresence.closing}
-            style={profileMenuPresence.value}
-            onKeyDown={(event) => menuKeyDown(profileMenuRef, event)}
-            className={cn(MENU_CLASS, "z-50 w-52 overflow-hidden")}
-          >
-            <button
-              type="button"
-              role="menuitem"
-              autoFocus
-              onClick={() => {
-                setProfileMenu(null);
-                dispatch({ type: "toggleAppSettings", open: true, section: "account" });
-              }}
-              className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
-            >
-              <UserRound size={16} className="text-ink-secondary" />
-              {t("settings.section.account")}
-            </button>
-            <div className="mx-2 my-1 border-t border-hairline/40" />
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setProfileMenu(null);
-                void signOut(signInSite);
-              }}
-              className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
-            >
-              <LogOut size={16} className="text-ink-secondary" />
-              {t("chrome.signOut")}
-            </button>
-          </div>
-        </>,
-        document.body,
-      )}
       {menuPresence.value && (
         <BotContextMenu
           menu={menuPresence.value}
