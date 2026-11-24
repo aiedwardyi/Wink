@@ -161,8 +161,21 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     expect(block).toContain(`- A2 ${status} needs verdict 11-12`);
     expect(block).toContain(`- A1 ${status} 11-12`);
     expect(asksNudge([fresh], NOW, "thanks")).toBe("");
-    expect(asksNudge([fresh, due], NOW, "thanks")).toBe(block);
+    expect(listed(asksNudge([fresh, due], NOW, "thanks"))).toEqual([`- A2 ${status} needs verdict 11-12: ask number 2`]);
     expect(asksNudge([ask(3, { status, ref: "PR #3", changedAt: 0 })], NOW, "thanks")).toBe("");
+  });
+
+  it("lists only the asks needing a verdict on an ordinary turn, and the full list on a status turn or a fresh session", () => {
+    const asks = [...Array.from({ length: 20 }, (_, index) => ask(index + 1)), ask(21, { changedAt: 0 })];
+    expect(asksNudge(asks, NOW, "thanks").split("\n")).toEqual([
+      "[Wink asks list - 21 open, 1 needs a verdict: no ref and no change in 3+ days, so build, park or close it yourself, and ask the user about at most 3 at a time. 20 more show on a status question.]",
+      "- A21 open needs verdict 11-12: ask number 21",
+    ]);
+    expect(asksNudge(asks.slice(0, 20), NOW, "thanks")).toBe("");
+    expect(listed(asksNudge(asks, NOW, "status?"))).toHaveLength(21);
+    expect(listed(taskRecordBlock(record(asks), 6_000, { now: NOW }))).toHaveLength(21);
+    const header = [...asks.slice(0, 20), ask(22, { ask: "make the header smaller on phone" }), ask(21, { changedAt: 0 })];
+    expect(listed(asksNudge(header, NOW, "the header on phone"))).toEqual(["- A21 open needs verdict 11-12: ask number 21", "- A22 open 11-12: make the header smaller on phone"]);
   });
 
   it("never flags or lists a closed ask", () => {
@@ -310,10 +323,10 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       expect(asksNudge([ask(3)], NOW, "thanks", elsewhere)).toBe("");
     });
 
-    it("lists every ask in a room thread, on a status turn and once one needs a verdict", () => {
+    it("lists every ask in a room thread on a status turn, and only the one needing a verdict otherwise", () => {
       const room = Array.from({ length: 300 }, (_, index) => ask(index + 1, { ask: "r".repeat(80), changedAt: index ? NOW : NOW - 4 * DAY }));
       expect(listed(asksNudge(room, NOW, "@Bot where are we?"))).toHaveLength(300);
-      expect(listed(asksNudge(room, NOW, "@Bot thanks"))).toHaveLength(300);
+      expect(listed(asksNudge(room, NOW, "@Bot thanks"))).toEqual([`- A1 open needs verdict 11-12: ${"r".repeat(80)}`]);
       expect(listed(taskRecordBlock(record(room), 512, { now: NOW, allAsks: true }))).toHaveLength(300);
     });
 
