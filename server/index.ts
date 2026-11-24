@@ -480,6 +480,7 @@ import { memberTurnSelection } from "./member-turn.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
 import { createPlaybookGate, harnessPlaybookPrompt, modelPicksPrompt } from "./harness-playbook.ts";
+import { createRevertIndex } from "./revert-index.ts";
 import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import "./package-export.ts";
@@ -3181,13 +3182,19 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
+const revertIndex = createRevertIndex();
+startupTiming.afterPaint("reverts", async () => {
+  await Promise.all([...new Set(store.bots.map((bot) => bot.cwd).filter((cwd) => cwd !== undefined))].map((cwd) => revertIndex.refresh(cwd)));
+});
 // where a bare "PR n" may be when the bot's folder is not a repo: its asks, its workers' reports and its panes' remotes
 const knownRepos = createKnownRepos({ saved: (botId) => store.bot(botId)?.knownRepos ?? [], save: (botId, repos) => store.rememberRepos(botId, repos), discover: async (botId) => {
   const bot = store.bot(botId);
   if (!bot) return [];
   const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, null, undefined, { panesOnly: true });
   const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
-  const remotes = await Promise.all([...new Set(panes.map((pane) => pane.cwd).filter(Boolean))].map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
+  const cwds = [...new Set(panes.map((pane) => pane.cwd).filter(Boolean))];
+  for (const cwd of [...cwds, ...bot.cwd ? [bot.cwd] : []]) void revertIndex.refresh(cwd);
+  const remotes = await Promise.all(cwds.map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
   return remotes.flatMap((url) => remoteRepo(url) ?? []);
 }, cited: async (botId, boot) => {
   const bot = store.bot(botId);
@@ -3449,7 +3456,11 @@ const spawnUsage = createSpawnUsage({
   nameOf: (id, engine) => accountNames.nameOf(id, engine),
 });
 const workerTurns = createWorkerTurns();
-const playbookGate = createPlaybookGate();
+const playbookGate = createPlaybookGate(undefined, undefined, {
+  reverts: revertIndex,
+  wouldHold: (row) => appendRotatingLog(join(DATA_DIR, "revert-holds.ndjson"), `${JSON.stringify({ at: Date.now(), ...row })}\n`),
+  enforce: process.env.OMB_REVERT_HOLD === "1",
+});
 // A recycled or switched provider session has a new cursor, so it reads the playbook again.
 function playbookSession(botId: string): string {
   const threadId = workerTurns.activeThread(botId);
@@ -8650,7 +8661,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
-        const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
+        const hold = await playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
         if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(String(body.command ?? "")));
