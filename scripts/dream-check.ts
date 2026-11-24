@@ -1,6 +1,6 @@
 // Dream check: one idle-tidy pass (server/memory-sleep.ts) over copies of each bot's notes, then proof no fact was lost.
 // Reads a copy of ~/.orbit, never the live folder; writes only under a throwaway data dir and Claude config dir.
-// node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--nights 1] [--no-model] [--max-tokens 2000000] [--json summary.json] [--detail detail.json] [--build sha]
+// node --experimental-strip-types scripts/dream-check.ts <orbit copy> [--bots id,id] [--nights 1] [--no-model] [--max-tokens 2000000] [--json summary.json] [--detail detail.json] [--build sha] [--ledger dir --date yyyy-mm-dd]
 // --json gets counts, codes, bot ids and sha8s only (server/memory-clean.ts nightSummarySchema); note text goes only to --detail, kept in dream-practice.
 // The model pass needs CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY on a throwaway profile, or CLAUDE_CONFIG_DIR set to an account profile.
 // With the model, a bot near its load budget also gets budget filing (server/memory-file.ts), shadow only: it runs nowhere else.
@@ -13,11 +13,14 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 
 import type { NoteGenerator } from "../server/memory-pass.ts";
+import { type CallKind, Ledger } from "./dream-ledger.ts";
 
 // the note helper's model (server/drivers/claude.ts runHelper)
 const MODEL = "claude-haiku-5-5";
 // grouping notes across many overlapping side files needs more than Haiku; the quiz stays on Haiku
 const FILER_MODEL = "claude-sonnet-5-5";
+// a cleaner call starts only if its prompt estimate and this output cap are left in the night ledger
+const OUTPUT_CAP = 8_000;
 // both true, so a tidy must move neither: rule and exception, two people, two things, a passing state
 const TRAP_PAIRS = [
   ["Prefers short replies at work (noted 2026-11-01)", "Wants detailed answers when learning something new (noted 2026-11-12)"],
@@ -220,10 +223,13 @@ export function sweepStale(dir: string, now = Date.now()): string[] {
   });
 }
 
-function claudeGenerator(configDir: string, cwd: string, spent: Spent, cap: number, model = MODEL): NoteGenerator {
+type Spend = { spent: Spent; cap: number; ledger: Ledger | null; kind: CallKind };
+
+function claudeGenerator(configDir: string, cwd: string, { spent, cap, ledger, kind }: Spend, model = MODEL): NoteGenerator {
   return (prompt, signal, onUsage) =>
     new Promise<string>((resolve, reject) => {
       if (spent.input + spent.output >= cap) return reject(new Error("model token cap reached"));
+      if (ledger && !ledger.callFits(prompt.length, OUTPUT_CAP)) return reject(new Error("night cap reached"));
       const cli = process.env.CLAUDE_CLI ?? "claude";
       // a .mjs stand-in (the tests' stub engine) runs under this node
       const [command, lead] = /\.m?js$/i.test(cli) ? [process.execPath, [cli]] : [cli, []];
@@ -245,6 +251,7 @@ function claudeGenerator(configDir: string, cwd: string, spent: Spent, cap: numb
           spent.input += used.input + used.cachedInput + used.cacheCreation;
           spent.output += used.output;
           spent.fresh += used.input + used.cacheCreation + used.output;
+          ledger?.add(kind, { fresh: used.input + used.cacheCreation + used.output, processed: used.input + used.cachedInput + used.cacheCreation + used.output });
           onUsage?.(used);
           resolve(result);
         } catch (error) {
@@ -345,10 +352,13 @@ async function main(): Promise<number> {
     const rules: Rules = { loaded: (raw) => loadedMemory(raw).text, synced: isMemoryTopicName };
 
     const spent: Spent = { input: 0, output: 0, fresh: 0 };
-    const generator = model ? claudeGenerator(configDir, helperDir, spent, cap) : null;
+    const ledgerDir = flag("ledger");
+    const ledger = ledgerDir ? new Ledger(ledgerDir, flag("date") ?? new Date().toISOString().slice(0, 10)) : null;
+    const spend = (kind: CallKind): Spend => ({ spent, cap, ledger, kind });
+    const generator = model ? claudeGenerator(configDir, helperDir, spend("tidy")) : null;
     const asking = (generate: NoteGenerator) => (prompt: string) => generate(prompt, AbortSignal.timeout(SLEEP_TIMEOUT_MS));
     // the quiz and the filer, both null under --no-model
-    const models = generator ? { ask: asking(generator), file: asking(claudeGenerator(configDir, helperDir, spent, cap, FILER_MODEL)) } : null;
+    const models = generator ? { ask: asking(claudeGenerator(configDir, helperDir, spend("check"))), file: asking(claudeGenerator(configDir, helperDir, spend("plan"), FILER_MODEL)) } : null;
     const notesOf = (ws: string): Notes => {
       const historyDir = join(ws, "memory-history");
       const side = filesUnder(ws).filter((path) => !path.startsWith(historyDir) && relative(ws, path) !== "MEMORY.md");
