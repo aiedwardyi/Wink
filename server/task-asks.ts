@@ -183,14 +183,15 @@ export function rotatedAsks(asks: readonly TaskAsk[] | undefined, now: number): 
   return shown.length < ordered.length + parked.length ? shown.map((ask) => ask.id) : null;
 }
 
-/** Every open ask, then each parked one with the day it comes back. Empty when none is open. */
-export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false): string {
-  const { ordered, parked, due, shown, line } = listed(asks, now);
+/** Every open ask, then each parked one with the day it comes back, or with verdictOnly just the asks needing a verdict. Empty when none is open. */
+export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false, verdictOnly = false): string {
+  const { ordered, parked, due, shown: listShown, line } = listed(asks, now);
   if (!ordered.length && !parked.length) return "";
+  const shown = verdictOnly ? listed(due, now).shown : listShown;
   const them = due.length === 1 ? "it" : "them";
   const flagged = due.length ? `, ${due.length} need${due.length === 1 ? "s" : ""} a verdict: no ref and no change in 3+ days, so build, park or close ${them} yourself, and ask the user about at most 3 at a time` : "";
   const waiting = ordered.length + parked.length - shown.length;
-  const rotated = waiting ? ` ${waiting} more wait for the next turn, least recently shown first.` : "";
+  const rotated = !waiting ? "" : verdictOnly ? ` ${waiting} more show on a status question.` : ` ${waiting} more wait for the next turn, least recently shown first.`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
   return [
     `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
@@ -232,13 +233,13 @@ function elsewhereBlock(asks: readonly TaskAsk[], now: number): string {
   ].join("\n");
 }
 
-/** For a turn the record does not ride: every open ask on a status turn or once one needs a verdict, otherwise up to NAMED_MAX asks the message names in NAMED_BYTES; asks from the bot's other chats ride the same way. */
+/** For a turn the record does not ride: every open ask on a status turn, the asks needing a verdict on any other, and up to NAMED_MAX asks the message names in NAMED_BYTES; asks from the bot's other chats ride the same way. */
 export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, text: string, elsewhere: readonly TaskAsk[] = []): string {
   const status = isStatusTurn(text);
   const own = asks ?? [];
   if (status) return [asksBlock(asks, now, true), elsewhereBlock(elsewhere.filter(isOpenAsk), now)].filter(Boolean).join("\n");
-  const block = own.some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now) : "";
-  const mine = new Set(block ? [] : own);
+  const block = own.some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now, false, true) : "";
+  const mine = new Set(own.filter((ask) => !needsVerdict(ask, now)));
   const render = (picked: readonly TaskAsk[]) => {
     const hits = picked.filter((ask) => mine.has(ask));
     return [
