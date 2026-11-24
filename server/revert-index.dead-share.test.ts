@@ -35,6 +35,8 @@ vi.mock("node:fs/promises", async (original) => {
 });
 
 const DEAD = process.platform === "win32" ? String.raw`\\192.0.2.1\share\x` : "//192.0.2.1/share/x";
+// a slow folder that is not a network string: network folders are never probed
+const SLOW = process.platform === "win32" ? String.raw`C:\192.0.2.1\share\x` : "/192.0.2.1/share/x";
 const NOW = Date.parse("2026-11-24T04:00:00Z");
 const at = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 const commit = (sha: string, when: string, subject: string, body: string, files: string[]) => `\x1e${sha.padEnd(40, "0")}\x1f${at(when)}\x1f${subject}\x1f${body}\x1f\n\n${files.join("\n")}\n`;
@@ -65,8 +67,8 @@ describe("revert index on a folder whose fs never answers", () => {
     const index = createRevertIndex({ git: async () => LOG, now: () => NOW });
     const before = state.dead;
     for (let turn = 0; turn < 3; turn += 1) {
-      void index.refresh(DEAD);
-      void index.hit(DEAD, CARD);
+      void index.refresh(SLOW);
+      void index.hit(SLOW, CARD);
     }
     await timerWait();
     expect(state.dead - before).toBe(1);
@@ -77,14 +79,14 @@ describe("revert index on a folder whose fs never answers", () => {
     let now = NOW;
     const index = createRevertIndex({ git: async () => LOG, now: () => now });
     const before = state.dead;
-    await index.refresh(DEAD);
+    await index.refresh(SLOW);
     const probed = state.dead;
     expect(probed).toBeGreaterThan(before);
-    await index.refresh(DEAD);
-    expect(await index.hit(DEAD, CARD)).toBeUndefined();
+    await index.refresh(SLOW);
+    expect(await index.hit(SLOW, CARD)).toBeUndefined();
     expect(state.dead).toBe(probed);
     now += 10 * 60_000;
-    await index.refresh(DEAD);
+    await index.refresh(SLOW);
     expect(state.dead).toBeGreaterThan(probed);
   });
 

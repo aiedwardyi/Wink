@@ -3,6 +3,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 
+import { isNetworkPath } from "./bot-cwd.ts";
 import { mapGit } from "./map-git.ts";
 import { UNLANDED_REFRESH_MS } from "./unlanded.ts";
 
@@ -167,8 +168,9 @@ export function createRevertIndex(deps: { git?: RevertGit; now?: () => number } 
   const probing = new Map<string, Promise<GitHome | undefined>>();
   const repoId = (common: string) => process.platform === "win32" ? common.toLowerCase() : common;
 
-  // one probe per folder, again only after the interval: a folder on a dead share ties up one fs thread per interval
+  // one probe per folder, again only after the interval; a share is never probed: a dead one holds an fs thread for ~21 s, and 4 of them hold every thread
   function homeOf(cwd: string): Promise<GitHome | undefined> {
+    if (isNetworkPath(cwd)) return Promise.resolve(undefined);
     const known = homes.get(cwd);
     if (known && now() - known.at < UNLANDED_REFRESH_MS) return Promise.resolve(known.home);
     const prior = probing.get(cwd);
