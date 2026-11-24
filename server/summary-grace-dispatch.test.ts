@@ -98,6 +98,7 @@ describe("summary grace dispatch", () => {
     const instance = { driverKind: "claude", generateText, textTimeoutMs: 90_000, adapter: { capabilities: { queueing: true } } };
     const store = {
       taskByThread: () => undefined,
+      otherChatAsks: () => [],
       activePath: () => [...messages],
       pathTail: (_threadId: string, count: number) => messages.slice(-count),
       activeLeaf: () => messages.at(-1)?.id ?? null,
@@ -190,7 +191,7 @@ describe("summary grace dispatch", () => {
         buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge, stampShownAsks: () => {},
         clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
         mailForTurn: () => event === "mail" || event === "held mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes,
-        opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
+        opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), notOwnerChats: () => new Set(), privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
         commsDepth: 0, MAX_COMMS_DEPTH: 1,
@@ -289,6 +290,7 @@ describe("summary grace dispatch", () => {
     const taskRecordText = "Goal: preserve context";
     const store = {
       taskByThread: () => undefined,
+      otherChatAsks: () => [],
       activePath: () => [...messages],
       pathTail: (_threadId: string, count: number) => messages.slice(-count),
       activeLeaf: () => messages.at(-1)?.id ?? null,
@@ -340,7 +342,7 @@ describe("summary grace dispatch", () => {
       estimateContextTokens, nativeReplayBudget, replayRoom: 0, limitWaits: { track() {}, bind() {} }, selection: {},
       clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
       mailForTurn: () => [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes: undefined,
-      opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, task: { resumeCursors: {} },
+      opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), notOwnerChats: () => new Set(), privateWorkspace: false, task: { resumeCursors: {} },
       persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
       computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
       commsDepth: 0, MAX_COMMS_DEPTH: 1,

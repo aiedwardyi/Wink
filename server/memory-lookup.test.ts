@@ -204,6 +204,12 @@ describe("corpus", () => {
     expect(note).not.toContain("Tuesdays");
   });
 
+  it("keeps goals noted on different days as their own topics", async () => {
+    const { botId, lookup } = await lookupFor(`${FILLER}\n- Goal: Glasses v1 is a CEO meeting tool: person brief (noted 11-01)\n- Goal: Korean lessons twice a week before the Seoul trip (noted 11-02)\n`);
+    expect(ask(lookup, botId, "glasses CEO meeting tool person brief")[0]).toContain("Glasses v1");
+    expect(ask(lookup, botId, "Korean lessons before the Seoul trip")[0]).toContain("Korean lessons");
+  });
+
   it("never shows a row with a newer same-topic row, even when the newer one fails the gate", async () => {
     const { botId, lookup } = await lookupFor(`${FILLER}\n- OLIVE TRAM: Tuesday morning airport (2026-10-01)\n- OLIVE TRAM: Friday evening downtown (2026-11-01)\n`);
     expect(ask(lookup, botId, "olive tram Tuesday morning airport").join("")).not.toContain("Tuesday");

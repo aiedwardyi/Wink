@@ -213,8 +213,9 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "- Keep facts that stay true: who they are, their age, languages, tools they use, likes and dislikes, how they want things done.",
     "- Skip one-off requests that are not tweaks, questions, task details, and anything CURRENT NOTES already says.",
     "- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.",
+    "- goal: something the user wants built or reached, with its spec, like \"Glasses v1: person brief, top 3 competitors, 1 news line\". Never task details.",
     "- CONTEXT and PICTURES clarify short answers. Quote the user's choice, never the bot's suggestion.",
-    `- kind: "decision", "tweak" or "fact". One decision per thing.`,
+    `- kind: "decision", "tweak", "goal" or "fact". One decision per thing.`,
     `- decision: key is the thing decided, never the option, in 2-6 chat words, copied exactly if CURRENT PICKS has it. fact is the pick, ${DECISION_MAX} characters max, with its letter or number, like "C - Reddit cards"; over: the options it beat; picture, over_pictures: copy paths from PICTURES, a continued <prior> or CURRENT PICKS.`,
     "- \"actually c\" moving a CURRENT PICKS pick to an option it beat is a new decision, same key, even with tweaks after it.",
     "- tweak: a change the user asked for on a pick, like \"make the header smaller\"; key: that pick's key. Never a new pick.",
@@ -293,12 +294,26 @@ export function maskSecretValues(text: string): string {
     i === VALUE_PATTERNS.length - 1 && plainValue(value, all.slice(Math.max(0, at - 40), at), all) ? value : `«redacted ${value.length} chars»`), redactRoomMemory(text));
 }
 
-function secretValue(text: string): boolean {
+const valueWord = (word: string) => word.length >= 6 && /\p{L}/u.test(word) &&
+  (/\d/.test(word) || /\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+){2,}/u.test(word) || (/\p{L}[!@#$%^&*=~|<>{}]+\p{L}/u.test(word) && !/:\/\/|^\W*[\w.+-]+@[\w-]+\.[\w.-]+\W*$/.test(word)));
+// Tr0ub4dor&3xQ, Tr@ub!dor&xQ, Blue-Horse-Staple, card or account digits, or a value spelled out letter by letter
+const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some(valueWord) || /\d(?:[ -]?\d){9,}/.test(paragraph) || /(?<!\S)(?:\S[ \t]+){5,}\S(?!\S)/u.test(paragraph);
+// LLM token talk, only after a plain word or sentence punctuation: "the hf token" and "(github) token" name a credential
+const TOKEN_TALK = [
+  /(?<=(?:^|\n|\(|[,;.!?][ \t]|\b(?:the|my|our|your|their|its|this|that|these|those|a|an|of|per|in|on|at|for|and|or|but|so|to|with|by|from|about|watch|check|track|cut|lower|reduce|total|daily|weekly|monthly|high|higher|low|big|huge|llm|model|prompt|output|input|claude|gpt|opus|sonnet|haiku|ai|is|was|are|were)\b)[ \t]*)\btokens?\s+(?:costs?|usage|counts?(?!\s+down)|budgets?|limits?|spend(?:ing)?|bills?|totals?|intensive|heavy)\b/gi,
+  /(?<![\d.,])\b\d[\d.,]*[ \t]?(?:[kmb]|million|billion|thousand)\s+tokens?\b/gi,
+];
+// token talk clears a message base drops only when no login word, value handed over on its line or bare code sits in it
+const VALUE_HINT = /\b(?:pw|pwd|pass|passphrase|passkey|p\/w|log[- ]?in|sign[- ]?in|user ?name|admin|wi-?fi|router|modem|nas|door|gate|lock|unlock|safe|vault|alarm|garage|locker|combo|ssh|ftp|sftp)\b|\b(?:license|product|encryption|recovery|backup|secret|access|security|auth)\s+(?:keys?|codes?|phrase|answer|word)\b|\b[A-Z][A-Z0-9]*_(?:PASS|PWD|KEY|SECRET|TOKEN)\w*|로그인|아이디|와이파이|공유기|도어락|현관|금고|비밀|\b(?:below|next line|last line|coming|incoming|here(?:'s| is| are))\b|:[ \t]*\S|(?<![\w#$.,:/-])(?<!\bPR )\d{4,9}(?![\w%.,:/-])/i;
+
+export function secretValue(text: string): boolean {
   const plain = text
     .replace(/\b(?:(?:under|fewer than|up to|at most)\s+\d+|fewer|more|\d+)\s+tokens?\b/gi, "")
     .replace(/\bpin\s+(?:it|this|that|the\s+\w+)\s+(?:to|at|on)\b/gi, "")
     .replace(/\bsecret\s+(?:menu|theme|level|door|room)\b/gi, "");
-  return secretLike(plain);
+  if (!secretLike(plain)) return false;
+  const rest = TOKEN_TALK.reduce((left, talk) => left.replace(talk, ""), plain);
+  return rest === plain || secretLike(rest) || VALUE_HINT.test(text) || holdsValue(text);
 }
 
 const STOP_WORDS = new Set(["the", "and", "but", "for", "with", "are", "was", "that", "this", "you", "your", "can", "can't", "cant", "don't", "dont", "just", "have", "has", "not", "i'm", "it's", "its", "really"]);
@@ -534,7 +549,9 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
     const tweak = kind === "tweak";
-    const line = factLine(fact.fact);
+    const goal = kind === "goal";
+    const stated = factLine(fact.fact);
+    const line = goal && stated ? `Goal: ${stated}` : stated;
     const key = fact.key?.replace(/\s+/g, " ").trim() ?? "";
     // switching to an option the current pick beat is grounded in that pick's record
     const before = decision ? current.get(pickKey(key || line)) : undefined;
@@ -543,8 +560,9 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
     if (before && !paragraphs.some((paragraph) => quotes(paragraph, said))) said = confirmed(sources, said, line, before) ?? said;
     if (!line || line.length > (decision || tweak ? DECISION_MAX : FACT_MAX) || !said || said.length > QUOTE_MAX) return null;
     if (!paragraphs.some((paragraph) => quotes(paragraph, said))) return null;
-    const sensitive = decision || tweak ? secretValue : secretLike;
-    if (sensitive(line) || sensitive(said)) return null;
+    const sensitive = decision || tweak || goal ? secretValue : secretLike;
+    // the "Goal:" label's colon reads as a value handed over
+    if (sensitive(stated) || sensitive(said)) return null;
     const quoting = sources.filter(({ text }) => quotes(text, said));
     const identified = decision && fact.message_id != null ? quoting.filter(({ id }) => id === fact.message_id) : quoting;
     const own = identified.length ? identified : quoting;

@@ -100,7 +100,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
       opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000, closes: { notes: () => [] },
       taskRecord: undefined, durableTaskRecordText: "",
-      providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, opensHostFiles: () => false,
+      providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), notOwnerChats: () => new Set(), privateWorkspace: false, opensHostFiles: () => false,
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),
       persona: "Verify the delegated work.", cwd: ".", projectFolderPrompt: () => "", projectNotesPrompt: () => "",

@@ -18,6 +18,7 @@ import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
 import { THREAD_CACHE_CHARS, ThreadCache, type ThreadState } from "./thread-cache.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
+import { latestTaskAsks } from "../shared/task-ask-list.ts";
 import { removeWorkspace } from "./workspace.ts";
 import { readSessionSystem, SESSION_SYSTEM_DIR, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
@@ -29,6 +30,7 @@ import { redactSecretsInText } from "./redact.ts";
 import { noticeText } from "./rooms/db.ts";
 import { coalescedSave } from "./save-defer.ts";
 import { redactToolMessage } from "./tool-detail.ts";
+import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
 import { redactVerifyCard } from "./verify-message.ts";
 import type { NativePrompt, ResumeSeed } from "./turn-context.ts";
 import {
@@ -2290,6 +2292,18 @@ export class Store {
     const group = this.groupByThread(threadId);
     const repaired = group && !group.dm ? this.repairRoomTaskPacketOwner(group, threadId) : null;
     return repaired ? structuredClone(repaired) : null;
+  }
+
+  /** Open asks the bot's other owner chats hold, newest copy of each, minus the ones this chat already has; none for or from a room or routine thread in notOwner. */
+  otherChatAsks(botId: string, threadId: string, notOwner: ReadonlySet<string>): TaskAsk[] {
+    const bot = this.bot(botId);
+    if (!bot || notOwner.has(threadId)) return [];
+    const key = (ask: TaskAsk) => `${ask.at}\0${ask.ask}`;
+    const own = new Set((this.taskPacket(threadId)?.asks ?? []).map(key));
+    const threads = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
+    threads.delete(threadId);
+    const records = [...threads].filter((id) => !notOwner.has(id)).map((id) => this.taskPacket(id)).filter((record) => record !== null);
+    return latestTaskAsks(records, (ask) => ask.ask).filter((ask) => isOpenAsk(ask) && !own.has(key(ask)));
   }
 
   /** `staged` is a send's write: readers have the record at once, and settleTaskPacket pays its fsync after the dispatch. */

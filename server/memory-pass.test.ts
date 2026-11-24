@@ -18,6 +18,7 @@ import {
   parseFacts,
   pendingRows,
   secretLike,
+  secretValue,
   userTyping,
   type MemoryPass,
   type NoteGenerator,
@@ -38,6 +39,7 @@ import type { Message, StoreChange } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_MAX_BYTES, MEMORY_SEED, memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { BASE_SENDS, S32_ROWS, SECRET_CASES, TOKEN_TALK_LIMITS, secretCase, sendsValue } from "./testing/secret-cases.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- a second writer has to land between the pass's read and its write.
@@ -1855,6 +1857,32 @@ describe("memory pass", () => {
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- 38 years old (noted 2026-10-15)\n`);
   });
 
+  it("sends a message whose only secret word is token talk to the note-taker", async () => {
+    generate.mockResolvedValue("[]");
+    say("t1", "Glasses v1 is the CEO meeting tool, mind the token cost.\n\nPart 2 shows top 3 competitors and 1 news line.");
+    await settle("t1", 3 * MINUTE);
+    const prompt = generate.mock.calls[0]![0];
+    expect(prompt).toContain("mind the token cost");
+    expect(prompt).toContain("top 3 competitors");
+  });
+
+  it.each([
+    ["a plain fact", "I live in Seoul and build the glasses app", 1],
+    ["a value two paragraphs from its label", "password for the nas\n\nok so\n\nPurpleMonkeyDishwasher", 0],
+    ["a value with symbols beside its label", "the staging password is in the next line\n\nlet's go with option B for the header, and use Tr@ub!dor&xQ for the staging login", 0],
+    ["a plain-word value beside its label", "the staging password is in the next line\n\nlet's go with option B for the header, and use PurpleMonkeyDishwasher for the staging login", 0],
+    ["a login in a long paragraph", `router login is admin / PurpleMonkeyDishwasher ${"The glasses app should feel calm and fast for a founder walking into a meeting, with one glance views and no menus to dig through. ".repeat(4)}`, 0],
+    ["a value in a long sentence", "password for the nas\n\nok so\n\nit is PurpleMonkeyDishwasher and you type it exactly like that with capitals", 0],
+    ["a passphrase", "the vault password is below\n\nok\n\nseven purple otters dance under quiet moonlight tonight", 0],
+    ["4-digit pins past a decision", "my bank pin is in the last line\n\nFor the glasses app go with option B for the header: small logo on the left, the person brief in the middle, and the three competitor chips under it, because it reads faster at a glance than option A did in the demo yesterday.\n\nit's 4821 for the card and 7731 for the app, remember both of them", 0],
+    ["a Korean value", "와이파이 비밀번호 알려줄게\n\n알겠어\n\n손님용은 보라색원숭이식기세척기 이고 위층에서도 잘 잡혀 그러니까 그걸로 써", 0],
+    ...(["E2b", "E2e", "E3b", "E4b", "E4c", "E4e"] as const).map((id) => [`review case ${id}`, secretCase(id)[1]!, 0] as const),
+  ] as const)("calls the note-taker for %s only when no label points at a value", async (_, text, calls) => {
+    say("t1", text);
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(calls);
+  });
+
   it("skips quietly when Claude is missing or signed out", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     generate.mockRejectedValue(new Error("Not logged in - Please run /login"));
@@ -2236,6 +2264,129 @@ describe("memory pass filters", () => {
       "1\n2\n3\n4\n5\n6\n7",
     ].join("\n\n");
     expect(userTyping(text)).toBe("i'm 38\n\nhe said  ok");
+  });
+
+  it("keeps a message whose only secret word is token talk, unless it hints at a value", () => {
+    const spec = "Glasses v1 is the CEO meeting tool, keep the brief short and mind the token cost.\n\nPart 2 shows top 3 competitors and 1 news line.";
+    expect(userTyping(spec)).toBe(spec);
+    expect(secretValue(spec)).toBe(false);
+    expect(userTyping("keep it short, token cost matters")).toBe("keep it short, token cost matters");
+    for (const said of [
+      spec.replace("mind the token cost", "watch the tokens"),
+      `${spec}\n\nthe wifi one is HarborLanternQuartz`,
+      `${spec}\n\nthe staging one is: willowbasket`,
+      `${spec}\n\nmy code is 482913`,
+      "the access token usage page wants velvetpinecone",
+      "깃허브 token usage page wants velvetpinecone",
+      "(github) token usage page wants velvetpinecone",
+      "github.token usage page wants velvetpinecone",
+    ]) {
+      expect(secretValue(said)).toBe(true);
+      expect(userTyping(said)).toBe("");
+    }
+  });
+
+  it("drops the whole message for a password label or a key handed over, since a plain-word value has no shape", () => {
+    const kept = "I live in Seoul and build the glasses app for founders walking into a meeting";
+    const word = "PurpleMonkeyDishwasher";
+    const prose = (length: number) => "The glasses app should feel calm and fast for a founder walking into a meeting, with one glance views and no menus to dig through. ".repeat(5).slice(0, length).trimEnd();
+    const decision = "For the glasses app go with option B for the header: small logo on the left, the person brief in the middle, and the three competitor chips under it, because it reads faster at a glance than option A did in the demo yesterday.";
+    for (const said of [
+      `${kept}\n\nmy wifi password is\n\nhunter22`,
+      `${kept}\n\nhunter22\n\nthat's my wifi password`,
+      `${kept}\n\nmy wifi password:\n\nit's hunter22`,
+      `the staging password is in the next line\n\nlet's go with option B for the header, and use ${word} for the staging login`,
+      `${prose(120)} The router login is admin / ${word} for now. ${prose(420)}\n\npassword: hunter2!Xy9zz`,
+      `router login is admin / ${word} ${prose(520)}`,
+      `와이파이 비밀번호 알려줄게\n\n손님용은 ${word} 이고 위층에서도 잘 잡혀 그러니까 그걸로 쓰고 다른 사람한테는 절대 알려주지 마`,
+      `password for the nas\n\nok so\n\nit is ${word} and you type it exactly like that with capitals`,
+      "the vault password is below\n\nok\n\nseven purple otters dance under quiet moonlight tonight",
+      `${word} is what I set last night for everything\n\n${decision}\n\nthat first line is the root password btw`,
+      "The nas password is below.\n\nIt is MarigoldTeacupSaxophone, all one word, capitals as shown.",
+      "the safe password is below\n\nit's the word tulipgarden typed twice with no space between the two copies ok thanks",
+      `my bank pin is in the last line\n\n${decision}\n\nit's 4821 for the card and 7731 for the app, remember both of them`,
+      "와이파이 비밀번호 알려줄게\n\n알겠어\n\n손님용은 보라색원숭이식기세척기 이고 위층에서도 잘 잡혀 그러니까 그걸로 써",
+      `wifi password below, then the plan\n\nlantern orchid granite whisper velvet thunder maple and that is all lowercase with single spaces between the seven words\n\n${decision}`,
+      "here is the api token for the staging box\n\nuse maple-otter-canyon-drift as the value and put it in the header named x-wink on every call",
+      "password: hunter2!Xy9zz\n\nand the backup one is MarigoldTeacupSaxophone in case the first one stops working after the router update next week",
+    ]) expect(userTyping(said)).toBe("");
+  });
+
+  it("still sends what base sent beside the words a password or key label uses", () => {
+    for (const said of ["PR 2140 ea5032e5f", "#2140 is next", "$29.99", "15:38", "server/store.ts", "the login page is ugly", "pw reset email is ugly"]) expect(userTyping(said)).toBe(said);
+  });
+
+  it("never sends a value whose label sits paragraphs away or that a long paragraph holds", () => {
+    const value = "Tr0ub4dor&3xQ";
+    const phrase = "correct horse battery staple zebra";
+    const prose = (length: number) => "The glasses app should feel calm and fast for a founder walking into a meeting. ".repeat(10).slice(0, length).trimEnd();
+    const decision = "For the glasses app go with option B for the header: small logo on the left and the person brief in the middle, because it reads faster at a glance.";
+    for (const said of [
+      `the key is ${value} ${prose(560)}`,
+      `password for the wifi\n\nok\n\n${value}`,
+      `${prose(430)} and the admin password is:\n\nit is ${value} for now`,
+      `${phrase}\n\n^ that's my bank password`,
+      `${value} ${prose(500)}`,
+      `my wifi password:\n\nthe value is ${value} ok`,
+      `my wifi password is\n\n${value}\nand the guest one is Vx9mK2pQ7zLw`,
+      `${decision}\n\nhere is the admin password\n\n${decision.slice(0, 80)}\n\n${value}`,
+    ]) expect(userTyping(said)).not.toMatch(/Tr0ub4dor|horse battery|Vx9mK2pQ7zLw/);
+    expect(userTyping(`this is the wifi password\n\n${phrase}\n\n${decision}`)).toBe("");
+  });
+
+  it("drops a value with no digit beside its label", () => {
+    expect(userTyping("the staging password is in the next line\n\nlet's use Fr@nk!ly&On for the staging login from now on ok")).toBe("");
+  });
+
+  it("drops a passphrase over 6 words beside its label", () => {
+    expect(userTyping("the vault password is below\n\nlantern copper river eleven quiet maple storm")).toBe("");
+  });
+
+  it("drops digits-only values beside their label", () => {
+    expect(userTyping("my bank card secret details\n\n5500 0000 0000 0004 09 28 321 7395")).toBe("");
+  });
+
+  it("drops a value spelled out with spaces", () => {
+    expect(userTyping("the safe password is below\n\nk 9 v x 2 m p q 7 z")).toBe("");
+  });
+
+  it("drops a value two paragraphs from its label, before or after it", () => {
+    const decision = "For the glasses app go with option B for the header: small logo on the left and the person brief in the middle, because it reads faster at a glance.";
+    expect(userTyping("password for the nas\n\nok so\n\nOrangeWalrusTeapot")).toBe("");
+    expect(userTyping(`J@zz!hands&Go\n\n${decision}\n\nthat first line is the root password btw`)).toBe("");
+  });
+
+  it("never clips and sends a long paragraph holding a value with no digit", () => {
+    const prose = "The glasses app should feel calm and fast for a founder walking into a meeting. ".repeat(8);
+    expect(userTyping(`router login is admin / Fr@nk!ly&On ${prose}`)).toBe("");
+    expect(userTyping(`${prose.slice(0, 120)} The router login is admin / Red-Kite-Paper-Lamp for now. ${prose}\n\npassword: hunter2!Xy9zz`)).toBe("");
+  });
+
+  it("drops a value beside a Korean label", () => {
+    expect(userTyping("와이파이 비밀번호 알려줄게\n\n손님용은 OrangeWalrusTeapot 이고 위층에서도 잘 잡혀 그러니까 그걸로 써")).toBe("");
+  });
+
+  it.each(["E2b", "E2e", "E3b", "E4b", "E4c", "E4e", ...Array.from({ length: 21 }, (_, at) => `F${at + 1}`)])("sends no value from review case %s", (id) => {
+    const [, text, values] = secretCase(id);
+    const seen = userTyping(text!);
+    expect(values.filter((value) => sendsValue(seen, value))).toEqual([]);
+  });
+
+  it("sends no value from any review round that base held back", () => {
+    const leaks = Object.entries(SECRET_CASES).flatMap(([set, cases]) => cases.flatMap(([id, text, values]) => {
+      const seen = text === null ? S32_ROWS.map((row) => userTyping(row)).join("\n\n") : userTyping(text);
+      return values.filter((value) => sendsValue(seen, value) && !BASE_SENDS.get(id)?.includes(value) && !TOKEN_TALK_LIMITS.get(id)?.includes(value)).map((value) => `${set} ${id}: ${value}`);
+    }));
+    expect(leaks).toEqual([]);
+  });
+
+  it("keeps a goal the user set, marked as a goal", () => {
+    const text = "glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line";
+    expect(notePrompt("", [{ text }])).toContain(`"goal"`);
+    expect(acceptFacts([{ kind: "goal", fact: "Glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line", quote: "glasses v1 is a CEO meeting tool" }], text, ""))
+      .toEqual([{ line: "Goal: Glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line" }]);
+    expect(acceptFacts([{ kind: "goal", fact: "Wifi password is hunter22", quote: "my wifi password is hunter22" }], "my wifi password is hunter22", "")).toEqual([]);
+    expect(acceptFacts([{ kind: "goal", fact: "Reduce token cost", quote: "Reduce token cost" }], "Reduce token cost", "")).toEqual([{ line: "Goal: Reduce token cost" }]);
   });
 
   it("masks secrets before text leaves Wink", () => {
