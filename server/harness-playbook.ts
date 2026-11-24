@@ -84,7 +84,7 @@ function cardSection(lines: string[], heading: string): string {
 }
 
 /** Why the card a standard launch names, when it exists, is not ready: no prior-work search, or a fix card that names no change to undo. */
-function cardHold(command: string, cwd: string | undefined, readCard: (path: string) => string | undefined, lookFirst?: (path: string, card: string) => string | undefined): string | undefined {
+async function cardHold(command: string, cwd: string | undefined, readCard: (path: string) => string | undefined, lookFirst?: (path: string, card: string) => Promise<string | undefined>): Promise<string | undefined> {
   const named = CARD_LAUNCH.exec(command)?.[1]?.replace(/^["'`]+|["'`]+$/g, "");
   const absolute = (path: string) => isAbsolute(path) || win32.isAbsolute(path);
   // A relative card lives in the pane's cwd, never the server's.
@@ -99,7 +99,7 @@ function cardHold(command: string, cwd: string | undefined, readCard: (path: str
 
 /** Provider sessions that were handed the on-demand part; a worker launch waits for it. */
 export interface RevertGate {
-  reverts: { hit(cwd: string, card: string): RevertHit | undefined };
+  reverts: { hit(cwd: string, card: string): Promise<RevertHit | undefined> };
   wouldHold?: (row: ReturnType<typeof revertHoldRow>) => void;
   /** off: a would-hold is only logged */
   enforce?: boolean;
@@ -107,8 +107,8 @@ export interface RevertGate {
 
 export function createPlaybookGate(body = harnessPlaybookBody(), readCard = readCardFile, revertGate?: RevertGate) {
   const read = new Set<string>();
-  const lookFirst = (cwd: string | undefined) => (path: string, card: string) => {
-    const hit = cwd && revertGate ? revertGate.reverts.hit(cwd, card) : undefined;
+  const lookFirst = (cwd: string | undefined) => async (path: string, card: string) => {
+    const hit = cwd && revertGate ? await revertGate.reverts.hit(cwd, card) : undefined;
     if (!hit) return undefined;
     try {
       revertGate!.wouldHold?.(revertHoldRow(path, hit));
@@ -121,7 +121,7 @@ export function createPlaybookGate(body = harnessPlaybookBody(), readCard = read
       return body;
     },
     // Never marks the session: spawns sent side by side must all be held.
-    hold(session: string, command: string, cwd?: string): string | undefined {
+    async hold(session: string, command: string, cwd?: string): Promise<string | undefined> {
       if (!body || !WORKER_COMMAND.test(command)) return undefined;
       if (!read.has(session)) return "Held: this session has not read the worker playbook. Call terminal_playbook, follow it (card, worktree or safety copy, label), then send the spawn again.";
       return cardHold(command, cwd, readCard, lookFirst(cwd));

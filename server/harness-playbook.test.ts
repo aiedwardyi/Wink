@@ -49,32 +49,32 @@ describe("harness playbook", () => {
     expect(squash(`${harnessPlaybookPrompt(true).slice(0, -close.length)}<!-- on demand -->${body}${close}`)).toBe(squash(loadHarnessPlaybook()));
   });
 
-  it("sends a playbook with no on-demand line whole", () => {
+  it("sends a playbook with no on-demand line whole", async () => {
     const whole = "\n<harness_playbook>\nrules\n</harness_playbook>";
     expect(harnessPlaybookPrompt(true, whole)).toBe(whole);
     expect(harnessPlaybookBody(whole)).toBe("");
-    expect(createPlaybookGate("").hold("s1", "claude")).toBeUndefined();
+    expect(await createPlaybookGate("").hold("s1", "claude")).toBeUndefined();
   });
 
-  it("holds a worker launch until its session has read the playbook", () => {
+  it("holds a worker launch until its session has read the playbook", async () => {
     const gate = createPlaybookGate("BODY");
     const launch = "claude --model claude-haiku-5-5 --effort low 'Read card.md and do it.'";
-    expect(gate.hold("s1", launch)).toContain("Call terminal_playbook");
-    expect(gate.hold("s1", launch)).toContain("Call terminal_playbook");
+    expect(await gate.hold("s1", launch)).toContain("Call terminal_playbook");
+    expect(await gate.hold("s1", launch)).toContain("Call terminal_playbook");
     expect(gate.read("s1")).toBe("BODY");
-    expect(gate.hold("s1", launch)).toBeUndefined();
-    expect(gate.hold("s2", launch)).toContain("Call terminal_playbook");
+    expect(await gate.hold("s1", launch)).toBeUndefined();
+    expect(await gate.hold("s2", launch)).toContain("Call terminal_playbook");
   });
 
-  it("holds every engine launch form and lets plain shell commands through", () => {
+  it("holds every engine launch form and lets plain shell commands through", async () => {
     const gate = createPlaybookGate("BODY");
     for (const command of ["codex --model x 'Do it.'", "$env:CODEX_HOME='Work'; codex", "grok", "muse.cmd -m x", "$env:AGY_CLI_DISABLE_AUTO_UPDATE='1'; agy --model x", "cd app && claude", "& 'C:\\bin\\claude.exe' --model x"]) {
-      expect(gate.hold("s1", command), command).toBeDefined();
+      expect(await gate.hold("s1", command), command).toBeDefined();
     }
-    for (const command of ["", "pnpm test", "git status", "node claude-notes.js", "type docs\\codex.md"]) expect(gate.hold("s1", command), command).toBeUndefined();
+    for (const command of ["", "pnpm test", "git status", "node claude-notes.js", "type docs\\codex.md"]) expect(await gate.hold("s1", command), command).toBeUndefined();
   });
 
-  it("holds a card launch until its Already built section holds the prior-work search", () => {
+  it("holds a card launch until its Already built section holds the prior-work search", async () => {
     const empty = String.raw`C:\cards\EMPTY.md`;
     const missing = String.raw`C:\cards\MISSING.md`;
     const filled = String.raw`C:\my cards\FILLED.md`;
@@ -89,16 +89,16 @@ describe("harness playbook", () => {
     gate.read("s1");
     const launch = (card: string) => `claude --model claude-opus-5-5 --effort high 'Read ${card} and do it.'`;
     for (const card of [empty, missing]) {
-      expect(gate.hold("s1", launch(card)), card).toBe(`Held: ${card} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`);
+      expect(await gate.hold("s1", launch(card)), card).toBe(`Held: ${card} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`);
     }
-    expect(gate.hold("s1", launch(filled))).toBeUndefined();
-    expect(gate.hold("s1", `codex "Read ${last} and do it."`)).toBeUndefined();
-    expect(gate.hold("s1", launch(String.raw`C:\cards\GONE.md`))).toBeUndefined();
-    expect(gate.hold("s1", "claude --model x 'Fix the header.'")).toBeUndefined();
-    expect(gate.hold("s1", `type ${empty}`)).toBeUndefined();
+    expect(await gate.hold("s1", launch(filled))).toBeUndefined();
+    expect(await gate.hold("s1", `codex "Read ${last} and do it."`)).toBeUndefined();
+    expect(await gate.hold("s1", launch(String.raw`C:\cards\GONE.md`))).toBeUndefined();
+    expect(await gate.hold("s1", "claude --model x 'Fix the header.'")).toBeUndefined();
+    expect(await gate.hold("s1", `type ${empty}`)).toBeUndefined();
   });
 
-  it("holds a fix card until its Undo first section names the change it undoes", () => {
+  it("holds a fix card until its Undo first section names the change it undoes", async () => {
     const card = (purpose: string, undo?: string) => `# CARD | opus | high | FRESH\n## Purpose\n${purpose}\n## Already built\n- none found (searched: header)\n${undo === undefined ? "" : `## Undo first\n${undo}\n`}## Files\n- a.ts\n`;
     const cards = new Map([
       [String.raw`C:\cards\NONE.md`, card("Fix the header that broke on phone.")],
@@ -115,21 +115,21 @@ describe("harness playbook", () => {
     gate.read("s1");
     const launch = (name: string) => `claude --model x 'Read C:\\cards\\${name}.md and do it.'`;
     for (const name of ["NONE", "BLANK", "VAGUE", "NOTERMS"]) {
-      expect(gate.hold("s1", launch(name)), name).toBe(`Held: C:\\cards\\${name}.md is a fix card that names no change to undo. Fill ## Undo first: 'revert <sha or PR>' for the change that caused it, else 'no earlier change caused this (searched: <terms>)', or 'new code: "<user's words>" (<date>)' when the user asked for new code. Then send the spawn again.`);
+      expect(await gate.hold("s1", launch(name)), name).toBe(`Held: C:\\cards\\${name}.md is a fix card that names no change to undo. Fill ## Undo first: 'revert <sha or PR>' for the change that caused it, else 'no earlier change caused this (searched: <terms>)', or 'new code: "<user's words>" (<date>)' when the user asked for new code. Then send the spawn again.`);
     }
-    for (const name of ["SHA", "PR", "SEARCHED", "NEW", "BUILD"]) expect(gate.hold("s1", launch(name)), name).toBeUndefined();
+    for (const name of ["SHA", "PR", "SEARCHED", "NEW", "BUILD"]) expect(await gate.hold("s1", launch(name)), name).toBeUndefined();
   });
 
-  it("finds a relative card in the spawn's cwd and skips it without one", () => {
+  it("finds a relative card in the spawn's cwd and skips it without one", async () => {
     const cwd = String.raw`D:\wt\site`;
     const gate = createPlaybookGate("BODY", (path) => (path === join(cwd, "CARD.md") ? "# CARD\n## Already built\n" : undefined));
     gate.read("s1");
     const launch = "claude --model x 'Read CARD.md and do it.'";
-    expect(gate.hold("s1", launch, cwd)).toContain(`Held: ${join(cwd, "CARD.md")} has no prior-work search.`);
-    expect(gate.hold("s1", launch)).toBeUndefined();
+    expect(await gate.hold("s1", launch, cwd)).toContain(`Held: ${join(cwd, "CARD.md")} has no prior-work search.`);
+    expect(await gate.hold("s1", launch)).toBeUndefined();
   });
 
-  it("holds a non-code card in a plain folder the same way", () => {
+  it("holds a non-code card in a plain folder the same way", async () => {
     const folder = String.raw`C:\Users\me\Documents\Q3 research`;
     const cards = new Map([
       [join(folder, "DECK.md"), "# DECK | sonnet | high | FRESH\n## Purpose\nBuild the Q3 board deck.\n## Already built\n\n## Files\n- notes.docx\n"],
@@ -137,8 +137,8 @@ describe("harness playbook", () => {
     ]);
     const gate = createPlaybookGate("BODY", (path) => cards.get(path));
     gate.read("s1");
-    expect(gate.hold("s1", "claude --model x 'Read DECK.md and do it.'", folder)).toContain(`Held: ${join(folder, "DECK.md")} has no prior-work search.`);
-    expect(gate.hold("s1", "claude --model x 'Read MEMO.md and do it.'", folder)).toBeUndefined();
+    expect(await gate.hold("s1", "claude --model x 'Read DECK.md and do it.'", folder)).toContain(`Held: ${join(folder, "DECK.md")} has no prior-work search.`);
+    expect(await gate.hold("s1", "claude --model x 'Read MEMO.md and do it.'", folder)).toBeUndefined();
   });
 
   it("says the built list covers docs, decks and pages, written from the files when there is no code", () => {
@@ -511,7 +511,7 @@ Last command: orbit-msg --report DONE|FAIL|BLOCKED VERIFY-SHARP "PR <n>"
 
   it("holds the blur card on the revert of the fix it builds again", async () => {
     const { dir, gate, rows } = await setup(true);
-    const held = gate.hold("s1", launch("VERIFY-SHARP"), dir);
+    const held = await gate.hold("s1", launch("VERIFY-SHARP"), dir);
     expect(held).toContain("Held (look first): C:\\cards\\VERIFY-SHARP.md names electron/verify-cast.mjs, which revert #1595 (11-14) changed; it undid #1587 \"fix: Live Verify checks a slow page");
     expect(held).toContain('add a "Look-first:" line under ## Already built');
     expect(rows).toEqual([expect.objectContaining({ card: String.raw`C:\cards\VERIFY-SHARP.md`, file: "electron/verify-cast.mjs", revert: expect.objectContaining({ pr: 1595 }), undid: expect.objectContaining({ prs: [1587] }) })]);
@@ -519,27 +519,27 @@ Last command: orbit-msg --report DONE|FAIL|BLOCKED VERIFY-SHARP "PR <n>"
 
   it("passes a card whose Look-first line names the revert", async () => {
     const { dir, gate, rows } = await setup(true);
-    expect(gate.hold("s1", launch("LOOK"), dir)).toBeUndefined();
+    expect(await gate.hold("s1", launch("LOOK"), dir)).toBeUndefined();
     expect(rows).toEqual([]);
   });
 
   it("passes a card naming only a hot file", async () => {
     const { dir, gate, rows } = await setup(true);
-    expect(gate.hold("s1", launch("HOT"), dir)).toBeUndefined();
+    expect(await gate.hold("s1", launch("HOT"), dir)).toBeUndefined();
     expect(rows).toEqual([]);
   });
 
   it("passes a launch whose cwd is not a repo, with no git call", async () => {
     const { dir, gate, rows, git } = await setup(true, false);
-    expect(gate.hold("s1", launch("VERIFY-SHARP"), dir)).toBeUndefined();
-    expect(gate.hold("s1", launch("VERIFY-SHARP"))).toBeUndefined();
+    expect(await gate.hold("s1", launch("VERIFY-SHARP"), dir)).toBeUndefined();
+    expect(await gate.hold("s1", launch("VERIFY-SHARP"))).toBeUndefined();
     expect(rows).toEqual([]);
     expect(git).not.toHaveBeenCalled();
   });
 
   it("only logs the would-hold while holds are off", async () => {
     const { dir, gate, rows } = await setup(false);
-    expect(gate.hold("s1", launch("VERIFY-SHARP"), dir)).toBeUndefined();
+    expect(await gate.hold("s1", launch("VERIFY-SHARP"), dir)).toBeUndefined();
     expect(rows).toHaveLength(1);
   });
 
@@ -549,7 +549,7 @@ Last command: orbit-msg --report DONE|FAIL|BLOCKED VERIFY-SHARP "PR <n>"
     await index.refresh(dir);
     const gate = createPlaybookGate("BODY", () => "# X\n## Purpose\nSharpen electron/verify-cast.mjs.\n## Already built\n\n", { reverts: index, wouldHold: (row) => rows.push(row), enforce: true });
     gate.read("s1");
-    expect(gate.hold("s1", launch("X"), dir)).toContain("has no prior-work search");
+    expect(await gate.hold("s1", launch("X"), dir)).toContain("has no prior-work search");
     expect(rows).toEqual([]);
   });
 });

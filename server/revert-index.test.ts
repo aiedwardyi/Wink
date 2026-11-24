@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -116,7 +116,7 @@ describe("revert index", () => {
     expect(revertHit(log, card, Date.parse("2026-11-14T10:30:00Z"))).toBeUndefined();
   });
 
-  it("finds the common dir of a worktree and nothing outside a repo", () => {
+  it("finds the common dir of a worktree and nothing outside a repo", async () => {
     const main = repo();
     const worktree = mkdtempSync(join(tmpdir(), "revert-wt-"));
     const own = join(main, ".git", "worktrees", "wt");
@@ -125,11 +125,11 @@ describe("revert index", () => {
     writeFileSync(join(own, "commondir"), "../..\n");
     writeFileSync(join(worktree, ".git"), `gitdir: ${own}\n`);
     mkdirSync(join(worktree, "src"));
-    expect(gitHome(join(worktree, "src"))?.common).toBe(join(main, ".git"));
-    expect(gitHome(main)).toEqual({ common: join(main, ".git"), refs: "--branches", shallow: false });
-    expect(gitHome(mkdtempSync(join(tmpdir(), "revert-none-")))).toBeUndefined();
-    expect(gitHome("")).toBeUndefined();
-    expect(gitHome("relative/dir")).toBeUndefined();
+    expect((await gitHome(join(worktree, "src")))?.common).toBe(join(main, ".git"));
+    expect(await gitHome(main)).toEqual({ common: join(main, ".git"), refs: "--branches", shallow: false });
+    expect(await gitHome(mkdtempSync(join(tmpdir(), "revert-none-")))).toBeUndefined();
+    expect(await gitHome("")).toBeUndefined();
+    expect(await gitHome("relative/dir")).toBeUndefined();
   });
 
   it("runs one git pass per repo and runs again only when a ref moves or the interval passes", async () => {
@@ -137,11 +137,11 @@ describe("revert index", () => {
     let now = NOW;
     const calls: string[][] = [];
     const index = createRevertIndex({ git: async (_cwd, args) => { calls.push(args); return BLUR_LOG; }, now: () => now });
-    expect(index.hit(dir, "electron/verify-cast.mjs")).toBeUndefined();
+    expect(await index.hit(dir, "electron/verify-cast.mjs")).toBeUndefined();
     await index.refresh(dir);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual(expect.arrayContaining(["log", "--since=90.days", "--name-only"]));
-    expect(index.hit(dir, "electron/verify-cast.mjs")?.revert.pr).toBe(1595);
+    expect((await index.hit(dir, "electron/verify-cast.mjs"))?.revert.pr).toBe(1595);
     await index.refresh(dir);
     expect(calls).toHaveLength(1);
     moveRef(dir, "2".repeat(40));
@@ -160,7 +160,7 @@ describe("revert index", () => {
     fail = true;
     moveRef(dir, "2".repeat(40));
     await expect(index.refresh(dir)).resolves.toBeUndefined();
-    expect(index.hit(dir, "electron/verify-cast.mjs")?.revert.pr).toBe(1595);
+    expect((await index.hit(dir, "electron/verify-cast.mjs"))?.revert.pr).toBe(1595);
   });
   it("matches file names with spaces, brackets and non-folder roots, and a folder file only by its whole path", () => {
     const files = ["docs/my guide.md", "src/app/users/[id]/page.tsx", "src/app/(dashboard)/page.tsx", "root-file.ts", "index.ts"];
@@ -202,12 +202,12 @@ describe("revert index", () => {
       const { git, passes } = counted();
       const index = createRevertIndex({ git });
       for (const name of order) await index.refresh(repos[name]);
-      expect(index.hit(repos.main, SHARP)?.revert.pr, order.join(">")).toBe(1595);
-      expect(index.hit(repos.old, SHARP)?.revert.pr, order.join(">")).toBe(1595);
+      expect((await index.hit(repos.main, SHARP))?.revert.pr, order.join(">")).toBe(1595);
+      expect((await index.hit(repos.old, SHARP))?.revert.pr, order.join(">")).toBe(1595);
       const warmed = passes();
       for (let cycle = 0; cycle < 3; cycle += 1) {
         await Promise.all([repos.old, repos.main].map((cwd) => index.refresh(cwd)));
-        expect(index.hit(repos.main, SHARP)?.revert.pr).toBe(1595);
+        expect((await index.hit(repos.main, SHARP))?.revert.pr).toBe(1595);
         await index.refresh(repos.main);
       }
       expect(passes() - warmed).toBe(0);
@@ -224,7 +224,7 @@ describe("revert index", () => {
     const fresh = createRevertIndex({ git: burst.git });
     await Promise.all(repos.others.map((cwd) => fresh.refresh(cwd)));
     expect(burst.passes()).toBe(1);
-    expect(index.hit(repos.others[0]!, "Edit docs/가이드.md.")).toMatchObject({ file: "docs/가이드.md", revert: { pr: 1596 } });
+    expect(await index.hit(repos.others[0]!, "Edit docs/가이드.md.")).toMatchObject({ file: "docs/가이드.md", revert: { pr: 1596 } });
   });
 
   it("sees a revert fetched from a linked worktree without waiting out the interval", async () => {
@@ -233,7 +233,7 @@ describe("revert index", () => {
     const index = createRevertIndex({ git });
     await index.refresh(repos.main);
     const card = "Edit src/lens.ts.";
-    expect(index.hit(repos.main, card)).toBeUndefined();
+    expect(await index.hit(repos.main, card)).toBeUndefined();
     const upstream = join(repos.main, "..", "upstream");
     const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { windowsHide: true, encoding: "utf8" });
     run(join(repos.main, ".."), "clone", "-q", join(repos.main, "..", "origin.git"), upstream);
@@ -246,7 +246,7 @@ describe("revert index", () => {
     run(upstream, "push", "-q", "origin", "main");
     run(repos.old, "fetch", "-q", "origin");
     await index.refresh(repos.main);
-    expect(index.hit(repos.main, card)?.revert.pr).toBe(1701);
+    expect((await index.hit(repos.main, card))?.revert.pr).toBe(1701);
     expect(passes()).toBe(2);
   });
 
@@ -261,16 +261,43 @@ describe("revert index", () => {
     const index = createRevertIndex({ git });
     const card = "Edit lens.ts.";
     await index.refresh(dir);
-    expect(index.hit(dir, card)).toBeUndefined();
+    expect(await index.hit(dir, card)).toBeUndefined();
     save("v0\n", "revert: lens (#1701)");
     await index.refresh(dir);
-    expect(index.hit(dir, card)?.revert.pr).toBe(1701);
+    expect((await index.hit(dir, card))?.revert.pr).toBe(1701);
     run("reset", "-q", "--hard", a);
     await index.refresh(dir);
-    expect(index.hit(dir, card)).toBeUndefined();
+    expect(await index.hit(dir, card)).toBeUndefined();
     await index.refresh(dir);
     await index.refresh(dir);
     expect(passes()).toBe(3);
+  });
+
+  it("sees a new ref in a reftable repo without waiting out the interval", async (context) => {
+    const dir = mkdtempSync(join(tmpdir(), "revert-reftable-"));
+    roots.push(dir);
+    const run = (...args: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { windowsHide: true, encoding: "utf8" }).trim();
+    try {
+      run("init", "-q", "-b", "main", "--ref-format=reftable");
+    } catch {
+      return context.skip();
+    }
+    const save = (text: string, message: string) => { writeFileSync(join(dir, "lens.ts"), text); run("add", "-A"); run("commit", "-qm", message); };
+    save("v1\n", "feat: lens (#1700)");
+    const { git, passes } = counted();
+    const index = createRevertIndex({ git });
+    await index.refresh(dir);
+    expect(await index.hit(dir, "Edit lens.ts.")).toBeUndefined();
+    save("v0\n", "revert: lens (#1701)");
+    await index.refresh(dir);
+    expect((await index.hit(dir, "Edit lens.ts."))?.revert.pr).toBe(1701);
+    expect(passes()).toBe(2);
+  });
+
+  it("reads folders only through node:fs/promises", () => {
+    const source = readFileSync(new URL("./revert-index.ts", import.meta.url), "utf8");
+    const sync = [...source.matchAll(/\b\w+Sync\b|from "node:fs"/g)].map((match) => match[0]);
+    expect(sync, "sync fs in server/revert-index.ts blocks the whole server on a folder that never answers (a dead network share): use stat, readFile and readdir from node:fs/promises").toEqual([]);
   });
 
   it.skipIf(process.platform !== "win32")("treats a common dir in another letter case as the same repo", async () => {
@@ -289,7 +316,7 @@ describe("revert index", () => {
     const calls: string[][] = [];
     const index = createRevertIndex({ git: async (_cwd, args) => { calls.push(args); return BLUR_LOG; }, now: () => NOW });
     await index.refresh(dir);
-    expect(index.hit(dir, "electron/verify-cast.mjs")).toBeUndefined();
+    expect(await index.hit(dir, "electron/verify-cast.mjs")).toBeUndefined();
     expect(calls).toHaveLength(0);
   });
 
@@ -299,7 +326,7 @@ describe("revert index", () => {
     let calls = 0;
     const index = createRevertIndex({ git: async () => { calls += 1; throw new Error("spawn git ENOENT"); }, now: () => now });
     await index.refresh(dir);
-    for (let hit = 0; hit < 3; hit += 1) expect(index.hit(dir, "electron/verify-cast.mjs")).toBeUndefined();
+    for (let hit = 0; hit < 3; hit += 1) expect(await index.hit(dir, "electron/verify-cast.mjs")).toBeUndefined();
     await index.refresh(dir);
     expect(calls).toBe(1);
     now += 10 * 60_000;

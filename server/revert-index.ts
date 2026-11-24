@@ -1,6 +1,6 @@
 // Reverts in each repo's last 90 days and how often each file changed there, for the worker-launch gate.
 // hit() never waits on git: it reads what the last pass found.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 
 import { mapGit } from "./map-git.ts";
@@ -111,66 +111,50 @@ export function revertHoldRow(card: string, { file, revert }: RevertHit) {
   return { card, file, revert: { pr: revert.pr, sha: revert.sha, subject: revert.subject }, undid: revert.undid };
 }
 
-function readText(path: string): string | undefined {
-  try {
-    return readFileSync(path, "utf8").trim();
-  } catch {
-    return undefined;
-  }
-}
+const readText = (path: string) => readFile(path, "utf8").then((text) => text.trim(), () => undefined);
+const mtime = (path: string) => stat(path).then((stats) => stats.mtimeMs, () => 0);
 
-function mtime(path: string): number {
-  try {
-    return statSync(path).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
+export interface GitHome { common: string; refs: string; shallow: boolean }
 
 /** The git common dir the cwd's checkout shares with its worktrees and the refs to log, read with no git spawn. */
-export function gitHome(cwd: string): { common: string; refs: string; shallow: boolean } | undefined {
+export async function gitHome(cwd: string): Promise<GitHome | undefined> {
   if (!isAbsolute(cwd) && !win32.isAbsolute(cwd)) return undefined;
   for (let dir = resolve(cwd); ; dir = dirname(dir)) {
     const dot = join(dir, ".git");
-    let own;
-    try {
-      own = statSync(dot);
-    } catch {
+    const own = await stat(dot).catch(() => undefined);
+    if (!own) {
       if (dirname(dir) === dir) return undefined;
       continue;
     }
-    const gitDir = own.isDirectory() ? dot : resolve(dir, /^gitdir:\s*(.+)$/m.exec(readText(dot) ?? "")?.[1]?.trim() ?? "");
-    const shared = readText(join(gitDir, "commondir"));
+    const gitDir = own.isDirectory() ? dot : resolve(dir, /^gitdir:\s*(.+)$/m.exec(await readText(dot) ?? "")?.[1]?.trim() ?? "");
+    const shared = await readText(join(gitDir, "commondir"));
     const common = shared ? resolve(gitDir, shared) : gitDir;
-    const head = readText(join(gitDir, "HEAD"));
+    const head = await readText(join(gitDir, "HEAD"));
     if (head === undefined) return undefined;
-    const shallow = existsSync(join(common, "shallow"));
+    const shallow = await stat(join(common, "shallow")).then(() => true, () => false);
     // every worktree logs the same refs, so one forked before a revert never hides it
-    const origin = /^\s*\[remote "origin"\]/m.test(readText(join(common, "config")) ?? "");
+    const origin = /^\s*\[remote "origin"\]/m.test(await readText(join(common, "config")) ?? "");
     return { common, refs: origin ? "--remotes=origin" : "--branches", shallow };
   }
 }
 
 const folders = new Map<string, { at: number; subs: string[] }>();
 
-/** Changes when any worktree moves a ref the log reads: git writes a loose ref as a lock file renamed into its folder. */
-function refsKey(common: string, refs: string): string {
-  const times = [mtime(join(common, "packed-refs"))];
-  const walk = (dir: string) => {
-    const at = mtime(dir);
+/** Changes when any worktree moves a ref the log reads: git writes a loose ref as a lock file renamed into its folder, and reftable rewrites tables.list. */
+async function refsKey(common: string, refs: string): Promise<string> {
+  const times = [await mtime(join(common, "packed-refs")), await mtime(join(common, "reftable", "tables.list"))];
+  const walk = async (dir: string) => {
+    const at = await mtime(dir);
     times.push(at);
     let known = folders.get(dir);
     if (known?.at !== at) {
-      let subs: string[] = [];
-      try {
-        subs = readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name));
-      } catch {}
+      const subs = await readdir(dir, { withFileTypes: true }).then((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name)), () => []);
       known = { at, subs };
       folders.set(dir, known);
     }
-    for (const sub of known.subs) walk(sub);
+    for (const sub of known.subs) await walk(sub);
   };
-  walk(join(common, refs === "--branches" ? "refs/heads" : "refs/remotes/origin"));
+  await walk(join(common, refs === "--branches" ? "refs/heads" : "refs/remotes/origin"));
   return times.join(",");
 }
 
@@ -179,34 +163,49 @@ export function createRevertIndex(deps: { git?: RevertGit; now?: () => number } 
   const now = deps.now ?? Date.now;
   const repos = new Map<string, { key: string; at: number; checked: number; log: RevertLog }>();
   const running = new Map<string, Promise<void>>();
+  const homes = new Map<string, { at: number; home: GitHome | undefined }>();
+  const probing = new Map<string, Promise<GitHome | undefined>>();
   const repoId = (common: string) => process.platform === "win32" ? common.toLowerCase() : common;
 
-  function refresh(cwd: string, home = gitHome(cwd)): Promise<void> {
-    // a shallow history undercounts how often a file changed
-    if (!home || home.shallow) return Promise.resolve();
+  // one probe per folder, again only after the interval: a folder on a dead share ties up one fs thread per interval
+  function homeOf(cwd: string): Promise<GitHome | undefined> {
+    const known = homes.get(cwd);
+    if (known && now() - known.at < UNLANDED_REFRESH_MS) return Promise.resolve(known.home);
+    const prior = probing.get(cwd);
+    if (prior) return prior;
+    const probe = gitHome(cwd).then((home) => { homes.set(cwd, { at: now(), home }); return home; }).finally(() => probing.delete(cwd));
+    probing.set(cwd, probe);
+    return probe;
+  }
+
+  function check(cwd: string, home: GitHome): Promise<void> {
     const id = repoId(home.common);
-    const key = refsKey(home.common, home.refs);
-    const known = repos.get(id);
-    if (known) known.checked = now();
-    if (known?.key === key && now() - known.at < UNLANDED_REFRESH_MS) return Promise.resolve();
     const prior = running.get(id);
     if (prior) return prior;
-    // a failed pass keeps the last one until the interval passes
-    const job = git(cwd, ["-c", "core.quotePath=false", "log", "--no-color", "--no-renames", "--since=90.days", "--name-only", FORMAT, home.refs, "--"])
-      .then(parseRevertLog, () => known?.log ?? EMPTY)
-      .then((log) => { repos.set(id, { key, at: now(), checked: now(), log }); })
-      .finally(() => running.delete(id));
+    const job = refsKey(home.common, home.refs).then((key) => {
+      const known = repos.get(id);
+      if (known) known.checked = now();
+      if (known?.key === key && now() - known.at < UNLANDED_REFRESH_MS) return;
+      // a failed pass keeps the last one until the interval passes
+      return git(cwd, ["-c", "core.quotePath=false", "log", "--no-color", "--no-renames", "--since=90.days", "--name-only", FORMAT, home.refs, "--"])
+        .then(parseRevertLog, () => known?.log ?? EMPTY)
+        .then((log) => { repos.set(id, { key, at: now(), checked: now(), log }); });
+    }).finally(() => running.delete(id));
     running.set(id, job);
     return job;
   }
 
   return {
-    refresh,
-    hit(cwd: string, card: string): RevertHit | undefined {
-      const home = gitHome(cwd);
+    // a shallow history undercounts how often a file changed
+    refresh: (cwd: string): Promise<void> => homeOf(cwd).then((home) => home && !home.shallow ? check(cwd, home) : undefined),
+    /** A folder seen before answers from memory; a new one waits for its home probe, never for git or the refs check. */
+    async hit(cwd: string, card: string): Promise<RevertHit | undefined> {
+      const seen = homes.get(cwd);
+      const probe = homeOf(cwd);
+      const home = seen ? seen.home : await probe;
       if (!home || home.shallow) return undefined;
       const known = repos.get(repoId(home.common));
-      if (!known || now() - known.checked >= REFS_CHECK_MS) void refresh(cwd, home);
+      if (!known || now() - known.checked >= REFS_CHECK_MS) void check(cwd, home);
       return known ? revertHit(known.log, card, now()) : undefined;
     },
   };
