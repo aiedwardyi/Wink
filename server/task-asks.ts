@@ -67,18 +67,20 @@ const untilTime = (text: string) => {
 };
 
 // only closed asks fall off, oldest first; an open ask is never dropped or refused
-function trimClosed(asks: TaskAsk[]): void {
+export function trimClosed(asks: TaskAsk[]): TaskAsk[] {
+  const trimmed: TaskAsk[] = [];
   for (let closed = asks.findIndex((ask) => !isOpenAsk(ask)); asks.length > ASK_LIMITS.kept && closed >= 0; closed = asks.findIndex((ask) => !isOpenAsk(ask))) {
-    asks.splice(closed, 1);
+    trimmed.push(...asks.splice(closed, 1));
   }
+  return trimmed;
 }
 
-/** No id adds an ask unless an open one matches its words, an id updates it; closing keeps it, and only the oldest closed asks fall off past the cap. */
+/** No id adds an ask unless an open one matches its words, an id updates it; closing keeps it, and only the oldest closed asks fall off past the cap, into trimmed as this update left them. */
 export function mergeTaskAsks(
   book: AskBook | undefined,
   updates: readonly TaskAskUpdate[],
   now: number,
-): (SavedAsks & { note: string }) | { error: string } {
+): (SavedAsks & { note: string; trimmed: TaskAsk[] }) | { error: string } {
   const asks = (book?.asks ?? []).map((ask) => ({ ...ask }));
   const added: string[] = [];
   const merged: string[] = [];
@@ -112,11 +114,11 @@ export function mergeTaskAsks(
     asks.push({ id: `A${last}`, ask: text, status, ...(update.ref ? { ref: update.ref } : {}), ...(parked ? { until } : {}), at: now, changedAt: now });
     added.push(`A${last}`);
   }
-  trimClosed(asks);
+  const trimmed = trimClosed(asks);
   const saved = [added.length ? `added ${added.join(", ")}` : "", merged.length ? `merged into ${merged.join(", ")}` : ""].filter(Boolean).join("; ");
   const parkedCount = asks.filter((ask) => isParked(ask, now)).length;
   const open = asks.filter(isOpenAsk).length - parkedCount;
-  return { asks, lastAskId: last, note: `Asks saved${saved ? `: ${saved}` : ""}; ${open} open${parkedCount ? `, ${parkedCount} parked` : ""}.` };
+  return { asks, lastAskId: last, trimmed, note: `Asks saved${saved ? `: ${saved}` : ""}; ${open} open${parkedCount ? `, ${parkedCount} parked` : ""}.` };
 }
 
 const clip = (text: string, max: number) => {
@@ -183,14 +185,15 @@ export function rotatedAsks(asks: readonly TaskAsk[] | undefined, now: number): 
   return shown.length < ordered.length + parked.length ? shown.map((ask) => ask.id) : null;
 }
 
-/** Every open ask, then each parked one with the day it comes back. Empty when none is open. */
-export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false): string {
-  const { ordered, parked, due, shown, line } = listed(asks, now);
+/** Every open ask, then each parked one with the day it comes back, or with verdictOnly just the asks needing a verdict. Empty when none is open. */
+export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false, verdictOnly = false): string {
+  const { ordered, parked, due, shown: listShown, line } = listed(asks, now);
   if (!ordered.length && !parked.length) return "";
+  const shown = verdictOnly ? listed(due, now).shown : listShown;
   const them = due.length === 1 ? "it" : "them";
   const flagged = due.length ? `, ${due.length} need${due.length === 1 ? "s" : ""} a verdict: no ref and no change in 3+ days, so build, park or close ${them} yourself, and ask the user about at most 3 at a time` : "";
   const waiting = ordered.length + parked.length - shown.length;
-  const rotated = waiting ? ` ${waiting} more wait for the next turn, least recently shown first.` : "";
+  const rotated = !waiting ? "" : verdictOnly ? ` ${waiting} more show on a status question.` : ` ${waiting} more wait for the next turn, least recently shown first.`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
   return [
     `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
@@ -232,13 +235,13 @@ function elsewhereBlock(asks: readonly TaskAsk[], now: number): string {
   ].join("\n");
 }
 
-/** For a turn the record does not ride: every open ask on a status turn or once one needs a verdict, otherwise up to NAMED_MAX asks the message names in NAMED_BYTES; asks from the bot's other chats ride the same way. */
+/** For a turn the record does not ride: every open ask on a status turn, the asks needing a verdict on any other, and up to NAMED_MAX asks the message names in NAMED_BYTES; asks from the bot's other chats ride the same way. */
 export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, text: string, elsewhere: readonly TaskAsk[] = []): string {
   const status = isStatusTurn(text);
   const own = asks ?? [];
   if (status) return [asksBlock(asks, now, true), elsewhereBlock(elsewhere.filter(isOpenAsk), now)].filter(Boolean).join("\n");
-  const block = own.some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now) : "";
-  const mine = new Set(block ? [] : own);
+  const block = own.some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now, false, true) : "";
+  const mine = new Set(own.filter((ask) => !needsVerdict(ask, now)));
   const render = (picked: readonly TaskAsk[]) => {
     const hits = picked.filter((ask) => mine.has(ask));
     return [

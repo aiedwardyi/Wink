@@ -958,7 +958,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
   it("keeps the update control in the footer rail and uses the tighter labeled row geometry", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "Sidebar.tsx"), "utf8");
     const conversations = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "SidebarConversations.tsx"), "utf8");
-    const footer = source.slice(source.indexOf("{/* Footer */}"), source.indexOf("{profileMenuPresence.value &&"));
+    const footer = source.slice(source.indexOf("{/* Footer */}"), source.indexOf("{menuPresence.value &&"));
     expect(footer).toContain("data-sidebar-update");
     expect(footer).toContain("<UpdateButton />");
     const profileRow = footer.indexOf("data-sidebar-profile-row");

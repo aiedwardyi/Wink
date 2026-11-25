@@ -44,8 +44,8 @@ describe("ask PRs", () => {
     expect(prs.take("bot", "thread", asks)).toEqual([]);
     await prs.settled();
     expect(calls).toEqual([
-      { cwd: "C:/repo", args: ["pr", "view", "1988", "--json", "state"] },
-      { cwd: "C:/repo", args: ["pr", "view", "7", "--json", "state"] },
+      { cwd: "C:/repo", args: ["pr", "view", "1988", "--json", "state,mergedAt"] },
+      { cwd: "C:/repo", args: ["pr", "view", "7", "--json", "state,mergedAt"] },
     ]);
     expect(prs.take("bot", "thread", asks)).toEqual(["A1"]);
   });
@@ -55,7 +55,7 @@ describe("ask PRs", () => {
     const asks = [ask(1, { ref: "https://github.com/o/r/pull/5" }), ask(2, { ref: "PR #6" })];
     prs.take("bot", "thread", asks);
     await prs.settled();
-    expect(calls.map((call) => call.args)).toEqual([["pr", "view", "5", "--repo", "o/r", "--json", "state"]]);
+    expect(calls.map((call) => call.args)).toEqual([["pr", "view", "5", "--repo", "o/r", "--json", "state,mergedAt"]]);
     prs.take("bot", "thread", asks);
     tick(UNLANDED_REFRESH_MS - 1);
     prs.take("bot", "thread", asks);
@@ -300,28 +300,147 @@ describe("ask PR closes the bot can see", () => {
 describe("repos a bot works in", () => {
   const mod = askPrsModule as {
     reposIn?: (texts: readonly string[]) => string[];
-    createKnownRepos?: (deps: { discover: (botId: string) => Promise<string[]> }) => { get(botId: string): string[]; refresh(botId: string): Promise<void> };
+    remoteRepo?: (url: string) => string | undefined;
+    createKnownRepos?: (deps: { discover: (botId: string) => Promise<string[]>; cited: (botId: string) => Promise<string[]>; saved: (botId: string) => readonly string[]; save: (botId: string, repos: string[]) => void }) => { get(botId: string): string[] | undefined; cite(botId: string): Promise<void>; refresh(botId: string): Promise<void> };
   };
 
   it("reads repos from PR links, owner/repo#n refs and git remotes", () => {
-    expect(mod.reposIn?.([
-      "https://github.com/AiEdwardYi/Wink/pull/2138",
-      "AiEdwardYi/orbit-releases#12 merged",
-      "git@github.com:aiedwardyi/quorum.git",
-      "https://github.com/aiedwardyi/wink.git",
-      "PR 2140",
-    ])).toEqual(["aiedwardyi/wink", "aiedwardyi/orbit-releases", "aiedwardyi/quorum"]);
+    expect(mod.reposIn?.(["https://github.com/AiEdwardYi/Wink/pull/2138", "AiEdwardYi/orbit-releases#12 merged", "PR 2140"])).toEqual(["aiedwardyi/wink", "aiedwardyi/orbit-releases"]);
+    expect(["git@github.com:aiedwardyi/quorum.git\n", "https://github.com/AiEdwardYi/Wink.git\n", "https://gitlab.com/o/r.git"].map((url) => mod.remoteRepo?.(url))).toEqual(["aiedwardyi/quorum", "aiedwardyi/wink", undefined]);
   });
 
   it("answers take() from a cache filled after a reply settles", async () => {
     let calls = 0;
-    const known = mod.createKnownRepos?.({ discover: async () => { calls++; return ["aiedwardyi/wink"]; } });
-    expect(known?.get("bot")).toEqual([]);
+    const saved = new Map<string, string[]>();
+    const known = mod.createKnownRepos?.({ discover: async () => { calls++; return ["aiedwardyi/wink"]; }, cited: async () => [], saved: (botId) => saved.get(botId) ?? [], save: (botId, repos) => saved.set(botId, repos) });
+    expect(known?.get("bot")).toBeUndefined();
     expect(calls).toBe(0);
     await known?.refresh("bot");
     expect(known?.get("bot")).toEqual(["aiedwardyi/wink"]);
     known?.get("bot");
     expect(calls).toBe(1);
+  });
+
+  it("reads no repo from a plain github.com link a report cites", () => {
+    expect(mod.reposIn?.(["LENS-VOICE: followed https://github.com/meta/meta-wearables-webapp/blob/main/AGENTS.md", "see github.com/o/r"])).toEqual([]);
+  });
+
+  it("learns repos into the bot record, reading pane remotes apart from report text, and keeps them off the wire", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    expect(source).toContain("createKnownRepos({ saved: (botId) => store.bot(botId)?.knownRepos ?? [], save: (botId, repos) => store.rememberRepos(botId, repos),");
+    expect(source).toContain("  return remotes.flatMap((url) => remoteRepo(url) ?? []);\n}, cited: async (botId, boot) => {\n");
+    expect(source).toContain("  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? \"\"), ...reports]);\n} });");
+    expect(source).toContain("    knownRepos: _knownRepos,\n");
+    const unlanded = source.slice(source.indexOf('startupTiming.afterPaint("unlanded"'), source.indexOf("const memoryLookup = createMemoryLookup("));
+    expect(unlanded, "a restart reads the cited repos off the send path, from boot's reports").toContain("  for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));\n");
+  });
+
+  describe("a bare PR from a bot folder that is not a repo", () => {
+    const META = "meta/meta-wearables-webapp";
+    const WINK = "aiedwardyi/wink";
+    function bot(found: string[][], saved: Map<string, string[]>, cited: string[][] = [], held: Record<string, string> = {}) {
+      const known = mod.createKnownRepos!({ discover: async () => found.shift() ?? [], cited: async () => cited.shift() ?? [], saved: (botId) => saved.get(botId) ?? [], save: (botId, repos) => saved.set(botId, repos) });
+      const prs = createAskPrs({
+        repoDir: () => "C:/Users/me/Desktop",
+        repos: known.get,
+        gh: async (_cwd, args) => {
+          if (args[1] === "view" && !args.includes("--repo")) throw new Error("failed to run git: fatal: not a git repository (or any of the parent directories): .git");
+          const state = ({ [`${WINK}|2161`]: "MERGED", ...held } as Record<string, string>)[`${args[args.indexOf("--repo") + 1]}|${args[2]}`];
+          if (!state) throw new Error("GraphQL: Could not resolve to a PullRequest with the number of 2161. (repository.pullRequest)");
+          return JSON.stringify({ state });
+        },
+      });
+      return { known, prs };
+    }
+    const asks = [ask(1057, { ref: "PR 2161 merged 8e3752db8" })];
+    const check = async ({ prs }: ReturnType<typeof bot>) => {
+      prs.take("bot", "thread", asks);
+      await prs.settled();
+      prs.take("bot", "thread", asks);
+      await prs.settled();
+      return { taken: prs.take("bot", "thread", asks), failed: prs.failedNote("bot", "thread", asks, true) };
+    };
+
+    it("keeps a repo a pane remote taught it after a refresh that found less", async () => {
+      const saved = new Map<string, string[]>();
+      const live = bot([[META, WINK], [META]], saved);
+      await live.known.refresh("bot");
+      await live.known.refresh("bot");
+      expect(await check(live)).toEqual({ taken: ["A1057"], failed: "" });
+    });
+
+    it("keeps that repo across a restart with no panes open", async () => {
+      const saved = new Map<string, string[]>();
+      await bot([[WINK]], saved).known.refresh("bot");
+      const restarted = bot([[]], saved);
+      await restarted.known.refresh("bot");
+      expect(await check(restarted)).toEqual({ taken: ["A1057"], failed: "" });
+    });
+
+    it("looks it up in a repo a report cites only while that report is in the window", async () => {
+      const saved = new Map<string, string[]>();
+      const live = bot([[WINK], []], saved, [["x/y"], []], { "x/y|2161": "OPEN" });
+      await live.known.refresh("bot");
+      expect(await check(live)).toEqual({ taken: [], failed: expect.stringContaining("PR 2161 is in aiedwardyi/wink and x/y") });
+      await live.known.refresh("bot");
+      expect(await check(live)).toEqual({ taken: ["A1057"], failed: "" });
+      expect(saved.get("bot")).toEqual([WINK]);
+    });
+
+    it("holds it after a restart until the repos its reports cite are read", async () => {
+      const restarted = bot([], new Map([["bot", [WINK]]]), [["x/y"]], { "x/y|2161": "OPEN" });
+      expect(await check(restarted), "a send before the first refresh").toEqual({ taken: [], failed: "" });
+      await restarted.known.cite("bot");
+      expect(await check(restarted)).toEqual({ taken: [], failed: expect.stringContaining("PR 2161 is in aiedwardyi/wink and x/y") });
+    });
+
+    it("closes it on the first turn after a restart once no report cites another repo", async () => {
+      const restarted = bot([], new Map([["bot", [WINK]]]));
+      await restarted.known.cite("bot");
+      expect(await check(restarted)).toEqual({ taken: ["A1057"], failed: "" });
+    });
+
+    it("keeps the cited repos it last read when reading them fails", async () => {
+      let fail = false;
+      const known = mod.createKnownRepos!({ discover: async () => [], cited: async () => { if (fail) throw new Error("database is locked"); return ["x/y"]; }, saved: () => [WINK], save: () => {} });
+      fail = true;
+      await known.refresh("bot");
+      expect(known.get("bot"), "never read").toBeUndefined();
+      fail = false;
+      await known.refresh("bot");
+      fail = true;
+      await known.refresh("bot");
+      expect(known.get("bot")).toEqual([WINK, "x/y"]);
+    });
+
+    it("saves only when a refresh found a remote it did not have", async () => {
+      const saved = new Map([["bot", [WINK]]]);
+      const saves: string[][] = [];
+      const found = [[WINK], [META]];
+      const known = mod.createKnownRepos!({ discover: async () => found.shift()!, cited: async () => [], saved: (botId) => saved.get(botId) ?? [], save: (botId, repos) => { saves.push(repos); saved.set(botId, repos); } });
+      await known.refresh("bot");
+      expect(saves).toEqual([]);
+      await known.refresh("bot");
+      expect(saves).toEqual([[WINK, META]]);
+    });
+
+    it("reads the cited repos when finding pane remotes throws", async () => {
+      const known = mod.createKnownRepos!({ discover: async () => { throw new Error("terminal bridge down"); }, cited: async () => ["x/y"], saved: () => [WINK], save: () => {} });
+      await known.refresh("bot");
+      expect(known.get("bot")).toEqual([WINK, "x/y"]);
+    });
+
+    it("keeps a remote an overlapping refresh saved while a slower one found less", async () => {
+      const saved = new Map<string, string[]>();
+      let slow!: (repos: string[]) => void;
+      const found = [new Promise<string[]>((resolve) => { slow = resolve; }), Promise.resolve([META, WINK])];
+      const known = mod.createKnownRepos!({ discover: () => found.shift()!, cited: async () => [], saved: (botId) => saved.get(botId) ?? [], save: (botId, repos) => saved.set(botId, repos) });
+      const first = known.refresh("bot");
+      await known.refresh("bot");
+      slow([META]);
+      await first;
+      expect(saved.get("bot")).toEqual([META, WINK]);
+    });
   });
 });
 

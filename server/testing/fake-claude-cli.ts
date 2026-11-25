@@ -59,6 +59,9 @@
 //                      (default; applied at once, like the real CLI) | error
 //                      | none (never answered) | crash (success, then a
 //                      503-shaped exit before the turn's result)
+//   FAKE_CLAUDE_MODEL_REPLY  how set_model is answered: success (default;
+//                      echoed first as a replayed user line, like 2.1.332;
+//                      later inits and replies name the new model) | error | none
 //   FAKE_CLAUDE_USAGE  path; once it exists, usage-calls reads {first, last,
 //                      window} from it each turn: the two main calls' prompts
 //                      and the main model's window
@@ -259,9 +262,9 @@ if (lateRole === "speaker") {
 // exits only when stdin ends. `slow` leaves a gap between the tool result
 // and the reply so a test can steer into it.
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-type StdinLine = { type?: string; request_id?: string; request?: { subtype?: string; settings?: { effortLevel?: string }; appendSystemPrompt?: string } };
+type StdinLine = { type?: string; request_id?: string; request?: { subtype?: string; settings?: { effortLevel?: string }; appendSystemPrompt?: string; model?: string } };
 const sessionId = forked ? (argAfter("--session-id") ?? `${argAfter("--resume")}-fork`) : (argAfter("--resume") ?? argAfter("--session-id") ?? "fake-session");
-const model = argAfter("--model") ?? "claude-fake";
+let model = argAfter("--model") ?? "claude-fake";
 let effort = argAfter("--effort");
 let dumped = false;
 let turnRunning = false;
@@ -600,6 +603,14 @@ const answerFlagSettings = (requestId: string, effortLevel: string | undefined) 
   if (how === "crash") {
     setTimeout(() => process.stderr.write("claude: API error (503): service temporarily unavailable\n", () => process.exit(5)), 100);
   }
+};
+const answerSetModel = (requestId: string, next: string | undefined) => {
+  const how = process.env.FAKE_CLAUDE_MODEL_REPLY;
+  if (how === "none") return;
+  if (how === "error") return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "unsupported" } });
+  model = next ?? model;
+  out({ type: "user", message: { role: "user", content: `<local-command-stdout>Set model to \`${model}\`</local-command-stdout>` }, session_id: sessionId, isReplay: true });
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { model } } });
 };
 const logEffort = () => {
   if (process.env.FAKE_CLAUDE_EFFORT_LOG) appendFileSync(process.env.FAKE_CLAUDE_EFFORT_LOG, `${effort ?? ""}\n`);
@@ -1129,6 +1140,7 @@ process.stdin.on("data", (c) => {
       const requestId = String(control.request_id ?? "");
       if (control.request?.subtype === "interrupt" && onInterrupt) onInterrupt(requestId);
       else if (control.request?.subtype === "apply_flag_settings") answerFlagSettings(requestId, control.request.settings?.effortLevel);
+      else if (control.request?.subtype === "set_model") answerSetModel(requestId, control.request.model);
       else if (control.request?.subtype === "get_usage" && process.env.FAKE_CLAUDE_GET_USAGE) {
         if (process.env.FAKE_USAGE_CALLS) appendFileSync(process.env.FAKE_USAGE_CALLS, `${process.env.FAKE_CLAUDE_GET_USAGE}\n`);
         out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: JSON.parse(readFileSync(process.env.FAKE_CLAUDE_GET_USAGE, "utf8")) } });

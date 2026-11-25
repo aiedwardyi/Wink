@@ -2205,6 +2205,13 @@ describe("Store remembered project folder", () => {
     expect(store.pinTaskCwd(bot.id, bot.threadId, store.bot(bot.id)?.lastProjectCwd)).toBe("/tmp/pinned");
   });
 
+  it("keeps the repos a bot learned across a restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.rememberRepos(bot.id, ["aiedwardyi/wink"]);
+    expect(new Store(selection).bot(bot.id)?.knownRepos).toEqual(["aiedwardyi/wink"]);
+  });
+
   it("lets a new unpinned task start in the remembered folder", () => {
     const store = new Store(selection);
     const bot = store.createBot();

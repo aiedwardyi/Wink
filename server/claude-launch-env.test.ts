@@ -35,7 +35,7 @@ const SITES = {
   "server/device-sync.ts": { launches: 3 },
   "server/drivers/acp/core.ts": { launches: 2 },
   "server/drivers/acp/muse.ts": { launches: 1 },
-  "server/drivers/antigravity.ts": { launches: 3 },
+  "server/drivers/antigravity.ts": { launches: 4 },
   "server/drivers/cli-text.ts": { launches: 1 },
   "server/drivers/codex-account.ts": { launches: 1 },
   "server/drivers/codex-catalog.ts": { launches: 1 },

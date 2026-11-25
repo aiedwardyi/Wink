@@ -183,7 +183,7 @@ import {
   sendWebPushToDevices,
   type PushTarget,
 } from "./web-push.ts";
-import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { receiveChatSwitch, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
@@ -280,9 +280,10 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { sweepDroppedAsks } from "./task-dropped.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import {
@@ -320,6 +321,7 @@ import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
+import { traceTerminalRead } from "./terminal-read-log.ts";
 import { deferMailboxAuto, mailboxSecretFor } from "./mailbox.ts";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
 import { recoverHandedMail } from "./mail-index.ts";
@@ -340,6 +342,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
+import { createDreamLive } from "./dream-live.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
 import { goalRoute } from "./goal-route.ts";
@@ -347,7 +350,7 @@ import { createMemoryHealthCheck } from "./memory-health.ts";
 import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
 import { createUnlandedWork, reportNotes } from "./unlanded.ts";
-import { closedAskLine, createAskPrs, createKnownRepos, reposIn, withClosed } from "./ask-prs.ts";
+import { closedAskLine, createAskPrs, createKnownRepos, remoteRepo, reposIn, withClosed } from "./ask-prs.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -426,6 +429,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
+  restoreSyncedAvatar,
   readSyncOperationsFor,
   syncAvatarMatches,
   saveProfileSyncSettings,
@@ -480,6 +484,7 @@ import { memberTurnSelection } from "./member-turn.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
 import { createPlaybookGate, harnessPlaybookPrompt, modelPicksPrompt } from "./harness-playbook.ts";
+import { createRevertIndex } from "./revert-index.ts";
 import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import "./package-export.ts";
@@ -1355,6 +1360,12 @@ const wireTask = ({
 }: TaskRecord) => ({ ...task, taskState: store.taskPacket(task.threadId) ?? undefined });
 
 const KEEP_GOING_PAUSED_LINE = "Agentic Mode paused: two tries made no progress";
+async function botLivePanes(botId: string) {
+  const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
+  return counts.status === 200 && "counts" in counts.body ? counts.body.counts[botId] ?? 0 : null;
+}
+const workerEngineSignedIn = () => registry.describeSaved().some((row) => (row.driverKind === "claudeAgent" || row.driverKind === "codex") && row.snapshot.authenticated === true);
+
 // Declared before wireBot reads it; its callbacks only run on the routines timer.
 const keepGoing = new KeepGoing({
   deviceId: () => profileSyncSettings.deviceId,
@@ -1388,10 +1399,7 @@ const keepGoing = new KeepGoing({
     }
     return rateLimitsByInstance.get(instanceId) ?? null;
   },
-  livePanes: async (botId) => {
-    const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
-    return counts.status === 200 && "counts" in counts.body ? counts.body.counts[botId] ?? 0 : null;
-  },
+  livePanes: botLivePanes,
   dispatch: (botId, prompt, options) => startTurn(botId, prompt, options).then(() => undefined),
   paused: (_botId, threadId) => {
     store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name: `error: ${KEEP_GOING_PAUSED_LINE}`, ok: false } });
@@ -1452,6 +1460,7 @@ const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
     projectFolderClearedAt: _projectFolderClearedAt,
     paneWakePaused: _paneWakePaused,
     lastProjectCwd: _lastProjectCwd,
+    knownRepos: _knownRepos,
     tasks,
     ...rest
   } = bot;
@@ -1501,6 +1510,7 @@ let profileSyncLastSyncAt: number | null = null;
 let profileSyncSeen: ProfileImportSeen = { signature: "", invalid: false, missingAssets: [] };
 let profileImports = 0;
 const syncAvatarAssets = new Map<string, string>();
+const STORED_AVATAR = /^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/;
 
 function syncSectionId(section: string | undefined): string | null {
   const key = sectionKey(section);
@@ -1560,16 +1570,17 @@ function nextProfileSyncOperation(
   return operation;
 }
 
-function syncAvatarAssetForBot(bot: BotRecord, folder: string): string | null {
+/** undefined: the picture's file is gone here, which says nothing about the picture, so no op may clear it on other PCs. */
+function syncAvatarAssetForBot(bot: BotRecord, folder: string): string | null | undefined {
   if (!bot.avatarUrl) return null;
-  const match = bot.avatarUrl.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/);
+  const match = bot.avatarUrl.match(STORED_AVATAR);
   if (!match) return null;
   // attachments never change under their name, and every publish and import pass asks again
   const cacheKey = `${folder}\n${bot.avatarUrl}`;
   const cached = syncAvatarAssets.get(cacheKey);
   if (cached) return cached;
   const attachment = readAttachment(match[1]!);
-  if (!attachment) return null;
+  if (!attachment) return undefined;
   try {
     const asset = writeSyncAvatarAsset(folder, attachment.bytes, match[1]!.split(".").pop() ?? "");
     syncAvatarAssets.set(cacheKey, asset);
@@ -1596,6 +1607,7 @@ function importSyncAvatar(folder: string, avatarAsset: unknown): string | null {
 }
 
 function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unknown> {
+  const avatarAsset = syncAvatarAssetForBot(bot, folder);
   return {
     name: bot.name,
     title: bot.title,
@@ -1603,7 +1615,7 @@ function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unk
     color: bot.color,
     mascotExpression: bot.mascotExpression ?? null,
     mascotStyle: bot.mascotStyle ?? null,
-    avatarAsset: syncAvatarAssetForBot(bot, folder),
+    ...(avatarAsset === undefined ? {} : { avatarAsset }),
     ...(bot.avatarCrop ? { avatarCrop: bot.avatarCrop } : {}),
     sectionId: syncSectionId(bot.section),
     pinned: Boolean(bot.pinned),
@@ -1775,7 +1787,7 @@ function applySyncedBotFields(
   }
   const current = store.bot(bot.id);
   const avatarCrop = importedSyncAvatarCrop(synced.avatarCrop, current?.avatarCrop);
-  const currentMatch = current?.avatarUrl?.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/);
+  const currentMatch = current?.avatarUrl?.match(STORED_AVATAR);
   const currentBytes = currentMatch ? readAttachment(currentMatch[1]!)?.bytes : undefined;
   const avatarUrl = currentBytes && syncAvatarMatches(folder, importedAvatar, currentBytes)
     ? current!.avatarUrl
@@ -1785,11 +1797,22 @@ function applySyncedBotFields(
   return true;
 }
 
+/** Bot pictures whose files are gone here come back from the sync folder, under the name bots.json already holds. */
+function restoreLostBotAvatars(folder: string): void {
+  for (const bot of store.bots) {
+    const name = bot.avatarUrl?.match(STORED_AVATAR)?.[1];
+    const globalId = profileSyncSettings.botMap[bot.id];
+    if (!name || !globalId || attachmentExists(name)) continue;
+    if (restoreSyncedAvatar(folder, profileSyncSettings.syncedHashes, globalId, ATTACHMENTS_DIR, name)) console.warn(`bot sync: restored ${bot.name}'s lost picture`);
+  }
+}
+
 /** Applies what other devices published since the last pass: newest recordedAt wins, a local edit waiting to publish is kept. */
 async function importProfileChanges(): Promise<void> {
   const folder = profileSyncSettings.folder;
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return;
   ensureProfileSyncWorkspace(folder);
+  restoreLostBotAvatars(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
   profileImports++;
@@ -2991,7 +3014,7 @@ const unreadTurns = turnUnread();
 const TASK_PACKET_FLUSH_MS = 30_000;
 const pendingTaskPackets = new Map<
   string,
-  { packet: TaskResumePacket; timer: ReturnType<typeof setTimeout> }
+  { packet: TaskResumePacket; timer: ReturnType<typeof setTimeout>; seen?: TaskAsk[] }
 >();
 
 function eventTime(event: RuntimeEvent): number {
@@ -3009,12 +3032,12 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
-function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }): TaskResumePacket | null {
+function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) clearTimeout(pending.timer);
   pendingTaskPackets.delete(packet.threadId);
   try {
-    return store.writeTaskPacket(packet, opts);
+    return store.writeTaskPacket(packet, opts, [...(pending?.seen ?? []), ...(pending?.packet.asks ?? []), ...seen]);
   } catch (error) {
     console.error("task state: write failed", error);
     return null;
@@ -3051,6 +3074,7 @@ function closeMergedAsks(botId: string, threadId: string, record: TaskResumePack
 function queueTaskPacket(packet: TaskResumePacket): void {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) {
+    pending.seen = [...(pending.seen ?? []), ...(pending.packet.asks ?? [])];
     pending.packet = packet;
     return;
   }
@@ -3146,6 +3170,25 @@ const memoryPass = createMemoryPass({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   host: deviceMachine,
 });
+const dreamLive = createDreamLive({
+  dataDir: DATA_DIR,
+  pc: () => profileSyncSettings.deviceId,
+  threads: (botId) => {
+    const bot = store.bot(botId);
+    return bot ? ownerChats(bot, notOwnerChats()) : [];
+  },
+  packet: (threadId) => taskPacketForWrite(threadId),
+  busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  cite: (botId) => knownRepos.cite(botId),
+  merged: (botId, threadId, ask, start) => askPrs.merged(botId, threadId, ask, start),
+  checked: () => askPrs.settled(),
+  reverted: async (botId, threadId) => {
+    const pinned = store.taskByThread(botId, threadId)?.cwd;
+    const dir = pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+    if (dir) await revertIndex.refresh(dir);
+    return (pr) => Boolean(dir && revertIndex.undid(dir, pr));
+  },
+});
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
@@ -3162,6 +3205,7 @@ const memorySleep = createMemorySleep({
     markTidied(memorySyncLedger, botSyncId, before, after);
     saveMemoryLedger();
   },
+  dream: dreamLive,
 });
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
@@ -3180,15 +3224,25 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
+const revertIndex = createRevertIndex();
+startupTiming.afterPaint("reverts", async () => {
+  await Promise.all([...new Set(store.bots.map((bot) => bot.cwd).filter((cwd) => cwd !== undefined))].map((cwd) => revertIndex.refresh(cwd)));
+});
 // where a bare "PR n" may be when the bot's folder is not a repo: its asks, its workers' reports and its panes' remotes
-const knownRepos = createKnownRepos({ discover: async (botId) => {
+const knownRepos = createKnownRepos({ saved: (botId) => store.bot(botId)?.knownRepos ?? [], save: (botId, repos) => store.rememberRepos(botId, repos), discover: async (botId) => {
   const bot = store.bot(botId);
   if (!bot) return [];
   const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, null, undefined, { panesOnly: true });
   const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
-  const remotes = await Promise.all([...new Set(panes.map((pane) => pane.cwd).filter(Boolean))].map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
-  const reports = [...reportNotes(store.notesBack(bot.threadId))].map((row) => row.text ?? "");
-  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports, ...remotes]);
+  const cwds = [...new Set(panes.map((pane) => pane.cwd).filter(Boolean))];
+  for (const cwd of [...cwds, ...bot.cwd ? [bot.cwd] : []]) void revertIndex.refresh(cwd);
+  const remotes = await Promise.all(cwds.map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
+  return remotes.flatMap((url) => remoteRepo(url) ?? []);
+}, cited: async (botId, boot) => {
+  const bot = store.bot(botId);
+  if (!bot) return [];
+  const reports = [...reportNotes(boot ?? store.notesBack(bot.threadId))].map((row) => row.text ?? "");
+  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports]);
 } });
 const askPrs = createAskPrs({
   repoDir: (botId, threadId) => {
@@ -3202,6 +3256,7 @@ startupTiming.afterPaint("unlanded", async () => {
   // the worker read each chat's reports; a chat loaded since then has them in memory
   const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
   for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+  for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
 });
 const memoryLookup = createMemoryLookup({
   dataDir: DATA_DIR,
@@ -3443,7 +3498,11 @@ const spawnUsage = createSpawnUsage({
   nameOf: (id, engine) => accountNames.nameOf(id, engine),
 });
 const workerTurns = createWorkerTurns();
-const playbookGate = createPlaybookGate();
+const playbookGate = createPlaybookGate(undefined, undefined, {
+  reverts: revertIndex,
+  wouldHold: (row) => appendRotatingLog(join(DATA_DIR, "revert-holds.ndjson"), `${JSON.stringify({ at: Date.now(), ...row })}\n`),
+  enforce: process.env.OMB_REVERT_HOLD === "1",
+});
 // A recycled or switched provider session has a new cursor, so it reads the playbook again.
 function playbookSession(botId: string): string {
   const threadId = workerTurns.activeThread(botId);
@@ -6305,7 +6364,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal) });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -8244,6 +8303,7 @@ const boardRoutes = createBoardRoutes({
 });
 const internalRoutes = createInternalRoutes({
   readOnlyTurn: readOnlyRoomTurn,
+  planHint: { room: sharedTurn(store, joinedRoomThreads), workerReady: workerEngineSignedIn, livePanes: botLivePanes },
   answeredLine: (threadId) => roomTurnInstruction.get(threadId),
   turnText: (botId, threadId) => askTexts.last(botId, threadId),
   runDelegatedTurn,
@@ -8448,6 +8508,7 @@ const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
+  const received = performance.now();
   if (!req.headers.accept?.includes("text/event-stream")) res.once("close", requestQuiet.track());
   try {
     // Relay traffic is known by socket identity. It needs this PC's relay Host
@@ -8644,7 +8705,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
-        const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
+        const hold = await playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
         if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(String(body.command ?? "")));
@@ -8976,6 +9037,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const [result] = await sendWebPushToDevices(DATA_DIR, test, webPushSubject(), phoneSignedIn, body.data.endpoint);
       return result?.ok ? json(res, 200, { ok: true }) : json(res, 502, { error: result?.error ?? "push failed" });
     }
+    if (method === "POST" && path === "/api/diag/chat-switch") {
+      const received = await receiveChatSwitch(req);
+      return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
+    }
     if (method === "POST" && path === "/api/diag/cold-open") {
       const received = await receiveColdOpen(req, DATA_DIR);
       return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
@@ -9286,6 +9351,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      traceTerminalRead(bot.id, relay, received, res);
       const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, bot.id, url.searchParams.get("sessionId"), undefined, { panesOnly: url.searchParams.get("panes") === "1" });
       return json(res, snapshot.status, snapshot.body);
     }
@@ -9340,6 +9406,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "PUT") {
       return await botRoutes.putMemory(req, res, m);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean$/);
+    if (m && method === "GET") {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const run = dreamLive.latest(m[1]);
+      return run ? json(res, 200, { run }) : json(res, 404, { error: "no-run" });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
     if (m && method === "POST") {
@@ -10006,6 +10079,7 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
+startupTiming.afterPaint("droppedAsks", async () => sweepDroppedAsks());
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")

@@ -22,6 +22,7 @@
 // ensureAntigravityComputerMcp below. Computer use is full-auto instances
 // only; the host desktop stays off (no approval channel in print mode, ever).
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -32,6 +33,7 @@ import { computerProxyEnv } from "../container-computer.ts";
 import { augmentedPath } from "../env-path.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { injectedApiModel, mergeLocalInject } from "./local-inject.ts";
+import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 
 import type { ChildProcess } from "node:child_process";
 import type {
@@ -46,13 +48,14 @@ import type {
 } from "../contracts.ts";
 import { cliNotFound, newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
-import { textUsageError } from "./rate-limits.ts";
+import { AGY_TEXT_MODEL, textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
 import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, hasAntigravityTokenFile, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 import { antigravityHelperHome } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
+import { warmPool, type Lease } from "./warm-pool.ts";
 
 const DRIVER_KIND = "antigravityAgent";
 const AGY_STOPPED_NOTE = "The bot stopped before finishing.";
@@ -64,7 +67,6 @@ const AGY_ACCOUNT_ERROR =
   /unauthorized|unauthenticated|\bforbidden\b|(?<![\w-])40[13](?![\w-])|not logged in|\bsign[\s-]?in\b|authentication failed|permission_denied|permission denied|has not been used in project|\bapi\b[^.\n]{0,120}\bdisabled\b/i;
 const AGY_NOT_ACCOUNT_ERROR = /\brate[\s-]?limit\b|(?<![\w-])429(?![\w-])|\berror-code-(?:429|5\d\d)\b|\btoo many requests\b|resource[ _]exhausted|quota exceeded|exceeded[^.\n]{0,40}\bquota\b|(?<![\w-])5\d\d(?![\w-])|\b5xx\b/i;
 const AGY_TIMEOUT_ERROR = /\b(?:watchdog timeout|timed out|time-out|timeout)\b/i;
-const AGY_TEXT_MODEL = "gemini-3.8-flash-low";
 // agy keeps one conversation store for every account and backend (a Vertex
 // project, a consumer sign-in), but the API only takes back the thought
 // signatures it minted itself. After a sign-in change, every model refuses
@@ -211,7 +213,6 @@ export function readAntigravityModelCatalog(env: Record<string, string | undefin
 export const ANTIGRAVITY_COMPUTER_MCP_KEY = "openmausbot-computer";
 export const ANTIGRAVITY_AGENTS_MCP_KEY = "openmausbot-agents";
 export const ANTIGRAVITY_TERMINAL_MCP_KEY = "openmausbot-terminal";
-const WINK_MCP_KEY_PREFIX = "openmausbot-";
 
 type TurnUsage = { input: number; output: number; cachedInput?: number };
 
@@ -228,6 +229,7 @@ export interface AntigravityComputerMcpServer {
 let mcpSharedHolders = 0;
 let mcpExclusiveHeld = false;
 const mcpWaiters: Array<{ exclusive: boolean; grant: () => void }> = [];
+const mcpExclusiveWanted = () => mcpExclusiveHeld || mcpWaiters.some((waiter) => waiter.exclusive);
 
 function pumpAntigravityMcpLock() {
   while (mcpWaiters.length && !mcpExclusiveHeld && !(mcpWaiters[0].exclusive && mcpSharedHolders > 0)) {
@@ -240,6 +242,8 @@ function pumpAntigravityMcpLock() {
 
 /** Resolves with the release once granted; cancel() drops a waiter that was never granted. */
 function acquireAntigravityMcpLock(exclusive: boolean) {
+  // a standby holds the shared mount until it exits
+  if (exclusive) warmPool.invalidate({ engine: DRIVER_KIND }, "computer turn");
   let cancel = () => {};
   const granted = new Promise<() => void>((resolve) => {
     let released = false;
@@ -296,8 +300,52 @@ function antigravityMcpConfigPath(env: Record<string, string | undefined>): stri
   return join(env.HOME || env.USERPROFILE || homedir(), ".gemini", "config", "mcp_config.json");
 }
 
-function withoutWinkMcpServers(servers: z.infer<typeof mcpConfigFileSchema>["mcpServers"] = {}) {
-  return Object.fromEntries(Object.entries(servers).filter(([key]) => !key.startsWith(WINK_MCP_KEY_PREFIX)));
+function withoutWinkMcpServers(servers: z.infer<typeof mcpConfigFileSchema>["mcpServers"] = {}, owned: Iterable<string>) {
+  const keys = new Set(owned);
+  return Object.fromEntries(Object.entries(servers).filter(([key]) => !keys.has(key)));
+}
+
+// Per config file, the keys Wink mounted and has not yet restored. Only these are Wink's: a user's own
+// openmausbot-* server is theirs, and a crash leaves the record for the next run to clean.
+const OWNED_MCP_RECORD = join(DATA_DIR, "gemini-mcp-owned.json");
+const ownedMcpRecordSchema = z.record(z.string(), z.array(z.string()));
+
+function readOwnedMcpRecord(): z.infer<typeof ownedMcpRecordSchema> {
+  try {
+    return ownedMcpRecordSchema.parse(JSON.parse(readFileSync(OWNED_MCP_RECORD, "utf8")));
+  } catch {
+    return {};
+  }
+}
+
+function ownedMcpKeys(path: string): string[] {
+  return readOwnedMcpRecord()[path] ?? [];
+}
+
+function recordOwnedMcpKeys(path: string, keys: string[]): void {
+  const record = readOwnedMcpRecord();
+  if (keys.length) record[path] = keys;
+  else if (path in record) delete record[path];
+  else return;
+  mkdirSync(dirname(OWNED_MCP_RECORD), { recursive: true });
+  writeFileSync(OWNED_MCP_RECORD, JSON.stringify(record));
+}
+
+/** agy's MCP config without Wink's keys: a standby started on other servers is not this turn's launch. */
+function userMcpConfig(env: Record<string, string | undefined>): string {
+  const path = antigravityMcpConfigPath(env);
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+  try {
+    const config = mcpConfigFileSchema.parse(JSON.parse(text));
+    return JSON.stringify({ ...config, mcpServers: withoutWinkMcpServers(config.mcpServers, ownedMcpKeys(path)) });
+  } catch {
+    return text;
+  }
 }
 
 function winkProxyMcpServer(proxy: string): AntigravityComputerMcpServer {
@@ -340,9 +388,30 @@ export function antigravityComputerMcpServer(
   return null;
 }
 
+const sweptMcpConfigs = new Set<string>();
+
+/** Once per run, before any mount: drops the keys a crash or kill left in agy's config (a standby keeps them there while it idles). */
+function sweepAntigravityMcpLeftover(env: Record<string, string | undefined>): void {
+  const path = antigravityMcpConfigPath(env);
+  if (sweptMcpConfigs.has(path) || sharedMcpMounts.has(path) || mcpExclusiveHeld) return;
+  sweptMcpConfigs.add(path);
+  const owned = new Set(ownedMcpKeys(path));
+  if (!owned.size) return;
+  let config: z.infer<typeof mcpConfigFileSchema>;
+  try {
+    config = mcpConfigFileSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    return;
+  }
+  if (Object.keys(config.mcpServers ?? {}).some((key) => owned.has(key))) {
+    writeFileSync(path, `${JSON.stringify({ ...config, mcpServers: withoutWinkMcpServers(config.mcpServers, owned) }, null, 2)}\n`, { mode: 0o600 });
+  }
+  recordOwnedMcpKeys(path, []);
+}
+
 /** Mount Wink's static agents and terminal entries, plus the computer entry
- * when given, into the global mcp_config.json. Any openmausbot-* key already
- * there is a crash leftover: left out of the mount and never restored. */
+ * when given, into the global mcp_config.json. A key a crash left, or one Wink
+ * writes over, is Wink's: left out of the restore. */
 export function ensureAntigravityComputerMcp(
   server: AntigravityComputerMcpServer | null,
   env: Record<string, string | undefined> = process.env,
@@ -357,7 +426,9 @@ export function ensureAntigravityComputerMcp(
   } catch {
     // Missing or malformed user config — rebuild only what the mount needs.
   }
-  const userServers = withoutWinkMcpServers(config.mcpServers);
+  const keys = [ANTIGRAVITY_AGENTS_MCP_KEY, ANTIGRAVITY_TERMINAL_MCP_KEY, ...(server ? [ANTIGRAVITY_COMPUTER_MCP_KEY] : [])];
+  const owned = new Set([...ownedMcpKeys(path), ...keys]);
+  const userServers = withoutWinkMcpServers(config.mcpServers, owned);
   const servers = {
     ...userServers,
     [ANTIGRAVITY_AGENTS_MCP_KEY]: winkProxyMcpServer(SPAWNED_PROXIES.agents),
@@ -369,10 +440,11 @@ export function ensureAntigravityComputerMcp(
   chmodSync(directory, 0o700);
   if (existed) chmodSync(path, 0o600);
   const mounted = `${JSON.stringify({ ...config, mcpServers: servers }, null, 2)}\n`;
+  recordOwnedMcpKeys(path, keys);
   writeFileSync(path, mounted, { mode: 0o600 });
   chmodSync(path, 0o600);
 
-  const hadLeftover = Object.keys(config.mcpServers ?? {}).some((key) => key.startsWith(WINK_MCP_KEY_PREFIX));
+  const hadLeftover = Object.keys(config.mcpServers ?? {}).some((key) => owned.has(key));
   const restoreTo =
     original !== null && hadLeftover ? `${JSON.stringify({ ...config, mcpServers: userServers }, null, 2)}\n` : original;
 
@@ -388,16 +460,16 @@ export function ensureAntigravityComputerMcp(
     try {
       current = readFileSync(path, "utf8");
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return recordOwnedMcpKeys(path, []);
       throw error;
     }
     if (current === mounted) {
-      if (restoreTo === null) {
-        unlinkSync(path);
-        return;
+      if (restoreTo === null) unlinkSync(path);
+      else {
+        writeFileSync(path, restoreTo, { mode: 0o600 });
+        chmodSync(path, 0o600);
       }
-      writeFileSync(path, restoreTo, { mode: 0o600 });
-      chmodSync(path, 0o600);
+      recordOwnedMcpKeys(path, []);
       return;
     }
 
@@ -414,10 +486,11 @@ export function ensureAntigravityComputerMcp(
     const currentConfig = parsed.data;
     writeFileSync(
       path,
-      `${JSON.stringify({ ...currentConfig, mcpServers: withoutWinkMcpServers(currentConfig.mcpServers) }, null, 2)}\n`,
+      `${JSON.stringify({ ...currentConfig, mcpServers: withoutWinkMcpServers(currentConfig.mcpServers, owned) }, null, 2)}\n`,
       { mode: 0o600 },
     );
     chmodSync(path, 0o600);
+    recordOwnedMcpKeys(path, []);
   };
 }
 
@@ -537,8 +610,49 @@ export function measureAntigravityTransportLengths(opts: {
   };
 }
 
+/** A one-shot agy started on the thread's conversation once a turn's child exits: it signs in, starts its MCP servers
+ * and loads the conversation while the user reads, then serves exactly one turn the way a cold spawn would. */
+type Standby = {
+  child: ReturnType<typeof spawnCli>;
+  /** stdout lines (only init) and stderr from before the turn took it */
+  lines: string[];
+  partial: string;
+  stderr: string;
+  closed: boolean;
+  broken: boolean;
+  exited: Promise<void>;
+  restoreMcp: () => void;
+  releaseMcpLock: () => void;
+  detach: () => void;
+  lease: Lease;
+  /** agy's account as its logs named it at launch */
+  account: string | undefined;
+};
+
+/** Idle standbys of every instance, each resolving when its process exits. */
+const standbyExits = new Set<Promise<void>>();
+
+/** agy's sign-in is one per machine: retires every idle Gemini standby and waits for their exits (5 s at most). */
+async function retireStandbys(reason: string): Promise<void> {
+  warmPool.invalidate({ engine: DRIVER_KIND }, reason);
+  if (!standbyExits.size) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([Promise.all([...standbyExits]), new Promise<void>((done) => { timer = setTimeout(done, 5_000); })]);
+  clearTimeout(timer);
+}
+
+/** Everything fixed at spawn; a turn runs on a standby only when its own launch hashes the same. */
+function launchFingerprint(cli: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, turn: SendTurnInput): string {
+  return createHash("sha256")
+    .update(JSON.stringify([cli, args, cwd, Object.entries(env).sort(([a], [b]) => (a < b ? -1 : 1)), turn.model ?? "", turn.effort ?? "", turn.approval ?? "", userMcpConfig(env)]))
+    .digest("hex");
+}
+
 // agy's saved sign-in is one per machine, so every instance shares one keyring sign-out and its running turns.
-const keyringSignOut = antigravityKeyringSignOut(() => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING), {
+const keyringSignOut = antigravityKeyringSignOut(async () => {
+  await retireStandbys("sign-out");
+  return forgetAntigravitySignIn(ANTIGRAVITY_KEYRING);
+}, {
   present: () => probeAntigravitySignIn(),
   mark: signedOutMarkFile(join(DATA_DIR, "gemini-signed-out")),
 });
@@ -567,8 +681,12 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const { instanceId, config } = input;
     // Per call, so agy installed after Wink started is on PATH without a restart.
     const env = () => antigravityEnvironment(input.environment);
+    sweepAntigravityMcpLeftover(env());
     const signIn = antigravitySignIn(async () => hasAntigravityTokenFile(env()) || probeAntigravitySignIn(), () => readAntigravityLogSignIn(env()));
-    const forgetSignedOut = keyringSignOut.onSignedOut(() => signIn.record(false));
+    const forgetSignedOut = keyringSignOut.onSignedOut(() => {
+      signIn.record(false);
+      void retireStandbys("signed out");
+    });
     keyringSignOut.attach();
     let models = STATIC_ANTIGRAVITY_MODELS;
     const refreshModels = async () => {
@@ -623,6 +741,131 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       turnId,
       createdAt: new Date().toISOString(),
     });
+
+    const incarnation = input.incarnation ?? newId();
+    const warmKey = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
+    const captured = (threadId: string) => ({ generation: warmPool.generation(warmKey(threadId)), incarnation, identity: "" });
+    const standbys = new WeakMap<Lease, Standby>();
+    const standbyOf = new Map<string, Standby>();
+
+    /** Takes over the exiting turn's shared mount and lock, so agy's config is not rewritten between the two. */
+    const startStandby = (
+      threadId: string,
+      conversation: string,
+      turn: SendTurnInput,
+      cwd: string,
+      childEnv: NodeJS.ProcessEnv,
+      mcp: { restoreMcp: () => void; releaseMcpLock: () => void },
+    ) => {
+      let held = true;
+      const finalizeMcp = () => {
+        if (!held) return;
+        held = false;
+        try {
+          mcp.restoreMcp();
+        } catch (error) {
+          console.warn("[antigravity] could not restore Antigravity's MCP config", error);
+        } finally {
+          mcp.releaseMcpLock();
+        }
+      };
+      // a standby started beside a running turn would load the conversation before that turn's messages
+      if (disposed || active.has(threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return finalizeMcp();
+      const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly });
+      const lease = warmPool.reserve(warmKey(threadId), launchFingerprint(config.cli, args, cwd, childEnv, turn), captured(threadId), "speculative");
+      if (typeof lease !== "object" || standbys.has(lease)) return finalizeMcp();
+      let child: ReturnType<typeof spawnCli>;
+      try {
+        child = spawnCli(config.cli, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
+      } catch {
+        finalizeMcp();
+        lease.release("spawn failed");
+        return;
+      }
+      children.add(child);
+      let exited!: () => void;
+      const standby: Standby = {
+        child, lines: [], partial: "", stderr: "", closed: false, broken: false,
+        exited: new Promise((done) => { exited = done; }),
+        restoreMcp: mcp.restoreMcp, releaseMcpLock: mcp.releaseMcpLock, detach: () => {}, lease, account: readAntigravityAccount(env()),
+      };
+      const unusable = (reason: string) => {
+        standby.broken = true;
+        lease.release(reason);
+      };
+      const onData = (chunk: string) => {
+        standby.partial += chunk;
+        let nl;
+        while ((nl = standby.partial.indexOf("\n")) !== -1) {
+          const line = standby.partial.slice(0, nl);
+          standby.partial = standby.partial.slice(nl + 1);
+          if (!line.trim()) continue;
+          standby.lines.push(line);
+          let event: unknown;
+          try {
+            event = JSON.parse(line).event;
+          } catch {}
+          // agy prints only init before its first prompt
+          if (event !== "init") unusable("output before prompt");
+        }
+      };
+      const onStderr = (chunk: string) => {
+        standby.stderr = (standby.stderr + chunk).slice(-8192);
+      };
+      const onError = () => unusable("spawn error");
+      const onClose = () => {
+        finalizeMcp();
+        lease.release("exit");
+      };
+      child.once("close", () => {
+        standby.closed = true;
+        children.delete(child);
+        standbyExits.delete(standby.exited);
+        if (standbyOf.get(threadId) === standby) standbyOf.delete(threadId);
+        exited();
+      });
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", onData);
+      child.stderr.on("data", onStderr);
+      child.on("error", onError);
+      child.on("close", onClose);
+      standby.detach = () => {
+        child.stdout.off("data", onData);
+        child.stderr.off("data", onStderr);
+        child.off("error", onError);
+        child.off("close", onClose);
+        standbyExits.delete(standby.exited);
+      };
+      standbyExits.add(standby.exited);
+      standbys.set(lease, standby);
+      standbyOf.set(threadId, standby);
+      lease.attach({
+        session: { kind: "loaded", id: conversation },
+        alive: () => !standby.closed && !standby.broken,
+        close: async () => {
+          if (!standby.closed) killCliTree(child);
+          await standby.exited;
+        },
+      });
+      lease.ready();
+    };
+
+    /** The thread's standby when this launch matches it; otherwise a dying one to wait out, so two agy never share a conversation. */
+    const takeStandby = (threadId: string, fingerprint: string, resumeCursor: string): { standby?: Standby; dying?: Promise<void> } => {
+      const taken = warmPool.take(warmKey(threadId), fingerprint, captured(threadId), resumeCursor);
+      if (typeof taken === "object") {
+        const standby = "hit" in taken ? standbys.get(taken.hit) : undefined;
+        if (standby && !standby.closed && !standby.broken) {
+          standby.detach();
+          return { standby };
+        }
+        ("hit" in taken ? taken.hit : taken.pending).release("unusable");
+      }
+      const dying = standbyOf.get(threadId);
+      if (!dying || dying.closed) return {};
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      return { dying: Promise.race([dying.exited, new Promise<void>((done) => { timer = setTimeout(done, 2_000); })]).finally(() => clearTimeout(timer)) };
+    };
 
     // A resume fallback relaunch is the same logical turn: the harness holds
     // the first id as live and drops events from any other.
@@ -742,44 +985,6 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // agy's config is global, so every turn holds the MCP lock for its
       // complete child lifetime; only a computer turn holds it alone.
       const computer = antigravityComputerMcpServer(turn.integrations);
-      const mcpLock = acquireAntigravityMcpLock(computer !== null);
-      // Reserve the thread across the lock wait so a Stop lands here.
-      active.set(threadId, {
-        stop: () => {},
-        interrupt: () => {
-          interrupted = true;
-          mcpLock.cancel();
-        },
-        turnId,
-      });
-      emit({ ...base(threadId, turnId), type: "turn.started" });
-      const releaseMcpLock = await mcpLock.granted;
-      if (interrupted) {
-        releaseMcpLock();
-        settle(false, "interrupted");
-        return { turnId };
-      }
-      if (disposed) {
-        releaseMcpLock();
-        settle(false, "disposed");
-        return { turnId };
-      }
-      let restoreMcp = () => {};
-      try {
-        restoreMcp = mountAntigravityMcp(computer, env());
-      } catch (error) {
-        releaseMcpLock();
-        emit({
-          ...base(threadId, turnId),
-          type: "runtime.error",
-          message: `could not update Antigravity's MCP config (${join(".gemini", "config", "mcp_config.json")}): ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        });
-        settle(false, "mcp_config_error");
-        return { turnId };
-      }
-
       const args = buildAntigravityTurnArgv({
         fullAuto: config.fullAuto,
         cwd,
@@ -787,56 +992,106 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         resumeCursor,
         readOnly: turn.readOnly,
       });
-      // Remaining argv (paths, model, conversation id) can still blow the
-      // Windows CreateProcess ceiling even with the prompt on stdin.
-      if (process.platform === "win32" && estimateWin32CmdlineLength(config.cli, args) > WIN32_CREATEPROCESS_CMDLINE_MAX) {
-        try {
-          restoreMcp();
-        } finally {
-          releaseMcpLock();
-        }
-        emit({
-          ...base(threadId, turnId),
-          type: "runtime.error",
-          message: `spawn failed: command line too long for Windows (${estimateWin32CmdlineLength(config.cli, args)} chars > ${WIN32_CREATEPROCESS_CMDLINE_MAX})`,
-          setup: false,
-        });
-        settle(false, "spawn_error");
-        return { turnId };
-      }
-
       // The static agents and terminal entries read this turn's identity from
       // agy's env. Added after the credential allowlist, which strips *_TOKEN;
       // the node flag would leak into every shell command the agent runs.
       const { ELECTRON_RUN_AS_NODE: _nodeFlag, ...identity } = {
         ...turn.integrations?.terminal?.env,
-        ...turn.integrations?.agents?.env,
+        ...(turn.integrations?.agents && experimentalAgents(turn.integrations.agents, true).env),
       };
-
-      // spawnCli resolves npm .cmd shims / shebang scripts on Windows and
-      // owns the process-group vs windowsHide difference (see procs.ts)
+      const childEnv = { ...env(), ...identity };
+      // a computer turn's mount carries its box token, so it never runs on or leaves a standby
+      const ordinary = computer === null;
+      const taken = ordinary && !relaunchOf && resumeCursor
+        ? takeStandby(threadId, launchFingerprint(config.cli, args, cwd, childEnv, turn), resumeCursor)
+        : {};
+      const standby = taken.standby;
+      const mcpLock = standby ? undefined : acquireAntigravityMcpLock(computer !== null);
+      // Reserve the thread across the lock wait so a Stop lands here.
+      active.set(threadId, {
+        stop: () => {},
+        interrupt: () => {
+          interrupted = true;
+          mcpLock?.cancel();
+        },
+        turnId,
+      });
+      emit({ ...base(threadId, turnId), type: "turn.started" });
+      if (taken.dying) await taken.dying;
+      let releaseMcpLock: () => void;
+      let restoreMcp = () => {};
       let child: ReturnType<typeof spawnCli>;
-      try {
-        child = spawnCli(config.cli, args, {
-          cwd,
-          env: { ...env(), ...identity },
-          stdio: ["pipe", "pipe", "pipe"], // prompt on stdin as stream-json NDJSON
-        });
-      } catch (error) {
-        try {
-          restoreMcp();
-        } finally {
+      if (standby) {
+        ({ releaseMcpLock, restoreMcp, child } = standby);
+      } else {
+        releaseMcpLock = await mcpLock!.granted;
+        if (interrupted) {
           releaseMcpLock();
+          settle(false, "interrupted");
+          return { turnId };
         }
-        emit({
-          ...base(threadId, turnId),
-          type: "runtime.error",
-          ...describeSpawnFailure(error instanceof Error ? error : new Error(String(error)), config.cli, cwd),
-        });
-        settle(false, "spawn_error");
-        return { turnId };
+        if (disposed) {
+          releaseMcpLock();
+          settle(false, "disposed");
+          return { turnId };
+        }
+        try {
+          restoreMcp = mountAntigravityMcp(computer, env());
+        } catch (error) {
+          releaseMcpLock();
+          emit({
+            ...base(threadId, turnId),
+            type: "runtime.error",
+            message: `could not update Antigravity's MCP config (${join(".gemini", "config", "mcp_config.json")}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          });
+          settle(false, "mcp_config_error");
+          return { turnId };
+        }
+
+        // Remaining argv (paths, model, conversation id) can still blow the
+        // Windows CreateProcess ceiling even with the prompt on stdin.
+        if (process.platform === "win32" && estimateWin32CmdlineLength(config.cli, args) > WIN32_CREATEPROCESS_CMDLINE_MAX) {
+          try {
+            restoreMcp();
+          } finally {
+            releaseMcpLock();
+          }
+          emit({
+            ...base(threadId, turnId),
+            type: "runtime.error",
+            message: `spawn failed: command line too long for Windows (${estimateWin32CmdlineLength(config.cli, args)} chars > ${WIN32_CREATEPROCESS_CMDLINE_MAX})`,
+            setup: false,
+          });
+          settle(false, "spawn_error");
+          return { turnId };
+        }
+
+        // spawnCli resolves npm .cmd shims / shebang scripts on Windows and
+        // owns the process-group vs windowsHide difference (see procs.ts)
+        try {
+          child = spawnCli(config.cli, args, {
+            cwd,
+            env: childEnv,
+            stdio: ["pipe", "pipe", "pipe"], // prompt on stdin as stream-json NDJSON
+          });
+        } catch (error) {
+          try {
+            restoreMcp();
+          } finally {
+            releaseMcpLock();
+          }
+          emit({
+            ...base(threadId, turnId),
+            type: "runtime.error",
+            ...describeSpawnFailure(error instanceof Error ? error : new Error(String(error)), config.cli, cwd),
+          });
+          settle(false, "spawn_error");
+          return { turnId };
+        }
+        children.add(child);
       }
-      children.add(child);
 
       // Deliver the full prompt (system/persona + user text, continuity included)
       // as one stream-json user event, then close stdin so one-shot print exits
@@ -869,6 +1124,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         try {
           killCliTree(child);
         } catch {}
+        standby?.lease.release("stdin");
         emit({
           ...base(threadId, turnId),
           type: "runtime.error",
@@ -879,6 +1135,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       }
 
       let childClosed = false;
+      // the conversation a clean reply leaves, for the thread's next standby
+      let next: string | null = null;
       let postSettleReaper: ReturnType<typeof setTimeout> | undefined;
       let terminationEscalation: ReturnType<typeof setTimeout> | undefined;
       let mcpFinalized = false;
@@ -1015,7 +1273,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               cancelledTool ||= isCancelledTool(payload);
               const itemId = `${conversationId ?? o.conversation_id ?? "conv"}:${payload.step_index}`;
               if (payload.state === "ACTIVE") {
-                emit({ ...base(threadId, turnId), type: "item.started", itemType: "tool", itemId, title: payload.tool_name });
+                emit({ ...base(threadId, turnId), type: "item.started", itemType: "tool", itemId, title: payload.tool_name && originalCatalogCall(payload.tool_name, payload.tool_info?.parameters, "agents").name });
               } else if (payload.state === "DONE") {
                 emit({ ...base(threadId, turnId), type: "item.completed", itemType: "tool", itemId, ok: true });
               } else if (payload.state === "ERROR") {
@@ -1065,6 +1323,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               resumeWhenFree(conversation, busyReason, payload.usage ? withPriorUsage(payload.usage) : priorUsage);
               break;
             }
+            if (ordinary && payload.status === "SUCCESS" && realResponse && !interrupted) next = conversation;
             if (agyResultError && !recoveredTransient) {
               if (isAgyAccountError(agyError)) {
                 emit({ ...base(threadId, turnId), type: "runtime.error", message: agyError, signIn: true });
@@ -1104,7 +1363,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         }
       };
 
-      let buf = "";
+      let buf = standby?.partial ?? "";
       child.stdout.setEncoding("utf8"); // decode multibyte across chunk splits
       child.stdout.on("data", (chunk) => {
         buf += chunk;
@@ -1116,7 +1375,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         }
       });
 
-      let stderr = "";
+      let stderr = standby?.stderr ?? "";
       child.stderr.on("data", (c) => {
         stderr += c;
         if (stderr.length > 8192) stderr = stderr.slice(-8192);
@@ -1132,7 +1391,12 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         children.delete(child); // close is the true process-exit signal
         clearTimeout(postSettleReaper);
         clearTimeout(terminationEscalation);
-        finalizeMcp();
+        standby?.lease.release("used");
+        // agy has saved the turn once it exits
+        if (next && !mcpFinalized) {
+          mcpFinalized = true;
+          startStandby(threadId, next, turn, cwd, childEnv, { restoreMcp, releaseMcpLock });
+        } else finalizeMcp();
         if (!settled) {
           if (interrupted) {
             settle(false, "interrupted");
@@ -1176,6 +1440,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         }
       }, 61 * 60_000);
       watchdog.unref?.();
+      for (const line of standby?.lines ?? []) handleLine(line);
 
       return { turnId };
     };
@@ -1189,7 +1454,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // Only a failed lookup is Not Installed; a slow or failing agy is installed but not answering.
       if (!version) return missing ? cliNotFound(config.cli) : { state: "unavailable", reason: `\`${config.cli}\` did not answer --version` };
       const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
-      return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env()) : undefined };
+      const account = authenticated ? readAntigravityAccount(env()) : undefined;
+      // a sign-in made outside Wink changes agy's account under the idle standbys
+      if ([...standbyOf.values()].some((standby) => standby.account !== account)) void retireStandbys("account changed");
+      return { state: "available", version, authenticated, account };
     };
 
     const textModelDenied = new Set<string>();
@@ -1202,6 +1470,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       get models() {
         return models;
       },
+      // undefined once agy denies this account the text model: notes then run on the bot's own model
+      get textModel() {
+        return textModelDenied.size && textModelDenied.has(readAntigravityAccount(env()) ?? "") ? undefined : AGY_TEXT_MODEL;
+      },
       refreshModels,
       snapshot,
       loginConfig: () => ({
@@ -1211,10 +1483,17 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // agy older than 1.5 has no ACP logout, and could not update to get one: delete its saved sign-in instead.
       signOutWithoutCli: async (failure) => {
         if (failure !== "update_offline" && failure !== "update_failed") return false;
+        await retireStandbys("sign-out");
         return keyringSignOut.signOut();
       },
-      signingIn: () => keyringSignOut.signingIn(),
-      signedOutByCli: () => keyringSignOut.signedOutByAgy(),
+      signingIn: async () => {
+        await retireStandbys("sign-in");
+        return keyringSignOut.signingIn();
+      },
+      signedOutByCli: () => {
+        void retireStandbys("signed out");
+        keyringSignOut.signedOutByAgy();
+      },
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {
@@ -1343,6 +1622,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         if (disposed) return;
         disposed = true;
         forgetSignedOut();
+        warmPool.invalidate({ instanceId, incarnation }, "dispose");
         for (const { stop } of active.values()) stop();
         reapChildren(true); // escalate to SIGKILL — disposal must reap every child
         listeners.clear();

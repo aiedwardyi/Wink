@@ -40,6 +40,14 @@ describe("cleanup copy", () => {
     await act(async () => host.querySelector("button")!.click());
     expect(store.dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { cleanup: true } });
   });
+  it("keeps the details open to a dry run whose to-do checks did not finish", async () => {
+    const dream = { mode: "dry" as const, notes: { state: "checked" as const, items: [] }, asks: { threads: 2, skipped: 1, unchecked: 2, items: [] }, runUntil: run.at, dropUntil: run.at };
+    await mount(createElement(MemoryCleanRow, { run: { ...run, dream }, onUndo: vi.fn() }));
+    expect(host.textContent).not.toContain("Nothing to move or close");
+    await act(async () => host.querySelector("button")!.click());
+    expect(host.textContent).toContain("1 busy chats not checked.");
+    expect(host.textContent).toContain("2 to-dos' PRs not checked yet.");
+  });
   it("omits zero-count details", async () => {
     await mount(createElement(MemoryCleanRow, { run: { ...run, merged: 0, replaced: 0 }, onUndo: vi.fn() }));
     expect(host.textContent).not.toContain("merged");

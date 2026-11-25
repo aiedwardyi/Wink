@@ -3,20 +3,22 @@ import { z } from "zod";
 
 import { redactSecretsInText } from "../shared/redact.ts";
 import { ghRun, type MapGh } from "./map-pr.ts";
+import type { Message } from "./store.ts";
 import type { TaskAsk } from "./task-asks.ts";
 import { NOT_FOUND, UNLANDED_REFRESH_MS } from "./unlanded.ts";
 
 const PR_URL = /(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#][^\s;,+]*)?/gi;
 const REPO_PR = /\b([\w.-]+\/[\w.-]+)#(\d+)\b/g;
 const PR_REF = /\bPR\s*#?(\d{1,6})\b/gi;
-const GITHUB_REPO = /github\.com[:/]([\w.-]+\/[\w.-]+)/gi;
+const GITHUB_REMOTE = /github\.com[:/]([\w.-]+\/[\w.-]+)/i;
 const SHA = /\b[0-9a-f]{7,40}\b/gi;
 const NOT_REPO = /not a git repository/i;
 const REASON_MAX = 120;
-const viewSchema = z.object({ state: z.enum(["OPEN", "MERGED", "CLOSED"]) });
+const viewSchema = z.object({ state: z.enum(["OPEN", "MERGED", "CLOSED"]), mergedAt: z.string().nullish() });
 
 type Pr = { repo?: string; number: number };
-type Check = { at: number; state: "merged" | "open" | "missing" | "failed"; reason?: string };
+type Check = { at: number; state: "merged" | "open" | "missing" | "failed"; reason?: string; mergedAt?: number };
+export type MergedPr = Pr & { mergedAt?: number };
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
 const clip = (text: string) => {
@@ -43,23 +45,34 @@ export function askPr(ref: string | undefined): Pr | null {
   return refPrs(ref)[0] ?? null;
 }
 
-/** Repos named by PR links, owner/repo#n refs and GitHub remotes, lowercase, first seen first. */
+/** Repos named by PR links and owner/repo#n refs, lowercase, first seen first. A plain github.com/o/r link names none: reports cite other repos' docs. */
 export function reposIn(texts: readonly string[]): string[] {
-  const repos = new Set<string>();
-  for (const text of texts) {
-    for (const match of text.matchAll(GITHUB_REPO)) repos.add(match[1]!.replace(/\.git$/i, "").toLowerCase());
-    for (const match of text.matchAll(REPO_PR)) repos.add(match[1]!.toLowerCase());
-  }
-  return [...repos];
+  return [...new Set(texts.flatMap((text) => refPrs(text).flatMap((pr) => pr.repo ? [pr.repo] : [])))];
 }
 
-/** Repos each bot works in, found off the send path; get() never waits. */
-export function createKnownRepos(deps: { discover: (botId: string) => Promise<string[]> }) {
-  const known = new Map<string, string[]>();
+/** The GitHub repo a git remote URL points at, lowercase; undefined for any other. */
+export function remoteRepo(url: string): string | undefined {
+  return GITHUB_REMOTE.exec(url)?.[1]!.replace(/\.git$/i, "").toLowerCase();
+}
+
+/** Repos each bot works in, found off the send path; get() never waits. Remotes from discover are saved and only added to, so a refresh that finds less keeps them; repos cited in asks and reports last until the next refresh, so a cited link goes when its report leaves. get() is undefined until cite() or refresh() has read the cited ones. */
+export function createKnownRepos(deps: { discover: (botId: string) => Promise<string[]>; cited: (botId: string, reports?: readonly Message[]) => Promise<string[]>; saved: (botId: string) => readonly string[]; save: (botId: string, repos: string[]) => void }) {
+  const cited = new Map<string, string[]>();
   return {
-    get: (botId: string): string[] => known.get(botId) ?? [],
+    get: (botId: string): string[] | undefined => cited.has(botId) ? [...new Set([...deps.saved(botId), ...cited.get(botId)!])] : undefined,
+    /** Reads the cited repos once, from these reports if given; a refresh that already read them wins. */
+    async cite(botId: string, reports?: readonly Message[]): Promise<void> {
+      const repos = await deps.cited(botId, reports).catch(() => undefined);
+      if (repos && !cited.has(botId)) cited.set(botId, repos);
+    },
     async refresh(botId: string): Promise<void> {
-      known.set(botId, await deps.discover(botId).catch(() => known.get(botId) ?? []));
+      const found = await deps.discover(botId).catch(() => []);
+      const repos = await deps.cited(botId).catch(() => undefined);
+      if (repos) cited.set(botId, repos);
+      // read after the awaits: an overlapping refresh may have saved since this one began
+      const saved = deps.saved(botId);
+      const next = [...new Set([...saved, ...found])];
+      if (next.length > saved.length) deps.save(botId, next);
     },
   };
 }
@@ -88,8 +101,8 @@ export function closedAskLine(ask: TaskAsk): string {
 export interface AskPrsDeps {
   /** where gh resolves "PR n" with no repo: the folder this task pinned */
   repoDir: (botId: string, threadId: string) => string | undefined;
-  /** where a bare "PR n" is looked up when that folder is not a git repo */
-  repos?: (botId: string) => readonly string[];
+  /** where a bare "PR n" is looked up when that folder is not a git repo; undefined while not read yet, which holds it unchecked */
+  repos?: (botId: string) => readonly string[] | undefined;
   gh?: MapGh;
   now?: () => number;
 }
@@ -110,8 +123,10 @@ export function createAskPrs(deps: AskPrsDeps) {
   async function check(key: string, number: number, repo: string | undefined, dir: string | undefined, botId: string): Promise<void> {
     let result: Check;
     try {
-      const raw: unknown = JSON.parse(await gh(dir ?? process.cwd(), ["pr", "view", String(number), ...repo ? ["--repo", repo] : [], "--json", "state"]));
-      result = { at: now(), state: viewSchema.parse(raw).state === "MERGED" ? "merged" : "open" };
+      const view = viewSchema.parse(JSON.parse(await gh(dir ?? process.cwd(), ["pr", "view", String(number), ...repo ? ["--repo", repo] : [], "--json", "state,mergedAt"])));
+      const mergedAt = Date.parse(view.mergedAt ?? "");
+      result = { at: now(), state: view.state === "MERGED" ? "merged" : "open" };
+      if (Number.isFinite(mergedAt)) result.mergedAt = mergedAt;
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       result = NOT_FOUND.test(text) ? { at: now(), state: "missing" } : { at: now(), state: "failed", reason: clip(redactSecretsInText(text)) };
@@ -141,7 +156,8 @@ export function createAskPrs(deps: AskPrsDeps) {
       const local = look(`${dir}|${pr.number}`, pr.number, undefined, dir, botId, start).last;
       if (!notRepo.has(dir)) return local;
     }
-    const repos = deps.repos?.(botId) ?? [];
+    const repos = deps.repos ? deps.repos(botId) : [];
+    if (!repos) return undefined;
     if (!repos.length) {
       return { at: 0, state: "failed", reason: dir ? `${dir} is not a git repo and no repo it works in is known yet` : `no folder or known repo to look PR ${pr.number} up in` };
     }
@@ -187,6 +203,18 @@ export function createAskPrs(deps: AskPrsDeps) {
     stepNote(botId: string, threadId: string, asks: readonly TaskAsk[] | undefined, full = false): string {
       const kept = verdicts(botId, threadId, asks, false).filter((verdict) => verdict.merged && stepLeft(verdict.ask.ref));
       return once(told, threadId, kept.map(({ ask }) => closedAskLine(ask)).join("\n"), full);
+    },
+    /** Each PR the ask's ref names with when it merged, whatever the ask's status: undefined while one is unchecked, null once one is open, gone or failed. start begins the checks still owed. */
+    merged(botId: string, threadId: string, ask: TaskAsk, start = false): MergedPr[] | null | undefined {
+      const dir = deps.repoDir(botId, threadId);
+      const each = refPrs(ask.ref).map((pr) => ({ pr, last: placed(botId, dir, pr, start) }));
+      if (!each.length || each.some(({ last }) => last && last.state !== "merged")) return null;
+      if (each.some(({ last }) => !last)) return undefined;
+      return each.map(({ pr, last }) => {
+        const item: MergedPr = { ...pr };
+        if (last?.mergedAt) item.mergedAt = last.mergedAt;
+        return item;
+      });
     },
     /** Building asks whose PRs could not be checked, and why. No I/O. */
     failed,

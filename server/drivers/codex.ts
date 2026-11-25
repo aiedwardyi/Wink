@@ -398,7 +398,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
         }
         if (turn.integrations?.agents) {
-          mountMcpServer(appServerArgs, env, "agents", experimentalAgents(turn.integrations.agents), AGENTS_TOOL_TIMEOUT_SEC);
+          // an Ask card can only name call_wink_tool, so Ask and read-only turns keep the 11 tools direct
+          mountMcpServer(appServerArgs, env, "agents", experimentalAgents(turn.integrations.agents, turn.approval !== "ask" && !turn.readOnly), AGENTS_TOOL_TIMEOUT_SEC);
         }
         if (turn.integrations?.computer) {
           const proxyEnv = computerProxyEnv(turn.integrations.computer);
