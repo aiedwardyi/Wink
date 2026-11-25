@@ -6,7 +6,7 @@
 }
 /* A closing docked panel gives its column back on the first frame, like the other side panels, and slides out over the chat. */
 @container verify-watch (min-width: 660px) {
-  .verify-watch[data-wide] { --dock: max(380px, 46cqi); }
+  .verify-watch[data-wide] { --dock: clamp(380px, var(--pane-width, 46cqi), max(380px, 100cqi - 560px)); }
   .verify-watch[data-closing] { position: absolute; inset: 0 0 0 auto; transition: none; }
 }
 /* Maximized, the panel grows leftward over the chat without taking its column, so the chat never reflows. */
