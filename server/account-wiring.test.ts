@@ -109,7 +109,7 @@ it("tracks room and continuation turns on their captured accounts", async () => 
   const room = section("        accountNote.commit();\n        releaseStarting();", "\n      })\n      .catch((err) => {");
   for (const block of [oneToOne, room]) expect(block).toContain("boardTurnStarted(bot.id, threadId, started.turnId);");
   const settle = section("  if (event.turnId) {\n    if (settleMail(", "\n  drainQueuedSends();");
-  expect(settle).toContain("usageBoard.turnSettled(event.turnId);");
+  expect(settle).toContain("usageBoard.turnSettled(event.turnId, event.ok);");
 
   const s = await wired();
   s.providerReload.current = () => ({ instanceId: "acct_studio", account: { generation: 3 } });
