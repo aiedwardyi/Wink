@@ -68,8 +68,9 @@ export function createUsageBoard(deps: Deps) {
   // Accounts the last known runs had workers on: a read without runs keeps that answer instead of flipping rows.
   const working = new Set<string>();
   const identities = new Map<string, string | null>();
-  // Account id to the generation the CLI refused for a past-due payment; a later good send or usage read clears it.
-  const unpaid = new Map<string, number>();
+  // Account id to the generation and time the CLI refused it for a past-due payment. It belongs to the signed-in
+  // identity: a sign-out or identity change drops it, and only a good send or a usage reading observed after it clears it.
+  const unpaid = new Map<string, { generation: number; at: number }>();
 
   for (const row of deps.accounts.list()) {
     const report = observedRateLimits(deps.rateLimits.get(row.id));
@@ -99,6 +100,7 @@ export function createUsageBoard(deps: Deps) {
       const changed = identities.has(row.id) && identities.get(row.id) !== identity;
       // Stored before accountChanged runs: its callbacks read the board again.
       identities.set(row.id, identity);
+      if (changed || identity === null) unpaid.delete(row.id);
       if (changed) {
         deps.rateLimits.delete(row.id);
         deps.history.purge(row.id);
@@ -154,7 +156,7 @@ export function createUsageBoard(deps: Deps) {
     if (seenReports.has(key)) return;
     seenReports.add(key);
     if (seenReports.size > 1024) seenReports.delete(seenReports.values().next().value!);
-    unpaid.delete(accountId);
+    if (at > (unpaid.get(accountId)?.at ?? Infinity)) unpaid.delete(accountId);
     if (!last || at > last.at) {
       for (const window of windows) {
         const before = last?.windows.find((value) => value.id === window.id);
@@ -200,7 +202,7 @@ export function createUsageBoard(deps: Deps) {
   function paymentDue(accountId: string) {
     const row = accounts().find((row) => row.id === accountId);
     if (!row) return;
-    unpaid.set(accountId, row.generation);
+    unpaid.set(accountId, { generation: row.generation, at: now() });
     bump();
   }
 
@@ -271,7 +273,7 @@ export function createUsageBoard(deps: Deps) {
       else if (!row.existing) signIn = "ready";
       else if (row.status?.authenticated === true) signIn = "ready";
       else if (row.status?.authenticated === false) signIn = "signed-out";
-      if (signIn === "ready" && unpaid.get(row.id) === row.generation) signIn = "payment-due";
+      if (signIn === "ready" && unpaid.get(row.id)?.generation === row.generation) signIn = "payment-due";
       const observedAt = report ? Date.parse(report.observedAt) : NaN;
       group.accounts.push({ id: row.id, number, nickname, name: nickname ?? text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
         signIn, coverage: "unknown", windows, observedAt: Number.isFinite(observedAt) ? observedAt : null,

@@ -7,6 +7,7 @@ import type { UsageBoard, UsageBoardFrame } from "../src/lib/usage-board.ts";
 import type { RateLimitsReport } from "./rate-limits-store.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
+import { createUsageRefresh } from "./usage-refresh.ts";
 import { codexRateLimitWindows } from "./drivers/rate-limits.ts";
 
 type Deps = Parameters<typeof createUsageBoard>[0];
@@ -519,6 +520,53 @@ describe("usage board", () => {
     s.board.paymentDue("claude");
     s.rows()[0].generation = 1;
     expect(account(await s.board.read()).signIn).toBe("ready");
+  });
+
+  it("drops payment due when the built-in slot signs out or signs in as someone else", async () => {
+    const s = setup();
+    const row = s.rows()[0]!;
+    const as = (who: string) => { row.status = { state: "available", authenticated: true, account: `${who}@example.test`, accountIdentity: `uuid-${who}` }; };
+    as("a");
+    s.accept("claude", report(93));
+    s.board.paymentDue("claude");
+    expect(account(await s.board.read()).signIn).toBe("payment-due");
+    row.status = { state: "available", authenticated: false };
+    expect(account(await s.board.read()).signIn).toBe("signed-out");
+    as("b");
+    expect(account(await s.board.read())).toMatchObject({ signIn: "ready", windows: [] });
+    s.board.paymentDue("claude");
+    as("c");
+    expect(account(await s.board.read()).signIn).toBe("ready");
+    // A login that never names itself still loses the mark on sign-out.
+    row.status = { state: "available", authenticated: true };
+    s.board.paymentDue("claude");
+    expect(account(await s.board.read()).signIn).toBe("payment-due");
+    row.status = { state: "available", authenticated: false };
+    await s.board.read();
+    row.status = { state: "available", authenticated: true };
+    expect(account(await s.board.read()).signIn).toBe("ready");
+    expect(row.generation).toBe(0);
+  });
+
+  it("keeps payment due through a failed refresh or a reading observed before it", async () => {
+    const s = setup();
+    const saved = report(93, now - 3_600_000);
+    s.rateLimits.set("claude", saved);
+    // A restart: the board loads the saved reading but has not seen it reported.
+    const board = createUsageBoard(s.deps);
+    now += 1_000;
+    board.paymentDue("claude");
+    now += 1_000;
+    const refresh = createUsageRefresh({ platform: "linux", now: () => now, claude: async () => { throw new Error("network"); } });
+    const failed = await refresh("claudeAgent", { instanceId: "claude" }, saved);
+    expect(failed).toMatchObject({ report: saved, status: "no_observation" });
+    // The refresh route hands the board whatever report the refresh returned.
+    board.recordReport("claude", failed.report!);
+    expect(account(await board.read())).toMatchObject({ signIn: "payment-due", windows: [{ usedPercent: 93 }, { usedPercent: 40 }] });
+    board.recordReport("claude", report(95, now - 1_500));
+    expect(account(await board.read()).signIn).toBe("payment-due");
+    board.recordReport("claude", report(96, now));
+    expect(account(await board.read()).signIn).toBe("ready");
   });
 
   it("reads a missing CLI as not installed and an unchecked account as unknown, never as signed out", async () => {
