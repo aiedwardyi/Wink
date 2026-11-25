@@ -102,7 +102,9 @@ export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
   return "unknown";
 }
 
-function priority(path: string, chatFirst = false, openThread?: string | null): number {
+function priority(path: string, rule: DrivePathRule, chatFirst = false, openThread?: string | null): number {
+  // This PC's presence goes first: its record waiting behind a catch-up reads as Offline to the others.
+  if (rule === "own" && path.startsWith("devices/")) return -1;
   if (path === "workspace.json") return 0;
   if (path.startsWith("assets/")) return 1;
   const chat = chatPart(path);
@@ -711,8 +713,9 @@ export function createDriveMirror(options: Options) {
     }
     // One priority tier at a time; a throw still waits for the rest in flight so no save lands after the pass.
     async function each(items: Iterable<string>): Promise<void> {
-      const rank = (path: string) => priority(path, options.chatFirst, options.openThread);
       const list = [...items];
+      const ranks = new Map(list.map((path) => [path, priority(path, drivePathRule(path, ids), options.chatFirst, options.openThread)]));
+      const rank = (path: string) => ranks.get(path)!;
       const active = new Map<string, number>();
       for (const path of list) {
         const chat = chatPart(path);

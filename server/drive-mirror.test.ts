@@ -205,7 +205,7 @@ describe("Drive mirror", () => {
   });
 
   it("uploads every pre-existing kind in dependency order on its first pass", async () => {
-    const paths = ["workspace.json", "assets/a.png", "pictures/a.png", "threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "changes/000000000001-device-home-op.json", "memory/bot/MEMORY.md", "threads/bot/thread.json", "memory-v2/bot/aaaaaaaaaaaa.json", "threads-v2/bot/thread/writer-home/head.json", "devices/device-home.json"];
+    const paths = ["devices/device-home.json", "workspace.json", "assets/a.png", "pictures/a.png", "threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "changes/000000000001-device-home-op.json", "memory/bot/MEMORY.md", "threads/bot/thread.json", "memory-v2/bot/aaaaaaaaaaaa.json", "threads-v2/bot/thread/writer-home/head.json"];
     for (const path of paths.toReversed()) write(pcs[0], path, path);
     write(pcs[0], "devices/device-home.json.1.tmp", "partial");
     const summary = await pcs[0].mirror.syncOnce();
@@ -247,6 +247,45 @@ describe("Drive mirror", () => {
     expect(readyAtHead).toEqual(Array(10).fill(true));
     const paths = drive.downloads.map((id) => decodeDrivePath(drive.records.get(id)!.file.name)!);
     expect(paths.indexOf(`${dir(9)}/head.json`)).toBeLessThan(paths.indexOf(segments(0)[0]));
+  });
+
+  it("sends this PC's presence before a chat-first catch-up and takes peer presence after it", async () => {
+    for (let chat = 0; chat < 5; chat++) seed(`threads-v2/bot/chat-${chat}/writer-home/seg-1-1.json.gz`, `chat ${chat}`);
+    seed("devices/device-home.json", "home");
+    write(pcs[1], "devices/device-work.json", "work");
+    const sentBefore: boolean[] = [];
+    drive.onDownload = async (file) => {
+      if (decodeDrivePath(file.name)!.startsWith("threads-v2/")) sentBefore.push(drive.uploads.some((upload) => decodeDrivePath(upload.name) === "devices/device-work.json"));
+    };
+    await mirrorFor(pcs[1], { chatFirst: true }).syncOnce();
+    expect(sentBefore).toEqual(Array(5).fill(true));
+    expect(decodeDrivePath(drive.records.get(drive.downloads.at(-1)!)!.file.name)).toBe("devices/device-home.json");
+  });
+
+  it("lands workspace and chats before a throttled peer presence stops the pass", async () => {
+    const peer = seed("devices/device-home.json", "home");
+    const landed = ["workspace.json", "threads-v2/bot/thread/writer-home/seg-1-1.json.gz"];
+    for (const path of landed) seed(path, path);
+    const client = createDriveClient({ getAccessToken: async () => "test-access", fetch: async (input, init) => {
+      const url = new URL(input instanceof URL ? input.href : input instanceof Request ? input.url : input);
+      return url.pathname.endsWith(`/${peer.id}`) && url.searchParams.get("alt") === "media" ? new Response(null, { status: 429, headers: { "retry-after": "3" } }) : withParents(input, init);
+    } });
+    const summary = await mirrorFor(pcs[1], { client }).syncOnce();
+    expect(summary.retryAfterMs).toBe(3_000);
+    expect(summary.downloaded).toEqual(landed);
+    expect(existsSync(join(pcs[1].folder, "devices/device-home.json"))).toBe(false);
+  });
+
+  it("ranks each path once per pass whatever order Drive lists them in", async () => {
+    const kinds = (index: number) => [`pictures/p${index}.png`, `changes/${String(index + 1).padStart(12, "0")}-device-work-op.json`, `threads-v2/bot/t${index}/writer-work/seg-1-1.json.gz`, `threads-v2/bot/t${index}/writer-work/head.json`];
+    const paths = Array.from({ length: 30 }, (_, index) => kinds(index)).flat();
+    for (const [index] of paths.entries()) seed(paths[(index * 37) % paths.length], "x");
+    const endsWith = vi.spyOn(String.prototype, "endsWith");
+    await pcs[1].mirror.syncOnce();
+    const ruleCalls = endsWith.mock.calls.filter(([suffix]) => suffix === ".tmp").length;
+    endsWith.mockRestore();
+    // drivePathRule checks .tmp first, so this counts its calls.
+    expect(ruleCalls).toBeLessThan(paths.length * 10);
   });
 
   describe("boot and wake catch-up", () => {
@@ -1324,7 +1363,7 @@ describe("Drive mirror", () => {
     });
 
     it("finishes each tier before the next starts", async () => {
-      const tiers = [["workspace.json"], Array.from({ length: 10 }, (_, index) => `assets/a${index}.png`), pictures.slice(0, 10), ["memory-v2/bot/aaaaaaaaaaaa.json"], ["threads-v2/bot/thread/writer-home/head.json"], ["devices/device-home.json"]];
+      const tiers = [["devices/device-home.json"], ["workspace.json"], Array.from({ length: 10 }, (_, index) => `assets/a${index}.png`), pictures.slice(0, 10), ["memory-v2/bot/aaaaaaaaaaaa.json"], ["threads-v2/bot/thread/writer-home/head.json"]];
       for (const path of tiers.flat()) write(pcs[0], path, path);
       await mirrorFor(pcs[0], { client: held() }).syncOnce();
       for (const [index, tier] of tiers.entries()) {
