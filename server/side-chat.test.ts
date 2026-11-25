@@ -97,19 +97,6 @@ describe("quickAsk on a fork", () => {
     expect(text).toBe("where's the plan?");
   });
 
-  it("asks a send the bot already took for one short line, never a handoff", async () => {
-    const stub = stubFork();
-    const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "help me answer ur questions", ack: true });
-    stub.emit({ type: "done", ok: true, text: "On it, I'll lay out each question with my pick." });
-    expect(await pending).toMatchObject({ route: "answer", text: "I'll lay out each question with my pick." });
-    const [preamble, text] = stub.inputs[0]!.text.split("\n\n");
-    expect(preamble).toMatch(/^\[Quick helper\. .*already reached your main task as their own words.*never reply HANDOFF\.\]$/);
-    expect(preamble).not.toContain("reply with exactly HANDOFF");
-    expect(preamble).not.toContain("acknowledge what they said");
-    expect(preamble).toContain("Never open with filler");
-    expect(text).toBe("help me answer ur questions");
-  });
-
   it("hands the main's live state to the fork", async () => {
     const stub = stubFork();
     const at = new Date().toISOString();
@@ -298,11 +285,11 @@ describe("dropOpener", () => {
     expect(dropOpener(line)).toBe(expected);
   });
 
-  it("leaves a quick answer that is not an ack alone", async () => {
+  it.each([["Sure, port 8080.", "Port 8080."], ["네, 8080이에요.", "8080이에요."]])("drops a filler opener from any answer: %s", async (said, line) => {
     const stub = stubFork();
     const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "what port?" });
-    stub.emit({ type: "done", ok: true, text: "Sure, port 8080." });
-    expect(await pending).toMatchObject({ route: "answer", text: "Sure, port 8080." });
+    stub.emit({ type: "done", ok: true, text: said });
+    expect(await pending).toMatchObject({ route: "answer", text: line });
   });
 });
 
