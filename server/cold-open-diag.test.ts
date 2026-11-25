@@ -72,6 +72,22 @@ describe("cold-open diagnostics", () => {
     ]);
   });
 
+  it("stores a terminal open's marks and refuses any other field in them", async () => {
+    const dir = freshDir();
+    const terminal = {
+      label: "terminal",
+      hiddenMs: 3000,
+      terminal: { tap: 5000, fetchStart: 5100, read: { start: 5100, end: 12701, transferSize: 4200, encodedBodySize: 3900, requestStart: 5120, responseStart: 12601, decodedBodySize: 9000, nextHopProtocol: "h2" }, paint: 12850, sinceResume: 1000 },
+      displayMode: "standalone",
+      visibility: "visible",
+      userAgent: "Mozilla/5.0",
+    };
+    expect(await receiveColdOpen(post(JSON.stringify(terminal)), dir)).toEqual({ status: 200 });
+    expect(lines(dir)[0]).toMatchObject(terminal);
+    const extra = { ...terminal, terminal: { ...terminal.terminal, text: "$ secret" } };
+    expect(await receiveColdOpen(post(JSON.stringify(extra)), dir)).toEqual({ status: 400, error: "invalid cold-open record" });
+  });
+
   it("stores the stream, bots and cache fields and drops the page's id", async () => {
     const dir = freshDir();
     expect(await receiveColdOpen(post(JSON.stringify(traced)), dir)).toEqual({ status: 200 });

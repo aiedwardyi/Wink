@@ -321,6 +321,7 @@ import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
+import { traceTerminalRead } from "./terminal-read-log.ts";
 import { deferMailboxAuto, mailboxSecretFor } from "./mailbox.ts";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
 import { recoverHandedMail } from "./mail-index.ts";
@@ -8486,6 +8487,7 @@ const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
+  const received = performance.now();
   if (!req.headers.accept?.includes("text/event-stream")) res.once("close", requestQuiet.track());
   try {
     // Relay traffic is known by socket identity. It needs this PC's relay Host
@@ -9324,6 +9326,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      traceTerminalRead(bot.id, relay, received, res);
       const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, bot.id, url.searchParams.get("sessionId"), undefined, { panesOnly: url.searchParams.get("panes") === "1" });
       return json(res, snapshot.status, snapshot.body);
     }

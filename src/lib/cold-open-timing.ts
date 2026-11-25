@@ -7,7 +7,7 @@ export const COLD_OPEN_HEADER = "x-cold-open";
 export const COLD_OPEN_QUERY = "coldOpen";
 const USER_AGENT_MAX = 512;
 
-export type ColdOpenLabel = "notification" | "open" | "warm" | "resume";
+export type ColdOpenLabel = "notification" | "open" | "warm" | "resume" | "terminal";
 export type ColdOpenMark = "mount" | "sseOpen" | "hello";
 
 const NAV_FIELDS = [
@@ -47,6 +47,16 @@ export interface ColdOpenSse {
   lastError?: number;
 }
 
+/** A terminal opened on the page: marks count from page load, like the resource times in `read`. */
+export interface ColdOpenTerminal {
+  tap: number;
+  fetchStart?: number;
+  read?: ColdOpenBots;
+  paint?: number;
+  /** How long before the tap the page came back from hidden, when it did. */
+  sinceResume?: number;
+}
+
 export interface ColdOpenRecord {
   desktop?: true;
   openId?: string;
@@ -63,6 +73,7 @@ export interface ColdOpenRecord {
   bots?: ColdOpenBots;
   taskSwitch?: ColdOpenRequest;
   cache?: { hit: boolean; paint?: number };
+  terminal?: ColdOpenTerminal;
   chatPaint?: number;
   jsCached?: boolean;
   cssCached?: boolean;
@@ -119,6 +130,7 @@ interface Pending {
 }
 
 const BOTS = /\/api\/bots\?messages=/;
+const TERMINAL_READ = /\/api\/bots\/[^/]+\/terminal$/;
 const TASK_SWITCH = /\/api\/(?:bots|groups)\/[^/]+\/tasks\/[^/?]+$/;
 const ENTRY_JS = /\/assets\/index-[\w-]+\.js$/;
 const ENTRY_CSS = /\/assets\/index-[\w-]+\.css$/;
@@ -161,9 +173,22 @@ function cached(entry: Resource | undefined): boolean | undefined {
   return entry ? entry.transferSize === 0 : undefined;
 }
 
+interface TerminalOpen {
+  tap: number;
+  /** The worker's session id the tap asked for, null for Main, undefined when it named none. */
+  pane?: string | null;
+  sinceResume?: number;
+  hiddenMs?: number;
+  fetchStart?: number;
+  painting: boolean;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export function createColdOpenTiming(page: ColdOpenPage) {
   let pending: Pending | null = null;
+  let terminal: TerminalOpen | null = null;
   let hiddenAt: number | undefined;
+  let resumed: { at: number; hiddenMs: number } | undefined;
   const navigation = page.navigation();
 
   const begin = (label: ColdOpenLabel, t0: number | undefined, threadId: string | undefined, resumed?: { since: number; hiddenMs: number }) => {
@@ -172,14 +197,16 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     pending = { label, t0, since: resumed?.since ?? 0, hiddenMs: resumed?.hiddenMs, threadId, visibility: page.visibility(), id, botsSent: false, sse: { errors: 0 }, cachePainting: false, marks: {}, painting: false, timer };
   };
 
+  const metaFor = (visibility: string) => ({
+    ...(page.desktop ? { desktop: true as const } : {}),
+    displayMode: page.standalone() ? ("standalone" as const) : ("browser" as const),
+    visibility,
+    build: page.build(),
+    userAgent: page.userAgent.slice(0, USER_AGENT_MAX),
+  });
+
   const record = (open: Pending, chatPaint: number | undefined): ColdOpenRecord => {
-    const meta = {
-      ...(page.desktop ? { desktop: true as const } : {}),
-      displayMode: page.standalone() ? ("standalone" as const) : ("browser" as const),
-      visibility: open.visibility,
-      build: page.build(),
-      userAgent: page.userAgent.slice(0, USER_AGENT_MAX),
-    };
+    const meta = metaFor(open.visibility);
     const t0 = open.t0 === undefined ? undefined : Math.round(open.t0 - page.timeOrigin);
     if (open.label === "warm") return { label: "warm", t0, chatPaint, ...meta };
     const { created, ...sse } = open.sse;
@@ -228,6 +255,35 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     }
   };
 
+  /** `target` is the session id the read asked for, undefined for the default pane, which is `main` once the roster names it. */
+  const terminalWants = (open: TerminalOpen, target: string | undefined, main: string | undefined) =>
+    open.pane === undefined || (open.pane === null ? target === undefined : (target ?? main) === open.pane);
+
+  const finishTerminal = (paint?: number) => {
+    const open = terminal;
+    if (!open) return;
+    terminal = null;
+    clearTimeout(open.timer);
+    try {
+      const { fetchStart } = open;
+      const read = fetchStart === undefined ? undefined : page.resources().find((entry) => entry.startTime >= fetchStart - 1 && readsPane(entry.name, open.pane));
+      const sent: ColdOpenRecord = {
+        label: "terminal",
+        hiddenMs: open.hiddenMs,
+        terminal: { tap: open.tap, fetchStart, read: botsRequest(read), paint, sinceResume: open.sinceResume },
+        ...metaFor(page.visibility()),
+      };
+      page.send(JSON.stringify(sent));
+    } catch {
+      // Timing is best effort; it never surfaces.
+    }
+  };
+
+  const readsPane = (name: string, pane: string | null | undefined) => {
+    const url = new URL(name, page.href);
+    return TERMINAL_READ.test(url.pathname) && (pane === undefined || url.searchParams.get("sessionId") === pane);
+  };
+
   const search = new URL(page.href).searchParams;
   const t0 = clickTime(Number(search.get("t0")));
   const stripped = withoutClickTime(page.href);
@@ -259,6 +315,7 @@ export function createColdOpenTiming(page: ColdOpenPage) {
       if (hiddenAt === undefined) return;
       const hiddenMs = Math.round(page.clock() - hiddenAt);
       hiddenAt = undefined;
+      resumed = { at: page.now(), hiddenMs };
       // A first open still measuring keeps its own record.
       if (!pending) begin("resume", undefined, undefined, { since: page.now(), hiddenMs });
     },
@@ -305,6 +362,32 @@ export function createColdOpenTiming(page: ColdOpenPage) {
       const open = pending;
       page.afterPaint(() => {
         if (pending === open) finish(Math.round(page.now()));
+      });
+    },
+    /** The tap that opens the terminal; `pane` is the worker it asked for, null for Main. */
+    terminalOpened(pane?: string | null) {
+      finishTerminal();
+      const tap = page.now();
+      terminal = {
+        tap: Math.round(tap),
+        pane,
+        sinceResume: resumed && Math.round(tap - resumed.at),
+        hiddenMs: resumed?.hiddenMs,
+        painting: false,
+        timer: setTimeout(() => finishTerminal(), COLD_OPEN_TIMEOUT_MS),
+      };
+    },
+    /** The terminal view is about to read `target` (undefined for Main); only the first read of the opened pane counts. */
+    terminalFetching(target?: string, main?: string) {
+      if (terminal && terminalWants(terminal, target, main)) terminal.fetchStart ??= Math.round(page.now());
+    },
+    /** The terminal view applied a read of `target`. */
+    terminalShown(target?: string, main?: string) {
+      const open = terminal;
+      if (!open || open.painting || open.fetchStart === undefined || !terminalWants(open, target, main)) return;
+      open.painting = true;
+      page.afterPaint(() => {
+        if (terminal === open) finishTerminal(Math.round(page.now()));
       });
     },
     warm(t0: number, threadId: string) {
@@ -385,6 +468,18 @@ export function firstStreamId() {
 /** Header for the page's first bots request; empty for every later one. */
 export function firstBotsHeader() {
   return active?.botsHeader() ?? {};
+}
+
+export function noteTerminalOpened(pane?: string | null) {
+  active?.terminalOpened(pane);
+}
+
+export function noteTerminalFetching(target?: string, main?: string) {
+  active?.terminalFetching(target, main);
+}
+
+export function noteTerminalShown(target?: string, main?: string) {
+  active?.terminalShown(target, main);
 }
 
 export function startWarmOpenTiming(t0: number, threadId: string) {
