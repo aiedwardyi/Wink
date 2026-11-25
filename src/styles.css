@@ -212,6 +212,12 @@
   justify-content: flex-end;
 }
 
+/* Some skins fill your own bubble with the accent, so links there take the bubble's ink. */
+[data-orbit-message="user"] [data-orbit-message-content] a {
+  color: inherit;
+  text-decoration-color: currentColor;
+}
+
 /* Rows are display:contents wrappers, so their children carry the containment.
    The newest row remembers its size too, or settling it drops to 80px for a frame and clamps the scroll. */
 [data-orbit-transcript] :is([data-settled], [data-mid], [data-run]) > * {
