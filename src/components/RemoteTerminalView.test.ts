@@ -1565,6 +1565,7 @@ describe("RemoteTerminalView", () => {
       { sessionId: "worker", label: "Worker", main: false },
     ];
     store.api.mockImplementation(async (path: string) => {
+      if (String(path).includes("sessionId=missing")) throw new Error("Unknown terminal");
       const sessionId = String(path).includes("sessionId=worker") ? "worker" : "main";
       return { screenText: sessionId, sessionId, generation: 1, panes };
     });
@@ -1577,6 +1578,9 @@ describe("RemoteTerminalView", () => {
       await act(async () => root.render(view({ sessionId: "worker" })));
       expect(title(host)).toBe("Terminal / Worker");
       await act(async () => root.render(view({ sessionId: "missing" })));
+      await vi.waitFor(() => expect(title(host)).toBe("Terminal / Ada"));
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal", ...READ);
+      await act(async () => root.render(view({ sessionId: "worker" })));
       expect(title(host)).toBe("Terminal / Worker");
       await act(async () => root.render(view({ sessionId: "main" })));
       expect(title(host)).toBe("Terminal / Ada");
@@ -1655,6 +1659,37 @@ describe("RemoteTerminalView", () => {
       panes = [...panes, { sessionId: "worker", label: "Worker", main: false }];
       await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Refresh"]')!.click());
       await vi.waitFor(() => expect(title(host)).toBe("Terminal / Worker"), { timeout: 2000 });
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("reads a tapped worker the last roster omits, past a hung previous worker", async () => {
+    const main = { sessionId: "main", label: "Main", main: true };
+    const prior = { sessionId: "w12", label: "W12", main: false };
+    const next = { sessionId: "w25", label: "W25", main: false };
+    let previousHangs = false;
+    store.api.mockImplementation((path: string, init?: RequestInit) => {
+      const sessionId = new URL(path, "http://localhost").searchParams.get("sessionId");
+      if (sessionId === "w12" && previousHangs) return hung([])(path, init);
+      const panes = previousHangs ? [main, prior, next] : [main, prior];
+      return Promise.resolve({ screenText: `${sessionId} screen`, sessionId, generation: 1, panes });
+    });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const focus = { sessionId: "w12" };
+    const view = (visible: boolean, paneFocus: { sessionId: string }) =>
+      createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible, onClose: () => {}, paneFocus }));
+    try {
+      await act(async () => root.render(view(true, focus)));
+      await vi.waitFor(() => expect(host.querySelector("pre")?.textContent).toBe("w12 screen"));
+      previousHangs = true;
+      await act(async () => root.render(view(false, focus)));
+      store.api.mockClear();
+      await act(async () => root.render(view(true, { sessionId: "w25" })));
+      expect(store.api.mock.calls.map(([path]) => path)).toEqual(["/api/bots/bot-1/terminal?sessionId=w25"]);
+      await vi.waitFor(() => expect(host.querySelector("pre")?.textContent).toBe("w25 screen"));
+      expect(store.api.mock.calls.map(([path]) => path)).not.toContain("/api/bots/bot-1/terminal?sessionId=w12");
     } finally {
       await act(async () => root.unmount());
     }

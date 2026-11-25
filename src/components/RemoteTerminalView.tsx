@@ -143,7 +143,7 @@ export function RemoteTerminalView({
   if (tapped !== paneFocus) {
     setTapped(paneFocus);
     const id = paneFocus?.sessionId;
-    if (id && (!panes.length || panes.some((pane) => pane.sessionId === id && !pane.main))) setSelectedPane(id);
+    if (id && !panes.some((pane) => pane.sessionId === id && pane.main)) setSelectedPane(id);
   }
   const order: RemoteTerminalPane[] = !panes.length
     ? panes
@@ -227,7 +227,7 @@ export function RemoteTerminalView({
     setRefreshing(false);
   }, [refresh]);
 
-  // A stale roster must not consume the tap. Apply it once that pane is listed.
+  // A roster can predate a worker the chat lists, so an unlisted tap is a worker; a gone one falls back on its read.
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
@@ -238,11 +238,11 @@ export function RemoteTerminalView({
       setDraftPane(mainPane ? MAIN_TAB : null);
       return;
     }
-    const match = panes.find((pane) => pane.sessionId === paneFocus.sessionId);
-    if (!match) return;
+    if (!panes.length) return;
+    const main = panes.some((pane) => pane.main && pane.sessionId === paneFocus.sessionId);
     focusedRef.current = paneFocus;
-    setSelectedPane(match.main ? null : match.sessionId);
-    setDraftPane(match.main ? MAIN_TAB : match.sessionId);
+    setSelectedPane(main ? null : paneFocus.sessionId);
+    setDraftPane(main ? MAIN_TAB : paneFocus.sessionId);
   }, [paneFocus, panes]);
 
   useEffect(() => {
