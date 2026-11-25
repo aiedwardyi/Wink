@@ -89,6 +89,38 @@ it.each([[-1000, -108], [1000, 8]])("a dragged tab in a row that scrolls stays i
   await point(label("map"), "pointerup", 350 + to);
 });
 
+it("a held finger lifts a tab, drags it past its neighbour and drops it there, while a swipe still scrolls the row", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const said = vi.fn();
+  await act(async () => { showMedia("t6"); showMap("t6"); showTimeline("t6"); });
+  await act(async () => root.render(createElement(Strip, { threadId: "t6", onSay: said })));
+  layOut(0, 300);
+  const touch = (el: Element, type: string, clientX: number, clientY = 10) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 2, pointerType: "touch", clientX, clientY })); });
+  const swipe = () => { const event = new TouchEvent("touchmove", { bubbles: true, cancelable: true }); label("media").dispatchEvent(event); return event.defaultPrevented; };
+  // A swipe that leaves before the hold is a scroll: nothing lifts, and the row keeps its touchmoves.
+  await touch(label("media"), "pointerdown", 50);
+  await touch(label("media"), "pointermove", 70);
+  await act(async () => { vi.advanceTimersByTime(500); });
+  expect(document.querySelector("[data-ghost]")).toBeNull();
+  expect(swipe()).toBe(false);
+  await touch(label("media"), "pointercancel", 70);
+  // A finger held still lifts the tab, which then takes the row's touchmoves for itself.
+  await touch(label("media"), "pointerdown", 50);
+  await touch(label("media"), "pointermove", 53, 13);
+  await act(async () => { vi.advanceTimersByTime(399); });
+  expect(document.querySelector("[data-ghost]")).toBeNull();
+  await act(async () => { vi.advanceTimersByTime(1); });
+  expect(document.querySelector("[data-ghost]")).not.toBeNull();
+  expect(swipe()).toBe(true);
+  await touch(label("media"), "pointermove", 200);
+  expect(tabs().map((tab) => tab.style.translate)).toEqual(["", "-100px 0", ""]);
+  await touch(label("media"), "pointerup", 200);
+  expect(document.querySelector("[data-ghost]")).toBeNull();
+  expect(paneTabs("t6")).toEqual(["map", "media", "timeline"]);
+  expect(said).toHaveBeenCalledWith("Media moved to position 2 of 3");
+  vi.useRealTimers();
+});
+
 it("Esc cancels an edge resize, the arrow keys step the width and a double-click resets it", async () => {
   vi.stubGlobal("innerWidth", 1440);
   localStorage.setItem(PANE_WIDTH_KEY, "520");

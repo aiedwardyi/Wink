@@ -5,9 +5,9 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { EASE_STANDARD, MOTION_MODERATE_MS } from "@/lib/motion";
-import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "@/lib/phone-swipe";
+import { hapticTick, reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "@/lib/phone-swipe";
 import { moveTab, PANE_KEY, type PaneEntry, type PaneTool } from "@/lib/show-pane";
-import { LIFT_SCALE, soften } from "@/lib/use-touch-drag";
+import { LIFT_SCALE, LONG_PRESS_MS, LONG_PRESS_SLOP, soften } from "@/lib/use-touch-drag";
 import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
 
 export const FILE_ICON = { image: ImageIcon, pdf: FileText, page: Globe, text: FileText, folder: Folder };
@@ -112,10 +112,10 @@ export function PaneToolList({ rows, onPick }: { rows: readonly ToolRow[]; onPic
   );
 }
 
-interface Drag { key: string; id: number; x0: number; x: number; from: number; to: number; els: HTMLElement[]; lefts: number[]; widths: number[]; view: [number, number]; left: number; ghost?: HTMLElement }
+interface Drag { key: string; id: number; x0: number; y0: number; hold?: ReturnType<typeof setTimeout>; x: number; from: number; to: number; els: HTMLElement[]; lefts: number[]; widths: number[]; view: [number, number]; left: number; ghost?: HTMLElement }
 interface Landing { key: string; at: Map<string, number>; look: { scale: string; boxShadow: string; backgroundColor: string; color: string } }
 
-/** The open tabs. A pressed tab follows the pointer from the first pixel; past 4 px it lifts (a copy, so the row's scroll clip never cuts its shadow) and its neighbors slide aside to open its spot. */
+/** The open tabs. A pressed tab follows the pointer from the first pixel; past 4 px it lifts (a copy, so the row's scroll clip never cuts its shadow) and its neighbors slide aside to open its spot. A finger lifts it by holding still instead, so a swipe still scrolls the row. */
 export function PaneTabs({ row, threadId, tabs, active, onOpen, onClose, onSay }: { row: RefObject<HTMLDivElement | null>; threadId: string; tabs: readonly TabView[]; active: string | null; onOpen: (entry: PaneEntry) => void; onClose: (tab: TabView, index: number) => void; onSay: (said: string) => void }) {
   const { t } = useI18n();
   const drag = useRef<Drag | null>(null);
@@ -146,11 +146,24 @@ export function PaneTabs({ row, threadId, tabs, active, onOpen, onClose, onSay }
   }, [order]);
   // A chat switch or the pane shutting mid-drag takes the lifted copy down with it.
   useLayoutEffect(() => () => finish(false), [threadId]);
+  // Only a touchmove can keep a held tab's finger from scrolling the row, and only from a listener already there when the touch began.
+  useEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const hold = (event: TouchEvent) => {
+      if (!drag.current?.ghost) return;
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+    };
+    el.addEventListener("touchmove", hold, { passive: false });
+    return () => el.removeEventListener("touchmove", hold);
+  }, [row]);
 
   const finish = (commit: boolean) => {
     const d = drag.current;
     drag.current = null;
     if (!d) return;
+    clearTimeout(d.hold);
     const el = d.els[d.from]!;
     if (!d.ghost) {
       el.style.translate = "";
@@ -203,16 +216,25 @@ export function PaneTabs({ row, threadId, tabs, active, onOpen, onClose, onSay }
   };
 
   const down = (tab: TabView) => (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || event.pointerType === "touch" || !row.current || (event.target as HTMLElement).closest("[data-tab-close]")) return;
+    if (event.button !== 0 || !row.current || (event.target as HTMLElement).closest("[data-tab-close]")) return;
     const els = Array.from(row.current.querySelectorAll<HTMLElement>("[data-pane-tab]"));
     const from = els.findIndex((el) => el.dataset.paneTab === tab.key);
     const { scrollLeft, clientWidth } = row.current;
-    drag.current = { key: tab.key, id: event.pointerId, x0: event.clientX, x: 0, from, to: from, els, lefts: els.map((el) => el.offsetLeft), widths: els.map((el) => el.offsetWidth), view: [scrollLeft, scrollLeft + clientWidth], left: 0 };
+    const d: Drag = { key: tab.key, id: event.pointerId, x0: event.clientX, y0: event.clientY, x: 0, from, to: from, els, lefts: els.map((el) => el.offsetLeft), widths: els.map((el) => el.offsetWidth), view: [scrollLeft, scrollLeft + clientWidth], left: 0 };
+    drag.current = d;
+    if (event.pointerType === "touch") d.hold = setTimeout(() => {
+      lift(d);
+      hapticTick();
+    }, LONG_PRESS_MS);
   };
 
   const move = (event: PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d || event.pointerId !== d.id) return;
+    if (d.hold && !d.ghost) {
+      if (Math.hypot(event.clientX - d.x0, event.clientY - d.y0) > LONG_PRESS_SLOP) finish(false);
+      return;
+    }
     const last = d.els.length - 1;
     const w = d.widths[d.from]!;
     const home = d.lefts[d.from]!;
