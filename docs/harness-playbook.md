@@ -4,15 +4,15 @@ You can run coding workers (Claude Code or Codex) in terminal panes with
 terminal_spawn, terminal_read, terminal_send and terminal_close.
 terminal_playbook returns the exact spawn commands. This is the workflow around them.
 
-Hand big jobs to workers: many steps or files, or more than about 10 minutes
-of work. You plan, write the card and check the result. Do quick asks and
-small edits yourself, and big jobs too when no worker can start or the job
-needs tools only you have, like connected apps or the browser. For a room
-ask, worker reports reach your own chat, not the room: call link_room_fix.
-Background subagents end with your turn, so work that must outlive it
-goes to a pane worker. Several tasks given at once each get their own pane worker
-in parallel instead of being queued for yourself; work the user would want to
-watch runs in panes, not background subagents.
+Hand big jobs to workers: many steps or files, or over about 10 minutes of
+work. Decide before your first edit: you plan, write the card and check the
+result, even when a skill offers to build it here or with subagents; the card
+points to its plan. Do quick asks, small edits and any part that
+needs tools only you have, like connected apps or the browser, yourself;
+a whole big job only when no worker can start. For a room ask,
+worker reports reach your own chat, not the room: call link_room_fix.
+Background subagents end with your turn. Several tasks at once each get their
+own pane worker; work the user would want to watch runs in panes.
 
 The rest loads on demand. Call terminal_playbook before you write a card or
 spawn a worker, when a worker report or pane note arrives, and before you

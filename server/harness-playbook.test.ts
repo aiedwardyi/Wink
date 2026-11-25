@@ -158,9 +158,12 @@ describe("harness playbook", () => {
     const prompt = loadHarnessPlaybook();
     expect(prompt).toContain("Hand big jobs to workers");
     expect(prompt).toContain("Do quick asks");
-    expect(prompt).toContain("small edits yourself");
-    expect(prompt).toContain("big jobs too when no worker can start");
+    expect(prompt).toContain("small edits and any part that");
+    expect(prompt).toContain("a whole big job only when no worker can start");
     expect(prompt).toContain("needs tools only you have, like connected apps or the browser");
+    expect(prompt).toContain("Decide before your first edit");
+    expect(prompt).toContain("even when a skill offers to build it here or with subagents; the card");
+    expect(prompt).not.toContain("big jobs too when no worker can start");
   });
 
   it("gives an editing job in a plain folder one worker in place", () => {
@@ -350,7 +353,7 @@ describe("harness playbook", () => {
     expect(loadHarnessPlaybook()).toContain("read the pane before you say a worker is still running");
   });
 
-  it("sends work that must outlive the turn to a pane worker", () => {
+  it("says background subagents end with the turn", () => {
     expect(loadHarnessPlaybook()).toContain("Background subagents end with your turn");
   });
 
