@@ -71,6 +71,17 @@ const mount = async () => {
     openWorker: (n: number) => act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: `Digit${n}`, altKey: true, bubbles: true, cancelable: true }));
     }),
+    pickWorker: async (nick: string) => {
+      const open = document.querySelector<HTMLButtonElement>("button[data-show-pane-button]");
+      expect(open).not.toBeNull();
+      await act(async () => open!.click());
+      let row: HTMLButtonElement | undefined;
+      await vi.waitFor(() => {
+        row = [...document.querySelectorAll<HTMLButtonElement>("[data-worker-list] li button")].find((item) => item.textContent?.includes(nick));
+        expect(row).toBeDefined();
+      });
+      return act(async () => row!.click());
+    },
     records: () => fetched.mock.calls
       .filter(([url]) => url === COLD_OPEN_PATH)
       .map(([, init]) => posted(init))
@@ -115,6 +126,32 @@ it("finishes a worker open when that worker's read is shown, not when the first 
     await vi.waitFor(() => expect(f.records()).toHaveLength(1));
     const { tap, fetchStart, paint } = f.records()[0].terminal!;
     expect(fetchStart! - tap).toBeGreaterThanOrEqual(300);
+    expect(paint! - fetchStart!).toBeGreaterThanOrEqual(300);
+  } finally { await f.unmount(); }
+});
+
+type Fixture = Awaited<ReturnType<typeof mount>>;
+
+it.each([
+  ["a tap", (f: Fixture) => f.pickWorker("WORK-2")],
+  ["the shortcut", (f: Fixture) => f.openWorker(2)],
+])("times a worker reopened by %s from its first read, not the next poll", async (_, open) => {
+  chunk.release();
+  const f = await mount();
+  try {
+    await open(f);
+    await vi.waitFor(() => expect(f.records()).toHaveLength(1));
+    const close = document.querySelector<HTMLButtonElement>('button[aria-label="Close terminal"]');
+    expect(close).not.toBeNull();
+    await act(async () => close!.click());
+    const { first, hold } = f.hold(PANES[1]);
+    first.release();
+    await open(f);
+    await vi.waitFor(() => expect(hold.requested).toBe(true));
+    vi.advanceTimersByTime(300);
+    hold.release();
+    await vi.waitFor(() => expect(f.records()).toHaveLength(2), { timeout: 2_500 });
+    const { fetchStart, paint } = f.records()[1].terminal!;
     expect(paint! - fetchStart!).toBeGreaterThanOrEqual(300);
   } finally { await f.unmount(); }
 });

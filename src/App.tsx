@@ -235,8 +235,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [botId, openTerminal]);
   const botPaneFocus = paneFocus?.botId && paneFocus.botId !== botId ? null : paneFocus;
   // The tap, before the remote view's chunk loads; a focus an earlier open already used names no pane.
+  // A layout effect: a reopened view is still mounted, and its passive effect starts the read.
   const seenFocus = useRef(botPaneFocus);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (terminalOpen && !window.ogb?.terminal && !webTerminal) noteTerminalOpened(botPaneFocus === seenFocus.current ? undefined : botPaneFocus?.sessionId);
   }, [terminalOpen, botId]);
   useEffect(() => {
