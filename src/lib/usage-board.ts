@@ -33,7 +33,7 @@ export type UsageBoardAccount = {
   nickname: string | null;
   name: string;
   main: boolean;
-  signIn: "ready" | "signing-in" | "signed-out" | "cli-missing" | "draining" | "unknown";
+  signIn: "ready" | "signing-in" | "signed-out" | "payment-due" | "cli-missing" | "draining" | "unknown";
   // "complete": the report lists every window the plan enforces, so a missing session window means the plan has none.
   coverage: "complete" | "unknown";
   windows: UsageBoardWindow[];

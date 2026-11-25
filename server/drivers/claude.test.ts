@@ -2285,6 +2285,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(recorder.events.some((e) => e.type === "runtime.error" && e.signedOut)).toBe(false);
   });
 
+  it.each([
+    ["the CLI's past-due subscription result", "Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing (if you just paid, try again shortly), or use an Anthropic API key instead", true],
+    ["another subscription error", "Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account", false],
+    ["a rate limit", "HTTP 429 Too Many Requests", false],
+  ])("marks payment due only for %s", async (_kind, result, due) => {
+    const fixture = join(scratch, "payment-due.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-payment-due", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const errors = recorder.events.filter((e) => e.type === "runtime.error");
+    expect(errors).toEqual([expect.objectContaining({ turnId, message: result })]);
+    expect(errors.some((e) => e.paymentDue)).toBe(due);
+    expect(errors.some((e) => e.signedOut)).toBe(false);
+  });
+
   it("refuses a turn on a blocked base Claude instance", async () => {
     process.env.FAKE_CLAUDE_DUMP = join(scratch, "healthy.json");
     const inputs = () => {

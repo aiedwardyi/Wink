@@ -68,6 +68,9 @@ export function createUsageBoard(deps: Deps) {
   // Accounts the last known runs had workers on: a read without runs keeps that answer instead of flipping rows.
   const working = new Set<string>();
   const identities = new Map<string, string | null>();
+  // Account id to the generation and time the CLI refused it for a past-due payment. It belongs to the signed-in
+  // identity: a sign-out or identity change drops it, and only a good send or a usage reading observed after it clears it.
+  const unpaid = new Map<string, { generation: number; at: number }>();
 
   for (const row of deps.accounts.list()) {
     const report = observedRateLimits(deps.rateLimits.get(row.id));
@@ -99,12 +102,14 @@ export function createUsageBoard(deps: Deps) {
       identities.set(row.id, identity);
       if (changed) {
         deps.rateLimits.delete(row.id);
+        unpaid.delete(row.id);
         deps.history.purge(row.id);
         reports.delete(row.id);
         for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === row.id) queue.splice(i, 1);
         seenReports.clear();
         deps.accountChanged?.(row.id, row.status?.authenticated !== false);
       }
+      if (identity === null) unpaid.delete(row.id);
     }
     const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation, identities.get(row.id), row.codexPromo]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
     if (signature !== accountSet) {
@@ -152,6 +157,7 @@ export function createUsageBoard(deps: Deps) {
     if (seenReports.has(key)) return;
     seenReports.add(key);
     if (seenReports.size > 1024) seenReports.delete(seenReports.values().next().value!);
+    if (at > (unpaid.get(accountId)?.at ?? Infinity)) unpaid.delete(accountId);
     if (!last || at > last.at) {
       for (const window of windows) {
         const before = last?.windows.find((value) => value.id === window.id);
@@ -187,7 +193,19 @@ export function createUsageBoard(deps: Deps) {
     bump();
   }
 
-  function turnSettled(turnId: string) { if (turns.delete(turnId)) bump(); }
+  function turnSettled(turnId: string, ok = false) {
+    const turn = turns.get(turnId);
+    if (!turns.delete(turnId)) return;
+    if (ok) unpaid.delete(turn!.accountId);
+    bump();
+  }
+
+  function paymentDue(accountId: string) {
+    const row = accounts().find((row) => row.id === accountId);
+    if (!row) return;
+    unpaid.set(accountId, { generation: row.generation, at: now() });
+    bump();
+  }
 
   function freeze(cursor?: string) {
     const rows = accounts();
@@ -256,6 +274,7 @@ export function createUsageBoard(deps: Deps) {
       else if (!row.existing) signIn = "ready";
       else if (row.status?.authenticated === true) signIn = "ready";
       else if (row.status?.authenticated === false) signIn = "signed-out";
+      if (signIn === "ready" && unpaid.get(row.id)?.generation === row.generation) signIn = "payment-due";
       const observedAt = report ? Date.parse(report.observedAt) : NaN;
       group.accounts.push({ id: row.id, number, nickname, name: nickname ?? text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
         signIn, coverage: "unknown", windows, observedAt: Number.isFinite(observedAt) ? observedAt : null,
@@ -322,5 +341,5 @@ export function createUsageBoard(deps: Deps) {
     return () => { listeners.delete(callback); if (!listeners.size) { clearTimeout(frameTimer); frameTimer = undefined; } };
   }
 
-  return { read, handle, touch, sync: accounts, turnStarted, turnSettled, recordReport, recordMain, onFrame };
+  return { read, handle, touch, sync: accounts, turnStarted, turnSettled, paymentDue, recordReport, recordMain, onFrame };
 }

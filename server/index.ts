@@ -4521,6 +4521,7 @@ bus.subscribe((event: RuntimeEvent) => {
     }
     case "runtime.error": {
       refreshCodexPromo(event.message, usageBoard.touch);
+      if (event.paymentDue && event.providerInstanceId) usageBoard.paymentDue(event.providerInstanceId);
       if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
       unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
@@ -4894,7 +4895,7 @@ bus.subscribe((event: RuntimeEvent) => {
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
     turnRegistry.settle(event.turnId);
-    usageBoard.turnSettled(event.turnId);
+    usageBoard.turnSettled(event.turnId, event.ok);
   }
   drainQueuedSends();
   if (!event.ok || event.stopReason === "cancelled" || event.stopReason === "interrupted") discardDelegations(commsBus, event.threadId, sourceBotId, event.turnId);
