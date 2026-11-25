@@ -33,6 +33,7 @@ import { computerProxyEnv } from "../container-computer.ts";
 import { augmentedPath } from "../env-path.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { injectedApiModel, mergeLocalInject } from "./local-inject.ts";
+import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 
 import type { ChildProcess } from "node:child_process";
 import type {
@@ -997,7 +998,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // the node flag would leak into every shell command the agent runs.
       const { ELECTRON_RUN_AS_NODE: _nodeFlag, ...identity } = {
         ...turn.integrations?.terminal?.env,
-        ...turn.integrations?.agents?.env,
+        ...(turn.integrations?.agents && experimentalAgents(turn.integrations.agents, true).env),
       };
       const childEnv = { ...env(), ...identity };
       // a computer turn's mount carries its box token, so it never runs on or leaves a standby
@@ -1273,7 +1274,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               cancelledTool ||= isCancelledTool(payload);
               const itemId = `${conversationId ?? o.conversation_id ?? "conv"}:${payload.step_index}`;
               if (payload.state === "ACTIVE") {
-                emit({ ...base(threadId, turnId), type: "item.started", itemType: "tool", itemId, title: payload.tool_name });
+                emit({ ...base(threadId, turnId), type: "item.started", itemType: "tool", itemId, title: payload.tool_name && originalCatalogCall(payload.tool_name, payload.tool_info?.parameters, "agents").name });
               } else if (payload.state === "DONE") {
                 emit({ ...base(threadId, turnId), type: "item.completed", itemType: "tool", itemId, ok: true });
               } else if (payload.state === "ERROR") {

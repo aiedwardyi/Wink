@@ -60,8 +60,8 @@ export function createToolCatalog(eligible: readonly CatalogTool[]) {
 }
 
 export function originalCatalogCall(name: string, input: unknown, server?: string): { name: string; input: unknown } {
-  if (((name === "call_wink_tool" && server === "agents") || name === "mcp__agents__call_wink_tool") && record(input) && typeof input.name === "string" && OPTIONAL.has(input.name) && record(input.arguments)) {
-    return { name: name.replace("call_wink_tool", input.name), input: input.arguments };
+  if (((name.endsWith("call_wink_tool") && server === "agents") || name === "mcp__agents__call_wink_tool") && record(input) && typeof input.name === "string" && OPTIONAL.has(input.name) && record(input.arguments)) {
+    return { name: name.slice(0, -"call_wink_tool".length) + input.name, input: input.arguments };
   }
   return { name, input };
 }

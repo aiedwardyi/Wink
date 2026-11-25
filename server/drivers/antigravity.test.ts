@@ -16,6 +16,7 @@ import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV
 import type { ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { summaryInstance } from "../summary-instance.ts";
+import { AGENTS_IDENTITY, expectAgentsBudget, listAgentsTools } from "../testing/agents-tools.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { removeTestData, testHome } from "../testing/test-home.ts";
 import { ProviderRegistry } from "../harness/registry.ts";
@@ -2562,6 +2563,83 @@ describe("Antigravity computer MCP config", () => {
       await recorder.until((event) => event.type === "turn.completed");
       const { env } = JSON.parse(readFileSync(join(home, "token.json"), "utf8"));
       expect(env).toMatchObject({ OMB_COMMS_TOKEN: "agents-tok", OMB_TERMINAL_TOKEN: "grant-python", OMB_TERMINAL_URL: "http://127.0.0.1:9" });
+    } finally {
+      recorder.stop();
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["", "0", "1"])("hands the agents proxy catalog flag %s through agy's env", async (flag) => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-catalog-"));
+    const instance = await createIn(home, "catalog", { FAKE_AGY_DUMP: join(home, "catalog.json") });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-python", text: "one", integrations: botIntegrations("python") });
+      await recorder.until((event) => event.type === "turn.completed");
+      const { env } = JSON.parse(readFileSync(join(home, "catalog.json"), "utf8"));
+      expect(env.OMB_WINK_TOOL_CATALOG).toBe(flag === "0" ? undefined : "1");
+      expect(env.OMB_BOT_ID).toBe("python");
+    } finally {
+      vi.unstubAllEnvs();
+      recorder.stop();
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the Wink tool schemas Gemini loads every call inside the budget", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "");
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-budget-"));
+    const instance = await createIn(home, "budget", { FAKE_AGY_DUMP: join(home, "budget.json") });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-agents-budget", text: "hi", integrations: { agents: { command: process.execPath, args: [SPAWNED_PROXIES.agents], env: AGENTS_IDENTITY } } });
+      await recorder.until((event) => event.type === "turn.completed");
+      // the static mcp_config entry's proxy inherits agy's env, so the dump is what it reads
+      const tools = await listAgentsTools(JSON.parse(readFileSync(join(home, "budget.json"), "utf8")).env);
+      expectAgentsBudget("Gemini", tools, 17_500);
+    } finally {
+      vi.unstubAllEnvs();
+      recorder.stop();
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("names a catalog call's tool row after the real tool, as a direct call would be", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-catalog-row-"));
+    const conversation_id = "00000000-0000-4000-8000-000000000000";
+    type Parameters = { query: string } | { name: string; arguments: Record<string, string> };
+    const step = (step_index: number, state: string, tool_name: string, parameters: Parameters) =>
+      ({ event: "step_update", step_update: { conversation_id, step_index, state, step_type: "tool", tool_name, tool_info: { name: tool_name, parameters } } });
+    const call = { name: "generate_image", arguments: { prompt: "a cat" } };
+    const replay = [
+      { event: "init", conversation_id, init: { cwd: home, permission_mode: "always-proceed" } },
+      step(0, "ACTIVE", "find_wink_tool", { query: "image" }),
+      step(0, "DONE", "find_wink_tool", { query: "image" }),
+      step(1, "ACTIVE", "call_wink_tool", call),
+      step(1, "DONE", "call_wink_tool", call),
+      step(2, "ACTIVE", "call_wink_tool", { name: "react", arguments: {} }),
+      step(2, "ERROR", "call_wink_tool", { name: "react", arguments: {} }),
+      { event: "step_update", step_update: { conversation_id, step_index: 3, state: "DONE", step_type: "agent_response", text_delta: "Made it." } },
+      { event: "result", result: { conversation_id, status: "SUCCESS", response: "Made it." } },
+    ];
+    const instance = await createIn(home, "catalog-row", { FAKE_AGY_REPLAY: JSON.stringify(replay) });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-catalog-row", text: "draw a cat", integrations: botIntegrations("python") });
+      await recorder.until((event) => event.type === "turn.completed");
+      const titles = recorder.events.flatMap((event) => (event.type === "item.started" ? [event.title] : []));
+      // react is loaded directly, so the gateway refuses it and the row keeps the gateway's name
+      expect(titles).toEqual(["find_wink_tool", "generate_image", "call_wink_tool"]);
     } finally {
       recorder.stop();
       await instance.dispose();
