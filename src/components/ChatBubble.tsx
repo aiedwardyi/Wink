@@ -466,7 +466,7 @@ const Bubble = memo(function Bubble({
               </div>
               {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className={cn(visibleText && "mt-2")} />}
               {message.steered && (
-                <div className="mt-1 text-[11px] text-ink-secondary/70" title={t("chat.sentMidTurnHint")}>
+                <div className="mt-1 text-[11px]" title={t("chat.sentMidTurnHint")}>
                   {t("chat.sentMidTurn")}
                 </div>
               )}
