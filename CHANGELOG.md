@@ -2,6 +2,17 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.302] - 2026-11-25
+
+### Added
+- Side pane tabs: open only the tabs you need, drag to reorder, drag the edge to resize.
+
+### Fixed
+- Sending to an idle chat starts at once instead of waiting on an old sync copy.
+- Live Verify replays point only at what was checked, and a run that checked nothing leaves no card.
+- Space plays and pauses a video after full screen.
+- Old helper files get cleaned up even on a busy PC.
+
 ## [1.0.301] - 2026-11-25
 
 ### Fixed
