@@ -164,7 +164,6 @@ describe("side pane", () => {
       await act(async () => { target.dispatchEvent(press); });
       expect(press.defaultPrevented).toBe(false);
     }
-    await act(() => new Promise<void>(done => setTimeout(done, 50)));
     expect(watchPanel()).toBeNull();
     expect(document.activeElement).toBe(target);
     terminal.parentElement!.remove();

@@ -426,11 +426,10 @@ it("a kept site check stops drawing until its tab is open again", async () => {
   await act(async () => tab("a.png").click());
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
   const frames = vi.spyOn(globalThis, "requestAnimationFrame");
-  await act(() => new Promise<void>((done) => setTimeout(done, 100)));
-  expect(frames).not.toHaveBeenCalled();
+  await act(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  expect(frames).toHaveBeenCalledTimes(2);
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
-  await act(() => new Promise<void>((done) => setTimeout(done, 100)));
-  expect(frames).toHaveBeenCalled();
+  await until(() => frames.mock.calls.length > 2);
 });
 
 it("a phone tap near an unselected tab's x opens the tab: its x takes no tap and the label reaches under it", () => {
