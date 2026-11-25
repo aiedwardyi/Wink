@@ -276,6 +276,18 @@ describe("Drive mirror", () => {
     expect(existsSync(join(pcs[1].folder, "devices/device-home.json"))).toBe(false);
   });
 
+  it("ranks each path once per pass whatever order Drive lists them in", async () => {
+    const kinds = (index: number) => [`pictures/p${index}.png`, `changes/${String(index + 1).padStart(12, "0")}-device-work-op.json`, `threads-v2/bot/t${index}/writer-work/seg-1-1.json.gz`, `threads-v2/bot/t${index}/writer-work/head.json`];
+    const paths = Array.from({ length: 30 }, (_, index) => kinds(index)).flat();
+    for (const [index] of paths.entries()) seed(paths[(index * 37) % paths.length], "x");
+    const endsWith = vi.spyOn(String.prototype, "endsWith");
+    await pcs[1].mirror.syncOnce();
+    const ruleCalls = endsWith.mock.calls.filter(([suffix]) => suffix === ".tmp").length;
+    endsWith.mockRestore();
+    // drivePathRule checks .tmp first, so this counts its calls.
+    expect(ruleCalls).toBeLessThan(paths.length * 10);
+  });
+
   describe("boot and wake catch-up", () => {
     let sync: GoogleSync | undefined;
     const open = "threads-v2/bot/z-open/writer-home";

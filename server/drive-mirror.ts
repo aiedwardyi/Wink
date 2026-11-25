@@ -713,8 +713,9 @@ export function createDriveMirror(options: Options) {
     }
     // One priority tier at a time; a throw still waits for the rest in flight so no save lands after the pass.
     async function each(items: Iterable<string>): Promise<void> {
-      const rank = (path: string) => priority(path, drivePathRule(path, ids), options.chatFirst, options.openThread);
       const list = [...items];
+      const ranks = new Map(list.map((path) => [path, priority(path, drivePathRule(path, ids), options.chatFirst, options.openThread)]));
+      const rank = (path: string) => ranks.get(path)!;
       const active = new Map<string, number>();
       for (const path of list) {
         const chat = chatPart(path);
