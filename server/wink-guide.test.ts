@@ -16,7 +16,8 @@ describe("wink guide", () => {
 
   it("keeps engine picks in the guide", () => {
     const guide = readFileSync(PACKAGED_FILES.winkGuide, "utf8");
-    expect(guide).toContain("- Save Gemini 4 Argon for big jobs that gain from a second model family's view, like 3D and graphic design. Routine work goes to the other engines.");
+    expect(guide).toContain("- Gemini 4 Hydrogen is the fast Gemini for everyday agentic work, like quick multi-step tasks.");
+    expect(guide).not.toContain("Argon");
     expect(guide).toContain("- Coding fallback as engines run low:");
   });
 
