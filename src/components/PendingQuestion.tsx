@@ -224,7 +224,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
               <span className={QUOTE_LABEL}>{label}</span>
               <span className={QUOTE_TEXT}>{card.subtitle.trim().split(/\r?\n/, 1)[0]}</span>
             </button>
-            <RowChoices options={card.options} onPick={onPick} onMore={(event) => fold(false, byKeyboard(event))} />
+            <RowChoices options={card.options} onPick={onPick} />
             {controls(false)}
           </div>
         </div>
@@ -342,35 +342,23 @@ function fitChoices(card: HTMLDivElement | null) {
   };
 }
 
-/** The row's choices on one line: the ones past its width give way to one +N pill that opens the card, so none drops out unseen. */
-function RowChoices({ options, onPick, onMore }: { options: string[]; onPick: (choice: string) => void; onMore: (event: MouseEvent) => void }) {
-  const { t } = useI18n();
+/** The row's choices on one line, all or none: when any has no room, none show and the question takes the line. */
+function RowChoices({ options, onPick }: { options: string[]; onPick: (choice: string) => void }) {
   const list = useRef<HTMLSpanElement>(null);
-  const more = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
     const chips = list.current;
-    const rest = more.current;
     const row = chips?.parentElement;
-    if (!chips || !rest || !row) return;
+    if (!chips || !row) return;
     const fit = () => {
-      const all = [...chips.querySelectorAll<HTMLElement>("[data-row-choice]")];
-      for (const chip of all) chip.hidden = false;
-      rest.hidden = true;
-      // the pill's own width counts, so each cut is measured with it in place
-      for (let cut = 1; cut <= all.length && chips.scrollWidth > chips.clientWidth; cut++) {
-        all[all.length - cut].hidden = true;
-        rest.hidden = false;
-        rest.textContent = `+${cut}`;
-        rest.title = t(cut === 1 ? "ask.moreChoicesOne" : "ask.moreChoices", { count: cut });
-        rest.setAttribute("aria-label", rest.title);
-      }
+      chips.hidden = false;
+      chips.hidden = chips.scrollWidth > chips.clientWidth;
     };
     fit();
     if (typeof ResizeObserver === "undefined") return;
     const watch = new ResizeObserver(fit);
     watch.observe(row);
     return () => watch.disconnect();
-  }, [options, t]);
+  }, [options]);
   if (!options.length) return null;
   return (
     <span ref={list} data-row-choices="" className="flex min-w-0 items-center gap-1 overflow-hidden">
@@ -379,8 +367,6 @@ function RowChoices({ options, onPick, onMore }: { options: string[]; onPick: (c
           {choice}
         </button>
       ))}
-      {/* its count and label are set by the fit above */}
-      <button ref={more} hidden type="button" onClick={onMore} className={ROW_CHIP} />
     </span>
   );
 }
