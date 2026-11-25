@@ -70,7 +70,7 @@ import { warmPool, type Lease } from "./warm-pool.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
-import { isSignOut } from "./signout.ts";
+import { isPaymentDue, isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
 import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
@@ -2102,7 +2102,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                   break;
                 }
                 // the CLI already retried; a limit gets its own row from settle
-                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim() });
+                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim(), ...(!injected.injected && isPaymentDue(text) ? { paymentDue: true } : {}) });
               }
             }
             session.turn?.trace?.reconcile(claudeUsage(o.usage));

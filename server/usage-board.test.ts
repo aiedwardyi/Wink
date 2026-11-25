@@ -500,6 +500,27 @@ describe("usage board", () => {
     expect(account(await s.board.read()).signIn).toBe("draining");
   });
 
+  it("shows payment due over a stale reading until a send or usage read on that account succeeds", async () => {
+    const s = setup();
+    s.accept("claude", report(93));
+    s.board.paymentDue("claude");
+    expect(account(await s.board.read())).toMatchObject({ signIn: "payment-due", windows: [{ usedPercent: 93 }, { usedPercent: 40 }] });
+    expect(account(await s.board.read(), added).signIn).toBe("ready");
+    s.board.turnStarted({ turnId: "t-1", botId: "atlas", accountId: "claude", generation: 0 });
+    s.board.turnSettled("t-1", false);
+    expect(account(await s.board.read()).signIn).toBe("payment-due");
+    s.board.turnStarted({ turnId: "t-2", botId: "atlas", accountId: "claude", generation: 0 });
+    s.board.turnSettled("t-2", true);
+    expect(account(await s.board.read()).signIn).toBe("ready");
+    s.board.paymentDue("claude");
+    now += 60_000;
+    s.accept("claude", report(94));
+    expect(account(await s.board.read()).signIn).toBe("ready");
+    s.board.paymentDue("claude");
+    s.rows()[0].generation = 1;
+    expect(account(await s.board.read()).signIn).toBe("ready");
+  });
+
   it("reads a missing CLI as not installed and an unchecked account as unknown, never as signed out", async () => {
     const s = setup();
     const missing = { state: "unavailable" as const, reason: "`claude` CLI not found", cliMissing: true };

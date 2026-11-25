@@ -68,6 +68,8 @@ export function createUsageBoard(deps: Deps) {
   // Accounts the last known runs had workers on: a read without runs keeps that answer instead of flipping rows.
   const working = new Set<string>();
   const identities = new Map<string, string | null>();
+  // Account id to the generation the CLI refused for a past-due payment; a later good send or usage read clears it.
+  const unpaid = new Map<string, number>();
 
   for (const row of deps.accounts.list()) {
     const report = observedRateLimits(deps.rateLimits.get(row.id));
@@ -152,6 +154,7 @@ export function createUsageBoard(deps: Deps) {
     if (seenReports.has(key)) return;
     seenReports.add(key);
     if (seenReports.size > 1024) seenReports.delete(seenReports.values().next().value!);
+    unpaid.delete(accountId);
     if (!last || at > last.at) {
       for (const window of windows) {
         const before = last?.windows.find((value) => value.id === window.id);
@@ -187,7 +190,19 @@ export function createUsageBoard(deps: Deps) {
     bump();
   }
 
-  function turnSettled(turnId: string) { if (turns.delete(turnId)) bump(); }
+  function turnSettled(turnId: string, ok = false) {
+    const turn = turns.get(turnId);
+    if (!turns.delete(turnId)) return;
+    if (ok) unpaid.delete(turn!.accountId);
+    bump();
+  }
+
+  function paymentDue(accountId: string) {
+    const row = accounts().find((row) => row.id === accountId);
+    if (!row) return;
+    unpaid.set(accountId, row.generation);
+    bump();
+  }
 
   function freeze(cursor?: string) {
     const rows = accounts();
@@ -256,6 +271,7 @@ export function createUsageBoard(deps: Deps) {
       else if (!row.existing) signIn = "ready";
       else if (row.status?.authenticated === true) signIn = "ready";
       else if (row.status?.authenticated === false) signIn = "signed-out";
+      if (signIn === "ready" && unpaid.get(row.id) === row.generation) signIn = "payment-due";
       const observedAt = report ? Date.parse(report.observedAt) : NaN;
       group.accounts.push({ id: row.id, number, nickname, name: nickname ?? text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
         signIn, coverage: "unknown", windows, observedAt: Number.isFinite(observedAt) ? observedAt : null,
@@ -322,5 +338,5 @@ export function createUsageBoard(deps: Deps) {
     return () => { listeners.delete(callback); if (!listeners.size) { clearTimeout(frameTimer); frameTimer = undefined; } };
   }
 
-  return { read, handle, touch, sync: accounts, turnStarted, turnSettled, recordReport, recordMain, onFrame };
+  return { read, handle, touch, sync: accounts, turnStarted, turnSettled, paymentDue, recordReport, recordMain, onFrame };
 }
