@@ -21,7 +21,7 @@ const paints = [
   { name: "first-contentful-paint", startTime: 1400.7 },
 ];
 
-const hidden = { requestStart: 0, responseStart: 0, decodedBodySize: 0, nextHopProtocol: "" };
+const hidden = { connectStart: 0, connectEnd: 0, requestStart: 0, responseStart: 0, decodedBodySize: 0, nextHopProtocol: "" };
 
 const resources = [
   { name: "https://home.example/assets/index-DNyEQLOj.js", startTime: 320, responseEnd: 800, transferSize: 0, encodedBodySize: 376156, ...hidden },
@@ -32,6 +32,8 @@ const resources = [
     responseEnd: 2400.5,
     transferSize: 285111,
     encodedBodySize: 284811,
+    connectStart: 1600.4,
+    connectEnd: 1600.4,
     requestStart: 1610.6,
     responseStart: 2300.2,
     decodedBodySize: 900000,
@@ -44,6 +46,8 @@ const resources = [
     responseEnd: 12700.9,
     transferSize: 4200,
     encodedBodySize: 3900,
+    connectStart: 5100.4,
+    connectEnd: 5100.4,
     requestStart: 5120.2,
     responseStart: 12600.5,
     decodedBodySize: 9000,
@@ -149,6 +153,42 @@ describe("cold-open timing", () => {
     expect(fake.sent[0].nav).toBeUndefined();
   });
 
+  it("records a resumed phone page's own bots request, counted from its return", () => {
+    const wake = {
+      name: "https://home.example/api/bots?messages=0",
+      startTime: 60_020.4,
+      responseEnd: 75_600,
+      transferSize: 4_000,
+      encodedBodySize: 3_700,
+      connectStart: 60_021,
+      connectEnd: 75_440.2,
+      requestStart: 75_453,
+      responseStart: 75_590,
+      decodedBodySize: 12_000,
+      nextHopProtocol: "h2",
+    };
+    const fake = fakePage("https://home.example/remote", "reload");
+    const timing = createColdOpenTiming({ ...fake.page, resources: () => [...resources, wake] });
+    timing.visibility(true);
+    fake.at(60_000);
+    timing.visibility(false);
+    timing.resumeCurrent();
+    fake.at(75_700);
+    fake.paint();
+    expect(fake.sent[0].bots).toEqual({
+      start: 20,
+      end: 15_600,
+      transferSize: 4_000,
+      encodedBodySize: 3_700,
+      connectStart: 21,
+      connectEnd: 15_440,
+      requestStart: 15_453,
+      responseStart: 15_590,
+      decodedBodySize: 12_000,
+      nextHopProtocol: "h2",
+    });
+  });
+
   it("sends a resume whose link never came back, without its hello", () => {
     const fake = fakePage("https://home.example/remote", "reload");
     const timing = createColdOpenTiming(fake.page);
@@ -234,6 +274,8 @@ describe("cold-open timing", () => {
           end: 2401,
           transferSize: 285111,
           encodedBodySize: 284811,
+          connectStart: 1600,
+          connectEnd: 1600,
           requestStart: 1611,
           responseStart: 2300,
           decodedBodySize: 900000,
@@ -544,7 +586,7 @@ describe("cold-open timing", () => {
         terminal: {
           tap: 5_000,
           fetchStart: 5_100,
-          read: { start: 5_100, end: 12_701, transferSize: 4_200, encodedBodySize: 3_900, requestStart: 5_120, responseStart: 12_601, decodedBodySize: 9_000, nextHopProtocol: "h2" },
+          read: { start: 5_100, end: 12_701, transferSize: 4_200, encodedBodySize: 3_900, connectStart: 5_100, connectEnd: 5_100, requestStart: 5_120, responseStart: 12_601, decodedBodySize: 9_000, nextHopProtocol: "h2" },
           paint: 12_850,
           sinceResume: 1_000,
         },

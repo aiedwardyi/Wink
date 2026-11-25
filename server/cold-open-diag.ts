@@ -28,6 +28,8 @@ const botsRequest = z
     end: ms,
     transferSize: size,
     encodedBodySize: size,
+    connectStart: ms.optional(),
+    connectEnd: ms.optional(),
     requestStart: ms.optional(),
     responseStart: ms.optional(),
     decodedBodySize: size.optional(),
@@ -83,6 +85,9 @@ export const coldOpenRecordSchema = z
     userAgent: z.string().max(512),
   })
   .strict();
+
+/** How the record reached this PC, from the request's socket and Host, never from the page. */
+export type ColdOpenVia = "relay" | "tailnet" | "local";
 
 type Received = { status: 200 } | { status: 400 | 413; error: string };
 type OpenTimings = z.infer<typeof server>;
@@ -160,7 +165,7 @@ export async function receiveChatSwitch(req: AsyncIterable<Buffer>, log: (line: 
   return { status: 200 };
 }
 
-export async function receiveColdOpen(req: AsyncIterable<Buffer>, dataDir: string, now = Date.now()): Promise<Received> {
+export async function receiveColdOpen(req: AsyncIterable<Buffer>, dataDir: string, via: ColdOpenVia, now = Date.now()): Promise<Received> {
   const read = await readJson(req);
   if ("error" in read) return read;
   const parsed = coldOpenRecordSchema.safeParse(read.body);
@@ -183,7 +188,7 @@ export async function receiveColdOpen(req: AsyncIterable<Buffer>, dataDir: strin
   const span = Math.max(0, ...[record.mount, record.sseOpen, record.hello, record.chatPaint, record.bots?.end, record.sse?.open].filter((mark) => mark !== undefined));
   const stalls = loopStallsDuring(now - span, now).map((stall) => ({ at: new Date(stall.start).toISOString(), ms: stall.ms }));
   const timings = { ...joined, uptimeS: Math.round(process.uptime()), ...(stalls.length ? { stalls } : {}) };
-  lines.push(JSON.stringify({ receivedAt: new Date(now).toISOString(), ...record, server: timings, serverStart: SERVER_START }));
+  lines.push(JSON.stringify({ receivedAt: new Date(now).toISOString(), via, ...record, server: timings, serverStart: SERVER_START }));
   writeFileAtomic(path, `${lines.slice(-COLD_OPEN_KEEP).join("\n")}\n`);
   return { status: 200 };
 }

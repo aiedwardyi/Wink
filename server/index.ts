@@ -9042,7 +9042,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
     }
     if (method === "POST" && path === "/api/diag/cold-open") {
-      const received = await receiveColdOpen(req, DATA_DIR);
+      const received = await receiveColdOpen(req, DATA_DIR, relay ? "relay" : hostMatchesRemote(req.headers.host, REMOTE_HOST) ? "tailnet" : "local");
       return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
     }
 

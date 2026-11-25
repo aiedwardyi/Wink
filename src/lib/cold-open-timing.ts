@@ -32,6 +32,8 @@ export interface ColdOpenRequest {
 }
 
 export interface ColdOpenBots extends ColdOpenRequest {
+  connectStart: number;
+  connectEnd: number;
   requestStart: number;
   responseStart: number;
   decodedBodySize: number;
@@ -88,7 +90,7 @@ type Navigation = Pick<PerformanceNavigationTiming, NavField | "type">;
 type Paint = Pick<PerformanceEntry, "name" | "startTime">;
 type Resource = Pick<
   PerformanceResourceTiming,
-  "name" | "startTime" | "responseEnd" | "transferSize" | "encodedBodySize" | "requestStart" | "responseStart" | "decodedBodySize" | "nextHopProtocol"
+  "name" | "startTime" | "responseEnd" | "transferSize" | "encodedBodySize" | "connectStart" | "connectEnd" | "requestStart" | "responseStart" | "decodedBodySize" | "nextHopProtocol"
 >;
 
 export interface ColdOpenPage {
@@ -147,23 +149,27 @@ function clickTime(at: number): number | undefined {
   return Number.isFinite(at) && at > 0 ? at : undefined;
 }
 
-function request(entry: Resource | undefined): ColdOpenRequest | undefined {
+function request(entry: Resource | undefined, since = 0): ColdOpenRequest | undefined {
   if (!entry) return undefined;
   return {
-    start: Math.round(entry.startTime),
-    end: Math.round(entry.responseEnd),
+    start: Math.round(entry.startTime - since),
+    end: Math.round(entry.responseEnd - since),
     transferSize: entry.transferSize,
     encodedBodySize: entry.encodedBodySize,
   };
 }
 
-function botsRequest(entry: Resource | undefined): ColdOpenBots | undefined {
-  const base = request(entry);
+/** Times count from `since`; a field the browser hides stays 0. */
+function botsRequest(entry: Resource | undefined, since = 0): ColdOpenBots | undefined {
+  const base = request(entry, since);
   if (!entry || !base) return undefined;
+  const at = (ms: number) => (ms ? Math.round(ms - since) : 0);
   return {
     ...base,
-    requestStart: Math.round(entry.requestStart),
-    responseStart: Math.round(entry.responseStart),
+    connectStart: at(entry.connectStart),
+    connectEnd: at(entry.connectEnd),
+    requestStart: at(entry.requestStart),
+    responseStart: at(entry.responseStart),
     decodedBodySize: entry.decodedBodySize,
     nextHopProtocol: entry.nextHopProtocol,
   };
@@ -211,7 +217,10 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     if (open.label === "warm") return { label: "warm", t0, chatPaint, ...meta };
     const { created, ...sse } = open.sse;
     const link = created === undefined ? undefined : { created, ...sse };
-    if (open.label === "resume") return { openId: open.id, label: "resume", hiddenMs: open.hiddenMs, ...open.marks, sse: link, chatPaint, ...meta };
+    if (open.label === "resume") {
+      const bots = page.resources().find((entry) => BOTS.test(entry.name) && entry.startTime >= open.since);
+      return { openId: open.id, label: "resume", hiddenMs: open.hiddenMs, ...open.marks, sse: link, bots: botsRequest(bots, open.since), chatPaint, ...meta };
+    }
     const paint = (name: string) => {
       const at = page.paints().find((entry) => entry.name === name)?.startTime;
       return at === undefined ? undefined : Math.round(at);
