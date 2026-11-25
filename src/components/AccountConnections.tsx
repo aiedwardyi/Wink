@@ -3,7 +3,7 @@ import { Ellipsis } from "lucide-react";
 import { api, useStore, type InstanceInfo } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
-import { signsInElsewhere } from "@/lib/devices-setup";
+import { engineSignInFlow } from "@/lib/devices-setup";
 import { afterFold } from "@/lib/fold-press";
 import { useI18n } from "@/lib/i18n";
 import { revealOnOpen } from "@/lib/reveal-on-open";
@@ -220,7 +220,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const folded = board?.engines.find((engine) => engine.base === base)?.duplicates ?? [];
   const shown = accounts.filter((account) => !folded.includes(account.instanceId));
   const login = accounts[0]!.install?.login;
-  const computerOnly = signsInElsewhere() && !login?.deviceArgs;
+  const { device, computerOnly } = engineSignInFlow(login, true);
   const mutate = async (path: string, body: object, sourceId?: string) => {
     if (busy) return;
     const signInIds = accounts.filter(signInPending).map((account) => account.instanceId);
@@ -244,9 +244,8 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const existing = state.instances.find((account) => account.instanceId === existingId);
   const existingName = board?.engines.flatMap((engine) => engine.accounts).find((account) => account.id === existingId)?.name
     ?? existing?.snapshot.account ?? existing?.displayName;
-  // deviceEnv marks a login that opens nothing on the PC (Claude, Gemini): only a window on that PC keeps the browser login.
   const add = addable && (computerOnly ? <span data-computer-only="">{t("connections.addOnComputer")}</span>
-    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) && (!login?.deviceEnv || signsInElsewhere()) })}
+    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device })}
       className={STRONG_BUTTON}>{t("accounts.add")}</button>);
   return (
     <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0">

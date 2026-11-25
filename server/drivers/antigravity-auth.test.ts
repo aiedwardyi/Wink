@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import * as auth from "./antigravity-auth.ts";
 import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 
 // Spied on below: a mark another process holds open cannot be removed.
@@ -532,5 +533,43 @@ describe("agy's code-flow sign-in log", () => {
     const env = home({ "acp-login-20261125_191430-29948.log": signedIn, "acp-server-20261125_200000-1.log": loggedOut });
     expect(readAntigravityAccount(env)).toBeUndefined();
     expect(readAntigravityLogSignIn(env)).toBe(false);
+  });
+});
+
+describe("Antigravity credential store", () => {
+  const homes: string[] = [];
+  afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
+  const phoneSignIn = (logName: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-store-"));
+    homes.push(dir);
+    const app = join(dir, ".gemini", "antigravity-cli");
+    mkdirSync(join(app, "log"), { recursive: true });
+    writeFileSync(join(app, "log", "acp-server-20261124_100000-1.log"), "I1124 10:00:00.0 1 server.go:1] Logging out current user\n");
+    writeFileSync(join(app, "log", logName), "I1125 19:30:42.0 1 server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=\n");
+    writeFileSync(join(app, "antigravity-oauth-token"), "{\"refresh_token\":\"fixture\"}");
+    return { HOME: dir };
+  };
+
+  it.each(["acp-login-20261125_193042-28260.log", "acp-paste-20261125_193042-1.log", "login-20261125_193042.log"])("reads a token-file sign-in and its email from %s", async (logName) => {
+    const store = auth.antigravityCredentialStore(phoneSignIn(logName), { probe: async () => false, forget: async () => false });
+    expect(await store.has()).toBe(true);
+    expect(store.account()).toBe("ed@example.com");
+  });
+
+  it("signs out of both the keyring and the token file", async () => {
+    const env = phoneSignIn("acp-login-20261125_193042-1.log");
+    let keyed = true;
+    const forget = vi.fn(async () => { keyed = false; return true; });
+    const store = auth.antigravityCredentialStore(env, { probe: async () => keyed, forget });
+    expect(await store.clear()).toBe(true);
+    expect(forget).toHaveBeenCalledOnce();
+    expect(existsSync(store.path)).toBe(false);
+    expect(await store.has()).toBe(false);
+  });
+
+  it("clears a token-file sign-in where the keyring can't be read", async () => {
+    const store = auth.antigravityCredentialStore(phoneSignIn("acp-login-20261125_193042-1.log"), { probe: async () => undefined, forget: async () => false });
+    expect(await store.clear()).toBe(true);
+    expect(await store.has()).toBeUndefined();
   });
 });

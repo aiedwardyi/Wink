@@ -1393,7 +1393,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
       expect(await registry.signOut("agy-acp")).toBe(true);
       expect(existsSync(flag)).toBe(false);
       expect((await registry.get("agy-acp")!.snapshot({ refresh: true })).authenticated).toBe(false);
-      await registry.startSignIn("agy-acp");
+      await registry.startSignIn("agy-acp", false, "pc:");
       await registry.logins.wait("agy-acp");
       expect(registry.logins.state("agy-acp")).toBe("complete");
       expect((await registry.get("agy-acp")!.snapshot({ refresh: true })).authenticated).toBe(true);
@@ -1432,7 +1432,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     try {
       await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
       expect((await registry.get("agy-old")!.snapshot()).authenticated).toBe(false);
-      await registry.startSignIn("agy-old");
+      await registry.startSignIn("agy-old", false, "pc:");
       await registry.logins.wait("agy-old");
       expect(registry.logins.state("agy-old")).toBe("complete");
       expect((await registry.get("agy-old")!.snapshot({ refresh: true })).authenticated).toBe(true);
@@ -1552,7 +1552,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
       expect(existsSync(keyring.entry)).toBe(true);
 
-      await registry.startSignIn("agy-other");
+      await registry.startSignIn("agy-other", false, "pc:");
       await registry.logins.wait("agy-other");
       const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-other")!;
       expect(row.loginError).toBe("update_offline");
@@ -1674,7 +1674,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
       expect(existsSync(keyring.entry)).toBe(true);
 
       writeFileSync(online, "");
-      await registry.startSignIn("agy-other");
+      await registry.startSignIn("agy-other", false, "pc:");
       await registry.logins.wait("agy-other");
       expect(registry.logins.state("agy-other")).toBe("complete");
       expect(await out).toBe(false);
@@ -1703,7 +1703,7 @@ else require("node:readline").createInterface({ input: process.stdin }).on("line
     const registry = new ProviderRegistry([AntigravityDriver]);
     try {
       await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
-      await registry.startSignIn("agy-old");
+      await registry.startSignIn("agy-old", false, "pc:");
       await registry.logins.wait("agy-old");
       const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-old")!;
       expect(row.loginState).toBe("failed");
@@ -3201,7 +3201,7 @@ require(${JSON.stringify(fake)});
             aliveAtKeyring = alive(standby.pid);
             return undefined as never;
           });
-          await registry.startSignIn(id).catch(() => {});
+          await registry.startSignIn(id, false, "pc:").catch(() => {});
           expect(login).toHaveBeenCalled();
         }
         expect(aliveAtKeyring).toBe(false);
@@ -3420,7 +3420,7 @@ require("node:readline").createInterface({ input: process.stdin }).once("line", 
     const registry = await load(home, fake);
     try {
       expect(await geminiShown(registry, "agy")).toBe(false);
-      const capture = await registry.startSignIn("agy", true);
+      const capture = await registry.startSignIn("agy", true, "pc:");
       expect(capture?.inputGeneration).toBeDefined();
       expect(registry.logins.submit("agy", capture!.inputGeneration!, "4/fake-code")).toBe(true);
       await registry.logins.wait("agy");
@@ -3448,7 +3448,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     const registry = await load(home, fake);
     try {
       writeFileSync(token, "{}");
-      await registry.startSignIn("agy");
+      await registry.startSignIn("agy", false, "pc:");
       await registry.logins.wait("agy");
       expect(registry.logins.state("agy")).toBe("complete");
       await registry.describeCached();

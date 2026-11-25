@@ -10,6 +10,8 @@ import { EngineRow as EngineRowView } from "./EnginesSettings";
 import { ProviderRegistry } from "../../server/harness/registry.ts";
 import { makeFakeDriver } from "../../server/testing/fake-driver.ts";
 import { BUILT_IN_DRIVERS } from "../../server/drivers/builtIn.ts";
+import { engineSignInFlow } from "@/lib/devices-setup";
+import { readFileSync } from "node:fs";
 
 function EngineRow(props: ComponentProps<typeof EngineRowView>) {
   return createElement(StoreProvider, null, createElement(EngineRowView, props));
@@ -416,6 +418,26 @@ describe("sign-in from a phone or another PC's window", () => {
     if (name !== "this PC") vi.stubGlobal("location", new URL("https://home.tail1234.ts.net/"));
   }
 
+  it.each(["phone", "PC window", "this PC"] as const)("decides Sign In and Add Account the same way on %s", (name) => {
+    surface(name);
+    const elsewhere = name !== "this PC";
+    for (const kind of ENGINES) {
+      const login = install(kind)!.login;
+      expect(engineSignInFlow(login), kind).toEqual({ device: elsewhere, computerOnly: false, deviceFlow: elsewhere || kind === "museAgent" });
+      expect(engineSignInFlow(login, true).device, kind).toBe(elsewhere || !login?.deviceEnv);
+      Object.assign(window, { ogb: { platform: "win32" } });
+      expect(engineSignInFlow(login, true).device, kind).toBe(false);
+      Object.assign(window, { ogb: undefined });
+    }
+  });
+
+  it("leaves the code-flow decision to engineSignInFlow in both sign-in surfaces", () => {
+    for (const name of ["EngineSetup.tsx", "AccountConnections.tsx"]) {
+      const source = readFileSync(new URL(`./${name}`, import.meta.url), "utf8");
+      expect(source, name).not.toMatch(/\bisPhone\(|deviceEnv|deviceArgs\.(?:length|every|join)/);
+    }
+  });
+
   it.each(ENGINES.flatMap((kind) => [["phone", kind], ["PC window", kind]] as const))("signs %s in with the code flow for %s", async (name, kind) => {
     surface(name);
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ url: "https://auth.example/sign-in", inputGeneration: 3 }));
@@ -454,5 +476,29 @@ describe("sign-in from a phone or another PC's window", () => {
     await render(createElement(EngineSignIn, { instance: instance("antigravityAgent", { install: install("antigravityAgent"), loginState: "pending", loginOpensBrowser: true, loginCapture: { url: "https://auth.example/browser" } }) }));
     expect(host.textContent).toContain("Cancel");
     expect([...host.querySelectorAll("button")].some((button) => button.textContent === "Sign In")).toBe(false);
+  });
+});
+
+describe("a sign-in started on another device or tab", () => {
+  const elsewhere = () => new Response(JSON.stringify({ error: "This sign-in was started on another device", code: "sign-in-elsewhere" }), { status: 403, headers: { "content-type": "application/json" } });
+
+  it.each(["Cancel", "code"] as const)("offers plain Sign In when its %s is refused, and that Sign In takes it over", async (action) => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => init?.method === "DELETE" || url.endsWith("/sign-in/code") ? elsewhere()
+      : json({ url: "https://auth.example/mine", inputGeneration: 4 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await render(createElement(EngineSignIn, { instance: instance("claudeAgent", { loginState: "pending", loginCapture: { url: "https://auth.example/theirs", inputGeneration: 3 } }) }));
+    if (action === "Cancel") await click("Cancel");
+    else {
+      const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
+      await act(async () => {
+        input.value = "their-code";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    }
+    expect(host.textContent).toBe("Sign In");
+    await click("Sign In");
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/instances/claudeAgent/sign-in", expect.objectContaining({ method: "POST" }));
+    expect(host.querySelector("a")?.href).toBe("https://auth.example/mine");
   });
 });

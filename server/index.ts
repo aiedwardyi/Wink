@@ -140,7 +140,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
-import { LoginBusyError, logSignInRefusal, signInOwner, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
+import { signInOwner } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -9611,51 +9611,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const install = registry.install(engineInstall[1]);
       return install ? json(res, 200, install) : json(res, 404, { error: "Unknown engine install" });
     }
-    const engineSignIn = /^\/api\/instances\/([^/]+)\/sign-in$/.exec(path);
-    if (engineSignIn) {
-      const id = engineSignIn[1];
-      const refuse = (status: number, error: string, code?: string) => {
-        logSignInRefusal(status, code);
-        return json(res, status, { error });
-      };
-      if (!isInstanceId(id)) return refuse(400, "Invalid instance id");
-      try {
-        if (method === "POST") {
-          if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-            return refuse(415, "content-type must be application/json");
-          }
-          const body = await readBody(req);
-          if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
-          const capture = await registry.startSignIn(id, body?.device === true, signInOwner(req.headers, phone?.id));
-          return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
-        }
-        if (method === "DELETE" && !registry.logins.owns(id, signInOwner(req.headers, phone?.id))) return refuse(403, SIGNED_IN_ELSEWHERE, "sign-in-elsewhere");
-        if (method === "DELETE") return await registry.cancelSignIn(id)
-          ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
-        if (method === "GET") {
-          const signIn = registry.signIn(id);
-          return signIn ? json(res, 200, signIn) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
-        }
-      } catch (error) {
-        const failure = requestError(error, () => {});
-        logSignInRefusal(failure.status, error instanceof LoginBusyError ? error.code : undefined);
-        return json(res, failure.status, failure.body);
-      }
-    }
-    const engineSignOut = /^\/api\/instances\/([^/]+)\/sign-out$/.exec(path);
-    if (engineSignOut && !isInstanceId(engineSignOut[1])) return json(res, 400, { error: "Invalid instance id" });
-    if (method === "POST" && engineSignOut) {
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
-      // Owner check and sign-out's cancel run in this one turn, so no newer sign-in can slip between them.
-      // A press while this instance's sign-out runs joins it: the pending job is that sign-out's own logout, and no sign-in can start meanwhile.
-      if (!registry.signingOutNow(engineSignOut[1]) && !registry.logins.owns(engineSignOut[1], signInOwner(req.headers, phone?.id))) return json(res, 403, { error: SIGNED_IN_ELSEWHERE, code: "sign-in-elsewhere" });
-      const signedOut = await registry.signOut(engineSignOut[1]);
-      return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
-        : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });
-    }
-
     if (method === "GET" && path === "/api/usage/board") {
       const board = await usageBoard.handle(url);
       return json(res, board.status, board.body);

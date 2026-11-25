@@ -69,6 +69,19 @@ function realHome(root: string) {
 const readIf = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : undefined);
 
 describe("antigravityHelperHome", () => {
+  it("signs note helpers in with a phone sign-in's token file, and drops it after sign-out", () => {
+    const home = scratch("token");
+    const data = scratch("token-data");
+    const token = join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+    mkdirSync(dirname(token), { recursive: true });
+    writeFileSync(token, "token-fixture");
+    const copy = join(antigravityHelperHome({ HOME: home }, data), ".gemini", "antigravity-cli", "antigravity-oauth-token");
+    expect(readFileSync(copy, "utf8")).toBe("token-fixture");
+    rmSync(token);
+    antigravityHelperHome({ HOME: home }, data);
+    expect(existsSync(copy)).toBe(false);
+  });
+
   it("holds only Wink's empty MCP config: no link, hard link or copy of the real ~/.gemini", () => {
     const root = scratch("shape");
     const { home, gemini } = realHome(root);

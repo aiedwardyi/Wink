@@ -82,7 +82,7 @@ async function fixture(empty = false, of = "claude") {
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: vi.fn(() => false) };
   const controller = createAccountRuntime(deps);
   controllers.push(controller);
-  const request = async (method: string, path: string, value: unknown = {}, owner?: string) => {
+  const request = async (method: string, path: string, value: unknown = {}, owner = "pc:") => {
     const req = Object.assign(Readable.from([JSON.stringify(value)]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
     let status = 0;
     let output = "";
@@ -151,7 +151,7 @@ describe("engine default account routing", () => {
     writeFileSync(script, `process.stdout.write("Paste code here if prompted > ");
       process.stdin.once("data", (code) => require("node:fs").writeFileSync(${JSON.stringify(received)}, code)); setInterval(() => {}, 1000);`);
     const phone = `phone:phone-1:${"a".repeat(32)}`;
-    const capture = await f.registry.logins.start(id, `"${process.execPath}" "${script}"`, [], {}, [], { scope: "claudeAgent", paste: true, owner: phone });
+    const capture = await f.registry.logins.start(id, `"${process.execPath}" "${script}"`, [], {}, [], { mode: "code", scope: "claudeAgent", paste: true, owner: phone });
     expect(capture.inputGeneration).toBe(f.registry.logins.generation(id));
     const cancel = vi.spyOn(f.registry, "cancelSignIn").mockImplementation(async (login) => { await f.registry.logins.cancel(login); return true; });
     const code = { generation: capture.inputGeneration, code: "other-session#state" };
@@ -180,7 +180,7 @@ describe("engine default account routing", () => {
     writeFileSync(script, `process.stdout.write("Visit: https://claude.com/cai/oauth/authorize?code=true\\nPaste code here if prompted > "); setInterval(() => {}, 1000);`);
     const tab = `phone:phone-1:${"a".repeat(32)}`;
     const otherTab = `phone:phone-1:${"b".repeat(32)}`;
-    const start = () => f.registry.logins.start(id, `"${process.execPath}" "${script}"`, [], {}, [], { scope: "claudeAgent", paste: true, owner: tab });
+    const start = () => f.registry.logins.start(id, `"${process.execPath}" "${script}"`, [], {}, [], { mode: "code", scope: "claudeAgent", paste: true, owner: tab });
     vi.spyOn(f.registry, "cancelSignIn").mockImplementation(async (login) => { await f.registry.logins.cancel(login); return true; });
     await start();
     for (const [method, path] of [["POST", `/api/accounts/${id}/sign-out`], ["DELETE", `/api/accounts/${id}`], ["POST", `/api/instances/${id}/sign-out`], ["DELETE", `/api/accounts/${id}/sign-in`]] as const) {
@@ -194,7 +194,7 @@ describe("engine default account routing", () => {
     const held = new Promise<void>((resolve) => { release = resolve; });
     vi.spyOn(f.registry, "startSignIn").mockImplementationOnce(async () => { await held; throw new Error("held"); });
     const queued = [vi.spyOn(f.controller, "cancel"), vi.spyOn(f.controller, "remove")];
-    const busy = f.controller.signIn(f.added[1].id).catch(() => {});
+    const busy = f.controller.signIn(f.added[1].id, false, "pc:").catch(() => {});
     await vi.waitFor(() => expect(f.registry.startSignIn).toHaveBeenCalled());
     const cancel = f.request("DELETE", `/api/accounts/${id}/sign-in`, {}, tab);
     const remove = f.request("DELETE", `/api/accounts/${id}`, {}, tab);
@@ -882,15 +882,15 @@ describe("account removal drain", () => {
     f.registry.blockAccount(destination, true);
     await controller.restore();
     expect(controller.busy).toBe(true);
-    await expect(controller.signIn(source)).rejects.toThrow("draining");
+    await expect(controller.signIn(source, false, "pc:")).rejects.toThrow("draining");
     const login = vi.spyOn(f.registry, "startSignIn").mockResolvedValue({});
     vi.spyOn(f.registry.logins, "wait").mockResolvedValue();
     vi.spyOn(f.registry.logins, "state").mockReturnValue("complete");
     snapshot.mockResolvedValue({ state: "available", authenticated: true, accountIdentity: "identity-2" });
-    await controller.signIn(destination);
+    await controller.signIn(destination, false, "pc:");
     await controller.settled(destination);
     await controller.resumeDrains();
-    expect(login).toHaveBeenCalledExactlyOnceWith(destination, false, undefined);
+    expect(login).toHaveBeenCalledExactlyOnceWith(destination, false, "pc:");
     expect(accounts.get(source)).toBeUndefined();
     expect(accounts.drains[source]).toBeUndefined();
     expect(controller.bots?.resolve(f.bot).instanceId).toBe(destination);
@@ -906,7 +906,7 @@ describe("account removal drain", () => {
     else f.panes.mockResolvedValue(Response.json({ count: kind === "pane" ? 1 : 0, unknown: kind === "unknown pane" ? 1 : 0, generations: {} }));
     f.registry.blockAccount(destination, true);
     const login = vi.spyOn(f.registry, "startSignIn");
-    await expect(f.controller.signIn(destination)).rejects.toThrow(kind === "unknown pane" ? /unknown/ : /active work/);
+    await expect(f.controller.signIn(destination, false, "pc:")).rejects.toThrow(kind === "unknown pane" ? /unknown/ : /active work/);
     expect(login).not.toHaveBeenCalled();
     f.providers.settled("destination-work");
   });
@@ -917,7 +917,7 @@ describe("account removal drain", () => {
     await f.accounts.drain(f.added[0].id, destination, phase);
     if (phase !== "signed-out") f.registry.blockAccount(destination, true);
     const login = vi.spyOn(f.registry, "startSignIn");
-    await expect(f.controller.signIn(destination)).rejects.toThrow("destination of a pending removal");
+    await expect(f.controller.signIn(destination, false, "pc:")).rejects.toThrow("destination of a pending removal");
     expect(login).not.toHaveBeenCalled();
   });
 

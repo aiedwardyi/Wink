@@ -8,6 +8,15 @@ export const onThisPc = () => ["localhost", "127.0.0.1", "[::1]"].includes(locat
 // A server render has no location, and renders as this PC.
 export const signsInElsewhere = () => !window.ogb && (isPhone() || (globalThis.location !== undefined && !onThisPc()));
 
+/** How this window signs an engine in, for Sign In and Add Account alike: the code flow when the CLI's browser would open out of reach, or when the engine has only that flow (Muse). */
+export function engineSignInFlow(login: { args: string[]; deviceArgs?: string[]; deviceEnv?: Record<string, string> } | undefined, adding = false) {
+  const elsewhere = signsInElsewhere();
+  const deviceOnly = Boolean(login?.deviceArgs && login.deviceArgs.join("\0") === login.args.join("\0"));
+  // An added account keeps the code flow in any browser, except where its browser login opens nothing on the PC (deviceEnv: Claude, Gemini).
+  const device = Boolean(login?.deviceArgs) && (adding ? !window.ogb && (!login?.deviceEnv || elsewhere) : elsewhere);
+  return { device, computerOnly: elsewhere && !login?.deviceArgs, deviceFlow: elsewhere || deviceOnly };
+}
+
 /** The sign-in site a relay browser signs out to; null in the desktop app and its PC windows, on the tailnet and on this PC. */
 export function relaySignInSite(): string | null {
   const pc = /^[a-z2-7]{16}\.(.+)$/.exec(location.hostname);

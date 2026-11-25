@@ -16,13 +16,11 @@ const nameSchema = z.object({ nickname: z.string().nullable() }).strict();
 
 export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: { names?: AccountNames; onNamesChanged?: () => void } = {}) {
   /** `owner` names the requesting session (signInOwner); only the session that started a sign-in may answer or cancel it. */
-  return async (req: IncomingMessage, res: ServerResponse, method: string, path: string, owner?: string): Promise<boolean> => {
+  return async (req: IncomingMessage, res: ServerResponse, method: string, path: string, owner: string): Promise<boolean> => {
     const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default|destination))?)?$/.exec(path);
     const nameRoute = deps.names && /^\/api\/accounts\/([^/]+)\/name$/.exec(path);
     const legacy = /^\/api\/instances\/([^/]+)\/(sign-in|sign-out)$/.exec(path);
-    const managed = legacy && (lifecycle.accounts.get(legacy[1]) || lifecycle.accounts.drains[legacy[1]] || lifecycle.accounts.snapshot.some((row) => row.of === legacy[1])
-      || (legacy[2] === "sign-in" && registry.accountBlocked(legacy[1])));
-    if (!route && !managed && !nameRoute) return false;
+    if (!route && !legacy && !nameRoute) return false;
     const id = nameRoute?.[1] ?? route?.[1] ?? legacy?.[1];
     const action = route?.[2] ?? legacy?.[2];
     const signIn = action === "sign-in" || action === "sign-in/code" || (!id && method === "POST");
@@ -87,7 +85,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       } else if (!id && method === "POST") {
         const parsed = addSchema.safeParse(await body(req));
         if (!parsed.success) throw new AccountError("An engine base id and optional device flag are required", 400);
-        json(res, 200, await lifecycle.add(parsed.data.of, parsed.data.device, owner));
+        json(res, 200, await lifecycle.add(parsed.data.of, parsed.data.device === true, owner));
       } else if (id && action === "default" && method === "POST") {
         json(res, 200, await lifecycle.useForBots(id).catch((error) => {
           console.warn(`accounts: Main switch to ${id} refused (${(error as { code?: string }).code ?? "error"}): ${error instanceof Error ? error.message : String(error)}`);
@@ -96,7 +94,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       } else if (id && action === "sign-in" && method === "POST") {
         const parsed = signInSchema.safeParse(await body(req));
         if (!parsed.success) throw new AccountError("device must be a boolean", 400);
-        json(res, 200, await lifecycle.signIn(id, parsed.data.device, owner));
+        json(res, 200, await lifecycle.signIn(id, parsed.data.device === true, owner));
       } else if (id && action === "sign-in" && method === "DELETE") {
         json(res, 200, await lifecycle.cancel(id, { owner, generation: registry.logins.generation(id) }));
       }

@@ -169,6 +169,12 @@ export class AccountService {
       ]);
   }
 
+  /** Any enabled engine signs in from its base; only ACCOUNT_DRIVERS also add accounts. */
+  isBase(id: string) {
+    const bases = this.bases();
+    return isInstanceId(id) && Object.hasOwn(bases, id) && bases[id].enabled !== false;
+  }
+
   add(of: string): Promise<AccountRecord> {
     return this.change(() => {
       const base = this.base(of);

@@ -53,6 +53,9 @@ const VERSION_PROBE_MS = 10_000;
 const PASTE_PROMPT = /^(?:Paste code here if prompted\s*>|Then paste the authorization code\b.*:)\s*$/;
 
 type LoginState = "pending" | "complete" | "failed" | "cancelled";
+export type SignInMode = "browser" | "code";
+type StartOptions = { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean }
+  & ({ mode: SignInMode; owner: string } | { mode: "sign-out"; owner?: never });
 interface LoginJob {
   scope: string;
   generation: number;
@@ -64,7 +67,7 @@ interface LoginJob {
   changed: Set<() => void>;
   acknowledged: boolean;
   pasteBack: boolean;
-  mode?: "browser" | "code";
+  mode: SignInMode | "sign-out";
   owner?: string;
   lastStderr?: string;
 }
@@ -119,25 +122,26 @@ export class EngineLogin {
     return true;
   }
 
-  needsRefresh(engine: string): boolean {
+  /** Whether a sign-in start from `owner` in `mode` joins this engine's waiting sign-in instead of replacing it. */
+  joins(engine: string, owner: string, mode: SignInMode): boolean {
     const job = this.jobs.get(engine);
-    return job?.state === "pending" || (job?.state === "complete" && !job.acknowledged);
+    return job?.state === "pending" && job.owner === owner && job.mode === mode;
   }
 
-  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean; owner?: string; mode?: "browser" | "code" } = {}): Promise<LoginCapture> {
+  /** The newest sign-in wins: a waiting one is joined only by its own session in its own mode; any other start ends it. A sign-out is never replaced. */
+  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: StartOptions): Promise<LoginCapture> {
     if (this.disposed) return {};
     let job = this.jobs.get(engine);
     const scope = options.scope ?? engine;
     const owner = this.scopes.get(scope);
-    // A code-flow start replaces a browser-mode sign-in instead of joining one it could never finish.
-    const stale = options.mode === "code" ? [job, owner].find((other) => other?.state === "pending" && other.mode === "browser") : undefined;
-    if (stale) {
-      stale.finish("cancelled");
-      await stale.done;
+    const waiting = [...new Set([job, owner])].filter((other): other is LoginJob => other?.state === "pending");
+    if (waiting.some((other) => other.mode === "sign-out" || (options.mode === "sign-out" && other !== job))) throw new LoginBusyError();
+    if (options.mode !== "sign-out" && !(job && this.joins(engine, options.owner, options.mode) && waiting.every((other) => other === job)) && waiting.length) {
+      for (const other of waiting) other.finish("cancelled");
+      await Promise.all(waiting.map((other) => other.done));
       return this.start(engine, cli, args, env, authHosts, options);
     }
     if (owner && owner !== job) {
-      if (owner.state === "pending") throw new LoginBusyError();
       await owner.done;
       if (this.scopes.get(scope) === owner) throw new LoginBusyError();
       return this.start(engine, cli, args, env, authHosts, options);
@@ -148,9 +152,8 @@ export class EngineLogin {
       return this.start(engine, cli, args, env, authHosts, options);
     }
     if (job?.state !== "pending") {
-      job = this.create(engine, scope);
+      job = this.create(engine, scope, options.mode);
       job.pasteBack = options.paste === true;
-      job.mode = options.mode;
       job.owner = options.owner;
       try {
         // A cold Windows sign-in can beat the status check that selects the usable Claude binary.
@@ -193,13 +196,8 @@ export class EngineLogin {
 
   waitExternal(engine: string): LoginCapture {
     if (this.disposed) return {};
-    if (this.state(engine) !== "pending") this.create(engine);
+    if (this.state(engine) !== "pending") this.create(engine, engine, "browser");
     return {};
-  }
-
-  complete(engine: string): void {
-    const job = this.jobs.get(engine);
-    if (job?.state === "pending") job.finish("complete");
   }
 
   acknowledge(engine: string, authenticated: boolean): void {
@@ -228,10 +226,10 @@ export class EngineLogin {
     this.scopes.clear();
   }
 
-  private create(engine: string, scope = engine): LoginJob {
+  private create(engine: string, scope: string, mode: LoginJob["mode"]): LoginJob {
     let closed!: () => void;
     const job: LoginJob = {
-      scope,
+      scope, mode,
       generation: ++this.nextGeneration,
       capture: {}, state: "pending", changed: new Set(), acknowledged: false, pasteBack: false,
       done: new Promise<void>((resolve) => { closed = resolve; }),
@@ -329,7 +327,8 @@ export class EngineLogin {
         resolve();
       };
       const check = () => {
-        if (job.state !== "pending" || (job.capture.url && (job.capture.code || job.capture.inputGeneration))) finish();
+        // A browser sign-in has nothing more to show once its link is out; a code sign-in waits for its code or paste prompt.
+        if (job.state !== "pending" || (job.capture.url && (job.capture.code || job.capture.inputGeneration || (job.mode === "browser" && !job.pasteBack)))) finish();
       };
       const timer = setTimeout(finish, this.captureMs);
       job.changed.add(check);

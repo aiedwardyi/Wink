@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { writeFileAtomic } from "../atomic.ts";
 import { DATA_DIR } from "../config.ts";
+import { antigravityCredentialStore } from "./antigravity-auth.ts";
 import { removeWorkspaceDir } from "../workspace.ts";
 
 const MCP_CONFIG = `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`;
 
-/** agy home for note helpers, all Wink's own: agy signs in from the OS keyring, so nothing of ~/.gemini is linked or copied in and a helper's writes stay here. */
+/** agy home for note helpers, all Wink's own: only agy's sign-in token file is copied in, so a helper's writes stay here. */
 export function antigravityHelperHome(env: Record<string, string | undefined>, dataDir = DATA_DIR): string {
   // Older helper homes junctioned the real ~/.gemini; a recursive rm under Electron would empty it.
   removeWorkspaceDir(join(dataDir, "agy-helper"));
@@ -24,5 +25,12 @@ export function antigravityHelperHome(env: Record<string, string | undefined>, d
     mkdirSync(dirname(config), { recursive: true, mode: 0o700 });
     writeFileAtomic(config, MCP_CONFIG, { mode: 0o600 });
   }
+  // A keyring sign-in needs nothing here; a phone sign-in lives in the token file, and a sign-out takes the copy too.
+  const token = antigravityCredentialStore(env);
+  const copy = antigravityCredentialStore({ HOME: home }).path;
+  if (token.hasFile()) {
+    mkdirSync(dirname(copy), { recursive: true, mode: 0o700 });
+    copyFileSync(token.path, copy);
+  } else rmSync(copy, { force: true });
   return home;
 }

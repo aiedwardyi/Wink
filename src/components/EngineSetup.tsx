@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Download, ExternalLink, LogIn, TerminalSquare } from "lucide-react";
 import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } from "@/state/store";
-import { signsInElsewhere } from "@/lib/devices-setup";
+import { engineSignInFlow, signsInElsewhere } from "@/lib/devices-setup";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
@@ -238,11 +238,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
   const generation = useRef(0);
   const cancelled = useRef(false);
   const [loginCode, setLoginCode] = useState("");
-  const elsewhere = signsInElsewhere();
-  const login = instance.install?.login;
-  const computerOnly = elsewhere && !login?.deviceArgs;
-  // Same argv both ways is a device-only flow (Muse): nothing opens on desktop either.
-  const deviceFlow = elsewhere || Boolean(login?.deviceArgs && login.deviceArgs.length === login.args.length && login.deviceArgs.every((arg, i) => arg === login.args[i]));
+  const { device, computerOnly, deviceFlow } = engineSignInFlow(instance.install?.login);
   const connected = accountReady(current);
   const path = `/api/instances/${encodeURIComponent(instance.instanceId)}/sign-in`;
 
@@ -287,7 +283,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setCapture({});
     let started = false;
     try {
-      const result = await api(path, { method: "POST", body: JSON.stringify({ device: elsewhere }) });
+      const result = await api(path, { method: "POST", body: JSON.stringify({ device }) });
       started = true;
       if (request !== generation.current) return;
       setCapture(result);
@@ -312,7 +308,10 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
       if (request !== generation.current) return;
       setWaiting(false);
       setCapture({});
-    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
+    } catch (error) {
+      // Another device's or tab's sign-in: this one can't answer it, but its own Sign In replaces it.
+      if (request === generation.current && !(error instanceof Error && "code" in error && error.code === "sign-in-elsewhere")) setFailed(DIDNT_FINISH);
+    }
     finally { if (request === generation.current) setBusy(false); }
   };
   const submitCode = async () => {
@@ -325,7 +324,16 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
         method: "POST", body: JSON.stringify({ code: loginCode, generation: capture.inputGeneration }),
       });
       if (request === generation.current) setLoginCode("");
-    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
+    } catch (error) {
+      if (request !== generation.current) return;
+      if (!(error instanceof Error && "code" in error && error.code === "sign-in-elsewhere")) setFailed(DIDNT_FINISH);
+      else {
+        cancelled.current = true;
+        setWaiting(false);
+        setCapture({});
+        setLoginCode("");
+      }
+    }
     finally { if (request === generation.current) setBusy(false); }
   };
   const loading = !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState;
