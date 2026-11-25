@@ -100,15 +100,16 @@ export function createUsageBoard(deps: Deps) {
       const changed = identities.has(row.id) && identities.get(row.id) !== identity;
       // Stored before accountChanged runs: its callbacks read the board again.
       identities.set(row.id, identity);
-      if (changed || identity === null) unpaid.delete(row.id);
       if (changed) {
         deps.rateLimits.delete(row.id);
+        unpaid.delete(row.id);
         deps.history.purge(row.id);
         reports.delete(row.id);
         for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === row.id) queue.splice(i, 1);
         seenReports.clear();
         deps.accountChanged?.(row.id, row.status?.authenticated !== false);
       }
+      if (identity === null) unpaid.delete(row.id);
     }
     const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation, identities.get(row.id), row.codexPromo]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
     if (signature !== accountSet) {
