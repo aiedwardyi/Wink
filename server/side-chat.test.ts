@@ -285,7 +285,7 @@ describe("dropOpener", () => {
     expect(dropOpener(line)).toBe(expected);
   });
 
-  it.each([["Sure, port 8080.", "Port 8080."], ["네, 8080이에요.", "8080이에요."]])("drops a filler opener from any answer: %s", async (said, line) => {
+  it.each([["Sure, port 8080.", "Port 8080."], ["네, 8080이에요.", "8080이에요."], ["notes.md says Tue Nov 24.", "notes.md says Tue Nov 24."]])("drops a filler opener from any answer: %s", async (said, line) => {
     const stub = stubFork();
     const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "what port?" });
     stub.emit({ type: "done", ok: true, text: said });

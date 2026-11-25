@@ -125,7 +125,7 @@ export async function sideIdle(): Promise<void> {
 /** A filler opener the model added anyway comes off; a line that is only filler stays. */
 export function dropOpener(line: string): string {
   const rest = line.replace(OPENER, "");
-  return rest ? rest[0]!.toUpperCase() + rest.slice(1) : line;
+  return rest && rest !== line ? rest[0]!.toUpperCase() + rest.slice(1) : line;
 }
 
 const handoff = (started: number, usage?: Usage): QuickResult => ({ route: "handoff", ...(usage ? { usage } : {}), ms: Date.now() - started });
