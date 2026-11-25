@@ -1,6 +1,6 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { dirname, join } from "node:path";
@@ -13,7 +13,8 @@ import {
 } from "./mailbox.ts";
 import { PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_PROMPT } from "./pane-wake.ts";
 import { waitForExit } from "./testing/cleanup.ts";
-import { removeTestData, testHome } from "./testing/test-home.ts";
+import { spawnTestNode } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FAKE_CLAUDE = join(ROOT, "server", "testing", "fake-claude-cli.ts");
@@ -77,9 +78,7 @@ async function transcript(threadId: string) {
 }
 
 beforeAll(async () => {
-  const scratch = testHome();
-  mkdirSync(scratch, { recursive: true });
-  home = mkdtempSync(join(scratch, "mailbox-"));
+  home = createFixtureHome("mailbox-");
   const data = join(home, "data");
   const userData = join(home, "server-user-data");
   mkdirSync(userData);
@@ -114,7 +113,7 @@ beforeAll(async () => {
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
   base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, [join(ROOT, "server", "index.ts")], {
+  child = spawnTestNode(process.execPath, [join(ROOT, "server", "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),

@@ -23,6 +23,7 @@ import { withSystemChanges } from "../turn-context.ts";
 import { CodexDriver } from "./codex.ts";
 import { retireAppServer } from "./codex-catalog.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
+import { AGENTS_IDENTITY, AGENTS_PROXY, expectAgentsBudget, listAgentsTools } from "../testing/agents-tools.ts";
 
 vi.mock("./warm-pool.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./warm-pool.ts")>();
@@ -553,7 +554,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     };
     const locked = { sandbox: "read-only", approvalPolicy: "untrusted", approvalsReviewer: "user" };
     expect(await policyOf("thread/start")).toEqual(locked);
-    expect(await policyOf("thread/resume", "codex-thread-9")).toEqual(locked);
+    expect(await policyOf("thread/resume", "codex-thread-1")).toEqual(locked);
     expect(instance.adapter.access!({ approval: "auto", readOnly: true })).toEqual({ edits: "off", commands: "off" });
   });
 
@@ -661,7 +662,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(recorder.events).toContainEqual(expect.objectContaining({ type: "item.completed", phase: "final_answer", text: messages.at(-1).text }));
   });
 
-  it.each(["0", "1"])("mounts peer-agent comms with catalog flag %s and private credentials", async (flag) => {
+  it.each(["", "0", "1"])("mounts peer-agent comms with catalog flag %s and private credentials", async (flag) => {
     vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
     await create();
     const dump = join(scratch, "agents.json");
@@ -695,7 +696,22 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.argv.join(" ")).not.toContain("peer-comms-secret");
     expect(seen.env.WINK_MCP_AGENTS_OMB_COMMS_TOKEN).toBe("peer-comms-secret");
     expect(instance.adapter.capabilities.agentsMcp).toBe(true);
-    expect(seen.env.WINK_MCP_AGENTS_OMB_WINK_TOOL_CATALOG).toBe(flag === "1" ? "1" : undefined);
+    expect(seen.env.WINK_MCP_AGENTS_OMB_WINK_TOOL_CATALOG).toBe(flag === "0" ? undefined : "1");
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps the Wink tool schemas Codex loads every call inside the budget", async () => {
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "");
+    await create();
+    const dump = join(scratch, "agents-budget.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-agents-budget", text: "hi", integrations: { agents: { command: process.execPath, args: [AGENTS_PROXY], env: AGENTS_IDENTITY } } });
+    await recorder.until((event) => event.type === "turn.completed");
+    const prefix = "WINK_MCP_AGENTS_";
+    // SAFETY: the fake app-server dumps its own process.env, whose values are strings
+    const env = JSON.parse(readFileSync(dump, "utf8")).env as Record<string, string>;
+    const tools = await listAgentsTools(Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith(prefix)).map(([key, value]) => [key.slice(prefix.length), value])));
+    expectAgentsBudget("Codex", tools, 17_500);
     vi.unstubAllEnvs();
   });
 
@@ -836,6 +852,44 @@ describe("CodexDriver turns (fake app-server)", () => {
     await instance.dispose();
     // no app-server outlives its instance: the stale one died at the first respawn, the idle one on dispose
     await Promise.all([warm, last].map((child) => (child.exitCode !== null || child.signalCode !== null ? undefined : once(child, "close"))));
+  });
+
+  it("never hands a reader turn the warm app-server a full-access turn left on the thread", async () => {
+    await create({ mode: "resume", fullAuto: true });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const dump = join(scratch, "reader-warm.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const turn = async (extra: Partial<SendTurnInput> = {}) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-reader-warm", text: "hi", ...extra });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+    expect(await turn()).toMatchObject({ ok: true });
+    expect(await turn({ resumeCursor: "codex-thread-1", readOnly: true })).toMatchObject({ ok: true });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(sentCalls(dump).map((call) => call.method)).toEqual(["initialize", "initialized", "config/read", "thread/start", "turn/start"]);
+  });
+
+  it("starts a fresh thread when the turn's access differs from the thread's, so a guest never keeps the owner's helper tools", async () => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "access-change.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    let n = 0;
+    // a new Wink thread each turn, so no warm app-server carries a thread over
+    const turn = async (extra: Partial<SendTurnInput> = {}) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: `t-access-${n++}`, text: "go", resumeFallback: { text: "history\n\ngo" }, ...extra });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      const calls = sentCalls(dump);
+      return { methods: calls.map((call) => call.method).filter((method) => method.startsWith("thread/")), input: calls.find((call) => call.method === "turn/start")?.params.input };
+    };
+    const guest = { readOnly: true as const, approval: "ask" as const };
+    const fresh = { methods: ["thread/start"], input: [{ type: "text", text: "history\n\ngo" }] };
+    // a cursor from before a restart may be an owner's thread
+    expect(await turn({ resumeCursor: "codex-thread-9", ...guest })).toEqual(fresh);
+    expect(await turn({ resumeCursor: "codex-thread-1", ...guest })).toEqual({ methods: ["thread/resume"], input: [{ type: "text", text: "go" }] });
+    // the owner gets a thread with its own tools back
+    expect(await turn({ resumeCursor: "codex-thread-1" })).toEqual(fresh);
+    expect(await turn({ resumeCursor: "codex-thread-1", ...guest })).toEqual(fresh);
+    expect(await turn({ resumeCursor: "codex-thread-9" })).toMatchObject({ methods: ["thread/resume"] });
   });
 
   it("ends a warm app-server on Stop, so the next turn spawns again", async () => {
@@ -1176,6 +1230,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     it.each([
       ["agents/update_task_state", {}],
       ["agents/list_bots", {}],
+      ["agents/web_read", {}],
+      ["agents/wake_me", {}],
       ["openmausbot_phone/read_screen", {}],
       ["computer/click", {}],
       ["computer/click", { computer: undefined, localComputer: { ...stdio, platform: "win32" } }],
@@ -1215,6 +1271,22 @@ describe("CodexDriver turns (fake app-server)", () => {
         expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "decline" });
       },
     );
+
+    // an Ask card for call_wink_tool would hide the real tool, and its Always allow would cover all 11
+    it.each([
+      ["ask", {}, undefined],
+      ["auto", {}, "1"],
+      ["auto", { readOnly: true }, undefined],
+    ] as const)("mounts the Wink tool catalog on a %s turn %o only where no card can name call_wink_tool", async (approval, extra, flag) => {
+      vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "");
+      await create();
+      const dump = join(scratch, "catalog.json");
+      process.env.FAKE_CODEX_DUMP = dump;
+      await instance.adapter.sendTurn({ threadId: "t-catalog", text: "go", approval, ...extra, integrations: { agents: stdio } });
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(JSON.parse(readFileSync(dump, "utf8")).env.WINK_MCP_AGENTS_OMB_WINK_TOOL_CATALOG).toBe(flag);
+      vi.unstubAllEnvs();
+    });
 
     it.each(["agents/generate_image", "agents/create_bot", "openmausbot_phone/tap", "browser/browser_click"])(
       "Auto still accepts %s with no card",

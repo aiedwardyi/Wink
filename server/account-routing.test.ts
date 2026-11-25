@@ -40,7 +40,7 @@ afterEach(async () => {
 async function fixture(empty = false, of = "claude") {
   const root = join(DATA_DIR, `routing-${++serial}`);
   mkdirSync(root, { recursive: true });
-  const bases: InstanceConfigMap = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" }, work: { driver: "claudeAgent", environment: { PROFILE: "work" } }, custom: { driver: "custom" } };
+  const bases: InstanceConfigMap = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" }, grok: { driver: "grokAgent" }, work: { driver: "claudeAgent", environment: { PROFILE: "work" } }, custom: { driver: "custom" } };
   const accounts = new AccountService(root, () => bases);
   const added = [];
   if (!empty) for (let i = 0; i < 3; i++) {
@@ -50,7 +50,7 @@ async function fixture(empty = false, of = "claude") {
   const active = new Set<string>();
   const helpers = new Set<string>();
   const generators = new Map<string, ReturnType<typeof vi.fn<() => Promise<string>>>>();
-  const fakeDrivers = ["claudeAgent", "codex", "custom"].map((kind) => {
+  const fakeDrivers = ["claudeAgent", "codex", "grokAgent", "custom"].map((kind) => {
     const fake = makeFakeDriver({ kind, effortLevels: ["low", "medium", "high"] }).driver;
     const create = fake.create;
     fake.create = async (input) => {
@@ -69,7 +69,7 @@ async function fixture(empty = false, of = "claude") {
   const configs = () => instanceConfigs({ instances: bases }, accounts.snapshot);
   await registry.load(configs());
   const providers = new ProviderReload(registry, new EventBus(() => {}), configs());
-  const store = new Store(() => ({ instanceId: of, model: of === "codex" ? "codex-1" : "claudeAgent-1", mode: "automatic" }));
+  const store = new Store(() => ({ instanceId: of, model: of === "codex" ? "codex-1" : of === "grok" ? "grokAgent-1" : "claudeAgent-1", mode: "automatic" }));
   store.bots.length = 0;
   store.groups.length = 0;
   const bot = store.createBot({ name: "Routing fixture" });
@@ -605,6 +605,16 @@ describe("account removal drain", () => {
     await f.registry.describe({ refresh: true });
     await f.controller.observe(main.id, { state: "unavailable", reason: "`codex` CLI not found", cliMissing: true });
     expect(f.resolve).toThrow(/^Codex isn't installed or isn't answering on this PC\.$/);
+  });
+
+  it("names Grok when a Grok Main's CLI is missing", async () => {
+    const f = await fixture(false, "grok");
+    const [main] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    f.registry.get("grok")!.snapshot = async () => ({ state: "unavailable", reason: "`grok` CLI not found", cliMissing: true });
+    await f.registry.describe({ refresh: true });
+    await f.controller.observe(main.id, { state: "unavailable", reason: "`grok` CLI not found", cliMissing: true });
+    expect(f.resolve).toThrow(/^Grok isn't installed or isn't answering on this PC\.$/);
   });
 
   it("keeps last-account sign-out available without changing portable selections", async () => {

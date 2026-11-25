@@ -1,6 +1,10 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { BUILT_IN_DRIVERS } from "../server/drivers/builtIn.ts";
+import { createFixtureHome } from "../server/testing/test-home.ts";
 import { trustedTerminalSender } from "./terminal-host.mjs";
 import * as terminal from "./terminal-launch.mjs";
 
@@ -241,5 +245,50 @@ describe("install terminal script", () => {
         expect(Buffer.from(args.at(-1), "base64").toString("utf16le")).toBe(terminal.buildInstallScript(descriptor, platform));
       } else expect(args.join(" ")).toContain("do script");
     }
+  });
+});
+
+// Each official installer's real target dir; they edit rc files but never the shell that ran them.
+const INSTALLERS = {
+  "https://claude.ai/install.sh": ["claude", ".local/bin"],
+  "https://chatgpt.com/codex/install.sh": ["codex", ".local/bin"],
+  "https://antigravity.google/cli/install.sh": ["agy", ".local/bin"],
+  "https://x.ai/cli/install.sh": ["grok", ".grok/bin"],
+  "https://dev.meta.ai/install.sh": ["muse", ".local/bin"],
+};
+const posixShells = process.platform === "win32"
+  ? [join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "usr", "bin", "bash.exe")]
+  : ["/bin/bash", "/bin/zsh"];
+const posixInstalls = BUILT_IN_DRIVERS.filter((driver) => driver.install?.command?.darwin)
+  .map((driver) => [driver.driverKind, { ...driver.install, command: driver.install.command.darwin, driverKind: driver.driverKind }]);
+
+describe.each(posixShells.filter((shell) => existsSync(shell)))("fresh Mac install in %s", (shell) => {
+  it.each(posixInstalls)("%s installs and signs in with no Node on PATH", (_kind, install) => {
+    const home = createFixtureHome("engine-install-home");
+    const bin = createFixtureHome("engine-install-bin");
+    const log = join(bin, "calls.txt");
+    for (const [url, [name, dir]] of Object.entries(INSTALLERS)) {
+      writeFileSync(join(bin, `${name}.installer`), `mkdir -p "$HOME/${dir}"\nprintf '#!/bin/sh\\necho "${name} $*" >> "$LOG"\\n' > "$HOME/${dir}/${name}"\nchmod +x "$HOME/${dir}/${name}"\n`);
+      writeFileSync(join(bin, `${name}.url`), url);
+    }
+    writeFileSync(join(bin, "curl"), `#!/bin/sh\nfor url; do :; done\necho "curl $url" >> "$LOG"\nfor known in "$STUBS"/*.url; do\n  [ "$(cat "$known")" = "$url" ] && exec cat "\${known%.url}.installer"\ndone\nexit 22\n`);
+    chmodSync(join(bin, "curl"), 0o755);
+    // Only the tools the installers use: a host with Node in /usr/bin must not leak it onto PATH.
+    const tools = createFixtureHome("engine-install-tools");
+    for (const tool of ["bash", "sh", "cat", "mkdir", "chmod"]) {
+      const found = ["/usr/bin", "/bin"].map((dir) => join(dir, tool)).find((file) => existsSync(file));
+      if (found) symlinkSync(found, join(tools, tool));
+    }
+    const system = process.platform === "win32" ? join(shell, "..") : tools;
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(path|home)$/i.test(key)));
+    const run = (script) => spawnSync(shell, ["-c", script], {
+      encoding: "utf8", timeout: 30000, windowsHide: true,
+      env: { ...env, PATH: `${bin}${process.platform === "win32" ? ";" : ":"}${system}`, HOME: home, LOG: log, STUBS: bin },
+    });
+    expect(run("command -v npm node").stdout).toBe("");
+    const result = run(terminal.buildInstallScript(install, "darwin"));
+    const [name] = INSTALLERS[install.command.match(/https:\/\/\S+/)?.[0]] ?? [];
+    const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split(/\r?\n/).map((line) => line.trim()) : [];
+    expect(calls, `${result.stdout}\n${result.stderr}`).toEqual([`curl ${install.command.match(/https:\/\/\S+/)?.[0]}`, `${name} ${install.signInCommand.split(" ").slice(1).join(" ")}`.trim()]);
   });
 });

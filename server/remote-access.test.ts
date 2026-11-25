@@ -253,6 +253,21 @@ describe("remote access", () => {
       expect(run.lines).toEqual(["Remote auto: Tailscale not found, remote off"]);
     });
 
+    it("finds the Mac app's own CLI when tailscale is not on PATH", async () => {
+      const app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+      const outputs: Record<string, string> = { "status --json": running, "serve status --json": "{}", [SERVE]: "" };
+      const calls: string[] = [];
+      const setups: RemoteSetup[] = [];
+      const exec = async (file: string, args: string[]) => {
+        calls.push([file, ...args].join(" "));
+        if (file !== app) throw new Error("spawn tailscale ENOENT");
+        return outputs[args.join(" ")] ?? "";
+      };
+      expect(await autoRemoteHost({}, PORT, exec, () => {}, "darwin", (setup) => setups.push(setup))).toBe(HOST);
+      expect(calls.slice(0, 3)).toEqual(["tailscale status --json", `${app} status --json`, `${app} serve status --json`]);
+      expect(setups.map((setup) => setup.state)).not.toContain("missing");
+    });
+
     it("skips detection when ORBIT_REMOTE_AUTO=0", async () => {
       const run = detect({ ORBIT_REMOTE_AUTO: "0" }, { "status --json": running, "serve status --json": "{}", [SERVE]: "" });
       expect(await run.host).toBeUndefined();

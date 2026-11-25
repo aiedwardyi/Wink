@@ -1,5 +1,6 @@
 // A shared bot group's runtime: what the answering bot is told about who
 // asked, and the one room entry each finished turn leaves for every viewer.
+import { lineWords } from "../replies.ts";
 import type { Message, Store } from "../store.ts";
 import { askById, settleAsk, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, committedRoomText, roomEntry, roomPeople } from "./db.ts";
@@ -12,7 +13,7 @@ export function askNote(askId: string | undefined, botName: string, riders: read
   const ask = askId ? askById(askId) : null;
   const asked = (ask ? [ask, ...riders] : []).flatMap((row) => roomEntry(row.roomId, row.entryId) ?? []);
   if (!asked.length) return `(Reply to the conversation above as ${JSON.stringify(botName)}.)`;
-  const lines = asked.map((entry) => `${JSON.stringify(entry.author.name)} asked you: ${JSON.stringify(entry.text)}`).join(". Then ");
+  const lines = asked.map((entry) => `${JSON.stringify(entry.author.name)} asked you: ${JSON.stringify(lineWords(entry, entry.text, true))}`).join(". Then ");
   return `(${lines}. Reply to them as ${JSON.stringify(botName)}.)`;
 }
 
@@ -20,7 +21,7 @@ export function askNote(askId: string | undefined, botName: string, riders: read
 export function laneAsk(askId: string): { asker: string; ask: string } | null {
   const ask = askById(askId);
   const entry = ask && roomEntry(ask.roomId, ask.entryId);
-  return entry ? { asker: entry.author.name, ask: entry.text } : null;
+  return entry ? { asker: entry.author.name, ask: lineWords(entry, entry.text, true) } : null;
 }
 
 /** `refusal` is what the bot says when someone read-only asks it to do more than read. */

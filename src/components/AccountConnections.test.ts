@@ -726,3 +726,15 @@ it("swaps the header slot between the computer-only label and Add Account, with 
   expect(slot()?.textContent).toBe("Add Account");
   expect(host.querySelector('[data-engine-row="claude"] [data-fold]')).toBeNull();
 });
+
+it("keeps the Claude section, Add Account and the added accounts after the base signs out, never Not Installed", async () => {
+  await render(3);
+  state.instances = state.instances.map((account) => account.instanceId === "claude" ? { ...account, accountMain: false, snapshot: { state: "available", authenticated: false } } : account);
+  await update();
+  const section = host.querySelector('[data-engine-row="claude"]')!;
+  expect(section.querySelector("[data-engine-head]")?.textContent).toContain("Claude");
+  expect([...section.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount)).toEqual(["claude", "account-1", "account-2"]);
+  expect(buttons("Add Account")).toHaveLength(1);
+  expect(section.querySelector('[data-connection-account="claude"]')!.textContent).toContain("Sign In");
+  expect(host.textContent).not.toMatch(/Not Installed|More Engines/);
+});

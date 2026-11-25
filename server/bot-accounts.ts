@@ -7,6 +7,7 @@ import type { ProviderRegistry } from "./harness/registry.ts";
 import { noteGenerator, type NoteLimits } from "./memory-pass.ts";
 import type { BotRecord, Store } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
+import { ENGINE_NAMES } from "./turn-context.ts";
 
 export const SIGNED_OUT = "This account is signed out. Sign in again, then send your message.";
 export const SIGN_IN_UNCONFIRMED = "This account's sign-in isn't confirmed yet.";
@@ -185,7 +186,7 @@ export class BotAccounts {
   private blocked(id: string) {
     const account = this.accounts.get(id);
     const of = account?.of ?? id;
-    if (this.registry.cliMissing(id) || this.registry.cliMissing(of)) return cliMissing(this.registry.get(of)?.driverKind === "codex" ? "Codex" : "Claude");
+    if (this.registry.cliMissing(id) || this.registry.cliMissing(of)) return cliMissing(ENGINE_NAMES.get(this.registry.get(of)?.driverKind ?? "") ?? "This engine");
     return account?.state === "ready" ? SIGN_IN_UNCONFIRMED : SIGNED_OUT;
   }
 

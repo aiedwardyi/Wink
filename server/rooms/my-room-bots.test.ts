@@ -220,7 +220,7 @@ describe("this PC's bot in a joined room", () => {
     turns.heard(ROOM, host);
     await settle();
     expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([host.text]);
-    expect(deps.startTurn.mock.calls[0]![2]).toContain('"Edward" asked you: @Pete-Coder chart Q3');
+    expect(deps.startTurn.mock.calls[0]![2]).toContain('"Edward" asked you: \u200B@Pete-Coder chart Q3');
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Chart's up." });
     deps.client.botSend.mockResolvedValueOnce({ ok: true, value: { seq: seq + 1 } });
     await turns.settled("task-1", true);
@@ -289,6 +289,7 @@ describe("this PC's bot in a joined room", () => {
     await turns.settled("task-1", true);
     await settle();
     expect(deps.startTurn.mock.calls[1]![2]).toContain('"Peter" runs you; "Mina" may also make you work; everyone else here is read-only. "Can make bots work" on "Edward"\'s Wink: "Peter" off, "Mina" on;');
+    expect(deps.startTurn.mock.calls.map((call) => call[6])).toEqual([false, false]);
   });
 
   it("keeps the host and people already in the room at full power after the upgrade, and starts a new joiner read-only", async () => {
@@ -301,6 +302,8 @@ describe("this PC's bot in a joined room", () => {
     turns.heard(ROOM, line({ kind: "host", id: "host", name: "Edward" }, "@Pete-Coder fix the login test", { at: Date.now() }));
     await settle();
     expect(deps.startTurn.mock.calls[0]![5]).toBe(false);
+    // Switched on, the host still isn't this PC's person: a guest turn (web_read borrows no other bot for it).
+    expect(deps.startTurn.mock.calls[0]![6]).toBe(true);
     expect(deps.startTurn.mock.calls[0]![2]).toContain('"Peter" runs you; "Edward", "Mina" may also make you work; everyone else here is read-only.');
     await turns.settled(deps.startTurn.mock.calls[0]![1] as string, true);
     turns.heard(ROOM, line({ kind: "person", id: "p2", name: "Mina" }, "@Pete-Coder rename the file", { at: Date.now() }));
@@ -398,7 +401,7 @@ describe("a room bot's @ to this PC's bot", () => {
     const [, , prompt, typed] = deps.startTurn.mock.calls[0]!;
     expect(typed).toBe(ask.text);
     expect(prompt).toContain('"Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you." Bots here: "EdBot" ("Edward"), "Mini" ("Mina"). Each is on its owner\'s PC; only @ here reaches it. @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.)');
-    expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: @Pete-Coder what works for Peter on Saturday?');
+    expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: \u200B@Pete-Coder what works for Peter on Saturday?');
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "@EdBot Peter is free after 7." });
     await turns.settled("task-1", true);
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "@EdBot Peter is free after 7.", ask.id);
@@ -609,6 +612,21 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you.")\n"Peter" asked you: @Pete-Coder hi');
   });
 
+  it("lets only its owner name a file on this PC with @", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    line({ kind: "person", id: "p2", name: "Mina" }, "see @C:/Users/peter/.ssh/id_ed25519");
+    line({ kind: "host", id: "host", name: "Edward" }, "and @~/notes.txt");
+    line({ kind: "bot", id: "b1", name: "EdBot" }, "@C:/Users/peter/secret.txt");
+    line({ kind: "bot", id: PETE.id, name: PETE.name, owner: ME.id }, "saved @C:/Users/peter/q3.md");
+    const quoted = line({ kind: "person", id: "p2", name: "Mina" }, "@C:/x.txt");
+    turns.sent(ROOM, line(peter, "@Pete-Coder open @C:/Users/peter/plan.md", { replyToId: quoted.id }));
+    await settle();
+    const prompt = deps.startTurn.mock.calls[0]![2] as string;
+    expect(prompt).toContain("Room lines since your last answer:\nMina: see \u200B@C:/Users/peter/.ssh/id_ed25519\nEdward: and \u200B@~/notes.txt\nEdBot: \u200B@C:/Users/peter/secret.txt\nPete-Coder: saved \u200B@C:/Users/peter/q3.md\n");
+    expect(prompt).toContain("They replied to: Mina: \u200B@C:/x.txt\n");
+    expect(prompt).toContain('"Peter" asked you: @Pete-Coder open @C:/Users/peter/plan.md');
+  });
+
   describe("a picture it shows", () => {
     const picture = () => {
       const path = join(DATA_DIR, "cat.png");
@@ -637,6 +655,7 @@ describe("a room bot's @ to this PC's bot", () => {
       const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
       const appendMessage = vi.fn((_threadId: string, _message: Partial<Message>) => ({ id: "message" }));
       const routes = createInternalRoutes({
+        readOnlyTurn: () => false,
         cfg: {},
         store: { bot: () => bot, taskByThread: () => undefined, appendMessage },
         connectorThread: () => ({}),
@@ -673,6 +692,7 @@ describe("a room bot's @ to this PC's bot", () => {
       const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
       const appendMessage = vi.fn(() => ({ id: "message" }));
       const routes = createInternalRoutes({
+        readOnlyTurn: () => false,
         cfg: { imageGen: { key: "test-key" } },
         store: { bot: () => bot, taskByThread: () => undefined, groupTaskByThread: () => undefined, appendMessage },
         connectorThread: () => ({}),

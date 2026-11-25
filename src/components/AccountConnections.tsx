@@ -216,6 +216,9 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       && signInPending(account))) setError(null);
   }, [accounts, error]);
   const drag = useUsageDrag([{ base, accounts: accounts.map((account) => ({ id: account.instanceId })) }]);
+  // Usage shows one row per sign-in; the base signed in as an added account folds into that account's row here too.
+  const folded = board?.engines.find((engine) => engine.base === base)?.duplicates ?? [];
+  const shown = accounts.filter((account) => !folded.includes(account.instanceId));
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
   const mutate = async (path: string, body: object, sourceId?: string) => {
@@ -250,12 +253,12 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       <ConnectionRow mark={<ProviderBrandMark driverKind={accounts[0]!.driverKind} size={16} />}
         label={<span className="min-w-0 truncate text-[14px] font-semibold text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined} />
       <AccountGroup label={accounts[0]!.displayName} terminal={terminal}>
-        {ordered(accounts, drag.orders[base], (account) => account.instanceId).map((account) => {
+        {ordered(shown, drag.orders[base], (account) => account.instanceId).map((account) => {
           const drain = account.drain;
           const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
           const hasDestination = accounts.some((other) => other !== account && accountReady(other));
           return (
-            <ConnectionAccount key={account.instanceId} reorder={accounts.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
+            <ConnectionAccount key={account.instanceId} reorder={shown.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
               named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
               reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
           );

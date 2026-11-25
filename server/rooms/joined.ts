@@ -275,6 +275,15 @@ export function setJoinedDeletedCount(roomId: string, count: number): void {
   db().prepare("INSERT OR REPLACE INTO deleted_counts (room_id, count) VALUES (?, ?)").run(roomId, count);
 }
 
+/** The host's PC answered this room and key under another relay name, so every later call and a rejoin go there. */
+export function moveJoined(roomId: string, key: string, relayHost: string): void {
+  transaction((database) => {
+    const moved = database.prepare("UPDATE joined SET relay_host = ? WHERE room_id = ? AND key = ? AND status = 'joined'").run(relayHost, roomId, key).changes > 0;
+    const code = moved ? joinedCode(roomId) : null;
+    if (code) saveJoinedCode(roomId, code.replace(/^wkr1:[^:]+/, () => `wkr1:${relayHost}`));
+  });
+}
+
 /** Only the guest client reads this. */
 export function joinedKey(roomId: string): { relayHost: string; key: string } | null {
   const row = db().prepare("SELECT relay_host, key FROM joined WHERE room_id = ? AND status = 'joined' AND key IS NOT NULL").get(roomId) as

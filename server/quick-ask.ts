@@ -226,39 +226,57 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
   }
 }
 
+// the last run's index, read once per store: this run's sends rewrite the file before the boot reads take their list
+const lastRun = new WeakMap<object, Array<{ botId: string; threadId: string }>>();
+
 /** The open chats plus the threads of asks still running at shutdown; no other thread can hold a recovered ask. */
 export function quickAskThreads(store: Pick<Store, "bots" | "taskByThread">): Map<string, string> {
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
-  for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
+  if (!lastRun.has(store)) lastRun.set(store, savedThreads());
+  for (const { botId, threadId } of lastRun.get(store)!) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   return threads;
 }
 
+type RecoveryStore = AskStore & Pick<Store, "bots" | "taskByThread" | "activePathBack" | "loaded" | "messagesFor">;
+type FoundAsk = { id: string; at: number };
+
 const recovering = new Map<string, Promise<void>>();
+// the chats the boot reads have not recovered yet, each with its bot
+const unrecovered = new Map<string, string>();
+let recoverNow: ((threadId: string, botId: string) => Promise<void>) | undefined;
 
-/** A send to this chat waits here first, so a recovered ask still queues ahead of it. */
-export const quickAskRecovery = (threadId: string): Promise<void> | undefined => recovering.get(threadId);
+/** A send to this chat waits here first, so a recovered ask still queues ahead of it; before the boot reads land, it recovers this chat alone. */
+export function quickAskRecovery(threadId: string): Promise<void> | undefined {
+  const botId = unrecovered.get(threadId);
+  if (botId !== undefined && recoverNow) {
+    unrecovered.delete(threadId);
+    const done: Promise<void> = recoverNow(threadId, botId).finally(() => {
+      if (recovering.get(threadId) === done) recovering.delete(threadId);
+    });
+    recovering.set(threadId, done);
+  }
+  return recovering.get(threadId);
+}
 
-/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. `asks` come from boot-reads.ts. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "taskByThread" | "activePathBack">, asks: Promise<Array<{ threadId: string; id: string; at: number }>>): Promise<void> {
+/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. `asks` come from boot-reads.ts; with `onDemand`, a send that comes first reads its own chat's asks and drains them. */
+export function recoverQuickAsks(store: RecoveryStore, asks: Promise<Array<FoundAsk & { threadId: string }>>, onDemand?: { read: (threadId: string) => Promise<FoundAsk[]>; drain: () => void }): Promise<void> {
   const threads = quickAskThreads(store);
+  for (const [threadId, botId] of threads) unrecovered.set(threadId, botId);
+  recoverNow = onDemand && (async (threadId, botId) => {
+    let found: FoundAsk[] | undefined;
+    try {
+      if (!store.loaded(threadId)) found = await onDemand.read(threadId);
+    } catch (error) {
+      console.error("cold quick ask read failed; the store answers", threadId, error);
+    }
+    if (!recoverThread(store, botId, threadId, found ?? loadedAsks(store, threadId))) return;
+    saveRunning();
+    onDemand.drain();
+  });
   const done = asks.then((found) => {
     for (const [threadId, botId] of threads) {
-      const ids = new Map(found.filter((ask) => ask.threadId === threadId).map((ask) => [ask.id, ask.at]));
-      if (!ids.size) continue;
-      const path: Message[] = [];
-      // newest first by key, and only until every ask is seen: timestamps need not fall along the path
-      let left = ids.size;
-      // an answer that landed after the boot read sits newer on the path than its ask, so the walk meets it first
-      const answered = new Set<string>();
-      for (const row of store.activePathBack(threadId)) {
-        if (row.role === "bot" && row.quick?.askId) answered.add(row.quick.askId);
-        if (ids.has(row.id)) {
-          left--;
-          if (row.quick?.state === "asked" && !answered.has(row.id)) path.push(row);
-        }
-        if (!left) break;
-      }
-      for (const ask of path.toReversed()) queueAsk(store, botId, threadId, ask);
+      // a send already recovered it
+      if (unrecovered.delete(threadId)) recoverThread(store, botId, threadId, found.filter((ask) => ask.threadId === threadId));
     }
     saveRunning();
   }).finally(() => {
@@ -266,6 +284,34 @@ export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "taskByT
   });
   for (const threadId of threads.keys()) recovering.set(threadId, done);
   return done;
+}
+
+/** quickAsksOn's rows from a chat already in memory: an asked user line no bot line answers. */
+function loadedAsks(store: Pick<Store, "messagesFor">, threadId: string): FoundAsk[] {
+  const rows = store.messagesFor(threadId);
+  const answered = new Set(rows.flatMap((row) => (row.role === "bot" && row.kind === "text" && row.quick?.askId ? [row.quick.askId] : [])));
+  return rows.filter((row) => row.role === "user" && row.kind === "text" && row.quick?.state === "asked" && !answered.has(row.id));
+}
+
+/** Queues the found asks still open on the chat's path, oldest first; returns how many. */
+function recoverThread(store: RecoveryStore, botId: string, threadId: string, found: FoundAsk[]): number {
+  const ids = new Map(found.map((ask) => [ask.id, ask.at]));
+  if (!ids.size) return 0;
+  const path: Message[] = [];
+  // newest first by key, and only until every ask is seen: timestamps need not fall along the path
+  let left = ids.size;
+  // an answer that landed after the boot read sits newer on the path than its ask, so the walk meets it first
+  const answered = new Set<string>();
+  for (const row of store.activePathBack(threadId)) {
+    if (row.role === "bot" && row.quick?.askId) answered.add(row.quick.askId);
+    if (ids.has(row.id)) {
+      left--;
+      if (row.quick?.state === "asked" && !answered.has(row.id)) path.push(row);
+    }
+    if (!left) break;
+  }
+  for (const ask of path.toReversed()) queueAsk(store, botId, threadId, ask);
+  return path.length;
 }
 
 type HelperDeps = Omit<QuickDeps, "handoff" | "drain">;

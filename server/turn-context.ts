@@ -10,7 +10,7 @@ export interface ReplayMessage {
 }
 
 // Voice-call provenance is not a chat engine switch.
-const REPLAY_ENGINE_NAMES = new Map([
+export const ENGINE_NAMES = new Map([
   ["claudeAgent", "Claude"],
   ["codex", "Codex"],
   ["antigravityAgent", "Gemini"],
@@ -19,7 +19,7 @@ const REPLAY_ENGINE_NAMES = new Map([
 ]);
 
 export function replayEngineTag(engine?: string, driverKind?: string, model?: string): string {
-  const name = engine && REPLAY_ENGINE_NAMES.get(engine);
+  const name = engine && ENGINE_NAMES.get(engine);
   // Box selects its engine by model; its driver kind only names the runner.
   const currentEngine = driverKind === "boxAgent" ? (model?.startsWith("gpt") ? "codex" : "claudeAgent") : driverKind;
   return name && currentEngine && engine !== currentEngine ? ` (on ${name})` : "";

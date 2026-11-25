@@ -102,6 +102,21 @@ describe("augmentedPath", () => {
     expect(stdout.trim()).toBe("found-me");
   });
 
+  posixIt("finds every native installer's CLI installed after launch", async () => {
+    resetPathCacheForTests();
+    augmentedPath();
+    // Names no host has installed, so a CLI already on this machine's PATH cannot be the first hit.
+    const installs = [["wink-late-claude", ".local"], ["wink-late-codex", ".local"], ["wink-late-agy", ".local"], ["wink-late-muse", ".local"], ["wink-late-grok", ".grok"]] as const;
+    const files = installs.map(([name, dir]) => join(testHome(), dir, "bin", name));
+    for (const file of files) {
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file, "#!/bin/sh\n");
+      chmodSync(file, 0o755);
+    }
+    await paths.refreshPathCache(installs.map(([name]) => name));
+    expect(installs.map(([name]) => paths.findCliCandidates(name)[0])).toEqual(files);
+  });
+
   posixIt("keeps the last login-shell PATH available during a rescan", async () => {
     const shell = join(testHome(), "fake-login-shell");
     const rcOnlyBin = join(testHome(), "rc-only", "bin");

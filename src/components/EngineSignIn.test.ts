@@ -301,6 +301,20 @@ describe("engine sign-in row", () => {
     expect(host.textContent).not.toContain(capture.code);
   });
 
+  it.each([
+    ["update_offline", "Gemini needs an update to sign in, and there's no internet connection. Connect and try again."],
+    ["update_failed", "Gemini needs an update to sign in, and it didn't install. Let running Gemini chats finish, then try again."],
+  ])("says in plain words why Gemini on an old agy could not sign in (%s)", async (loginError, words) => {
+    const row = instance("antigravityAgent");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => json(url === "/api/instances" ? { instances: [{ ...row, loginState: "failed", loginError }] } : {})));
+    await render(createElement(EngineSignIn, { instance: row }));
+    await click("Sign In");
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(host.textContent).toContain(words);
+    expect(host.textContent).not.toContain("Didn't finish");
+    expect(host.textContent).toContain("Sign In");
+  });
+
   it("shows why sign-in could not start and leaves the other sign-in running", async () => {
     const reasons = [
       ["login-busy", "Finish or cancel the other sign-in first.", "다른 로그인을 먼저 끝내거나 취소하세요."],
@@ -363,7 +377,7 @@ describe("engine sign-in row", () => {
     const row = instance("codex", { snapshot: { state: "available", authenticated: true } });
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/sign-out")) signedOut = true;
-      return json(url.startsWith("/api/instances?") ? { instances: [{ ...row, snapshot: { state: "available", authenticated: !signedOut } }] } : {});
+      return json(/^\/api\/instances(\?|$)/.test(url) ? { instances: [{ ...row, snapshot: { state: "available", authenticated: !signedOut } }] } : {});
     });
     vi.stubGlobal("fetch", fetchMock);
     await render(createElement(EngineRow, { instance: row }));

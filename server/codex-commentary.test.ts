@@ -16,7 +16,6 @@ import { AntigravityDriver } from "./drivers/antigravity.ts";
 import { ClaudeDriver } from "./drivers/claude.ts";
 import { CodexDriver } from "./drivers/codex.ts";
 import { MspMuseAgentDriver } from "./drivers/msp/muse.ts";
-import { takeImportOffer } from "./memory-import-offer.ts";
 import { takePeerReplyStamp, watchPeerTurn } from "./peer-takeover.ts";
 import { persistPeerUserReply } from "./peer-user-reply.ts";
 import { ENGINE_SUMMARY_PREFIX } from "./replies.ts";
@@ -72,7 +71,7 @@ function chat(threadId: string) {
     Object.assign(messages.find((message) => message.id === id)!, patch);
   };
   const deps: Record<string, unknown> = {
-    turnSummaries, takePeerReplyStamp, takeImportOffer, isVoiceLine, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(), askTexts: { text() {} }, turnOwnerId: undefined,
+    turnSummaries, takePeerReplyStamp, isVoiceLine, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(), askTexts: { text() {} }, turnOwnerId: undefined,
     store: {
       messagesFor: () => messages,
       findLast: (_threadId: string, predicate: (message: Message) => boolean) => messages.findLast(predicate),

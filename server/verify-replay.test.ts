@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 
-import { chunk, decodeChunks } from "../electron/verify-replay.mjs";
+import { chunk, decodeChunks, REPLAY_LIMIT } from "../electron/verify-replay.mjs";
 import { createReplay, listReplays, pruneReplays } from "./verify-replay.ts";
 
 const head = { v: 1, runId: "run-123456", site: "site/index.html", page: "index.html", startedAt: Date.now(), tiles: { desktop: [1280, 720], phone: [392, 800] } };
@@ -23,7 +23,7 @@ it("ships an encoded fixture with both JPEG tiles and a boxed problem", async ()
   expect(rows.some(row => row.value.kind === "checks")).toBe(true);
 });
 
-it("thins under 3 MiB, preserving post-scroll and last frames and all marks", () => {
+it("thins under the replay cap, preserving post-scroll and last frames and all marks", () => {
   const replay = createReplay(head);
   replay.add(chunk(2, { kind: "scroll", tile: "desktop", y: 200, ms: 1 }));
   replay.add(frame(2));
@@ -31,13 +31,43 @@ it("thins under 3 MiB, preserving post-scroll and last frames and all marks", ()
   replay.add(frame(100, "phone"));
   replay.finish(end);
   const bytes = replay.file(), rows: any[] = [], decoder = decodeChunks(row => rows.push(row));
-  expect(bytes.length).toBeLessThanOrEqual(3 * 1024 * 1024);
+  expect(bytes.length).toBeLessThanOrEqual(REPLAY_LIMIT);
   expect(bytes.subarray(0, 4).toString()).toBe("LVR1");
   decoder.push(bytes.subarray(4)); decoder.end();
   expect(rows.filter(r => r.kind === 1).length).toBeLessThan(99);
   expect(rows.filter(r => r.kind === 1).map(r => r.ms)).toEqual(expect.arrayContaining([2, 99, 100]));
   expect(rows.filter(r => r.kind === 2)).toHaveLength(1);
   expect(rows.at(-1)).toMatchObject({ kind: 3, ...end });
+});
+
+it("keeps every top picture, scroll-stop picture and check batch of a 4 MB sharp run", () => {
+  const replay = createReplay(head), keep = { desktop: new Set<number>(), phone: new Set<number>() };
+  let ms = 1, batches = 0, input = 0;
+  const add = (bytes: Buffer) => { input += bytes.length; replay.add(bytes); };
+  const run = (tile: "desktop" | "phone", stops: number, casts: number, size: number) => {
+    const top = ms++;
+    add(frame(top, tile, size)); keep[tile].add(top);
+    for (let i = 0; i < stops; i++) {
+      add(chunk(2, { kind: "scroll", tile, y: (i + 1) * 500, ms: ms++ }));
+      const shot = ms++;
+      add(frame(shot, tile, size)); keep[tile].add(shot);
+      for (let c = 0; c < casts; c++) add(frame(ms++, tile, size));
+      for (let b = 0; b < 12; b++, batches++) add(chunk(2, { kind: "checks", ms: ms++, text: "x".repeat(1000) }));
+    }
+  };
+  run("desktop", 9, 2, 80_000);
+  run("phone", 17, 1, 50_000);
+  expect(input).toBeGreaterThan(3.5 * 1024 * 1024);
+  replay.finish(end);
+  const file = replay.file(), rows: any[] = [], decoder = decodeChunks(row => rows.push(row));
+  decoder.push(file.subarray(4)); decoder.end();
+  expect(file.length).toBeLessThanOrEqual(REPLAY_LIMIT);
+  for (const tile of ["desktop", "phone"] as const) {
+    const kept = new Set(rows.filter(r => r.kind === 1 && r.tile === tile).map(r => r.ms));
+    expect([...keep[tile]].filter(at => !kept.has(at))).toEqual([]);
+  }
+  expect(rows.filter(r => r.kind === 2 && r.value.kind === "checks")).toHaveLength(batches);
+  expect(rows.filter(r => r.kind === 2 && r.value.kind === "scroll")).toHaveLength(26);
 });
 
 it("late live subscribers get head, latest tile frames, marks and end", () => {
@@ -61,7 +91,7 @@ it("makes room for marks by thinning frames before dropping a mark", () => {
   replay.add(chunk(2, { kind: "hold", text: "x".repeat(180_000), ms: 50 }));
   replay.finish(end);
   const rows: any[] = [], decoder = decodeChunks(row => rows.push(row)); decoder.push(replay.file().subarray(4)); decoder.end();
-  expect(replay.file().length).toBeLessThanOrEqual(3 * 1024 * 1024);
+  expect(replay.file().length).toBeLessThanOrEqual(REPLAY_LIMIT);
   expect(rows.some(row => row.kind === 2 && row.value.text.length === 180_000)).toBe(true);
 });
 

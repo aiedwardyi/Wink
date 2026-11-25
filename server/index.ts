@@ -16,6 +16,7 @@ import {
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
 import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
+import { WEB_READ_ROUTE, WEB_READ_RULE } from "../shared/web-read.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
@@ -186,7 +187,7 @@ import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.t
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, coldLoad, coldLoading, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldLoading, coldQuickAsks, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -203,12 +204,12 @@ import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
 import { lastMessageAt } from "./message-db.ts";
 import "./turn-index.ts";
-import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { botRoute, CommsCallers } from "./comms-caller.ts";
+import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
@@ -279,9 +280,10 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { sweepDroppedAsks } from "./task-dropped.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import {
@@ -330,6 +332,7 @@ import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
   ensureWorkspace,
+  goalsOf,
   workspaceDir,
   memoryHealth,
   memorySystemPrompt,
@@ -339,12 +342,13 @@ import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save
 import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote, noteImportOffer, noteOfferTurn, takeImportOffer } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
+import { goalRoute } from "./goal-route.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
-import { createMemoryLookup } from "./memory-lookup.ts";
+import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
-import { createUnlandedWork } from "./unlanded.ts";
-import { createAskPrs } from "./ask-prs.ts";
+import { createUnlandedWork, reportNotes } from "./unlanded.ts";
+import { closedAskLine, createAskPrs, createKnownRepos, remoteRepo, reposIn, withClosed } from "./ask-prs.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -423,6 +427,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
+  restoreSyncedAvatar,
   readSyncOperationsFor,
   syncAvatarMatches,
   saveProfileSyncSettings,
@@ -477,6 +482,7 @@ import { memberTurnSelection } from "./member-turn.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
 import { createPlaybookGate, harnessPlaybookPrompt, modelPicksPrompt } from "./harness-playbook.ts";
+import { createRevertIndex } from "./revert-index.ts";
 import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import "./package-export.ts";
@@ -487,6 +493,7 @@ import { createGroupRoutes, roomSetupPending } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
 import { createVerifyAuto } from "./verify-auto.ts";
+import { createWebReader, webReadRoute } from "./web-read.ts";
 import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { keepErrorReports, reportServerFailure, turnOffErrorReports } from "./error-reports.ts";
@@ -693,8 +700,7 @@ googleAccount.onIdToken(googlePhotoChanged);
  * but the compare costs nothing to make safe. */
 const commsCallers = new CommsCallers();
 function authorizedComms(header: string | string[] | undefined, path: string): boolean {
-  const caller = commsCallers.resolve(header);
-  return caller ? botRoute(path, caller.botId) : bootToken(header);
+  return commsCallers.allows(header, path, bootToken);
 }
 function bootToken(header: string | string[] | undefined): boolean {
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
@@ -818,7 +824,7 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation; reader?: boolean },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
@@ -840,6 +846,7 @@ function askBotAndWait(
       ...peerAttribution(peer?.sender, peer?.channel),
       onDispatchError,
       commsAsk: true,
+      ...(peer?.reader ? { webReader: true } : {}),
     }).then(() => undefined),
     adopt: () => {
       if (!peer || !store.bot(targetBotId)?.busy) return undefined;
@@ -1351,6 +1358,12 @@ const wireTask = ({
 }: TaskRecord) => ({ ...task, taskState: store.taskPacket(task.threadId) ?? undefined });
 
 const KEEP_GOING_PAUSED_LINE = "Agentic Mode paused: two tries made no progress";
+async function botLivePanes(botId: string) {
+  const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
+  return counts.status === 200 && "counts" in counts.body ? counts.body.counts[botId] ?? 0 : null;
+}
+const workerEngineSignedIn = () => registry.describeSaved().some((row) => (row.driverKind === "claudeAgent" || row.driverKind === "codex") && row.snapshot.authenticated === true);
+
 // Declared before wireBot reads it; its callbacks only run on the routines timer.
 const keepGoing = new KeepGoing({
   deviceId: () => profileSyncSettings.deviceId,
@@ -1384,10 +1397,7 @@ const keepGoing = new KeepGoing({
     }
     return rateLimitsByInstance.get(instanceId) ?? null;
   },
-  livePanes: async (botId) => {
-    const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
-    return counts.status === 200 && "counts" in counts.body ? counts.body.counts[botId] ?? 0 : null;
-  },
+  livePanes: botLivePanes,
   dispatch: (botId, prompt, options) => startTurn(botId, prompt, options).then(() => undefined),
   paused: (_botId, threadId) => {
     store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name: `error: ${KEEP_GOING_PAUSED_LINE}`, ok: false } });
@@ -1448,6 +1458,7 @@ const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
     projectFolderClearedAt: _projectFolderClearedAt,
     paneWakePaused: _paneWakePaused,
     lastProjectCwd: _lastProjectCwd,
+    knownRepos: _knownRepos,
     tasks,
     ...rest
   } = bot;
@@ -1497,6 +1508,7 @@ let profileSyncLastSyncAt: number | null = null;
 let profileSyncSeen: ProfileImportSeen = { signature: "", invalid: false, missingAssets: [] };
 let profileImports = 0;
 const syncAvatarAssets = new Map<string, string>();
+const STORED_AVATAR = /^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/;
 
 function syncSectionId(section: string | undefined): string | null {
   const key = sectionKey(section);
@@ -1556,16 +1568,17 @@ function nextProfileSyncOperation(
   return operation;
 }
 
-function syncAvatarAssetForBot(bot: BotRecord, folder: string): string | null {
+/** undefined: the picture's file is gone here, which says nothing about the picture, so no op may clear it on other PCs. */
+function syncAvatarAssetForBot(bot: BotRecord, folder: string): string | null | undefined {
   if (!bot.avatarUrl) return null;
-  const match = bot.avatarUrl.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/);
+  const match = bot.avatarUrl.match(STORED_AVATAR);
   if (!match) return null;
   // attachments never change under their name, and every publish and import pass asks again
   const cacheKey = `${folder}\n${bot.avatarUrl}`;
   const cached = syncAvatarAssets.get(cacheKey);
   if (cached) return cached;
   const attachment = readAttachment(match[1]!);
-  if (!attachment) return null;
+  if (!attachment) return undefined;
   try {
     const asset = writeSyncAvatarAsset(folder, attachment.bytes, match[1]!.split(".").pop() ?? "");
     syncAvatarAssets.set(cacheKey, asset);
@@ -1592,6 +1605,7 @@ function importSyncAvatar(folder: string, avatarAsset: unknown): string | null {
 }
 
 function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unknown> {
+  const avatarAsset = syncAvatarAssetForBot(bot, folder);
   return {
     name: bot.name,
     title: bot.title,
@@ -1599,7 +1613,7 @@ function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unk
     color: bot.color,
     mascotExpression: bot.mascotExpression ?? null,
     mascotStyle: bot.mascotStyle ?? null,
-    avatarAsset: syncAvatarAssetForBot(bot, folder),
+    ...(avatarAsset === undefined ? {} : { avatarAsset }),
     ...(bot.avatarCrop ? { avatarCrop: bot.avatarCrop } : {}),
     sectionId: syncSectionId(bot.section),
     pinned: Boolean(bot.pinned),
@@ -1771,7 +1785,7 @@ function applySyncedBotFields(
   }
   const current = store.bot(bot.id);
   const avatarCrop = importedSyncAvatarCrop(synced.avatarCrop, current?.avatarCrop);
-  const currentMatch = current?.avatarUrl?.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/);
+  const currentMatch = current?.avatarUrl?.match(STORED_AVATAR);
   const currentBytes = currentMatch ? readAttachment(currentMatch[1]!)?.bytes : undefined;
   const avatarUrl = currentBytes && syncAvatarMatches(folder, importedAvatar, currentBytes)
     ? current!.avatarUrl
@@ -1781,11 +1795,22 @@ function applySyncedBotFields(
   return true;
 }
 
+/** Bot pictures whose files are gone here come back from the sync folder, under the name bots.json already holds. */
+function restoreLostBotAvatars(folder: string): void {
+  for (const bot of store.bots) {
+    const name = bot.avatarUrl?.match(STORED_AVATAR)?.[1];
+    const globalId = profileSyncSettings.botMap[bot.id];
+    if (!name || !globalId || attachmentExists(name)) continue;
+    if (restoreSyncedAvatar(folder, profileSyncSettings.syncedHashes, globalId, ATTACHMENTS_DIR, name)) console.warn(`bot sync: restored ${bot.name}'s lost picture`);
+  }
+}
+
 /** Applies what other devices published since the last pass: newest recordedAt wins, a local edit waiting to publish is kept. */
 async function importProfileChanges(): Promise<void> {
   const folder = profileSyncSettings.folder;
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return;
   ensureProfileSyncWorkspace(folder);
+  restoreLostBotAvatars(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
   profileImports++;
@@ -2698,6 +2723,9 @@ function messagePage(threadId: string, limit: number | undefined, before?: strin
 /** A bounded page centred on a known message, used when a search result is
  * opened on a client that only hydrated the newest part of the transcript. */
 function messageWindow(threadId: string, messageId: string, limit: number) {
+  // a chat not in memory reads just the window; loading a long one took seconds
+  const stored = store.storedWindow(threadId, messageId, limit);
+  if (stored) return { messages: stored.messages.map(slimMessage), hasMore: stored.hasMore };
   const all = store.messagesFor(threadId);
   const index = all.findIndex((message) => message.id === messageId);
   if (index < 0) return null;
@@ -2861,6 +2889,8 @@ const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> 
 const readOnlyTurnThreads = new Set<string>();
 /** Task threads that answer a room this PC joined: their Board posts are room posts. */
 const joinedRoomThreads = new Set<string>();
+/** Joined-room task threads whose current turn someone other than this PC's person asked for. */
+const joinedGuestThreads = new Set<string>();
 
 function settlePendingToolMessages(threadId: string, turnId?: string): void {
   const prefix = `${threadId}:`;
@@ -2982,7 +3012,7 @@ const unreadTurns = turnUnread();
 const TASK_PACKET_FLUSH_MS = 30_000;
 const pendingTaskPackets = new Map<
   string,
-  { packet: TaskResumePacket; timer: ReturnType<typeof setTimeout> }
+  { packet: TaskResumePacket; timer: ReturnType<typeof setTimeout>; seen?: TaskAsk[] }
 >();
 
 function eventTime(event: RuntimeEvent): number {
@@ -3000,12 +3030,12 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
-function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }): TaskResumePacket | null {
+function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) clearTimeout(pending.timer);
   pendingTaskPackets.delete(packet.threadId);
   try {
-    return store.writeTaskPacket(packet, opts);
+    return store.writeTaskPacket(packet, opts, [...(pending?.seen ?? []), ...(pending?.packet.asks ?? []), ...seen]);
   } catch (error) {
     console.error("task state: write failed", error);
     return null;
@@ -3020,17 +3050,29 @@ function stampShownAsks(threadId: string, sent: string): void {
   if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
-// a building ask closes as done once the PR in its ref merges
-function closeMergedAsks(botId: string, threadId: string, record: TaskResumePacket | null): TaskResumePacket | null {
+// a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
+function saveLandedCloses(threadId: string, turnId: string | undefined, landed: boolean): void {
+  const record = taskPacketForWrite(threadId);
+  const ids = askPrs.landed(threadId, turnId ?? "", landed, record?.asks);
+  if (record && ids.length) persistTaskPacket({ ...record, asks: withClosed(record.asks, ids, Date.now()) });
+}
+
+// a building ask whose ref PRs all merged shows as done on this turn, with a line; the store keeps it building until the turn lands
+function closeMergedAsks(botId: string, threadId: string, record: TaskResumePacket | null) {
   const ids = record ? askPrs.take(botId, threadId, record.asks) : [];
-  if (!record || !ids.length) return record;
+  const lines = record?.asks?.filter((ask) => ids.includes(ask.id)).map((ask) => closedAskLine(ask)) ?? [];
   const now = Date.now();
-  return persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, status: "done" as const, changedAt: now } : ask) }) ?? record;
+  return {
+    ids,
+    shown: (packet: TaskResumePacket | null): TaskResumePacket | null => packet && ids.length ? { ...packet, asks: withClosed(packet.asks, ids, now) } : packet,
+    notes: (full: boolean) => [...lines, askPrs.stepNote(botId, threadId, record?.asks, full), askPrs.failedNote(botId, threadId, record?.asks, full)].filter(Boolean),
+  };
 }
 
 function queueTaskPacket(packet: TaskResumePacket): void {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) {
+    pending.seen = [...(pending.seen ?? []), ...(pending.packet.asks ?? [])];
     pending.packet = packet;
     return;
   }
@@ -3160,17 +3202,45 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
-const askPrs = createAskPrs({ repoDir: (botId, threadId) => {
-  const pinned = store.taskByThread(botId, threadId)?.cwd;
-  return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+const revertIndex = createRevertIndex();
+startupTiming.afterPaint("reverts", async () => {
+  await Promise.all([...new Set(store.bots.map((bot) => bot.cwd).filter((cwd) => cwd !== undefined))].map((cwd) => revertIndex.refresh(cwd)));
+});
+// where a bare "PR n" may be when the bot's folder is not a repo: its asks, its workers' reports and its panes' remotes
+const knownRepos = createKnownRepos({ saved: (botId) => store.bot(botId)?.knownRepos ?? [], save: (botId, repos) => store.rememberRepos(botId, repos), discover: async (botId) => {
+  const bot = store.bot(botId);
+  if (!bot) return [];
+  const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, null, undefined, { panesOnly: true });
+  const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
+  const cwds = [...new Set(panes.map((pane) => pane.cwd).filter(Boolean))];
+  for (const cwd of [...cwds, ...bot.cwd ? [bot.cwd] : []]) void revertIndex.refresh(cwd);
+  const remotes = await Promise.all(cwds.map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
+  return remotes.flatMap((url) => remoteRepo(url) ?? []);
+}, cited: async (botId, boot) => {
+  const bot = store.bot(botId);
+  if (!bot) return [];
+  const reports = [...reportNotes(boot ?? store.notesBack(bot.threadId))].map((row) => row.text ?? "");
+  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports]);
 } });
+const askPrs = createAskPrs({
+  repoDir: (botId, threadId) => {
+    const pinned = store.taskByThread(botId, threadId)?.cwd;
+    return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+  },
+  repos: (botId) => knownRepos.get(botId),
+});
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
 startupTiming.afterPaint("unlanded", async () => {
   // the worker read each chat's reports; a chat loaded since then has them in memory
   const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
   for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+  for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
 });
-const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
+const memoryLookup = createMemoryLookup({
+  dataDir: DATA_DIR,
+  notesPath: (botId) => store.bot(botId)?.projectNotes,
+  asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),
+});
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
@@ -3406,7 +3476,11 @@ const spawnUsage = createSpawnUsage({
   nameOf: (id, engine) => accountNames.nameOf(id, engine),
 });
 const workerTurns = createWorkerTurns();
-const playbookGate = createPlaybookGate();
+const playbookGate = createPlaybookGate(undefined, undefined, {
+  reverts: revertIndex,
+  wouldHold: (row) => appendRotatingLog(join(DATA_DIR, "revert-holds.ndjson"), `${JSON.stringify({ at: Date.now(), ...row })}\n`),
+  enforce: process.env.OMB_REVERT_HOLD === "1",
+});
 // A recycled or switched provider session has a new cursor, so it reads the playbook again.
 function playbookSession(botId: string): string {
   const threadId = workerTurns.activeThread(botId);
@@ -3985,7 +4059,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
-            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}), ...takeImportOffer(event.threadId, event.text) },
+            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}) },
         );
         markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "assistant.persisted", {
           turnId: event.turnId,
@@ -4456,7 +4530,6 @@ bus.subscribe((event: RuntimeEvent) => {
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
-      noteOfferTurn(event.threadId, false);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
       for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
       const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
@@ -4500,6 +4573,7 @@ bus.subscribe((event: RuntimeEvent) => {
           liveTurnIdByThread.delete(event.threadId);
         }
         const disowned = Boolean(event.turnId && disownedTurnIds.delete(event.turnId));
+        saveLandedCloses(event.threadId, event.turnId, !superseded && !disowned && (event.promptAccepted || event.ok && !interrupted));
         if (!superseded && !disowned) {
           const seed = turnSeeds.take(event.threadId, event.turnId);
           if (seed && turnSeedsSession({
@@ -4570,6 +4644,7 @@ bus.subscribe((event: RuntimeEvent) => {
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void unlandedWork.refresh(bot.id, event.threadId);
+            void knownRepos.refresh(bot.id);
             void memoryLookup.settled(bot.id, event.threadId, cursor);
             memoryHealthCheck.settled(bot.id, event.threadId, cursor);
           }
@@ -4609,6 +4684,16 @@ bus.subscribe((event: RuntimeEvent) => {
         } else if (vpsTurn) {
           clearVpsTurn();
         }
+      } else {
+        const { superseded, interrupted } = turnCompletionDisposition({
+          eventTurnId: event.turnId,
+          liveTurnId: liveTurnIdByThread.get(event.threadId),
+          interruptedTurnIds,
+          interruptedAt: 0,
+          dispatchedAt: 0,
+          stopReason: event.stopReason,
+        });
+        saveLandedCloses(event.threadId, event.turnId, !superseded && (event.promptAccepted || event.ok && !interrupted));
       }
       const speaker = groupSpeakers.get(event.threadId);
       const group = store.groupByThread(event.threadId);
@@ -4616,6 +4701,7 @@ bus.subscribe((event: RuntimeEvent) => {
         memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
         memorySleep.onSettled(speaker.botId);
+        void knownRepos.refresh(speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
         const speakingBot = store.bot(speaker.botId);
@@ -5094,6 +5180,8 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
+  /** web_read's borrowed reader: page text steers it, so read-only with no Wink tools. */
+  webReader?: boolean;
 };
 
 /** True only for a turn a person actually typed - not a pane note wake, a
@@ -5126,7 +5214,7 @@ const REPEAT_MISTAKES_INSTRUCTIONS =
 const FORUM_INSTRUCTIONS =
   ` After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
-const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
+const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + WEB_READ_RULE + modelPicksPrompt();
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -5292,7 +5380,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1, bot.threadId).tool) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTool(store.activePathBack(bot.threadId), 1)) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5462,7 +5550,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  let taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
+  let storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  let taskRecord = closes.shown(storedTaskRecord);
   const selectionChanged = task.lastInstanceId !== undefined && (
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
@@ -5571,13 +5661,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle) => {
     if (!grace) {
       rewound = threadId === bot.threadId && Boolean(bot.rewound);
-      taskRecord = taskPacketForWrite(threadId);
-      if (taskRecord && selectionChanged) {
-        taskRecord = persistTaskPacket(stampTaskResumePacket(taskRecord, "engine-switch", {
+      storedTaskRecord = taskPacketForWrite(threadId);
+      if (storedTaskRecord && selectionChanged) {
+        storedTaskRecord = persistTaskPacket(stampTaskResumePacket(storedTaskRecord, "engine-switch", {
           now: Date.now(),
-          turnsAtWrite: task.usage?.turns ?? taskRecord.turnsAtWrite,
-        })) ?? taskRecord;
+          turnsAtWrite: task.usage?.turns ?? storedTaskRecord.turnsAtWrite,
+        })) ?? storedTaskRecord;
       }
+      taskRecord = closes.shown(storedTaskRecord);
       recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages, skipTranscript)?.text) || "";
       durableTaskRecordText = taskRecord
         ? taskRecordBlock(taskRecord, Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
@@ -5586,7 +5677,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       sessionPrompt = sessionPromptFor({ report: task.nativePrompt, cursor: task.resumeCursors[instanceId], model, catalogWindow });
       reactions.delivered = task.reactionsDelivered;
     }
-    const taskRecordToFlush = taskRecord;
+    const taskRecordToFlush = storedTaskRecord;
     return prepareModelContext({
       messages,
       contextWindow: modelContextWindow,
@@ -5600,6 +5691,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
+      goals: () => goalsOf(bot.id),
       onSummaryCall: (record) => logSummaryCall({
         botId: bot.id,
         threadId,
@@ -5615,7 +5707,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           turnsAtWrite: task.usage?.turns ?? taskRecordToFlush.turnsAtWrite,
         }));
         if (!saved) throw new Error("the durable task record could not be flushed");
-        taskRecord = saved;
+        storedTaskRecord = saved;
+        taskRecord = closes.shown(saved);
       } : undefined,
     });
   };
@@ -5763,6 +5856,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // A send made while this turn prepared was queued because busy had not
   // flipped yet. Fold it in as steer would have, or it drains after this
   // turn's replies. Synchronous through the busy flip, so nothing slips past.
+  // a failed check rides again wherever the record does, so a new session hears it
+  const askNotes = closes.notes(rewound || fresh || recycled || compactedThisTurn || resumeSessionUnseeded(seedInputs) || recovering || Boolean(unsettled));
   const folded = currentTurnEpoch(bot.id) === epoch && !(opts?.sendId && isSendCancelled(opts.sendId))
     ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
@@ -5780,15 +5875,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
-    ? importMemoryTurn(activeMessages, 0, threadId)
-    : { offer: false, tool: false };
-  noteOfferTurn(threadId, importMemory.offer);
-  if (importMemory.offer) noteImportOffer(threadId);
-  const currentPrompt = [
-    ...(importMemory.offer ? [importOfferNote()] : []),
-    composeUserTurnPrompt(text, turnOpts),
-    ...folded,
-  ].join("\n\n");
+    ? importMemoryTool(activeMessages)
+    : false;
+  const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded].join("\n\n");
   let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
     activeMessages,
     skipTranscript,
@@ -5804,7 +5893,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId, threadId);
   const roomEchoes = roomEchoesSinceLastUserTurn(activeMessages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model);
   const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
-  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
+  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind) && !notOwnerChats().has(threadId)
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
@@ -5812,9 +5901,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...askNotes, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
+  const elsewhereAsks = commsDepth === 0 ? store.otherChatAsks(bot.id, threadId, notOwnerChats()) : [];
+  // the durable record holds only this chat's asks
+  const recordText = [durableTaskRecordText, asksNudge(undefined, Date.now(), text, elsewhereAsks)].filter(Boolean).join("\n") || undefined;
   const { turnText, resume, nativeReplayPrefix } = buildTurnContext({
     driverKind: instance.driverKind,
     model,
@@ -5827,11 +5919,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     replaysNatively,
     nativeReplay: codexHistory && summaryGrace.fresh,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
-    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
+    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks) : "",
   });
   stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
@@ -5840,7 +5932,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     text: turnPrompt,
     transcript: turnTranscript,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
   });
   const systemRecycleText = (compaction = false) => buildTurnContext({
     driverKind: instance.driverKind,
@@ -5853,7 +5945,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recycleReason: compaction ? "compaction" : "system",
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   }).turnText;
@@ -5936,7 +6028,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     const releaseStarting = takeStartingHold(bot.id);
     let systemSeed: ReturnType<typeof systemSeeds.set> | undefined;
     try {
-      const readOnly = opts?.readOnly === true;
+      const readOnly = opts?.readOnly === true || opts?.webReader === true;
       if (readOnly && instance.adapter.capabilities.readOnlyTurns !== true) throw new Error(`${bot.name} can't answer other people here: its engine can't work read-only`);
       if (readOnly) readOnlyTurnThreads.add(threadId);
       else readOnlyTurnThreads.delete(threadId);
@@ -6197,8 +6289,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           !candidate.hidden &&
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
-      if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);
+      if (instance.adapter.capabilities.agentsMcp === true && opts?.webReader !== true) {
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6250,7 +6342,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal) });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6319,7 +6411,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           accessRules(live.adapter.access?.({ approval, ...(readOnly ? { readOnly } : {}), cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           // a joined room's session answers everyone there, so it never carries the owner's About You
-          tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt()) +
+          tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
           tracePart("playbook", packagePlaybooks) +
@@ -6381,7 +6473,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...closes.notes(true), ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -6443,6 +6535,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       if (reservation) commit(reservation);
+      askPrs.closing(threadId, started.turnId ?? "", closes.ids);
       if (holdNotes) newestPaneNoteId = undefined;
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded
@@ -7025,8 +7118,10 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => {
+  startTurn: (botId, threadId, prompt, typed, failed, readOnly, guest) => {
     joinedRoomThreads.add(threadId);
+    if (guest) joinedGuestThreads.add(threadId);
+    else joinedGuestThreads.delete(threadId);
     return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
   },
   readOnlyTurns: (botId, threadId) => {
@@ -7211,8 +7306,10 @@ async function runClaimedGroupMemberTurn(
     return true;
   }
   startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
-  const taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
-  const taskRecordToFlush = taskRecord;
+  const storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  const taskRecord = closes.shown(storedTaskRecord);
+  const taskRecordToFlush = storedTaskRecord;
   const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
   // A room replays Wink's context every turn, so no native session ever compacts it.
   const modelContextWindow = nativeCompactAt(instance.driverKind, selection.model, catalogWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }) ? Math.min(catalogWindow, NATIVE_SUMMARY_WINDOW) : catalogWindow;
@@ -7283,8 +7380,9 @@ async function runClaimedGroupMemberTurn(
   const roomContext = [
     prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
     prepared.transcript.map((message) => replayMessageText(message, instance.driverKind, bot.id, selection.model)).join("\n"),
-    ...roomMail.map((part) => part.text),
+    ...roomMail.map((part) => inertMentions(part.text)),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
+    ...closes.notes(Boolean(prepared.compacted && durableTaskRecordText)),
   ].filter((value) => value !== null).join("\n\n");
   stampShownAsks(threadId, roomContext);
   // One turn per bot at a time, across BOTH engines. Without this a bot
@@ -7298,7 +7396,9 @@ async function runClaimedGroupMemberTurn(
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
   const works = !asked || Boolean(lead && asksWork([lead, ...riders]));
   const guestAsked = asked && (!askFromHost(lead) || riders.some((ask) => !askFromHost(ask)));
-  if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
+  // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
+  const guestReadOnly = Boolean(guestAsked && (!bot.autoApprove || !works));
+  if ((!works || guestReadOnly) && instance.adapter.capabilities.readOnlyTurns !== true) {
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
   }
@@ -7314,7 +7414,8 @@ async function runClaimedGroupMemberTurn(
     ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff));
+    // a lane is read-only for the engine only: its own hand_off and the owner's tools stay
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works || guestReadOnly, Boolean(handoff));
   }
   const canMessage = works && Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
@@ -7432,15 +7533,15 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
-  // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
-  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (guestAsked && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
+  // the owner's own lane keeps Claude's @file attach; a guest's words never get it
+  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || guestReadOnly ? { readOnly: true } : {}), ...(lane && !guestAsked ? { ownerText: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
     // a teammate's ask, or a chain one started, answers the whole room: the owner's private facts stay out
-    (asked ? "" : aboutYouPrompt()) +
+    (asked ? "" : aboutYouPrompt(bot.id)) +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -7523,6 +7624,7 @@ async function runClaimedGroupMemberTurn(
     })
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
+        askPrs.closing(threadId, started.turnId ?? "", closes.ids);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
         accountNote.commit();
         releaseStarting();
@@ -8065,7 +8167,7 @@ function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     gemini: { configured: Boolean(cfg.gemini?.apiKey), introSeen: callIntro.seen() },
-    liveCall: { voice: cfg.liveCall?.voice ?? LIVE_VOICE },
+    liveCall: { voice: cfg.liveCall?.voice ?? LIVE_VOICE, answer: cfg.liveCall?.answer ?? "gemini" },
     openaiCompat: { configured: Boolean(cfg.openaiCompat?.key) },
     composio: {
       configured: composio.configured(cfg),
@@ -8158,7 +8260,14 @@ const groupRoutes = createGroupRoutes({
 });
 function readOnlyRoomTurn(botId: string, threadId: string) {
   const hosted = store.groupByThread(threadId)?.hosted;
-  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && readOnlyAskTurn(hosted.roomId, threadId, botId));
+  // a teammate who may make bots work still gets a read-only turn from a bot not on Auto
+  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && (readOnlyAskTurn(hosted.roomId, threadId, botId)
+    || (teammateAskTurn(hosted.roomId, threadId, botId) && !store.bot(botId)?.autoApprove)));
+}
+/** A room turn anyone but this PC's owner asked for, read-only or with "Can make bots work". */
+function guestRoomTurn(botId: string, threadId: string) {
+  const hosted = store.groupByThread(threadId)?.hosted;
+  return readOnlyRoomTurn(botId, threadId) || joinedGuestThreads.has(threadId) || Boolean(hosted && teammateAskTurn(hosted.roomId, threadId, botId));
 }
 const boardRoutes = createBoardRoutes({
   board,
@@ -8172,6 +8281,7 @@ const boardRoutes = createBoardRoutes({
 });
 const internalRoutes = createInternalRoutes({
   readOnlyTurn: readOnlyRoomTurn,
+  planHint: { room: sharedTurn(store, joinedRoomThreads), workerReady: workerEngineSignedIn, livePanes: botLivePanes },
   answeredLine: (threadId) => roomTurnInstruction.get(threadId),
   turnText: (botId, threadId) => askTexts.last(botId, threadId),
   runDelegatedTurn,
@@ -8229,6 +8339,14 @@ const verifyDoc = createVerifyDoc({
   broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
   log: line => console.log(line),
 });
+const webRead = webReadRoute(createWebReader({
+  readers: () => store.bots.map((bot) => {
+    const instance = registry.get(bot.modelSelection.instanceId);
+    const snapshot = providerSnapshots.get(bot.modelSelection.instanceId);
+    const ready = snapshot?.state === "available" && snapshot.authenticated !== false;
+    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy) };
+  }),
+}), (header) => commsCallers.resolve(header), guestRoomTurn);
 const verifySite = createVerifySite({
   store,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
@@ -8274,6 +8392,7 @@ const botRoutes = createBotRoutes({
   projectNotesCheck,
   memoryHealthCheck,
   noteTalked,
+  refreshLookup: (botId) => memoryLookup.refresh(botId),
   activeVpsThreads,
   resumePaneWakes,
 });
@@ -8440,6 +8559,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, await teamReports.handle(await readBody(req)));
       }
       if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
+      if (method === "POST" && path === WEB_READ_ROUTE) return await webRead(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
         const body = await readBody(req);
         const url = typeof body?.url === "string" ? body.url.trim().replace(/\/$/, "") : "";
@@ -8485,10 +8605,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
       }
       if (method === "POST" && path === "/api/internal/import-memory") {
-        return await importMemoryRoute(req, res, {
+        await importMemoryRoute(req, res, {
           caller: (header) => commsCallers.resolve(header),
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
+        });
+        for (const bot of store.bots) void memoryLookup.refresh(bot.id);
+        return;
+      }
+      // pin_goal: a standing goal in the bot's timeline, in every prompt until it is done
+      if (method === "POST" && path === "/api/internal/goal") {
+        return await goalRoute(req, res, {
+          caller: (header) => commsCallers.resolve(header),
+          ownerTurn: ({ botId, threadId }) => {
+            const bot = store.bot(botId);
+            return Boolean(bot && !readOnlyTurnThreads.has(threadId) && ownerChats(bot, notOwnerChats()).includes(threadId) && threadHasLiveTurn(threadId));
+          },
         });
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
@@ -8550,7 +8682,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
-        const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
+        const hold = await playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
         if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(String(body.command ?? "")));
@@ -9220,10 +9352,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       return await terminalLive.handle(req, res, bot.id, m[2], url);
     }
-    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res);
-    if (path === "/api/about-you" && method === "POST") return await aboutYouRoutes.add(req, res);
+    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res, store.bot(url.searchParams.get("bot") ?? "")?.id);
+    if (path === "/api/about-you" && method === "POST") {
+      // past the prompt's cut, Import Memory is looked up by every bot, from the next turn on
+      return aboutYouRoutes.add(req, res, Date.now, async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
+    }
+    if (path === "/api/about-you/decline" && method === "POST") return aboutYouRoutes.decline(res);
     m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);
-    if (m && method === "DELETE") return aboutYouRoutes.remove(res, m[1]);
+    if (m && method === "DELETE") {
+      // the removed lines are out of every bot's lookup before the removal is answered
+      return aboutYouRoutes.remove(res, m[1], async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
+    }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's
     // workspace); these routes only make them visible without a trip to
@@ -9235,6 +9378,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "PUT") {
       return await botRoutes.putMemory(req, res, m);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
+    if (m && method === "POST") {
+      return await botRoutes.importMemory(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/topics\/([^/]+)$/);
     if (m && method === "GET") {
@@ -9467,7 +9614,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       // Owner check and sign-out's cancel run in this one turn, so no newer sign-in can slip between them.
-      if (!registry.logins.owns(engineSignOut[1], signInOwner(req.headers, phone?.id))) return json(res, 403, { error: SIGNED_IN_ELSEWHERE, code: "sign-in-elsewhere" });
+      // A press while this instance's sign-out runs joins it: the pending job is that sign-out's own logout, and no sign-in can start meanwhile.
+      if (!registry.signingOutNow(engineSignOut[1]) && !registry.logins.owns(engineSignOut[1], signInOwner(req.headers, phone?.id))) return json(res, 403, { error: SIGNED_IN_ELSEWHERE, code: "sign-in-elsewhere" });
       const signedOut = await registry.signOut(engineSignOut[1]);
       return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
         : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });
@@ -9513,8 +9661,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim() })) return;
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
-    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode() })) return;
-    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState })) return;
+    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(true) })) return;
+    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(true), groupIsWorking, publicGroupState })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId), (roomId) => myRoomBotTurns.stopMine(roomId));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
@@ -9841,8 +9989,8 @@ setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
-// the boot drain has already run by the time the worker replies
-void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).catch((error: unknown) => console.warn("[quick] recovery failed", error))
+// the boot drain has already run by the time the worker replies; a send before then reads only its own chat
+void recoverQuickAsks(store, bootReads().then((rows) => rows.asks), { read: coldQuickAsks, drain: drainQueuedSends }).catch((error: unknown) => console.warn("[quick] recovery failed", error))
   .then(drainQueuedSends).catch((error: unknown) => console.warn("[quick] drain after recovery failed", error));
 const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
@@ -9896,6 +10044,7 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
+startupTiming.afterPaint("droppedAsks", async () => sweepDroppedAsks());
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")

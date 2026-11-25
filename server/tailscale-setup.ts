@@ -15,7 +15,9 @@ export const tailscaleStatusSchema = z.object({
 export type TailscaleStatus = z.infer<typeof tailscaleStatusSchema>;
 
 export function tailscaleCommands(platform: NodeJS.Platform): string[] {
-  return platform === "win32" ? ["tailscale", "C:\\Program Files\\Tailscale\\tailscale.exe"] : ["tailscale"];
+  if (platform === "win32") return ["tailscale", "C:\\Program Files\\Tailscale\\tailscale.exe"];
+  // The Mac app puts no tailscale on PATH unless its CLI integration is turned on.
+  return platform === "darwin" ? ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"] : ["tailscale"];
 }
 
 export function tailnetDevices(status: TailscaleStatus) {

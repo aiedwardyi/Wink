@@ -1,6 +1,7 @@
 // A phone that comes back after busy workers resumes from the replay ring
 // instead of refetching every transcript, as long as what it missed fits.
 import type { ChildProcess } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -28,6 +29,11 @@ const api = async (method: "POST" | "PATCH", path: string, body: unknown) => {
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
   home = createFixtureHome("omb-replay-resume-");
+  mkdirSync(join(home, ".orbit"), { recursive: true });
+  writeFileSync(
+    join(home, ".orbit", "config.json"),
+    JSON.stringify({ instances: { claude: { driver: "claudeAgent", displayName: "Fixture Claude", environment: { FAKE_CLAUDE_MODE: "happy" }, config: { cli: join(SERVER_DIR, "testing", "fake-claude-cli.ts") } } } }),
+  );
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: { ...process.env, HOME: home, USERPROFILE: home, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1) },
@@ -96,6 +102,7 @@ describe("resume after busy workers", () => {
     const { status, body } = await api("POST", "/api/bots", { name: "Cy" });
     expect(status).toBe(201);
     const cy = (body as { bot: { id: string; threadId: string } }).bot;
+    expect((await api("POST", `/api/bots/${cy.id}/messages`, { text: "hi" })).status).toBe(202);
     expect((await api("PATCH", `/api/bots/${cy.id}`, { color: "#445566" })).status).toBe(200);
 
     const back = await openSse(`${origin()}/api/events?since=${encodeURIComponent(cursor)}`);

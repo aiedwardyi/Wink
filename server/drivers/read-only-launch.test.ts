@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testHome } from "../testing/test-home.ts";
 
-import { ensureDirs } from "../config.ts";
+import { DATA_DIR, ensureDirs } from "../config.ts";
 import * as procs from "../procs.ts";
 import type { ProviderInstance, SendTurnInput } from "../contracts.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
@@ -17,7 +17,7 @@ import * as auth from "./antigravity-auth.ts";
 import { AntigravityDriver } from "./antigravity.ts";
 import { BUILT_IN_DRIVERS } from "./builtIn.ts";
 import { ClaudeDriver } from "./claude.ts";
-import { CodexDriver } from "./codex.ts";
+import { CodexDriver, READ_ONLY_FEATURES_OFF } from "./codex.ts";
 import { MspMuseAgentDriver } from "./msp/muse.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -26,6 +26,9 @@ const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "Notebo
 const EXEMPT: Record<string, string> = { boxAgent: "a cloud box has no read-only mode, so Wink keeps the can't-work line for it" };
 const agents = { command: process.execPath, args: ["-e", ""], env: {} };
 const composio = { command: process.execPath, args: ["-e", "", "composio"], env: {} };
+
+// the CLI's absolute rule form
+const rule = (dir: string) => `Read(${/^[A-Za-z]:/.test(dir) ? `//${dir[0]!.toLowerCase()}/${dir.slice(3).replace(/\\/g, "/")}` : `/${dir}`}/**)`;
 
 const createSignIn = auth.antigravitySignIn;
 let scratch: string;
@@ -91,6 +94,8 @@ const ENGINES: Record<string, Engine> = {
       expect(argv).not.toContain("--plugin-dir");
       expect(mcpServers).toEqual(["agents", "ogb"]);
       expect(after(argv, "--allowedTools").split(",").sort()).toEqual(["mcp__agents", "mcp__ogb"]);
+      const deny = JSON.parse(after(argv, "--settings")).permissions.deny as string[];
+      for (const dir of [join(testHome(), ".ssh"), join(testHome(), ".codex"), join(testHome(), ".claude"), DATA_DIR, join(DATA_DIR, "accounts")]) expect(deny).toContain(rule(dir));
     },
   },
   codex: {
@@ -100,7 +105,8 @@ const ENGINES: Record<string, Engine> = {
       const instance = await CodexDriver.create({ instanceId: "ro-codex", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-codex-app-server.ts"), fullAuto: true } });
       live.push(instance);
       const params: Record<string, unknown> = {};
-      for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", "codex-thread-9"]] as const) {
+      // a read-only turn resumes only a thread it started read-only (the fake's first thread)
+      for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", readOnly ? "codex-thread-1" : "codex-thread-9"]] as const) {
         const file = `codex-${method.replace("/", "-")}.json`;
         setEnv("FAKE_CODEX_DUMP", join(scratch, file));
         await run(instance, `t-codex-${method}`, { integrations: { agents }, ...(cursor && { resumeCursor: cursor }), ...(readOnly && { readOnly }) });
@@ -115,6 +121,8 @@ const ENGINES: Record<string, Engine> = {
         expect({ method, sandbox, approvalPolicy }).toEqual({ method, sandbox: "read-only", approvalPolicy: "untrusted" });
         expect(config).toMatchObject({ "mcp_servers.github.enabled": false, "plugins.unified-computer-use@openai-bundled.enabled": false, "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
         expect(config).not.toHaveProperty("mcp_servers.agents.enabled");
+        expect(config).toMatchObject({ "features.shell_tool": false, "features.unified_exec": false, "features.view_image": false, "features.multi_agent": false, "features.multi_agent_v2": false });
+        for (const name of READ_ONLY_FEATURES_OFF) expect(config).toHaveProperty([`features.${name}`], false);
       }
     },
   },
@@ -129,6 +137,7 @@ const ENGINES: Record<string, Engine> = {
     },
     restricted({ argv }: { argv: string[] }) {
       expect(after(argv, "--mode")).toBe("plan");
+      expect(JSON.parse(after(argv, "--settings"))).toEqual({ allowNonWorkspaceAccess: false });
       expect(argv).not.toContain("--dangerously-skip-permissions");
     },
   },
@@ -229,6 +238,41 @@ describe("Claude read-only turns run none of the owner's hooks", () => {
     expect(await turn("t-read-only", { readOnly: true })).toEqual([]);
     expect(await turn("t-read-only-resumed", { readOnly: true, resumeCursor: "s-owner" })).toEqual([]);
   });
+});
+
+describe("Codex web_read reader turn, which mounts no Wink agents", () => {
+  const INHERITED = { mcp_servers: { github: { url: "https://example.invalid/mcp" }, agents: { command: "inert-user-agents" } } };
+  const codex = async () => {
+    setEnv("FAKE_CODEX_MODE", "resume");
+    setEnv("FAKE_CODEX_CONFIG", JSON.stringify(INHERITED));
+    const instance = await CodexDriver.create({ instanceId: "reader-codex", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-codex-app-server.ts"), fullAuto: true } });
+    live.push(instance);
+    return instance;
+  };
+  const sent = (file: string, method: string) => dumped(file).calls.find((call: { method: string }) => call.method === method)?.params;
+
+  it("turns off every inherited MCP server, one named agents included, fresh and resumed", async () => {
+    const instance = await codex();
+    for (const [method, cursor] of [["thread/start", undefined], ["thread/resume", "codex-thread-1"]] as const) {
+      const file = `reader-${method.replace("/", "-")}.json`;
+      setEnv("FAKE_CODEX_DUMP", join(scratch, file));
+      await run(instance, `t-reader-${method}`, { readOnly: true, ...(cursor && { resumeCursor: cursor }) });
+      const { argv } = dumped(file);
+      expect(argv.join(" ")).not.toContain("mcp_servers.agents.command");
+      expect(sent(file, method)).toMatchObject({ sandbox: "read-only", approvalPolicy: "untrusted", config: { "mcp_servers.github.enabled": false, "mcp_servers.agents.enabled": false } });
+    }
+  });
+
+  it("keeps Wink's own agents server on a read-only turn that mounts it", async () => {
+    const instance = await codex();
+    setEnv("FAKE_CODEX_DUMP", join(scratch, "room.json"));
+    await run(instance, "t-room", { readOnly: true, integrations: { agents } });
+    expect(dumped("room.json").argv.join(" ")).toContain("mcp_servers.agents.command");
+    const config = sent("room.json", "thread/start").config;
+    expect(config).toMatchObject({ "mcp_servers.github.enabled": false });
+    expect(config).not.toHaveProperty("mcp_servers.agents.enabled");
+  });
+
 });
 
 describe("read-only launch contract", () => {

@@ -19,6 +19,7 @@ const secrets = [
   ['passphrase is "abc1-sk-ant-abcdefghijklmnop-def"', "abc1-sk-ant-abcdefghijklmnop-def"],
   ["K7PQ2M", "K7PQ2M"],
   ["invite code K7MZ3Q", "K7MZ3Q"],
+  ["group code K7MZ3QPA", "K7MZ3QPA"],
   ["join (2ABCDE)!", "2ABCDE"],
 ];
 

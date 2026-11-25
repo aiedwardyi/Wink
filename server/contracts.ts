@@ -224,6 +224,8 @@ export interface SendTurnInput {
   approval?: "ask" | "auto";
   /** No file edits or shell, whatever the approval mode. Only for drivers with capabilities.readOnlyTurns. */
   readOnly?: true;
+  /** A read-only turn on the owner's own words (a room side lane): Claude still attaches the files its @paths name. */
+  ownerText?: true;
   /** A person is present for this turn. Only then does background work it
    * starts keep Auto approvals for desktop control after it settles. */
   attended?: boolean;
@@ -517,6 +519,12 @@ export interface ProviderInstance {
   /** Refresh a live catalog without recreating the provider instance. */
   readonly refreshModels?: () => Promise<void>;
   loginConfig?(): { cli: string; env: Record<string, string | undefined> };
+  /** When CLI logout fails, returns whether the fallback finished signing out. */
+  signOutWithoutCli?(failure: import("./engine-login.ts").LoginCapture["error"]): Promise<boolean>;
+  /** A sign-in is starting. Resolves when it can proceed, with a callback for its outcome. */
+  signingIn?(): Promise<(succeeded: boolean) => void>;
+  /** Its logout command succeeded: whatever sign-out was still pending is done. */
+  signedOutByCli?(): void;
   readonly adapter: ProviderAdapter;
   /** `rescan` = the user asked (Check again, saved a CLI): probes that
    * would start WSL are allowed to, where a passive refresh may not.
@@ -569,5 +577,7 @@ export interface ProviderDriver<Config = unknown> {
 export type AnyProviderDriver = ProviderDriver<any>;
 
 let eventCounter = 0;
+// Usage reads cliMissing as Not Installed, so every driver builds this one snapshot.
+export const cliNotFound = (cli: string): ProviderSnapshot => ({ state: "unavailable", reason: `\`${cli}\` CLI not found`, cliMissing: true });
 export const newEventId = () => `ev-${Date.now().toString(36)}-${(eventCounter++).toString(36)}`;
 export const newId = () => crypto.randomUUID();

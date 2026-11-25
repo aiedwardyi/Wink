@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, extname, join, relative, resolve } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
@@ -633,6 +633,34 @@ export function syncAvatarMatches(folder: string, avatarAsset: unknown, bytes: B
   if (!asset) return false;
   const digest = (value: Buffer) => createHash("sha256").update(value).digest("hex");
   return digest(asset.bytes) === digest(bytes);
+}
+
+/** The asset this PC last synced for a bot's picture, found by the hash it kept; null when the folder no longer holds it. */
+export function lastSyncedAvatarAsset(folder: string, synced: Record<string, string>, entityId: string): string | null {
+  const base = synced[syncedKey("bot", entityId, "avatarAsset")];
+  if (!base) return null;
+  let names: string[];
+  try {
+    names = readdirSync(join(folder, PROFILE_SYNC_ASSETS_DIR));
+  } catch {
+    return null;
+  }
+  const asset = names.map((name) => `${PROFILE_SYNC_ASSETS_DIR}/${name}`).find((candidate) => syncValueHash(candidate) === base);
+  return asset && resolveSyncAvatarPath(folder, asset) ? asset : null;
+}
+
+/** A bot picture lost here (a wiped attachments folder) comes back under its own name from that asset; an existing file is never replaced. */
+export function restoreSyncedAvatar(folder: string, synced: Record<string, string>, entityId: string, attachmentsDir: string, name: string): boolean {
+  if (!/^[A-Za-z0-9-]+\.(png|jpg|gif|webp)$/.test(name)) return false;
+  const asset = readSyncAvatarAsset(folder, lastSyncedAvatarAsset(folder, synced, entityId));
+  if (!asset || extname(name) !== `.${asset.ext}`) return false;
+  try {
+    mkdirSync(attachmentsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(attachmentsDir, name), asset.bytes, { mode: 0o600, flag: "wx" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const namesSignature = (names: string[]) => createHash("sha256").update(names.filter(isSyncOperationFile).sort().join("\n")).digest("hex");

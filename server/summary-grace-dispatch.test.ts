@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { closedAskNotes } from "./ask-user.ts";
-import { noteOfferTurn } from "./memory-import-offer.ts";
 import { estimateContextTokens, holdWorkerNotes, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, withoutTurnNotes } from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
 import { composeUserTurnPrompt, userTurnReactionKeys } from "./replies.ts";
@@ -99,6 +98,7 @@ describe("summary grace dispatch", () => {
     const instance = { driverKind: "claude", generateText, textTimeoutMs: 90_000, adapter: { capabilities: { queueing: true } } };
     const store = {
       taskByThread: () => undefined,
+      otherChatAsks: () => [],
       activePath: () => [...messages],
       pathTail: (_threadId: string, count: number) => messages.slice(-count),
       activeLeaf: () => messages.at(-1)?.id ?? null,
@@ -187,11 +187,11 @@ describe("summary grace dispatch", () => {
           return live;
         } },
         instanceId: "claude", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
-        turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, noteOfferTurn, withoutTurnNotes,
+        turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
         buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge, stampShownAsks: () => {},
         clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
         mailForTurn: () => event === "mail" || event === "held mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes,
-        opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
+        opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), notOwnerChats: () => new Set(), privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
         commsDepth: 0, MAX_COMMS_DEPTH: 1,
@@ -205,7 +205,7 @@ describe("summary grace dispatch", () => {
         recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, sessionCompactionId: null, seed,
         seedInputs: { instanceId: "claude", cursor: "session", seed: summaryGrace.native.seed, latestCompactionId: null },
         summarySkipped: true, codexHistory: false, summaryGrace, graceInputs, planBeforeSummary, summaryBuild: build, prepareContext,
-        inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) },
+        inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, askNotes: [], closes: { notes: () => [] },
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
@@ -290,6 +290,7 @@ describe("summary grace dispatch", () => {
     const taskRecordText = "Goal: preserve context";
     const store = {
       taskByThread: () => undefined,
+      otherChatAsks: () => [],
       activePath: () => [...messages],
       pathTail: (_threadId: string, count: number) => messages.slice(-count),
       activeLeaf: () => messages.at(-1)?.id ?? null,
@@ -336,12 +337,12 @@ describe("summary grace dispatch", () => {
         return live;
       } },
       instanceId: "codex", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
-      turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, noteOfferTurn: () => {}, withoutTurnNotes,
+      turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
       buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge, stampShownAsks: () => {},
       estimateContextTokens, nativeReplayBudget, replayRoom: 0, limitWaits: { track() {}, bind() {} }, selection: {},
       clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
       mailForTurn: () => [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes: undefined,
-      opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, task: { resumeCursors: {} },
+      opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), notOwnerChats: () => new Set(), privateWorkspace: false, task: { resumeCursors: {} },
       persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
       computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
       commsDepth: 0, MAX_COMMS_DEPTH: 1,
@@ -355,7 +356,7 @@ describe("summary grace dispatch", () => {
       recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, sessionCompactionId: null, seed,
       seedInputs: { instanceId: "codex", cursor: undefined, seed: undefined, latestCompactionId: null },
       summarySkipped: false, codexHistory: true, summaryGrace, graceInputs, planBeforeSummary, summaryBuild, prepareContext,
-      inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) },
+      inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, askNotes: [], closes: { notes: () => [] },
       onSummaryWait: () => {}, logSummaryWait: () => {}, latencySendId: "send", isSendCancelled: () => false,
       systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
       pendingInterruptThreads: { started: () => {} }, model: "gpt-6.2-sol", effort: undefined,
