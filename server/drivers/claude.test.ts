@@ -2643,6 +2643,75 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     vi.restoreAllMocks();
   });
 
+  describe("an idle switch", () => {
+    afterEach(() => vi.restoreAllMocks());
+    const firstCursor = () => (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
+    const stdin = () => readFileSync(join(scratch, "stdin.log"), "utf8").split("\n").filter(Boolean);
+    const stalled = async (threadId: string) => {
+      process.env.OMB_CLAUDE_EFFORT_REPLY_MS = "300";
+      process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+      await create(undefined, { FAKE_CLAUDE_MODEL_REPLY: "none", FAKE_CLAUDE_STDIN_LOG: join(scratch, "stdin.log") });
+      const first = await instance.adapter.sendTurn({ threadId, text: "one", model: "claude-one", effort: "max" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+      const cursor = firstCursor();
+      const pending = instance.adapter.sendTurn({ threadId, text: "switched", model: "claude-other", effort: "max", resumeCursor: cursor });
+      await vi.waitFor(() => expect(stdin()).toContain("set_model"));
+      return { cursor, pending };
+    };
+    const prompts = () => readFileSync(join(scratch, "prompts.jsonl"), "utf8").trim().split("\n").map((line) => (JSON.parse(line) as { text: string }).text);
+
+    it("is stopped before its prompt reaches Claude", async () => {
+      const { cursor, pending } = await stalled("t-switch-stop");
+      await instance.adapter.interruptTurn("t-switch-stop");
+      const { turnId } = await pending;
+      expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId)).toMatchObject({ ok: false, stopReason: "interrupted" });
+      const again = await instance.adapter.sendTurn({ threadId: "t-switch-stop", text: "again", model: "claude-one", effort: "max", resumeCursor: cursor });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === again.turnId);
+      expect(prompts()).toEqual(["one", "again"]);
+    });
+
+    it("turns away a second send", async () => {
+      const { cursor, pending } = await stalled("t-switch-overlap");
+      await expect(instance.adapter.sendTurn({ threadId: "t-switch-overlap", text: "overlap", model: "claude-one", effort: "max", resumeCursor: cursor }))
+        .rejects.toThrow("already running");
+      const { turnId } = await pending;
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(prompts()).toEqual(["one", "switched"]);
+    });
+
+    it("respawns without the injected credentials when leaving an injected model on the same base URL", async () => {
+      await create(undefined, { ANTHROPIC_BASE_URL: "http://127.0.0.1:8888", UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" });
+      const spawn = vi.spyOn(procs, "spawnCli");
+      const first = await instance.adapter.sendTurn({ threadId: "t-leave-inject", text: "one", model: "unsloth::local-model", effort: "max" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+      const cursor = firstCursor();
+      const second = await instance.adapter.sendTurn({ threadId: "t-leave-inject", text: "two", model: "claude-sonnet-5-5", effort: "max", resumeCursor: cursor });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === second.turnId);
+      expect(spawn.mock.calls.map(([, , opts]) => [opts?.env?.ANTHROPIC_BASE_URL, opts?.env?.ANTHROPIC_AUTH_TOKEN])).toEqual([
+        ["http://127.0.0.1:8888", "unsloth-secret"],
+        ["http://127.0.0.1:8888", undefined],
+      ]);
+    });
+
+    it("forks Quick Helper on the model and effort an idle switch moved to", async () => {
+      await create();
+      const spawn = vi.spyOn(procs, "spawnCli");
+      const first = await instance.adapter.sendTurn({ threadId: "t-switch-helper", text: "one", model: "claude-one", effort: "max" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+      const cursor = firstCursor();
+      const second = await instance.adapter.sendTurn({ threadId: "t-switch-helper", text: "two", model: "claude-other", effort: "high", resumeCursor: cursor });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === second.turnId);
+      expect(spawn).toHaveBeenCalledOnce();
+      const side = instance.fork!({ threadId: "t-switch-helper", text: "q" })!;
+      try {
+        const argv = spawn.mock.calls[1]![1];
+        expect([argv[argv.indexOf("--model") + 1], argv[argv.indexOf("--effort") + 1], argv[argv.indexOf("--resume") + 1]]).toEqual(["claude-other", "high", cursor]);
+      } finally {
+        await side.close(1000);
+      }
+    });
+  });
+
   it("closes an idle session after the configured window", async () => {
     process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS = "10";
     process.env.OMB_CLAUDE_SESSION_IDLE_MS = "50";
@@ -2737,6 +2806,21 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const { turnId } = await instance.adapter.sendTurn({ threadId: focus.threadId, text: "two", approval: "ask", resumeCursor: cursor, model: "claude-other", effort: "high" });
       await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
       expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["model", { model: "claude-other", effort: "max" as const }],
+      ["effort", { model: "claude-one", effort: "high" as const }],
+    ])("switches a prepared process's %s in place when the pick moves before Send", async (_name, pick) => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, { ...focus, model: "claude-one", effort: "max" });
+      expect(spawn).toHaveBeenCalledTimes(2);
+      const started = Date.now();
+      const { turnId } = await instance.adapter.sendTurn({ threadId: focus.threadId, text: "two", approval: "ask", resumeCursor: cursor, ...pick });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(prompts().at(-1)).toMatchObject({ pid: spawn.mock.results[1]!.value.pid, text: "two" });
     });
 
     it("prepares nothing without a closed session, once the approval moved, or twice", async () => {
