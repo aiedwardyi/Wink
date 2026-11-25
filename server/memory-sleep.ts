@@ -209,8 +209,8 @@ export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<strin
   // a twin merge is certain; a model's moves are capped per run
   const move = (line: NoteLine | undefined, by: NoteLine | undefined, why: Why, model = true) => {
     if (!line || !by || line === by || (model && guessed >= MOVES_MAX) || gone.has(line) || gone.has(by) || kept.has(line) || movedBefore.has(twinKey(line.text))) return;
-    // only whole notes, under the same heading, and never in favor of a line the prompt does not load
-    if (!line.alone || !by.alone || line.section !== by.section || (loaded(line) && !loaded(by))) return;
+    // only whole notes, under the same heading, and never in favor of a line the prompt does not load; a head duplicate stays, since the newest lines roll out
+    if (!line.alone || !by.alone || line.section !== by.section || (loaded(line) && !loaded(by)) || (why === "duplicate" && line.at < head && by.at >= head)) return;
     moves.push({ at: line.at, text: line.text, by: by.text, why });
     if (model) guessed += 1;
     gone.add(line);
@@ -223,7 +223,8 @@ export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<strin
     if (text) twins.set(key, [...(twins.get(key) ?? []), line]);
   }
   for (const group of twins.values()) {
-    const shown = group.filter(loaded);
+    const top = group.filter((line) => line.at < head);
+    const shown = top.length ? top : group.filter(loaded);
     const pool = shown.length ? shown : group;
     // the newest: notes are appended, so the last copy, unless an earlier one carries a later stamp
     const keep = pool.reduce((best, line) => (best.date && line.date && best.date > line.date ? best : line));

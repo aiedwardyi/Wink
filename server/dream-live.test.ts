@@ -46,6 +46,25 @@ describe("planTidy loads the newest lines too", () => {
     expect(view.text).not.toContain("- Uses pnpm (noted 2026-11-10)");
     expect(planTidy(raw).map(({ text, by }) => [text, by])).toEqual([["- Uses pnpm (noted 2026-11-10)", "- Uses pnpm (noted 2026-11-01)"]]);
   });
+
+  // the newest lines roll out of the prompt as notes are added; the head stays
+  it("keeps the head copy of a note that also sits in the newest lines", () => {
+    const head = (top: string, bottom: string) => {
+      const filler = Array.from({ length: MEMORY_MAX_LINES + 220 }, (_, n) => `- Filler kettle${n} harbor${n} lantern${n}`);
+      filler[2] = top;
+      const raw = memory(...filler, bottom);
+      const view = loadedMemory(raw);
+      expect(view.text).toContain(top);
+      expect(view.newest).toContain(bottom);
+      return raw;
+    };
+    const twin = head("- Deploys with pnpm from the home PC (noted 2026-10-01)", "- Deploys with pnpm from the home PC (noted 2026-11-20)");
+    expect(planTidy(twin).map(({ text, by }) => [text, by])).toEqual([["- Deploys with pnpm from the home PC (noted 2026-11-20)", "- Deploys with pnpm from the home PC (noted 2026-10-01)"]]);
+    const model = head("- Deploys with pnpm (noted 2026-10-01)", "- Deploys with pnpm and turbo from the home PC (noted 2026-11-20)");
+    expect(planTidy(model, JSON.stringify({ duplicates: [{ keep: `L${MEMORY_MAX_LINES + 223}`, drop: ["L5"] }] }))).toEqual([]);
+    const replaced = head("- Prefers tabs (noted 2026-10-01)", "- Prefers spaces, not tabs (noted 2026-11-20)");
+    expect(planTidy(replaced, JSON.stringify({ disagree: [["L5", `L${MEMORY_MAX_LINES + 223}`]] })).map(({ text }) => text)).toEqual(["- Prefers tabs (noted 2026-10-01)"]);
+  });
 });
 
 describe("replaces keeps a fact a hedged or scoped newer note only narrows", () => {
