@@ -1,4 +1,5 @@
 import { redactSecretsInText } from "./redact.ts";
+import { SYSTEM_LINE_SPLIT_CHARS, systemDelta } from "./system-delta.ts";
 import { asksBlock, type TaskAsk } from "./task-asks.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
 
@@ -422,9 +423,6 @@ export class TurnSeeds<T extends { instanceId: string; cursor: unknown } = Resum
 
 /** Cap on the changed lines' characters; past it the session recycles instead. */
 export const SYSTEM_REMINDER_MAX_CHARS = 12_000;
-// Most of Wink's guidance is one long line; split such lines at sentence
-// ends so one changed rule does not resend the rest.
-const SYSTEM_LINE_SPLIT_CHARS = 2_000;
 const SYSTEM_REMINDER_HEADER =
   "[Wink instructions update - your system prompt changed after this session started. Removed lines no longer apply; added lines are current and win over anything older.]";
 
@@ -451,39 +449,6 @@ export function systemLinesReordered(delivered: string, system: string): boolean
   return retainedLinesReordered(systemLines(delivered), systemLines(system));
 }
 
-// Blank and tag lines bound a block and a heading keeps its body; a whole block that moves changes nothing.
-function systemBlocks(text: string): string[] {
-  const blocks: string[] = [];
-  let block: string[] = [];
-  const close = () => {
-    if (block.length) blocks.push(block.join("\n"));
-    block = [];
-  };
-  for (const raw of text.split("\n")) {
-    const line = raw.trimEnd();
-    if (!line.trim()) {
-      if (!/^#{1,6}\s/.test(block.at(-1) ?? "")) close();
-      continue;
-    }
-    if (/^<[\w-]+>$/.test(line.trim())) close();
-    block.push(line);
-    if (/^<\/[\w-]+>$/.test(line.trim())) close();
-  }
-  close();
-  return blocks;
-}
-
-/** Lines of `from` that `other` does not also hold, in `from`'s order. */
-function linesOnlyIn(from: string[], other: string[]): string[] {
-  const left = new Map<string, number>();
-  for (const line of other) left.set(line, (left.get(line) ?? 0) + 1);
-  return from.filter((line) => {
-    const count = left.get(line) ?? 0;
-    left.set(line, count - 1);
-    return count <= 0;
-  });
-}
-
 /** A resumed session keeps the system text it started with. Prepends what
  * changed since `delivered` to this turn's text; null when the change is
  * too big for that and the session should recycle instead. */
@@ -494,13 +459,7 @@ export function withSystemChanges(
   maxChars = SYSTEM_REMINDER_MAX_CHARS,
 ): string | null {
   if (delivered === undefined || delivered === system) return text;
-  const blocksBefore = systemBlocks(delivered);
-  const blocksAfter = systemBlocks(system);
-  const before = linesOnlyIn(blocksBefore, blocksAfter).flatMap(systemLines);
-  const after = linesOnlyIn(blocksAfter, blocksBefore).flatMap(systemLines);
-  const reordered = retainedLinesReordered(before, after);
-  const removed = reordered ? before : linesOnlyIn(before, after);
-  const added = reordered ? after : linesOnlyIn(after, before);
+  const { removed, added } = systemDelta(delivered, system);
   if (!removed.length && !added.length) return text;
   if ([...removed, ...added].reduce((sum, line) => sum + line.length, 0) > maxChars) return null;
   // Untagged, Haiku kept the stale system prompt in about half of real-CLI

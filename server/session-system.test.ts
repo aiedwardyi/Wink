@@ -358,7 +358,7 @@ describe("system text on a resumed session", () => {
     }
 
     const edited = await send("which package manager?", remember("- deploy with railway up", "- the user prefers pnpm"));
-    expect(edited.text).toBe([...reminder("[Added:]", "- the user prefers pnpm"), "", "which package manager?"].join("\n"));
+    expect(edited.text).toBe([...reminder("[Added:]", "# Memory", "- the user prefers pnpm"), "", "which package manager?"].join("\n"));
     expect(edited.pid).toBe(first.pid);
     expect(session()).toBe(opened);
     expect(store.taskByThread(bot.id, bot.threadId)?.nativePrompt).toMatchObject({ cursor: opened, first: 45_003, last: 46_202 });

@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
+import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const fake = (name: string) => join(SERVER_DIR, "testing", name);
@@ -25,11 +26,20 @@ const ENGINE_NAMES = ["claude", "codex"] as const;
 type Engine = (typeof ENGINE_NAMES)[number];
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
-// The order before the cache reorder: the playbook came after memory.
+// The layout before the cache reorder: saved keys rode the credential rule, About You and
+// the notes sat by the memory guidance, and the playbook came after them.
 const olderOrder = (system: string) => {
   const start = system.indexOf("\n<harness_playbook>");
   const end = system.indexOf("</harness_playbook>") + "</harness_playbook>".length;
-  return system.slice(0, start) + system.slice(end) + system.slice(start, end);
+  const tail = system.slice(end);
+  const keys = /^\nSaved keys: [^\n]*/.exec(tail)?.[0] ?? "";
+  const personal = tail.slice(keys.length);
+  const notesAt = personal.indexOf("\n\nYour memory (MEMORY.md):");
+  const guidanceStart = system.indexOf(" Your private long-term memory file is");
+  const guidanceEnd = system.indexOf("never action approval.", guidanceStart) + "never action approval.".length;
+  const rest = system.slice(0, guidanceStart) + personal.slice(0, notesAt) + system.slice(guidanceStart, guidanceEnd)
+    + personal.slice(notesAt) + system.slice(guidanceEnd, start);
+  return rest.replace(CREDENTIAL_PROMPT, CREDENTIAL_PROMPT + keys.replace("\n", " ")) + system.slice(start, end);
 };
 
 describe("pinned session across a prompt reorder", () => {
@@ -109,7 +119,7 @@ describe("pinned session across a prompt reorder", () => {
         const entry = existsSync(log)
           ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((item) => item.text?.includes(text))
           : undefined;
-        if (entry && !busy) return { resumed: Boolean(entry.argv.includes("--resume")), input: String(entry.text) };
+        if (entry && !busy) return { resumed: Boolean(entry.argv.includes("--resume")), input: String(entry.text), startup: String(entry.systemPrompt ?? "") };
       } else {
         let calls: Array<{ method: string; params: any }> = [];
         try { calls = JSON.parse(readFileSync(join(home, "codex", "dump.json"), "utf8")).calls; } catch { /* not written yet */ }
@@ -118,7 +128,8 @@ describe("pinned session across a prompt reorder", () => {
           const injected = calls.filter((call) => call.method === "thread/inject_items")
             .flatMap((call) => call.params.items.flatMap((item: any) => item.content.map((block: any) => block.text ?? "")));
           const turn = started.params.input.map((item: any) => item.text ?? "");
-          return { resumed: calls.some((call) => call.method === "thread/resume") && !calls.some((call) => call.method === "thread/start"), input: [...injected, ...turn].join("\n") };
+          const startup = String(calls.find((call) => call.method === "thread/start")?.params?.developerInstructions ?? "");
+          return { resumed: calls.some((call) => call.method === "thread/resume") && !calls.some((call) => call.method === "thread/start"), input: [...injected, ...turn].join("\n"), startup };
         }
       }
       if (Date.now() > deadline) throw new Error(`${engine} never settled "${text}". stderr: ${stderr.slice(-2000)}`);
@@ -158,6 +169,7 @@ describe("pinned session across a prompt reorder", () => {
         const system = readFileSync(path, "utf8");
         if (!system.includes("<harness_playbook>")) continue;
         expect(olderOrder(system)).not.toBe(system);
+        expect(olderOrder(system)).toContain(`${CREDENTIAL_PROMPT} Saved keys: `);
         writeFileSync(path, olderOrder(system));
       }
     });
@@ -180,6 +192,43 @@ describe("pinned session across a prompt reorder", () => {
     expect(keyed.resumed).toBe(true);
     expect(keyed.input).not.toContain(REPLAY);
     expect(keyed.input).toContain("xAI API Key");
+
+    await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
+  }, 120_000);
+
+  it.each(ENGINE_NAMES)("delivers values that traded headings to the open %s chat and after a restart", async (engine) => {
+    await restart(() => writeConfig({ tts: { key: "fixture-tts" } }));
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    expect((await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: engine, model: ENGINES[engine].model },
+    })).status).toBe(200);
+    const path = `/api/bots/${bot.id}/memory`;
+    const notes = (a: string, b: string) => [
+      "# Project notes", "", "## Project A", "Owner: Alex.", "", `Budget: ${a} dollars.`, "",
+      "## Project B", "Owner: Billie.", "", `Budget: ${b} dollars.`, "", "## Status", "Both active.", "",
+    ].join("\n");
+    const save = async (a: string, b: string) => {
+      const { revision } = (await api("GET", path)).body;
+      expect((await api("PUT", path, { text: notes(a, b), baseRevision: revision })).status).toBe(200);
+    };
+    const knows = (got: { input: string; startup: string }, a: string, b: string) => {
+      if (!got.input.includes(UPDATE)) return got.startup.includes(notes(a, b).trim());
+      const added = got.input.slice(got.input.indexOf("[Added:]"));
+      return added.includes(`## Project A\nOwner: Alex.\nBudget: ${a} dollars.`) && added.includes(`## Project B\nOwner: Billie.\nBudget: ${b} dollars.`);
+    };
+
+    await save("500", "740");
+    expect(knows(await send(engine, bot.id, `read the notes on ${engine}`), "500", "740")).toBe(true);
+    await save("740", "500");
+    const warm = await send(engine, bot.id, `the Project A budget on ${engine}`);
+    expect(warm.input).not.toContain(REPLAY);
+    expect(knows(warm, "740", "500")).toBe(true);
+
+    await save("500", "740");
+    await restart();
+    const restarted = await send(engine, bot.id, `the Project A budget after a restart on ${engine}`);
+    expect(restarted.resumed).toBe(true);
+    expect(knows(restarted, "500", "740")).toBe(true);
 
     await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
   }, 120_000);
