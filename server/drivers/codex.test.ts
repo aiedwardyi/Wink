@@ -1230,6 +1230,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     it.each([
       ["agents/update_task_state", {}],
       ["agents/list_bots", {}],
+      ["agents/web_read", {}],
+      ["agents/wake_me", {}],
       ["openmausbot_phone/read_screen", {}],
       ["computer/click", {}],
       ["computer/click", { computer: undefined, localComputer: { ...stdio, platform: "win32" } }],
@@ -1269,6 +1271,22 @@ describe("CodexDriver turns (fake app-server)", () => {
         expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "decline" });
       },
     );
+
+    // an Ask card for call_wink_tool would hide the real tool, and its Always allow would cover all 11
+    it.each([
+      ["ask", {}, undefined],
+      ["auto", {}, "1"],
+      ["auto", { readOnly: true }, undefined],
+    ] as const)("mounts the Wink tool catalog on a %s turn %o only where no card can name call_wink_tool", async (approval, extra, flag) => {
+      vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "");
+      await create();
+      const dump = join(scratch, "catalog.json");
+      process.env.FAKE_CODEX_DUMP = dump;
+      await instance.adapter.sendTurn({ threadId: "t-catalog", text: "go", approval, ...extra, integrations: { agents: stdio } });
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(JSON.parse(readFileSync(dump, "utf8")).env.WINK_MCP_AGENTS_OMB_WINK_TOOL_CATALOG).toBe(flag);
+      vi.unstubAllEnvs();
+    });
 
     it.each(["agents/generate_image", "agents/create_bot", "openmausbot_phone/tap", "browser/browser_click"])(
       "Auto still accepts %s with no card",
