@@ -19,7 +19,7 @@ import { Fold } from "./Fold";
 
 // Newest release first: the grid opens on these, ahead of the older featured themes. Precision Dimmed stays under More themes.
 const NEW_SKIN_IDS: readonly SkinId[] = ["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night", "precision-dimmed", "bronze", "dim-sand"];
-const FEATURED_SKIN_IDS: readonly SkinId[] = [...NEW_SKIN_IDS.filter((id) => id !== "precision-dimmed"), "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "wink-day", "notebook"];
+const FEATURED_SKIN_IDS: readonly SkinId[] = [...NEW_SKIN_IDS.filter((id) => id !== "precision-dimmed"), "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "wink-day", "notebook", "messenger"];
 
 /** An animated theme's own scene, looping in its tile while mounted; a still tile under reduced motion. */
 function MiniScene({ scene }: { scene: SceneId }) {

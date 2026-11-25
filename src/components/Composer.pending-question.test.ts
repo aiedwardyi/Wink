@@ -12,7 +12,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
+import { StoreProvider, useStore, type Bot, type Group, type Message } from "@/state/store";
 import { createBotChatRoutes } from "../../server/bot-chat-routes";
 import { Store as ServerStore } from "../../server/store";
 
@@ -58,6 +58,14 @@ const bot = (messages: Message[]): Bot => ({
   modelSelection: { instanceId: "claude", model: "claude" },
 });
 
+const screen = (phone: boolean) => vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+
+let focused: ReturnType<typeof useStore>["state"]["focusMessage"] = null;
+function Probe() {
+  focused = useStore().state.focusMessage;
+  return null;
+}
+
 let root: ReturnType<typeof createRoot> | null = null;
 let host: HTMLElement | null = null;
 const calls: Array<{ method: string; path: string; body: unknown }> = [];
@@ -71,6 +79,7 @@ afterEach(async () => {
   host?.remove();
   root = null;
   host = null;
+  focused = null;
   calls.length = 0;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -91,7 +100,7 @@ async function mount(props: Parameters<typeof Composer>[0]) {
   vi.spyOn(console, "error").mockImplementation(() => {});
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, props))));
+  await act(async () => root!.render(createElement(StoreProvider, null, createElement(Probe), createElement(Composer, props))));
   await act(async () => FakeEventSource.current!.onmessage?.({
     data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }),
     lastEventId: "",
@@ -228,6 +237,62 @@ describe("pinned ask_user question", () => {
     resized();
     expect(card()!.style.maxHeight).toBe("106px");
     expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["22px", "auto"]);
+  });
+
+  it("lifts the tray's own cap, so a phone keeps three lines of the question with every choice in sight", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(true);
+    const sheet = document.head.appendChild(document.createElement("style"));
+    sheet.textContent = "[data-composer-tray] { overflow-y: auto; }";
+    const isPane = (el: Element) => el.matches("[data-composer-tray]");
+    const tall = 170;
+    const need = tall + 128;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : this.matches("[data-pending-question]") ? need : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : isPane(this) ? need : 0; });
+    // a phone's 30dvh tray cap at 844 is 253px, below the card's 298px
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return isPane(this) ? (this.style.maxHeight === "none" ? need : 253) : 0; });
+    await mount({ bot: bot([question]) });
+    const tray = host!.querySelector<HTMLElement>("[data-composer-tray]")!;
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    const choices = card()!.querySelector<HTMLElement>("[data-term-choices]")!;
+    expect(body.style.minHeight).toBe("66px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["", ""]);
+    expect(tray.style.maxHeight).toBe("none");
+    await act(async () => root!.unmount());
+    root = null;
+    expect(tray.style.maxHeight).toBe("");
+    sheet.remove();
+  });
+
+  it("ends a cut question on a whole line, never half of one", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(true);
+    let shown = 113;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 0, this.matches("[data-question-body]") ? shown : 0); });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 132 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.style.maxHeight).toBe("110px");
+    shown = 110;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("");
+    shown = 120;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("110px");
+    shown = 132;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("");
+  });
+
+  it("keeps a desktop card's window and the tray's cap as they were", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(false);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 0, this.matches("[data-question-body]") ? 174 : 0); });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 1078 : 0; });
+    await mount({ bot: bot([ask({ options: ["Prod", "Staging", "Both"] })]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.style.maxHeight).toBe("");
+    expect(host!.querySelector<HTMLElement>("[data-composer-tray]")!.style.maxHeight).toBe("");
   });
 
   it("fades a cut question at its foot until it is scrolled to its end", async () => {
@@ -584,5 +649,62 @@ describe("one tray over the message box", () => {
     const together = tray?.querySelector('[data-attachment-tray="row"]');
     expect(together?.textContent).toContain("Replying to Ada");
     expect(together?.querySelectorAll('[aria-label="Remove image"]')).toHaveLength(2);
+  });
+});
+
+describe("jumping from the question card", () => {
+  const reply = (id: string, from?: Message["from"]): Message => ({ id, role: "bot", kind: "text", at: 1, text: "Here is why I am asking.", from });
+  const tool = (id: string): Message => ({ id, role: "bot", kind: "activity", at: 1, tool: { name: "Read", ok: true } });
+  const tap = () => act(async () => host!.querySelector<HTMLElement>("[data-question-body]")!.click());
+
+  it("lands on the bot's own text from the turn that raised the pinned question", async () => {
+    const stamped = ask({ replyId: "reply-1" });
+    await mount({ bot: bot([reply("reply-1"), tool("t1"), stamped]) });
+    await tap();
+    expect(focused).toMatchObject({ threadId: "asker-thread", messageId: "reply-1", consumed: false });
+  });
+
+  it("lands on the asking member's text in a room, not another member's", async () => {
+    const ada = bot([]);
+    const max = { ...bot([]), id: "max", name: "Max" };
+    const from = (member: Bot) => ({ botId: member.id, name: member.name, color: member.color });
+    const group: Group = {
+      id: "room", threadId: "room-thread", name: "War room", memberIds: [ada.id, max.id], bulletin: "",
+      defaultResponder: { kind: "everyone" }, unread: false, createdAt: 1,
+      messages: [reply("ada-text", from(ada)), reply("max-text", from(max)), { ...ask({ replyId: "ada-text" }), from: from(ada) }],
+    };
+    await mount({ group, members: [ada, max] });
+    await tap();
+    expect(focused).toMatchObject({ threadId: "room-thread", messageId: "ada-text" });
+  });
+
+  it("does nothing for a question whose turn wrote no text, even with an earlier turn's text above it", async () => {
+    await mount({ bot: bot([reply("earlier"), tool("t1"), question]) });
+    expect(host!.querySelector("[data-question-body]")!.className).not.toContain("cursor-pointer");
+    await tap();
+    expect(focused).toBeNull();
+  });
+
+  it("jumps to an older open question's own record, reached with the arrows", async () => {
+    const older = ask({ staysOpen: true, subtitle: "Older question?" });
+    const newest = ask({ staysOpen: true, subtitle: "Newest question?" });
+    await mount({ bot: bot([reply("reply-1"), older, newest]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    await expand();
+    await tap();
+    expect(card()?.textContent).toContain("Older question?");
+    expect(focused).toMatchObject({ messageId: older.id });
+  });
+
+  it("leaves the arrows and the choices to flip and answer, not jump", async () => {
+    const older = ask({ staysOpen: true, subtitle: "Older question?" });
+    const newest = ask({ staysOpen: true, subtitle: "Newest question?" });
+    await mount({ bot: bot([reply("reply-1"), older, newest]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    await act(async () => rowButton("Prod").click());
+    expect(focused).toBeNull();
+    expect(row()!.textContent).toContain("1/2");
   });
 });

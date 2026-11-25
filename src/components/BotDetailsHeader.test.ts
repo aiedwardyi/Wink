@@ -71,7 +71,8 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(phoneHeaderName).not.toContain("data-chat-terminal");
     expect(chatHeader).not.toContain("data-chat-terminal");
     expect(chatHeader).not.toContain("TerminalSquare");
-    expect(chatHeader).toContain("onOpenTerminalPane, onOpenTerminal }} />");
+    expect(chatHeader).toContain("workers={paneSource} />");
+    expect(chatView).toContain("onOpenTerminalPane, onOpenTerminal };");
     expect(chatHeader).toContain('className="min-w-0 flex-1 overflow-hidden max-md:hidden"');
   });
 

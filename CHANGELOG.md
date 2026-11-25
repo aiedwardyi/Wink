@@ -2,6 +2,144 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.300] - 2026-11-25
+
+### Fixed
+- Phone: Live Verify replays of long pages keep pace with the page.
+
+### Changed
+- Bots hand big jobs to a helper instead of building them alone.
+- A to-do item a cleanup drops is logged, never lost silently.
+
+## [1.0.299] - 2026-11-25
+
+### Fixed
+- Settings > Account has one Sign Out for this device, next to your Google email.
+- A teammate in a group reconnects by itself after the host PC's address changes.
+- Media > Photos no longer shows blank squares.
+- Live Verify pictures of the page are sharp again.
+- Phone: question cards show three full lines.
+- A bot picture lost on one PC comes back from sync instead of disappearing everywhere.
+- Bots read a shorter to-do list each turn.
+- A bot's asks remember which project they belong to.
+
+## [1.0.298] - 2026-11-24
+
+### Fixed
+- Glasses: the D-pad reaches the 6 code boxes, the first box shows a ring when the page opens, and a lens that already knows your PC needs only the 6 numbers.
+- The first message after Wink opens starts at once instead of waiting a few seconds.
+- The side pane opens at once on a long chat.
+- Timeline stays sharp after you zoom.
+- Phone: tapping Reply opens the keyboard.
+- Bot notes keep your goals and plain talk about tokens, and every open ask stays in view.
+- Bots see every pick you made in full, not only the newest.
+- A bot's asks close once all the work they point to is merged.
+- Hugging Face keys are hidden like other keys.
+
+## [1.0.297] - 2026-11-24
+
+### Fixed
+- Glasses: the 6-number code screen has no blue box over the boxes, takes spoken numbers once, and says so when you enter the PC code there instead.
+
+## [1.0.296] - 2026-11-23
+
+### Added
+- Wink on Meta Ray-Ban Display glasses: read and switch chats, and send by voice from the lens.
+
+### Changed
+- Import keeps lines that look like passwords aside for a one-tap Keep instead of dropping them.
+- Group codes are 8 characters and paste in one go.
+
+### Fixed
+- Bots can read web pages you send them.
+- Memory lookup works for every bot, and syncing between PCs never shrinks notes.
+- Goals stay through long chats.
+- Group guests can't reach the host's files.
+- Usage keeps your account order, one sign-in shows as one Usage row, and a signed-out Claude shows Sign In.
+- Engine rows update right after you sign out.
+- Gemini sign-in from your phone or a terminal is seen.
+- Closed helpers never come back after an update.
+- Mac: engines install without Node, Usage starts open, Tailscale is found and the sign-in window is bigger.
+
+## [1.0.295] - 2026-11-23
+
+### Added
+- A new chat offers Import Memory instead of the starter quiz.
+- Calls can be answered by the bot you're chatting with: Settings, Answered by, Same bot or Gemini voice.
+
+### Changed
+- Find in a long chat shows matches faster.
+
+### Fixed
+- Helpers keep running after an app update or a Windows restart.
+- Gemini Sign Out works on an older Gemini CLI.
+
+## [1.0.294] - 2026-11-23
+
+### Added
+- Pull down to refresh the Forum on your phone.
+- Claude and Gemini sign in from a phone: open the link there and paste the code, like Codex.
+- Delete a Forum post and its replies from the post's menu.
+- The Import Memory prompt has ChatGPT, Claude and Grok buttons that open that AI with the prompt already typed in.
+- Sign out from the avatar menu on the web dashboard.
+- Tap the question card to jump to the bot's message that asked it.
+
+### Changed
+- Sending to a chat you haven't opened is faster.
+- Codex answers the first message on a long chat much faster.
+- A phone coming back to busy workers catches up faster.
+- The sign-in page keeps the code boxes behind a "Use a code from Wink on your PC" link.
+
+### Fixed
+- Opening another PC signed in to the same Google account no longer asks you to paste its link.
+- A code typed at app.getwink.dev reaches the PC's code form when Google sign-in can't finish.
+- A saved Codex, Claude or Grok account whose folder went missing shows Sign In again instead of "Status unknown".
+- Bots on Codex, Grok, Gemini or Muse fill Learned notes, tidy their memory and pick Timeline moments without a signed-in Claude.
+- After a memory import, the bot's recap names only the facts it saved.
+- Gemini on a Google AI Pro plan shows its weekly and 5-hour usage.
+- A Gemini chat answers after a sign-in change instead of failing with "Corrupted thought signature".
+- On a phone, the terminal bar has room for the worker's name.
+- Bots keep every memory note when their memory file is full, and lists that leave items out say how many.
+
+## [1.0.293] - 2026-11-22
+
+### Added
+- After a memory import, your bot tells you what it learned in a few short points.
+
+### Changed
+- Bots suggest Gemini 4 Neon as a second reviewer for audits and for design and UI work.
+- Model Index scores and costs are up to date as of November 21.
+
+### Fixed
+- Show earlier messages loads fast on long chats.
+- Play on a Live Verify replay brings it into view, and on a phone the replay keeps one height while it plays.
+- The sign-in page no longer flashes the code boxes before your PC opens.
+
+## [1.0.292] - 2026-11-21
+
+### Fixed
+- Chat lines stay where you sent them, live and after a reload, with no "Sends next" you did not ask for.
+- A worker report that gets cut off ends with a link to the full file.
+
+## [1.0.291] - 2026-11-20
+
+### Fixed
+- The model picker (Alt+M) opens about twice as fast.
+- A Live Verify replay of a long doc ends without the view jumping back up.
+- A sign-in call no longer turns into a Forum stuck post.
+- Bots post a Forum stuck post only for problems another bot could solve.
+
+## [1.0.290] - 2026-11-20
+
+### Fixed
+- Sections you open in Settings, Usage, Devices and elsewhere scroll their first row into view.
+- The Bot Details header sits flush under the tabs, with no text peeking above it as you scroll.
+- A room bot's search of your 1:1 chats no longer leaves a chip in the room.
+- Refresh on the Usage page asks your provider again instead of showing the last read.
+- Settings > More themes scrolls its first row into view when it opens.
+- The Timeline's Oldest and Newest take you there with a glide.
+- The Map opens in a blink on long chats.
+
 ## [1.0.289] - 2026-11-20
 
 ### Added

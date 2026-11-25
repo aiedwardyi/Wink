@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
-import { ASK_USER_QUESTION_MAX, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, closedAskNotes, memberClosedAskNotes, postAskUser, skippedQuestion, watchSkippedQuestions, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
+import { ASK_USER_QUESTION_MAX, askTurnTexts, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, closedAskNotes, memberClosedAskNotes, postAskUser, skippedQuestion, watchSkippedQuestions, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
 import type { MausColor, Message, StoreChange } from "./store.ts";
 import type { TaskAsk } from "./task-asks.ts";
 
@@ -33,6 +33,47 @@ function harness(conversations = new Map<string, { group?: object }>([["bot-a:th
 
 const ask = (deps: AskUserDeps<Bot>, body: Partial<AskUserRequest>) => postAskUser(deps, askUserRequestSchema.parse(body));
 
+describe("the asking turn's text", () => {
+  it("is the last text of the bot's current turn in that thread", () => {
+    const texts = askTurnTexts();
+    texts.started("ada", "t", "turn-1");
+    texts.text("ada", "t", "turn-1", "m1");
+    texts.text("ada", "t", "turn-1", "m2");
+    expect(texts.last("ada", "t")).toBe("m2");
+    expect(texts.last("ada", "other")).toBeUndefined();
+    expect(texts.last("max", "t")).toBeUndefined();
+  });
+
+  it("forgets an earlier turn's text once a new turn starts, with or without a start event", () => {
+    const texts = askTurnTexts();
+    texts.text("ada", "t", "turn-1", "m1");
+    texts.started("ada", "t", "turn-2");
+    expect(texts.last("ada", "t")).toBeUndefined();
+    texts.text("ada", "t", "turn-3", "m3");
+    expect(texts.last("ada", "t")).toBe("m3");
+  });
+
+  it("keeps each room member's turn apart", () => {
+    const texts = askTurnTexts();
+    texts.started("ada", "room", "turn-a");
+    texts.text("ada", "room", "turn-a", "ada-1");
+    texts.started("max", "room", "turn-m");
+    texts.text("max", "room", "turn-m", "max-1");
+    expect(texts.last("ada", "room")).toBe("ada-1");
+    texts.started("ada", "room", "turn-a2");
+    expect(texts.last("ada", "room")).toBeUndefined();
+  });
+
+  it("keeps the final answer over commentary written after it", () => {
+    const texts = askTurnTexts();
+    texts.started("ada", "t", "turn-1");
+    texts.text("ada", "t", "turn-1", "note", "commentary");
+    texts.text("ada", "t", "turn-1", "final", "final_answer");
+    texts.text("ada", "t", "turn-1", "late", "commentary");
+    expect(texts.last("ada", "t")).toBe("final");
+  });
+});
+
 describe("ask-user endpoint", () => {
   it("posts a marked question card into the sender's own thread and alerts once", () => {
     const h = harness();
@@ -50,6 +91,25 @@ describe("ask-user endpoint", () => {
     ]);
     expect(h.appended[0].message.card).not.toHaveProperty("requestId");
     expect(h.alerts).toEqual([{ bot: expect.objectContaining({ id: "bot-a" }), threadId: "thread-a", question: "Prod or staging?" }]);
+  });
+
+  it("stamps the card with the asking turn's last text, read when the held card posts", () => {
+    const h = harness();
+    let held: (() => void) | undefined;
+    let reply: string | undefined = "early";
+    h.deps.whenSettled = (_botId, _threadId, post) => { held = post; };
+    h.deps.turnText = (botId, threadId) => (botId === "bot-a" && threadId === "thread-a" ? reply : undefined);
+    ask(h.deps, { fromBotId: "bot-a", fromThreadId: "thread-a", question: "Which?" });
+    reply = "final";
+    held!();
+    expect(h.appended[0].message.card?.replyId).toBe("final");
+  });
+
+  it("leaves the card unstamped when the asking turn wrote no text", () => {
+    const h = harness();
+    h.deps.turnText = () => undefined;
+    ask(h.deps, { fromBotId: "bot-a", fromThreadId: "thread-a", question: "Which?" });
+    expect(h.appended[0].message.card).not.toHaveProperty("replyId");
   });
 
   it("attributes a room question to its sender", () => {
@@ -133,7 +193,7 @@ describe("closed ask_user card note", () => {
     activeMessages, userMessage, text: userMessage.text, closedAskNotes, currentPrompt: userMessage.text,
     turnStartedByUser: () => true, opts: undefined, supportsWorkspaceFiles: () => false, instance: {}, threadSyncV2: null,
     mailForTurn: () => [], store: {}, threadId: "t1", paneNoteIds: [], modelContextWindow: 200_000, paneTokens: 0,
-    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], bot: { id: "bot-a" },  });
+    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], bot: { id: "bot-a" }, askNotes: [] });
 
   it("tells the bot its open card closed when the user typed past it", () => {
     const typed = said("u1", "what's for lunch?");

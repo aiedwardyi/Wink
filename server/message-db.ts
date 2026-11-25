@@ -25,6 +25,7 @@ const DB_FILE = () => join(DATA_DIR, "messages.db");
 let handle: DatabaseSync | null = null;
 let handlePath: string | null = null;
 let opened = 0;
+// never cleared: a thread deleted and re-created can reuse its rowids, so only this count tells the two apart
 const changes = new Map<string, number>();
 let transactionKeys = 0;
 const changeListeners = new Set<(threadId: string, id: string, deleted: boolean) => void>();
@@ -140,14 +141,15 @@ export function readThread(threadId: string, legacyFile: string): ThreadRows & {
   return { ...legacy, chars: legacy.messages.reduce((sum, message) => sum + JSON.stringify(message).length, 0) };
 }
 
-/** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here. */
-export function storedHead(threadId: string): string | null | undefined {
+/** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here; `kept`, while that row exists, stands in for the newest row when no head is stored. */
+export function storedHead(threadId: string, kept?: string | null): string | null | undefined {
   // SAFETY: Each subquery selects one TEXT column, or NULL when it finds no row.
   const row = db().prepare(
     "SELECT (SELECT active_leaf_id FROM thread_state WHERE thread_id = ?1) AS leaf, " +
+      "(SELECT id FROM messages WHERE thread_id = ?1 AND id = ?2) AS kept, " +
       "(SELECT id FROM messages WHERE thread_id = ?1 ORDER BY rowid DESC LIMIT 1) AS last",
-  ).get(threadId) as { leaf: string | null; last: string | null };
-  return row.last === null ? undefined : row.leaf || row.last;
+  ).get(threadId, kept ?? null) as { leaf: string | null; kept: string | null; last: string | null };
+  return row.last === null ? undefined : row.leaf || row.kept || row.last;
 }
 
 /** A key that moves with every committed change to a thread's rows, or undefined when it has no rows here; key cached reads of a thread on it. */
@@ -185,6 +187,22 @@ export function threadTailOn(handle: DatabaseSync, threadId: string, count: numb
     .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
     .get(threadId) as { active_leaf_id: string | null } | undefined;
   return { messages: rows.reverse().map(rowToMessage), options: options.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
+}
+
+/** A stored row's rowid, or undefined when the row is not stored here. */
+export function rowCursor(threadId: string, id: string): number | undefined {
+  // SAFETY: This projection selects SQLite's rowid.
+  const row = db().prepare("SELECT rowid AS cursor FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { cursor: number } | undefined;
+  return row?.cursor;
+}
+
+/** The `count` stored rows before a rowid, oldest first; cold-thread-worker.ts runs it on its own handle. */
+export function threadPageBeforeOn(handle: DatabaseSync, threadId: string, before: number, count: number): ThreadRows & { options: Message[] } {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = handle
+    .prepare("SELECT json FROM messages WHERE thread_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?")
+    .all(threadId, before, count) as Array<{ json: string }>;
+  return { messages: rows.reverse().map(rowToMessage), options: [], activeLeafId: null };
 }
 
 function importLegacy(threadId: string, legacyFile: string): ThreadRows {
@@ -381,9 +399,9 @@ export function readMessage(threadId: string, id: string): Message | undefined {
   return row && rowToMessage(row);
 }
 
-/** The active path newest first, one row at a time, or null when there are no stored rows. */
-export function activePathBack(threadId: string): Iterable<Message> | null {
-  const leaf = storedHead(threadId);
+/** The active path newest first, one row at a time, or null when there are no stored rows; `kept` as storedHead takes it. */
+export function activePathBack(threadId: string, kept?: string | null): Iterable<Message> | null {
+  const leaf = storedHead(threadId, kept);
   if (!leaf) return null;
   const database = db();
   const row = database.prepare("SELECT rowid AS position, json FROM messages WHERE thread_id = ? AND id = ?");
@@ -405,6 +423,64 @@ export function activePathBack(threadId: string): Iterable<Message> | null {
       id = message.parentId;
     }
   })();
+}
+
+/** The last thread whose stored active path was walked, keyed on its head and version so a search per keystroke walks it once. */
+let storedPath: { threadId: string; key: string; ids: Set<string> } | undefined;
+
+/** Which of `ids` sit on the stored active path, read from the parent and id indexes alone: the rows themselves (pictures and all) are never read. `kept` as storedHead takes it. */
+export function onStoredPath(threadId: string, ids: readonly string[], kept?: string | null): Set<string> {
+  const head = storedHead(threadId, kept);
+  if (!head) return new Set();
+  const key = `${head}:${threadVersion(threadId)}`;
+  if (storedPath?.threadId !== threadId || storedPath.key !== key) {
+    const database = db();
+    // SAFETY: These projections select SQLite's rowid with the message's parentId or id TEXT, both covered by an index.
+    const parents = database.prepare("SELECT rowid AS position, json_extract(json, '$.parentId') AS parent FROM messages WHERE thread_id = ?").all(threadId) as Array<{ position: number; parent: string | null }>;
+    const rows = database.prepare("SELECT rowid AS position, id FROM messages WHERE thread_id = ?").all(threadId) as Array<{ position: number; id: string }>;
+    // flat legacy rows omit parentId and follow the row stored before them, as activePathBack reads them; an explicit null ends the branch
+    // SAFETY: This projection selects SQLite's rowid.
+    const flat = new Set((database.prepare("SELECT rowid AS position FROM messages WHERE thread_id = ? AND json_extract(json, '$.parentId') IS NULL AND json_type(json, '$.parentId') IS NULL").all(threadId) as Array<{ position: number }>).map((row) => row.position));
+    const parentAt = new Map(parents.map((row) => [row.position, row.parent]));
+    const positionOf = new Map(rows.map((row) => [row.id, row.position]));
+    const stored = flat.size ? rows.sort((a, b) => a.position - b.position) : rows;
+    const indexAt = flat.size ? new Map(stored.map((row, index) => [row.position, index])) : undefined;
+    const path = new Set<string>();
+    for (let id: string | null | undefined = head; id && !path.has(id);) {
+      const position = positionOf.get(id);
+      if (position === undefined) break;
+      path.add(id);
+      id = flat.has(position) ? stored[indexAt!.get(position)! - 1]?.id : parentAt.get(position);
+    }
+    storedPath = { threadId, key, ids: path };
+  }
+  const path = storedPath.ids;
+  return new Set(ids.filter((id) => path.has(id)));
+}
+
+/** The rows messageWindow slices from messagesFor(threadId) around `id`, read by key without loading the thread; null when no stored row has that id. */
+export function storedWindow(threadId: string, id: string, limit: number): { messages: Message[]; hasMore: boolean } | null {
+  const database = db();
+  // SAFETY: This projection selects SQLite's rowid.
+  const target = database.prepare("SELECT rowid AS position FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id) as { position: number } | undefined;
+  if (!target) return null;
+  if (limit < 1) return { messages: [], hasMore: true };
+  type Row = { id: string; json: string };
+  // SAFETY: These projections select the message id and its stored JSON.
+  const newer = database.prepare("SELECT id, json FROM messages WHERE thread_id = ? AND rowid >= ? ORDER BY rowid LIMIT ?").all(threadId, target.position, limit) as Row[];
+  // half the page before the row, more when the chat ends sooner; one extra row tells whether older ones remain
+  const wanted = Math.max(Math.floor((limit - 1) / 2), limit - newer.length);
+  const older = database.prepare("SELECT id, json FROM messages WHERE thread_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?").all(threadId, target.position, wanted + 1) as Row[];
+  const shown = older.slice(0, wanted).reverse();
+  // flat legacy rows chain to the row stored before them, as a loaded thread chains them
+  let prev = older[shown.length]?.id ?? null;
+  const messages = [...shown, ...newer.slice(0, limit - shown.length)].map((row) => {
+    const message = rowToMessage(row);
+    if (message.parentId === undefined) message.parentId = prev;
+    prev = message.id;
+    return message;
+  });
+  return { messages, hasMore: older.length > shown.length };
 }
 
 /** A thread's rows newest first, parsed only as far as the caller reads. */
@@ -472,6 +548,33 @@ export function sendIdsOn(handle: DatabaseSync, threadId: string): SendIdRows {
   return { cursor, rows };
 }
 
+/** The newest stamp a send is clocked past, by sendClock's rule over every stored row: a row's time, or the later acted time of a row that did not wait. */
+export function newestStampOn(handle: DatabaseSync, threadId: string): number {
+  // SAFETY: Two aggregates always yield one row; each is null for an empty thread.
+  const row = handle.prepare(
+    "SELECT MAX(at) AS at, MAX(CASE WHEN json_type(json, '$.actedAt') IN ('integer', 'real') AND COALESCE(json_type(json, '$.waited'), 'null') IN ('null', 'false') THEN json_extract(json, '$.actedAt') END) AS acted FROM messages WHERE thread_id = ?",
+  ).get(threadId) as { at: number | null; acted: number | null } | undefined;
+  return Math.max(0, row?.at ?? 0, row?.acted ?? 0);
+}
+
+/** A chat's unanswered quick asks on its active path, as quick-ask.ts recovers them after a restart. */
+export function quickAsksOn(handle: DatabaseSync, threadId: string): Array<{ id: string; at: number }> {
+  // SAFETY: The query selects the message table's typed ids and time.
+  const found = handle.prepare(`SELECT id, at FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
+    AND json_extract(json, '$.quick.state') = 'asked'
+    AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
+      AND json_extract(json, '$.quick.askId') IS NOT NULL)`).all(threadId, threadId) as Array<{ id: string; at: number }>;
+  // without a saved leaf main reads the path whole (Store.activePath), so every ask stays
+  if (!found.length || !handle.prepare("SELECT 1 FROM thread_state WHERE thread_id = ? AND active_leaf_id IS NOT NULL").get(threadId)) return found;
+  // only asks on the active path: main walks back until it sees each one, so an ask on a dropped branch would walk it to the root
+  // SAFETY: The query selects the message table's typed id.
+  const onPath = new Set((handle.prepare(`WITH RECURSIVE path(id) AS (
+      SELECT active_leaf_id FROM thread_state WHERE thread_id = ?
+      UNION SELECT json_extract(m.json, '$.parentId') FROM messages m JOIN path ON m.id = path.id WHERE m.thread_id = ?
+    ) SELECT id FROM path WHERE id IN (SELECT value FROM json_each(?))`).all(threadId, threadId, JSON.stringify(found.map((row) => row.id))) as Array<{ id: string }>).map((row) => row.id));
+  return found.filter((row) => onPath.has(row.id));
+}
+
 /** Newest message time without loading the transcript. */
 export function lastMessageAt(threadId: string): number | null {
   const row = db().prepare("SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { at: number | null } | undefined;
@@ -508,8 +611,10 @@ export function botRepliesByEngine(): Array<{ threadId: string; botId: string | 
 export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
-  changes.delete(threadId);
 }
+
+/** A hit's at and rowid: an in-chat find page past it starts there even once its row is gone. */
+export type FindPlace = { at: number; row: number };
 
 export interface SearchHit {
   threadId: string;
@@ -526,6 +631,8 @@ export interface SearchHit {
   matches: number;
   /** room messages: which member said it */
   from?: string;
+  /** with `at`, where the row sits in its chat: a find page goes on from there even once the row is gone */
+  row: number;
 }
 
 // Same header and detail block the terminal row draws. Search must not outrun it.
@@ -600,14 +707,27 @@ export function searchSnippet(haystack: string, needle: string): Pick<SearchHit,
  * ahead of tool rows so a real line is not crowded out by newer paths that
  * repeat it; inside one chat (find bar) it stays newest first, so next and
  * previous follow the transcript. One ordered LIKE scan, deliberately: local
- * transcripts are megabytes at most, a scan is milliseconds, and it needs
- * no FTS extension to exist. In one chat, `before` pages past that hit.
+ * transcripts are usually megabytes, and it needs no FTS extension to exist;
+ * a gigabyte chat scans for seconds, so an in-chat find runs off the server
+ * thread (searchMessagesOn). In one chat, `before` pages past that hit, at
+ * its `place` when given, and `ids` limits the scan to those rows.
  * `skip` threads never count toward `limit`. */
 export function searchMessages(
   query: string,
   limit = 40,
   threadId?: string,
-  { before, chips = false, skip }: { before?: string; chips?: boolean; skip?: ReadonlySet<string> } = {},
+  options: { before?: string; place?: FindPlace; chips?: boolean; skip?: ReadonlySet<string>; ids?: readonly string[] } = {},
+): SearchHit[] {
+  return searchMessagesOn(db(), query, limit, threadId, options);
+}
+
+/** searchMessages on `handle`; cold-thread-worker.ts runs an in-chat find on its own handle, since a gigabyte chat scans for seconds. */
+export function searchMessagesOn(
+  handle: DatabaseSync,
+  query: string,
+  limit = 40,
+  threadId?: string,
+  { before, place, chips = false, skip, ids }: { before?: string; place?: FindPlace; chips?: boolean; skip?: ReadonlySet<string>; ids?: readonly string[] } = {},
 ): SearchHit[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
@@ -628,11 +748,14 @@ export function searchMessages(
       "     WHERE lower(CASE WHEN substr(value, 1, 1) IN ('+', '-') THEN substr(value, 1, 1) || ' ' || substr(value, 2) ELSE value END) LIKE ?1 ESCAPE '\\'))"
     : "";
   // SAFETY: This projection selects at and SQLite's rowid.
-  const cursor = threadId && before
-    ? db().prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined
-    : undefined;
+  const cursor = !threadId || !before ? undefined
+    : place ?? handle.prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined;
   if (before && !cursor) return [];
-  const scope = threadId ? `thread_id = ?3 AND ${cursor ? "(at < ?4 OR (at = ?4 AND rowid < ?5)) AND " : ""}` : "";
+  const after = cursor ? "(at < ?4 OR (at = ?4 AND rowid < ?5)) AND " : "";
+  // `ids` reads just those rows by key: the unary + keeps SQLite off the chat's (thread_id, at) index, which walks every row
+  const scope = !threadId ? ""
+    : ids ? `+thread_id = ?3 AND rowid IN (SELECT rowid FROM messages WHERE thread_id = ?3 AND id IN (SELECT value FROM json_each(?${cursor ? 6 : 4}))) AND ${after}`
+    : `thread_id = ?3 AND ${after}`;
   const order = threadId ? "" : "CASE WHEN kind = 'text' THEN 0 ELSE 1 END, ";
   // Text matches its text. Activity matches the fields a row can draw, then
   // the visible detail only; a default-skin chip draws its name and summary. Engine
@@ -641,13 +764,13 @@ export function searchMessages(
     ? "(lower(ifnull(json_extract(json, '$.tool.name'), '')) LIKE ?1 ESCAPE '\\' OR lower(ifnull(json_extract(json, '$.tool.summary'), '')) LIKE ?1 ESCAPE '\\')"
     : `lower(json_extract(json, '$.tool.name', '$.tool.summary', '$.tool.detail.input', '$.tool.detail.output', '$.tool.detail.diff')) LIKE ?2 ESCAPE '\\'${decoded}`;
   // Sorts row ids only; the hit loop reads each row once it needs it.
-  const ordered = db().prepare(
+  const ordered = handle.prepare(
     "SELECT rowid AS row, thread_id FROM messages " +
       `WHERE ${scope}((kind = 'text' AND text IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\' AND json_extract(json, '$.summarized') IS NOT 1) ` +
       "   OR (kind = 'activity' AND ((text IS NOT NULL AND json_extract(json, '$.comm') IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\') " +
       `     OR (lower(json) LIKE ?2 ESCAPE '\\' AND ${gate})))) ORDER BY ${order}at DESC, rowid DESC`,
   );
-  const fetch = db().prepare(
+  const fetch = handle.prepare(
     "SELECT thread_id, id, at, role, kind, CASE WHEN kind != 'activity' OR json_extract(json, '$.comm') IS NOT NULL THEN text END AS text, " +
       "CASE WHEN kind = 'activity' THEN json_extract(json, '$.tool') END AS tool_json, json_extract(json, '$.from.name') AS from_name FROM messages WHERE rowid = ?",
   );
@@ -662,7 +785,7 @@ export function searchMessages(
     from_name: string | null;
   };
   const hits: SearchHit[] = [];
-  const args = [pattern, like(fragment), ...(threadId ? [threadId] : []), ...(cursor ? [cursor.at, cursor.row] : [])];
+  const args = [pattern, like(fragment), ...(threadId ? [threadId] : []), ...(cursor ? [cursor.at, cursor.row] : []), ...(threadId && ids ? [JSON.stringify(ids)] : [])];
   const rows = ordered.iterate(...args);
   for (const { row: rowid, thread_id } of rows) {
     if (skip?.has(String(thread_id))) continue;
@@ -677,6 +800,7 @@ export function searchMessages(
       role: row.role,
       kind: row.kind,
       ...searchSnippet(haystack, needle),
+      row: Number(rowid),
     };
     if (row.from_name) hit.from = row.from_name;
     hits.push(hit);

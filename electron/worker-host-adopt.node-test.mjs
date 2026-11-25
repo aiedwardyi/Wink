@@ -299,6 +299,28 @@ test("a kept pane with no record or an unknown owner never becomes a row and is 
   await closeAll(second, [kept]);
 });
 
+test("a held pane whose record was closed while the bot list loaded is dropped, not adopted", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-adopt-"));
+  try {
+    const id = "11111111-aaaa-4bbb-8ccc-000000000001";
+    const file = path.join(root, "pane-runs.json");
+    fs.writeFileSync(file, JSON.stringify([{ id, botId: "bot-1", teacher: "bot-1", label: "HELD-1", cwd: root, spawnedAt: 1, state: "running", kept: true }]));
+    const runs = createPaneRuns(file);
+    const calls = [];
+    const client = { left: () => "kept", ended: () => new Map(), prewarm: async () => true, panes: async () => [{ id }], attach: () => ({ pty: { detach() {} } }), drop: (dropped) => calls.push(["drop", dropped]), state: () => ({}) };
+    const loaded = [{}, { "bot-1": "One" }];
+    let recheck;
+    const rechecked = new Promise((resolve) => { recheck = resolve; });
+    await adoptWorkers({ client, runs, host: { adoptPane: (run) => { calls.push(["adopt", run.id]); return null; }, closeForBot: async () => {} }, botNames: async () => loaded.shift(), wait: () => rechecked, pacer: { wrap: (attached) => attached } });
+    assert.equal(runs.closed(id), true);
+    recheck();
+    await until(() => calls.length, 5000);
+    assert.deepEqual(calls, [["drop", id]]);
+  } finally {
+    await remove(root);
+  }
+});
+
 test("a host the app cannot reach blocks both adoption and restart until it is gone", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-adopt-"));
   try {

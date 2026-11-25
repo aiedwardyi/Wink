@@ -63,8 +63,8 @@ export interface PhoneRelay {
   sendSnag?(snag: TeamSnag): Promise<boolean>;
   /** This PC's person used Wink just now. */
   sendActive?(): void;
-  /** A short room code pointing at this PC, or null. */
-  mintRoomCode?(): Promise<{ code: string; exp: number } | null>;
+  /** A short room code pointing at this PC, or null. `long` asks for 8 characters. */
+  mintRoomCode?(long?: boolean): Promise<{ code: string; exp: number } | null>;
 }
 
 export interface PhoneRelayEnrollOptions {

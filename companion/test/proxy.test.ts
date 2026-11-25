@@ -7,8 +7,7 @@
 // through, and the harness's loopback gate rejecting a proxied request.
 import { type ChildProcess } from "node:child_process";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -17,6 +16,7 @@ import { createProxyHandler } from "../src/proxy.ts";
 import { spawnHarness as spawn, harnessFetch as fetch, harnessToken } from "../../server/testing/harness-auth.ts";
 import { createConnectedDeviceTracker } from "../src/connected-devices.ts";
 import type { CompanionEndpoint } from "../src/endpoints.ts";
+import { createFixtureHome, removeTestData } from "../../server/testing/test-home.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
@@ -131,7 +131,7 @@ beforeAll(async () => {
   HARNESS = `http://127.0.0.1:${HARNESS_PORT}`;
   SIDECAR = `http://127.0.0.1:${SIDECAR_PORT}`;
 
-  home = mkdtempSync(join(tmpdir(), "companion-test-"));
+  home = createFixtureHome("companion-test-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
     join(home, ".orbit", "config.json"),
@@ -215,7 +215,7 @@ afterAll(async () => {
     // the suite instead
     setTimeout(resolve, 10_000).unref?.();
   });
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 describe("the sidecar in front of an unmodified harness", () => {

@@ -4,6 +4,7 @@ import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as compaction from "./context-compaction.ts";
+import { decodeCodexSelection, OFFICIAL_CODEX_PROVIDER } from "./drivers/codex-catalog.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
 import { Store, type Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryBuild } from "./summary-build.ts";
@@ -96,11 +97,12 @@ function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MOD
     const userMessage = store.appendMessage(THREAD, { role: "user", kind: "text", text: "next request" });
     const skipTranscript = new Set([userMessage.id]);
     const result = await runSend({
-      ...compaction, ...turnContext, composeUserTurnPrompt, inlineDeadlineMs, inlineSummarizer, summaryInstance, asksNudge, isStatusTurn,
+      ...compaction, ...turnContext, composeUserTurnPrompt, inlineDeadlineMs, inlineSummarizer, summaryInstance, asksNudge, isStatusTurn, goalsOf: () => [],
+      decodeCodexSelection, OFFICIAL_CODEX_PROVIDER,
       store, task, instance, model, instanceId: "claude", threadId: THREAD, bot, summaryBuild: build,
       cfg: {}, accounts: { snapshot: [] }, process: { env: {} }, instanceConfigs: () => ({ claude: { environment: env } }),
       text: "next request", userMessage, skipTranscript, opts: {}, holdNotes: undefined, routineTurn: false, recovering: false, priorTaskPacket: undefined, commsDepth: 0,
-      latencySendId: "send", taskPacketForWrite: () => undefined, closeMergedAsks: (_botId: string, _threadId: string, record: unknown) => record, persistTaskPacket: () => undefined, stampTaskResumePacket: () => undefined,
+      latencySendId: "send", taskPacketForWrite: () => undefined, closeMergedAsks: () => ({ ids: [], shown: (record: unknown) => record, notes: () => [] }), persistTaskPacket: () => undefined, stampTaskResumePacket: () => undefined,
       unsettledRequest: () => "", lastUserInstruction: () => undefined, decodeInjectId: () => null, logSummaryCall: () => {}, startedTurn: () => ({}),
     });
     return { ...result, skipTranscript };
@@ -155,7 +157,7 @@ describe("native send path", () => {
     expect(prepared).toMatchObject({ status: "ready", compactionId: "summary-0" });
     const prompt = composeUserTurnPrompt("next request", { messages: h.store.activePath(), userName: "User", replayedTranscript: prepared.transcript });
     const output = { summaryPrompt: h.generateText.mock.calls[0]![0], summary: h.appended[0]!.compaction, transcript: prepared.transcript, prompt };
-    expect(createHash("sha256").update(JSON.stringify(output)).digest("hex")).toMatchInlineSnapshot(`"a8f0cbe574155b2e2c5a7acfece8a1c8edfbc726aa933e22cf4121d322b54d71"`);
+    expect(createHash("sha256").update(JSON.stringify(output)).digest("hex")).toMatchInlineSnapshot(`"a8f021bb10dfcd158e80ba8a49840dd851d1d4317f8ea2efd120511a50fb1efa"`);
   });
 
   it.each([false, true])("shares a projection per send revision (mid-send edit: %s)", async (edit) => {

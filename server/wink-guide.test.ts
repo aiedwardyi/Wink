@@ -16,7 +16,7 @@ describe("wink guide", () => {
 
   it("keeps engine picks in the guide", () => {
     const guide = readFileSync(PACKAGED_FILES.winkGuide, "utf8");
-    expect(guide).toContain("- Save Gemini 4 Argon for big jobs that gain from a second model family's view, like a whole-codebase audit or 3D and graphic design. Routine work goes to the other engines.");
+    expect(guide).toContain("- Save Gemini 4 Argon for big jobs that gain from a second model family's view, like 3D and graphic design. Routine work goes to the other engines.");
     expect(guide).toContain("- Coding fallback as engines run low:");
   });
 

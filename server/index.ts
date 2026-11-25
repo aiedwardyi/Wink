@@ -15,6 +15,8 @@ import {
   botNotifyIconPath,
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
+import { FORUM_STUCK_RULE } from "../shared/forum-rule.ts";
+import { WEB_READ_ROUTE, WEB_READ_RULE } from "../shared/web-read.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
@@ -34,6 +36,7 @@ import "./bot-cwd.ts";
 import { resolveBotTerminalFolder } from "./terminal-cwd.ts";
 import {
   applyResolvedProjectFolder,
+  checkProjectFolders,
   opensHostFiles,
   projectFolderPrompt,
   projectNotesPrompt,
@@ -137,7 +140,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
-import { LoginBusyError, logSignInRefusal } from "./engine-login.ts";
+import { LoginBusyError, logSignInRefusal, signInOwner, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
@@ -151,7 +154,8 @@ import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { codexResumeReplayRoom, contextWindowFor, estimateContextTokens, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nativeReplayBudget, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, prepareNativeReplay, routineCardsSinceLastUserTurn, summarizesOnEstimate, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { decodeCodexSelection, OFFICIAL_CODEX_PROVIDER } from "./drivers/codex-catalog.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -159,7 +163,7 @@ import { summaryInstance } from "./summary-instance.ts";
 import { resetPathCache } from "./env-path.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import { watchAskHold } from "./ask-hold.ts";
-import { closedAskNotes, memberClosedAskNotes, watchSkippedQuestions } from "./ask-user.ts";
+import { askTurnTexts, closedAskNotes, memberClosedAskNotes, watchSkippedQuestions } from "./ask-user.ts";
 import {
   createPingLimiter,
   pingForMailbox,
@@ -183,7 +187,7 @@ import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.t
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, coldLoading, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldLoading, coldQuickAsks, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -200,12 +204,12 @@ import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
 import { lastMessageAt } from "./message-db.ts";
 import "./turn-index.ts";
-import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { botRoute, CommsCallers } from "./comms-caller.ts";
+import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
@@ -230,6 +234,7 @@ import {
   type Hands,
 } from "./steer-queue.ts";
 import { startedTurn } from "./send-receipt.ts";
+import { serverClockSample } from "./send-clock.ts";
 import "./send-deliver.ts";
 import {
   SendSequencer,
@@ -275,9 +280,10 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { sweepDroppedAsks } from "./task-dropped.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import {
@@ -326,21 +332,23 @@ import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
   ensureWorkspace,
+  goalsOf,
   workspaceDir,
   memoryHealth,
   memorySystemPrompt,
   supportsWorkspaceFiles,
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
-import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
+import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
-import { importMemoryRoute, importMemoryTurn, importOfferNote } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
+import { goalRoute } from "./goal-route.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
-import { createMemoryLookup } from "./memory-lookup.ts";
+import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
-import { createUnlandedWork } from "./unlanded.ts";
-import { createAskPrs } from "./ask-prs.ts";
+import { createUnlandedWork, reportNotes } from "./unlanded.ts";
+import { closedAskLine, createAskPrs, createKnownRepos, remoteRepo, reposIn, withClosed } from "./ask-prs.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -419,6 +427,7 @@ import {
   syncedDeleteChoice,
   syncedInFolder,
   readSyncAvatarAsset,
+  restoreSyncedAvatar,
   readSyncOperationsFor,
   syncAvatarMatches,
   saveProfileSyncSettings,
@@ -435,7 +444,7 @@ import {
   type SyncedBot,
   type SyncEntityValues,
 } from "./profile-sync.ts";
-import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, peerMemoryLanded, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
+import { ensureMemorySyncDevice, loadLegacyMemoryLedger, loadMemorySyncLedger, markTalked, markTidied, memorySyncUnchanged, memoryJobMachine, peerMemoryLanded, pinMemoryJobOwner, readMemorySnapshots, saveMemorySyncLedger, saveMemorySyncLedgerIfChanged, syncBotMemory, tidiesHere } from "./memory-sync.ts";
 import {
   CONFLICT_NOTICE,
   CONFLICT_NOTICE_V2,
@@ -473,6 +482,7 @@ import { memberTurnSelection } from "./member-turn.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
 import { createPlaybookGate, harnessPlaybookPrompt, modelPicksPrompt } from "./harness-playbook.ts";
+import { createRevertIndex } from "./revert-index.ts";
 import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import "./package-export.ts";
@@ -483,6 +493,7 @@ import { createGroupRoutes, roomSetupPending } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
 import { createVerifyAuto } from "./verify-auto.ts";
+import { createWebReader, webReadRoute } from "./web-read.ts";
 import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { keepErrorReports, reportServerFailure, turnOffErrorReports } from "./error-reports.ts";
@@ -689,8 +700,7 @@ googleAccount.onIdToken(googlePhotoChanged);
  * but the compare costs nothing to make safe. */
 const commsCallers = new CommsCallers();
 function authorizedComms(header: string | string[] | undefined, path: string): boolean {
-  const caller = commsCallers.resolve(header);
-  return caller ? botRoute(path, caller.botId) : bootToken(header);
+  return commsCallers.allows(header, path, bootToken);
 }
 function bootToken(header: string | string[] | undefined): boolean {
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
@@ -814,7 +824,7 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation; reader?: boolean },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
@@ -836,6 +846,7 @@ function askBotAndWait(
       ...peerAttribution(peer?.sender, peer?.channel),
       onDispatchError,
       commsAsk: true,
+      ...(peer?.reader ? { webReader: true } : {}),
     }).then(() => undefined),
     adopt: () => {
       if (!peer || !store.bot(targetBotId)?.busy) return undefined;
@@ -1347,6 +1358,12 @@ const wireTask = ({
 }: TaskRecord) => ({ ...task, taskState: store.taskPacket(task.threadId) ?? undefined });
 
 const KEEP_GOING_PAUSED_LINE = "Agentic Mode paused: two tries made no progress";
+async function botLivePanes(botId: string) {
+  const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
+  return counts.status === 200 && "counts" in counts.body ? counts.body.counts[botId] ?? 0 : null;
+}
+const workerEngineSignedIn = () => registry.describeSaved().some((row) => (row.driverKind === "claudeAgent" || row.driverKind === "codex") && row.snapshot.authenticated === true);
+
 // Declared before wireBot reads it; its callbacks only run on the routines timer.
 const keepGoing = new KeepGoing({
   deviceId: () => profileSyncSettings.deviceId,
@@ -1380,10 +1397,7 @@ const keepGoing = new KeepGoing({
     }
     return rateLimitsByInstance.get(instanceId) ?? null;
   },
-  livePanes: async (botId) => {
-    const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
-    return counts.status === 200 && "counts" in counts.body ? counts.body.counts[botId] ?? 0 : null;
-  },
+  livePanes: botLivePanes,
   dispatch: (botId, prompt, options) => startTurn(botId, prompt, options).then(() => undefined),
   paused: (_botId, threadId) => {
     store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name: `error: ${KEEP_GOING_PAUSED_LINE}`, ok: false } });
@@ -1444,6 +1458,7 @@ const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
     projectFolderClearedAt: _projectFolderClearedAt,
     paneWakePaused: _paneWakePaused,
     lastProjectCwd: _lastProjectCwd,
+    knownRepos: _knownRepos,
     tasks,
     ...rest
   } = bot;
@@ -1493,6 +1508,7 @@ let profileSyncLastSyncAt: number | null = null;
 let profileSyncSeen: ProfileImportSeen = { signature: "", invalid: false, missingAssets: [] };
 let profileImports = 0;
 const syncAvatarAssets = new Map<string, string>();
+const STORED_AVATAR = /^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/;
 
 function syncSectionId(section: string | undefined): string | null {
   const key = sectionKey(section);
@@ -1552,16 +1568,17 @@ function nextProfileSyncOperation(
   return operation;
 }
 
-function syncAvatarAssetForBot(bot: BotRecord, folder: string): string | null {
+/** undefined: the picture's file is gone here, which says nothing about the picture, so no op may clear it on other PCs. */
+function syncAvatarAssetForBot(bot: BotRecord, folder: string): string | null | undefined {
   if (!bot.avatarUrl) return null;
-  const match = bot.avatarUrl.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/);
+  const match = bot.avatarUrl.match(STORED_AVATAR);
   if (!match) return null;
   // attachments never change under their name, and every publish and import pass asks again
   const cacheKey = `${folder}\n${bot.avatarUrl}`;
   const cached = syncAvatarAssets.get(cacheKey);
   if (cached) return cached;
   const attachment = readAttachment(match[1]!);
-  if (!attachment) return null;
+  if (!attachment) return undefined;
   try {
     const asset = writeSyncAvatarAsset(folder, attachment.bytes, match[1]!.split(".").pop() ?? "");
     syncAvatarAssets.set(cacheKey, asset);
@@ -1588,6 +1605,7 @@ function importSyncAvatar(folder: string, avatarAsset: unknown): string | null {
 }
 
 function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unknown> {
+  const avatarAsset = syncAvatarAssetForBot(bot, folder);
   return {
     name: bot.name,
     title: bot.title,
@@ -1595,7 +1613,7 @@ function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unk
     color: bot.color,
     mascotExpression: bot.mascotExpression ?? null,
     mascotStyle: bot.mascotStyle ?? null,
-    avatarAsset: syncAvatarAssetForBot(bot, folder),
+    ...(avatarAsset === undefined ? {} : { avatarAsset }),
     ...(bot.avatarCrop ? { avatarCrop: bot.avatarCrop } : {}),
     sectionId: syncSectionId(bot.section),
     pinned: Boolean(bot.pinned),
@@ -1767,7 +1785,7 @@ function applySyncedBotFields(
   }
   const current = store.bot(bot.id);
   const avatarCrop = importedSyncAvatarCrop(synced.avatarCrop, current?.avatarCrop);
-  const currentMatch = current?.avatarUrl?.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(png|jpg|gif|webp))$/);
+  const currentMatch = current?.avatarUrl?.match(STORED_AVATAR);
   const currentBytes = currentMatch ? readAttachment(currentMatch[1]!)?.bytes : undefined;
   const avatarUrl = currentBytes && syncAvatarMatches(folder, importedAvatar, currentBytes)
     ? current!.avatarUrl
@@ -1777,11 +1795,22 @@ function applySyncedBotFields(
   return true;
 }
 
+/** Bot pictures whose files are gone here come back from the sync folder, under the name bots.json already holds. */
+function restoreLostBotAvatars(folder: string): void {
+  for (const bot of store.bots) {
+    const name = bot.avatarUrl?.match(STORED_AVATAR)?.[1];
+    const globalId = profileSyncSettings.botMap[bot.id];
+    if (!name || !globalId || attachmentExists(name)) continue;
+    if (restoreSyncedAvatar(folder, profileSyncSettings.syncedHashes, globalId, ATTACHMENTS_DIR, name)) console.warn(`bot sync: restored ${bot.name}'s lost picture`);
+  }
+}
+
 /** Applies what other devices published since the last pass: newest recordedAt wins, a local edit waiting to publish is kept. */
 async function importProfileChanges(): Promise<void> {
   const folder = profileSyncSettings.folder;
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return;
   ensureProfileSyncWorkspace(folder);
+  restoreLostBotAvatars(folder);
   const signature = `${folder}\n${syncOperationsSignature(folder)}`;
   if (!profileImportDue(profileSyncSeen, signature, folder)) return;
   profileImports++;
@@ -1840,6 +1869,15 @@ async function importProfileChanges(): Promise<void> {
     if (created || "avatarAsset" in item.apply) {
       markSynced(synced, { entity: "bot", entityId: item.globalId, changes: Object.fromEntries(Object.entries(local).filter(([field]) => !(field in remoteBot))) });
     }
+  }
+  if (!remote.invalidFiles.length) {
+    ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice);
+    for (const [botId, syncId] of Object.entries(profileSyncSettings.botMap)) {
+      const owner = Object.hasOwn(state.botOrigins, syncId) ? state.botOrigins[syncId] : undefined;
+      if (!owner || !pinMemoryJobOwner(memorySyncLedger, syncId, owner)) continue;
+      if (memoryJobsHere(botId)) memorySleep.onSettled(botId);
+    }
+    saveMemoryLedger();
   }
   const finish = () => {
     if (botTrash) finishRevive(trashSyncHost(), marks.revive, (botId) => threadSyncV2?.rebuild(botId));
@@ -2367,6 +2405,8 @@ let profilePublishTimer: ReturnType<typeof setTimeout> | undefined;
 const memorySyncLedger = loadMemorySyncLedger(DATA_DIR);
 const legacyMemoryLedger = loadLegacyMemoryLedger(DATA_DIR);
 let savedMemoryLedger = JSON.stringify(memorySyncLedger);
+const memoryJobDevice = memoryJobMachine(DATA_DIR);
+if (memorySyncLedger.device) ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice);
 
 function publishProfileChangesSafely(): void {
   try {
@@ -2467,8 +2507,11 @@ function saveMemoryLedger(): void {
   }
 }
 
-// whether this PC is the one that tidies each synced bot, as of its last sync pass
-const memoryTidyHere = new Map<string, boolean>();
+function memoryJobsHere(botId: string): boolean {
+  const folder = profileSyncSettings.folder;
+  const syncId = chatSyncBotId(profileSyncSettings, botId);
+  return !syncId || Boolean(folder && existsSync(folder) && tidiesHere(memorySyncLedger, syncId, profileSyncSettings.deviceId, memoryJobDevice));
+}
 
 // true when a pass ran; a poll that found nothing to do only retries a save that failed
 async function syncMemoryPass(botId: string): Promise<boolean> {
@@ -2481,7 +2524,6 @@ async function syncMemoryPass(botId: string): Promise<boolean> {
   const snapshots = await readMemorySnapshots(folder, botSyncId);
   if (!store.bot(botId) || chatSyncBotId(profileSyncSettings, botId) !== botSyncId || profileSyncSettings.folder !== folder) return false;
   const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, snapshots });
-  memoryTidyHere.set(botId, tidiesHere(memorySyncLedger, botSyncId, snapshots));
   // the poll runs for every idle bot, so only pulled changes refresh the page and check
   if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) {
     memoryHealthCheck.refresh(botId);
@@ -2566,7 +2608,7 @@ const googleSync = createGoogleSync({
   folder: () => profileSyncSettings.folder,
   prepare: () => {
     const device = memorySyncLedger.device;
-    if (ensureMemorySyncDevice(memorySyncLedger) !== device) {
+    if (ensureMemorySyncDevice(memorySyncLedger, memoryJobDevice) !== device) {
       saveMemorySyncLedger(DATA_DIR, memorySyncLedger);
       savedMemoryLedger = JSON.stringify(memorySyncLedger);
     }
@@ -2681,6 +2723,9 @@ function messagePage(threadId: string, limit: number | undefined, before?: strin
 /** A bounded page centred on a known message, used when a search result is
  * opened on a client that only hydrated the newest part of the transcript. */
 function messageWindow(threadId: string, messageId: string, limit: number) {
+  // a chat not in memory reads just the window; loading a long one took seconds
+  const stored = store.storedWindow(threadId, messageId, limit);
+  if (stored) return { messages: stored.messages.map(slimMessage), hasMore: stored.hasMore };
   const all = store.messagesFor(threadId);
   const index = all.findIndex((message) => message.id === messageId);
   if (index < 0) return null;
@@ -2701,7 +2746,7 @@ interface SseClient {
 }
 const sseClients = new Set<SseClient>();
 
-/** Every frame is numbered, and the last few hundred are kept, so a client
+/** Every frame is numbered, and the last thousand are kept, so a client
  * whose connection dropped can ask for what it missed instead of
  * re-downloading every transcript. The desktop reconnects in milliseconds
  * and barely needs this; a phone reconnects every time it unlocks.
@@ -2712,14 +2757,16 @@ const sseClients = new Set<SseClient>();
  * inside the SSE `id:` field, which means a browser EventSource resumes
  * correctly through its own Last-Event-ID with no client code at all. */
 const STREAM_ID = randomUUID().slice(0, 8);
-const REPLAY_MAX = 500;
+const REPLAY_MAX = 1000;
 const configuredSseHeartbeatMs = Number(process.env.OMB_SSE_HEARTBEAT_MS);
 const SSE_HEARTBEAT_MS =
   Number.isFinite(configuredSseHeartbeatMs) && configuredSseHeartbeatMs > 0
     ? configuredSseHeartbeatMs
     : 15_000;
 let lastSeq = 0;
-const replayBuffer: Array<{ seq: number; kind: string; frame: string | null }> = [];
+const replayBuffer: Array<{ seq: number; kind: string; frame: string | null; key?: string; payload?: Record<string, unknown> }> = [];
+/** The newest seq that fell off the ring; a cursor at or past it can still resume. */
+let replayFloor = 0;
 
 /** Screen frames are the only kind a client can decline. */
 const wants = (client: SseClient, kind: string) => kind !== "screen" || client.screens;
@@ -2780,6 +2827,33 @@ function broadcast(payload: Record<string, unknown>) {
   writeBroadcastFrame(payload);
 }
 
+/** A bot frame is the whole bot but its transcript, and a task.packet the whole strip, so a replay
+ * needs only the first and newest of each: the slots between leave and the ring reaches further back.
+ * A busy:true bot frame stays until a newer one is busy too, since the client clears its
+ * optimistic thinking state only on busy:true. */
+function replaySlot(seq: number, kind: string, safe: Record<string, unknown>, frame: string): (typeof replayBuffer)[number] {
+  if (kind === "screen") return { seq, kind, frame: null };
+  const bot = kind === "bot" ? safe.bot as Record<string, unknown> | undefined : undefined;
+  const key = kind === "task.packet" && typeof safe.threadId === "string" ? `packet:${safe.threadId}`
+    : bot && typeof bot.id === "string" ? `bot:${bot.id}` : undefined;
+  if (!key) return { seq, kind, frame };
+  // a frame carrying the transcript is a thread switch: it neither absorbs nor is absorbed
+  if (bot && "messages" in bot) return { seq, kind, frame, key };
+  let payload = safe;
+  for (let at = replayBuffer.length - 1; at >= 0; at--) {
+    if (replayBuffer[at].key !== key) continue;
+    const older = replayBuffer[at].payload?.bot as Record<string, unknown> | undefined;
+    if (bot && (!older || older.threadId !== bot.threadId || (older.busy === true && bot.busy !== true))) break;
+    // the oldest slot may announce a new bot ahead of the frames in its chat
+    if (!replayBuffer.some((slot, index) => index < at && slot.key === key)) break;
+    replayBuffer.splice(at, 1);
+    // older fields this frame omits still reach a client that replays both
+    if (bot && older) payload = { ...payload, bot: { ...older, ...(payload.bot as Record<string, unknown>) } };
+  }
+  const merged = payload === safe ? frame : `id: ${STREAM_ID}:${seq}\ndata: ${JSON.stringify({ ...payload, seq })}\n\n`;
+  return { seq, kind, frame: merged, key, payload };
+}
+
 function writeBroadcastFrame(payload: Record<string, unknown>, alreadyMasked = false) {
   const seq = ++lastSeq;
   const kind = String(payload.kind ?? "");
@@ -2791,8 +2865,8 @@ function writeBroadcastFrame(payload: Record<string, unknown>, alreadyMasked = f
   // Live desktop captures can each be hundreds of kilobytes and become stale
   // as soon as the next one arrives. Keep their sequence slots so resume-gap
   // detection stays honest, but never retain their base64 payloads.
-  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame });
-  if (replayBuffer.length > REPLAY_MAX) replayBuffer.shift();
+  replayBuffer.push(replaySlot(seq, kind, safe, frame));
+  if (replayBuffer.length > REPLAY_MAX) replayFloor = replayBuffer.shift()!.seq;
   for (const client of [...sseClients]) {
     if (!wants(client, kind)) continue;
     try {
@@ -2815,6 +2889,8 @@ const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> 
 const readOnlyTurnThreads = new Set<string>();
 /** Task threads that answer a room this PC joined: their Board posts are room posts. */
 const joinedRoomThreads = new Set<string>();
+/** Joined-room task threads whose current turn someone other than this PC's person asked for. */
+const joinedGuestThreads = new Set<string>();
 
 function settlePendingToolMessages(threadId: string, turnId?: string): void {
   const prefix = `${threadId}:`;
@@ -2929,13 +3005,14 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
+const askTexts = askTurnTexts();
 const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); });
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
 const pendingTaskPackets = new Map<
   string,
-  { packet: TaskResumePacket; timer: ReturnType<typeof setTimeout> }
+  { packet: TaskResumePacket; timer: ReturnType<typeof setTimeout>; seen?: TaskAsk[] }
 >();
 
 function eventTime(event: RuntimeEvent): number {
@@ -2953,12 +3030,12 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
-function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }): TaskResumePacket | null {
+function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) clearTimeout(pending.timer);
   pendingTaskPackets.delete(packet.threadId);
   try {
-    return store.writeTaskPacket(packet, opts);
+    return store.writeTaskPacket(packet, opts, [...(pending?.seen ?? []), ...(pending?.packet.asks ?? []), ...seen]);
   } catch (error) {
     console.error("task state: write failed", error);
     return null;
@@ -2973,17 +3050,29 @@ function stampShownAsks(threadId: string, sent: string): void {
   if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
-// a building ask closes as done once the PR in its ref merges
-function closeMergedAsks(botId: string, threadId: string, record: TaskResumePacket | null): TaskResumePacket | null {
+// a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
+function saveLandedCloses(threadId: string, turnId: string | undefined, landed: boolean): void {
+  const record = taskPacketForWrite(threadId);
+  const ids = askPrs.landed(threadId, turnId ?? "", landed, record?.asks);
+  if (record && ids.length) persistTaskPacket({ ...record, asks: withClosed(record.asks, ids, Date.now()) });
+}
+
+// a building ask whose ref PRs all merged shows as done on this turn, with a line; the store keeps it building until the turn lands
+function closeMergedAsks(botId: string, threadId: string, record: TaskResumePacket | null) {
   const ids = record ? askPrs.take(botId, threadId, record.asks) : [];
-  if (!record || !ids.length) return record;
+  const lines = record?.asks?.filter((ask) => ids.includes(ask.id)).map((ask) => closedAskLine(ask)) ?? [];
   const now = Date.now();
-  return persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, status: "done" as const, changedAt: now } : ask) }) ?? record;
+  return {
+    ids,
+    shown: (packet: TaskResumePacket | null): TaskResumePacket | null => packet && ids.length ? { ...packet, asks: withClosed(packet.asks, ids, now) } : packet,
+    notes: (full: boolean) => [...lines, askPrs.stepNote(botId, threadId, record?.asks, full), askPrs.failedNote(botId, threadId, record?.asks, full)].filter(Boolean),
+  };
 }
 
 function queueTaskPacket(packet: TaskResumePacket): void {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) {
+    pending.seen = [...(pending.seen ?? []), ...(pending.packet.asks ?? [])];
     pending.packet = packet;
     return;
   }
@@ -3038,6 +3127,7 @@ const summaryBuild = createSummaryBuild({
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
     if (!instance?.generateText) return null;
+    if (instance.driverKind === "codex" && codexResumeReplayRoom(task, selection.instanceId, selection.model) > 0) return null;
     const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
@@ -3058,31 +3148,33 @@ const summaryBuild = createSummaryBuild({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   userName: () => cfg.profile?.name?.trim() || "User",
 });
+const signedOutHelpers = new Set<string>();
+registry.onProbed((instanceId) => signedOutHelpers.delete(instanceId));
+const noteHelper = (botId: string) => {
+  const bot = store.bot(botId);
+  return bot ? botAccounts.notes(bot, { limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR), signedOut: signedOutHelpers }) : null;
+};
+const memoryJobEnabled = (botId: string) => {
+  const bot = store.bot(botId);
+  const instance = bot && registry.get(bot.modelSelection.instanceId);
+  return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
+};
+const ownNoteEngine = (botId: string) => registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.driverKind !== "claudeAgent";
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
-  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
-  enabled: (botId) => {
-    const bot = store.bot(botId);
-    const instance = bot && registry.get(bot.modelSelection.instanceId);
-    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot);
-  },
+  generate: noteHelper,
+  enabled: memoryJobEnabled,
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  host: deviceMachine,
 });
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
-  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
-  enabled: (botId) => {
-    const bot = store.bot(botId);
-    const instance = bot && registry.get(bot.modelSelection.instanceId);
-    const folder = profileSyncSettings.folder;
-    // two PCs tidying the same notes apart would leave parked copies, so a synced bot is tidied on one, and not while its folder is out of reach
-    const synced = Boolean(folder && chatSyncBotId(profileSyncSettings, botId));
-    const tidier = memoryTidyHere.get(botId) === true && Boolean(folder && existsSync(folder));
-    return Boolean(instance && supportsWorkspaceFiles(instance.driverKind)) && memoryNotesEnabled(cfg, bot) && (!synced || tidier);
-  },
+  generate: noteHelper,
+  requiresGenerator: ownNoteEngine,
+  enabled: (botId) => memoryJobEnabled(botId) && memoryJobsHere(botId),
   busy: (botId) => botHasActiveTurn(botId),
   changed: (botId) => broadcast({ kind: "memory.changed", botId }),
   // saved now, so a restart before the next sync pass still knows the tidy alone made this change
@@ -3110,17 +3202,45 @@ const unlandedWork = createUnlandedWork({
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
-const askPrs = createAskPrs({ repoDir: (botId, threadId) => {
-  const pinned = store.taskByThread(botId, threadId)?.cwd;
-  return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+const revertIndex = createRevertIndex();
+startupTiming.afterPaint("reverts", async () => {
+  await Promise.all([...new Set(store.bots.map((bot) => bot.cwd).filter((cwd) => cwd !== undefined))].map((cwd) => revertIndex.refresh(cwd)));
+});
+// where a bare "PR n" may be when the bot's folder is not a repo: its asks, its workers' reports and its panes' remotes
+const knownRepos = createKnownRepos({ saved: (botId) => store.bot(botId)?.knownRepos ?? [], save: (botId, repos) => store.rememberRepos(botId, repos), discover: async (botId) => {
+  const bot = store.bot(botId);
+  if (!bot) return [];
+  const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, botId, null, undefined, { panesOnly: true });
+  const panes = z.array(z.object({ cwd: z.string().catch("") })).catch([]).parse(snapshot.status === 200 ? snapshot.body.panes : []);
+  const cwds = [...new Set(panes.map((pane) => pane.cwd).filter(Boolean))];
+  for (const cwd of [...cwds, ...bot.cwd ? [bot.cwd] : []]) void revertIndex.refresh(cwd);
+  const remotes = await Promise.all(cwds.map((cwd) => mapGit(cwd, ["remote", "get-url", "origin"]).catch(() => "")));
+  return remotes.flatMap((url) => remoteRepo(url) ?? []);
+}, cited: async (botId, boot) => {
+  const bot = store.bot(botId);
+  if (!bot) return [];
+  const reports = [...reportNotes(boot ?? store.notesBack(bot.threadId))].map((row) => row.text ?? "");
+  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? ""), ...reports]);
 } });
+const askPrs = createAskPrs({
+  repoDir: (botId, threadId) => {
+    const pinned = store.taskByThread(botId, threadId)?.cwd;
+    return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+  },
+  repos: (botId) => knownRepos.get(botId),
+});
 // one bot at a time after the first paint, so a restart after an update has the list before the first typed turn
 startupTiming.afterPaint("unlanded", async () => {
   // the worker read each chat's reports; a chat loaded since then has them in memory
   const boot = new Map((await bootReads()).reports.map((row) => [row.threadId, row.notes]));
   for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
+  for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
 });
-const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
+const memoryLookup = createMemoryLookup({
+  dataDir: DATA_DIR,
+  notesPath: (botId) => store.bot(botId)?.projectNotes,
+  asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),
+});
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
@@ -3341,7 +3461,7 @@ const refreshUsage = createUsageRefresh({
 });
 const checkMuseUsage = createMuseCheck();
 const refreshSwappedUsage = createUsageSwapRefresh({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
-  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); },
+  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); else usageBoard.touch(); },
 });
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
@@ -3356,7 +3476,11 @@ const spawnUsage = createSpawnUsage({
   nameOf: (id, engine) => accountNames.nameOf(id, engine),
 });
 const workerTurns = createWorkerTurns();
-const playbookGate = createPlaybookGate();
+const playbookGate = createPlaybookGate(undefined, undefined, {
+  reverts: revertIndex,
+  wouldHold: (row) => appendRotatingLog(join(DATA_DIR, "revert-holds.ndjson"), `${JSON.stringify({ at: Date.now(), ...row })}\n`),
+  enforce: process.env.OMB_REVERT_HOLD === "1",
+});
 // A recycled or switched provider session has a new cursor, so it reads the playbook again.
 function playbookSession(botId: string): string {
   const threadId = workerTurns.activeThread(botId);
@@ -3904,8 +4028,12 @@ bus.subscribe((event: RuntimeEvent) => {
         bindPeerTurn(event.threadId, event.turnId);
       }
       limitWaits.bind(event.threadId, event.turnId);
+      if (turnOwnerId) askTexts.started(turnOwnerId, event.threadId, event.turnId);
       unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
-      if (turnOwnerId) memorySleep.onTurn(turnOwnerId);
+      if (turnOwnerId) {
+        if (ownNoteEngine(turnOwnerId)) memoryPass.onTurn(turnOwnerId);
+        memorySleep.onTurn(turnOwnerId);
+      }
       break;
     case "session.started":
       if (bot && event.sessionId && event.providerInstanceId && !staleTurnEvent(event.threadId, event.turnId)) {
@@ -3940,6 +4068,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // kept so "finished" can say what it finished with, rather than
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
+        if (!event.summarized && turnOwnerId) askTexts.text(turnOwnerId, event.threadId, event.turnId, message.id, event.phase);
         turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
@@ -4444,6 +4573,7 @@ bus.subscribe((event: RuntimeEvent) => {
           liveTurnIdByThread.delete(event.threadId);
         }
         const disowned = Boolean(event.turnId && disownedTurnIds.delete(event.turnId));
+        saveLandedCloses(event.threadId, event.turnId, !superseded && !disowned && (event.promptAccepted || event.ok && !interrupted));
         if (!superseded && !disowned) {
           const seed = turnSeeds.take(event.threadId, event.turnId);
           if (seed && turnSeedsSession({
@@ -4458,6 +4588,7 @@ bus.subscribe((event: RuntimeEvent) => {
               instanceId: seed.instanceId,
               cursor: seed.cursor,
               compactionId: seed.compactionId,
+              ...(seed.nativeReplay ? { nativeReplay: true } : {}),
             });
           }
           const systemSeed = systemSeeds.take(event.threadId, event.turnId);
@@ -4513,6 +4644,7 @@ bus.subscribe((event: RuntimeEvent) => {
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void unlandedWork.refresh(bot.id, event.threadId);
+            void knownRepos.refresh(bot.id);
             void memoryLookup.settled(bot.id, event.threadId, cursor);
             memoryHealthCheck.settled(bot.id, event.threadId, cursor);
           }
@@ -4552,6 +4684,16 @@ bus.subscribe((event: RuntimeEvent) => {
         } else if (vpsTurn) {
           clearVpsTurn();
         }
+      } else {
+        const { superseded, interrupted } = turnCompletionDisposition({
+          eventTurnId: event.turnId,
+          liveTurnId: liveTurnIdByThread.get(event.threadId),
+          interruptedTurnIds,
+          interruptedAt: 0,
+          dispatchedAt: 0,
+          stopReason: event.stopReason,
+        });
+        saveLandedCloses(event.threadId, event.turnId, !superseded && (event.promptAccepted || event.ok && !interrupted));
       }
       const speaker = groupSpeakers.get(event.threadId);
       const group = store.groupByThread(event.threadId);
@@ -4559,6 +4701,7 @@ bus.subscribe((event: RuntimeEvent) => {
         memoryPass.onSettled(speaker.botId, event.threadId);
         settledGroupSpeakers.set(event.threadId, speaker.botId);
         memorySleep.onSettled(speaker.botId);
+        void knownRepos.refresh(speaker.botId);
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
         const speakingBot = store.bot(speaker.botId);
@@ -5029,11 +5172,16 @@ type StartTurnOptions = {
   call?: CallTag;
   answersCard?: string;
   actedAt?: number;
+  sendSeq?: number;
+  sentAfterId?: string | null;
+  waited?: boolean;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
+  /** web_read's borrowed reader: page text steers it, so read-only with no Wink tools. */
+  webReader?: boolean;
 };
 
 /** True only for a turn a person actually typed - not a pane note wake, a
@@ -5064,9 +5212,9 @@ const PLAIN_WORDS_INSTRUCTIONS =
 const REPEAT_MISTAKES_INSTRUCTIONS =
   " When you make the same mistake a second time (like saying you'll do something with no tool call), log it on one repeat-mistakes page in your memory and fix it in your own notes or scripts that day; a guard that changes Wink code or what the user sees needs the user's OK first.";
 const FORUM_INSTRUCTIONS =
-  " After something took 2+ tries, board_post kind fix: the error and the line that fixed it.";
+  ` After something took 2+ tries, board_post kind fix: the error and the line that fixed it. Same error twice: board_search it before a third try. ${FORUM_STUCK_RULE}`;
 // One block for every route, so none can carry one rule set without the other.
-const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + modelPicksPrompt();
+const DEFAULT_RULES = CORPUS_SEARCH_INSTRUCTIONS + CODE_FIX_INSTRUCTIONS + PLAIN_WORDS_INSTRUCTIONS + REPEAT_MISTAKES_INSTRUCTIONS + FORUM_INSTRUCTIONS + WEB_READ_RULE + modelPicksPrompt();
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
@@ -5119,6 +5267,11 @@ function botHasLiveTurn(botId: string, threadId?: string): boolean {
 function tryClaimTurnStart(botId: string, threadId: string | undefined): boolean {
   if (turnStartClaims.has(botId)) return false;
   turnStartClaims.set(botId, threadId);
+  // agy's note helper holds the machine-global MCP file a computer turn needs alone, so stop it before preparation.
+  if (registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.driverKind === "antigravityAgent") {
+    memoryPass.onTurn(botId);
+    memorySleep.onTurn(botId);
+  }
   return true;
 }
 
@@ -5227,7 +5380,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTurn(store.activePathBack(bot.threadId), 1).tool) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTool(store.activePathBack(bot.threadId), 1)) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -5345,6 +5498,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           call: opts?.call,
           answersCard: opts?.answersCard,
           actedAt: opts?.actedAt,
+          sendSeq: opts?.sendSeq,
+          sentAfterId: opts?.sentAfterId,
+          waited: opts?.waited,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -5381,9 +5537,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     persistTaskPacket(packet, { staged: true });
   }
 
-  // Map may be loading this chat off the server thread, and the model context below reads all of it
-  const loading = coldLoading(threadId);
-  if (loading) await loading;
+  // the model context below reads the whole chat: an unloaded one loads off the server thread, joining a load Map started
+  if (!store.loaded(threadId)) await coldLoad(store, threadId);
 
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
@@ -5395,14 +5550,15 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  let taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
+  let storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  let taskRecord = closes.shown(storedTaskRecord);
   const selectionChanged = task.lastInstanceId !== undefined && (
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
   );
-  const earlierMessages = messagesBeforeSummary.filter((message) => !skipTranscript.has(message.id));
-  const latestUser = lastUserInstruction(earlierMessages);
-  const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, earlierMessages);
+  const latestUser = lastUserInstruction(messagesBeforeSummary, skipTranscript);
+  const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, messagesBeforeSummary, skipTranscript);
   // Recovery Current request must be this send's text. skipTranscript excludes
   // userMessage.id, so transcript lookup alone would show a prior user turn.
   // A Resume card carries no request of its own, so it falls back to the turn
@@ -5423,6 +5579,21 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const notesBeforeSummary = instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(messagesBeforeSummary, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
+  const reactions = { delivered: task.reactionsDelivered };
+  const requestText = composeUserTurnPrompt(text, {
+    replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
+  });
+  const codexReplayEligible = instance.driverKind === "codex" && !rewound && !recovering &&
+    decodeCodexSelection(model).modelProvider === OFFICIAL_CODEX_PROVIDER;
+  const replayRoom = codexReplayEligible ? codexResumeReplayRoom(task, instanceId, model) : 0;
+  const requestTokens = codexReplayEligible
+    ? estimateContextTokens([{ text: requestText }, { text: durableTaskRecordText }]) + (notesBeforeSummary?.tokens ?? 0)
+    : 0;
+  const resumeNativeReplay = replayRoom > 0 && replayRoom >= requestTokens && task.resumeSeed &&
+    task.lastInstanceId === instanceId && !selectionChanged && sessionPrompt &&
+    !shouldRecycleProviderSession({ compacted: false, sessionPrompt }) && !instance.adapter.hasBackgroundWork?.(threadId)
+    ? { compactionId: task.resumeSeed.compactionId, budgetTokens: nativeReplayBudget(modelContextWindow) - requestTokens }
+    : undefined;
   const planBeforeSummary = planCompaction({
     messages: messagesBeforeSummary,
     contextWindow: modelContextWindow,
@@ -5430,15 +5601,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     reserveTokens: notesBeforeSummary?.tokens,
     nativeAt,
     ...nativeCycle,
+    resumeNativeReplay,
     userName: cfg.profile?.name?.trim() || "User",
     referenceMessages: store.messagesFor(threadId),
   });
-  const reactions = { delivered: task.reactionsDelivered };
   const summaryGrace: SummaryGrace = {
     knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
-    requestText: composeUserTurnPrompt(text, {
-      replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
-    }),
+    requestText,
     fresh: selectionChanged || engineIsFresh({
       instanceId, model, lastInstanceId: task.lastInstanceId, lastModel: task.lastModel,
       sessionModelSwitch: instance.adapter.capabilities.sessionModelSwitch, resumeCursors: task.resumeCursors,
@@ -5466,31 +5635,41 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const graceInputs = { plan: planBeforeSummary, grace: summaryGrace, taskRecordText: durableTaskRecordText || "No durable task record is available.", reserveTokens: notesBeforeSummary?.tokens };
   const sessionResumes = planSummaryGrace(graceInputs).safe;
+  const nativeReplay = planBeforeSummary.needed && codexReplayEligible &&
+    (summaryGrace.fresh || (!summaryGrace.recycle &&
+      task.resumeSeed?.compactionId === (planBeforeSummary.previous?.messageId ?? null) &&
+      replayRoom >= requestTokens))
+    ? prepareNativeReplay(planBeforeSummary, nativeReplayBudget(modelContextWindow) - requestTokens)
+    : undefined;
+  const codexHistory = nativeReplay !== undefined ||
+    (!planBeforeSummary.needed && planBeforeSummary.status === "fits" && planBeforeSummary.nativeReplay === true);
   const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));
+  const usePlannedContext = summarySkipped || codexHistory;
   let summaryWait: SummaryWait | undefined;
   const onSummaryWait = (wait: SummaryWait) => { summaryWait = { ...wait, waitedMs: (summaryWait?.waitedMs ?? 0) + wait.waitedMs }; };
   const logSummaryWait = () => {
     if (summaryWait) console.info(`[summary-wait] ${JSON.stringify(summaryWait)}`);
     summaryWait = undefined;
   };
-  const summaryWaitMs = await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
-  const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);
+  const summaryWaitMs = codexHistory ? 0 : await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
+  const activeMessages = usePlannedContext ? messagesBeforeSummary : store.activePath(threadId);
   holdNotes?.(activeMessages);
   // Inline replay carries this turn's notes after the reply marker, so they leave history and claim their room first.
-  let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
+  let inlineNotes = usePlannedContext ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
   const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle) => {
     if (!grace) {
       rewound = threadId === bot.threadId && Boolean(bot.rewound);
-      taskRecord = taskPacketForWrite(threadId);
-      if (taskRecord && selectionChanged) {
-        taskRecord = persistTaskPacket(stampTaskResumePacket(taskRecord, "engine-switch", {
+      storedTaskRecord = taskPacketForWrite(threadId);
+      if (storedTaskRecord && selectionChanged) {
+        storedTaskRecord = persistTaskPacket(stampTaskResumePacket(storedTaskRecord, "engine-switch", {
           now: Date.now(),
-          turnsAtWrite: task.usage?.turns ?? taskRecord.turnsAtWrite,
-        })) ?? taskRecord;
+          turnsAtWrite: task.usage?.turns ?? storedTaskRecord.turnsAtWrite,
+        })) ?? storedTaskRecord;
       }
-      recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages.filter((message) => !skipTranscript.has(message.id)))?.text) || "";
+      taskRecord = closes.shown(storedTaskRecord);
+      recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages, skipTranscript)?.text) || "";
       durableTaskRecordText = taskRecord
         ? taskRecordBlock(taskRecord, Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
             { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn })
@@ -5498,7 +5677,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       sessionPrompt = sessionPromptFor({ report: task.nativePrompt, cursor: task.resumeCursors[instanceId], model, catalogWindow });
       reactions.delivered = task.reactionsDelivered;
     }
-    const taskRecordToFlush = taskRecord;
+    const taskRecordToFlush = storedTaskRecord;
     return prepareModelContext({
       messages,
       contextWindow: modelContextWindow,
@@ -5512,6 +5691,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
+      goals: () => goalsOf(bot.id),
       onSummaryCall: (record) => logSummaryCall({
         botId: bot.id,
         threadId,
@@ -5527,11 +5707,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           turnsAtWrite: task.usage?.turns ?? taskRecordToFlush.turnsAtWrite,
         }));
         if (!saved) throw new Error("the durable task record could not be flushed");
-        taskRecord = saved;
+        storedTaskRecord = saved;
+        taskRecord = closes.shown(saved);
       } : undefined,
     });
   };
-  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);
+  const prepared = nativeReplay ?? await prepareContext(activeMessages, summaryWaitMs, usePlannedContext ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);
   if (prepared.status !== "ready") {
     const detail = prepared.status === "unsupported"
       ? `This conversation uses context summary version ${String(prepared.version)}. Update Wink before continuing.`
@@ -5547,9 +5728,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
   let latestCompactionId = prepared.compactionId ?? null;
-  if (prepared.compaction) {
+  if (prepared.compaction || prepared.replaySummary) {
     try {
-      latestCompactionId = store.appendCompaction(threadId, prepared.compaction).id;
+      if (prepared.compaction) {
+        latestCompactionId = store.appendCompaction(threadId, prepared.compaction).id;
+      } else if (prepared.replaySummary && prepared.compactionId &&
+        !store.patchMessage(threadId, prepared.compactionId, prepared.replaySummary)) {
+        throw new Error("the reused context summary is missing");
+      }
     } catch (error) {
       const detail = `The context summary could not be saved. Earlier messages and the last valid summary remain intact; retry this turn. ${error instanceof Error ? error.message : String(error)}`;
       store.appendMessage(threadId, {
@@ -5562,7 +5748,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       store.settleTaskPacket(threadId);
       return startedTurn(userMessage, { dispatchFailed: true, error: detail });
     }
-    if (nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
+    if (prepared.compaction && nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
   }
   ensureChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id });
   trace?.identify({ messageId: userMessage.id });
@@ -5670,6 +5856,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // A send made while this turn prepared was queued because busy had not
   // flipped yet. Fold it in as steer would have, or it drains after this
   // turn's replies. Synchronous through the busy flip, so nothing slips past.
+  // a failed check rides again wherever the record does, so a new session hears it
+  const askNotes = closes.notes(rewound || fresh || recycled || compactedThisTurn || resumeSessionUnseeded(seedInputs) || recovering || Boolean(unsettled));
   const folded = currentTurnEpoch(bot.id) === epoch && !(opts?.sendId && isSendCancelled(opts.sendId))
     ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
@@ -5687,13 +5875,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
-    ? importMemoryTurn(activeMessages)
-    : { offer: false, tool: false };
-  const currentPrompt = [
-    ...(importMemory.offer ? [importOfferNote()] : []),
-    composeUserTurnPrompt(text, turnOpts),
-    ...folded,
-  ].join("\n\n");
+    ? importMemoryTool(activeMessages)
+    : false;
+  const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded].join("\n\n");
   let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
     activeMessages,
     skipTranscript,
@@ -5709,7 +5893,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId, threadId);
   const roomEchoes = roomEchoesSinceLastUserTurn(activeMessages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model);
   const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
-  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
+  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind) && !notOwnerChats().has(threadId)
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
@@ -5717,10 +5901,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...askNotes, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
-  const { turnText, resume } = buildTurnContext({
+  const elsewhereAsks = commsDepth === 0 ? store.otherChatAsks(bot.id, threadId, notOwnerChats()) : [];
+  // the durable record holds only this chat's asks
+  const recordText = [durableTaskRecordText, asksNudge(undefined, Date.now(), text, elsewhereAsks)].filter(Boolean).join("\n") || undefined;
+  const { turnText, resume, nativeReplayPrefix } = buildTurnContext({
     driverKind: instance.driverKind,
     model,
     text: turnPrompt,
@@ -5730,12 +5917,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recycled,
     recycleReason,
     replaysNatively,
+    nativeReplay: codexHistory && summaryGrace.fresh,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
-    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
+    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks) : "",
   });
   stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
@@ -5744,7 +5932,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     text: turnPrompt,
     transcript: turnTranscript,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
   });
   const systemRecycleText = (compaction = false) => buildTurnContext({
     driverKind: instance.driverKind,
@@ -5757,7 +5945,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recycleReason: compaction ? "compaction" : "system",
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: durableTaskRecordText || undefined,
+    taskRecordText: recordText,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   }).turnText;
@@ -5822,6 +6010,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     }),
     instanceId,
     cursor: resume ? task.resumeCursors[instanceId] : undefined,
+    ...(codexHistory ? { nativeReplay: true } : {}),
   });
 
   const settleTrace = holdTurnTrace(trace);
@@ -5839,7 +6028,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     const releaseStarting = takeStartingHold(bot.id);
     let systemSeed: ReturnType<typeof systemSeeds.set> | undefined;
     try {
-      const readOnly = opts?.readOnly === true;
+      const readOnly = opts?.readOnly === true || opts?.webReader === true;
       if (readOnly && instance.adapter.capabilities.readOnlyTurns !== true) throw new Error(`${bot.name} can't answer other people here: its engine can't work read-only`);
       if (readOnly) readOnlyTurnThreads.add(threadId);
       else readOnlyTurnThreads.delete(threadId);
@@ -5894,17 +6083,28 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const namedByUser = !opts?.cardContinuation && !opts?.automationSource && !opts?.commsDepth;
       // The send was persisted before the awaits above, so a Clear that
       // landed meanwhile spends it like any other history line.
-      const clearedAt = bot.projectFolderClearedAt ?? -Infinity;
-      const currentFolderText = namedByUser && userMessage.at > clearedAt ? text : undefined;
-      const resolvedProject = worksInWorkspace && opts?.runOn !== "cloud"
-        ? applyResolvedProjectFolder({
+      const clearedAt = bot.projectFolderClearedAt;
+      const folderInput = () => worksInWorkspace && opts?.runOn !== "cloud"
+        ? {
             pin: bot.cwd,
             remembered: bot.lastProjectCwd,
             continuation: !namedByUser,
-            userTexts: userProjectTexts(store.messagesFor(threadId), currentFolderText, {
+            userTexts: userProjectTexts(store.messagesFor(threadId), namedByUser && userMessage.at > (bot.projectFolderClearedAt ?? -Infinity) ? text : undefined, {
               since: bot.projectFolderClearedAt,
             }),
             recentPaths: projectPathsFromRecords({ bots: store.bots, groups: store.groups }),
+          }
+        : undefined;
+      const checking = folderInput();
+      // the folders a long chat names are checked off the server thread first; a pin reads none of them
+      const checked = checking && !checking.pin?.trim() ? await checkProjectFolders(checking) : undefined;
+      // a Settings Clear or pin during the check is read as it is now, so the lines it spent stay spent
+      const unchanged = checking?.pin === bot.cwd && checking?.remembered === bot.lastProjectCwd && clearedAt === bot.projectFolderClearedAt;
+      const resolving = unchanged ? checking : folderInput();
+      const resolvedProject = resolving
+        ? applyResolvedProjectFolder({
+            ...resolving,
+            checked,
             remember: (cwd) => store.rememberProjectCwd(bot.id, cwd),
             forget: () => store.forgetProjectCwd(bot.id),
           })
@@ -6089,8 +6289,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           !candidate.hidden &&
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
-      if (instance.adapter.capabilities.agentsMcp === true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory.tool);
+      if (instance.adapter.capabilities.agentsMcp === true && opts?.webReader !== true) {
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6142,7 +6342,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal) });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6211,7 +6411,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           accessRules(live.adapter.access?.({ approval, ...(readOnly ? { readOnly } : {}), cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           // a joined room's session answers everyone there, so it never carries the owner's About You
-          tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt()) +
+          tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
           tracePart("playbook", packagePlaybooks) +
@@ -6246,10 +6446,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         const finalGraceInputs = { ...graceInputs, grace: { ...summaryGrace, requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle } };
         const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;
-        if (systemRecycle || (finalGrace && !finalGrace.safe)) {
+        // Native history was sized before late sends folded in; past its room the turn summarizes like base.
+        const replayOverflow = codexHistory && estimateContextTokens([{ text: systemUpdate + text }]) > (replaysTranscript ? nativeReplayBudget(modelContextWindow) : replayRoom);
+        if (systemRecycle || replayOverflow || (finalGrace && !finalGrace.safe)) {
           const lateCount = late.length;
-          if (summarySkipped) {
-            onSummaryWait({ threadId, sendId: latencySendId, mode: "waited", waitedMs: 0, reason: finalGrace && !finalGrace.safe ? finalGrace.reason : "session-recycle" });
+          if (summarySkipped || replayOverflow) {
+            onSummaryWait({ threadId, sendId: latencySendId, mode: "waited", waitedMs: 0, reason: finalGrace && !finalGrace.safe ? finalGrace.reason : replayOverflow ? "headroom" : "session-recycle" });
             const waitedMs = await summaryBuild.settle(threadId, instance, 90_000, () => summarizesOnEstimate(planBeforeSummary), {
               sendId: latencySendId, grace: finalGraceInputs, onWait: onSummaryWait,
             });
@@ -6271,11 +6473,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...closes.notes(true), ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
             seed.compactionId = compacted.expanded ? null : latestCompactionId;
+            delete seed.nativeReplay;
             if (currentTurnEpoch(bot.id) !== epoch || (opts?.sendId && isSendCancelled(opts.sendId))) {
               throw Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true });
             }
@@ -6319,6 +6522,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         leanStartup,
         resumeCursor,
         resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
+        ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,
@@ -6331,6 +6535,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       if (reservation) commit(reservation);
+      askPrs.closing(threadId, started.turnId ?? "", closes.ids);
       if (holdNotes) newestPaneNoteId = undefined;
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded
@@ -6913,8 +7118,10 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => {
+  startTurn: (botId, threadId, prompt, typed, failed, readOnly, guest) => {
     joinedRoomThreads.add(threadId);
+    if (guest) joinedGuestThreads.add(threadId);
+    else joinedGuestThreads.delete(threadId);
     return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
   },
   readOnlyTurns: (botId, threadId) => {
@@ -7099,8 +7306,10 @@ async function runClaimedGroupMemberTurn(
     return true;
   }
   startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
-  const taskRecord = closeMergedAsks(bot.id, threadId, taskPacketForWrite(threadId));
-  const taskRecordToFlush = taskRecord;
+  const storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  const taskRecord = closes.shown(storedTaskRecord);
+  const taskRecordToFlush = storedTaskRecord;
   const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
   // A room replays Wink's context every turn, so no native session ever compacts it.
   const modelContextWindow = nativeCompactAt(instance.driverKind, selection.model, catalogWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }) ? Math.min(catalogWindow, NATIVE_SUMMARY_WINDOW) : catalogWindow;
@@ -7171,8 +7380,9 @@ async function runClaimedGroupMemberTurn(
   const roomContext = [
     prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
     prepared.transcript.map((message) => replayMessageText(message, instance.driverKind, bot.id, selection.model)).join("\n"),
-    ...roomMail.map((part) => part.text),
+    ...roomMail.map((part) => inertMentions(part.text)),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
+    ...closes.notes(Boolean(prepared.compacted && durableTaskRecordText)),
   ].filter((value) => value !== null).join("\n\n");
   stampShownAsks(threadId, roomContext);
   // One turn per bot at a time, across BOTH engines. Without this a bot
@@ -7186,7 +7396,9 @@ async function runClaimedGroupMemberTurn(
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
   const works = !asked || Boolean(lead && asksWork([lead, ...riders]));
   const guestAsked = asked && (!askFromHost(lead) || riders.some((ask) => !askFromHost(ask)));
-  if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
+  // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
+  const guestReadOnly = Boolean(guestAsked && (!bot.autoApprove || !works));
+  if ((!works || guestReadOnly) && instance.adapter.capabilities.readOnlyTurns !== true) {
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
   }
@@ -7202,7 +7414,8 @@ async function runClaimedGroupMemberTurn(
     ? laneHandoff({ lane, hop, works, autoApprove: bot.autoApprove, rows: store.messagesFor(threadId), botId: bot.id, owner: userName, instructionId: dispatchedInstructionId, ...(authority ? { teammate: laneAsk(authority), ownerAsk: !guestAsked } : {}) })
     : null;
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works, Boolean(handoff));
+    // a lane is read-only for the engine only: its own hand_off and the owner's tools stay
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works || guestReadOnly, Boolean(handoff));
   }
   const canMessage = works && Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
@@ -7320,15 +7533,15 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
-  // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
-  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (guestAsked && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
+  // the owner's own lane keeps Claude's @file attach; a guest's words never get it
+  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || guestReadOnly ? { readOnly: true } : {}), ...(lane && !guestAsked ? { ownerText: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
     // a teammate's ask, or a chain one started, answers the whole room: the owner's private facts stay out
-    (asked ? "" : aboutYouPrompt()) +
+    (asked ? "" : aboutYouPrompt(bot.id)) +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -7411,6 +7624,7 @@ async function runClaimedGroupMemberTurn(
     })
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
+        askPrs.closing(threadId, started.turnId ?? "", closes.ids);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
         accountNote.commit();
         releaseStarting();
@@ -7527,12 +7741,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string, roomFileIds: readonly string[] = [], actedAt?: number, waited?: boolean, sendSeq?: number, sentAfterId?: string | null) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
   const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId, roomFileIds).message : null;
-  const shared = hosted && (answersCard || actedAt !== undefined) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt }) ?? hosted : hosted;
+  const shared = hosted && (answersCard || actedAt !== undefined || waited) ? store.patchMessage(group.threadId, hosted.id, { answersCard, actedAt, waited }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group, store.messagesFor(group.threadId).length)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7549,6 +7763,9 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     ...(askerId ? { askedBy: askerId } : {}),
     answersCard,
     actedAt,
+    waited,
+    sendSeq,
+    sentAfterId,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -7950,7 +8167,7 @@ function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     gemini: { configured: Boolean(cfg.gemini?.apiKey), introSeen: callIntro.seen() },
-    liveCall: { voice: cfg.liveCall?.voice ?? LIVE_VOICE },
+    liveCall: { voice: cfg.liveCall?.voice ?? LIVE_VOICE, answer: cfg.liveCall?.answer ?? "gemini" },
     openaiCompat: { configured: Boolean(cfg.openaiCompat?.key) },
     composio: {
       configured: composio.configured(cfg),
@@ -8043,7 +8260,14 @@ const groupRoutes = createGroupRoutes({
 });
 function readOnlyRoomTurn(botId: string, threadId: string) {
   const hosted = store.groupByThread(threadId)?.hosted;
-  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && readOnlyAskTurn(hosted.roomId, threadId, botId));
+  // a teammate who may make bots work still gets a read-only turn from a bot not on Auto
+  return readOnlyTurnThreads.has(threadId) || Boolean(hosted && (readOnlyAskTurn(hosted.roomId, threadId, botId)
+    || (teammateAskTurn(hosted.roomId, threadId, botId) && !store.bot(botId)?.autoApprove)));
+}
+/** A room turn anyone but this PC's owner asked for, read-only or with "Can make bots work". */
+function guestRoomTurn(botId: string, threadId: string) {
+  const hosted = store.groupByThread(threadId)?.hosted;
+  return readOnlyRoomTurn(botId, threadId) || joinedGuestThreads.has(threadId) || Boolean(hosted && teammateAskTurn(hosted.roomId, threadId, botId));
 }
 const boardRoutes = createBoardRoutes({
   board,
@@ -8057,7 +8281,9 @@ const boardRoutes = createBoardRoutes({
 });
 const internalRoutes = createInternalRoutes({
   readOnlyTurn: readOnlyRoomTurn,
+  planHint: { room: sharedTurn(store, joinedRoomThreads), workerReady: workerEngineSignedIn, livePanes: botLivePanes },
   answeredLine: (threadId) => roomTurnInstruction.get(threadId),
+  turnText: (botId, threadId) => askTexts.last(botId, threadId),
   runDelegatedTurn,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,
@@ -8113,6 +8339,14 @@ const verifyDoc = createVerifyDoc({
   broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
   log: line => console.log(line),
 });
+const webRead = webReadRoute(createWebReader({
+  readers: () => store.bots.map((bot) => {
+    const instance = registry.get(bot.modelSelection.instanceId);
+    const snapshot = providerSnapshots.get(bot.modelSelection.instanceId);
+    const ready = snapshot?.state === "available" && snapshot.authenticated !== false;
+    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy) };
+  }),
+}), (header) => commsCallers.resolve(header), guestRoomTurn);
 const verifySite = createVerifySite({
   store,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
@@ -8158,6 +8392,7 @@ const botRoutes = createBotRoutes({
   projectNotesCheck,
   memoryHealthCheck,
   noteTalked,
+  refreshLookup: (botId) => memoryLookup.refresh(botId),
   activeVpsThreads,
   resumePaneWakes,
 });
@@ -8238,6 +8473,7 @@ const threadRoutes = createThreadRoutes({
   DEFAULT_PAGE,
   pageSize,
   clientMessage,
+  slimMessage,
   messagePage,
   messageWindow,
   answerRequest,
@@ -8323,6 +8559,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, await teamReports.handle(await readBody(req)));
       }
       if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
+      if (method === "POST" && path === WEB_READ_ROUTE) return await webRead(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
         const body = await readBody(req);
         const url = typeof body?.url === "string" ? body.url.trim().replace(/\/$/, "") : "";
@@ -8368,10 +8605,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
       }
       if (method === "POST" && path === "/api/internal/import-memory") {
-        return await importMemoryRoute(req, res, {
+        await importMemoryRoute(req, res, {
           caller: (header) => commsCallers.resolve(header),
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
+        });
+        for (const bot of store.bots) void memoryLookup.refresh(bot.id);
+        return;
+      }
+      // pin_goal: a standing goal in the bot's timeline, in every prompt until it is done
+      if (method === "POST" && path === "/api/internal/goal") {
+        return await goalRoute(req, res, {
+          caller: (header) => commsCallers.resolve(header),
+          ownerTurn: ({ botId, threadId }) => {
+            const bot = store.bot(botId);
+            return Boolean(bot && !readOnlyTurnThreads.has(threadId) && ownerChats(bot, notOwnerChats()).includes(threadId) && threadHasLiveTurn(threadId));
+          },
         });
       }
       if (method === "POST" && path === "/api/internal/hand-off") {
@@ -8433,7 +8682,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
-        const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
+        const hold = await playbookGate.hold(playbookSession(from.id), String(body.command ?? ""), String(body.cwd ?? ""));
         if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(String(body.command ?? "")));
@@ -8569,10 +8818,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The buffer only reaches so far back. If the client's cursor fell off
       // the end, saying so is the only honest answer — a partial replay
       // would leave a permanent hole in its state.
-      const resumed =
-        since !== null &&
-        since <= lastSeq &&
-        (replayBuffer.length === 0 ? since === lastSeq : replayBuffer[0].seq <= since + 1);
+      const resumed = since !== null && since <= lastSeq && since >= replayFloor;
       res.write(
         `data: ${JSON.stringify({
           kind: "hello",
@@ -8581,6 +8827,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           // A client that offered no cursor gets false too, which is exactly
           // what a cold start should do.
           resumed,
+          // a window stamps its sends by this clock, so a cap here never moves a line
+          now: serverClockSample(),
         })}\n\n`,
       );
       if (resumed) {
@@ -8598,7 +8846,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // liveness watchdog. Heartbeats carry no id and never advance replay.
       const keepalive = setInterval(() => {
         try {
-          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping" })}\n\n`);
+          res.write(`: keepalive\n\ndata: ${JSON.stringify({ kind: "ping", now: serverClockSample() })}\n\n`);
         } catch {}
       }, SSE_HEARTBEAT_MS);
       req.on("close", () => {
@@ -8692,7 +8940,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
         setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
-        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : []) } : {}),
+        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [], teamRelayBase(googleEnv.teamRelay)) } : {}),
         phones: phoneVisits.list(),
       });
     }
@@ -8713,7 +8961,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "POST" && path === BOARD_ROUTES.remove) return await boardRoutes.remove(req, res);
     if (method === "GET" && path === "/api/devices") {
       const listed = syncedDevices();
-      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay), Date.now(), !relay && isLoopbackHost(req.headers.host));
       return json(res, 200, { devices });
     }
     if (method === "DELETE" && path.startsWith("/api/devices/")) {
@@ -9104,10 +9352,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       return await terminalLive.handle(req, res, bot.id, m[2], url);
     }
-    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res);
-    if (path === "/api/about-you" && method === "POST") return await aboutYouRoutes.add(req, res);
+    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res, store.bot(url.searchParams.get("bot") ?? "")?.id);
+    if (path === "/api/about-you" && method === "POST") {
+      // past the prompt's cut, Import Memory is looked up by every bot, from the next turn on
+      return aboutYouRoutes.add(req, res, Date.now, async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
+    }
+    if (path === "/api/about-you/decline" && method === "POST") return aboutYouRoutes.decline(res);
     m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);
-    if (m && method === "DELETE") return aboutYouRoutes.remove(res, m[1]);
+    if (m && method === "DELETE") {
+      // the removed lines are out of every bot's lookup before the removal is answered
+      return aboutYouRoutes.remove(res, m[1], async () => {
+        await Promise.all(store.bots.map((bot) => memoryLookup.refresh(bot.id)));
+      });
+    }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's
     // workspace); these routes only make them visible without a trip to
@@ -9119,6 +9378,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "PUT") {
       return await botRoutes.putMemory(req, res, m);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
+    if (m && method === "POST") {
+      return await botRoutes.importMemory(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/topics\/([^/]+)$/);
     if (m && method === "GET") {
@@ -9264,7 +9527,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
     if (method === "POST" && path === "/api/accounts") await enableWorkerAccounts(terminalBridgeAccess);
-    if (await accountRoutes(req, res, method, path)) return;
+    if (await accountRoutes(req, res, method, path, signInOwner(req.headers, phone?.id))) return;
     m = path.match(/^\/api\/usage\/(refresh|check)\/([^/]+)$/);
     if (m && method === "POST") {
       const instanceId = m[2];
@@ -9285,6 +9548,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             museModel: museCheckModel(store.bots.filter((bot) => bot.modelSelection.instanceId === instanceId).map((bot) => bot.modelSelection.model)),
           }, previous)
         : await refreshUsage(instance.driverKind, { ...usageOptions, fresh: url.searchParams.get("fresh") === "1", maxAgeMs: 30_000 }, previous);
+      if (result.cleared && rateLimitsByInstance.delete(instanceId)) {
+        scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR);
+        usageBoard.touch();
+      }
       if (result.report) {
         const current = rateLimitsByInstance.get(instanceId);
         if (!current || Date.parse(result.report.observedAt) >= Date.parse(current.observedAt)) {
@@ -9324,9 +9591,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
           const body = await readBody(req);
           if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
-          const capture = await registry.startSignIn(id, body?.device === true);
+          const capture = await registry.startSignIn(id, body?.device === true, signInOwner(req.headers, phone?.id));
           return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         }
+        if (method === "DELETE" && !registry.logins.owns(id, signInOwner(req.headers, phone?.id))) return refuse(403, SIGNED_IN_ELSEWHERE, "sign-in-elsewhere");
         if (method === "DELETE") return await registry.cancelSignIn(id)
           ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
         if (method === "GET") {
@@ -9345,6 +9613,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
+      // Owner check and sign-out's cancel run in this one turn, so no newer sign-in can slip between them.
+      // A press while this instance's sign-out runs joins it: the pending job is that sign-out's own logout, and no sign-in can start meanwhile.
+      if (!registry.signingOutNow(engineSignOut[1]) && !registry.logins.owns(engineSignOut[1], signInOwner(req.headers, phone?.id))) return json(res, 403, { error: SIGNED_IN_ELSEWHERE, code: "sign-in-elsewhere" });
       const signedOut = await registry.signOut(engineSignOut[1]);
       return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
         : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });
@@ -9390,8 +9661,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim() })) return;
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
-    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode() })) return;
-    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState })) return;
+    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(true) })) return;
+    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(true), groupIsWorking, publicGroupState })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId), (roomId) => myRoomBotTurns.stopMine(roomId));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
@@ -9718,8 +9989,8 @@ setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
-// the boot drain has already run by the time the worker replies
-void recoverQuickAsks(store, bootReads().then((rows) => rows.asks)).catch((error: unknown) => console.warn("[quick] recovery failed", error))
+// the boot drain has already run by the time the worker replies; a send before then reads only its own chat
+void recoverQuickAsks(store, bootReads().then((rows) => rows.asks), { read: coldQuickAsks, drain: drainQueuedSends }).catch((error: unknown) => console.warn("[quick] recovery failed", error))
   .then(drainQueuedSends).catch((error: unknown) => console.warn("[quick] drain after recovery failed", error));
 const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
@@ -9773,6 +10044,7 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
+startupTiming.afterPaint("droppedAsks", async () => sweepDroppedAsks());
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")

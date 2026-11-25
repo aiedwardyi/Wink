@@ -92,6 +92,8 @@ function unescapeAttr(raw: string): string {
 
 function fileInDir(root: string, candidate: string, name: string): { path: string; size: number } | null {
   if (!PICTURE_NAME.test(name)) return null;
+  // a network path would make realpathSync open the share
+  if (/^[\\/]{2}/.test(candidate)) return null;
   try {
     const real = realpathSync(candidate);
     const stat = statSync(real);

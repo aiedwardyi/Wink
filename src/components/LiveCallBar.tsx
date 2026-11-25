@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Volume2 } from "lucide-react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
@@ -6,6 +6,7 @@ import { useJoinedRoom } from "@/lib/joined-rooms";
 import { hostLines, isTeamRoom, joinedLines, roomTeamBots, type RoomLine } from "@/lib/team-rooms";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
+import { lazyView } from "@/lib/stale-build";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
@@ -113,7 +114,7 @@ export function failedText(snap: CallState, locale: LocaleId): string {
   return [error ? `${words.failed}: ${error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ");
 }
 
-async function post(path: string, body: object): Promise<Posted> {
+export async function post(path: string, body: object): Promise<Posted> {
   const res = await fetchResponse(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: res.status, data: ((await responseBody(res)) ?? {}) as Record<string, any> };
 }
@@ -131,13 +132,16 @@ export function clock(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export type Live = { call: LiveCall; level: (mic: boolean) => number };
+/** What the call's bar, box and widget drive: a same-bot call has no orders or room posts, and only it can be stopped mid-reply. */
+export type CallHandle = Pick<LiveCall, "subscribe" | "state" | "resume" | "mute" | "end"> & Partial<Pick<LiveCall, "answer" | "answerPost">> & { interrupt?: () => void };
+export type Live = { call: CallHandle; level: (mic: boolean) => number };
+const SameBotSession = lazyView(() => import("./SameBotSession").then((m) => ({ default: m.SameBotSession })));
 
 // The box controls live in the composer, which remounts on a task switch; the call must not.
 const lives = new Map<string, Live>();
 const watchers = new Set<() => void>();
 
-function publish(botId: string, live: Live | undefined) {
+export function publish(botId: string, live: Live | undefined) {
   if (live) lives.set(botId, live);
   else lives.delete(botId);
   for (const fn of [...watchers]) fn();
@@ -170,7 +174,8 @@ export function LiveCallHost() {
   const active = useActiveCall();
   const { state } = useStore();
   const bot = active && (state.bots.find((candidate) => candidate.id === active.botId) ?? active.bot);
-  return active && bot ? <Session key={active.id} active={active} bot={bot} /> : null;
+  if (!active || !bot) return null;
+  return active.answer === "bot" ? <Suspense fallback={null}><SameBotSession key={active.id} active={active} bot={bot} /></Suspense> : <Session key={active.id} active={active} bot={bot} />;
 }
 
 function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
@@ -178,7 +183,7 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const onEnd = useCallback((note?: string) => dropCall(active, note), [active]);
-  const [live] = useState((): Live => {
+  const [live] = useState(() => {
     const audio = new CallAudio(active.sound);
     const call = new LiveCall({
       botId: bot.id,
@@ -191,7 +196,7 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       prefs: bot.call,
       room: active.room && { id: active.room.id, kind: active.room.kind },
     });
-    return { call, level: (mic) => audio.level(mic) };
+    return { call, level: (mic: boolean) => audio.level(mic) };
   });
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
@@ -308,8 +313,8 @@ export function OrderCard({ bot, live, narrow = false }: { bot: Bot; live: Live;
           <p>{words.send.replace("{bot}", () => bot.name)}</p>
           <p className="font-medium break-words">{snap.pending?.order}</p>
         </div>
-        <button type="button" onClick={() => void call.answer(true)} className={cn(TARGET, "bg-accent text-accent-ink", narrow && "flex-1")}>{words.yes}</button>
-        <button type="button" onClick={() => void call.answer(false)} className={cn(TARGET, "bg-control text-ink", narrow && "flex-1")}>{words.no}</button>
+        <button type="button" onClick={() => void call.answer?.(true)} className={cn(TARGET, "bg-accent text-accent-ink", narrow && "flex-1")}>{words.yes}</button>
+        <button type="button" onClick={() => void call.answer?.(false)} className={cn(TARGET, "bg-control text-ink", narrow && "flex-1")}>{words.no}</button>
       </div>
     </div>
   );
@@ -328,8 +333,8 @@ function PostCard({ live, room }: { live: Live; room: string }) {
           <p className="font-medium whitespace-pre-wrap break-words">{snap.postOffer?.text}</p>
           {snap.postFailed && <p role="alert" className="mt-1 text-xs text-danger">{words.postFailed}</p>}
         </div>
-        <button type="button" disabled={snap.posting} onClick={() => void call.answerPost(true)} className={cn(TARGET, "bg-accent text-accent-ink disabled:opacity-40")}>{words.yes}</button>
-        <button type="button" disabled={snap.posting} onClick={() => void call.answerPost(false)} className={cn(TARGET, "bg-control text-ink disabled:opacity-40")}>{words.no}</button>
+        <button type="button" disabled={snap.posting} onClick={() => void call.answerPost?.(true)} className={cn(TARGET, "bg-accent text-accent-ink disabled:opacity-40")}>{words.yes}</button>
+        <button type="button" disabled={snap.posting} onClick={() => void call.answerPost?.(false)} className={cn(TARGET, "bg-control text-ink disabled:opacity-40")}>{words.no}</button>
       </div>
     </div>
   );

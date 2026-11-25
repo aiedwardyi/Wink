@@ -28,11 +28,13 @@ export function useCallControls(bot: Bot | undefined, hidden: boolean, room?: Ac
   const roomId = room?.id;
   const roomKind = room?.kind;
   const roomName = room?.name ?? "";
+  // Rooms keep the Gemini voice: only a 1:1 call can be answered by the bot itself.
+  const answer = roomId ? undefined : state.config?.liveCall?.answer;
   // A phone's context is born in the tap, the only place it may play from; a desktop hover may have made one already.
   const start = useCallback(() => {
     if (!bot) return;
-    placeCall(bot, callAudio(), undefined, roomId && roomKind ? { id: roomId, kind: roomKind, name: roomName } : undefined);
-  }, [bot, roomId, roomKind, roomName]);
+    placeCall(bot, callAudio(), undefined, roomId && roomKind ? { id: roomId, kind: roomKind, name: roomName } : undefined, answer);
+  }, [answer, bot, roomId, roomKind, roomName]);
   if (!bot || !voiceCalls) return { on: false, bar: null, composer: {} };
   const available = ready && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
   return {
