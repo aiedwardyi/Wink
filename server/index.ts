@@ -1358,6 +1358,12 @@ const wireTask = ({
 }: TaskRecord) => ({ ...task, taskState: store.taskPacket(task.threadId) ?? undefined });
 
 const KEEP_GOING_PAUSED_LINE = "Agentic Mode paused: two tries made no progress";
+async function botLivePanes(botId: string) {
+  const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
+  return counts.status === 200 && "counts" in counts.body ? counts.body.counts[botId] ?? 0 : null;
+}
+const workerEngineSignedIn = () => registry.describeSaved().some((row) => (row.driverKind === "claudeAgent" || row.driverKind === "codex") && row.snapshot.authenticated === true);
+
 // Declared before wireBot reads it; its callbacks only run on the routines timer.
 const keepGoing = new KeepGoing({
   deviceId: () => profileSyncSettings.deviceId,
@@ -1391,10 +1397,7 @@ const keepGoing = new KeepGoing({
     }
     return rateLimitsByInstance.get(instanceId) ?? null;
   },
-  livePanes: async (botId) => {
-    const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
-    return counts.status === 200 && "counts" in counts.body ? counts.body.counts[botId] ?? 0 : null;
-  },
+  livePanes: botLivePanes,
   dispatch: (botId, prompt, options) => startTurn(botId, prompt, options).then(() => undefined),
   paused: (_botId, threadId) => {
     store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name: `error: ${KEEP_GOING_PAUSED_LINE}`, ok: false } });
@@ -6339,7 +6342,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal) });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -8278,6 +8281,7 @@ const boardRoutes = createBoardRoutes({
 });
 const internalRoutes = createInternalRoutes({
   readOnlyTurn: readOnlyRoomTurn,
+  planHint: { room: sharedTurn(store, joinedRoomThreads), workerReady: workerEngineSignedIn, livePanes: botLivePanes },
   answeredLine: (threadId) => roomTurnInstruction.get(threadId),
   turnText: (botId, threadId) => askTexts.last(botId, threadId),
   runDelegatedTurn,
