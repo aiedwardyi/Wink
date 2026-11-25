@@ -160,6 +160,26 @@ describe("first engine connection", () => {
     expect(row.textContent).toContain("Sign In");
   });
 
+  it("offers Sign In in the already-open remote Main row when the new attempt opens a PC browser", async () => {
+    Object.assign(window, { ogb: undefined });
+    vi.stubGlobal("location", new URL("https://remote.example/"));
+    const base = { ...instances[0]!, accountOf: "claude", accountState: "ready" as const,
+      install: { ...instances[0]!.install, login: { args: ["auth", "login"], deviceArgs: ["auth", "login", "--claudeai"] } },
+      snapshot: { state: "available" as const, authenticated: true }, pickerSnapshot: { state: "unavailable" as const } };
+    const main = { ...base, instanceId: "acct_11111111-1111-1111-1111-111111111111", accountMain: true,
+      loginState: "pending" as const, snapshot: { state: "available" as const, authenticated: false } };
+    instances = [base, main];
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const row = host.querySelector('[data-engine-connect="claude"]')!;
+    expect(row.textContent).toContain("Cancel");
+    instances = [base, { ...main, loginOpensBrowser: true }];
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    await advance(2000);
+    await advance(2000);
+    expect(row.textContent).toContain("Sign In");
+    expect(row.textContent).not.toContain("Cancel");
+  });
+
   it("keeps a missing CLI installable even when Main's picker is ready", async () => {
     const base = { ...instances[0]!, pickerSnapshot: { state: "available" as const, authenticated: true } };
     await render(createElement(EngineConnect, { instances: [base], onRefresh: refreshInstances }));

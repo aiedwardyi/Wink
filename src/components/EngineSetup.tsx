@@ -268,7 +268,10 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
       setWaiting(true);
       loadCapture();
     }
-    if (accountReady(instance)) setWaiting(false);
+    if (accountReady(instance) || (instance.loginState === "pending" && !joinable(instance))) {
+      setWaiting(false);
+      setCapture({});
+    }
   }, [instance]);
 
   useEngineLoginRefresh(waiting, (instances) => {
@@ -276,11 +279,11 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     const next = instances.find((row) => row.instanceId === instance.instanceId);
     if (!next) return;
     setCurrent(next);
-    if (next.loginState === "pending") loadCapture();
+    if (joinable(next)) loadCapture();
     else setCapture({});
     onUpdated?.(next);
     if (accountReady(next)) { setWaiting(false); setFailed(false); }
-    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled" && loginFailure(next)); }
+    else if (!joinable(next)) { setWaiting(false); setFailed(next.loginState !== "pending" && next.loginState !== "cancelled" && loginFailure(next)); }
   });
 
   const start = async () => {
