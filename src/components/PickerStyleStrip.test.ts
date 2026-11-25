@@ -175,7 +175,7 @@ describe("Picker style strip", () => {
     await mount("machine");
     expect([shown(), document.querySelector(".model-dial") !== null, document.querySelector(".model-machine")]).toEqual(["dial", true, null]);
     await altT();
-    expect([...document.querySelectorAll("[data-picker-style]")].map((tile) => tile.getAttribute("data-picker-style"))).toEqual(["dial", "list", "chart"]);
+    expect([...document.querySelectorAll("[data-picker-style]")].map((tile) => tile.getAttribute("data-picker-style"))).toEqual(["dial", "list", "chart", "quick"]);
   });
 
   it("opens a saved Machine on the list where the dial does not fit", async () => {

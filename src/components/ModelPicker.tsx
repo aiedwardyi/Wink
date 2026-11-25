@@ -17,10 +17,12 @@ import { EngineSetup, engineChecking, needsCli, needsSignIn } from "./EngineSetu
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { modelDialEnabled } from "@/lib/feature-flags";
-import { loadModelPickerView, saveModelPickerView, type ModelPickerView } from "@/lib/model-picker-view";
+import { loadModelPickerView, saveModelPickerView, useModelPickerView, type ModelPickerView } from "@/lib/model-picker-view";
 import { showTouchPickerLegend } from "@/lib/friends-chrome";
 import { pickerLookSkin, savePickerLook, shownPickerLook, usePickedLook } from "@/lib/picker-look";
-import { useSkin } from "@/lib/skins";
+import { reducedMotion } from "@/lib/phone-swipe";
+import { LIGHT_SKIN_IDS, useSkin } from "@/lib/skins";
+import { QuickMaxFlourish, QuickModelPicker, selectionFlowTier } from "./QuickModelPicker";
 import { ModelDial, useDialFontWarm, useDialWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
 import { ModelChart } from "./ModelChart";
 import { PickerStyleButton, PickerStyleStrip } from "./PickerStyleStrip";
@@ -73,26 +75,30 @@ export function ModelPickerControl({
   useBackLayer(open && customOpen, () => setCustomOpen(false));
   const [query, setQuery] = useState("");
   const dialFits = useModelDialFits(dial);
-  const [view, setView] = useState(loadModelPickerView);
+  const view = useModelPickerView();
   const dialView = dial && dialFits && view === "dial";
   const chartView = dial && dialFits && view === "chart";
-  const styles: ModelPickerView[] = dial && dialFits ? ["dial", "list", "chart"] : ["list"];
-  const shown: ModelPickerView = dialView ? "dial" : chartView ? "chart" : "list";
+  const quickView = dial && dialFits && view === "quick";
+  const styles: ModelPickerView[] = dial && dialFits ? ["dial", "list", "chart", "quick"] : ["list"];
+  const shown: ModelPickerView = dialView ? "dial" : chartView ? "chart" : quickView ? "quick" : "list";
   useDialFontWarm(dial, open);
   const warmDial = useDialWarm(dial && dialFits && loadModelPickerView() === "dial", open);
   const warmStageRef = useRef<HTMLDivElement>(null);
   const warmDialRef = useRef<ModelDialHandle>(null);
   useEffect(() => {
-    if (!presence.mounted) return;
+    if (!presence.mounted || quickView) return;
     void window.ogb?.setModelPickerBackground?.(dialView || chartView ? "dial" : "list")?.catch(() => undefined);
     return () => { void window.ogb?.setModelPickerBackground?.(null)?.catch(() => undefined); };
-  }, [presence.mounted, dialView, chartView]);
+  }, [presence.mounted, quickView, dialView, chartView]);
   const dialRef = useRef<ModelDialHandle>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const quickStyleBtnRef = useRef<HTMLSpanElement>(null);
   const focusComposerAfterCloseRef = useRef(false);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const switchingRef = useRef(false);
+  const pickedMaxWhileOpenRef = useRef(false);
+  const [flourishId, setFlourishId] = useState(0);
   const saveTimerRef = useRef(0);
   const switchSourceRef = useRef<string | undefined>(undefined);
   const followUpRef = useRef(false);
@@ -103,7 +109,14 @@ export function ModelPickerControl({
   const wheelRef = useRef({ at: 0, dir: 0, sum: 0 });
   const [stageWidth, setStageWidth] = useState(0);
   const bindingsId = useId();
+  const quickDialogId = useId();
   const rows = pickerRows(state.instances, selection, draft);
+  const resolvedSelection = withPickerEffort(active, selection);
+  const closedFlowTier = selectionFlowTier(rows, resolvedSelection);
+  const maxStillGlow = quickView && !open && closedFlowTier === "max";
+  useEffect(() => {
+    if (!maxStillGlow) setFlourishId(0);
+  }, [maxStillGlow, flourishId]);
   const row = rows.find((item) => item.instance.instanceId === draft.instanceId);
   const column = row ? pickerColumn(row, draft.model) : 0;
   const cell = row?.cells[column];
@@ -142,12 +155,13 @@ export function ModelPickerControl({
 
   const show = (switching = false) => {
     const next = loadModelPickerView();
-    trackScreen(dial && dialFits && next !== "list" ? (next === "chart" ? "model-chart" : "model-dial") : "model-picker");
+    trackScreen(dial && dialFits && next !== "list" ? (next === "chart" ? "model-chart" : next === "quick" ? "model-quick" : "model-dial") : "model-picker");
     setDraft(selection);
     setCustomOpen(false);
     setStyleOpen(false);
-    setView(next);
     setQuery("");
+    setFlourishId(0);
+    pickedMaxWhileOpenRef.current = false;
     focusComposerAfterCloseRef.current = false;
     switchingRef.current = switching;
     switchSourceRef.current = switching ? noReplySource(bot)?.id : undefined;
@@ -157,7 +171,28 @@ export function ModelPickerControl({
   const close = () => {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = 0;
+    if (quickView && pickedMaxWhileOpenRef.current && !reducedMotion()) {
+      setFlourishId((id) => id + 1);
+    }
+    pickedMaxWhileOpenRef.current = false;
     setOpen(false);
+  };
+  const closeQuick = (returnFocus: "trigger" | "composer" | "none" = "none") => {
+    close();
+    if (returnFocus === "trigger") triggerRef.current?.focus({ preventScroll: true });
+    else if (returnFocus === "composer") focusComposerOnActivation({ activatedElement: triggerRef.current });
+  };
+  const commitQuick = (candidate: ModelSelection) => {
+    if (!canCommit(candidate)) return;
+    const target = rows.find((item) => item.instance.instanceId === candidate.instanceId)?.instance;
+    pickedMaxWhileOpenRef.current = selectionFlowTier(rows, withPickerEffort(target, candidate)) === "max";
+    setDraft(candidate);
+    if (switchingRef.current) {
+      switchFromNoReply(bot, candidate, switchSourceRef.current, state.instances, () => followUpRef.current, dispatch, onSwitching, onRerunSettled);
+      close();
+    } else {
+      dispatch({ type: "setModel", botId: bot.id, selection: candidate });
+    }
   };
   useEffect(() => () => clearTimeout(saveTimerRef.current), []);
   useEffect(() => {
@@ -191,7 +226,6 @@ export function ModelPickerControl({
     setCustomOpen(false);
   };
   const chooseStyle = (next: ModelPickerView) => {
-    setView(next);
     saveModelPickerView(next, "picker");
     // The strip unmounts with the focused tile.
     requestAnimationFrame(() => { if (!dialogRef.current?.contains(document.activeElement)) dialogRef.current?.focus(); });
@@ -219,7 +253,7 @@ export function ModelPickerControl({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, shortcutEnabled, selection]);
+  }, [open, shortcutEnabled, selection, quickView, closedFlowTier]);
   // What's New opens the picker Alt+M would open.
   useEffect(() => {
     if (!shortcutEnabled || open) return;
@@ -229,7 +263,7 @@ export function ModelPickerControl({
   }, [open, shortcutEnabled, selection]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || quickView) return;
     void refreshInstances();
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : triggerRef.current;
     previousFocusRef.current = previous;
@@ -237,10 +271,10 @@ export function ModelPickerControl({
     return () => {
       if (!focusComposerAfterCloseRef.current) previous?.focus();
     };
-  }, [contained, open, refreshInstances]);
+  }, [contained, open, quickView, refreshInstances]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || quickView) return;
     const stage = stageRef.current!;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -253,13 +287,13 @@ export function ModelPickerControl({
     };
     stage.addEventListener("wheel", onWheel, { passive: false });
     return () => stage.removeEventListener("wheel", onWheel);
-  }, [open, rows, state.instances, dialView, chartView]);
+  }, [open, quickView, rows, state.instances, dialView, chartView]);
 
   // Touch equivalent of the wheel handler above: the stage isn't a scroll
   // container, so a plain touchmove does nothing. One gesture steps once,
   // on the dominant axis, when it first crosses the threshold.
   useEffect(() => {
-    if (!open) return;
+    if (!open || quickView) return;
     const stage = stageRef.current!;
     const THRESHOLD = 40;
     const onTouchStart = (event: TouchEvent) => {
@@ -286,10 +320,10 @@ export function ModelPickerControl({
       stage.removeEventListener("touchstart", onTouchStart);
       stage.removeEventListener("touchmove", onTouchMove);
     };
-  }, [open, rows, state.instances]);
+  }, [open, quickView, rows, state.instances]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || quickView) return;
     const stage = stageRef.current!;
     const resize = () => setStageWidth(stage.getBoundingClientRect().width);
     if (!dialView) resize();
@@ -303,7 +337,7 @@ export function ModelPickerControl({
       observer?.disconnect();
       document.body.style.overflow = overflow;
     };
-  }, [open, dialView]);
+  }, [open, quickView, dialView]);
 
   // Display-only: the accent dot is engine-driven, so effortless models
   // (wizard bots, muse) still show it; only the effort label stays gated
@@ -313,17 +347,23 @@ export function ModelPickerControl({
   const effortShort = chipEffort ? chipEffortShortLabel(chipEffort, t) : "";
   const chipName = modelChipText({ instance: active, model: selection.model, effort: selection.effort }, t);
   const phoneName = chipPhoneName(active?.driverKind, chipName);
+  const glowStyle: (CSSProperties & { "--quick-accent": string }) | undefined = maxStillGlow ? { "--quick-accent": modelFamilyAccent(active?.driverKind) } : undefined;
+  const stripHostStyle: CSSProperties & { "--picker-accent": string } = { "--picker-accent": modelFamilyAccent(active?.driverKind) };
   const trigger = (
     <button
       ref={triggerRef}
       type="button"
-      onClick={() => show()}
+      onClick={() => (quickView && open ? close() : show())}
       aria-expanded={open}
       aria-haspopup="dialog"
+      aria-controls={quickView && open ? quickDialogId : undefined}
       aria-keyshortcuts={shortcutEnabled ? "Alt+M" : undefined}
-      className="flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 bg-control/60 py-1 pl-2 pr-2.5 text-[13px] text-ink hover:bg-raised-hover"
+      data-light={(maxStillGlow && LIGHT_SKIN_IDS.has(skin)) || undefined}
+      className={cn("flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 bg-control/60 py-1 pl-2 pr-2.5 text-[13px] text-ink hover:bg-raised-hover", maxStillGlow && "relative quick-header-max")}
+      style={glowStyle}
       title={modelChipTitle({ mode: selection.mode, instance: active, model: selection.model, effort: selection.effort }, t) + (shortcutEnabled ? ` (${shortcut}+M)` : "")}
     >
+      {maxStillGlow && flourishId > 0 && <QuickMaxFlourish key={flourishId} onDone={() => setFlourishId(0)} />}
       {active ? <ProviderBrandMark driverKind={active.driverKind} size={14} className="shrink-0" /> : <Sparkles size={14} className="shrink-0 text-accent" />}
       {/* Only the label side may shrink: a long name truncates in place while
           the accent dot, effort, and chevron stay visible at any width. The
@@ -552,7 +592,65 @@ export function ModelPickerControl({
           <div className="flex">{trigger}</div>
         </div>
       ) : trigger}
-      {presence.mounted && (globalThis.document ? createPortal(dialog, document.body) : dialog)}
+      {presence.mounted && (quickView ? (
+        globalThis.document ? createPortal(
+          <>
+            <QuickModelPicker
+              id={quickDialogId}
+              cardRef={dialogRef}
+              skin={skin}
+              look={look}
+              closing={presence.closing}
+              rows={rows}
+              triggerRef={triggerRef}
+              styleButtonRef={quickStyleBtnRef}
+              styleOpen={styleOpen}
+              onToggleStyle={() => (styleOpen ? closeStrip() : setStyleOpen(true))}
+              onCloseStyle={closeStrip}
+              onClose={closeQuick}
+              onCommit={commitQuick}
+              refreshInstances={refreshInstances}
+              selection={resolvedSelection}
+            />
+            {strip.mounted && (
+              <div
+                className="picker-style-host"
+                data-skin={pickerLookSkin(skin, look)}
+                data-light={look !== "dark" || undefined}
+                style={stripHostStyle}
+                onKeyDownCapture={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeStrip();
+                  } else if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === "KeyT") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!event.repeat) closeStrip();
+                  } else if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === "KeyM") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeQuick("trigger");
+                  }
+                }}
+              >
+                <PickerStyleStrip
+                  closing={strip.closing}
+                  shown={shown}
+                  styles={styles}
+                  picked={picked}
+                  skin={skin}
+                  anchor={quickStyleBtnRef}
+                  onStyle={chooseStyle}
+                  onLook={savePickerLook}
+                  onDone={closeStrip}
+                />
+              </div>
+            )}
+          </>,
+          document.body,
+        ) : null
+      ) : (globalThis.document ? createPortal(dialog, document.body) : dialog))}
       {warmDial && !presence.mounted && createPortal(
         <div className="model-cross-backdrop" data-skin={pickerLookSkin(skin, look)} data-light={look !== "dark" || undefined} data-picker-family={family} data-dial-warm="" aria-hidden inert style={{ visibility: "hidden", pointerEvents: "none" }}>
           <div className="model-cross-dialog">

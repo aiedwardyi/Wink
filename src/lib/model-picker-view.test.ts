@@ -19,6 +19,8 @@ describe("model picker view", () => {
     });
     saveModelPickerView("list");
     expect(loadModelPickerView()).toBe("list");
+    saveModelPickerView("quick");
+    expect(loadModelPickerView()).toBe("quick");
     saveModelPickerView("dial");
     expect(loadModelPickerView()).toBe("dial");
   });

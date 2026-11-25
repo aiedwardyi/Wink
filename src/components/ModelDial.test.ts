@@ -372,7 +372,7 @@ describe("ModelDial", () => {
     await mount();
     expect(shownView()).toBe("dial");
     await openStrip();
-    expect([...document.querySelectorAll("[data-picker-style]")].map((button) => button.textContent)).toEqual(["Dial", "List", "Chart"]);
+    expect([...document.querySelectorAll("[data-picker-style]")].map((button) => button.textContent)).toEqual(["Dial", "List", "Chart", "Quick"]);
     expect(document.querySelector("[data-picker-style-strip]")?.getAttribute("aria-label")).toBe("Style");
     await act(async () => viewButton("list").click());
     expect(document.querySelector(".model-dial")).toBeNull();
