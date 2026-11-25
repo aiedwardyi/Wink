@@ -257,35 +257,40 @@ describe("skins", () => {
     }
   });
 
-  it("keeps links in your own bubble readable on every skin", () => {
-    const linked = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components/LinkedText.tsx"), "utf8");
-    const linkToken = `--color-${linked.match(/<a [^>]*className="[^"]*\btext-([\w-]+)/)![1]}`;
-    const own = /\[data-orbit-message="user"\] \[data-orbit-message-content\](\s+a)?\s*\{/;
+  it("keeps text on your own bubble readable on every skin", () => {
+    const source = (file: string) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components", file), "utf8");
+    const inherits = css.match(/\[data-orbit-message="user"\] \[data-orbit-message-content\] :is\(([^{]*)\)\s*\{\s*color: inherit;/)?.[1].split(/,\s*/) ?? [];
+    const texts: [name: string, selector: string, className: string][] = [
+      ["link", "a", source("LinkedText.tsx").match(/<a [^>]*className="([^"]*)"/)![1]],
+      ["sent mid-turn", "", source("ChatBubble.tsx").match(/className="([^"]*)" title=\{t\("chat\.sentMidTurnHint"\)\}/)![1]],
+      ["fold toggle", "[data-fold-toggle]", source("FoldClip.tsx").match(/<button [^>]*className="([^"]*)"/)![1]],
+      ["file size", "[data-file-row] *", source("FileAttachmentRow.tsx").match(/<span className="([^"]*)">\{size\}/)![1]],
+    ];
+    const own = /\[data-orbit-message="user"\] \[data-orbit-message-content\]\s*\{/;
     const lines = css.split("\n");
     const failures: string[] = [];
     for (const id of SKIN_IDS) {
       const skin = `[data-skin="${id}"]`;
       let fill = "--color-bubble-user";
       let ink = "--color-ink";
-      let link: string | null = null;
       let scope = "";
       for (const [i, line] of lines.entries()) {
         if (line.startsWith("@scope")) scope = line;
         else if (line === "}") scope = "";
-        const rule = line.match(own);
-        if (!rule || (line.includes("[data-skin=") ? !line.includes(skin) : scope && !scope.includes(skin))) continue;
+        if (!own.test(line) || (line.includes("[data-skin=") ? !line.includes(skin) : scope && !scope.includes(skin))) continue;
         const body = lines.slice(i).join("\n").match(/\{([^}]*)\}/)![1];
-        const value = (prop: string) => body.match(new RegExp(`(?:^|[\\s;])${prop}:\\s*(var\\((--[\\w-]+)\\)|inherit)`))?.slice(1);
-        if (rule[1]) link = value("color")?.[0] === "inherit" ? "inherit" : (value("color")?.[1] ?? link);
-        else {
-          fill = value("background")?.[1] ?? fill;
-          ink = value("color")?.[1] ?? ink;
-        }
+        fill = body.match(/(?:^|[\s;])background:\s*var\((--[\w-]+)\)/)?.[1] ?? fill;
+        ink = body.match(/(?:^|[\s;])color:\s*var\((--[\w-]+)\)/)?.[1] ?? ink;
       }
       const token = (name: string) =>
         sharedBodies(id).map((body) => body.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-fA-F]+)`))?.[1]).find(Boolean)?.toLowerCase() ?? skinToken(id, name);
-      const ratio = contrast(token(link === "inherit" ? ink : link ?? linkToken), token(fill));
-      if (ratio < 4.5) failures.push(`${id}: ${ratio.toFixed(2)}:1`);
+      const ground = token(fill);
+      for (const [name, selector, className] of texts) {
+        const own = className.match(/\btext-((?:ink|accent)[\w-]*)(?:\/(\d+))?/);
+        const color = !own || inherits.includes(selector) ? token(ink) : blend(token(`--color-${own[1]}`), ground, own[2] ? Number(own[2]) / 100 : 1);
+        const ratio = contrast(color, ground);
+        if (ratio < 4.5) failures.push(`${id} ${name}: ${ratio.toFixed(2)}:1`);
+      }
     }
     expect(failures).toEqual([]);
   });

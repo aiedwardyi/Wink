@@ -212,8 +212,8 @@
   justify-content: flex-end;
 }
 
-/* Some skins fill your own bubble with the accent, so links there take the bubble's ink. */
-[data-orbit-message="user"] [data-orbit-message-content] a {
+/* Some skins fill your own bubble with the accent, so text drawn on it takes the bubble's ink. */
+[data-orbit-message="user"] [data-orbit-message-content] :is(a, [data-fold-toggle], [data-file-row] *) {
   color: inherit;
   text-decoration-color: currentColor;
 }
