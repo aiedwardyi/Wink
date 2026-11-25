@@ -117,7 +117,7 @@ function fixture(kind: "claudeAgent" | "codex") {
         });
         done();
       }, final(done) {
-        if (kind === "claudeAgent" && args.includes("text")) queueMicrotask(() => { stdout.end("fixture helper answer"); process.exitCode = 0; process.emit("close", 0); });
+        if (kind === "claudeAgent" && args.includes("json")) queueMicrotask(() => { stdout.end(JSON.stringify({ type: "result", result: "fixture helper answer" })); process.exitCode = 0; process.emit("close", 0); });
         done();
       } }),
     });

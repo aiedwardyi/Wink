@@ -4308,7 +4308,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const [cli, argv, options] = spawn.mock.calls[0]!;
       expect(cli).toBe(FAKE_CLI);
       expect(argv).toEqual([
-        "-p", "--model", "claude-haiku-5-5", "--output-format", "text",
+        "-p", "--model", "claude-haiku-5-5", "--output-format", "json",
         ...(kind === "summary" ? [] : ["--safe-mode", "--tools", "", "--strict-mcp-config"]),
         ...(kind === "review" ? [] : ["--effort", "low"]),
         ...(kind === "summary" ? [] : ["--no-session-persistence"]),
@@ -4321,6 +4321,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     } finally {
       spawn.mockRestore();
     }
+  });
+
+  it("reads the reply and usage from a verbose CLI's json array", async () => {
+    await create(undefined, { FAKE_CLAUDE_VERBOSE: "1" });
+    const onUsage = vi.fn();
+    await expect(instance.generateText?.("summarize", { onUsage })).resolves.toBe("fake generated text");
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ input: 6188, output: 1436, cacheCreation: 468 }));
   });
 
   it("creates the lean helper folder when it is missing", async () => {
@@ -4340,7 +4347,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       await expect(instance.generateText?.("notes prompt", { ephemeral: true, lean: true })).resolves.toBe("fake generated text");
       await expect(instance.reviewPermission?.("review prompt")).resolves.toBe("fake generated text");
 
-      const base = ["-p", "--model", "claude-haiku-5-5", "--output-format", "text"];
+      const base = ["-p", "--model", "claude-haiku-5-5", "--output-format", "json"];
       expect(spawn.mock.calls.map(([, argv]) => argv)).toEqual([
         [...base, "--safe-mode", "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
         [...base, "--no-session-persistence"],
@@ -4456,7 +4463,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.prompt).toBe("summarize");
-    expect(seen.argv[seen.argv.indexOf("--output-format") + 1]).toBe("text");
+    expect(seen.argv[seen.argv.indexOf("--output-format") + 1]).toBe("json");
     expect(seen.mcpConfig).toBeNull();
   });
 
