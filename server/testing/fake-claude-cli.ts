@@ -166,7 +166,7 @@ if (argv[0] === "auth" && argv[1] === "status" && authFile && existsSync(authFil
 // One-shot helper mode used by generateText/reviewPermission. The prompt is
 // deliberately read from stdin so sensitive review text never appears in
 // argv or process listings.
-if (argAfter("--output-format") === "text") {
+if (argAfter("--output-format") === "json") {
   const rejected = process.env.FAKE_CLAUDE_REJECT_FLAG;
   if (rejected && argv.includes(rejected)) {
     process.stderr.write(`error: unknown option '${rejected}'\n`);
@@ -193,7 +193,7 @@ if (argAfter("--output-format") === "text") {
   if (Number.isFinite(delayMs) && delayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
-  process.stdout.write("fake generated text\n");
+  process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "fake generated text", usage: { input_tokens: 2, cache_creation_input_tokens: 468, cache_read_input_tokens: 5718, output_tokens: 1436 } })}\n`);
   process.exit(0);
 }
 

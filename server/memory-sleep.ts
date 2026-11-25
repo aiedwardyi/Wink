@@ -389,7 +389,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     let reply = "";
     if (generate && shownNotes.length > 1) {
       reply = await generate(tidyPrompt(shownNotes), signal, (spent) => {
-        usage.input += (spent?.input ?? 0) + (spent?.cachedInput ?? 0) + (spent?.cacheCreation ?? 0);
+        usage.input += spent?.input ?? 0;
         usage.output += spent?.output ?? 0;
       });
     }
