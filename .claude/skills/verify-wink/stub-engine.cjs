@@ -1,7 +1,8 @@
 // Stand-in for the five engine CLIs, at the same stdio boundary the drivers spawn.
 // Usage (as a configured `cli`): "<node>" "<this file>" <claude|grok|codex|antigravity|muse> ...driver args
 // Replies read: STUB <ENGINE> <model> | re: <last line of the prompt> | <n> image
-const { appendFileSync } = require("node:fs");
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { dirname, join } = require("node:path");
 const { createInterface } = require("node:readline");
 const { randomUUID } = require("node:crypto");
 
@@ -62,6 +63,19 @@ if (args.includes("--version")) {
 }
 note("spawn", { args });
 
+// `agy -p /usage`, only while the scratch root holds agy-usage.jsonl (a captured plan answer): a plan login prints it,
+// "apikey" in agy-usage-mode is agy's own refusal (exit 2). Without the file the stub answers as before.
+const usageFile = process.env.USERPROFILE ? join(dirname(process.env.USERPROFILE), "agy-usage.jsonl") : "";
+if (engine === "antigravity" && flag("-p") === "/usage" && existsSync(usageFile)) {
+  const modeFile = join(dirname(usageFile), "agy-usage-mode");
+  if (existsSync(modeFile) && readFileSync(modeFile, "utf8").trim() === "apikey") {
+    process.stderr.write("/usage is not available with a Gemini API key\n");
+    process.exit(2);
+  }
+  process.stdout.write(readFileSync(usageFile, "utf8"));
+  process.exit(0);
+}
+
 if (engine === "claude") {
   if (args[0] === "auth") {
     console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" }));
@@ -85,6 +99,13 @@ if (engine === "claude") {
       }
       out({ type: "system", subtype: "status", status: "requesting" });
       const { text, delay } = reply(model, message.message?.content);
+      // An expired login fails the first send only, as if Sign in fixed it before Retry.
+      const expiredOnce = process.env.WINK_STUB_LOG && `${process.env.WINK_STUB_LOG}.expired`;
+      if (text.includes("re: [expired]") && expiredOnce && !existsSync(expiredOnce)) {
+        writeFileSync(expiredOnce, "");
+        setTimeout(() => out({ type: "result", subtype: "success", is_error: true, result: "Failed to authenticate: OAuth session expired and could not be refreshed", total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } }), delay);
+        return;
+      }
       if (text.includes("re: [restate]")) {
         // A morning summary written before its tool calls, then said again after them.
         const said = (body) => ({ type: "assistant", message: { id: randomUUID(), content: [{ type: "text", text: body }] } });

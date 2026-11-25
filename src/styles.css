@@ -5707,10 +5707,6 @@ html[data-orbit-idle="hidden"] .needs-you-glow::after {
   animation-play-state: paused;
 }
 
-[data-board-list] > [data-board-post]:not([data-on-screen]) .orbit-ring {
-  display: none;
-}
-
 /* A frozen ring reads as a hung turn; the elapsed timer carries it instead. */
 html[data-orbit-idle] [data-turn-mascot] .orbit-ring,
 html[data-orbit-idle] [data-board-view] .orbit-ring,

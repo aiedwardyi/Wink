@@ -7,12 +7,12 @@
 //
 // POSIX-gated like the other CLI e2es (the fakes are shebang scripts).
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -47,8 +47,10 @@ posixOnly("mid-turn steering e2e", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CLAUDE, 0o755);
     chmodSync(FAKE_MSP, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-steer-"));
-    mkdirSync(join(home, ".orbit"), { recursive: true });
+    home = createFixtureHome("omb-steer-");
+    mkdirSync(join(home, ".orbit", "about-you"), { recursive: true });
+    // the user already said no to importing memory, so the first turn carries no import offer
+    writeFileSync(join(home, ".orbit", "about-you", "declined"), "");
     steerGate = join(home, "delayed-steer.gate");
     writeFileSync(
       join(home, ".orbit", "config.json"),
@@ -60,6 +62,8 @@ posixOnly("mid-turn steering e2e", () => {
             environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_STEER_GATE: steerGate },
             config: { cli: FAKE_CLAUDE, permissionMode: "bypassPermissions" },
           },
+          // the helper hangs past its cap, so the turn ends before it gives up
+          claudeLate: { driver: "claudeAgent", environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_FORK_MODE: "hang" }, config: { cli: FAKE_CLAUDE, permissionMode: "bypassPermissions" } },
           // no live session: a message while busy uses the server-side queue
           muse: { driver: "museAgent", environment: { FAKE_MSP_MODE: "hang", META_API_KEY: "fixture-meta-key" }, config: { cli: FAKE_MSP, fullAuto: true } },
         },
@@ -92,7 +96,7 @@ posixOnly("mid-turn steering e2e", () => {
       child.on("close", () => resolve());
       setTimeout(() => (child.kill("SIGKILL"), resolve()), 5_000).unref?.();
     });
-    rmSync(home, { recursive: true, force: true });
+    removeTestData(home);
   });
 
   it(
@@ -120,7 +124,7 @@ posixOnly("mid-turn steering e2e", () => {
         "user:first",
         "bot:hello from fake claude",
         "user:and also this",
-        expect.stringMatching(/^bot:reply to: first \+ steered: \[Wink note: [^\]]+\]\n\nand also this$/),
+        expect.stringMatching(/^bot:reply to: first \+ steered: \[Wink note: [^\]]+\]\n\n\[Wink note, automated, not from the person\. A fast reply in your voice answers the message below[^\]]+\]\n\nand also this \| \[Wink note, automated, not from the person\. No fast reply reached the person for "and also this"; reply to it now in one short visible line, then continue\.\]$/),
       ]);
       const steered = bot.messages.find((m: any) => m.text === "and also this");
       expect(steered.steered).toBe(true);
@@ -129,6 +133,25 @@ posixOnly("mid-turn steering e2e", () => {
     },
     40_000,
   );
+
+  it("a send the helper never answers gets one ack after the turn ends", async () => {
+    const created = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "claudeLate", model: "claude-fake" } });
+    expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "first" })).status).toBe(202);
+    await waitFor(async () => (await getBot(created.id)).busy === true, "the turn to start");
+    await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.kind === "activity"), "the tool chip");
+    const second = await api("POST", `/api/bots/${created.id}/messages`, { text: "switched to the new branch" });
+    expect(second.body.steered).toBe(true);
+    const replies = async () => (await getBot(created.id)).messages.filter((m: any) => m.role === "bot" && m.kind === "text" && m.text.startsWith("reply to:"));
+    await waitFor(async () => (await getBot(created.id)).busy === false, "the first turn to settle");
+    // the helper gives up 12 s after the send, long after that turn ended
+    await waitFor(async () => (await replies()).length === 2 && (await getBot(created.id)).busy === false, "the owed ack", 40_000);
+    const [finished, ack] = await replies();
+    expect(finished.text).toMatch(/A fast reply in your voice answers the message below/);
+    expect(finished.text).not.toMatch(/No fast reply reached/);
+    expect(ack.text).toMatch(/No fast reply reached the person for "switched to the new branch"/);
+    expect((await getBot(created.id)).messages.filter((m: any) => m.text === "switched to the new branch")).toHaveLength(1);
+  }, 60_000);
 
   it("rejects a delayed steer acknowledgement after the bot is deleted", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;

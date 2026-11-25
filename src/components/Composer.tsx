@@ -84,7 +84,7 @@ import { holdToSendAfter, markSent, stopTooSoon } from "@/lib/send-hold";
 import { fitComposerHeight } from "@/lib/composer-dock";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } from "@/lib/room-drafts";
-import { filesProblem, isRoomPicture, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
+import { filesProblem, isRoomPicture, roomHostSeats, roomMentionPeople, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -93,7 +93,7 @@ import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
-import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
+import { chatMovedOn, openQuestions, pinnedQuestion, questionJumpId } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -291,6 +291,7 @@ export function Composer({
   const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
   const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
+  const jumpId = question ? questionJumpId(threadMessages, question, pinned, Boolean(group ? group.hasMore : bot?.hasMore)) : null;
   const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
   const questionAsker = question
     ? group
@@ -512,10 +513,25 @@ export function Composer({
   // IME composition: native isComposing can stay true after Hangul
   // commits, which used to make Enter insert a newline instead of send.
   const composingRef = useRef(false);
-  const requestBotPrewarm = useCallback((botId: string | undefined) => {
-    if (!botId) return;
+  const botId = bot?.id;
+  const taskFolder = bot?.tasks?.find((task) => task.threadId === threadId)?.cwd;
+  const folder = taskFolder === undefined ? bot?.cwd ?? bot?.rememberedProjectCwd : taskFolder;
+  const selection = bot?.modelSelection;
+  const prewarmKey = JSON.stringify([botId, threadId, selection?.instanceId, selection?.model, selection?.effort, folder]);
+  const prepared = useRef<string | null>(null);
+  const requestBotPrewarm = useCallback(() => {
+    if (busy) {
+      prepared.current = null;
+      return;
+    }
+    if (!botId || prepared.current === prewarmKey) return;
+    prepared.current = prewarmKey;
     void api(`/api/bots/${botId}/prewarm`, { method: "POST" }).catch(() => {});
-  }, []);
+  }, [botId, busy, prewarmKey]);
+
+  useEffect(() => {
+    if (document.activeElement === inputRef.current) requestBotPrewarm();
+  }, [requestBotPrewarm]);
 
   const compositionEndedAtRef = useRef(0);
   // what was typed before the mic went on — partials append after it
@@ -528,7 +544,7 @@ export function Composer({
     const input = inputRef.current;
     if (!input || input.disabled) return;
     if (!composerNeedsTap()) input.focus();
-    requestBotPrewarm(bot.id);
+    requestBotPrewarm();
     dispatch({ type: "composerFocused", botId: bot.id });
   }, [bot, dispatch, focusBlocked, locked, requestBotPrewarm, state.composerFocusBotId, preview]);
 
@@ -585,9 +601,10 @@ export function Composer({
 
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
   const mention = mentionQueryAt(text, caret);
+  const hostName = state.config?.profile?.name;
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
-    const people = room?.people ?? (group?.hosted ? roomPeople(group) : []);
+    const people = room?.people ?? (group?.hosted ? roomMentionPeople(roomPeople(group), roomHostSeats(group)?.length ? hostName || t("teamRoom.host") : undefined) : []);
     const pool: MentionChoice[] = room
       ? [
           ...(room.bots ?? []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, owner: roomBot.owner, agent: true })),
@@ -611,7 +628,7 @@ export function Composer({
       const owner = peer.owner && people.find((person) => person.id === peer.owner);
       return owner ? { ...peer, label: t("teamRoom.botOwner", { name: peer.name, owner: owner.name }) } : peer;
     });
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, t]);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, hostName, t]);
   const pickerOpen = candidates.length > 0;
   useBackLayer(!preview && pickerOpen, () => setDismissedAt(mention?.start ?? null));
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -698,6 +715,7 @@ export function Composer({
         replyToId: entry.replyToId,
         threadId: entry.draft.threadId,
         actedAt: entry.at,
+        waited: true,
         onError: () => restoreDraft(entry.draft),
       });
     } : undefined,
@@ -972,6 +990,7 @@ export function Composer({
       replyToId: next.replyToId,
       threadId: next.draft.threadId,
       actedAt: next.at,
+      waited: true,
       onError: () => {
         restoreDraft(next.draft);
         if (!mountedRef.current) return;
@@ -1245,6 +1264,7 @@ export function Composer({
             askerName={questionAsker}
             count={questions.length}
             index={questionIndex}
+            onJump={jumpId ? () => dispatch({ type: "focusMessage", threadId, messageId: jumpId }) : undefined}
             onStep={(step) => {
               const next = questions[questionIndex + step];
               if (!next || !pinned) return;
@@ -1399,17 +1419,12 @@ export function Composer({
             compositionEndedAtRef.current = Date.now();
           }}
           onBlur={() => {
+            prepared.current = null;
             composingRef.current = false;
             compositionEndedAtRef.current = 0;
           }}
-          onFocus={() => {
-            if (bot?.id) requestBotPrewarm(bot.id);
-          }}
+          onFocus={requestBotPrewarm}
           onKeyDown={(e) => {
-            if (bot?.id && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
-              requestBotPrewarm(bot.id);
-            }
-
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !e.shiftKey && !e.altKey && undoPasteDisplay()) {
               e.preventDefault();
               return;

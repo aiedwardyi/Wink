@@ -1,10 +1,10 @@
 // The Forum: the Board's posts as a Threads-style feed on one raised sheet (Hot / New / Top, flair chips); a post opens its replies down a thread line.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type SetStateAction } from "react";
-import { ArrowBigUp, CircleCheck, Flame, MessageCircle, Sparkles, TrendingUp, type LucideIcon } from "lucide-react";
+import { ArrowBigUp, CircleCheck, Flame, Loader2, MessageCircle, Sparkles, TrendingUp, type LucideIcon } from "lucide-react";
 
 import { agoText } from "@/lib/ago";
 import {
-  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isOwnReply, replyToBoard, sortBoardThreads, useBoardPosts,
+  BOARD_FLAIRS, BOARD_SORTS, BOARD_USER, boardReplyTree, boardThreads, deleteFromBoard, FORUM_SELECTION, forumKept, isOwnReply, isRemovable, replyToBoard, sortBoardThreads, useBoardPosts,
   type BoardKind, type BoardPost, type BoardReply, type BoardSort,
 } from "@/lib/board";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
@@ -18,6 +18,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
+import { usePullRefresh } from "@/lib/use-pull-refresh";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { useStore } from "@/state/store";
 import { shownProfile } from "@/state/store-transforms";
@@ -25,6 +26,7 @@ import type { Bot } from "@/state/store-types";
 
 import { InitialsAvatar, profileInitials, RoomBotAvatar } from "./Avatar";
 import { BackButton } from "./BackButton";
+import { useToggleForum } from "./BoardButton";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MessageMenu, messageMenuProps, SelectionMenu, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
@@ -52,25 +54,26 @@ const ROW = "grid grid-cols-[52px_minmax(0,1fr)] px-6 max-md:grid-cols-[46px_min
 const SIDE = "px-6 max-md:px-4";
 // replies after this many share the last delay, so a long thread is never slow to show
 const STAGGER_CAP = 4;
-const FORUM_BACK = "flex min-h-11 items-center gap-0.5 px-1.5 text-[15px] font-medium text-accent hover:text-ink";
+const FORUM_BACK = "flex min-h-11 items-center gap-0.5 rounded-md px-1.5 text-[15px] font-medium text-accent hover:bg-control hover:text-ink";
 
 const EMPTY_MARKS = ["claudeAgent", "codex", "grokAgent", "geminiAgent", "museAgent"];
 const EMPTY_MARK_SIZE = 30;
 const EMPTY_RING_RADIUS = 56;
 const EMPTY_RING_BOX = 2 * EMPTY_RING_RADIUS + EMPTY_MARK_SIZE;
 
-type UserLook = { name: string; avatarUrl?: string };
+type UserLook = { name: string; initials: string; avatarUrl?: string };
 
 function useUserLook(): UserLook {
   const { t } = useI18n();
   const { state } = useStore();
   const profile = shownProfile(state)?.profile;
   const name = profile?.name?.trim() || profile?.email?.trim() || t("chrome.you");
+  const initials = profileInitials(profile);
   const avatarUrl = profile?.avatarUrl;
-  return useMemo(() => ({ name, avatarUrl }), [name, avatarUrl]);
+  return useMemo(() => ({ name, initials, avatarUrl }), [name, initials, avatarUrl]);
 }
 
-const userFace = (user: UserLook) => (size: number) => <InitialsAvatar initials={profileInitials({ name: user.name })} imageUrl={user.avatarUrl} size={size} />;
+const userFace = (user: UserLook) => (size: number) => <InitialsAvatar initials={user.initials} imageUrl={user.avatarUrl} size={size} />;
 
 function useUserFace() {
   const user = useUserLook();
@@ -85,7 +88,7 @@ const engineOf = (instances: Instances, post: BoardPost) => {
   return (model && instances.find((instance) => instance.models?.options.some((option) => option.label === model || option.id === model))?.driverKind) || "";
 };
 
-/** Name, face, model and its engine mark come from the post; a bot on this PC lends its face, which may be an uploaded picture, and its working ring. */
+/** Name, face, model and its engine mark come from the post; a bot on this PC lends its face, which may be an uploaded picture. */
 function authorOf(post: BoardPost, bot: Bot | undefined, driverKind: string, user: UserLook) {
   if (post.author_bot_id === BOARD_USER) return { name: user.name, face: userFace(user), model: "", driverKind: "", working: false };
   const name = post.author?.name || bot?.name || "";
@@ -96,7 +99,7 @@ function authorOf(post: BoardPost, bot: Bot | undefined, driverKind: string, use
     model: post.author?.model ?? "",
     driverKind,
     working,
-    face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} orbitRing={working} />,
+    face: (size: number) => <RoomBotAvatar bot={look} state="happy" size={size} motion="none" motionKey={0} animated={false} />,
   };
 }
 
@@ -165,7 +168,7 @@ const preview = (post: BoardPost) => (post.body && post.body !== post.title ? po
 
 type OnMenu = (menu: MessageMenuRequest) => void;
 
-/** The chat's message menu on a post: Copy on any, Delete added on the user's own replies. */
+/** The chat's message menu on a post: Copy on any, Delete added on a top-level post and on the user's own replies. */
 const menuProps = (post: BoardPost, onMenu: OnMenu) => {
   const text = post.body || post.title;
   const user = post.author_bot_id === BOARD_USER;
@@ -386,7 +389,7 @@ function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; chi
   );
 }
 
-export function BoardView({ hidden = false }: { hidden?: boolean }) {
+export function BoardView({ hidden = false, closing = false }: { hidden?: boolean; closing?: boolean }) {
   const { t } = useI18n();
   const sidebarOnRight = useSidebarSide() === "right";
   const { posts, failed, saved, removed, retry } = useBoardPosts();
@@ -410,19 +413,6 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
     opener.current = { id, top: listRef.current?.scrollTop ?? 0 };
     setOpenId(id);
   }, []);
-  // a working ring repaints its blurred halo every frame, even scrolled away, so only rows near the screen draw one
-  const shownIds = shown.map((thread) => thread.post.id).join(" ");
-  // Back mounts new rows for the same ids
-  const listShown = !open && threads.length > 0;
-  useEffect(() => {
-    const root = listRef.current;
-    if (!root) return;
-    const near = new IntersectionObserver((entries) => {
-      for (const entry of entries) entry.target.toggleAttribute("data-on-screen", entry.isIntersecting);
-    }, { root, rootMargin: "200px 0px" });
-    for (const row of root.querySelectorAll("[data-board-list] > [data-board-post]")) near.observe(row);
-    return () => near.disconnect();
-  }, [shownIds, listShown]);
   useBackLayer(Boolean(open), close);
   const stepSort = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
@@ -435,13 +425,28 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   const isOpen = Boolean(open);
   const page = usePresence(open);
   const phone = useIsPhone();
+  const leave = useToggleForum();
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
   const pageRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<HTMLElement>(null);
+  const pullRef = useRef<HTMLDivElement>(null);
+  // a closing Forum overlays the chat at the width it had, so the chat takes the column back on the first frame
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || closing) return;
+    const watch = new ResizeObserver(() => view.style.setProperty("--board-w", `${view.offsetWidth}px`));
+    watch.observe(view);
+    return () => watch.disconnect();
+  }, [closing]);
   useSettingsSwipe(pageRef, phone && page.mounted && !page.closing, false, () => {
     hapticTick();
     // the swipe already settled offscreen; do not replay the exit
     if (pageRef.current) pageRef.current.style.animation = "none";
     close();
   });
+  usePullRefresh(listRef, pullRef, phone && !isOpen, retry);
+  usePullRefresh(pageRef, pullRef, phone && page.mounted && !page.closing, retry);
   useLayoutEffect(() => {
     if (isOpen) {
       listRef.current?.closest("[data-board-view]")?.querySelector<HTMLElement>("[data-back-button]")?.focus({ preventScroll: true });
@@ -457,32 +462,42 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
   }, [isOpen]);
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const { value: shownMenu, closing: menuClosing } = usePresence(menu);
-  const [deleteFailed, setDeleteFailed] = useState(false);
+  const [deleteFailed, setDeleteFailed] = useState<string | null>(null);
+  const failedIn = (thread: { post: BoardPost; replies: BoardPost[] }) => [thread.post, ...thread.replies].some((post) => post.id === deleteFailed);
   const [deleting, setDeleting] = useState<BoardPost | null>(null);
   const confirm = usePresence(deleting);
   const retryButton = <button type="button" onClick={retry} className="shrink-0 underline">{t("viewer.retry")}</button>;
   const remove = (post: BoardPost) => deleteFromBoard(post.id).then(() => {
     removed(post);
-    setDeleteFailed(false);
-  }, () => setDeleteFailed(true));
+    setOpenId((current) => (current === post.id ? null : current));
+    setDeleteFailed(null);
+  }, () => setDeleteFailed(post.id));
   const menuPost = shownMenu?.kind === "message" ? posts?.find((post) => post.id === shownMenu.target.message.id) : undefined;
   useEffect(() => {
-    if (!isOpen || hidden) return;
+    if (hidden || closing || (!isOpen && phone)) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return;
+      if (event.target instanceof Element && event.target.closest('[aria-modal="true"], [data-sidebar-search]')) return;
       if ([...document.querySelectorAll<HTMLInputElement>("[data-board-view] [data-board-reply-box] input")].some((input) => input.value)) return;
       // the open menu takes this Escape
-      if (document.querySelector("[data-message-menu], [data-selection-menu]")) return;
+      if (document.querySelector("[data-message-menu], [data-selection-menu], [data-bot-menu], [data-room-menu], [data-section-picker], [data-new-menu]")) return;
       event.preventDefault();
-      setOpenId(null);
+      if (isOpen) setOpenId(null);
+      else leaveRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, hidden]);
+  }, [isOpen, hidden, closing, phone]);
   return (
-    <main data-board-view hidden={hidden} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      <div className={cn("flex min-h-[3.25rem] items-center px-5 py-2 md:min-h-[76px]", open ? (sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT) : cn(DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT))}>
+    <main
+      ref={viewRef}
+      data-board-view
+      data-closing={closing || undefined}
+      inert={closing}
+      hidden={hidden}
+      className="md:animate-panel-slide relative flex h-full min-w-0 flex-1 flex-col bg-app [--panel-dx:-28px] data-closing:z-20 data-closing:w-(--board-w) data-closing:-mr-(--board-w) data-closing:flex-none"
+    >
+      <div className={cn("flex min-h-[3.25rem] items-center px-5 py-2 md:min-h-[76px] md:animate-fade-in", open ? (sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT) : cn(DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT))}>
         <div className="mx-auto flex w-full max-w-[640px] min-w-0 justify-center">
           {open ? <span className="mr-auto md:-ml-1.5"><BackButton label={t("chrome.forum")} ariaLabel={t("board.back")} onClick={close} className={FORUM_BACK} /></span> : (
             <div className="flex min-w-0 flex-col items-center text-center">
@@ -492,10 +507,13 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
           )}
         </div>
       </div>
-      <div className="relative min-h-0 flex-1">
-        <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto md:px-5">
+      <div className="relative min-h-0 flex-1 md:animate-fade-in">
+        <div ref={pullRef} aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-10 flex h-9 items-center justify-center text-ink-secondary opacity-0 md:hidden">
+          <span><Loader2 size={22} className="[[data-spin]_&]:animate-spin" /></span>
+        </div>
+        <div ref={listRef} className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] md:px-5">
           <section className={SHEET}>
-            {failed && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{retryButton}</div>}
+            {(failed || (!open && threads.some((thread) => thread.post.id === deleteFailed))) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 py-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
             {!posts && !failed && (
               <div data-board-loading role="status" className="py-24 text-center text-[14px] text-ink-secondary">{t("board.loading")}</div>
             )}
@@ -571,7 +589,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
             className="max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in absolute inset-0 overflow-x-hidden overflow-y-auto bg-app md:px-5"
           >
             <section className={SHEET}>
-              {(failed || deleteFailed) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 pt-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
+              {(failed || failedIn(page.value)) && <div role="alert" className={cn(SIDE, "flex items-center justify-between gap-3 pt-3 text-[13px] text-danger")}><span>{t("errors.request")}</span>{failed && retryButton}</div>}
               <Thread key={page.value.post.id} post={page.value.post} replies={page.value.replies} onMenu={setMenu} onSaved={saved} />
             </section>
           </div>
@@ -586,7 +604,7 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
           target={shownMenu.target}
           closing={menuClosing}
           selectText={false}
-          onDelete={menuPost && isOwnReply(menuPost) ? () => setDeleting(menuPost) : undefined}
+          onDelete={menuPost && (isRemovable(menuPost) || isOwnReply(menuPost)) ? () => setDeleting(menuPost) : undefined}
           onClose={() => setMenu(null)}
         />
       ) : shownMenu ? (
@@ -595,8 +613,8 @@ export function BoardView({ hidden = false }: { hidden?: boolean }) {
       {confirm.value && (
         <ConfirmDialog
           closing={confirm.closing}
-          title={t("board.deleteTitle")}
-          body={t("board.deleteBody")}
+          title={t(confirm.value.parent_id === null ? "board.deletePostTitle" : "board.deleteTitle")}
+          body={t(confirm.value.parent_id === null ? "board.deletePostBody" : "board.deleteBody")}
           confirmLabel={t("chrome.delete")}
           onConfirm={() => {
             void remove(confirm.value!);

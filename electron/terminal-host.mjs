@@ -1239,6 +1239,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       return;
     }
     session.pty = pty;
+    // The retry can land in the other place, and nothing rewrites the record until the bot types again.
+    if (session.botPane) paneRuns?.ranLocally(session.id, !pty.hosted?.());
     watchExit(session);
     if (Number.isInteger(pty.pid)) {
       try { setPriority(pty.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
@@ -1409,7 +1411,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         watchStalls(session);
       }
       if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, baseHead: session.baseHead, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run,
-        worker: { engine: session.engine, executable: session.workerEngine, account: session.workerAccount, shell: session.shell, remote: session.remote } });
+        worker: { engine: session.engine, executable: session.workerEngine, account: session.workerAccount, shell: session.shell, remote: session.remote, local: session.pty.hosted?.() ? null : true } });
     }
     if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
     if (session.respawn) {
@@ -1852,6 +1854,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Session ids cross the local proxy boundary.
       if (!match.ambiguous && typeof sessionId === "string" && wasClosedPane(botId, sessionId)) return Promise.resolve({ alreadyClosed: true });
+      // A pane a worker host out of reach may still run has no session here; its record goes, so nothing brings it back.
+      const held = match.ambiguous ? null : resolveBotSession(paneRuns?.heldBy(botId) ?? [], sessionId).session;
+      if (held && paneRuns.closed(held.id)) return Promise.resolve({ alreadyClosed: true });
       throw new Error("Unknown terminal");
     },
     async openForBot(botId, input = {}, recovery = null) {

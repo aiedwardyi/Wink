@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
 import { useMemoryClean } from "./memory-clean";
+import { noteMemoryFrame } from "./memory-clean-events";
 
 const run = { runId: "r", at: 1, files: ["MEMORY.md"], beforeBytes: 2000, afterBytes: 1000, merged: 1, replaced: 0, moved: 0, undoneAt: null, undoable: true };
 let root: ReturnType<typeof createRoot>;
@@ -125,6 +126,14 @@ describe("cleanup summary", () => {
     await act(async () => value.undo()); expect(value.run?.undoable).toBe(false);
     expect(fetch).toHaveBeenCalledTimes(4);
     expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ runId: "r" });
+  });
+  it("rereads the summary when the server says this bot's memory changed", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ run: null })).mockResolvedValueOnce(Response.json({ run }));
+    vi.stubGlobal("fetch", fetch); await mount();
+    expect(value.run).toBeNull();
+    await act(async () => noteMemoryFrame({ kind: "memory.changed", botId: "b" }, { hydrated: true, bots: [] }));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(value.run?.runId).toBe("r");
   });
   it("clears the summary after other Undo failures without refetching", async () => {
     const fetch = vi.fn().mockResolvedValueOnce(Response.json({ run })).mockResolvedValueOnce(Response.json({ error: "failed" }, { status: 500 }));

@@ -23,9 +23,9 @@ export function openOutside(event: MouseEvent, url: string) {
   void window.ogb.openExternal(url).catch(() => {});
 }
 
-export function StepMark({ done, step, label, muted }: { done: boolean; step: number; label: string; muted?: boolean }) {
+export function StepMark({ done, step, label, muted, className }: { done: boolean; step: number; label: string; muted?: boolean; className?: string }) {
   return (
-    <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-full text-[13px]", done ? "bg-success/15 text-success" : muted ? "bg-control/50 text-ink-secondary" : "bg-control text-ink")}>
+    <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-full text-[13px]", done ? "bg-success/15 text-success" : muted ? "bg-control/50 text-ink-secondary" : "bg-control text-ink", className)}>
       {done ? <Check key="done" size={15} aria-label={label} className="animate-pop-in" /> : step}
     </span>
   );

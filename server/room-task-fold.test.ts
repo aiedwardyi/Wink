@@ -7,16 +7,16 @@
 // live thread ownership, unlike the in-memory fake driver's constant false.
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -51,7 +51,7 @@ const packet = (threadId: string) => z.object({
 ));
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-room-fold-"));
+  home = createFixtureHome("omb-room-fold-");
   setupDump = join(home, "setup-dump.json");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
@@ -114,7 +114,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("room task-state fold", () => {

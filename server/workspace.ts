@@ -8,13 +8,13 @@
 // memory/ holds topic files the bot reads on demand with its ordinary
 // file tools. Plain markdown on purpose — the user can open, edit, or
 // delete anything the bot believes.
-import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
-import { PICKS_FILE, picksBlock, timelineHolds } from "./picks.ts";
+import { applyPicks, PICKS_FILE, picksBlock, pinnedGoals, timelineHolds, type PinnedGoal } from "./picks.ts";
 import { currentTurnTrace } from "./turn-timing.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
@@ -31,8 +31,12 @@ export const MEMORY_MAX_LINES = 200;
 export const MEMORY_MAX_BYTES = 24_000;
 /** Either budget this full puts a trim notice in the prompt, before anything is cut. */
 const MEMORY_WARN_SHARE = 0.8;
+/** Past the budget, this share of it goes to the newest lines: Auto Notes appends at the bottom. */
+const MEMORY_NEWEST_SHARE = 0.25;
 /** A copy memory sync set aside when one file changed on two PCs (memory-sync.ts park). */
 export const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
+/** An "Only this bot" import (about-you.ts), a side file so MEMORY.md stays the bot's own notes. */
+export const IMPORT_FILE = "imported.md";
 
 export const MEMORY_SEED = `# Memory
 
@@ -82,9 +86,7 @@ export function removeWorkspaceDir(dir: string): void {
  * MEMORY_MAX_BYTES bytes, whichever cuts first. Returns null when the file
  * is missing or effectively empty (seed-only counts as empty). `bytes` and
  * `lines` size the whole file, not the cut. */
-export function loadMemory(
-  botId: string,
-): { text: string; truncated: boolean; bytes: number; lines: number } | null {
+export function loadMemory(botId: string, maxBytes = MEMORY_MAX_BYTES): LoadedMemory | null {
   let raw: string;
   const end = currentTurnTrace()?.span("memory_read", "MEMORY.md");
   try {
@@ -95,15 +97,39 @@ export function loadMemory(
     return null;
   }
   if (!raw.trim() || raw === MEMORY_SEED) return null;
+  return loadedMemory(raw, maxBytes);
+}
+
+/** `text` is the head; past the budget, `newest` holds the last lines and `cut` counts the older lines between them that do not load. */
+export type LoadedMemory = { text: string; truncated: boolean; bytes: number; lines: number; newest?: string; cut?: number };
+
+/** raw cut the way loadMemory cuts it for the prompt: the head, then the newest lines, older lines between them left out. */
+export function loadedMemory(raw: string, maxBytes = MEMORY_MAX_BYTES): LoadedMemory {
+  const all = raw.split("\n");
+  const whole = headOf(raw, MEMORY_MAX_LINES, maxBytes);
+  if (!whole.truncated) return { ...whole, bytes: Buffer.byteLength(raw, "utf8"), lines: all.length };
+  const end = all.at(-1) === "" ? all.length - 1 : all.length;
+  const size = (line: string) => Buffer.byteLength(line, "utf8") + 1;
+  let from = end;
+  let newestBytes = 0;
+  while (from > 0 && end - from < MEMORY_MAX_LINES * MEMORY_NEWEST_SHARE && newestBytes + size(all[from - 1]!) <= maxBytes * MEMORY_NEWEST_SHARE) newestBytes += size(all[--from]!);
+  const head = headOf(all.slice(0, from).join("\n"), MEMORY_MAX_LINES - (end - from), maxBytes - newestBytes);
+  const cut = from - head.text.split("\n").length;
+  // nothing between them: a full file whose last line ends in a break loses nothing
+  if (from === end || cut <= 0) return { ...whole, bytes: Buffer.byteLength(raw, "utf8"), lines: all.length };
+  return { text: head.text, truncated: true, bytes: Buffer.byteLength(raw, "utf8"), lines: all.length, newest: all.slice(from, end).join("\n"), cut };
+}
+
+function headOf(raw: string, maxLines = MEMORY_MAX_LINES, maxBytes = MEMORY_MAX_BYTES) {
   let truncated = false;
   let text = raw;
   const lines = text.split("\n");
-  if (lines.length > MEMORY_MAX_LINES) {
-    text = lines.slice(0, MEMORY_MAX_LINES).join("\n");
+  if (lines.length > maxLines) {
+    text = lines.slice(0, maxLines).join("\n");
     truncated = true;
   }
-  if (Buffer.byteLength(text, "utf8") > MEMORY_MAX_BYTES) {
-    text = Buffer.from(text, "utf8").subarray(0, MEMORY_MAX_BYTES).toString("utf8");
+  if (Buffer.byteLength(text, "utf8") > maxBytes) {
+    text = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
     // a multi-byte character sliced in half decodes as U+FFFD — drop it
     text = text.replace(/�+$/, "");
     // end on the last whole line; only a lone line over budget stays cut mid-line
@@ -111,7 +137,7 @@ export function loadMemory(
     if (lastBreak > 0) text = text.slice(0, lastBreak).trimEnd();
     truncated = true;
   }
-  return { text, truncated, bytes: Buffer.byteLength(raw, "utf8"), lines: lines.length };
+  return { text, truncated };
 }
 
 /** Cap on what the memory API will write to MEMORY.md. Far above the load
@@ -143,6 +169,9 @@ export function memoryRevision(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
+/** The revision readMemoryFile reports for these raw bytes. */
+const rawRevision = (raw: string) => memoryRevision(!raw.trim() || raw === MEMORY_SEED ? "" : raw);
+
 /** ensureWorkspace first: the user may edit memory before the bot has ever
  * run a turn, and the write must not depend on that ordering. */
 export function writeMemoryFile(botId: string, text: string): void {
@@ -151,14 +180,107 @@ export function writeMemoryFile(botId: string, text: string): void {
 }
 
 /** Writes only while MEMORY.md is still at `baseRevision`, so an editor never
- * overwrites notes it has not seen. No base writes as before, for older clients. */
+ * overwrites notes it has not seen. No base writes as before, for older clients.
+ * A second name pins the file it checked: a line another writer appends before
+ * the new text lands is carried over, and a file changed in place goes back as
+ * a conflict on Windows while nothing has touched the new text, else is parked
+ * as a conflict copy, so a save never erases an edit it did not see. */
 export function saveMemoryFile(botId: string, text: string, baseRevision?: string) {
-  const current = readMemoryFile(botId);
-  if (baseRevision !== undefined && baseRevision !== current.revision) {
+  const conflict = () => {
+    const current = readMemoryFile(botId);
     return { conflict: true as const, text: current.text, revision: current.revision };
+  };
+  const save = () => {
+    writeMemoryFile(botId, text);
+    return { conflict: false as const, ...readMemoryFile(botId) };
+  };
+  const stem = join(workspaceDir(botId), "memory", "MEMORY");
+  const park = (late: string) => parkCopy(stem, late);
+  if (baseRevision === undefined) return save();
+  if (baseRevision !== readMemoryFile(botId).revision) return conflict();
+  const path = join(ensureWorkspace(botId), "MEMORY.md");
+  const swap = swapPinned(path, text, (checked) => rawRevision(checked) === baseRevision, stem);
+  // no file yet, or a volume without hard links: the check above is all there is
+  if (swap === null) return save();
+  if (!swap.landed) return conflict();
+  if (swap.late === undefined) return { conflict: false as const, ...readMemoryFile(botId) };
+  let back: Swap | null = null;
+  try {
+    // the other writer's whole file goes back, and the caller saves again on top of it
+    back = swapPinned(path, swap.late, (current) => current === text, stem);
+  } catch {
+    /* a failed restore leaves the new file, and the old one is parked below */
   }
-  writeMemoryFile(botId, text);
-  return { conflict: false as const, ...readMemoryFile(botId) };
+  if (back?.landed) {
+    if (back.late !== undefined) park(back.late);
+    return conflict();
+  }
+  // a writer changed the new file after it landed, so it stays
+  park(swap.late);
+  const current = readMemoryFile(botId);
+  return current.text.startsWith(text) ? { conflict: false as const, ...current } : conflict();
+}
+
+// set aside where the prompt names it for the bot to merge, as memory sync parks a copy
+function parkCopy(stem: string, late: string): void {
+  writeFileAtomic(`${stem}.conflict-${memoryRevision(late).slice(0, 8)}.md`, late, { mode: 0o600 });
+}
+
+type Swap = { landed: boolean; late?: string };
+
+/** Puts `next` at `path` while `holds` accepts the file there. A second name pins the file it replaces: a line
+ * another writer appends to it before `next` lands is carried over, and any other change comes back as `late`,
+ * or off Windows, where that writer may not be done, the pinned file itself is parked as `<stem>.conflict-<id>.md`.
+ * Null when the file cannot be pinned. */
+function swapPinned(path: string, next: string, holds: (current: string) => boolean, stem: string): Swap | null {
+  const id = randomUUID();
+  const pin = `${path}.${process.pid}.${id}.tmp`;
+  try {
+    linkSync(path, pin);
+  } catch {
+    return null;
+  }
+  try {
+    const current = readFileSync(pin, "utf8");
+    if (!holds(current)) return { landed: false };
+    writeFileAtomic(path, next, { mode: 0o600 });
+    const late = readFileSync(pin, "utf8");
+    if (late === current) return { landed: true };
+    // only Windows refuses a rename over a file another process has open, so elsewhere `late` can be cut mid-write
+    const whole = process.platform === "win32";
+    if (late.startsWith(current) && (whole || late.endsWith("\n"))) {
+      try {
+        appendLines(path, late.slice(current.length));
+        return { landed: true };
+      } catch {
+        /* kept below like any other change */
+      }
+    }
+    if (whole) return { landed: true, late };
+    // the file itself, never its bytes, so a writer still writing finishes into the copy
+    linkSync(pin, `${stem}.conflict-${id.slice(0, 8)}.md`);
+    return { landed: true };
+  } finally {
+    try {
+      rmSync(pin, { force: true });
+    } catch {
+      /* best-effort cleanup: MEMORY.md or a parked copy holds its bytes */
+    }
+  }
+}
+
+/** Appends durably, on a line of its own even when the file's last line has no break. */
+export function appendLines(path: string, text: string): void {
+  const fd = openSync(path, "a+", 0o600);
+  try {
+    const { size } = fstatSync(fd);
+    const last = Buffer.alloc(1);
+    const lead = size > 0 && !text.startsWith("\n") && readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a ? "\n" : "";
+    writeFileSync(fd, `${lead}${text}`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Raw MEMORY.md bytes, including seed. Missing file is empty. */
@@ -208,9 +330,12 @@ export function listMemoryTopics(botId: string): Array<{ name: string; bytes: nu
 
 export const MEMORY_LINE_MAX_BYTES = 300;
 
-export type MemoryHealth = { longLines: number; orphans: string[] };
+/** `untriggered`: side files named only in sentences that never say when to read them. */
+export type MemoryHealth = { longLines: number; orphans: string[]; untriggered?: string[] };
 
 const NAME_CHAR = /[A-Za-z0-9_-]/;
+// "never act on" and "Quote:" lines carry the rule themselves; the file is history or the user's words
+const TRIGGER = /\b(?:when|whenever|before|after|if|while|during|first|start|never|quotes?)\b|때|전에|먼저/i;
 
 // indexOf, not a regex per name: this runs for every side file after each reply
 function namesStem(text: string, stem: string): boolean {
@@ -220,12 +345,20 @@ function namesStem(text: string, stem: string): boolean {
   return false;
 }
 
-/** Loaded lines over the one-rule size, and side files no loaded line names. */
+/** Loaded lines over the one-rule size, side files no loaded line names, and side files whose pointers never say when to read them. */
 export function memoryHealthOf(text: string, names: string[]): MemoryHealth {
   const longLines = text.split("\n").filter((line) => Buffer.byteLength(line, "utf8") > MEMORY_LINE_MAX_BYTES).length;
-  // a parked copy already gets its own notice, and the timeline is named by the picks in the prompt
-  const orphans = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE && !namesStem(text, name.slice(0, -".md".length)));
-  return { longLines, orphans };
+  // a parked copy already gets its own notice; the timeline and an import ride in the prompt themselves
+  const checked = names.filter((name) => !PARKED_COPY.test(name) && name !== PICKS_FILE && name !== IMPORT_FILE);
+  const orphans = checked.filter((name) => !namesStem(text, name.slice(0, -".md".length)));
+  // the prompt's rule reads a side file only when a line says when, so a bare pointer leaves it unread
+  // "memory/x.md. Read before any reply": the sentence after a pointer can say when
+  const saysWhen = text.split("\n").filter((line) => TRIGGER.test(line)).flatMap((line) => {
+    const sentences = line.split(/(?<=[.!?]) /);
+    return sentences.filter((sentence, index) => TRIGGER.test(sentence) || TRIGGER.test(sentences[index + 1] ?? ""));
+  }).join("\n");
+  const untriggered = checked.filter((name) => !orphans.includes(name) && !namesStem(saysWhen, name.slice(0, -".md".length)));
+  return { longLines, orphans, untriggered };
 }
 
 export function memoryHealth(botId: string): MemoryHealth {
@@ -239,7 +372,8 @@ export function memoryHealth(botId: string): MemoryHealth {
   } catch {
     names = [];
   }
-  return memoryHealthOf(loadMemory(botId)?.text ?? "", names);
+  const memory = loadMemory(botId);
+  return memoryHealthOf(memory ? [memory.text, memory.newest ?? ""].join("\n") : "", names);
 }
 
 /** Read one topic file. The name gate runs here too, not only in the HTTP
@@ -267,6 +401,23 @@ function readOptionalMemoryTopic(botId: string, name: string): string | null {
 const LESSON_RULE =
   " When the user corrects you or a memory note, or you catch your own mistake, save the lesson as one line in that same turn" +
   " without being asked, replacing any wrong line; never save passwords, keys, tokens or account numbers.";
+
+/** MEMORY.md as a prompt shows it: the head, a line counting the cut, the newest lines. */
+export const shownMemory = (memory: LoadedMemory) => memory.newest
+  ? `${memory.text}\n[${memory.cut} older lines of MEMORY.md were cut here; its newest lines follow.]\n${memory.newest}`
+  : `${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}`;
+
+/** The pin_goal tool: lands a goal, or finishes one, in the timeline every prompt reads. */
+export function pinGoal(botId: string, change: { name: string; goal?: string; done?: boolean }, now = Date.now()): string {
+  const landed = applyPicks(readMemoryTopic(botId, PICKS_FILE) ?? "", [{ kind: "goal", at: now, key: change.name, goal: change.goal, done: change.done }]);
+  if (landed) writeFileAtomic(join(ensureWorkspace(botId), "memory", PICKS_FILE), landed.text, { mode: 0o600 });
+  if (change.done) return landed ? `Finished the goal "${change.name}".` : `No open goal is named "${change.name}".`;
+  return landed ? `Pinned the goal "${change.name}": it shows in every turn until it is done.` : `The goal "${change.name}" is already pinned in those words.`;
+}
+
+export function goalsOf(botId: string): PinnedGoal[] {
+  return pinnedGoals(readOptionalMemoryTopic(botId, PICKS_FILE));
+}
 
 /** The current picks block, the one copy chats and calls both read. */
 export function picksPrompt(botId: string): string {
@@ -301,7 +452,7 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
       readRules + rules +
       laneNotice +
       (!readOnly && parked.length ? `\n\nMemory sync set aside copies: ${parked.join(", ")}.` : "") +
-      (memory ? `\n\nYour memory (MEMORY.md):\n${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}` : "") +
+      (memory ? `\n\nYour memory (MEMORY.md):\n${shownMemory(memory)}` : "") +
       picks
     );
   }
@@ -310,7 +461,7 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
     return (
       ` Your private long-term memory file is ${JSON.stringify(memoryFile)}, with longer notes in ${JSON.stringify(topicDir)}.` +
       " Read it as you need; this turn runs beside your busy 1:1 chat, so leave memory edits, and files your 1:1 is editing, to your 1:1." +
-      (memory ? `\n\nYour memory (MEMORY.md):\n${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}` : "") +
+      (memory ? `\n\nYour memory (MEMORY.md):\n${shownMemory(memory)}` : "") +
       picks
     );
   }
@@ -354,10 +505,9 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
     memory.lines >= MEMORY_MAX_LINES * MEMORY_WARN_SHARE;
   // above the notes: a notice at the cut, after 24 KB of notes, gets missed
   const notice = memory.truncated
-    ? `\n\n[${size}, over ${budget}, so its end was not loaded. Trim it this session: ${trim}]`
+    ? `\n\n[${size}, over ${budget}, so ${memory.newest ? `${memory.cut} older lines from its middle were` : "its end was"} not loaded. Trim it this session: ${trim}]`
     : near
       ? `\n\n[${size}, near ${budget}; past it, the end stops loading. Trim it soon: ${trim}]`
       : "";
-  const cut = memory.truncated ? "\n[MEMORY.md was cut off here.]" : "";
-  return `${guidance}${notice}${conflicts}\n\nYour memory (MEMORY.md):\n${memory.text}${cut}${picks}`;
+  return `${guidance}${notice}${conflicts}\n\nYour memory (MEMORY.md):\n${shownMemory(memory)}${picks}`;
 }

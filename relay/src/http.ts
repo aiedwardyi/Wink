@@ -2,7 +2,7 @@
 // GET /v1/healthz, GET /v1/status/<label>, POST /v1/enroll,
 // and, when config.google is set, POST /v1/enroll/google, POST /v1/account and GET /v1/pcs,
 // plus GET /v1/team and POST /v1/team/snags/{claim,ack} when teamOwnerEmail is set too,
-// GET /v1/room-codes/<code>, POST /v1/acme/eab when config.gts is set,
+// GET /v1/room-codes/<code> (CORS for the sign-in page), POST /v1/acme/eab when config.gts is set,
 // and, when config.stats is set, POST /v1/stats and GET /v1/stats/day/<date>.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -202,9 +202,10 @@ export function createApiServer(opts: ApiOptions): Server {
     const roomCode = opts.roomCodes && ROOM_CODE_URL_RE.exec(url);
     if (roomCode) {
       if (req.method !== "GET") return reply(res, 405, { error: "method" });
-      if (!roomCodeMinute.take(ip) || !roomCodeHour.take(ip) || !roomCodeAll.take("all")) return reply(res, 429, { error: "rate-limited" });
+      const cors = directoryCors(headerOne(req.headers.origin));
+      if (!roomCodeMinute.take(ip) || !roomCodeHour.take(ip) || !roomCodeAll.take("all")) return reply(res, 429, { error: "rate-limited" }, cors);
       const label = ROOM_CODE_RE.test(roomCode[1]) ? opts.roomCodes!.lookup(roomCode[1]) : null;
-      return label ? reply(res, 200, { label }) : reply(res, 404, { error: "not-found" });
+      return label ? reply(res, 200, { label }, cors) : reply(res, 404, { error: "not-found" }, cors);
     }
 
     if (url === "/v1/enroll") {

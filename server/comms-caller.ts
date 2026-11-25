@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-const BOT_ROUTE = /^\/api\/(?:internal\/(?:agents|ask-bot|ask-user|board-post|board-search|call-api|create-bot|create-channel|delegate-bot|delegations\/[^/]+|generate-image|hand-off|keep-going|launch-note|my-chats|react|request-credential|room-fix|routine-requests|routines|show-image|spawn-usage|task-state|team-report|usage|verify-site|wake|worker-playbook)|verify\/runs\/[a-z0-9-]{8,64}\/(?:live|replay))$/;
+const BOT_ROUTE = /^\/api\/(?:internal\/(?:agents|ask-bot|ask-user|board-post|board-search|call-api|create-bot|create-channel|delegate-bot|delegations\/[^/]+|generate-image|goal|hand-off|import-memory|keep-going|launch-note|my-chats|react|request-credential|room-fix|routine-requests|routines|show-image|spawn-usage|task-state|team-report|usage|verify-site|wake|web-read|worker-playbook)|verify\/runs\/[a-z0-9-]{8,64}\/(?:live|replay))$/;
 
 /** A bot's own token opens only the routes its agents and terminal tools call (Antigravity hands both its token), plus its own worker map; the boot token opens the rest. */
 export function botRoute(path: string, botId: string): boolean {
@@ -8,6 +8,12 @@ export function botRoute(path: string, botId: string): boolean {
 }
 
 export class CommsCallers {
+  /** The internal-route gate: a bot's own token opens only botRoute, any other caller needs the boot token. */
+  allows(header: string | string[] | undefined, path: string, bootToken: (header: string | string[] | undefined) => boolean): boolean {
+    const caller = this.resolve(header);
+    return caller ? botRoute(path, caller.botId) : bootToken(header);
+  }
+
   private readonly tokens = new Map<string, string>();
   private readonly callers = new Map<string, { botId: string; threadId: string }>();
 

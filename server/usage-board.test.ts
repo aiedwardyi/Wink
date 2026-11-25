@@ -91,6 +91,15 @@ afterEach(() => {
 });
 
 describe("usage board", () => {
+  it("keeps a background note limit out of displayed usage", async () => {
+    const s = setup();
+    s.rateLimits.set("claude", { observedAt: new Date(now).toISOString(), windows: [], noteLimit: { resetsAt: null } });
+    expect(account(await s.board.read())).toMatchObject({ windows: [], observedAt: null });
+    const observed = report(30);
+    s.rateLimits.set("claude", { ...observed, noteLimit: { resetsAt: null } });
+    expect(account(await s.board.read())).toMatchObject({ windows: [{ usedPercent: 30 }, { usedPercent: 40 }], observedAt: now });
+  });
+
   it("drops an old identity's queued history before it drains", async () => {
     const s = setup();
     s.rows()[0].status = { state: "available", authenticated: true, account: "old@example.test" };
@@ -636,5 +645,78 @@ describe("usage board", () => {
       { seq: 1, at: origin + 1, kind: "limit", accountId: "claude", window: "five_hour" },
       { seq: 2, at: origin + 3, kind: "reset", accountId: "claude", window: "five_hour" },
     ]);
+  });
+});
+
+describe("one sign-in, one row", () => {
+  const signedIn = (account: string, accountIdentity?: string) => ({ state: "available" as const, authenticated: true, account, accountIdentity });
+  function twins() {
+    const s = setup();
+    s.names.set("claude", { id: "claude", engine: "claude", number: 1, nickname: "hitecledtx", name: "hitecledtx" });
+    s.names.set(added, { id: added, engine: "claude", number: 2, nickname: "getwinkdev", name: "getwinkdev" });
+    s.rows()[0].status = signedIn("getwinkdev@example.test");
+    s.rows()[1].status = signedIn(" GetWinkDev@example.test ", "uuid-getwinkdev");
+    s.main(added);
+    s.accept("claude", report(50));
+    s.accept(added, report(51));
+    return s;
+  }
+  const names = (board: UsageBoard) => board.engines[0]!.accounts.map((row) => row.name);
+
+  it("shows a base signed in as an added account once, under the added account's name and numbers", async () => {
+    const s = twins();
+    const board = await s.board.read();
+    expect(board.engines[0]!.accounts.map((row) => row.id)).toEqual([added]);
+    expect(account(board, added)).toMatchObject({ name: "getwinkdev", nickname: "getwinkdev", main: true, windows: [{ usedPercent: 51 }, { usedPercent: 40 }] });
+    expect(board.engines[0]!.duplicates).toEqual(["claude"]);
+    expect(JSON.stringify(board)).not.toContain("hitecledtx");
+  });
+
+  it("matches on the account uuid when both rows report one, else on the email", async () => {
+    const s = twins();
+    s.rows()[0].status = signedIn("getwinkdev@example.test", "uuid-other");
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+    s.rows()[0].status = signedIn("getwinkdev@example.test", "uuid-getwinkdev");
+    expect(names(await s.board.read())).toEqual(["getwinkdev"]);
+  });
+
+  it("keeps the base's own nickname when its sign-in matches no added account", async () => {
+    const s = twins();
+    s.rows()[0].status = signedIn("hitecledtx@example.test");
+    const board = await s.board.read();
+    expect(names(board)).toEqual(["hitecledtx", "getwinkdev"]);
+    expect(board.engines[0]!.duplicates).toBeUndefined();
+    s.rows()[0].status = { state: "available", authenticated: false, account: "getwinkdev@example.test" };
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+  });
+
+  it("keeps the base's row while it is Main, has a busy bot or runs workers", async () => {
+    const s = twins();
+    s.main("claude");
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+    expect(account(await s.board.read()).main).toBe(true);
+    s.main(added);
+    s.board.turnStarted({ turnId: "t", botId: "atlas", accountId: "claude", generation: 0 });
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+    s.board.turnSettled("t");
+    const run = { botId: "atlas", paneId: "pane-1", label: "ATLAS-1", engine: "claude" as const, accountId: "claude", accountGeneration: 0, state: "busy" as const };
+    s.runs.mockResolvedValue({ known: true, runs: [run] });
+    expect(account(await s.board.read()).workers).toHaveLength(1);
+    s.runs.mockResolvedValue({ known: false, reason: "timeout" });
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+    s.runs.mockResolvedValue({ known: true, runs: [] });
+    expect(names(await s.board.read())).toEqual(["getwinkdev"]);
+  });
+
+  it("answers full after a folded row comes back, so it returns with its history", async () => {
+    const s = twins();
+    await settle();
+    const folded = await s.board.read();
+    s.main("claude");
+    const shown = await s.board.read(folded.cursor);
+    expect(names(shown)).toEqual(["hitecledtx", "getwinkdev"]);
+    const next = await s.board.read(shown.cursor);
+    expect(next.full).toBe(true);
+    expect(account(next).history.fine).not.toEqual([]);
   });
 });

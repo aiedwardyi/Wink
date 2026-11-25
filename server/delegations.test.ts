@@ -4,7 +4,6 @@
 // assert what would have been dispatched to the harness. The harness itself
 // stays out of these — the integration happens in comms.test.ts (the full
 // e2e through the agents proxy + fake ACP CLI).
-import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
@@ -78,7 +77,7 @@ describe("queueDelegation", () => {
   let broadcasts: unknown[];
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     store = new Store(selection);
     from = store.createBot();
     target = store.createBot();
@@ -212,7 +211,7 @@ describe("sender chip status", () => {
   let approvalBus: BusPair["approvalBus"];
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     store = new Store(selection);
     from = store.createBot();
     target = store.createBot();
@@ -335,7 +334,7 @@ describe("drainDelegations", () => {
   let runTargetCalls: Array<{ toBotId: string; message: string; commsDepth: number; sourceThreadId?: string; transcriptText?: string }>;
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     store = new Store(selection);
     from = store.createBot();
     target = store.createBot();
@@ -595,6 +594,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { _loadPending, _resetPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, pendingThreads } from "./delegations.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 describe("delegations survive a restart", () => {
   let store: Store;
@@ -604,7 +604,7 @@ describe("delegations survive a restart", () => {
   const file = () => join(DATA_DIR, "delegations.json");
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetPending();
     store = new Store(selection);
     from = store.createBot();
@@ -729,7 +729,7 @@ describe("busy retries and receipts", () => {
   let approvalBus: { store: Store; broadcast: (payload: unknown) => void };
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     store = new Store(selection);
     from = store.createBot();
     target = store.createBot();
@@ -1117,7 +1117,7 @@ describe("user messages during a delegated turn", () => {
   let root: string;
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetPending();
     _resetSteerQueue();
     store = new Store(selection);

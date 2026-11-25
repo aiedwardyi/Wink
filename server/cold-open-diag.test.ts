@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { COLD_OPEN_FILE, COLD_OPEN_KEEP, COLD_OPEN_MAX_BYTES, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { COLD_OPEN_FILE, COLD_OPEN_KEEP, COLD_OPEN_MAX_BYTES, receiveChatSwitch, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { startupTiming } from "./startup-timing.ts";
 
 const dirs: string[] = [];
@@ -70,6 +70,22 @@ describe("cold-open diagnostics", () => {
       { receivedAt: "2026-10-11T01:02:03.000Z", ...record, ...served },
       { receivedAt: "2026-10-11T01:05:00.000Z", ...record, label: "warm", ...served },
     ]);
+  });
+
+  it("stores a terminal open's marks and refuses any other field in them", async () => {
+    const dir = freshDir();
+    const terminal = {
+      label: "terminal",
+      hiddenMs: 3000,
+      terminal: { tap: 5000, fetchStart: 5100, read: { start: 5100, end: 12701, transferSize: 4200, encodedBodySize: 3900, requestStart: 5120, responseStart: 12601, decodedBodySize: 9000, nextHopProtocol: "h2" }, paint: 12850, sinceResume: 1000 },
+      displayMode: "standalone",
+      visibility: "visible",
+      userAgent: "Mozilla/5.0",
+    };
+    expect(await receiveColdOpen(post(JSON.stringify(terminal)), dir)).toEqual({ status: 200 });
+    expect(lines(dir)[0]).toMatchObject(terminal);
+    const extra = { ...terminal, terminal: { ...terminal.terminal, text: "$ secret" } };
+    expect(await receiveColdOpen(post(JSON.stringify(extra)), dir)).toEqual({ status: 400, error: "invalid cold-open record" });
   });
 
   it("stores the stream, bots and cache fields and drops the page's id", async () => {
@@ -166,5 +182,38 @@ describe("cold-open diagnostics", () => {
     const dir = freshDir();
     expect((await receiveColdOpen(post(body), dir)).status).toBe(400);
     expect(existsSync(join(dir, COLD_OPEN_FILE))).toBe(false);
+  });
+});
+
+describe("receiveChatSwitch", () => {
+  const line = {
+    from: "wink",
+    to: "marketing",
+    action: "select",
+    event: "popstate",
+    trusted: true,
+    active: false,
+    caller: ["at close (App.tsx:751:30)"],
+    focused: true,
+    visibility: "visible",
+    desktop: false,
+    userAgent: "Mozilla/5.0 orbit-desktop/1.0.289",
+  };
+
+  it("logs one [chat-switch] line naming the path", async () => {
+    const log = vi.fn();
+    expect(await receiveChatSwitch(post(JSON.stringify(line)), log)).toEqual({ status: 200 });
+    expect(log).toHaveBeenCalledWith(`[chat-switch] ${JSON.stringify(line)}`);
+  });
+
+  it.each([
+    ["broken JSON", "{", 400],
+    ["an unknown field", JSON.stringify({ ...line, stack: "x" }), 400],
+    ["a long caller", JSON.stringify({ ...line, caller: Array(9).fill("at x") }), 400],
+    ["an oversized body", JSON.stringify({ ...line, userAgent: "x".repeat(COLD_OPEN_MAX_BYTES) }), 413],
+  ])("refuses %s", async (_name, body, status) => {
+    const log = vi.fn();
+    expect((await receiveChatSwitch(post(body), log)).status).toBe(status);
+    expect(log).not.toHaveBeenCalled();
   });
 });

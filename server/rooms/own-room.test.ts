@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
@@ -7,6 +7,7 @@ import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries
 import { closeInvitesDb, roomCode, shortRoomCode } from "./invites.ts";
 import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedRoom, joinedRooms, saveJoined } from "./joined.ts";
 import { dropOwnJoins, ownRoomGroup } from "./own-room.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const HOST = "abcdefghijklmnop.wink.test";
 const KEY = `wkg_${"k".repeat(43)}`;
@@ -22,7 +23,7 @@ const close = () => {
 
 beforeEach(() => {
   close();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   roomId = createRoom("TK").id;
   groups = [{ id: "g-tk", hosted: { roomId } } as GroupRecord];

@@ -477,6 +477,86 @@ describe("Memory tab on a phone whose memory read never answers", () => {
   });
 });
 
+describe("Memory page on a slow read", () => {
+  it("paints the last read at once and the fresh read replaces it", async () => {
+    width(1440);
+    await open();
+    await toMemory();
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    const held: (() => void)[] = [];
+    vi.mocked(fetch).mockImplementation((url, init) => String(url) !== `/api/bots/${bot.id}/memory` || init?.method
+      ? answer(url, init)
+      : new Promise((done) => held.push(() => done(new Response(JSON.stringify({ text: "- Uses Windows\n- Drinks tea", truncated: false, revision: "fresh", topics: [{ name: "prefs.md", bytes: 3 }] }))))));
+    const count = (kind: string) => fold(kind).querySelector(".mm-count b")!.textContent;
+    await open();
+    await toMemory();
+    expect(held.length).toBeGreaterThan(0);
+    expect([count("long"), count("knowledge")]).toEqual(["1", "2"]);
+    expect(host.querySelector(".mm")!.textContent).toContain("Uses Windows");
+    await act(async () => { for (const each of held) each(); });
+    await settle();
+    expect([count("long"), count("knowledge")]).toEqual(["2", "1"]);
+  });
+});
+
+describe("kept copy follows this page's saves", () => {
+  const count = (kind: string) => fold(kind).querySelector(".mm-count b")!.textContent;
+  const mm = () => host.querySelector(".mm")?.textContent ?? null;
+  const remount = async () => { await act(async () => root.unmount()); root = createRoot(host); };
+  const reply = (text: string) => new Response(JSON.stringify({ text, truncated: false, revision: "rev:" + text, topics: [] }));
+  const of = (id: string): Bot => ({ ...bot, id, threadId: "t-" + id, name: id });
+
+  it("paints the saved text on the next open, not the text from before the save", async () => {
+    width(1440);
+    const me = of("f1a");
+    await open(me);
+    await toMemory();
+    expect(mm()).toContain("Uses Windows");
+    await startEditing();
+    await write("- Uses Linux");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(puts).toEqual(["- Uses Linux"]);
+    await remount();
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    const held: (() => void)[] = [];
+    vi.mocked(fetch).mockImplementation((url, init) => String(url) !== "/api/bots/f1a/memory" || init?.method ? answer(url, init) : new Promise((done) => held.push(() => done(reply("- Uses Linux")))));
+    await open(me);
+    await toMemory();
+    expect(held.length).toBeGreaterThan(0);
+    expect(mm()).toContain("Uses Linux");
+    expect(mm()).not.toContain("Uses Windows");
+  });
+
+  it("keeps a deleted and saved line gone on the next open", async () => {
+    width(1440);
+    const me = of("f1b");
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    let saved = "- Keep this\n- Forget this";
+    const held: (() => void)[] = [];
+    let hold = false;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      if (String(url) !== "/api/bots/f1b/memory") return answer(url, init);
+      if (init?.method === "PUT") { saved = JSON.parse(String(init.body)).text; return answer(url, init); }
+      return hold ? new Promise((done) => held.push(() => done(reply(saved)))) : Promise.resolve(reply(saved));
+    });
+    await open(me);
+    await toMemory();
+    expect(count("long")).toBe("2");
+    await startEditing();
+    await write("- Keep this");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(saved).toBe("- Keep this");
+    await remount();
+    hold = true;
+    await open(me);
+    await toMemory();
+    expect(held.length).toBeGreaterThan(0);
+    expect(count("long")).toBe("1");
+  });
+});
+
 describe("Knowledge and Edit", () => {
   it("reads a topic file from its Knowledge row and has no second list", async () => {
     await open();

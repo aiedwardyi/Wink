@@ -1,5 +1,6 @@
-import { Check, Copy } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { aboutYouNote } from "../../shared/about-you-note";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
@@ -8,35 +9,19 @@ import { Fold } from "./Fold";
 import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 
 type Source = { source: string; facts: string[] };
-type Added = { added: number; found: number; hidden: number; full: number };
+type Added = { source: string; added: number; found: number; hidden: number; flagged?: string[] };
 
 const STEP = "flex items-center justify-between gap-4";
 const STEP_TITLE = "text-[13px] font-medium text-ink";
 
-/** Settings > About You: what the user's other AI knew about them, read by every bot. */
-export function AboutYouCard() {
+/** The import prompt with its copy button, the same in Settings and a new chat's import card. */
+export function ImportPromptBox({ className }: { className?: string }) {
   const { t } = useI18n();
-  const [sources, setSources] = useState<Source[] | null>(null);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [more, setMore] = useState(false);
-  const [open, setOpen] = useState<string | null>(null);
-  const [note, setNote] = useState("");
   const copiedTimer = useRef<number | null>(null);
-  // only the newest request's list lands: an older answer would undo a newer change
-  const listSeq = useRef(0);
 
-  useEffect(() => {
-    let gone = false;
-    const seq = ++listSeq.current;
-    void api("/api/about-you").then((body) => {
-      if (!gone && seq === listSeq.current && Array.isArray(body?.sources)) setSources(body.sources);
-    }).catch(() => {});
-    return () => {
-      gone = true;
-      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
-    };
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
   }, []);
 
   const copy = async () => {
@@ -50,6 +35,97 @@ export function AboutYouCard() {
     }
   };
 
+  return (
+    <div className={cn("flex items-start gap-1 rounded-lg border border-hairline/40 bg-raised p-1.5", className)}>
+      <div tabIndex={0} className="max-h-[129px] min-w-0 flex-1 overflow-hidden whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+        {t("aboutYou.prompt")}
+      </div>
+      <button
+        onClick={() => void copy()}
+        aria-label={copied ? t("aboutYou.copied") : t("aboutYou.copy")}
+        className="relative shrink-0 rounded p-1.5 text-ink-secondary hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-[7px] [@media(pointer:coarse)]:after:content-['']"
+      >
+        {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+      </button>
+    </div>
+  );
+}
+
+/** Lines of a paste that looked like passwords, left out of memory. They live only in this component:
+ * Keep saves one as written, to wherever the paste went, and it leaves the list; leaving keeps the rest out. */
+export function SkippedLines({ lines, keep, className }: { lines: string[]; keep: (line: string) => Promise<void>; className?: string }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [kept, setKept] = useState<ReadonlySet<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const save = async (at: number) => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await keep(lines[at]!);
+      setKept((before) => new Set(before).add(at));
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // a kept line is in memory now, so it no longer counts as skipped
+  const left = lines.flatMap((line, at) => (kept.has(at) ? [] : [{ line, at }]));
+  if (!left.length) return null;
+
+  return (
+    <div data-import-skipped className={className}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-fit items-center gap-1.5 text-left text-[12.5px] leading-5 text-ink-secondary hover:text-ink focus-visible:text-ink focus-visible:outline-none">
+        {open ? <ChevronDown size={14} aria-hidden className="shrink-0" /> : <ChevronRight size={14} aria-hidden className="shrink-0" />}
+        {left.length === 1 ? t("importCard.skippedOne") : t("importCard.skipped", { count: left.length })}
+      </button>
+      <Fold open={open}>
+        <ul className="mt-1.5 flex flex-col gap-1.5">
+          {left.map(({ line, at }) => (
+            <li key={at} className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 text-[13px] leading-5 text-ink [overflow-wrap:anywhere]">{line}</span>
+              <button type="button" onClick={() => void save(at)} disabled={busy} className={cn(ROW_BUTTON, "text-ink")}>
+                {t("importCard.keep")}
+              </button>
+            </li>
+          ))}
+        </ul>
+        {failed && <div role="status" className="mt-1.5 text-[12.5px] text-ink">{t("aboutYou.failed")}</div>}
+      </Fold>
+    </div>
+  );
+}
+
+/** Settings > About You: what the user's other AI knew about them, read by every bot. */
+export function AboutYouCard() {
+  const { t } = useI18n();
+  const [sources, setSources] = useState<Source[] | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [more, setMore] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  // the last paste's password-looking lines, held here only; a new paste starts a new list
+  const [skipped, setSkipped] = useState<{ id: number; lines: string[]; source: string } | null>(null);
+  // only the newest request's list lands: an older answer would undo a newer change
+  const listSeq = useRef(0);
+
+  useEffect(() => {
+    let gone = false;
+    const seq = ++listSeq.current;
+    void api("/api/about-you").then((body) => {
+      if (!gone && seq === listSeq.current && Array.isArray(body?.sources)) setSources(body.sources);
+    }).catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, []);
+
   const add = async () => {
     if (busy || !text.trim()) return;
     setBusy(true);
@@ -59,11 +135,8 @@ export function AboutYouCard() {
       if (seq === listSeq.current) setSources(body.sources);
       setText("");
       setMore(false);
-      setNote([
-        body.added ? t("aboutYou.added", { count: body.added }) : body.found ? t("aboutYou.nothingNew") : t("aboutYou.noFacts"),
-        body.hidden ? t("aboutYou.hidden", { count: body.hidden }) : "",
-        body.full ? t("aboutYou.full", { count: body.full }) : "",
-      ].filter(Boolean).join(" "));
+      setNote(aboutYouNote(body, t));
+      setSkipped(body.flagged?.length ? { id: seq, lines: body.flagged, source: body.source } : null);
     } catch (error) {
       setNote((error as { status?: number }).status === 413 ? t("aboutYou.tooLarge") : t("aboutYou.failed"));
     } finally {
@@ -82,23 +155,18 @@ export function AboutYouCard() {
     }
   };
 
+  const keep = async (line: string) => {
+    const seq = ++listSeq.current;
+    const body: Added & { sources: Source[] } = await api("/api/about-you", { method: "POST", body: JSON.stringify({ keep: [line], source: skipped!.source }) });
+    if (seq === listSeq.current) setSources(body.sources);
+  };
+
   const known = Boolean(sources?.length);
   const steps = (
     <div className="flex flex-col gap-6">
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step1")}</div>
-        <div className="mt-2 flex items-start gap-1 rounded-lg border border-hairline/40 bg-raised p-1.5">
-          <div tabIndex={0} className="max-h-[129px] min-w-0 flex-1 overflow-hidden whitespace-pre-wrap py-0.5 pl-1.5 text-[13px] leading-relaxed text-ink-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
-            {t("aboutYou.prompt")}
-          </div>
-          <button
-            onClick={() => void copy()}
-            aria-label={copied ? t("aboutYou.copied") : t("aboutYou.copy")}
-            className="relative shrink-0 rounded p-1.5 text-ink-secondary hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-1 [@media(pointer:coarse)]:after:content-['']"
-          >
-            {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-          </button>
-        </div>
+        <ImportPromptBox className="mt-2" />
       </div>
       <div>
         <div className={STEP_TITLE}>{t("aboutYou.step2")}</div>
@@ -122,6 +190,7 @@ export function AboutYouCard() {
   return (
     <Card subtitle={known ? t("aboutYou.known") : t("aboutYou.empty")}>
       {note && <div role="status" className="mb-3 text-[13px] text-ink">{note}</div>}
+      {skipped && <SkippedLines key={skipped.id} lines={skipped.lines} keep={keep} className="mb-3" />}
       {known ? (
         <>
           <div className="divide-y divide-hairline/40">

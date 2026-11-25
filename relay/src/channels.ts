@@ -219,7 +219,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
     if (msg.type === "ping") send(socket, { type: "pong" });
     else if (msg.type === "snag") onSnag(session.label, msg);
     else if (msg.type === "active") hub.active(session);
-    else if (msg.type === "roomcode") onRoomCode(session.label, msg.id);
+    else if (msg.type === "roomcode") onRoomCode(session.label, msg.id, msg.long === true);
     else if (msg.type === "poke") hub.poke(session);
     else if (msg.type !== "pong") return false;
     hub.seen(session);
@@ -240,8 +240,8 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
     log.log("snag", { label, reason });
   };
 
-  const onRoomCode = (label: string, id: string) => {
-    const minted = ctx.roomCodes?.mint(label);
+  const onRoomCode = (label: string, id: string, long: boolean) => {
+    const minted = ctx.roomCodes?.mint(label, long);
     send(socket, minted ? { type: "roomcoded", id, ...minted } : { type: "roomcoded", id });
     log.log("room-code", { label, reason: minted ? "minted" : "refused" });
   };

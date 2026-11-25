@@ -10,6 +10,8 @@ import { useI18n } from "@/lib/i18n";
 import { trackFeatureOnce } from "@/lib/usage-stats";
 
 const PAGE = 100;
+// the newest hit comes alone first: a page of a long chat reads every row, and the first highlight needs one
+const FIRST = 1;
 
 export function ChatFindBar({
   threadId,
@@ -49,9 +51,10 @@ export function ChatFindBar({
     };
   }, []);
 
-  const searchPath = (text: string, before?: string) =>
-    `/api/search?q=${encodeURIComponent(text)}&limit=${PAGE}&threadId=${encodeURIComponent(threadId)}${view}` +
-    (before ? `&before=${encodeURIComponent(before)}` : "");
+  // a page goes on from the last hit's place, which stays put even when a sync removes that row
+  const searchPath = (text: string, before?: SearchHit, limit = PAGE) =>
+    `/api/search?q=${encodeURIComponent(text)}&limit=${limit}&threadId=${encodeURIComponent(threadId)}${view}` +
+    (before ? `&before=${encodeURIComponent(before.messageId)}&at=${before.at}&row=${before.row}` : "");
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -68,17 +71,35 @@ export function ChatFindBar({
     }
     setLoading(true);
     const timer = window.setTimeout(() => {
-      void api(searchPath(trimmed))
-        .then((body) => {
+      void api(searchPath(trimmed, undefined, FIRST))
+        .then(async (body) => {
           if (request !== requestRef.current) return;
+          let found: SearchHit[] = Array.isArray(body?.hits) ? body.hits : [];
+          let more = body?.more === true;
           hitsQueryRef.current = trimmed;
           freshRef.current = true;
-          setHits(Array.isArray(body?.hits) ? body.hits : []);
+          if (more && found.length) {
+            // land on the newest hit while the rest of the page is read; the count waits for it
+            pagingRef.current = true;
+            setHits(found);
+            setMore(false);
+            // the page again from just past the newest hit, which it reads as it stands now: a sync can edit or remove it meanwhile
+            const newest = found[0]!;
+            const rest = await api(searchPath(trimmed, { ...newest, row: newest.row! + 1 }));
+            if (request !== requestRef.current) return;
+            pagingRef.current = false;
+            found = Array.isArray(rest?.hits) ? rest.hits : [];
+            more = rest?.more === true;
+            // it no longer matches: land on the hit now newest
+            if (found[0]?.messageId !== newest.messageId) freshRef.current = true;
+          }
+          setHits(found);
           trackFeatureOnce("find.use");
-          setMore(body?.more === true);
+          setMore(more);
         })
         .catch((error) => {
           if (request !== requestRef.current) return;
+          pagingRef.current = false;
           setHits([]);
           setMore(false);
           dispatch({ type: "error", message: error instanceof Error ? error.message : "Search failed" });
@@ -110,7 +131,7 @@ export function ChatFindBar({
     if (!last || pagingRef.current) return;
     pagingRef.current = true;
     const request = requestRef.current;
-    void api(searchPath(query.trim(), last.messageId))
+    void api(searchPath(query.trim(), last))
       .then((body) => {
         if (request !== requestRef.current) return;
         const page: SearchHit[] = Array.isArray(body?.hits) ? body.hits : [];
@@ -136,10 +157,12 @@ export function ChatFindBar({
   // First result set starts on the clicked row, else the newest copy. Older pages keep the place.
   useEffect(() => {
     if (!freshRef.current || !stops.length || hitsQueryRef.current !== query.trim()) return;
-    freshRef.current = false;
     const wanted = query.trim() === anchorQueryRef.current.trim() ? anchorRef.current : null;
-    anchorRef.current = null;
     const next = findHitIndex(stops, wanted);
+    // the newest hit alone, and the clicked row is further back: wait for the rest of the page
+    if (next == null && pagingRef.current) return;
+    freshRef.current = false;
+    anchorRef.current = null;
     if (next == null) return;
     land(next);
     // `land` intentionally reads the state that produced this result set.

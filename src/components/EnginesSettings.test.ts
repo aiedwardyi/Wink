@@ -1,4 +1,5 @@
 import "./ProfileFields.test-dom.ts";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -46,6 +47,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   };
 });
 
+import { landFold, spyReveal } from "./Fold.test-land";
 import { EngineRow, EnginesSettings, isEngineConnected } from "./EnginesSettings";
 import { EngineSetup } from "./EngineSetup";
 import { ROW_BUTTON } from "./SettingsPrimitives";
@@ -315,6 +317,51 @@ it.each(["grokAgent", "museAgent", "antigravityAgent"])("signs %s out on one cli
   }
 });
 
+it.each(["grokAgent", "museAgent", "antigravityAgent"])("flips %s to Sign In once its sign-out answers, while a probe of every engine still runs", async (driverKind) => {
+  const connected = instance({ instanceId: driverKind, driverKind, install: { login: { args: ["login"] }, logout: ["logout"] },
+    snapshot: { state: "available", authenticated: true, account: "ed@example.com" } });
+  const signedOut = { ...connected, snapshot: { state: "available" as const, authenticated: false } };
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation((url, init) => init?.method === "POST" ? Promise.resolve(new Response("{}"))
+    : /[?&](refresh|rescan)=1/.test(String(url)) ? new Promise<Response>(() => {}) : Promise.resolve(new Response(JSON.stringify({ instances: [signedOut] }))));
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(EngineRow, { instance: connected }))));
+    await act(async () => host.querySelector("button")!.click());
+    const button = host.querySelector("button")!;
+    expect(button.textContent).toBe("Sign In");
+    expect(button.disabled).toBe(false);
+    expect(host.textContent).not.toContain("ed@example.com");
+  } finally {
+    await act(async () => root.unmount());
+    fetch.mockRestore();
+  }
+});
+
+it("shows the Gemini account once its browser sign-in finishes, with no reopen", async () => {
+  vi.useFakeTimers();
+  const signedOut = instance({ instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", install: { login: { args: ["login"] }, logout: ["logout"] },
+    snapshot: { state: "available", authenticated: false } });
+  let row: InstanceInfo = { ...signedOut, loginState: "pending" };
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => init?.method === "POST"
+    ? new Response(JSON.stringify({ url: "https://accounts.google.com/o/oauth2/auth" })) : new Response(JSON.stringify({ instances: [row] })));
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(EngineRow, { instance: signedOut }))));
+    await act(async () => host.querySelector("button")!.click());
+    expect(host.textContent).toContain("Sign in with your browser");
+    row = { ...signedOut, snapshot: { state: "available", authenticated: true, account: "ed@example.com" } };
+    await act(async () => vi.advanceTimersByTime(2000));
+    expect(host.querySelector("[data-account-email]")?.textContent).toBe("ed@example.com");
+    expect(host.querySelector("button")?.textContent).toBe("Sign Out");
+  } finally {
+    await act(async () => root.unmount());
+    fetch.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
 it("shows the signed-in Gemini account beside Sign Out like Muse", async () => {
   const host = document.createElement("div");
   const root = createRoot(host);
@@ -332,17 +379,22 @@ it("shows the signed-in Gemini account beside Sign Out like Muse", async () => {
 
 it.each(["en", "ko"] as const)("shows a failed sign-out and allows retry in %s", async (locale) => {
   applyLocale(locale);
-  const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 }));
+  const grok = instance({ instanceId: "grok", driverKind: "grokAgent", install: { logout: ["logout"] } });
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => init?.method === "POST"
+    ? new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 })
+    : new Response(JSON.stringify({ instances: [grok] })));
+  const onUpdated = vi.fn();
   const host = document.createElement("div");
   const root = createRoot(host);
   try {
-    await act(async () => root.render(createElement(EngineRow, {
-      instance: instance({ instanceId: "grok", driverKind: "grokAgent", install: { logout: ["logout"] } }),
-    })));
+    await act(async () => root.render(createElement(EngineRow, { instance: grok, onUpdated })));
     await act(async () => host.querySelector("button")!.click());
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(locale === "en" ? "Didn't finish. Try again." : "완료되지 않았어요. 다시 시도하세요.");
     expect(host.querySelector("button")!.disabled).toBe(false);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    // The row is refreshed after the failure too, with no extra tap.
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[1][0])).toContain("/api/instances?refresh=1");
+    expect(onUpdated).toHaveBeenCalledExactlyOnceWith(grok);
   } finally {
     await act(async () => root.unmount());
     fetch.mockRestore();
@@ -401,6 +453,30 @@ describe("EnginesSettings friends Connections list", () => {
       Object.assign(target, previous);
     };
   }
+
+  it("brings its first missing engine into view once More Engines has opened, never while closing", async () => {
+    const restore = stage("muse", { snapshot: { state: "unavailable" } });
+    const { host, root, row } = await renderList();
+    const scrolled = spyReveal();
+    try {
+      const more = () => [...host.querySelectorAll("button")].find((node) => node.textContent === "More Engines")!;
+      await act(async () => more().click());
+      expect(scrolled).not.toHaveBeenCalled();
+      await landFold(row("muse"));
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(row("muse"));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      vi.useFakeTimers();
+      await act(async () => more().click());
+      await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+      vi.useRealTimers();
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      scrolled.mockRestore();
+      await act(async () => root.unmount());
+      restore();
+    }
+  });
 
   it("shows a single account with its label, Sign Out and Add Account", async () => {
     const restore = stage("claude", { cli: OTHER, install: { logout: ["auth", "logout"], signInCommand: "claude auth login", docsUrl: "https://example.com/claude" } });
