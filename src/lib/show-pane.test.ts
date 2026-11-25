@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
 import { paneKind } from "./open-file";
-import { autoShowStep, closeShow, PANE_TAB_KEY, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, usePanePulse, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { autoShowStep, closeShow, PANE_TAB_KEY, picturedReplies, showableLinks, showItem, showKind, showMap, showMedia, togglePane, useAutoShow, useMapThread, useMediaThread, usePanePulse, useShowItem, useToolsThread, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -90,12 +90,14 @@ let root: Root;
 let shown: ShowItem | null = null;
 let media: string | null = null;
 let map: string | null = null;
+let tools: string | null = null;
 
 function Probe({ thread, messages, free }: { thread: string; messages: Message[]; free: boolean }) {
   useAutoShow(thread, messages, free);
   shown = useShowItem();
   media = useMediaThread();
   map = useMapThread();
+  tools = useToolsThread();
   return null;
 }
 
@@ -111,6 +113,7 @@ beforeEach(() => {
   shown = null;
   media = null;
   map = null;
+  tools = null;
 });
 afterEach(() => { act(() => root.unmount()); act(() => closeShow()); localStorage.clear(); vi.unstubAllGlobals(); });
 
@@ -173,20 +176,20 @@ it("a card tap shows a file again after a close", async () => {
 const pdf: ShowItem = { threadId: "t1", path: "C:\\work\\launch-deck.pdf", kind: "pdf" };
 const fresh: ShowItem = { ...pdf, threadId: "t5" };
 
-it("the header button opens Media with nothing shown, the last file after one, and closes again", async () => {
+it("the header button opens the tool list with nothing shown, the last file after one, and closes again", async () => {
   await render("t5", []);
   await act(async () => togglePane("t5"));
-  expect([shown, media]).toEqual([null, "t5"]);
+  expect([shown, tools]).toEqual([null, "t5"]);
   await act(async () => togglePane("t5"));
-  expect([shown, media]).toEqual([null, null]);
+  expect([shown, tools]).toEqual([null, null]);
   await act(async () => showItem(fresh));
   await act(async () => closeShow());
   await act(async () => togglePane("t5"));
-  expect([shown, media]).toEqual([fresh, null]);
+  expect([shown, tools]).toEqual([fresh, null]);
   await act(async () => togglePane("t5"));
-  expect([shown, media]).toEqual([null, null]);
+  expect([shown, tools]).toEqual([null, null]);
   await act(async () => togglePane("t6"));
-  expect([shown, media]).toEqual([null, "t6"]);
+  expect([shown, tools]).toEqual([null, "t6"]);
 });
 
 it("switching tabs keeps the shown file for Show", async () => {
@@ -217,31 +220,33 @@ it("the header button opens the tab last picked in each chat", async () => {
   expect([shown, media, map]).toEqual([null, "t8", null]);
 });
 
-it("with no pick the header button opens Map while a worker is live, else Media, and neither counts as a pick", async () => {
+it("with no pick and no tab the header button opens the tool list, a worker live or not, and that is not a pick", async () => {
   await render("t1", []);
   await act(async () => togglePane("t10", "live"));
-  expect([media, map]).toEqual([null, "t10"]);
+  expect([media, map, tools]).toEqual([null, null, "t10"]);
   await act(async () => togglePane("t10", "live"));
   await act(async () => togglePane("t10", "idle"));
-  expect([media, map]).toEqual(["t10", null]);
+  expect([media, map, tools]).toEqual([null, null, "t10"]);
   await act(async () => togglePane("t10", "idle"));
   await act(async () => togglePane("t10", "live"));
-  expect([media, map]).toEqual([null, "t10"]);
+  expect([media, map, tools]).toEqual([null, null, "t10"]);
 });
 
-it("a room opens Media where it remembered Map, and never Map on its own", async () => {
+it("a room opens the tool list where it remembered Map, and never Map on its own", async () => {
   await render("t1", []);
   localStorage.setItem(PANE_TAB_KEY, JSON.stringify({ r1: "map" }));
   await act(async () => togglePane("r1"));
-  expect([media, map]).toEqual(["r1", null]);
+  expect([media, map, tools]).toEqual([null, null, "r1"]);
   await act(async () => closeShow());
   await act(async () => showMap("r2"));
   await act(async () => closeShow());
   await act(async () => togglePane("r2"));
-  expect([media, map]).toEqual(["r2", null]);
+  expect([media, map, tools]).toEqual([null, null, "r2"]);
 });
 
 it("a file that opens on its own is not a pick", async () => {
+  await act(async () => showMap("t9"));
+  await act(async () => closeShow());
   await render("t9", [user("u1")]);
   await render("t9", [user("u1"), deck]);
   expect(shown?.path).toBe(pdf.path);

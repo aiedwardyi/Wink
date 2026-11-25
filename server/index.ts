@@ -183,7 +183,7 @@ import {
   sendWebPushToDevices,
   type PushTarget,
 } from "./web-push.ts";
-import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { receiveChatSwitch, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
@@ -321,6 +321,7 @@ import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
+import { traceTerminalRead } from "./terminal-read-log.ts";
 import { deferMailboxAuto, mailboxSecretFor } from "./mailbox.ts";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
 import { recoverHandedMail } from "./mail-index.ts";
@@ -341,6 +342,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
+import { createDreamLive } from "./dream-live.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
 import { goalRoute } from "./goal-route.ts";
@@ -3168,6 +3170,25 @@ const memoryPass = createMemoryPass({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   host: deviceMachine,
 });
+const dreamLive = createDreamLive({
+  dataDir: DATA_DIR,
+  pc: () => profileSyncSettings.deviceId,
+  threads: (botId) => {
+    const bot = store.bot(botId);
+    return bot ? ownerChats(bot, notOwnerChats()) : [];
+  },
+  packet: (threadId) => taskPacketForWrite(threadId),
+  busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  cite: (botId) => knownRepos.cite(botId),
+  merged: (botId, threadId, ask, start) => askPrs.merged(botId, threadId, ask, start),
+  checked: () => askPrs.settled(),
+  reverted: async (botId, threadId) => {
+    const pinned = store.taskByThread(botId, threadId)?.cwd;
+    const dir = pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+    if (dir) await revertIndex.refresh(dir);
+    return (pr) => Boolean(dir && revertIndex.undid(dir, pr));
+  },
+});
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
@@ -3184,6 +3205,7 @@ const memorySleep = createMemorySleep({
     markTidied(memorySyncLedger, botSyncId, before, after);
     saveMemoryLedger();
   },
+  dream: dreamLive,
 });
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
@@ -8486,6 +8508,7 @@ const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
+  const received = performance.now();
   if (!req.headers.accept?.includes("text/event-stream")) res.once("close", requestQuiet.track());
   try {
     // Relay traffic is known by socket identity. It needs this PC's relay Host
@@ -9014,6 +9037,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const [result] = await sendWebPushToDevices(DATA_DIR, test, webPushSubject(), phoneSignedIn, body.data.endpoint);
       return result?.ok ? json(res, 200, { ok: true }) : json(res, 502, { error: result?.error ?? "push failed" });
     }
+    if (method === "POST" && path === "/api/diag/chat-switch") {
+      const received = await receiveChatSwitch(req);
+      return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
+    }
     if (method === "POST" && path === "/api/diag/cold-open") {
       const received = await receiveColdOpen(req, DATA_DIR);
       return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
@@ -9324,6 +9351,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      traceTerminalRead(bot.id, relay, received, res);
       const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, bot.id, url.searchParams.get("sessionId"), undefined, { panesOnly: url.searchParams.get("panes") === "1" });
       return json(res, snapshot.status, snapshot.body);
     }
@@ -9378,6 +9406,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "PUT") {
       return await botRoutes.putMemory(req, res, m);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean$/);
+    if (m && method === "GET") {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const run = dreamLive.latest(m[1]);
+      return run ? json(res, 200, { run }) : json(res, 404, { error: "no-run" });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
     if (m && method === "POST") {

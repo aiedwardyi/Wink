@@ -3,6 +3,7 @@ import { Check, Copy, CornerDownLeft, RotateCcw, TerminalSquare, X } from "lucid
 import type { Bot } from "@/state/store";
 import { api, visibleMessages } from "@/state/store";
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { noteTerminalFetching, noteTerminalShown } from "@/lib/cold-open-timing";
 import { paintRun, runPaint, type RunPaint } from "@/lib/ansi-palette";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
@@ -169,6 +170,7 @@ export function RemoteTerminalView({
     const targetPane = onMainTab ? undefined : picked ?? fallbackPane;
     try {
       const qs = targetPane ? `?sessionId=${encodeURIComponent(targetPane)}` : "";
+      noteTerminalFetching(targetPane, mainPane?.sessionId);
       const next = await api(`${path}${qs}`, { ...READ, signal }, () => { entry.answering = true; });
       if (request < appliedRequestRef.current) return;
       // A body cut off mid-read decodes to {}: it holds no frame, so the last one stays.
@@ -176,6 +178,7 @@ export function RemoteTerminalView({
       appliedRequestRef.current = request;
       restoringRef.current = null;
       setSnapshot(next);
+      noteTerminalShown(targetPane, mainPane?.sessionId);
       setError(null);
       setActionError(null);
     } catch (cause) {

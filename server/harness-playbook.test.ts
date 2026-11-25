@@ -230,6 +230,8 @@ describe("harness playbook", () => {
     expect(prompt).toContain("-Attributes ReparsePoint | % { [System.IO.Directory]::Delete(");
     expect(prompt).toContain("wipes their targets");
     expect(prompt).toContain("wink-<NICKNAME>");
+    expect(prompt).toContain("Delete the big files in it that nobody needs before the report.");
+    expect(prompt).toContain("delete the ones nobody needs before your final report.");
     expect(prompt).toContain("Wink removes it when the pane closes; close with `keep` to hand it to the next card.");
     expect(prompt).toContain("Wink removes clean worktrees a day after pane close if all commits are on a remote.");
     expect(prompt).toContain("Squash-landed, unpushed worktrees: use the manual rules above.");
@@ -424,7 +426,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(17444);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(17702);
   });
 
   it("fills the worktree path from the configured root", () => {

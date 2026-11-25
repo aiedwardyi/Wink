@@ -48,7 +48,7 @@ import type {
 } from "../contracts.ts";
 import { cliNotFound, newEventId, newId } from "../contracts.ts";
 import { appendNative, finishNative } from "./native.ts";
-import { textUsageError } from "./rate-limits.ts";
+import { AGY_TEXT_MODEL, textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
 import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, hasAntigravityTokenFile, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
@@ -67,7 +67,6 @@ const AGY_ACCOUNT_ERROR =
   /unauthorized|unauthenticated|\bforbidden\b|(?<![\w-])40[13](?![\w-])|not logged in|\bsign[\s-]?in\b|authentication failed|permission_denied|permission denied|has not been used in project|\bapi\b[^.\n]{0,120}\bdisabled\b/i;
 const AGY_NOT_ACCOUNT_ERROR = /\brate[\s-]?limit\b|(?<![\w-])429(?![\w-])|\berror-code-(?:429|5\d\d)\b|\btoo many requests\b|resource[ _]exhausted|quota exceeded|exceeded[^.\n]{0,40}\bquota\b|(?<![\w-])5\d\d(?![\w-])|\b5xx\b/i;
 const AGY_TIMEOUT_ERROR = /\b(?:watchdog timeout|timed out|time-out|timeout)\b/i;
-const AGY_TEXT_MODEL = "gemini-3.8-flash-low";
 // agy keeps one conversation store for every account and backend (a Vertex
 // project, a consumer sign-in), but the API only takes back the thought
 // signatures it minted itself. After a sign-in change, every model refuses
@@ -1470,6 +1469,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       enabled: input.enabled,
       get models() {
         return models;
+      },
+      // undefined once agy denies this account the text model: notes then run on the bot's own model
+      get textModel() {
+        return textModelDenied.size && textModelDenied.has(readAntigravityAccount(env()) ?? "") ? undefined : AGY_TEXT_MODEL;
       },
       refreshModels,
       snapshot,

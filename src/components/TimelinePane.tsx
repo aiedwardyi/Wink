@@ -270,7 +270,7 @@ function drawInk(sheet: HTMLElement, ink: SVGSVGElement) {
   ink.innerHTML = paths.join("");
 }
 
-type PaneProps = { botId: string; threadId: string; maximized: boolean; closing: boolean; profileName?: string };
+type PaneProps = { botId: string; threadId: string; maximized: boolean; closing: boolean; profileName?: string; kept?: boolean };
 
 export function TimelinePane(props: PaneProps) {
   const [viewing, setViewing] = useState<PreviewImage | null>(null);
@@ -295,7 +295,7 @@ export function TimelinePane(props: PaneProps) {
   );
 }
 
-function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) {
+function Picks({ botId, threadId, maximized, closing, profileName, kept }: PaneProps) {
   const { t } = useI18n();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -337,7 +337,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
   const you = profileName || t("chrome.you");
 
   return (
-    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined} data-sample={sample || undefined}>
+    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} data-kept={kept} aria-busy={(!entries && !failed) || undefined} data-sample={sample || undefined}>
       {failed && !entries
         ? <p role="status" className="show-media-empty">{t("errors.request")}</p>
         : sample

@@ -44,8 +44,8 @@ describe("ask PRs", () => {
     expect(prs.take("bot", "thread", asks)).toEqual([]);
     await prs.settled();
     expect(calls).toEqual([
-      { cwd: "C:/repo", args: ["pr", "view", "1988", "--json", "state"] },
-      { cwd: "C:/repo", args: ["pr", "view", "7", "--json", "state"] },
+      { cwd: "C:/repo", args: ["pr", "view", "1988", "--json", "state,mergedAt"] },
+      { cwd: "C:/repo", args: ["pr", "view", "7", "--json", "state,mergedAt"] },
     ]);
     expect(prs.take("bot", "thread", asks)).toEqual(["A1"]);
   });
@@ -55,7 +55,7 @@ describe("ask PRs", () => {
     const asks = [ask(1, { ref: "https://github.com/o/r/pull/5" }), ask(2, { ref: "PR #6" })];
     prs.take("bot", "thread", asks);
     await prs.settled();
-    expect(calls.map((call) => call.args)).toEqual([["pr", "view", "5", "--repo", "o/r", "--json", "state"]]);
+    expect(calls.map((call) => call.args)).toEqual([["pr", "view", "5", "--repo", "o/r", "--json", "state,mergedAt"]]);
     prs.take("bot", "thread", asks);
     tick(UNLANDED_REFRESH_MS - 1);
     prs.take("bot", "thread", asks);

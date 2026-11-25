@@ -36,6 +36,7 @@ const botsRequest = z
   .strict();
 const sse = z.object({ created: ms, open: ms.optional(), errors: size, lastError: ms.optional() }).strict();
 const cache = z.object({ hit: z.boolean(), paint: ms.optional() }).strict();
+const terminal = z.object({ tap: ms, fetchStart: ms.optional(), read: botsRequest.optional(), paint: ms.optional(), sinceResume: ms.optional() }).strict();
 const server = z.object({ botsMs: ms, sseClients: size, uptimeS: size }).partial().strict();
 const nav = z
   .object({
@@ -56,7 +57,7 @@ export const coldOpenRecordSchema = z
   .object({
     desktop: z.literal(true).optional(),
     openId: z.string().regex(OPEN_ID).optional(),
-    label: z.enum(["notification", "open", "warm", "resume"]),
+    label: z.enum(["notification", "open", "warm", "resume", "terminal"]),
     t0: ms.optional(),
     hiddenMs: ms.optional(),
     nav: nav.optional(),
@@ -69,6 +70,7 @@ export const coldOpenRecordSchema = z
     bots: botsRequest.optional(),
     taskSwitch: request.optional(),
     cache: cache.optional(),
+    terminal: terminal.optional(),
     server: server.optional(),
     chatPaint: ms.optional(),
     jsCached: z.boolean().optional(),
@@ -122,16 +124,46 @@ async function readCapped(body: AsyncIterable<Buffer>): Promise<string | null> {
   return bytes > COLD_OPEN_MAX_BYTES ? null : Buffer.concat(chunks).toString("utf8");
 }
 
-export async function receiveColdOpen(req: AsyncIterable<Buffer>, dataDir: string, now = Date.now()): Promise<Received> {
+// One line per open chat a window left (src/lib/chat-switch-diag.ts), so a switch nobody asked for names its path.
+const chatSwitchSchema = z
+  .object({
+    from: z.string().max(128),
+    to: z.string().max(128),
+    action: z.string().max(40),
+    event: z.string().max(40).optional(),
+    trusted: z.boolean().optional(),
+    active: z.boolean().optional(),
+    caller: z.array(z.string().max(200)).max(8).optional(),
+    focused: z.boolean(),
+    visibility: z.string().max(16),
+    desktop: z.boolean(),
+    userAgent: z.string().max(512),
+  })
+  .strict();
+
+async function readJson(req: AsyncIterable<Buffer>): Promise<{ body: unknown } | Exclude<Received, { status: 200 }>> {
   const text = await readCapped(req);
   if (text === null) return { status: 413, error: "body too large" };
-  let body: unknown;
   try {
-    body = JSON.parse(text);
+    return { body: JSON.parse(text) };
   } catch {
     return { status: 400, error: "invalid JSON body" };
   }
-  const parsed = coldOpenRecordSchema.safeParse(body);
+}
+
+export async function receiveChatSwitch(req: AsyncIterable<Buffer>, log: (line: string) => void = console.log): Promise<Received> {
+  const read = await readJson(req);
+  if ("error" in read) return read;
+  const parsed = chatSwitchSchema.safeParse(read.body);
+  if (!parsed.success) return { status: 400, error: "invalid chat switch" };
+  log(`[chat-switch] ${JSON.stringify(parsed.data)}`);
+  return { status: 200 };
+}
+
+export async function receiveColdOpen(req: AsyncIterable<Buffer>, dataDir: string, now = Date.now()): Promise<Received> {
+  const read = await readJson(req);
+  if ("error" in read) return read;
+  const parsed = coldOpenRecordSchema.safeParse(read.body);
   if (!parsed.success) return { status: 400, error: "invalid cold-open record" };
   if (parsed.data.desktop && parsed.data.label === "open" && parsed.data.chatPaint !== undefined) {
     startupTiming.paint({ firstResponse: parsed.data.nav?.responseStart, chatPaint: parsed.data.chatPaint });

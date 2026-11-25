@@ -144,7 +144,8 @@ describe("the workers menu follows the view", () => {
     await openMenu();
     await key({ key: "2", code: "Digit2", ctrlKey: true });
     expect(menu()).toBeNull();
-    await openList();
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-side-panel]:not([data-closing]) [data-pane-tools] [data-pane-tool="workers"]')!.click());
+    await until(menu);
     expect(menu()?.querySelector("h2")?.textContent).toBe("Pilot's workers");
   });
 });

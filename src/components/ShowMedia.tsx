@@ -45,10 +45,10 @@ function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
   return { files, room: index?.list ?? null };
 }
 
-export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {
+export const ShowMedia = memo(function ShowMedia({ source, maximized, kept }: { source: MediaSource; maximized: boolean; kept?: boolean }) {
   const { files, room } = useMediaFiles(source);
   return (
-    <div className="verify-watch-frame show-media" data-show-media data-maximized={maximized || undefined} aria-busy={!files || undefined}>
+    <div className="verify-watch-frame show-media" data-show-media data-maximized={maximized || undefined} data-kept={kept} aria-busy={!files || undefined}>
       <MediaFiles files={files} room={room} pickFor={source.threadId} roomId={source.roomId} />
     </div>
   );
