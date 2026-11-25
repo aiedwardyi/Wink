@@ -361,7 +361,8 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     const controller = new AbortController();
     paneRequest = controller;
     try {
-      return await request(`${base}?panes=1`, { signal: controller.signal }).catch(() => null);
+      // Uncached: Chromium would queue it behind the workspace's identical read still waiting on headers.
+      return await request(`${base}?panes=1`, { signal: controller.signal, cache: "no-store" }).catch(() => null);
     } finally {
       if (paneRequest === controller) paneRequest = null;
     }

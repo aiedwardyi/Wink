@@ -137,6 +137,13 @@ export function RemoteTerminalView({
 
   const panes = snapshot?.panes ?? [];
   const mainPane = panes.find((pane) => pane.main);
+  // A later tap picks its worker in the render that brings it, so the poll's first read is that worker, not the last pane.
+  const [tapped, setTapped] = useState(paneFocus);
+  if (tapped !== paneFocus) {
+    setTapped(paneFocus);
+    const id = paneFocus?.sessionId;
+    if (id && (!panes.length || panes.some((pane) => pane.sessionId === id && !pane.main))) setSelectedPane(id);
+  }
   const order: RemoteTerminalPane[] = !panes.length
     ? panes
     : mainPane

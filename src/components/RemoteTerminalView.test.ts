@@ -1608,6 +1608,36 @@ describe("RemoteTerminalView", () => {
     }
   });
 
+  it.each([
+    ["reopened past a hung worker", true, false],
+    ["reopened past a worker that answered", true, true],
+    ["left open on a hung worker", false, false],
+  ])("reads only a tapped worker, %s", async (_case, reopen, answers) => {
+    const panes = [{ sessionId: "main", label: "Main", main: true }, { sessionId: "w12", label: "W12", main: false }, { sessionId: "w13", label: "W13", main: false }];
+    const signals: (AbortSignal | undefined)[] = [];
+    store.api.mockImplementation((path: string, init?: RequestInit) => {
+      const sessionId = new URL(path, "http://localhost").searchParams.get("sessionId");
+      if (sessionId === "w12" && !answers) return hung(signals)(path, init);
+      return Promise.resolve({ screenText: `${sessionId} screen`, sessionId, generation: 1, panes });
+    });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const view = (visible: boolean, paneFocus: { sessionId: string }) =>
+      createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible, onClose: () => {}, paneFocus }));
+    const first = { sessionId: "w12" };
+    try {
+      await act(async () => root.render(view(true, first)));
+      if (answers) await vi.waitFor(() => expect(host.querySelector("pre")?.textContent).toBe("w12 screen"));
+      if (reopen) await act(async () => root.render(view(false, first)));
+      store.api.mockClear();
+      await act(async () => root.render(view(true, { sessionId: "w13" })));
+      await vi.waitFor(() => expect(host.querySelector("pre")?.textContent).toBe("w13 screen"));
+      expect(store.api.mock.calls.map(([path]) => path)).toEqual(["/api/bots/bot-1/terminal?sessionId=w13"]);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("selects a focused pane once a later roster lists it", async () => {
     let panes = [{ sessionId: "main", label: "Main", main: true }];
     store.api.mockImplementation(async (path: string) => {
