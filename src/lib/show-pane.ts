@@ -259,10 +259,17 @@ export function closeShow() {
 
 export const lastShown = (threadId: string) => last.get(threadId);
 
+const paneOpen = (threadId: string) => showing?.threadId === threadId || media === threadId || mapping === threadId || working === threadId || timeline === threadId || tools === threadId;
+
 /** The header button: shuts this chat's pane, or opens Workers while the chat lists any, else the tab last open in it, else the tool list. Only a bot chat has a `map` and a Workers tab; a room's runs on each person's own PC. */
 export function togglePane(threadId: string, map?: "idle" | "live", workers?: "listed" | "tab") {
-  if (showing?.threadId === threadId || media === threadId || mapping === threadId || working === threadId || timeline === threadId || tools === threadId) return closeShow();
+  if (paneOpen(threadId)) return closeShow();
   openEntry(threadId, nextTab(threadId, map, workers));
+}
+
+/** Opens this chat's pane where the header button would, and leaves an open one as it is. */
+export function showPane(threadId: string) {
+  if (!paneOpen(threadId)) openEntry(threadId, nextTab(threadId));
 }
 
 /** Where an open pane lands when it follows a chat switch: the new chat's own tab, else its tool list. `check`: the chat has a check its Check tab can open. */

@@ -14,6 +14,7 @@ import forumClip from "@/assets/whats-new/1.0.282-forum.webp";
 import forumLightClip from "@/assets/whats-new/1.0.282-forum-light.webp";
 import picksClip from "@/assets/whats-new/1.0.287-timeline.webp";
 import forumFirstClip from "@/assets/whats-new/1.0.287-forum.webp";
+import paneClip from "@/assets/whats-new/1.0.302-pane.webp";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -21,7 +22,7 @@ import type { SkinId } from "./skins";
 type Copy = Record<LocaleId, string>;
 
 /** What Show me opens in this chat. */
-export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | "timeline" | "forum" | { skins: SkinId[] };
+export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | "timeline" | "forum" | "pane" | { skins: SkinId[] };
 
 /** Every tile after 1.0.278 is a moving clip plus a Show me that opens the feature; whats-new.test.ts enforces it. `how` and `still` only keep older tiles as they shipped. */
 export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
@@ -177,6 +178,18 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
   "1.0.299": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
   "1.0.300": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
   "1.0.301": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.302": {
+    title: { en: "New in Wink 1.0.302", ko: "Wink 1.0.302 새 기능" },
+    tiles: [
+      {
+        clip: paneClip,
+        title: { en: "Side pane tabs", ko: "사이드 패널 탭" },
+        line: { en: "Open only the tabs you need. Drag to reorder, drag the edge to resize.", ko: "필요한 탭만 열어요. 끌어서 순서를 바꾸고, 가장자리를 끌어 크기를 조절해요." },
+        show: "pane",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */
