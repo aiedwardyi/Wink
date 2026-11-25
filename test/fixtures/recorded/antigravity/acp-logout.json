@@ -1,0 +1,85 @@
+{
+  "stamp": {
+    "engine": "antigravity",
+    "cliVersion": "1.5.14",
+    "recordedAt": "2026-11-22T07:08:37.000Z",
+    "sourcePc": "home",
+    "source": "agy 1.5.14 (linux_amd64) in WSL on home with a throwaway HOME and no keyring: `agy acp`, then initialize and logout over stdin; real replies, and the logout line agy wrote to its ACP log (file name kept, nothing else in it)"
+  },
+  "reply": {
+    "initialize": {
+      "jsonrpc": "2.0",
+      "result": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "loadSession": true,
+          "load_session": true,
+          "promptCapabilities": {
+            "image": true,
+            "audio": false,
+            "embeddedContext": true
+          },
+          "sessionCapabilities": {
+            "resume": {},
+            "close": {},
+            "load": {},
+            "list": {},
+            "additionalDirectories": {}
+          },
+          "session_capabilities": {
+            "resume": {},
+            "close": {},
+            "load": {},
+            "list": {},
+            "additionalDirectories": {}
+          },
+          "auth": {
+            "logout": {}
+          },
+          "_meta": {
+            "antigravity": {
+              "tier": true,
+              "systemPrompt": {
+                "append": true
+              }
+            }
+          }
+        },
+        "agentInfo": {
+          "name": "Antigravity ACP Server",
+          "version": "1.5.14"
+        },
+        "authMethods": [
+          {
+            "id": "oauth-personal",
+            "name": "Log in with Google",
+            "description": "Log in with your Google account"
+          },
+          {
+            "id": "oauth-business",
+            "name": "Log in with Gemini Enterprise",
+            "description": "Log in with your Gemini Enterprise account"
+          },
+          {
+            "id": "gemini-api-key",
+            "name": "Gemini API key",
+            "description": "Use an API key with Gemini Developer API"
+          },
+          {
+            "id": "agent-platform",
+            "name": "Gemini Enterprise Agent Platform",
+            "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials"
+          }
+        ]
+      },
+      "id": 1
+    },
+    "logout": {
+      "jsonrpc": "2.0",
+      "result": {},
+      "id": 2
+    },
+    "logFile": "acp-server-20261122_160837-944.log",
+    "logLine": "I1122 16:08:37.690676      84 server_oauth.go:192] Logging out current user"
+  }
+}

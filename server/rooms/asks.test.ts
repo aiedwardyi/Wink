@@ -10,6 +10,7 @@ import {
   revalidatePersonAsks, roomAsks, settleAsk, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps,
 } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, setPersonWorks, type RoomPerson } from "./db.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 let store: Store;
 let group: HostedGroup;
@@ -36,7 +37,7 @@ beforeEach(() => {
   closeRoomsDb();
   closeAsksDb();
   _resetSteerQueue();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   botId = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
   group = store.createGroup("Team", [botId], false, undefined, undefined, { roomId: createRoom("Team").id }) as HostedGroup;

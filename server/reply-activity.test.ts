@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -9,6 +9,7 @@ import { replyActivity } from "./reply-activity.ts";
 import type { Message } from "./store.ts";
 import { disconnectSyncFolder, hasJoinedSync } from "./sync-history.ts";
 import { createSyncEngine } from "./thread-sync-v2-engine.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 let seq = 0;
 const reply = (at: number, extra: Partial<Message> = {}) =>
@@ -19,7 +20,7 @@ describe("replyActivity", () => {
   const zone = process.env.TZ;
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     process.env.TZ = "Asia/Seoul";
   });

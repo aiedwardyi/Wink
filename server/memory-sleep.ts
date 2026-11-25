@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { renameRetrying, writeFileAtomic } from "./atomic.ts";
 import { decisionSpan, type NoteGenerator } from "./memory-pass.ts";
+import type { DreamAsks, DryNotes } from "./dream-live.ts";
 import { pickStamp } from "./picks.ts";
 import { loadedMemory, memoryFileRaw, readMemoryFile, workspaceDir } from "./workspace.ts";
 
@@ -43,7 +44,15 @@ interface SleepLog {
   output?: number;
   moved?: number;
   ms: number;
-  result: "saved" | "none" | "conflict" | "error" | "timeout" | "cancelled";
+  result: "saved" | "none" | "conflict" | "error" | "timeout" | "cancelled" | "dry";
+  mode?: "dry";
+  wouldMove?: number;
+  closes?: number;
+  asked?: number;
+  fellOut?: number;
+  threads?: number;
+  skipped?: number;
+  unchecked?: number;
 }
 
 export interface MemorySleepDeps {
@@ -51,14 +60,21 @@ export interface MemorySleepDeps {
   /** Every bot at boot, so a tidy owed before a restart still runs. */
   bots(): string[];
   generate(botId: string): NoteGenerator | null;
+  requiresGenerator?(botId: string): boolean;
   /** The bot's Auto notes switch, read live; false on a PC that does not tidy this bot. */
   enabled(botId: string): boolean;
   /** Any turn of the bot running. */
   busy(botId: string): boolean;
-  /** MEMORY.md changed on disk, so an open Memory page reloads it. */
+  /** MEMORY.md or its dry plan changed on disk, so an open Memory page reloads it. */
   changed(botId: string): void;
   /** The tidy saved MEMORY.md as `after`, `before` without some lines, for memory sync to rank. */
   tidied?(botId: string, before: string, after: string): void;
+  /** Dreaming (dream-live.ts): a dry bot's pass plans its asks and notes and writes nothing else. */
+  dream?: {
+    dry(botId: string): boolean;
+    asks(botId: string, signal: AbortSignal): Promise<DreamAsks | null>;
+    plan(botId: string, at: number, notes: DryNotes, asks: DreamAsks): void;
+  };
   now?(): number;
 }
 
@@ -89,6 +105,8 @@ const NOT_WORDS = new Set(
   ).split(" "),
 );
 const NOT_PARTS = /n['’]t$|않|없|아니|못|ない|ません|ず$|ぬ$|不|没|沒|别|別|無|无|非|未|勿|莫|ไม่|नहीं|मत|बिना/u;
+// a hedge or a scope word narrows a newer note rather than turning the older one, and a hedged note is not sure enough to retire a fact
+const HEDGES = new Set("maybe perhaps unsure but over than except unless".split(" "));
 
 const withoutStamp = (text: string) => text.replace(STAMP, " ");
 const body = (text: string) => withoutStamp(text).replace(/^\s*[-*+]\s+/, "").normalize("NFC");
@@ -141,7 +159,8 @@ function replaces(newer: NoteLine, older: NoteLine): boolean {
   if (!newer.date || !older.date || newer.date <= older.date) return false;
   const words = (line: NoteLine) => tokens(line.text).map((token) => token.toLowerCase());
   const [before, after] = [words(older), words(newer)];
-  return before.length > 0 && before.every((word) => after.includes(word)) && after.some((word) => negates(word) && !before.includes(word));
+  const added = after.filter((word) => !before.includes(word));
+  return before.length > 0 && before.every((word) => after.includes(word)) && !added.some((word) => HEDGES.has(word)) && added.some(negates);
 }
 
 export function tidyPrompt(notes: NoteLine[]): string {
@@ -176,7 +195,12 @@ export function parseTidy(output: string): z.infer<typeof tidySchema> {
 export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<string> = new Set()): Move[] {
   const lines = noteLines(raw);
   const notes = new Map(lines.map((line) => [ref(line), line] as const));
-  const loads = loadedMemory(raw).text.split("\n").length;
+  const view = loadedMemory(raw);
+  const head = view.text.split("\n").length;
+  const all = raw.split("\n");
+  // the head and the newest lines load; only the cut middle does not
+  const tail = view.newest === undefined ? Infinity : (all.at(-1) === "" ? all.length - 1 : all.length) - view.newest.split("\n").length;
+  const loaded = (line: NoteLine) => line.at < head || line.at >= tail;
   const moves: Move[] = [];
   const gone = new Set<NoteLine>();
   const kept = new Set<NoteLine>();
@@ -184,8 +208,8 @@ export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<strin
   // a twin merge is certain; a model's moves are capped per run
   const move = (line: NoteLine | undefined, by: NoteLine | undefined, why: Why, model = true) => {
     if (!line || !by || line === by || (model && guessed >= MOVES_MAX) || gone.has(line) || gone.has(by) || kept.has(line) || movedBefore.has(twinKey(line.text))) return;
-    // only whole notes, under the same heading, and never in favor of a line the prompt does not load
-    if (!line.alone || !by.alone || line.section !== by.section || (line.at < loads && by.at >= loads)) return;
+    // only whole notes, under the same heading, and never in favor of a line the prompt does not load; a head duplicate stays, since the newest lines roll out
+    if (!line.alone || !by.alone || line.section !== by.section || (loaded(line) && !loaded(by)) || (why === "duplicate" && line.at < head && by.at >= head)) return;
     moves.push({ at: line.at, text: line.text, by: by.text, why });
     if (model) guessed += 1;
     gone.add(line);
@@ -198,8 +222,9 @@ export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<strin
     if (text) twins.set(key, [...(twins.get(key) ?? []), line]);
   }
   for (const group of twins.values()) {
-    const loaded = group.filter((line) => line.at < loads);
-    const pool = loaded.length ? loaded : group;
+    const top = group.filter((line) => line.at < head);
+    const shown = top.length ? top : group.filter(loaded);
+    const pool = shown.length ? shown : group;
     // the newest: notes are appended, so the last copy, unless an earlier one carries a later stamp
     const keep = pool.reduce((best, line) => (best.date && line.date && best.date > line.date ? best : line));
     // an undated copy away from the others may mean something where it sits, like a step done twice or a note under a bullet used as a label
@@ -355,15 +380,79 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     timers.set(botId, timer);
   };
 
-  const digestOf = (raw: string, model: boolean) => createHash("sha256").update(JSON.stringify([raw, model])).digest("hex").slice(0, 16);
+  const digestOf = (raw: string, model: boolean, dry = false) => createHash("sha256").update(JSON.stringify(dry ? [raw, model, "dry"] : [raw, model])).digest("hex").slice(0, 16);
+
+  const tidyReply = async (generate: NoteGenerator | null, lines: NoteLine[], signal: AbortSignal) => {
+    let used = 0;
+    const shownNotes = lines.filter((line) => (used += Buffer.byteLength(line.text, "utf8") + 8) <= PROMPT_NOTES_MAX);
+    const usage = { input: 0, output: 0 };
+    let reply = "";
+    if (generate && shownNotes.length > 1) {
+      reply = await generate(tidyPrompt(shownNotes), signal, (spent) => {
+        usage.input += (spent?.input ?? 0) + (spent?.cachedInput ?? 0) + (spent?.cacheCreation ?? 0);
+        usage.output += spent?.output ?? 0;
+      });
+    }
+    return { shownNotes, usage, reply };
+  };
+
+  // dry: the moves Sleep would make, with MEMORY.md and the history untouched
+  const dryNotes = async (botId: string, signal: AbortSignal, before: string | undefined): Promise<DryNotes & { digest?: string; fields?: Partial<SleepLog> }> => {
+    if (!deps.enabled(botId)) return { state: "off-here", moves: [] };
+    const raw = memoryFileRaw(botId);
+    const memory = readMemoryFile(botId);
+    const generate = deps.generate(botId);
+    if (!generate && deps.requiresGenerator?.(botId)) return { state: "no-model", moves: [] };
+    const digest = digestOf(raw, Boolean(generate), true);
+    if (before === digest) return { state: "unchanged", moves: [] };
+    const lines = noteLines(raw);
+    let asked: Awaited<ReturnType<typeof tidyReply>>;
+    try {
+      asked = await tidyReply(generate, lines, signal);
+    } catch {
+      return { state: signal.aborted ? "stopped" : "error", moves: [] };
+    }
+    const fields = { notes: lines.length, sentNotes: asked.shownNotes.length, ...asked.usage };
+    if (signal.aborted) return { state: "stopped", moves: [], fields };
+    if (deps.busy(botId) || readMemoryFile(botId).revision !== memory.revision) return { state: "conflict", moves: [], fields };
+    let moves = planTidy(raw, asked.reply);
+    if (moves.length) moves = planTidy(raw, asked.reply, historyKeys(botId));
+    return { state: "checked", moves, digest, fields };
+  };
+
+  const dryRun = async (botId: string, signal: AbortSignal, dream: NonNullable<MemorySleepDeps["dream"]>) => {
+    if (deps.busy(botId)) return arm(botId);
+    const record = bots.get(botId) ?? {};
+    const waited = now() - (record.at ?? -Infinity);
+    if (waited >= 0 && waited < SLEEP_GAP_MS) return arm(botId, SLEEP_GAP_MS - waited);
+    const started = now();
+    bots.set(botId, { ...record, at: started });
+    save();
+    // asks first: they have no model step, so a turn that stops the notes part loses none of them
+    const asks = await dream.asks(botId, signal);
+    if (disposed) return;
+    if (!asks) return log({ botId, mode: "dry", ms: now() - started, result: signal.aborted ? stopped(signal) : "error" });
+    const notes = await dryNotes(botId, signal, record.digest);
+    if (disposed) return;
+    dream.plan(botId, started, { state: notes.state, moves: notes.moves }, asks);
+    deps.changed(botId);
+    if (notes.digest) {
+      bots.set(botId, { at: started, digest: notes.digest });
+      save();
+    }
+    const count = (op: string) => asks.items.filter((item) => item.op === op).length;
+    log({ botId, mode: "dry", ...notes.fields, wouldMove: notes.moves.length, closes: count("close"), asked: count("ask"), fellOut: count("fall-out"), threads: asks.threads, skipped: asks.skipped, unchecked: asks.unchecked, ms: now() - started, result: "dry" });
+  };
 
   const run = async (botId: string, signal: AbortSignal) => {
+    if (deps.dream?.dry(botId)) return dryRun(botId, signal, deps.dream);
     if (!deps.enabled(botId)) return;
     if (deps.busy(botId)) return arm(botId);
     const record = bots.get(botId) ?? {};
     const raw = memoryFileRaw(botId);
     const memory = readMemoryFile(botId);
     const generate = deps.generate(botId);
+    if (!generate && deps.requiresGenerator?.(botId)) return;
     const digest = digestOf(raw, Boolean(generate));
     if (record.digest === digest) return;
     const waited = now() - (record.at ?? -Infinity);
@@ -374,21 +463,14 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     bots.set(botId, { ...record, at: started });
     save();
     const lines = noteLines(raw);
-    let used = 0;
-    const shownNotes = lines.filter((line) => (used += Buffer.byteLength(line.text, "utf8") + 8) <= PROMPT_NOTES_MAX);
-    const usage = { input: 0, output: 0 };
-    let reply = "";
-    if (generate && shownNotes.length > 1) {
-      try {
-        reply = await generate(tidyPrompt(shownNotes), signal, (spent) => {
-          usage.input += (spent?.input ?? 0) + (spent?.cachedInput ?? 0) + (spent?.cacheCreation ?? 0);
-          usage.output += spent?.output ?? 0;
-        });
-      } catch {
-        if (!disposed) log({ botId, ms: now() - started, result: signal.aborted ? stopped(signal) : "error" });
-        return;
-      }
+    let asked: Awaited<ReturnType<typeof tidyReply>>;
+    try {
+      asked = await tidyReply(generate, lines, signal);
+    } catch {
+      if (!disposed) log({ botId, ms: now() - started, result: signal.aborted ? stopped(signal) : "error" });
+      return;
     }
+    const { shownNotes, usage, reply } = asked;
     if (disposed || !deps.enabled(botId)) return;
     const base = { botId, notes: lines.length, sentNotes: shownNotes.length, ms: 0, ...usage };
     if (signal.aborted) return log({ ...base, ms: now() - started, result: stopped(signal) });

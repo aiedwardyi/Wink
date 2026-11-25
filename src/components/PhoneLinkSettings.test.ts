@@ -7,16 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const store = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => store);
-const relay = vi.hoisted(() => ({ on: true }));
+const relay = vi.hoisted(() => ({ on: true, signIn: null as (() => void) | null }));
 vi.mock("./PhoneAccessSettings", () => ({
-  PhoneAccessSettings: ({ onEnabled, onNoRelay }: { onEnabled?: (on: boolean) => void; onNoRelay?: () => void }) => {
+  PhoneAccessSettings: ({ onEnabled, onNoRelay, onSignIn }: { onEnabled?: (on: boolean) => void; onNoRelay?: () => void; onSignIn?: (open: (() => void) | null) => void }) => {
     useEffect(() => onEnabled?.(relay.on), [onEnabled]);
+    useEffect(() => onSignIn?.(relay.signIn), [onSignIn]);
     return createElement("div", { "data-this-pc": true }, createElement("button", { type: "button", "data-no-relay": "", onClick: onNoRelay }));
   },
 }));
 vi.mock("./DeviceRows", async (original) => ({ ...await original<typeof import("./DeviceRows")>(), YourPcs: () => null }));
 
 import { I18nProvider } from "@/lib/i18n";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
+import { landFold, spyReveal } from "./Fold.test-land";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
 
 const url = "https://fixture.invalid/remote?key=fixture";
@@ -41,6 +44,7 @@ afterEach(async () => {
   host.remove();
   store.api.mockReset();
   relay.on = true;
+  relay.signIn = null;
   localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -273,7 +277,7 @@ describe("Phone setup steps", () => {
     await act(async () => button("Copy Link").click());
     expect(writeText).toHaveBeenCalledWith(url);
     await act(async () => button("Open Laptop").click());
-    expect(open).toHaveBeenCalledExactlyOnceWith("laptop.tail1234.ts.net", "Laptop");
+    expect(open).toHaveBeenCalledExactlyOnceWith("laptop.tail1234.ts.net", "Laptop", undefined);
   });
 
   it.each(["missing", "not-running", "serve-disabled", "checking", "error", "ready"])("renders %s with one next PC step", async (state) => {
@@ -369,6 +373,21 @@ describe("Phone setup steps", () => {
     await act(async () => button("Other ways to connect").click());
     expect((button("Get Code") as HTMLButtonElement).disabled).toBe(true);
     expect((button("Set Up") as HTMLButtonElement).disabled).toBe(false);
+    expect(store.api.mock.calls.some(([path]) => path === "/api/phone/pairing")).toBe(false);
+  });
+
+  it("get code leads a signed-out PC to sign in instead of graying out", async () => {
+    relay.on = false;
+    relay.signIn = vi.fn();
+    store.api.mockResolvedValue({ url: null, setup: { state: "missing" } });
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
+    await act(async () => button("Other ways to connect").click());
+    const code = button("Get Code") as HTMLButtonElement;
+    expect(code.disabled).toBe(false);
+    await act(async () => code.click());
+    expect(relay.signIn).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("[data-phone-pairing]")).toBeNull();
     expect(store.api.mock.calls.some(([path]) => path === "/api/phone/pairing")).toBe(false);
   });
 
@@ -497,5 +516,29 @@ describe("Phone setup steps", () => {
     await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
     await openTailscale();
     for (const text of ["다른 연결 방법", "Google 대신 코드로 연결", "코드 받기", "나만의 사설 네트워크입니다. 기기마다 Tailscale을 설치하세요.", "설정", "이 PC", "휴대폰에 Tailscale 설치", "스캔해서 Wink 열기", "링크 복사"]) expect(host.textContent).toContain(text);
+  });
+});
+
+describe("Reveal", () => {
+  it("brings what each fold opened into view once it has landed, never while closing", async () => {
+    await render({ url, setup: { state: "ready" } });
+    await act(async () => host.querySelector<HTMLElement>('[aria-controls="phone-pairing"]')!.click());
+    const scrolled = spyReveal();
+    try {
+      await landFold(host.querySelector("#devices-other")!);
+      await landFold(host.querySelector("#phone-pairing")!);
+      await landFold(host.querySelector("#devices-tailscale")!);
+      expect(scrolled.mock.contexts).toEqual([
+        host.querySelector("#devices-other [role='group']"),
+        host.querySelector("#phone-pairing .pt-3"),
+        host.querySelector("#devices-tailscale .pt-3"),
+      ]);
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      await act(async () => host.querySelector<HTMLElement>('[aria-controls="devices-other"]')!.click());
+      await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+      expect(scrolled).toHaveBeenCalledTimes(3);
+    } finally {
+      scrolled.mockRestore();
+    }
   });
 });

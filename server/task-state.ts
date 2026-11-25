@@ -111,7 +111,7 @@ function taskStatePath(threadId: ThreadId, dir: string): string {
   return join(dir, `${checked.data}.json`);
 }
 
-function normalize(packet: TaskResumePacket): TaskResumePacket {
+export function normalize(packet: TaskResumePacket): TaskResumePacket {
   const normalized: TaskResumePacket = {
     v: 1,
     threadId: clean(packet.threadId, LIMITS.id),
@@ -180,7 +180,7 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
   return taskResumePacketSchema.parse(normalized);
 }
 
-function serializeBounded(packet: TaskResumePacket): string {
+export function serializeBounded(packet: TaskResumePacket): string {
   const bounded = structuredClone(packet);
   const pruneOrder = ["completed", "evidence", "artifacts", "plan", "blockers"] as const;
   const budgeted = () => Buffer.byteLength(JSON.stringify({ ...bounded, asks: bounded.asks?.filter((ask) => !isOpenAsk(ask)) }, null, 2), "utf8");
@@ -283,12 +283,13 @@ export function stageTaskResumePacket(
 export function settleTaskResumePacket(
   threadId: ThreadId,
   options: TaskStateOptions = {},
-): void {
+): TaskResumePacket | null {
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
-  if (!existsSync(stagedPath(path))) return;
+  if (!existsSync(stagedPath(path))) return null;
   const staged = stagedRecord(path, threadId);
   if (staged) writeFileAtomic(path, staged.raw, { mode: 0o600 });
   dropStaged(path);
+  return staged?.packet ?? null;
 }
 
 export function readTaskResumePacket(

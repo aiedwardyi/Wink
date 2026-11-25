@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Message } from "./store.ts";
 import { DATA_DIR } from "./config.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 import { createSyncEngine } from "./thread-sync-v2-engine.ts";
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 
@@ -32,13 +32,13 @@ const msg = (id: string, text: string): Message => ({ id, role: "user", kind: "t
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTestData(root);
 });
 
 describe("hard-link fallback", { timeout: 60_000 }, () => {
   it("publishes a sealed chat when hard links are refused", async () => {
     links.n = 0;
-    const folder = mkdtempSync(join(tmpdir(), "sync-v2-link-"));
+    const folder = mkdtempSync(join(testHome(), "sync-v2-link-"));
     roots.push(folder);
     const engine = createSyncEngine({ folder, dataDir: DATA_DIR, deviceId: "a", headBytes: 4096 });
     for (let i = 0; i < 12; i++) engine.commit(scope, [{ kind: "row", value: msg(`m${i}`, "x".repeat(700)) }]);
@@ -46,7 +46,7 @@ describe("hard-link fallback", { timeout: 60_000 }, () => {
     expect(links.n).toBeGreaterThan(0);
     expect(flushed.segments).toBeGreaterThan(0);
     expect(flushed.sealedThrough).toBeGreaterThan(0);
-    const dataDir = mkdtempSync(join(tmpdir(), "sync-v2-link-"));
+    const dataDir = mkdtempSync(join(testHome(), "sync-v2-link-"));
     roots.push(dataDir);
     const peer = new ThreadSyncV2({ folder, dataDir, deviceId: "b", headBytes: 4096 });
     clients.push(peer);

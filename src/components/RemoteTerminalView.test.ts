@@ -18,6 +18,7 @@ vi.mock("@/state/store", async () => {
 import { I18nProvider } from "@/lib/i18n";
 import { ConnectionError } from "@/lib/error-text";
 import { lastViewedPanes } from "@/lib/terminal-panes";
+import { PHONE_QUERY } from "@/lib/phone-swipe";
 import { RemoteTerminalView, snapshotText } from "./RemoteTerminalView";
 import { ProviderMark } from "./ProviderIcons";
 
@@ -142,6 +143,44 @@ describe("RemoteTerminalView", () => {
     expect(host.querySelector("pre")?.textContent).toBe("done\n\n$ ls");
     expect(host.textContent).toContain("C:\work");
     await act(async () => root.unmount());
+  });
+
+  describe("on a phone", () => {
+    const phoneOnly = () => vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === PHONE_QUERY }));
+
+    it("drops the folder line, keeps the same buttons in the same order, and tightens them to 40px taps", async () => {
+      phoneOnly();
+      store.api.mockResolvedValue({ screenText: "$ ls", cwd: "D:\\wink\\scratch", exited: false, panes: [{ sessionId: "main", main: true }] });
+      const { host, root } = await renderView();
+      try {
+        const header = host.querySelector("header")!;
+        expect(header.querySelector("p")).toBeNull();
+        expect(header.textContent).not.toContain("wink");
+        expect(title(host)).toBe("Terminal / Ada");
+        // The title word and slash hide below md so the worker name takes the room; the name itself never hides.
+        const h1 = header.querySelector("h1")!;
+        const hidden = [...h1.querySelectorAll("span")].filter((el) => el.className.split(" ").includes("max-md:hidden"));
+        expect(hidden.map((el) => el.textContent)).toEqual(["Terminal ", "/ "]);
+        expect(h1.querySelector("span.max-md\\:text-ink")?.textContent).toBe("/ Ada");
+        expect(header.className.split(" ")).toContain("max-md:gap-0.5");
+        const buttons = [...header.querySelectorAll<HTMLButtonElement>("button:not([data-worker-strip])")];
+        expect(buttons.map((el) => el.getAttribute("aria-label"))).toEqual(["Refresh", "Copy", "Close terminal"]);
+        for (const el of buttons) expect(el.className.split(" ")).toEqual(expect.arrayContaining(["max-md:min-h-10", "max-md:min-w-10", "max-md:px-2"]));
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("keeps the exited status without the folder", async () => {
+      phoneOnly();
+      store.api.mockResolvedValue({ screenText: "$", cwd: "D:\\wink\\scratch", exited: true, exitCode: 2, panes: [{ sessionId: "main", main: true }] });
+      const { host, root } = await renderView();
+      try {
+        expect(host.querySelector("header p")?.textContent).toBe("Shell exited (2)");
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
   });
 
   it("renders styled screen runs with palette colors", async () => {

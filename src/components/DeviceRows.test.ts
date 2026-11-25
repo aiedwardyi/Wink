@@ -69,7 +69,7 @@ describe("Your PCs", () => {
     expect(laptop!.querySelector("button")?.className).not.toContain("bg-accent");
     expect(den!.querySelector("button")).toBeNull();
     await act(async () => home!.querySelector("button")!.click());
-    expect(open).toHaveBeenCalledWith("home.wink.test", "Home");
+    expect(open).toHaveBeenCalledWith("home.wink.test", "Home", undefined);
     await act(async () => root.unmount());
   });
 

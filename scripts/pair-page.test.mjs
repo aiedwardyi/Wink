@@ -56,13 +56,15 @@ describe("pair page", () => {
     const page = open("/pair");
     expect(page.help.hidden).toBe(false);
     expect(page.help.textContent).toContain("6 digit code");
+    expect(page.help.textContent).toContain(`Settings, ${en["settings.section.devices"]}, ${en["settings.devices.codeInstead"]}.`);
     expect(page.form.hidden).toBe(false);
   });
 
   it.each([
-    ["en", en, "Get a new code on your PC: Settings, Connections, Phone access."],
-    ["ko", ko, "PC의 설정 > 연결 > 휴대폰 접속에서 새 코드를 받으세요."],
-  ])("sends a refused phone to Phone access for a new code (%s)", async (locale, catalog, next) => {
+    // Named as Settings names them, so the page cannot point at a place Settings no longer has.
+    ["en", en, `Get a new code on your PC: Settings, ${en["settings.section.devices"]}, ${en["settings.devices.codeInstead"]}.`],
+    ["ko", ko, `PC의 설정 > ${ko["settings.section.devices"]} > ${ko["settings.devices.codeInstead"]}에서 새 코드를 받으세요.`],
+  ])("sends a refused phone to Code instead of Google for a new code (%s)", async (locale, catalog, next) => {
     localStorage.setItem("omb-locale", locale);
     for (const error of ["no-pairing", "too-many-attempts", "something-else"]) {
       const page = open("/pair#k=wkp_token", async () => new Response(JSON.stringify({ error }), { status: 409 }));
@@ -177,6 +179,149 @@ describe("pair page", () => {
     expect(document.getElementById("title").textContent).toBe("Pair this phone");
     await vi.waitFor(() => expect(page.status.textContent).toBe("Paired. Opening Wink..."));
     expect(page.status.className).toBe("status ok");
+  });
+
+  describe("on a glasses lens", () => {
+    const GLASSES = "Mozilla/5.0 (Linux; Android 14; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Safari/537.36";
+    const FOLDABLE = "Mozilla/5.0 (Linux; Android 14; SM-F956N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+    const DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+    const lens = (square, ua = GLASSES) => {
+      vi.stubGlobal("matchMedia", (query) => ({ matches: square && query.includes("aspect-ratio"), media: query }));
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(ua);
+    };
+    const glass = () => document.getElementById("glass");
+    afterEach(() => document.body.removeAttribute("class"));
+
+    it.each([
+      ["?g=1 when the PC can't take Google", "/pair?g=1", googlePc({ start: 409 })],
+      ["a refused Google sign-in", "/pair#g=id.token.sig", googlePc({ signIn: () => new Response(JSON.stringify({ error: "wrong-account" }), { status: 403 }) })],
+    ])("falls back to the glasses code screen after %s", async (_, url, answer) => {
+      lens(true);
+      const page = open(url, answer);
+      await vi.waitFor(() => expect(glass().hidden).toBe(false));
+      expect(document.body.classList.contains("glasses")).toBe(true);
+      expect(page.form.hidden).toBe(true);
+      expect(document.activeElement?.id).toBe("g-code");
+    });
+
+    it.each([
+      ["?g=1 when the PC can't take Google", "/pair?g=1", googlePc({ start: 409 })],
+      ["a refused Google sign-in", "/pair#g=id.token.sig", googlePc({ signIn: () => new Response(JSON.stringify({ error: "wrong-account" }), { status: 403 }) })],
+    ])("keeps the phone form after %s on a phone", async (_, url, answer) => {
+      lens(false, FOLDABLE);
+      const page = open(url, answer);
+      await vi.waitFor(() => expect(page.form.hidden).toBe(false));
+      expect(glass().hidden).toBe(true);
+      expect(document.body.classList.contains("glasses")).toBe(false);
+    });
+
+    it("shows the glasses code screen and lands on /glasses in the glasses web view", async () => {
+      const replace = vi.spyOn(location, "replace").mockImplementation(() => {});
+      lens(true);
+      const page = open("/pair", googlePc());
+      expect(glass().hidden).toBe(false);
+      expect(page.form.hidden).toBe(true);
+      open("/pair#k=wkp_token", async () => new Response("{}", { status: 200 }));
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("/glasses"));
+    });
+
+    const cells = () => [...document.querySelectorAll(".g-group span")].map((cell) => cell.textContent).join("");
+    const say = (text) => {
+      const field = document.getElementById("g-code");
+      field.value = text;
+      field.dispatchEvent(new Event("input"));
+    };
+
+    // The lens moves its D-pad focus only onto what it can see: an opacity 0 field left the boxes out of reach (1.0.297).
+    it("draws the field under the code boxes with no room for text, so the lens can land on it and no selection, voice mark or tap mark covers them", () => {
+      const rule = SOURCE.match(/\.g-code input \{([^}]*)\}/)?.[1];
+      expect(rule).toContain("padding-left: 100%;");
+      expect(rule).toContain("caret-color: transparent;");
+      expect(rule).not.toMatch(/opacity|visibility|display|font-size/);
+      expect(SOURCE).toMatch(/\.g-code \{[^}]*-webkit-tap-highlight-color: transparent;/);
+    });
+
+    it("marks the first code box as selected on arrival, with the field focused", () => {
+      lens(true);
+      open("/pair", googlePc());
+      expect(document.activeElement?.id).toBe("g-code");
+      const [first, ...rest] = document.querySelectorAll(".g-group span");
+      expect(first.classList.contains("next")).toBe(true);
+      expect(rest.some((cell) => cell.classList.contains("next"))).toBe(false);
+    });
+
+    it("moves focus with the lens D-pad: any arrow to the field, Down to Connect once it shows", () => {
+      lens(true);
+      open("/pair", googlePc());
+      const field = document.getElementById("g-code");
+      const press = (key) => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      field.blur();
+      press("ArrowDown");
+      expect(document.activeElement).toBe(field);
+      say("123456");
+      expect(document.activeElement?.id).toBe("g-pair");
+      press("ArrowUp");
+      expect(document.activeElement).toBe(field);
+      press("ArrowDown");
+      expect(document.activeElement?.id).toBe("g-pair");
+    });
+
+    it.each(["123456", "1 2 3 4 5 6", "123 456.", "one two three four five six", "won to three for five six", "SXUMBB. 123456"])(
+      "fills the boxes from the dictated %j",
+      (text) => {
+        lens(true);
+        open("/pair", googlePc());
+        say(text);
+        expect(cells()).toBe("123456");
+        expect(document.getElementById("g-pair").hidden).toBe(false);
+      },
+    );
+
+    it("keeps the cursor in the field until the voice keyboard is done with its words", () => {
+      lens(true);
+      open("/pair", googlePc());
+      const field = document.getElementById("g-code");
+      field.dispatchEvent(new Event("compositionstart"));
+      say("one two three four five six");
+      expect(cells()).toBe("123456");
+      expect(document.activeElement).toBe(field);
+      field.dispatchEvent(new Event("compositionend"));
+      expect(document.activeElement?.id).toBe("g-pair");
+    });
+
+    it.each([
+      ["en", `Wink on PC › ${en["settings.title"]} › ${en["settings.section.devices"]} › ${en["settings.devices.codeInstead"]} › ${en["settings.devices.getCode"]}`, "That's the PC code. This step needs the 6 numbers."],
+      ["ko", `PC의 Wink › ${ko["settings.title"]} › ${ko["settings.section.devices"]} › ${ko["settings.devices.codeInstead"]} › ${ko["settings.devices.getCode"]}`, "PC 코드입니다. 이 단계에는 숫자 6자리가 필요합니다."],
+    ])("names the PC's buttons to the 6 numbers and says a 6 letter code is the PC code (%s)", (locale, path, pcCode) => {
+      localStorage.setItem("omb-locale", locale);
+      lens(true);
+      open("/pair", googlePc());
+      const hint = document.getElementById("g-hint");
+      expect(hint.textContent).toBe(path);
+      say("SXUMBB.");
+      expect(hint.textContent).toBe(pcCode);
+      say("hello");
+      expect(hint.textContent).toContain("“hello”");
+    });
+
+    // A square window alone is an unfolded foldable, a split-screen phone or a small desktop window.
+    it.each([
+      ["an unfolded foldable", FOLDABLE],
+      ["a small desktop window", DESKTOP],
+      ["an iPhone in split view", IPHONE],
+    ])("keeps the phone form, Google and / on a square window in %s", async (_, ua) => {
+      const replace = vi.spyOn(location, "replace").mockImplementation(() => {});
+      lens(true, ua);
+      const page = open("/pair", googlePc());
+      await vi.waitFor(() => expect(page.google.hidden).toBe(false));
+      expect(page.form.hidden).toBe(false);
+      expect(glass().hidden).toBe(true);
+      expect(document.body.classList.contains("glasses")).toBe(false);
+      open("/pair#k=wkp_token", async () => new Response("{}", { status: 200 }));
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+      expect(replace).toHaveBeenCalledWith("/");
+    });
   });
 
   it("names a wrong account and offers the code field after a refused Google sign-in", async () => {

@@ -4,7 +4,7 @@
 import { randomInt } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
-import { LABEL_RE, ROOM_CODE_ALPHABET, ROOM_CODE_RE, ROOM_CODE_TTL_MS } from "../../shared/relay-protocol.ts";
+import { LABEL_RE, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, ROOM_CODE_RE, ROOM_CODE_TTL_MS } from "../../shared/relay-protocol.ts";
 import { silentLogger, type Logger } from "./log.ts";
 import { readText, writeAtomic } from "./team.ts";
 
@@ -15,7 +15,7 @@ export const ROOM_CODES_MAX = 50_000;
 const heldSchema = z.strictObject({ code: z.string().regex(ROOM_CODE_RE), label: z.string().regex(LABEL_RE), exp: z.int().nonnegative() });
 type Held = z.infer<typeof heldSchema>;
 
-const newCode = () => Array.from({ length: 6 }, () => ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)]).join("");
+const newCode = (length: number) => Array.from({ length }, () => ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)]).join("");
 
 export class RoomCodeStore {
   private readonly held = new Map<string, Held>();
@@ -47,17 +47,18 @@ export class RoomCodeStore {
     return store;
   }
 
-  /** Null once the PC or the relay holds too many live codes. */
-  mint(label: string): { code: string; exp: number } | null {
+  /** Null once the PC or the relay holds too many live codes. `long` only for a PC that asked: older ones refuse 8 characters. */
+  mint(label: string, long = false): { code: string; exp: number } | null {
     this.prune();
     if (this.held.size >= ROOM_CODES_MAX) return null;
     let mine = 0;
     for (const entry of this.held.values()) if (entry.label === label) mine++;
     if (mine >= ROOM_CODES_PER_LABEL) return null;
-    let code = newCode();
+    const length = long ? ROOM_CODE_LENGTH : 6;
+    let code = newCode(length);
     for (let tries = 1; this.held.has(code); tries++) {
       if (tries >= 20) return null;
-      code = newCode();
+      code = newCode(length);
     }
     const entry = { code, label, exp: this.now() + ROOM_CODE_TTL_MS };
     this.held.set(code, entry);

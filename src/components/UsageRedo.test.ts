@@ -19,6 +19,7 @@ vi.mock("@/lib/usage-auto-refresh", async (original) => ({ ...await original<typ
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { LIFT_SCALE } from "@/lib/use-touch-drag";
+import { landFold, spyReveal } from "./Fold.test-land";
 import { UsageDesk } from "./UsageDesk";
 import { ChatPlanMeters } from "./ChatPlanMeters";
 import { AccountPicker } from "./UsageAccounts";
@@ -583,6 +584,46 @@ it.each(["[data-left]", "[data-account-email]", "[data-edit-name]", "[data-use]"
   expect(document.documentElement.hasAttribute("data-usage-dragging")).toBe(false);
 });
 
+it("reorders with a mouse drag from a signed-out row's Sign In", async () => {
+  h.board!.engines[0]!.accounts[0]!.signIn = "signed-out";
+  h.instances[0]!.snapshot = { authenticated: false, state: "available" };
+  await mount();
+  const before = rows();
+  stack(claudeRows());
+  const signIn = [...host.querySelectorAll<HTMLElement>('[data-account-row="claude"] button')].find((each) => each.textContent === "Sign In");
+  expect(signIn).toBeTruthy();
+  await drag(signIn!, 130);
+  expect(rows()).toEqual([before[1], before[0], ...before.slice(2)]);
+});
+
+it("reorders Connections with a mouse drag from Sign Out", async () => {
+  const first = h.instances.find((each) => each.accountOf === "claude")!;
+  const accounts = Array.from({ length: 3 }, (_, i) => ({ ...first, instanceId: i ? `slot-${i}` : first.instanceId }));
+  await mount(createElement(AccountConnections, { accounts, reload: async () => {} }));
+  const list = () => [...host.querySelectorAll<HTMLElement>("[data-connection-account]")];
+  stack(list());
+  const signOut = [...list()[0]!.querySelectorAll<HTMLElement>("button")].find((each) => each.textContent === "Sign Out");
+  expect(signOut).toBeTruthy();
+  await drag(signOut!, 130);
+  expect(list().map((node) => node.dataset.connectionAccount)).toEqual(["slot-1", first.instanceId, "slot-2"]);
+});
+
+it("keeps a press on Use with a 6 px jiggle a click", async () => {
+  await mount();
+  stack(claudeRows());
+  const use = q('[data-usage-engine="claude"] [data-use]')!;
+  const clicked = vi.fn();
+  use.addEventListener("click", clicked);
+  await act(async () => {
+    use.dispatchEvent(mouse("pointerdown", 40, 40));
+    document.dispatchEvent(mouse("pointermove", 40, 46));
+    document.dispatchEvent(mouse("pointerup", 40, 46));
+    use.click();
+  });
+  expect(lifted()).toBe(0);
+  expect(clicked).toHaveBeenCalledOnce();
+});
+
 it("waits a few px before dragging and stops the press from selecting text", async () => {
   await mount();
   const row = q('[data-account-row="claude"]')!;
@@ -748,6 +789,64 @@ it("lifts a mouse-dragged row by the scale its travel counts", () => {
   expect(usageCss).toContain(`scale: ${LIFT_SCALE};`);
 });
 
+// 12 rows of 80 px in a 200 px scroller, row 6 pressed; a lifted row held in an edge band scrolls the list under it
+it.each([
+  ["a jiggle on Use", "[data-use]", 174, [180], 5],
+  ["a 4 px jiggle on the row near the bottom", "", 174, [178], 5],
+  ["a 4 px jiggle on the row near the top", "", 22, [18], 5],
+  ["a drag to the first row", "", 100, [2], 0],
+  ["a drag to the last row", "", 100, [198], 11],
+] as const)("moves a small card row by mouse only on a real drag: %s", async (_, from, start, points, wanted) => {
+  const engine = h.board!.engines[0]!;
+  engine.accounts = Array.from({ length: 12 }, (_, i) => ({ ...engine.accounts[i ? 2 : 0]!, id: i ? `slot-${i}` : "claude", number: i + 1, main: !i }));
+  const order = engine.accounts.map((account) => account.id);
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: order }));
+  await openQuick();
+  const rows = [...quickRows()];
+  const box = document.querySelector<HTMLElement>("[data-quick-scroll]")!;
+  scroller(box, rows);
+  box.scrollTop = 414 - start;
+  for (const [i, row] of rows.entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, i * 80 - box.scrollTop, 400, 80));
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+  }
+  const pressed = from ? rows[5]!.querySelector(from)! : rows[5]!;
+  await act(async () => void pressed.dispatchEvent(mouse("pointerdown", 300, start)));
+  for (const y of points) {
+    await act(async () => void document.dispatchEvent(mouse("pointermove", 300, y)));
+    await held(32);
+  }
+  await held(wanted === 5 ? 300 : 1200);
+  await act(async () => void document.dispatchEvent(mouse("pointerup", 300, points.at(-1)!)));
+  const expected = [...order];
+  expected.splice(wanted, 0, expected.splice(5, 1)[0]!);
+  expect(quickIds()).toEqual(expected);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(expected);
+});
+
+it("keeps Connections in order after a 4 px jiggle on a row's button near the list edge", async () => {
+  const first = h.instances.find((each) => each.accountOf === "claude")!;
+  const accounts = Array.from({ length: 12 }, (_, i) => ({ ...first, instanceId: i ? `slot-${i}` : first.instanceId }));
+  const order = accounts.map((account) => account.instanceId);
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: order }));
+  await mount(createElement(AccountConnections, { accounts, reload: async () => {} }));
+  const rows = [...host.querySelectorAll<HTMLElement>("[data-connection-account]")];
+  scroller(host, rows);
+  host.scrollTop = 414 - 174;
+  for (const [i, row] of rows.entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, i * 80 - host.scrollTop, 400, 80));
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+  }
+  const button = rows[5]!.querySelector("button:not([data-edit-name])");
+  expect(button).not.toBeNull();
+  await act(async () => void button!.dispatchEvent(mouse("pointerdown", 300, 174)));
+  await act(async () => void document.dispatchEvent(mouse("pointermove", 300, 178)));
+  await held(300);
+  await act(async () => void document.dispatchEvent(mouse("pointerup", 300, 178)));
+  expect([...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount)).toEqual(order);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(order);
+});
+
 it("picks a row up on a long press", async () => {
   await mount();
   const row = q('[data-account-row="claude"]')!;
@@ -798,4 +897,27 @@ it("holds the quick view on screen, inert and fading, until its exit has run", a
   expect(view()?.hasAttribute("inert")).toBe(true);
   await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
   expect(view()).toBeNull();
+});
+
+it("brings the first account into view once a pressed engine has opened, never for Expand all or closing", async () => {
+  await mount();
+  const scrolled = spyReveal();
+  try {
+    const fold = '[data-usage-engine="claude"] [data-engine-fold]';
+    await click(fold);
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    await click(fold);
+    expect(scrolled).not.toHaveBeenCalled();
+    await landFold(q('[data-usage-engine="claude"] [data-account-row]')!);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(q('[data-usage-engine="claude"] [data-account-row]'));
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    await click("[data-fold-all]");
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    await click("[data-fold-all]");
+    for (const each of host.querySelectorAll("[data-usage-engine] [data-fold-soft]")) await landFold(each);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  } finally {
+    scrolled.mockRestore();
+  }
 });

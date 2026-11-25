@@ -238,6 +238,23 @@ describe("SettingsPanel approval pill", () => {
   });
 });
 
+describe("SettingsPanel sticky row header", () => {
+  it("sits flush under the tabs: the scrollers have no top padding for text to show in", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot }))));
+    const scrollers = Array.from(host.querySelectorAll<HTMLElement>(".absolute.inset-0.overflow-y-auto"));
+    expect(scrollers).toHaveLength(2);
+    for (const scroller of scrollers) expect(scroller.className).not.toMatch(/(?:^|\s)(?:[a-z-]+:)?pt-(?!0(?:\s|$))\S/);
+    const header = host.querySelector(".sticky");
+    expect(header?.className).toContain("top-0");
+    expect(header?.className).toContain("bg-card");
+    root.unmount();
+    host.remove();
+  });
+});
+
 describe("SettingsPanel bot name", () => {
   let host: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;

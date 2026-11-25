@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { BOT_AVATAR_PICKER_ORDER, botAvatarChoiceSchema, botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
+import { ABOUT_YOU_MAX_PASTE, addToBotMemory, day, readImportRequest } from "./about-you.ts";
 import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -19,7 +20,7 @@ import type { KeepGoing } from "./keep-going.ts";
 import { applyEffortPick } from "./live-effort.ts";
 import type { createMemoryHealthCheck } from "./memory-health.ts";
 import { modelPickPatch } from "./pending-model.ts";
-import { parseTimeline, PICKS_FILE } from "./picks.ts";
+import { parseTimeline, PICKS_FILE, timelineEntries } from "./picks.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
@@ -46,6 +47,8 @@ type BotRouteDeps = {
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
   noteTalked: (botId: string) => void;
+  /** Rebuilds the bot's memory lookup index (memory-lookup.ts refresh). */
+  refreshLookup: (botId: string) => Promise<void>;
   activeVpsThreads: Map<string, string>;
   resumePaneWakes: (botId: string) => void;
 };
@@ -512,6 +515,23 @@ export function createBotRoutes(deps: BotRouteDeps) {
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });
     },
+    importMemory: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const asked = await readImportRequest(req);
+      if (!asked) return json(res, 400, { error: "text must be a string" });
+      const result = addToBotMemory(m[1], asked, day(Date.now()));
+      if ("error" in result) {
+        if (result.error === "too-large") return json(res, 413, { error: result.error, maxBytes: ABOUT_YOU_MAX_PASTE });
+        return json(res, result.error === "empty" ? 400 : 500, { error: result.error });
+      }
+      if (result.added) {
+        deps.noteTalked(m[1]);
+        memoryHealthCheck.refresh(m[1]);
+        // lines past the prompt's cut are found from the next turn on, so the index is current before the reply
+        await deps.refreshLookup(m[1]);
+      }
+      return json(res, 200, result);
+    },
     memoryTopic: async (res: ServerResponse, m: RegExpMatchArray) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
@@ -536,7 +556,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (text === null && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
       if (text === null) return json(res, 404, { error: "no such topic file" });
       if (name !== PICKS_FILE) return json(res, 200, { name, text });
-      const entries = timelinePicks(parseTimeline(text).entries, bot, store);
+      const entries = timelinePicks(timelineEntries(parseTimeline(text).entries), bot, store);
       return json(res, 200, { name, text, entries });
     },
   };

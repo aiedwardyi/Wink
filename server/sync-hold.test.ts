@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -11,13 +10,14 @@ import { FakeDrive } from "./testing/fake-drive.ts";
 import type { Message } from "./store.ts";
 import type { SyncHead, SyncVersion, ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { testBootReads } from "./testing/boot-rows.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 let root: string;
 let close = async () => {};
 let releaseDownload = () => {};
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "sync-hold-"));
+  root = mkdtempSync(join(testHome(), "sync-hold-"));
   vi.stubEnv("OMB_DATA_DIR", join(root, "data"));
 });
 
@@ -27,7 +27,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  rmSync(root, { recursive: true, force: true });
+  removeTestData(root);
 });
 
 async function boot(google = false) {

@@ -433,10 +433,20 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
   }, []);
 
+  // will-change pins the sheet's bitmap at the scale it first painted, so it is set only while a drag or glide moves it.
+  // Below 1.5x Chromium draws subpixel text only off a layer, so a lift there would flicker the text to grayscale and back.
+  // That follows the display scale; devicePixelRatio also carries the desktop window zoom, and under 1.5x it shifts grey text on a layer too.
+  const lift = useCallback((on: boolean) => {
+    const scale = devicePixelRatio / (window.ogb?.zoomFactor?.() ?? 1);
+    if (sheet.current) sheet.current.style.willChange = on && Math.round(Math.min(scale, devicePixelRatio) * 100) >= 150 ? "transform" : "";
+  }, []);
+
   const stopGlide = useCallback(() => {
+    if (!gliding.current) return;
     cancelAnimationFrame(gliding.current);
     gliding.current = 0;
-  }, []);
+    lift(false);
+  }, [lift]);
 
   // the newest end is read each frame, so a pick landing mid-glide is still where it ends
   const glideTo = useCallback((end: "oldest" | "newest") => {
@@ -446,6 +456,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     if (end === "oldest") flushSync(() => setGrow((at) => (at.limit < total ? { ...at, limit: total } : at)));
     const goal = () => (end === "oldest" ? PAD.y : pinY(box, sheet.current!, view.current!.scale));
     if (reducedMotion()) return show({ ...view.current!, y: goal() });
+    lift(true);
     let began: number | undefined;
     let from = 0;
     const step = (now: number) => {
@@ -454,9 +465,10 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       const done = Math.min(1, (now - began) / GLIDE_MS);
       show({ ...view.current!, y: from + (goal() - from) * (1 - (1 - done) ** 3) });
       gliding.current = done < 1 ? requestAnimationFrame(step) : 0;
+      if (done === 1) lift(false);
     };
     gliding.current = requestAnimationFrame(step);
-  }, [show, stopGlide, total]);
+  }, [lift, show, stopGlide, total]);
 
   const zoomAt = useCallback((x: number, y: number, factor: number, at = view.current!) => {
     const scale = Math.min(ZOOM.max, Math.max(ZOOM.min, at.scale * factor));
@@ -547,10 +559,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     if (!last) return;
     const point = spot(event);
     const at = view.current!;
-    if (event.pointerType === "mouse" && !event.buttons) {
-      pointers.current.delete(event.pointerId);
-      return;
-    }
+    if (event.pointerType === "mouse" && !event.buttons) return onPointerUp(event);
     if (pointers.current.size >= 2) {
       // SAFETY: two or more pointers are down, so the first two exist before and after this move.
       const [a, b] = [...pointers.current.values()] as [typeof point, typeof point];
@@ -559,6 +568,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       const [c, d] = [...pointers.current.values()] as [typeof point, typeof point];
       if (!dragged.current) {
         dragged.current = true;
+        lift(true);
         frame.current!.setPointerCapture?.(event.pointerId);
       }
       const mid = { x: (c.x + d.x) / 2, y: (c.y + d.y) / 2 };
@@ -569,15 +579,19 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     if (!dragged.current) {
       if (Math.hypot(point.x - last.x, point.y - last.y) < SLOP) return;
       dragged.current = true;
+      lift(true);
       frame.current!.setPointerCapture?.(event.pointerId);
       frame.current!.dataset.grabbing = "";
     }
     pointers.current.set(event.pointerId, point);
     show({ ...at, x: at.x + point.x - last.x, y: at.y + point.y - last.y });
   };
+  // also ends a mouse drag whose mouse-up the page never saw
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     pointers.current.delete(event.pointerId);
-    if (!pointers.current.size) delete frame.current!.dataset.grabbing;
+    if (pointers.current.size) return;
+    delete frame.current!.dataset.grabbing;
+    lift(false);
   };
 
   return (

@@ -81,6 +81,16 @@ h1 {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+button.privacy {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
 .doc .panel {
   max-width: 36rem;
   min-width: 0;
@@ -125,6 +135,9 @@ h1 {
 .code {
   margin-top: 24px;
 }
+.code.trying {
+  opacity: 0;
+}
 .boxes {
   display: flex;
   justify-content: space-between;
@@ -143,6 +156,12 @@ h1 {
   text-align: center;
   text-transform: uppercase;
   outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+/* A box selects its letter on focus; the highlight would hide which box is which. */
+.boxes input::selection {
+  background: transparent;
+  color: var(--ink);
 }
 .boxes input:focus {
   border-color: var(--accent);
