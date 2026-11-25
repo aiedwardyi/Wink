@@ -554,6 +554,7 @@ it("draws the bot's picks on the Timeline canvas, oldest day first, each pick ci
   expect(outs).toBe(10);
   expect(strokes("ring")).toBe(2 * 5);
   expect(strokes("strike")).toBe(2 * outs);
+  expect(strokes("tick")).toBe(0);
   expect(strokes("link")).toBe(4);
   expect(strokes("replaced")).toBe(0);
   const fold = forum.querySelector<HTMLButtonElement>("[data-timeline-replaced]")!;
@@ -1234,6 +1235,7 @@ it.each([
   const outs = host.querySelectorAll(".timeline-pane[data-sample] [data-timeline-out]").length;
   expect(outs).toBeGreaterThan(0);
   expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=strike]").length).toBe(2 * outs);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=tick]")).toHaveLength(0);
   expect(host.querySelector(".timeline-pane[data-sample] .timeline-canvas")?.closest("[inert]")).toBeNull();
   expect(picked()).toHaveLength(0);
   expect(host.querySelector(".timeline-search")).toBeNull();
