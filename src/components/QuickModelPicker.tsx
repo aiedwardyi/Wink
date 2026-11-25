@@ -134,7 +134,7 @@ function encodedEffortTier(modelId: string): "low" | "medium" | "high" | "xhigh"
   return undefined;
 }
 
-/** Gemini encodes effort in the model id, so its tier is carried by hand across labs. */
+/** Antigravity's Gemini models encode effort in the model id, so its tier is carried by hand across labs. */
 function nextSelectionForCell(row: PickerRow, cell: PickerCell, current: ModelSelection, currentRow?: PickerRow): ModelSelection {
   if (row.instance.driverKind === "antigravityAgent") {
     const currentTier = current.effort ?? encodedEffortTier(current.model);
@@ -426,11 +426,14 @@ export function QuickModelPicker({
       return onClose("trigger");
     }
     if (event.key === "Enter") {
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("[data-picker-style-button], [data-quick-lab]")) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      // A row or effort step picks and closes; other controls keep their own Enter.
+      if (target !== event.currentTarget && target?.getAttribute("role") !== "radio") return;
       event.preventDefault();
+      if (target !== event.currentTarget) target?.click();
       return onClose("composer");
     }
+    if (event.key.startsWith("Arrow") && event.target instanceof Element && event.target.closest("[data-quick-lab]")) return;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       if (efforts.length < 2) return;
       event.preventDefault();
@@ -439,7 +442,7 @@ export function QuickModelPicker({
       return;
     }
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-      const allModels = pickerModels(rows);
+      const allModels = pickerModels(rows).filter((item) => !locked(item));
       if (!allModels.length) return;
       event.preventDefault();
       const curIdx = allModels.findIndex((item) => item.instance.instanceId === selection.instanceId && item.cell.options.some((opt) => opt.id === selection.model));
@@ -469,7 +472,7 @@ export function QuickModelPicker({
     <div
       ref={cardRef}
       id={id}
-      role="dialog"
+      role={closing ? undefined : "dialog"}
       aria-label={t("model.choose")}
       tabIndex={-1}
       data-model-picker-content={!closing || undefined}

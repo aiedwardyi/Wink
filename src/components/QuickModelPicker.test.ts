@@ -1,11 +1,12 @@
 import "./ProfileFields.test-dom.ts";
-import { act, createElement, useState } from "react";
+import { act, createElement, createRef, useState, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isDialogActive } from "@/lib/focus-composer";
 import { I18nProvider } from "@/lib/i18n";
 import { modelFamilyAccent } from "@/lib/model-chip";
 import { saveModelPickerView, type ModelPickerView } from "@/lib/model-picker-view";
@@ -60,11 +61,12 @@ function makeBot(selection: ModelSelection): Bot {
   };
 }
 
-function StatefulPicker({ initial, instances }: { initial: ModelSelection; instances: InstanceInfo[] }) {
+function StatefulPicker({ initial, instances, control }: { initial: ModelSelection; instances: InstanceInfo[]; control?: Ref<(() => void) | null> }) {
   const [selection, setSelection] = useState(initial);
   return createElement(I18nProvider, null, createElement(ModelPickerControl, {
     bot: makeBot(selection),
     dial: true,
+    switchControl: control,
     store: {
       state: { instances, selectedId: "bot-1" },
       dispatch: (action: Action) => {
@@ -75,13 +77,13 @@ function StatefulPicker({ initial, instances }: { initial: ModelSelection; insta
   }));
 }
 
-async function mountPicker(initial: ModelSelection, instances: InstanceInfo[], view: ModelPickerView = "quick") {
+async function mountPicker(initial: ModelSelection, instances: InstanceInfo[], view: ModelPickerView = "quick", control?: Ref<(() => void) | null>) {
   saveModelPickerView(view);
   const host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root.render(createElement(StatefulPicker, { initial, instances }));
+    root.render(createElement(StatefulPicker, { initial, instances, control }));
   });
 }
 
@@ -249,6 +251,15 @@ describe("Quick picker style", () => {
     expect(triggerBtn().querySelector("[data-quick-flourish]")).toBeNull();
   });
 
+  it("plays the flourish when a no-reply switch picks Max", async () => {
+    const control = createRef<() => void>();
+    await mountPicker(atHigh, [claude], "quick", control);
+    await act(async () => control.current?.());
+    await click('[data-quick-effort="max"]');
+    expect(triggerBtn().classList.contains("quick-header-max")).toBe(true);
+    expect(triggerBtn().querySelector("[data-quick-flourish]")).not.toBeNull();
+  });
+
   it("skips the flourish under reduced motion and keeps the still glow", async () => {
     mockMedia({ reduced: true });
     await mountPicker(atHigh, [claude]);
@@ -260,6 +271,27 @@ describe("Quick picker style", () => {
 
     const sheet = readFileSync(join(here, "QuickModelPicker.css"), "utf8");
     expect(sheet).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+  });
+
+  it("picks the focused row on Enter, leaves other controls their keys, and drops the dialog role while closing", async () => {
+    await mountPicker(atHigh, [claude, codex]);
+    await act(async () => triggerBtn().click());
+    const press = async (target: Element, key: string) => {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      await act(async () => { target.dispatchEvent(event); });
+      return event;
+    };
+    const lab = quickCard()!.querySelector('[data-quick-lab="codex"]')!;
+    expect((await press(lab, "Enter")).defaultPrevented).toBe(false);
+    await press(lab, "ArrowRight");
+    expect(quickCard()?.querySelector('[data-quick-effort][aria-checked="true"]')?.getAttribute("data-quick-effort")).toBe("high");
+    expect(quickCard()?.getAttribute("role")).toBe("dialog");
+
+    await click('[data-quick-lab="codex"]');
+    await press(quickCard()!.querySelector('[data-quick-model="gpt-6.2-astra"]')!, "Enter");
+    expect(triggerBtn().querySelector("[data-model-label]")?.textContent).toContain("GPT-6.2 Astra");
+    expect(quickCard()?.hasAttribute("data-closing")).toBe(true);
+    expect(isDialogActive(document)).toBe(false);
   });
 
   it.each(["dial", "list", "chart"] as const)("leaves the %s header button as it is today at Max", async (view) => {

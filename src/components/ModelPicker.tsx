@@ -116,7 +116,7 @@ export function ModelPickerControl({
   const maxStillGlow = quickView && !open && closedFlowTier === "max";
   useEffect(() => {
     if (!maxStillGlow) setFlourishId(0);
-  }, [maxStillGlow]);
+  }, [maxStillGlow, flourishId]);
   const row = rows.find((item) => item.instance.instanceId === draft.instanceId);
   const column = row ? pickerColumn(row, draft.model) : 0;
   const cell = row?.cells[column];
@@ -171,7 +171,7 @@ export function ModelPickerControl({
   const close = () => {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = 0;
-    if (quickView && pickedMaxWhileOpenRef.current && closedFlowTier === "max" && !reducedMotion()) {
+    if (quickView && pickedMaxWhileOpenRef.current && !reducedMotion()) {
       setFlourishId((id) => id + 1);
     }
     pickedMaxWhileOpenRef.current = false;
