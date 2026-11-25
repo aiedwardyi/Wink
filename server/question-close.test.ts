@@ -47,13 +47,13 @@ describe("close question", () => {
     expect(h.notifyQuestion).toHaveBeenCalledTimes(1);
   });
 
-  it.each([{ answered: "Yes" }, { dismissed: true }])("leaves a settled card unchanged: %j", (patch) => {
+  it.each([[{ answered: "Yes" }, "answered"], [{ dismissed: true }, "dismissed"]] as const)("leaves a settled card unchanged: %j", (patch, settled) => {
     const h = harness();
     h.ask("Ship it?");
     const card = h.store.activePath(h.bot.threadId).at(-1)!;
     h.store.patchMessage(h.bot.threadId, card.id, { card: { ...card.card!, ...patch } });
     const before = h.store.activePath(h.bot.threadId);
-    expect(h.ask("Ship it?", true)).toEqual({ status: 200, body: { closed: false, settled: true } });
+    expect(h.ask("Ship it?", true)).toEqual({ status: 200, body: { closed: false, settled } });
     expect(h.patchMessage).not.toHaveBeenCalled();
     expect(h.store.activePath(h.bot.threadId)).toEqual(before);
   });
@@ -62,7 +62,7 @@ describe("close question", () => {
     const h = harness();
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Ship it?", options, askUser: true, staysOpen: true } });
     h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: reply });
-    expect(h.ask("Ship it?", true)).toEqual({ status: 200, body: { closed: false, settled: true } });
+    expect(h.ask("Ship it?", true)).toEqual({ status: 200, body: { closed: false, settled: "answered" } });
     expect(h.ask("Never asked", true)).toEqual({ status: 200, body: { closed: false } });
     expect(h.patchMessage).not.toHaveBeenCalled();
   });
@@ -72,7 +72,7 @@ describe("close question", () => {
     h.ask("Ship it?");
     h.ask("Which region?");
     expect(h.ask(" Ship it? ", true)).toMatchObject({ body: { closed: true } });
-    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: false, settled: true } });
+    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: false, settled: "answered" } });
     expect(scanQuestion(h.store.activePath(h.bot.threadId))?.card?.subtitle).toBe("Which region?");
     expect(h.patchMessage).toHaveBeenCalledTimes(1);
   });

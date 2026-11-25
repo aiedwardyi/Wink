@@ -6,7 +6,7 @@
 // activity is never set to waiting-on-you.
 import { z } from "zod";
 
-import { ANSWERED_IN_CHAT, askStates, isSentByPerson, scanQuestion } from "../shared/open-question.ts";
+import { ANSWERED_IN_CHAT, type AskState, askStates, isSentByPerson, scanQuestion } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
@@ -72,7 +72,7 @@ export interface AskUserDeps<B extends Sender> {
 
 export interface AskUserResult {
   status: number;
-  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean; settled?: true } | { notice: string };
+  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean; settled?: Exclude<AskState["state"], "waiting"> } | { notice: string };
 }
 
 export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: AskUserRequest): AskUserResult {
@@ -85,17 +85,17 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   if (!question) return { status: 400, body: { error: "question required" } };
   if (request.close) {
     let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
-    let settled = false;
+    let settled: Exclude<AskState["state"], "waiting"> | undefined;
     for (const [message, state] of askStates(deps.activePath(request.fromThreadId))) {
       if (message.card!.subtitle.trim() !== question) continue;
       if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
       if (state.state !== "waiting") {
-        settled = true;
+        settled = state.state;
         continue;
       }
       closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card: { ...message.card!, answered: ANSWERED_IN_CHAT } })) || closed;
     }
-    return { status: 200, body: closed || !settled ? { closed } : { closed, settled: true } };
+    return { status: 200, body: closed || !settled ? { closed } : { closed, settled } };
   }
   const choices = askUserChoices(request.choices);
   const notice = request.fact && (() => {
