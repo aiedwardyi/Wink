@@ -73,6 +73,7 @@ describe("replaces keeps a fact a hedged or scoped newer note only narrows", () 
     ["- Prefers tabs (noted 2026-10-01)", "- Prefers spaces over tabs (noted 2026-11-12)"],
     ["- Replies in English (noted 2026-10-01)", "- Replies in English except when I write Korean (noted 2026-11-12)"],
     ["- Ships on Fridays (noted 2026-10-01)", "- Ships on Fridays unless the build is red (noted 2026-11-12)"],
+    ["- Ships on Fridays (noted 2026-10-01)", "- Ships on Fridays except when not ready (noted 2026-11-12)"],
     ["- Uses pnpm (noted 2026-10-01)", "- Uses pnpm, but perhaps bun later (noted 2026-11-12)"],
   ])("%s stays beside %s", (older, newer) => {
     expect(planTidy(memory(older, newer), JSON.stringify({ disagree: [["L3", "L4"]] }))).toEqual([]);
@@ -128,6 +129,7 @@ describe("dreaming, dry", () => {
   let generator: NoteGenerator;
   let generate: ReturnType<typeof vi.fn<NoteGenerator>>;
   let hold: Promise<void> | undefined;
+  let changed: ReturnType<typeof vi.fn<(botId: string) => void>>;
   let bot: string;
   let seq = 0;
   let sleep: MemorySleep;
@@ -153,7 +155,7 @@ describe("dreaming, dry", () => {
       },
       reverted: async () => (pr) => reverts.has(pr),
     });
-    return { dream, sleep: createMemorySleep({ dataDir, bots: () => [bot], generate: () => generate, enabled: () => enabled, busy: () => false, changed: () => {}, dream }) };
+    return { dream, sleep: createMemorySleep({ dataDir, bots: () => [bot], generate: () => generate, enabled: () => enabled, busy: () => false, changed, dream }) };
   };
   const quiet = async (wait = SLEEP_IDLE_MS) => {
     await vi.advanceTimersByTimeAsync(wait);
@@ -191,6 +193,7 @@ describe("dreaming, dry", () => {
     generator = reply({});
     generate = vi.fn<NoteGenerator>((...args) => generator(...args));
     hold = undefined;
+    changed = vi.fn();
     setMode({ [bot]: "dry" });
     sleep = start().sleep;
   });
@@ -267,6 +270,28 @@ describe("dreaming, dry", () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(plans()).toHaveLength(2);
     expect(plans()[0]!.notes).toEqual({ state: "unchanged", items: plan.notes.items });
+  });
+
+  it("keeps the last checked moves through a pass that skipped notes, under the month the reused plan runs in", async () => {
+    writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
+    await quiet();
+    expect(plans()[0]!.notes.items).toHaveLength(1);
+    enabled = false;
+    sleep.onSettled(bot);
+    await quiet(SLEEP_GAP_MS);
+    expect(plans()[0]!.notes).toEqual({ state: "off-here", items: [] });
+    enabled = true;
+    vi.setSystemTime(new Date(2026, 11, 2, 12));
+    sleep.onSettled(bot);
+    await quiet(SLEEP_GAP_MS);
+    expect(plans()[0]!.notes.state).toBe("unchanged");
+    expect(plans()[0]!.notes.items.map(({ text, history: file }) => [text, file])).toEqual([["- Uses pnpm", "memory-history/2026-12.md"]]);
+  });
+
+  it("tells an open Memory page each time a dry plan is saved", async () => {
+    await quiet();
+    expect(plans()).toHaveLength(1);
+    expect(changed).toHaveBeenCalledWith(bot);
   });
 
   it("copies no note that may hold a login, and redacts the rest", async () => {

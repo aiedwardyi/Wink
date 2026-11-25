@@ -43,7 +43,7 @@ function DreamRow({ run, className }: { run: MemoryCleanRun & { dream: DreamRun 
   const closes = dream.asks.items.filter((item) => item.op === "close").length;
   const count = (n: number, one: "bot.dreamNote" | "bot.dreamTodo", many: "bot.dreamNotes" | "bot.dreamTodos") => t(n === 1 ? one : many, { count: n });
   const notes = dream.notes.state === "off-here" ? t("bot.dreamNotesOffHere") : ["checked", "unchanged"].includes(dream.notes.state) ? "" : t("bot.dreamNotesNotChecked");
-  const listed = moves + dream.asks.items.length > 0;
+  const listed = moves + dream.asks.items.length + dream.asks.skipped + dream.asks.unchecked > 0;
   return (
     <div className={cn("mx-4 mb-4 border-t border-hairline/40 pt-3", className)}>
       <div className="break-keep text-[12px] leading-relaxed text-ink-secondary">

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchResponse } from "./api-request";
+import { watchMemoryChange } from "./memory-clean-events";
 import { forgetMemory } from "./memory-last";
 import type { Message } from "@/state/store";
 
@@ -69,7 +70,9 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
     const read = () => { void refresh(); };
     listeners.set(botId, set);
     set.add(read);
+    const unwatch = watchMemoryChange(botId, read);
     return () => {
+      unwatch();
       set.delete(read);
       if (!set.size) listeners.delete(botId);
       generation.current++;

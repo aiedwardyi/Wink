@@ -184,9 +184,9 @@ export function createDreamLive(deps: DreamLiveDeps) {
   function plan(botId: string, at: number, notes: DryNotes, asked: DreamAsks): DreamPlan {
     const runId = runIdOf(deps.pc(), botId, at);
     const month = `memory-history/${pickStamp(at).slice(0, 7)}.md`;
-    // MEMORY.md has not changed since the last plan, so its moves still stand
+    // MEMORY.md has not changed since the last checked plan, so its moves still stand; a pass that skipped notes in between saved none
     const items: NoteItem[] = notes.state === "unchanged"
-      ? plans(botId)[0]?.notes.items ?? []
+      ? (plans(botId).find((each) => each.notes.state === "checked" || each.notes.state === "unchanged")?.notes.items ?? []).map((item) => ({ ...item, history: month }))
       : notes.moves.map((move) => ({ op: "move", target: `note:${sha8(move.text)}`, text: copy(move.text), by: copy(move.by), why: move.why, history: month }));
     const saved: DreamPlan = { runId, botId, at, mode: "dry", notes: { state: notes.state, items }, asks: asked, runUntil: at + RUN_KEEP_MS, dropUntil: at + DROPPED_KEEP_MS };
     const dir = join(botDir(botId), runId);

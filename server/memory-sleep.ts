@@ -65,7 +65,7 @@ export interface MemorySleepDeps {
   enabled(botId: string): boolean;
   /** Any turn of the bot running. */
   busy(botId: string): boolean;
-  /** MEMORY.md changed on disk, so an open Memory page reloads it. */
+  /** MEMORY.md or its dry plan changed on disk, so an open Memory page reloads it. */
   changed(botId: string): void;
   /** The tidy saved MEMORY.md as `after`, `before` without some lines, for memory sync to rank. */
   tidied?(botId: string, before: string, after: string): void;
@@ -107,7 +107,6 @@ const NOT_WORDS = new Set(
 const NOT_PARTS = /n['’]t$|않|없|아니|못|ない|ません|ず$|ぬ$|不|没|沒|别|別|無|无|非|未|勿|莫|ไม่|नहीं|मत|बिना/u;
 // a hedge or a scope word narrows a newer note rather than turning the older one, and a hedged note is not sure enough to retire a fact
 const HEDGES = new Set("maybe perhaps unsure but over than except unless".split(" "));
-const UNSURE = new Set("maybe perhaps unsure".split(" "));
 
 const withoutStamp = (text: string) => text.replace(STAMP, " ");
 const body = (text: string) => withoutStamp(text).replace(/^\s*[-*+]\s+/, "").normalize("NFC");
@@ -161,7 +160,7 @@ function replaces(newer: NoteLine, older: NoteLine): boolean {
   const words = (line: NoteLine) => tokens(line.text).map((token) => token.toLowerCase());
   const [before, after] = [words(older), words(newer)];
   const added = after.filter((word) => !before.includes(word));
-  return before.length > 0 && before.every((word) => after.includes(word)) && !added.some((word) => UNSURE.has(word)) && added.some((word) => negates(word) && !HEDGES.has(word));
+  return before.length > 0 && before.every((word) => after.includes(word)) && !added.some((word) => HEDGES.has(word)) && added.some(negates);
 }
 
 export function tidyPrompt(notes: NoteLine[]): string {
@@ -436,6 +435,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     const notes = await dryNotes(botId, signal, record.digest);
     if (disposed) return;
     dream.plan(botId, started, { state: notes.state, moves: notes.moves }, asks);
+    deps.changed(botId);
     if (notes.digest) {
       bots.set(botId, { at: started, digest: notes.digest });
       save();
