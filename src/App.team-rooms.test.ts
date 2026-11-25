@@ -140,7 +140,7 @@ async function openPlus() {
   await click(button("New or share") ?? button("새로 만들기 또는 공유"));
 }
 
-const joinedSource = () => FakeEventSource.all.find((source) => source.url.includes("screens=off"));
+const joinedSource = () => FakeEventSource.all.at(-1);
 
 async function joinedFrame(roomId: string) {
   await act(async () => joinedSource()!.onmessage?.({ data: JSON.stringify({ kind: "joined", hosted: true, roomId }), lastEventId: `${Date.now()}` }));
@@ -256,6 +256,33 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
 });
 
 describe("Team rooms for the host", () => {
+  it.each([true, false])("shows one Edward in People and mentions with owner seat %s", async (owner) => {
+    const fromHome = { ...joinedEntries[0], files: [], text: "Welcome" };
+    const fromWork = { ...fromHome, seq: 2, id: "j2", text: "Sent from Work" };
+    const view = {
+      ...joinedView("joined", "live"),
+      me: owner ? { id: "p-work", name: "Edward", host: true } : { id: "p-mina", name: "Mina" },
+      state: { roomName: "Design team", host: "Edward", people: [{ id: "p-mina", name: "Mina" }] },
+      lastEntry: fromWork,
+    };
+    await boot({ route: (call) => {
+      if (call.path === "/api/joined/rooms") return reply({ rooms: [view] });
+      if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...view, entries: [fromHome, fromWork] } });
+      return undefined;
+    } });
+    await act(async () => store.dispatch!({ type: "select", id: "joined:r9" }));
+    await found(() => $("[data-mid=j2][data-team-room-line]"));
+    expect(["j1", "j2"].map((id) => $(`[data-mid=${id}]`)?.getAttribute("data-team-room-line"))).toEqual(owner ? ["mine", "mine"] : ["theirs", "theirs"]);
+    expect($("[data-joined-room-row]")?.textContent).toContain(owner ? "You: Sent from Work" : "Edward: Sent from Work");
+    await type($("main textarea"), "@Ed");
+    expect([...document.querySelectorAll('[role="option"]')].map((option) => option.textContent?.trim())).toEqual(["EdwardPerson"]);
+    const details = await openDetails();
+    const people = details.querySelectorAll('[data-room-details-section="people"] li');
+    expect(people).toHaveLength(2);
+    expect(people[0]?.textContent).toContain("Edward");
+    expect(people[0]?.firstElementChild?.textContent).toBe("E");
+  });
+
   it("reads joined lines only on an active room and clears the row on every client frame", async () => {
     const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     let unread = 3;

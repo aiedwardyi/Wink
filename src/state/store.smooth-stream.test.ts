@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { watchTurns } from "@/lib/call";
 import type { LiveFrame } from "@/lib/live-events";
 import { StoreProvider, useStore, useStreaming, type Bot, type Message } from "./store";
 
@@ -117,6 +118,17 @@ async function typingBurst() {
   expect(shown()).toBeGreaterThan(0);
   expect(shown()).toBeLessThan(BURST.length);
 }
+
+describe("a turn that ends", () => {
+  it("is told to the call, whichever task it ran on", async () => {
+    const ended = vi.fn();
+    const stop = watchTurns(ended);
+    await live();
+    await settle("Done.");
+    stop();
+    expect(ended).toHaveBeenCalledExactlyOnceWith("t1");
+  });
+});
 
 describe("live reply typing", () => {
   it("types a 2,000 character burst out over a second", async () => {

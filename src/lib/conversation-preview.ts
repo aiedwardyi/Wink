@@ -1,8 +1,7 @@
 // Sidebar row preview for a 1:1 bot or a room. Busy/waiting win; otherwise
-// the visible branch's tail. First-run quiz cards hide from chat once
-// answered or ignored — the preview must skip them too or the unanswered
-// question keeps staring from the roster after Ignore. Named tool chips
-// stay out unless Settings → Show tool calls is on (default off).
+// the visible branch's tail. A first-run quiz an older build seeded never
+// shows in chat, so the preview skips it too. Named tool chips stay out
+// unless Settings → Show tool calls is on (default off).
 import { isOnboardingCard, shouldHideOnboardingCard } from "@/components/OptionCard";
 import { activityVisibleInChat } from "@/lib/activity-runs";
 import { attachedFilePreview } from "@/lib/composer-attachments";
@@ -33,28 +32,24 @@ function settledApproval(card: OptionCardData, translate: Translate): string {
   return translate(card.routineRequest ? "approval.cancelled" : "approval.denied");
 }
 
-/** Ignored (X / Ignore), not a chosen option. Choosing sets answered. */
-export function isIgnoredOnboardingCard(message: PreviewBot["messages"][number], transcript: PreviewBot["messages"]): boolean {
-  return (
-    shouldHideOnboardingCard(message, transcript) &&
-    Boolean(message.card?.dismissed) &&
-    !message.card?.answered
-  );
+/** A seeded quiz nobody answered: nothing to show. Choosing sets answered. */
+export function isIgnoredOnboardingCard(message: PreviewBot["messages"][number]): boolean {
+  return isOnboardingCard(message) && !message.card?.answered;
 }
 
 /** True when the thread has nothing left to show after Ignore. A chosen
  * option is not idle — the user echo may still be in flight. */
 export function transcriptIdleAfterOnboarding(messages: PreviewBot["messages"]): boolean {
   if (messages.length === 0) return true;
-  return messages.every((message) => isIgnoredOnboardingCard(message, messages));
+  return messages.every(isIgnoredOnboardingCard);
 }
 
-function messagePreview(last: PreviewBot["messages"][number], messages: PreviewBot["messages"], translate: Translate, showToolCalls: boolean): string {
+function messagePreview(last: PreviewBot["messages"][number], translate: Translate, showToolCalls: boolean): string {
   if (!isShownMessage(last)) return "";
   if (last.kind === "options" && last.card) {
-    if (shouldHideOnboardingCard(last, messages)) return last.card.answered || "";
+    if (shouldHideOnboardingCard(last)) return last.card.answered || "";
     if (last.card.requestId && last.card.tool && last.card.answered) return settledApproval(last.card, translate);
-    return isOnboardingCard(last) ? translate("onboarding.card.title") : last.card.title;
+    return last.card.title;
   }
   if (last.kind === "activity" && last.tool) return activityVisibleInChat(last, showToolCalls) ? last.tool.name : "";
   if (last.kind === "screen") return showToolCalls ? translate("chrome.screenFrame") : "";
@@ -72,7 +67,7 @@ export function conversationPreview(
   if (bot.busy) return translate("chrome.working");
   const visible = previewMessages(bot);
   for (let i = visible.length - 1; i >= 0; i--) {
-    const text = messagePreview(visible[i], visible, translate, showToolCalls);
+    const text = messagePreview(visible[i], translate, showToolCalls);
     if (text) return text;
   }
   return "";
@@ -96,7 +91,7 @@ export function roomConversationPreview(
   }
   for (let i = group.messages.length - 1; i >= 0; i--) {
     const last = group.messages[i];
-    const text = messagePreview(last, group.messages, translate, showToolCalls);
+    const text = messagePreview(last, translate, showToolCalls);
     if (!text) continue;
     if (last.author?.kind === "person") return translate("chrome.speakerPrefix", { name: last.author.name, text });
     if (last.role === "user") return translate("chrome.youPrefix", { text });

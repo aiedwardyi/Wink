@@ -17,9 +17,9 @@ describe("packShards", () => {
     expect(Math.max(...seconds) - Math.min(...seconds)).toBeLessThan(5);
   });
 
-  it("costs an untimed file at the median", () => {
+  it("costs an untimed file at the mean, which the few slow files lift above the median", () => {
     const [shard] = packShards(["a", "b", "c", "new"], { a: 1, b: 2, c: 9 }, 1);
-    expect(shard.seconds).toBe(14);
+    expect(shard.seconds).toBe(16);
   });
 
   it("packs the same way whatever order the files arrive in", () => {

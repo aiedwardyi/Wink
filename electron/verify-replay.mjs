@@ -1,4 +1,4 @@
-export const REPLAY_LIMIT = 3 * 1024 * 1024;
+export const REPLAY_LIMIT = 6 * 1024 * 1024;
 
 export function chunk(kind, value) {
   let payload;

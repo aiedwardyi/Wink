@@ -40,6 +40,7 @@ import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 import { closePane, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { useReplaysHere } from "@/lib/verify-replays";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { useAutoShow, useCheckThread, useMapThread, useMediaThread, useShowItem, useTimelineThread, useWorkersThread } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
@@ -52,7 +53,7 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { answerOnThread } from "@/lib/live-call/active";
+import { answerOnThread, useEndCallUnlessAllowed } from "@/lib/live-call/active";
 import { syncWebPushRooms, webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
 import { isPhone, swipeChatIds } from "@/lib/phone-swipe";
@@ -327,9 +328,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const watchChat = group ?? bot;
   const room = group && isTeamRoom(group) ? group : undefined;
   const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
-  const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId
+  const watchCard = useReplaysHere(LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId
     ? verifyCardIn(chatMessages, watch.owner, watch.messageId)
-    : undefined;
+    : undefined, watchChat?.threadId);
+  const paneCard = useReplaysHere(LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, watchChat?.threadId);
   const showing = show && watchChat && show.threadId === watchChat.threadId ? show : undefined;
   const mediaOn = Boolean(watchChat && media === watchChat.threadId);
   const source = watchChat && { threadId: watchChat.threadId, messages: chatMessages, hasMore: watchChat.hasMore, roomId: room?.hosted.roomId };
@@ -337,13 +339,18 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const mapOn = Boolean(watchChat && mapping === watchChat.threadId);
   const workersOn = Boolean(watchChat && crewThread === watchChat.threadId);
   const timelineOn = Boolean(watchChat && timelineThread === watchChat.threadId);
-  const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn || workersOn || timelineOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), map: mapOn, workers: workersOn, timeline: timelineOn, profileName: shownProfile(state)?.profile?.name?.trim(), botId: bot?.id, card: LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, source } : null);
+  const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn || workersOn || timelineOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), map: mapOn, workers: workersOn, timeline: timelineOn, profileName: shownProfile(state)?.profile?.name?.trim(), botId: bot?.id, card: paneCard, source } : null);
   const withWatch = Boolean(bot || group && (isTeamRoom(group) || LIVE_VERIFY_V0));
   const watchDock = withWatch && watchShown.mounted ? "verify-watch-dock" : "";
-  const slotPanels: SlotPanel[] = [...(watch || show || media || mapping || crewThread || timelineThread ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : []), ...(terminalOpen && !terminalCovers ? ["terminal" as const] : [])];
+  const paneThreads = [watch?.threadId, show?.threadId, media, mapping, crewThread, timelineThread];
+  const slotPanels: SlotPanel[] = [...(watch || show || media || mapping || crewThread || timelineThread ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : []), ...(terminalOpen && !terminalCovers ? ["terminal" as const] : [])].filter((panel) => panel !== "show" || Boolean(watchChat && paneThreads.includes(watchChat.threadId)));
   const closeSlot = (panel: SlotPanel) => panel === "show" ? closePane() : panel === "terminal" ? closeTerminal() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
-  useEffect(() => { closePane(); }, [state.selectedId]);
+  // on desktop the Forum only hides the pane; the chat it was opened from finds it as it was
+  useEffect(() => {
+    if (!phoneMenuVisible && (forum || watchChat && [...paneThreads, checking].includes(watchChat.threadId))) return;
+    closePane();
+  }, [state.selectedId]);
   useAutoShow(room ? undefined : watchChat?.threadId, chatMessages, !phoneMenuVisible && !watch && slotPanels.every((panel) => panel === "show"));
   const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || state.settingsOpen && Boolean(bot || group || joinedId) || bot && state.inspectorOpen || terminalOpen);
   const watchPanel = (hidden: boolean) => watchShown.value && (
@@ -534,9 +541,11 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     pushOpenTarget.current = null;
     window.history.replaceState(window.history.state, "", window.location.pathname);
     openNotificationTarget(dispatch, target, latestState.current, true);
-    answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
+    answerOnThread(latestState.current.bots, latestState.current.config?.features?.voiceCalls === true, { botId: target.botId, threadId: target.threadId, opener: pushOpenCall.current });
   }, [dispatch, hydratedBots]);
-  useEffect(() => void answerOnThread(state.bots), [state.bots]);
+  const voiceCalls = state.config?.features?.voiceCalls === true;
+  useEffect(() => void answerOnThread(state.bots, voiceCalls), [state.bots, voiceCalls]);
+  useEndCallUnlessAllowed(voiceCalls);
   useEffect(() => {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
@@ -551,7 +560,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       setTerminalViews((views) => ({ ...views, [target.botId]: false }));
       startWarmOpenTiming(Number(event.data.t0), target.threadId);
       openNotificationTarget(dispatch, target, latestState.current);
-      answerOnThread(latestState.current.bots, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
+      answerOnThread(latestState.current.bots, latestState.current.config?.features?.voiceCalls === true, { botId: target.botId, threadId: target.threadId, opener: webPushCall(new URL(event.data.url, window.location.origin).search) });
     };
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
@@ -636,6 +645,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [terminalCovers, dispatch]);
 
   const botsUnreadable = state.botsUnreadable && state.bots.length === 0;
+  // a phone keeps the Forum as a full page with no exit, as before
+  const board = usePresence(forum && !noEngines && !botsUnreadable);
+  const boardShown = phoneMenuVisible ? forum && !noEngines && !botsUnreadable : board.mounted;
+  const boardClosing = !phoneMenuVisible && board.closing;
   const createBotRequired = !noEngines && state.bots.length === 0 && !botsUnreadable;
   const createBotSheetOpen = !onboardingOpen && state.connected && state.hydrated && (state.createBotOpen || createBotRequired);
   const secondaryViewOpen =
@@ -839,6 +852,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         folded={slotShown}
         onUnfold={() => slotPanels.forEach(closeSlot)}
       />
+      {boardShown && <BoardView hidden={nativeViewOverlayOpen} closing={boardClosing} />}
       {noEngines ? (
         <LazyView fallback={<BootFallback />}>
           <NoEngines />
@@ -848,9 +862,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
-      ) : forum ? (
-        <BoardView hidden={nativeViewOverlayOpen} />
-      ) : swipeChatId ? (
+      ) : forum ? null : swipeChatId ? (
         <div ref={conversationRef} className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip md:flex-row ${watchDock}`}>
           <PhoneChatPages id={swipeChatId} enabled={!terminalCovers && !nativeViewOverlayOpen} menuVisible={phoneMenuVisible} hidden={terminalCovers} rider={menuButtonRef} order={swipeOrder} onSelect={selectSwipe}>
             {(id, preview) => {

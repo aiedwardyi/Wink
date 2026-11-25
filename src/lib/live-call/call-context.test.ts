@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { expect, it, vi } from "vitest";
+import { DATA_DIR } from "../../../server/config.ts";
 
 import { createLiveCallRoutes } from "../../../server/live-call.ts";
 import { Store } from "../../../server/store.ts";
@@ -28,7 +28,7 @@ it("answers a stub call from the live task record and sends unknown readiness to
   expect(store.writeTaskPacket({ ...packet, asks: asks.asks, lastAskId: asks.lastAskId })).toBeTruthy();
 
   const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ name: "auth_tokens/stub" }));
-  const serve = createLiveCallRoutes({ cfg: { gemini: { apiKey: "stub" } }, store, dataDir: join(homedir(), "call"), taskPacket: (threadId) => store.taskPacket(threadId), fetch });
+  const serve = createLiveCallRoutes({ cfg: { gemini: { apiKey: "stub" } }, store, dataDir: join(DATA_DIR, "call"), taskPacket: (threadId) => store.taskPacket(threadId), fetch });
   const chat = vi.fn(async (_body: object): Promise<Posted> => ({ status: 202, data: { ok: true } }));
   async function post(path: string, body: object): Promise<Posted> {
     if (path.endsWith("/messages")) return chat(body);

@@ -407,3 +407,13 @@ it.each([
   expect(button(action, row()), `${action} shows`).toBeTruthy();
   expect(line!.contains(button(action, row())!), `${action} sits on its own row, clear of the menu`).toBe(false);
 });
+
+it("shows a base signed in as an added account once, as Usage does", async () => {
+  const claude = board.engines[0]!;
+  const kept = claude.accounts.filter((account) => account.id !== "claude");
+  Object.assign(claude, { accounts: kept, duplicates: ["claude"], mainId: kept[0]!.id });
+  await mount();
+  expect(row()).toBeNull();
+  expect([...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount)).toEqual(kept.map((account) => account.id));
+  expect(button("Add Account")).toBeTruthy();
+});

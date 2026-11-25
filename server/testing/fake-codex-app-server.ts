@@ -9,7 +9,8 @@
 //                     | bench-quiet (no tool items — latency floor)
 //                     | usage-calls (two model calls: `last` per call, `total` the thread)
 //                     | approval-pair (two approvals in one stdout chunk, then exits)
-//   FAKE_CODEX_ELICIT  "server/tool" the mcp-elicitation asks about (default agents/list_bots)
+//   FAKE_CODEX_ELICIT  "server/tool" the mcp-elicitation asks about (default agents/list_bots);
+//                     a tool behind a mounted Wink catalog is asked as agents/call_wink_tool
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //   FAKE_CODEX_USAGE  JSON array of tokenUsage payloads, one
 //                     thread/tokenUsage/updated per model call of the turn
@@ -227,6 +228,10 @@ process.stdin.on("data", (chunk) => {
         break;
       }
       case "turn/start": {
+        if (mode === "text-rate-limited") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "HTTP 429" } });
+          break;
+        }
         if (mode === "unauthorized") {
           out({
             jsonrpc: "2.0",
@@ -288,7 +293,10 @@ process.stdin.on("data", (chunk) => {
           notify("item/started", { item: { id: "w1", type: "webSearch", query: "OpenMausBot" } });
         }
         if (mode === "mcp-elicitation") {
-          const [serverName, tool] = (process.env.FAKE_CODEX_ELICIT ?? "agents/list_bots").split("/");
+          const [serverName, named] = (process.env.FAKE_CODEX_ELICIT ?? "agents/list_bots").split("/");
+          // with the catalog mounted the model reaches these only through the gateway (tool-catalog.ts OPTIONAL)
+          const hidden = ["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix", "board_search", "board_post", "wake_me", "web_read"];
+          const tool = serverName === "agents" && process.env.WINK_MCP_AGENTS_OMB_WINK_TOOL_CATALOG === "1" && hidden.includes(named) ? "call_wink_tool" : named;
           out({
             jsonrpc: "2.0",
             id: 101,

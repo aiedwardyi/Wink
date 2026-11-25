@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { fetchResponse, responseBody } from "./api-request";
 import { t } from "./i18n";
+import { keepSaved } from "./memory-last";
 import { holdReload } from "./reload-hold";
 
 export interface MemoryLatest {
@@ -154,6 +155,7 @@ export async function flushMemory(botId: string): Promise<void> {
       throw new Error(/^memory is capped at 256KB/.test(result.error ?? "") ? t("errors.memoryLimit") : result.error ?? `${res.status} ${res.statusText}`);
     } else {
       s.revision = result.revision;
+      keepSaved(botId, sent.text, result.truncated);
       if (s.draft?.text === sent.text) {
         // another tab may have stored its own draft since
         if (readStored(botId)?.text === sent.text) setDraft(botId, null);

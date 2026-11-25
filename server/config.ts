@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
-import { LIVE_VOICES, type LiveVoice } from "../shared/live-call.ts";
+import { CALL_ANSWERS, LIVE_VOICES, type CallAnswer, type LiveVoice } from "../shared/live-call.ts";
 import {
   CREDENTIAL_BROKER,
   credentialValue,
@@ -19,6 +19,7 @@ import {
 } from "../shared/credential-request.ts";
 import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
+import { resolveDataDir } from "./data-dir.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { hostMatchesRemote } from "./remote-access.ts";
 import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
@@ -112,7 +113,7 @@ const appConfigSchema = z.object({
   xai: z.object({ key: optionalText, url: optionalText }).optional(),
   gemini: z.object({ apiKey: optionalText }).optional(),
   // A voice dropped from the list later falls back to the default, not a config that fails to load.
-  liveCall: z.object({ voice: z.preprocess((voice) => OLD_VOICES[voice as string] ?? voice, z.enum(LIVE_VOICES)).optional().catch(undefined) }).optional(),
+  liveCall: z.object({ voice: z.preprocess((voice) => OLD_VOICES[voice as string] ?? voice, z.enum(LIVE_VOICES)).optional().catch(undefined), answer: z.enum(CALL_ANSWERS).optional().catch(undefined) }).optional(),
   /** `model` seeds the default selection; `provider` pins an OpenRouter
    * upstream (e.g. "fireworks"). Both are non-secret and optional. */
   openaiCompat: z
@@ -174,7 +175,7 @@ const jsonObjectSchema = z.record(z.string(), z.json());
 export interface AppConfig {
   xai?: { key?: string; url?: string };
   gemini?: { apiKey?: string };
-  liveCall?: { voice?: LiveVoice };
+  liveCall?: { voice?: LiveVoice; answer?: CallAnswer };
   openaiCompat?: { key?: string; url?: string; model?: string; provider?: string };
   composio?: { apiKey?: string; userId?: string; sessionId?: string };
   box?: { token?: string };
@@ -302,7 +303,7 @@ export function showToolCallsEnabled(cfg: AppConfig): boolean {
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
-export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".orbit");
+export const DATA_DIR = resolveDataDir("server/config.ts");
 export const DOWNLOADS_DIR = process.env.OMB_DOWNLOADS_DIR ?? join(homedir(), "Downloads");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");

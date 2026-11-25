@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import { loadConfig, parseConfigPatch, saveConfig } from "./config.ts";
 import { acpChildEnv } from "./drivers/acp/core.ts";
@@ -264,7 +264,7 @@ describe("google account", () => {
     expect(spies.some((spy) => spy.mock.calls.length > 0)).toBe(true);
     const files = (root: string): string[] =>
       readdirSync(root).flatMap((name) => (statSync(join(root, name)).isDirectory() ? files(join(root, name)) : [join(root, name)]));
-    const written = [...lines, ...files(homedir()).map((file) => readFileSync(file, "utf8")), JSON.stringify(google.status())].join("\n");
+    const written = [...lines, ...files(testHome()).map((file) => readFileSync(file, "utf8")), JSON.stringify(google.status())].join("\n");
     for (const secret of ["refresh-token-SECRET", "access-token-SECRET", "client-secret-test"]) expect(written).not.toContain(secret);
   });
 });

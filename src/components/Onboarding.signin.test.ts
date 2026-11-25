@@ -126,22 +126,24 @@ describe("Onboarding engine check", () => {
     expect(host.textContent).not.toContain("You're all set");
   });
 
-  it("leaves a way in when the only engine reads as signed out", async () => {
+  it("lets Continue open Wink when the only engine reads as signed out, with no second button", async () => {
     localStorage.setItem("omb-locale", "en");
     const onDone = vi.fn();
     const claude = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available", authenticated: false }, models: { default: "", options: [] } };
     const host = await renderWith(200, onDone, { instances: [claude] });
     const button = (label: string) => [...host.querySelectorAll("button")].find((node) => node.textContent === label);
     await act(async () => button("Continue")!.click());
-    expect(button("Continue")!.disabled).toBe(true);
-    expect(button("Open Wink")?.disabled).toBe(false);
-    await act(async () => button("Open Wink")!.click());
+    expect(button("Open Wink")).toBeUndefined();
+    expect(button("Continue")!.disabled).toBe(false);
+    await act(async () => button("Continue")!.click());
     expect(onDone).toHaveBeenCalledOnce();
     expect(host.textContent).not.toContain("You're all set");
     vi.mocked(fetch).mockImplementation(async () => Response.json({ instances: [{ ...claude, snapshot: { state: "available", authenticated: true } }] }));
     await act(async () => window.dispatchEvent(new Event("focus")));
-    expect(button("Continue")!.disabled).toBe(false);
     expect(button("Open Wink")).toBeUndefined();
+    await act(async () => button("Continue")!.click());
+    expect(host.textContent).toContain("You're all set");
+    expect(onDone).toHaveBeenCalledOnce();
   });
 
   it("keeps the all-set step when an engine is ready", async () => {
@@ -153,7 +155,7 @@ describe("Onboarding engine check", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  it("updates the ready row and disables Continue when the last engine signs out", async () => {
+  it("updates the ready row and keeps Continue enabled when the last engine signs out", async () => {
     let authenticated = false;
     const instance = {
       instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
@@ -183,7 +185,7 @@ describe("Onboarding engine check", () => {
     authenticated = false;
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(ready()).toBeNull();
-    expect(next().disabled).toBe(true);
+    expect(next().disabled).toBe(false);
   });
 
   it.each(["claude", "codex"])("focuses Continue when %s becomes ready on the engine step", async (readyId) => {
@@ -199,7 +201,7 @@ describe("Onboarding engine check", () => {
     const host = await renderWith(200, vi.fn(), { instances });
     await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!.click());
     const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
-    expect(next.disabled).toBe(true);
+    expect(next.disabled).toBe(false);
     const ready = instances.map((instance) => ({ ...instance,
       snapshot: { state: instance.instanceId === readyId ? "available" : "unavailable", authenticated: instance.instanceId === readyId },
     }));

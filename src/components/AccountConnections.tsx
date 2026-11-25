@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { safeProviderText } from "@/lib/safe-provider-text";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
@@ -154,7 +155,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
             className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
       </>} />}
       {named?.codexPromo && <p className="pb-2 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
-      <Fold open={menu} id={`${id}-actions`}>
+      <Fold open={menu} id={`${id}-actions`} onOpened={() => revealOnOpen(actions.current)}>
         <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pt-2"
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>
           {controls}
@@ -165,17 +166,23 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   );
 }
 
+/** The addition each engine waits on outlives a remount of Connections, so its failure line still shows,
+ * even when the failed row was retired while Connections was closed: the server keeps that result. */
+const pendingAdds = new Map<string, string>();
+
 export function AccountConnections({ accounts, reload }: { accounts: UsageAccount[]; reload: () => Promise<void> }) {
   const { t } = useI18n();
   const { state } = useStore();
   const { board } = useUsageBoard();
   const terminal = isTerminalSkin(useSkin());
   const [busy, setBusy] = useState(false);
-  const [adding, setAdding] = useState<string | null>(null);
+  const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
+  const [adding, setAdding] = useState<string | null>(() => pendingAdds.get(base) ?? null);
   const [existingId, setExistingId] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
   useEffect(() => {
-    if (!adding) return;
+    if (!adding) { pendingAdds.delete(base); return; }
+    pendingAdds.set(base, adding);
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -188,19 +195,30 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
           void reload();
           return;
         }
-        if (["complete", "failed", "cancelled"].includes(result.state)) { setAdding(null); return; }
-      } catch { if (cancelled) return; }
+        if (["complete", "failed", "cancelled"].includes(result.state)) {
+          // A failed addition is retired with its row, so the failure line stays here.
+          if (result.state === "failed") setError({ message: t("engines.didntFinish"), signInIds: [] });
+          setAdding(null);
+          return;
+        }
+      } catch (error) {
+        if (cancelled) return;
+        // The server no longer knows this addition (it restarted): nothing is left to wait on.
+        if ((error as { status?: number }).status === 404) { setAdding(null); return; }
+      }
       timer = setTimeout(() => void poll(), 1000);
     };
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [adding, reload]);
+  }, [adding, base, reload]);
   useEffect(() => {
     if (error?.signInIds.length && !accounts.some((account) => error.signInIds.includes(account.instanceId)
       && signInPending(account))) setError(null);
   }, [accounts, error]);
-  const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
   const drag = useUsageDrag([{ base, accounts: accounts.map((account) => ({ id: account.instanceId })) }]);
+  // Usage shows one row per sign-in; the base signed in as an added account folds into that account's row here too.
+  const folded = board?.engines.find((engine) => engine.base === base)?.duplicates ?? [];
+  const shown = accounts.filter((account) => !folded.includes(account.instanceId));
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
   const mutate = async (path: string, body: object, sourceId?: string) => {
@@ -226,20 +244,21 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const existing = state.instances.find((account) => account.instanceId === existingId);
   const existingName = board?.engines.flatMap((engine) => engine.accounts).find((account) => account.id === existingId)?.name
     ?? existing?.snapshot.account ?? existing?.displayName;
+  // deviceEnv marks a phone-only login (Claude, Gemini): a computer browser keeps the browser login.
   const add = addable && (computerOnly ? <span data-computer-only="">{t("connections.addOnComputer")}</span>
-    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
+    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) && (!login?.deviceEnv || isPhone()) })}
       className={STRONG_BUTTON}>{t("accounts.add")}</button>);
   return (
     <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0">
       <ConnectionRow mark={<ProviderBrandMark driverKind={accounts[0]!.driverKind} size={16} />}
         label={<span className="min-w-0 truncate text-[14px] font-semibold text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined} />
       <AccountGroup label={accounts[0]!.displayName} terminal={terminal}>
-        {ordered(accounts, drag.orders[base], (account) => account.instanceId).map((account) => {
+        {ordered(shown, drag.orders[base], (account) => account.instanceId).map((account) => {
           const drain = account.drain;
           const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
           const hasDestination = accounts.some((other) => other !== account && accountReady(other));
           return (
-            <ConnectionAccount key={account.instanceId} reorder={accounts.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
+            <ConnectionAccount key={account.instanceId} reorder={shown.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
               named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
               reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
           );

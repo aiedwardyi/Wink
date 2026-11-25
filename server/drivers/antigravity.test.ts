@@ -4,7 +4,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly;
 // spawnCli resolves it to `node <script>`, so these run everywhere.
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,10 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as auth from "./antigravity-auth.ts";
 
-import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
+import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { summaryInstance } from "../summary-instance.ts";
+import { AGENTS_IDENTITY, expectAgentsBudget, listAgentsTools } from "../testing/agents-tools.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
+import { removeTestData, testHome } from "../testing/test-home.ts";
 import { ProviderRegistry } from "../harness/registry.ts";
 import {
   ANTIGRAVITY_COMPUTER_MCP_KEY,
@@ -32,13 +35,147 @@ import {
   STATIC_ANTIGRAVITY_MODELS,
   WIN32_CREATEPROCESS_CMDLINE_MAX,
 } from "./antigravity.ts";
-import { describeSpawnFailure } from "../procs.ts";
+import { noteGenerator } from "../memory-pass.ts";
+import * as procs from "../procs.ts";
+
+vi.mock("./warm-pool.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./warm-pool.ts")>();
+  const warmPool = actual.createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+  // every test's registry runs the app's final closeAll on dispose
+  const closeAll = warmPool.closeAll.bind(warmPool);
+  warmPool.closeAll = (reason, opts = {}) => closeAll(reason, { ...opts, final: false });
+  return { ...actual, warmPool };
+});
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
+
+/** agy 1.3.0 as recorded: no `acp`, and `agy update` with no network. Turns run the fake CLI with `turnEnv`. */
+function oldOfflineAgy(dir: string, calls: string, turnEnv: Record<string, string> = {}): string {
+  const reply = (name: string) => JSON.parse(readFileSync(new URL(`../../test/fixtures/recorded/antigravity/${name}.json`, import.meta.url), "utf8")).reply;
+  const fake = join(dir, "fake-agy.cjs");
+  writeFileSync(fake, `
+const fs = require("node:fs");
+if (process.argv.includes("--version")) { console.log("1.3.0"); process.exit(0); }
+if (process.argv[2] !== "acp" && process.argv[2] !== "update") {
+  const turn = require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(FAKE_CLI)}, ...process.argv.slice(2)], { stdio: "inherit", env: { ...process.env, ...${JSON.stringify(turnEnv)} } });
+  process.exit(turn.status ?? 1);
+}
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+const reply = process.argv.includes("update") ? ${JSON.stringify(reply("update-offline"))} : ${JSON.stringify(reply("acp-unsupported"))};
+process.stdout.write(reply.stdout ?? "", () => process.stderr.write(reply.stderr, () => process.exit(reply.exitCode)));
+`);
+  return fake;
+}
+
+/** agy's saved sign-in as a file: what the driver probes and deletes in place of the OS keyring. */
+function fakeKeyring(dir: string) {
+  const entry = join(dir, "gemini-antigravity");
+  writeFileSync(entry, "not-a-token");
+  vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => existsSync(entry)));
+  vi.spyOn(auth, "probeAntigravitySignIn").mockImplementation(async () => existsSync(entry));
+  const forget = vi.mocked(auth.forgetAntigravitySignIn).mockImplementation(async (target) => {
+    if (target !== auth.ANTIGRAVITY_KEYRING || !existsSync(entry)) return false;
+    rmSync(entry);
+    return true;
+  });
+  return { entry, forget };
+}
+
+/** Wink's own "signed out by Wink" mark, kept in the data folder across runs. */
+const SIGNED_OUT_MARK = join(DATA_DIR, "gemini-signed-out");
+
+/** A fresh Wink run, as after a quit, crash or restart: new modules (nothing kept in memory from the run before), the
+ * same data folder, and agy's saved sign-in as the file `entry`. `store.refuse` refuses deletes; `store.deletes` counts them. */
+async function freshGeminiRun(cli: string, entry: string, store: { refuse: boolean; deletes: number }) {
+  vi.resetModules();
+  const fresh = await import("./antigravity-auth.ts");
+  const create = fresh.antigravitySignIn;
+  vi.spyOn(fresh, "antigravitySignIn").mockImplementation(() => create(async () => existsSync(entry)));
+  vi.spyOn(fresh, "probeAntigravitySignIn").mockImplementation(async () => existsSync(entry));
+  vi.spyOn(fresh, "forgetAntigravitySignIn").mockImplementation(async () => {
+    store.deletes += 1;
+    if (store.refuse || !existsSync(entry)) return false;
+    rmSync(entry);
+    return true;
+  });
+  const { ProviderRegistry: Registry } = await import("../harness/registry.ts");
+  const { AntigravityDriver: Driver } = await import("./antigravity.ts");
+  const load = async () => {
+    const registry = new Registry([Driver]);
+    await registry.load({
+      one: { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${cli}"`, fullAuto: false } },
+      two: { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${cli}"`, fullAuto: false } },
+    });
+    return registry;
+  };
+  return { registry: await load(), load };
+}
+
+async function geminiTurn(registry: ProviderRegistry, instanceId: string, threadId: string) {
+  const live = registry.get(instanceId)!;
+  const recorder = recordEvents(live.adapter);
+  try {
+    await live.adapter.sendTurn({ threadId, text: "hi" });
+    const end = await recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+    const series = recorder.events.filter((event) => event.threadId === threadId);
+    return {
+      ok: end.type === "turn.completed" && end.ok,
+      signIn: series.some((event) => event.type === "runtime.error" && event.signIn === true),
+      reply: series.some((event) => event.type === "item.completed" && event.itemType === "assistant_text"),
+    };
+  } finally {
+    recorder.stop();
+  }
+}
+
+async function geminiShown(registry: ProviderRegistry, instanceId: string) {
+  return (await registry.describe({ refresh: true })).find((entry) => entry.instanceId === instanceId)!.snapshot.authenticated;
+}
+
+/** Where agy writes its logs in this test process's home. */
+const AGY_LOGS = join(testHome(), ".gemini", "antigravity-cli", "log");
+const AGY_LOGOUT = "server_oauth.go:192] Logging out current user";
+
+/** agy logging `events` now, as it does: glog's local time, in a cli log named for when the run started. */
+function agyLog(...events: string[]) {
+  const now = new Date();
+  const pad = (value: number, width = 2) => String(value).padStart(width, "0");
+  const day = `${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map((value) => pad(value)).join(":");
+  mkdirSync(AGY_LOGS, { recursive: true });
+  const log = join(AGY_LOGS, `cli-${now.getFullYear()}${day}_${time.replaceAll(":", "")}.log`);
+  appendFileSync(log, events.map((event) => `I${day} ${time}.${pad(now.getMilliseconds(), 3)}000    42 ${event}\n`).join(""));
+}
+
+/** Start Sign Out during a turn and let the store refuse the delete. */
+async function refusedSignOut(registry: ProviderRegistry, fixture: ReturnType<typeof heldGeminiFixture>, store: { deletes: number }) {
+  await registry.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+  await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+  const out = registry.signOut("one");
+  await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+  writeFileSync(fixture.hold, "");
+  expect(await out).toBe(false);
+  expect(store.deletes).toBe(1);
+  expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+  expect(await geminiShown(registry, "one")).toBe(true);
+}
+
+/** agy 1.3.0 offline (`oldOfflineAgy`) whose turns hold until `hold` exists, with its saved sign-in as a file. */
+function heldGeminiFixture(prefix: string) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const entry = join(dir, "gemini-antigravity");
+  writeFileSync(entry, "old-sign-in");
+  const hold = join(dir, "hold");
+  const ready = join(dir, "ready");
+  const cli = oldOfflineAgy(dir, join(dir, "calls.txt"), { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: entry });
+  return { dir, entry, hold, ready, cli };
+}
 
 const createSignIn = auth.antigravitySignIn;
 beforeEach(() => {
   vi.spyOn(auth, "antigravitySignIn").mockImplementation(() => createSignIn(async () => true));
+  // No test here reaches the OS keyring; a test that signs out hands the driver a fake one (fakeKeyring).
+  vi.spyOn(auth, "forgetAntigravitySignIn").mockResolvedValue(false);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -532,6 +669,92 @@ describe("Antigravity turns (fake CLI)", () => {
     } finally {
       delete process.env.FAKE_AGY_DUMP;
       delete process.env.FAKE_AGY_RESUME_FAIL;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  // 11-22: the Python chat's conversation was built on 3.8 Flash and Hydrogen
+  // under one Gemini sign-in (Vertex); after signing in with another account,
+  // switching to Neon (then Hydrogen) got "Corrupted thought signature."
+  it.each(["gemini-4-neon-low", "gemini-4-carbon-high", "gemini-4-argon-medium", "gemini-4-hydrogen-low"])(
+    "a chat switched to %s after a Gemini sign-in change answers from its transcript, and switches back",
+    async (model) => {
+      const scratch = mkdtempSync(join(tmpdir(), "omb-agy-signature-"));
+      const dump = join(scratch, "dump.json");
+      const accountFile = join(scratch, "account");
+      writeFileSync(accountFile, "vertex-project");
+      process.env.FAKE_AGY_CONVERSATIONS_DIR = join(scratch, "conversations");
+      process.env.FAKE_AGY_ACCOUNT_FILE = accountFile;
+      process.env.FAKE_AGY_DUMP = dump;
+      const threadId = `t-signature-${model}`;
+      const turn = async (input: Omit<Parameters<typeof instance.adapter.sendTurn>[0], "threadId">) => {
+        const from = recorder.events.length;
+        const { turnId } = await instance.adapter.sendTurn({ threadId, ...input });
+        await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId && recorder.events.indexOf(event) >= from);
+        const events = recorder.events.slice(from);
+        const sessions = events.filter((event) => event.type === "session.started") as Array<{ sessionId: string | null }>;
+        return { events, cursor: sessions.at(-1)?.sessionId ?? undefined, argv: JSON.parse(readFileSync(dump, "utf8")).argv as string[], prompt: JSON.parse(readFileSync(dump, "utf8")).prompt as string };
+      };
+      try {
+        await create();
+        const earlier = await turn({ text: "my favorite loop is enumerate", model: "gemini-3.8-flash-low" });
+        expect(earlier.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+
+        writeFileSync(accountFile, "consumer-account");
+        const fallback = "Earlier in this chat:\nUser: my favorite loop is enumerate\n\nhi neon";
+        const switched = await turn({ text: "hi neon", model, resumeCursor: earlier.cursor, resumeFallback: { text: fallback } });
+        expect(switched.events.filter((event) => event.type === "runtime.error")).toEqual([]);
+        expect(switched.events.some((event) => event.type === "turn.retrying" && event.reason === "resume_cursor")).toBe(true);
+        expect(switched.events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
+        expect(switched.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        expect(switched.events.find((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toMatchObject({ text: "done from fake agy" });
+        // a new conversation under the current sign-in, holding the earlier talk
+        expect(switched.cursor).not.toBe(earlier.cursor);
+        expect(switched.argv).not.toContain("--conversation");
+        expect(switched.argv[switched.argv.indexOf("--model") + 1]).toBe(model);
+        expect(switched.prompt).toBe(fallback);
+
+        const back = await turn({ text: "back on flash", model: "gemini-3.8-flash-low", resumeCursor: switched.cursor, resumeFallback: { text: "unused" } });
+        expect(back.events.some((event) => event.type === "turn.retrying")).toBe(false);
+        expect(back.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        expect(back.argv[back.argv.indexOf("--conversation") + 1]).toBe(switched.cursor);
+        expect(back.prompt).toBe("back on flash");
+      } finally {
+        delete process.env.FAKE_AGY_CONVERSATIONS_DIR;
+        delete process.env.FAKE_AGY_ACCOUNT_FILE;
+        delete process.env.FAKE_AGY_DUMP;
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("switching Gemini models inside one sign-in keeps the same conversation", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-agy-same-account-"));
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_AGY_CONVERSATIONS_DIR = join(scratch, "conversations");
+    process.env.FAKE_AGY_DUMP = dump;
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-same-account", text: "one", model: "gemini-4-hydrogen-low" });
+      const first = await recorder.until((event) => event.type === "session.started") as { sessionId: string };
+      await recorder.until((event) => event.type === "turn.completed");
+      const from = recorder.events.length;
+      const { turnId } = await instance.adapter.sendTurn({
+        threadId: "t-same-account",
+        text: "two",
+        model: "gemini-4-neon-low",
+        resumeCursor: first.sessionId,
+        resumeFallback: { text: "unused" },
+      });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId && recorder.events.indexOf(event) >= from);
+      const events = recorder.events.slice(from);
+      expect(events.some((event) => event.type === "turn.retrying")).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      const argv = JSON.parse(readFileSync(dump, "utf8")).argv as string[];
+      expect(argv[argv.indexOf("--conversation") + 1]).toBe(first.sessionId);
+    } finally {
+      delete process.env.FAKE_AGY_CONVERSATIONS_DIR;
+      delete process.env.FAKE_AGY_DUMP;
       rmSync(scratch, { recursive: true, force: true });
     }
   });
@@ -1180,6 +1403,735 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     }
   });
 
+  it("updates an agy without ACP (1.3.0) so a signed-out Sign in completes, and Sign out works the same way", async () => {
+    const noAcp = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/acp-unsupported.json", import.meta.url), "utf8")).reply;
+    const update = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/update.json", import.meta.url), "utf8")).reply;
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-old-"));
+    const flag = join(dir, "signed-in");
+    const updated = join(dir, "updated");
+    const calls = join(dir, "calls.txt");
+    const fake = join(dir, "fake-agy.cjs");
+    writeFileSync(fake, `
+const fs = require("node:fs");
+const updated = fs.existsSync(${JSON.stringify(updated)});
+if (process.argv.includes("--version")) { console.log(updated ? "1.5.14" : "1.3.0"); process.exit(0); }
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+if (process.argv.includes("update")) {
+  fs.writeFileSync(${JSON.stringify(updated)}, "");
+  process.stdout.write(${JSON.stringify(update.stdout)}, () => process.exit(${update.exitCode}));
+} else if (!updated) process.stderr.write(${JSON.stringify(noAcp.stderr)}, () => process.exit(${noAcp.exitCode}));
+else require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "logout") fs.rmSync(${JSON.stringify(flag)}, { force: true });
+  if (method === "authenticate") fs.writeFileSync(${JSON.stringify(flag)}, "");
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => existsSync(flag)));
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      expect((await registry.get("agy-old")!.snapshot()).authenticated).toBe(false);
+      await registry.startSignIn("agy-old");
+      await registry.logins.wait("agy-old");
+      expect(registry.logins.state("agy-old")).toBe("complete");
+      expect((await registry.get("agy-old")!.snapshot({ refresh: true })).authenticated).toBe(true);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update", "acp"]);
+
+      rmSync(updated);
+      writeFileSync(calls, "");
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(existsSync(flag)).toBe(false);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update", "acp"]);
+    } finally {
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("signs an agy without ACP (1.3.0) out offline by deleting only gemini:antigravity, and the Connections row reads signed out", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-offline-"));
+    const calls = join(dir, "calls.txt");
+    const fake = oldOfflineAgy(dir, calls);
+    const keyring = fakeKeyring(dir);
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      expect(Object.keys(registry.get("agy-old")!.loginConfig!().env)).not.toContain("OMB_AGY_KEYRING");
+      expect((await registry.get("agy-old")!.snapshot()).authenticated).toBe(true);
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(keyring.forget.mock.calls).toEqual([["gemini:antigravity"]]);
+      expect(existsSync(keyring.entry)).toBe(false);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update"]);
+      const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-old")!;
+      expect(row.snapshot.authenticated).toBe(false);
+      expect(row.loginState).toBeUndefined();
+    } finally {
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a Gemini turn started before an offline Sign out finish its reply; the next turn asks for sign-in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-overlap-"));
+    const calls = join(dir, "calls.txt");
+    const hold = join(dir, "hold");
+    const ready = join(dir, "ready");
+    const keyring = fakeKeyring(dir);
+    // agy 1.3.0 rereads its saved sign-in for each request, as Gate B's fake did.
+    const fake = oldOfflineAgy(dir, calls, { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry });
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      const live = registry.get("agy-old")!;
+      const recorder = recordEvents(live.adapter);
+      const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const errors = (threadId: string) => recorder.events.filter((event) => event.type === "runtime.error" && event.threadId === threadId);
+      expect((await live.snapshot()).authenticated).toBe(true);
+
+      await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
+      await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
+      const out = registry.signOut("agy-old");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      expect(existsSync(keyring.entry)).toBe(true);
+      expect((await registry.describe()).find((entry) => entry.instanceId === "agy-old")!.snapshot.authenticated).toBe(true);
+
+      rmSync(ready);
+      const during = live.adapter.sendTurn({ threadId: "t-during", text: "hi" });
+      expect(existsSync(ready)).toBe(false);
+      expect(keyring.forget).not.toHaveBeenCalled();
+
+      writeFileSync(hold, "");
+      expect(await ended("t-before")).toMatchObject({ ok: true });
+      expect(errors("t-before")).toEqual([]);
+      expect(recorder.events.some((event) => event.type === "item.completed" && event.threadId === "t-before" && event.itemType === "assistant_text")).toBe(true);
+      expect(await out).toBe(true);
+      await during;
+      expect(await ended("t-during")).toMatchObject({ ok: false });
+      expect(errors("t-during")).toEqual([expect.objectContaining({ signIn: true, signedOut: true })]);
+      expect(existsSync(ready)).toBe(false);
+      expect(existsSync(keyring.entry)).toBe(false);
+      expect(keyring.forget.mock.calls).toEqual([["gemini:antigravity"]]);
+      expect((await live.snapshot()).authenticated).toBe(false);
+
+      // agy itself now reads signed out.
+      await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect(await ended("t-next")).toMatchObject({ ok: false });
+      expect(errors("t-next")).toEqual([expect.objectContaining({ signIn: true })]);
+      expect(existsSync(ready)).toBe(true);
+    } finally {
+      writeFileSync(hold, "");
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120D: a Sign in that fails while the delete waits must not hand the old sign-in back.
+  it("finishes Sign Out after another instance fails to sign in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-reconnect-"));
+    const calls = join(dir, "calls.txt");
+    const hold = join(dir, "hold");
+    const ready = join(dir, "ready");
+    const keyring = fakeKeyring(dir);
+    const fake = oldOfflineAgy(dir, calls, { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry });
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      const config = { cli: `"${process.execPath}" "${fake}"`, fullAuto: false };
+      await registry.load({
+        "agy-old": { driver: "antigravityAgent", config },
+        "agy-other": { driver: "antigravityAgent", config },
+      });
+      const live = registry.get("agy-old")!;
+      const recorder = recordEvents(live.adapter);
+      const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const errors = (threadId: string) => recorder.events.filter((event) => event.type === "runtime.error" && event.threadId === threadId);
+
+      await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
+      await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
+      const out = registry.signOut("agy-old");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      expect(existsSync(keyring.entry)).toBe(true);
+
+      await registry.startSignIn("agy-other");
+      await registry.logins.wait("agy-other");
+      const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-other")!;
+      expect(row.loginError).toBe("update_offline");
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
+      expect(keyring.forget).not.toHaveBeenCalled();
+
+      writeFileSync(hold, "");
+      expect(await ended("t-before")).toMatchObject({ ok: true });
+      expect(errors("t-before")).toEqual([]);
+      expect(await out).toBe(true);
+      expect(existsSync(keyring.entry)).toBe(false);
+      expect(keyring.forget.mock.calls).toEqual([["gemini:antigravity"]]);
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
+      await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect(await ended("t-next")).toMatchObject({ ok: false });
+      expect(errors("t-next")).toEqual([expect.objectContaining({ signIn: true })]);
+    } finally {
+      writeFileSync(hold, "");
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a queued turn use the saved login after the delete is refused", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-refused-"));
+    const calls = join(dir, "calls.txt");
+    const hold = join(dir, "hold");
+    const ready = join(dir, "ready");
+    const keyring = fakeKeyring(dir);
+    keyring.forget.mockImplementation(async () => false);
+    const fake = oldOfflineAgy(dir, calls, { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry });
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      const live = registry.get("agy-old")!;
+      const recorder = recordEvents(live.adapter);
+      const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const errors = (threadId: string) => recorder.events.filter((event) => event.type === "runtime.error" && event.threadId === threadId);
+
+      await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
+      await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
+      const out = registry.signOut("agy-old");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      const next = live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
+
+      writeFileSync(hold, "");
+      expect(await ended("t-before")).toMatchObject({ ok: true });
+      expect(await out).toBe(false);
+      await next;
+      expect(await ended("t-next")).toMatchObject({ ok: true });
+      expect(errors("t-next")).toEqual([]);
+      expect(keyring.forget).toHaveBeenCalledOnce();
+      expect(existsSync(keyring.entry)).toBe(true);
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
+
+      // Sign out again once the store accepts: it deletes now and still reads signed out.
+      keyring.forget.mockImplementation(async () => { rmSync(keyring.entry); return true; });
+      expect(await registry.signOut("agy-old")).toBe(true);
+      expect(existsSync(keyring.entry)).toBe(false);
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(false);
+    } finally {
+      writeFileSync(hold, "");
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("signs back in while Sign out waits on a running turn: the turn keeps its reply and the new sign-in stays", async () => {
+    const noAcp = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/acp-unsupported.json", import.meta.url), "utf8")).reply;
+    const offline = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/update-offline.json", import.meta.url), "utf8")).reply;
+    const update = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/update.json", import.meta.url), "utf8")).reply;
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-back-in-"));
+    const calls = join(dir, "calls.txt");
+    const hold = join(dir, "hold");
+    const ready = join(dir, "ready");
+    const online = join(dir, "online");
+    const updated = join(dir, "updated");
+    const keyring = fakeKeyring(dir);
+    const fake = join(dir, "fake-agy.cjs");
+    const turnEnv = { FAKE_AGY_HOLD_FILE: hold, FAKE_AGY_READY_FILE: ready, FAKE_AGY_CREDENTIAL_FILE: keyring.entry };
+    writeFileSync(fake, `
+const fs = require("node:fs");
+const updated = fs.existsSync(${JSON.stringify(updated)});
+if (process.argv.includes("--version")) { console.log(updated ? "1.5.14" : "1.3.0"); process.exit(0); }
+if (process.argv[2] !== "acp" && process.argv[2] !== "update") {
+  const turn = require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(FAKE_CLI)}, ...process.argv.slice(2)], { stdio: "inherit", env: { ...process.env, ...${JSON.stringify(turnEnv)} } });
+  process.exit(turn.status ?? 1);
+}
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+if (process.argv[2] === "update") {
+  const isOnline = fs.existsSync(${JSON.stringify(online)});
+  if (isOnline) fs.writeFileSync(${JSON.stringify(updated)}, "");
+  const reply = isOnline ? ${JSON.stringify(update)} : ${JSON.stringify(offline)};
+  process.stdout.write(reply.stdout ?? "", () => process.stderr.write(reply.stderr ?? "", () => process.exit(reply.exitCode)));
+} else if (!updated) process.stderr.write(${JSON.stringify(noAcp.stderr)}, () => process.exit(${noAcp.exitCode}));
+else require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "authenticate") fs.writeFileSync(${JSON.stringify(keyring.entry)}, "new-sign-in");
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      const config = { cli: `"${process.execPath}" "${fake}"`, fullAuto: false };
+      await registry.load({
+        "agy-old": { driver: "antigravityAgent", config },
+        "agy-other": { driver: "antigravityAgent", config },
+      });
+      const live = registry.get("agy-old")!;
+      const recorder = recordEvents(live.adapter);
+      const ended = (threadId: string) => recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const errors = (threadId: string) => recorder.events.filter((event) => event.type === "runtime.error" && event.threadId === threadId);
+
+      await live.adapter.sendTurn({ threadId: "t-before", text: "hi" });
+      await expect.poll(() => existsSync(ready), { timeout: 5_000 }).toBe(true);
+      const out = registry.signOut("agy-old");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      expect(existsSync(keyring.entry)).toBe(true);
+
+      writeFileSync(online, "");
+      await registry.startSignIn("agy-other");
+      await registry.logins.wait("agy-other");
+      expect(registry.logins.state("agy-other")).toBe("complete");
+      expect(await out).toBe(false);
+      expect(readFileSync(keyring.entry, "utf8")).toBe("new-sign-in");
+      expect((await live.snapshot({ refresh: true })).authenticated).toBe(true);
+
+      writeFileSync(hold, "");
+      expect(await ended("t-before")).toMatchObject({ ok: true });
+      expect(errors("t-before")).toEqual([]);
+      await live.adapter.sendTurn({ threadId: "t-next", text: "hi" });
+      expect(await ended("t-next")).toMatchObject({ ok: true });
+      expect(keyring.forget).not.toHaveBeenCalled();
+      expect(readFileSync(keyring.entry, "utf8")).toBe("new-sign-in");
+    } finally {
+      writeFileSync(hold, "");
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("tells Sign in why an agy without ACP (1.3.0) could not update offline, after one try", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-offline-"));
+    const calls = join(dir, "calls.txt");
+    const fake = oldOfflineAgy(dir, calls);
+    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(async () => false));
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    try {
+      await registry.load({ "agy-old": { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false } } });
+      await registry.startSignIn("agy-old");
+      await registry.logins.wait("agy-old");
+      const row = (await registry.describe()).find((entry) => entry.instanceId === "agy-old")!;
+      expect(row.loginState).toBe("failed");
+      expect(row.loginError).toBe("update_offline");
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(["acp", "update"]);
+    } finally {
+      await registry.disposeAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lands a Sign out that waits on a running turn when Wink quits, and the next run reads signed out", async () => {
+    const fixture = heldGeminiFixture("omb-agy-quit-");
+    const store = { refuse: false, deletes: 0 };
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      expect(existsSync(fixture.entry)).toBe(true);
+      // server/index.ts exits as soon as disposeAll resolves: the delete is done by then.
+      await first.disposeAll();
+      expect(await out).toBe(true);
+      expect(store.deletes).toBe(1);
+      expect(existsSync(fixture.entry)).toBe(false);
+
+      writeFileSync(fixture.hold, "");
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(false);
+      expect(await geminiTurn(second, "two", "t-next")).toMatchObject({ ok: false, signIn: true, reply: false });
+      expect(store.deletes).toBe(1);
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the saved login after a crash interrupts Sign Out", async () => {
+    const fixture = heldGeminiFixture("omb-agy-crash-");
+    const store = { refuse: false, deletes: 0 };
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      expect(await geminiShown(first, "one")).toBe(true);
+
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(existsSync(fixture.entry)).toBe(true);
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      expect(store.deletes).toBe(0);
+      expect(await second.signOut("one")).toBe(true);
+      await first.disposeAll();
+      expect(await out).toBe(true);
+      expect(existsSync(fixture.entry)).toBe(false);
+      expect(store.deletes).toBe(1);
+      writeFileSync(fixture.hold, "");
+      expect(await geminiTurn(second, "one", "t-next")).toMatchObject({ ok: false, signIn: true, reply: false });
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps summaries working after refusal and preserves the login on restart", async () => {
+    const fixture = heldGeminiFixture("omb-agy-restart-");
+    const store = { refuse: true, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      const summary = first.get("two")!.generateText!("a summary");
+      writeFileSync(fixture.hold, "");
+      expect(await out).toBe(false);
+      await expect(summary).resolves.toEqual(expect.any(String));
+      expect(store.deletes).toBe(1);
+      expect(existsSync(fixture.entry)).toBe(true);
+      expect(await geminiShown(first, "one")).toBe(true);
+      await first.disposeAll();
+
+      const deletes = store.deletes;
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(await geminiShown(second, "two")).toBe(true);
+      expect(existsSync(fixture.entry)).toBe(true);
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      expect(store.deletes).toBe(deletes);
+
+      store.refuse = false;
+      expect(await second.signOut("one")).toBe(true);
+      expect(existsSync(fixture.entry)).toBe(false);
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("shows signed in until a deferred delete succeeds and reports refusal for a fresh retry", async () => {
+    const fixture = heldGeminiFixture("omb-agy-refuse-live-");
+    const store = { refuse: true, deletes: 0 };
+    let registry: ProviderRegistry | undefined;
+    try {
+      ({ registry } = await freshGeminiRun(fixture.cli, fixture.entry, store));
+      const held = geminiTurn(registry, "one", "t-held");
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const signOut = registry.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      const shownDuringReply = await geminiShown(registry, "one");
+      const deletesDuringReply = store.deletes;
+      writeFileSync(fixture.hold, "");
+      const reply = await held;
+      const refused = await signOut;
+      await vi.waitFor(() => expect(store.deletes).toBe(1));
+      const shownAfterRefusal = await geminiShown(registry, "two");
+      const next = await geminiTurn(registry, "two", "t-after-refusal");
+      expect({ shownDuringReply, deletesDuringReply, refused, shownAfterRefusal }).toEqual({
+        shownDuringReply: true, deletesDuringReply: 0, refused: false, shownAfterRefusal: true,
+      });
+      expect(reply).toMatchObject({ ok: true, reply: true });
+      expect(next).toMatchObject({ ok: true, reply: true });
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      expect(store.deletes).toBe(1);
+      store.refuse = false;
+      expect(await registry.signOut("one")).toBe(true);
+      expect(store.deletes).toBe(2);
+      expect(existsSync(fixture.entry)).toBe(false);
+      expect(await geminiShown(registry, "two")).toBe(false);
+      expect(await geminiTurn(registry, "two", "t-after-delete")).toMatchObject({ ok: false, signIn: true, reply: false });
+    } finally {
+      writeFileSync(fixture.hold, "");
+      await registry?.disposeAll();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120I: a second press while Sign out waited on a reply said "Didn't finish" though the first press landed.
+  it.each([
+    ["lands", false, true],
+    ["is refused", true, false],
+  ] as const)("gives a second Sign out press while the first waits on a reply that sign-out's answer when the delete %s", async (_case, refuse, landed) => {
+    const fixture = heldGeminiFixture("omb-agy-second-press-");
+    const store = { refuse, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let registry: ProviderRegistry | undefined;
+    try {
+      ({ registry } = await freshGeminiRun(fixture.cli, fixture.entry, store));
+      const held = geminiTurn(registry, "one", "t-held");
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const first = registry.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      const second = registry.signOut("one");
+      expect(await Promise.race([second.then(() => "answered"), new Promise((resolve) => setImmediate(resolve, "waiting"))])).toBe("waiting");
+      expect(store.deletes).toBe(0);
+      writeFileSync(fixture.hold, "");
+      expect(await held).toMatchObject({ ok: true, reply: true });
+      expect([await first, await second]).toEqual([landed, landed]);
+      expect(store.deletes).toBe(1);
+      expect(existsSync(fixture.entry)).toBe(!landed);
+      expect(await geminiShown(registry, "one")).toBe(!landed);
+    } finally {
+      writeFileSync(fixture.hold, "");
+      await registry?.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120F: the second instance's Sign out found the saved sign-in already deleted and said "Didn't finish".
+  it("signs two Gemini instances out one after the other with one delete, both done", async () => {
+    const fixture = heldGeminiFixture("omb-agy-two-out-");
+    const store = { refuse: false, deletes: 0 };
+    let registry: ProviderRegistry | undefined;
+    try {
+      ({ registry } = await freshGeminiRun(fixture.cli, fixture.entry, store));
+      expect(await registry.signOut("one")).toBe(true);
+      expect(await registry.signOut("two")).toBe(true);
+      expect(store.deletes).toBe(1);
+      expect(existsSync(fixture.entry)).toBe(false);
+      expect(await geminiShown(registry, "one")).toBe(false);
+      expect(await geminiShown(registry, "two")).toBe(false);
+    } finally {
+      await registry?.disposeAll();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120F: agy's own logout deleted the saved sign-in, so nothing is pending; a sign-in made outside Wink counts.
+  it("ends a pending Sign out once agy's own logout succeeds, so a later sign-in outside Wink is seen", async () => {
+    const fixture = heldGeminiFixture("omb-agy-acp-out-");
+    const updated = join(fixture.dir, "updated");
+    const calls = join(fixture.dir, "calls.txt");
+    const noAcp = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/acp-unsupported.json", import.meta.url), "utf8")).reply;
+    const offline = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/antigravity/update-offline.json", import.meta.url), "utf8")).reply;
+    const turnEnv = { FAKE_AGY_HOLD_FILE: fixture.hold, FAKE_AGY_READY_FILE: fixture.ready, FAKE_AGY_CREDENTIAL_FILE: fixture.entry };
+    // agy 1.3.0 offline until `updated` exists; then agy 1.5 whose ACP logout deletes the saved sign-in.
+    writeFileSync(fixture.cli, `
+const fs = require("node:fs");
+const updated = fs.existsSync(${JSON.stringify(updated)});
+if (process.argv.includes("--version")) { console.log(updated ? "1.5.14" : "1.3.0"); process.exit(0); }
+if (process.argv[2] !== "acp" && process.argv[2] !== "update") {
+  const turn = require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(FAKE_CLI)}, ...process.argv.slice(2)], { stdio: "inherit", env: { ...process.env, ...${JSON.stringify(turnEnv)} } });
+  process.exit(turn.status ?? 1);
+}
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+if (process.argv[2] === "update") process.stdout.write(${JSON.stringify(offline.stdout ?? "")}, () => process.stderr.write(${JSON.stringify(offline.stderr ?? "")}, () => process.exit(${offline.exitCode})));
+else if (!updated) process.stderr.write(${JSON.stringify(noAcp.stderr)}, () => process.exit(${noAcp.exitCode}));
+else require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "logout") fs.rmSync(${JSON.stringify(fixture.entry)}, { force: true });
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    const store = { refuse: true, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let registry: ProviderRegistry | undefined;
+    try {
+      ({ registry } = await freshGeminiRun(fixture.cli, fixture.entry, store));
+      await registry.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const out = registry.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      writeFileSync(fixture.hold, "");
+      expect(await out).toBe(false);
+      expect(store.deletes).toBe(1);
+      expect(await geminiShown(registry, "one")).toBe(true);
+
+      writeFileSync(updated, "");
+      expect(await registry.signOut("one")).toBe(true);
+      expect(existsSync(fixture.entry)).toBe(false);
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+
+      // Signed in again outside Wink (agy in a terminal).
+      writeFileSync(fixture.entry, "new-sign-in");
+      expect(await geminiShown(registry, "one")).toBe(true);
+      expect(await geminiTurn(registry, "two", "t-next")).toMatchObject({ ok: true, signIn: false, reply: true });
+      expect(store.deletes).toBe(1);
+      expect(readFileSync(fixture.entry, "utf8")).toBe("new-sign-in");
+    } finally {
+      writeFileSync(fixture.hold, "");
+      await registry?.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120F: what one run knew in memory leaked into the next registry in the same process. Only the mark carries
+  // over; with none (here: removed, as in another data folder) the next run starts from what the store says.
+  it("keeps nothing in memory past disposeAll: with no mark, a refused Sign out reads still signed in", async () => {
+    const fixture = heldGeminiFixture("omb-agy-dispose-");
+    const store = { refuse: true, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first, load } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      writeFileSync(fixture.hold, "");
+      expect(await out).toBe(false);
+      await first.disposeAll();
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      expect(store.deletes).toBe(1);
+
+      const second = await load();
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(await second.signOut("one")).toBe(false);
+      expect(await geminiShown(second, "one")).toBe(true);
+      store.refuse = false;
+      expect(await second.signOut("one")).toBe(true);
+      expect(await geminiTurn(second, "one", "t-next")).toMatchObject({ ok: false, signIn: true });
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows an outside replacement after a refused delete without another delete", async () => {
+    const fixture = heldGeminiFixture("omb-agy-outside-");
+    const store = { refuse: true, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await refusedSignOut(first, fixture, store);
+
+      rmSync(fixture.entry);
+      writeFileSync(fixture.entry, "outside-sign-in");
+      expect(await geminiShown(first, "one")).toBe(true);
+      expect(await geminiTurn(first, "two", "t-next")).toMatchObject({ ok: true, signIn: false, reply: true });
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      await first.disposeAll();
+
+      store.refuse = false;
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(store.deletes).toBe(1);
+      expect(readFileSync(fixture.entry, "utf8")).toBe("outside-sign-in");
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120G B10: the same logout and sign-in in a terminal while Wink is closed: the next run keeps that sign-in.
+  it("keeps a sign-in made outside Wink while it was closed, after agy's own logout, over a kept Sign out", async () => {
+    const fixture = heldGeminiFixture("omb-agy-outside-closed-");
+    const store = { refuse: true, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await refusedSignOut(first, fixture, store);
+      await first.disposeAll();
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+      writeFileSync(SIGNED_OUT_MARK, new Date().toISOString());
+
+      rmSync(fixture.entry);
+      writeFileSync(fixture.entry, "outside-sign-in");
+      store.refuse = false;
+      const deletes = store.deletes;
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(await geminiTurn(second, "two", "t-next")).toMatchObject({ ok: true, signIn: false, reply: true });
+      expect(store.deletes).toBe(deletes);
+      expect(readFileSync(fixture.entry, "utf8")).toBe("outside-sign-in");
+      expect(existsSync(SIGNED_OUT_MARK)).toBe(false);
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finishes a deferred Sign Out despite a foreign logout log", async () => {
+    const fixture = heldGeminiFixture("omb-agy-old-still-out-");
+    const store = { refuse: false, deletes: 0 };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runs: ProviderRegistry[] = [];
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      await first.get("one")!.adapter.sendTurn({ threadId: "t-held", text: "hi" });
+      await expect.poll(() => existsSync(fixture.ready), { timeout: 5_000 }).toBe(true);
+      const out = first.signOut("one");
+      await vi.waitFor(() => expect(existsSync(SIGNED_OUT_MARK)).toBe(true));
+      agyLog(AGY_LOGOUT);
+      expect(await geminiShown(first, "one")).toBe(true);
+      await first.disposeAll();
+      expect(await out).toBe(true);
+      expect(store.deletes).toBe(1);
+      expect(existsSync(fixture.entry)).toBe(false);
+    } finally {
+      writeFileSync(fixture.hold, "");
+      for (const run of runs) await run.disposeAll();
+      warn.mockRestore();
+      rmSync(SIGNED_OUT_MARK, { force: true });
+      removeTestData(AGY_LOGS);
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Gate 2120G B12: Wink never writes a folder where its mark goes; one there is no mark, run after run.
+  it("reads a folder where the signed-out mark goes as no mark: the saved sign-in stays, run after run", async () => {
+    const fixture = heldGeminiFixture("omb-agy-mark-folder-");
+    writeFileSync(fixture.hold, "");
+    const store = { refuse: false, deletes: 0 };
+    const runs: ProviderRegistry[] = [];
+    mkdirSync(SIGNED_OUT_MARK, { recursive: true });
+    try {
+      const { registry: first } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(first);
+      expect(await geminiShown(first, "one")).toBe(true);
+      expect(await geminiTurn(first, "one", "t-first")).toMatchObject({ ok: true, reply: true });
+      await first.disposeAll();
+      const { registry: second } = await freshGeminiRun(fixture.cli, fixture.entry, store);
+      runs.push(second);
+      expect(await geminiShown(second, "one")).toBe(true);
+      expect(store.deletes).toBe(0);
+      expect(existsSync(fixture.entry)).toBe(true);
+    } finally {
+      for (const run of runs) await run.disposeAll();
+      removeTestData(SIGNED_OUT_MARK);
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
   it("re-checks sign-in on a refresh instead of reusing a recent signed-in answer", async () => {
     chmodSync(FAKE_CLI, 0o755);
     let signedIn = true;
@@ -1435,17 +2387,18 @@ describe("Antigravity computer MCP config", () => {
 
       restoreExistingEntry();
       restored = readConfig(home);
-      // an openmausbot-* key found at mount time is a crash leftover, never written back
+      // a key Wink mounts over is Wink's from then on, never written back
       expect(restored.mcpServers).toEqual({ "another-helper": { command: "another-mcp" } });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("restore strips a stale openmausbot-* key and keeps the user's own keys and unknown top-level keys", () => {
+  it("restore strips the keys a crashed mount left and keeps the user's own keys and unknown top-level keys", () => {
     const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpstale-"));
     try {
-      mkdirSync(join(home, ".gemini", "config"), { recursive: true });
+      // the crashed run's mount, never restored
+      ensureAntigravityComputerMcp(boxEntry(), { HOME: home });
       writeFileSync(
         configPath(home),
         JSON.stringify({
@@ -1581,6 +2534,10 @@ describe("Antigravity computer MCP config", () => {
       await teacherRecorder.until((event) => event.type === "turn.completed");
       expect(pythonRecorder.events.at(-1)).toMatchObject({ ok: true });
       expect(teacherRecorder.events.at(-1)).toMatchObject({ ok: true });
+      // each chat's standby keeps Wink's entries mounted until it is retired
+      expect(JSON.parse(readFileSync(configPath(home), "utf8")).mcpServers).toEqual({ "sqlite-helper": { command: "sqlite-mcp-server" }, ...staticEntries });
+      await python.dispose();
+      await teacher.dispose();
       await expect.poll(() => readFileSync(configPath(home), "utf8")).toBe(original);
     } finally {
       writeFileSync(hold, "");
@@ -1606,6 +2563,83 @@ describe("Antigravity computer MCP config", () => {
       await recorder.until((event) => event.type === "turn.completed");
       const { env } = JSON.parse(readFileSync(join(home, "token.json"), "utf8"));
       expect(env).toMatchObject({ OMB_COMMS_TOKEN: "agents-tok", OMB_TERMINAL_TOKEN: "grant-python", OMB_TERMINAL_URL: "http://127.0.0.1:9" });
+    } finally {
+      recorder.stop();
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["", "0", "1"])("hands the agents proxy catalog flag %s through agy's env", async (flag) => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-catalog-"));
+    const instance = await createIn(home, "catalog", { FAKE_AGY_DUMP: join(home, "catalog.json") });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-python", text: "one", integrations: botIntegrations("python") });
+      await recorder.until((event) => event.type === "turn.completed");
+      const { env } = JSON.parse(readFileSync(join(home, "catalog.json"), "utf8"));
+      expect(env.OMB_WINK_TOOL_CATALOG).toBe(flag === "0" ? undefined : "1");
+      expect(env.OMB_BOT_ID).toBe("python");
+    } finally {
+      vi.unstubAllEnvs();
+      recorder.stop();
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the Wink tool schemas Gemini loads every call inside the budget", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "");
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-budget-"));
+    const instance = await createIn(home, "budget", { FAKE_AGY_DUMP: join(home, "budget.json") });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-agents-budget", text: "hi", integrations: { agents: { command: process.execPath, args: [SPAWNED_PROXIES.agents], env: AGENTS_IDENTITY } } });
+      await recorder.until((event) => event.type === "turn.completed");
+      // the static mcp_config entry's proxy inherits agy's env, so the dump is what it reads
+      const tools = await listAgentsTools(JSON.parse(readFileSync(join(home, "budget.json"), "utf8")).env);
+      expectAgentsBudget("Gemini", tools, 17_500);
+    } finally {
+      vi.unstubAllEnvs();
+      recorder.stop();
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("names a catalog call's tool row after the real tool, as a direct call would be", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-catalog-row-"));
+    const conversation_id = "00000000-0000-4000-8000-000000000000";
+    type Parameters = { query: string } | { name: string; arguments: Record<string, string> };
+    const step = (step_index: number, state: string, tool_name: string, parameters: Parameters) =>
+      ({ event: "step_update", step_update: { conversation_id, step_index, state, step_type: "tool", tool_name, tool_info: { name: tool_name, parameters } } });
+    const call = { name: "generate_image", arguments: { prompt: "a cat" } };
+    const replay = [
+      { event: "init", conversation_id, init: { cwd: home, permission_mode: "always-proceed" } },
+      step(0, "ACTIVE", "find_wink_tool", { query: "image" }),
+      step(0, "DONE", "find_wink_tool", { query: "image" }),
+      step(1, "ACTIVE", "call_wink_tool", call),
+      step(1, "DONE", "call_wink_tool", call),
+      step(2, "ACTIVE", "call_wink_tool", { name: "react", arguments: {} }),
+      step(2, "ERROR", "call_wink_tool", { name: "react", arguments: {} }),
+      { event: "step_update", step_update: { conversation_id, step_index: 3, state: "DONE", step_type: "agent_response", text_delta: "Made it." } },
+      { event: "result", result: { conversation_id, status: "SUCCESS", response: "Made it." } },
+    ];
+    const instance = await createIn(home, "catalog-row", { FAKE_AGY_REPLAY: JSON.stringify(replay) });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-catalog-row", text: "draw a cat", integrations: botIntegrations("python") });
+      await recorder.until((event) => event.type === "turn.completed");
+      const titles = recorder.events.flatMap((event) => (event.type === "item.started" ? [event.title] : []));
+      // react is loaded directly, so the gateway refuses it and the row keeps the gateway's name
+      expect(titles).toEqual(["find_wink_tool", "generate_image", "call_wink_tool"]);
     } finally {
       recorder.stop();
       await instance.dispose();
@@ -1658,6 +2692,10 @@ describe("Antigravity computer MCP config", () => {
         [ANTIGRAVITY_COMPUTER_MCP_KEY]: boxEntry(),
       });
       expect(JSON.parse(readFileSync(laterDump, "utf8")).mcpServers).toEqual(staticEntries);
+      // the later chat's standby holds the shared mount; the computer turn left none
+      expect(JSON.parse(readFileSync(configPath(home), "utf8")).mcpServers).toEqual(staticEntries);
+      await shared.dispose();
+      await later.dispose();
       await expect.poll(() => existsSync(configPath(home))).toBe(false);
     } finally {
       writeFileSync(holdShared, "");
@@ -1710,6 +2748,94 @@ describe("Antigravity computer MCP config", () => {
     }
   });
 
+  it("a note helper runs on its own empty MCP config, so a computer turn starts beside it", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpyield-"));
+    const holdHelper = join(home, "hold-helper");
+    const holdComputer = join(home, "hold-computer");
+    const helperReady = join(home, "helper.ready");
+    const computerReady = join(home, "computer.ready");
+    const helperDump = join(home, "helper.json");
+    const helper = await createIn(home, "helper", { FAKE_AGY_HOLD_FILE: holdHelper, FAKE_AGY_READY_FILE: helperReady, FAKE_AGY_MCP_DUMP: helperDump });
+    const computer = await createIn(home, "computer", { FAKE_AGY_HOLD_FILE: holdComputer, FAKE_AGY_READY_FILE: computerReady });
+    const computerRecorder = recordEvents(computer.adapter);
+    try {
+      const notes = helper.generateText!("notes").catch((error: unknown) => error);
+      await expect.poll(() => existsSync(helperReady)).toBe(true);
+      await computer.adapter.sendTurn({ threadId: "t-mcp-yield", text: "click", integrations: boxIntegrations });
+      await expect.poll(() => existsSync(computerReady), { timeout: 1_000 }).toBe(true);
+      expect(readConfig(home).mcpServers[ANTIGRAVITY_COMPUTER_MCP_KEY]).toEqual(boxEntry());
+
+      writeFileSync(holdHelper, "");
+      expect(await notes).toBe("done from fake agy");
+      const seen = readFileSync(helperDump, "utf8");
+      expect(JSON.parse(seen)).toEqual({ mcpServers: {} });
+      expect(seen).not.toContain("box-tok");
+
+      writeFileSync(holdComputer, "");
+      await computerRecorder.until((event) => event.type === "turn.completed");
+      expect(computerRecorder.events.at(-1)).toMatchObject({ ok: true });
+    } finally {
+      writeFileSync(holdHelper, "");
+      writeFileSync(holdComputer, "");
+      computerRecorder.stop();
+      await helper.dispose();
+      await computer.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a note helper's quota failure from the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-notelimit-"));
+    const helper = await createIn(home, "limited", { FAKE_AGY_RESULT_ERROR: "RESOURCE_EXHAUSTED (code 429): Quota exceeded for quota metric Generate requests." });
+    try {
+      await expect(helper.generateText!("notes")).rejects.toThrow("Account text rate limit");
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("holds a note helper after a sign-in rejection in the result error", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-signedout-"));
+    const helper = await createIn(home, "signed-out", { FAKE_AGY_RESULT_ERROR: "UNAUTHENTICATED (code 401): Sign in again." });
+    const usage = { limits: new Map(), save: () => {}, signedOut: new Set<string>() };
+    try {
+      await expect(noteGenerator([], undefined, helper, usage)!("notes", new AbortController().signal)).rejects.toThrow("UNAUTHENTICATED (code 401)");
+      expect(noteGenerator([], undefined, helper, usage)).toBeNull();
+    } finally {
+      await helper.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("writes notes on the bot's chat model only when the account is denied the text model", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-denied-"));
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const models = () => spawn.mock.calls.flatMap(([, args]) => args.includes("--model") ? [args[args.indexOf("--model") + 1]] : []);
+    const allowed = await createIn(home, "allowed");
+    const denied = await createIn(home, "denied", { FAKE_AGY_DENIED_MODEL: "gemini-3.8-flash-low" });
+    try {
+      await expect(summaryInstance(allowed, "gemini-4-carbon-low").generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low"]);
+      spawn.mockClear();
+      const own = summaryInstance(denied, "gemini-4-carbon-low");
+      for (let i = 0; i < 2; i++) await expect(own.generateText!("notes")).resolves.toBe("done from fake agy");
+      expect(models()).toEqual(["gemini-3.8-flash-low", "gemini-4-carbon-low", "gemini-4-carbon-low"]);
+    } finally {
+      await allowed.dispose();
+      await denied.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("reaps a child that hangs after result, restores the mount, and unblocks the next turn", async () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
@@ -1756,6 +2882,8 @@ describe("Antigravity computer MCP config", () => {
 
       expect(JSON.parse(readFileSync(firstDump, "utf8")).mcpServers[ANTIGRAVITY_COMPUTER_MCP_KEY]).toEqual(boxEntry());
       expect(JSON.parse(readFileSync(secondDump, "utf8"))?.mcpServers?.[ANTIGRAVITY_COMPUTER_MCP_KEY]).toBeUndefined();
+      expect(JSON.parse(readFileSync(configPath(home), "utf8")).mcpServers).toEqual(staticEntries);
+      await second.dispose();
       await expect.poll(() => existsSync(configPath(home))).toBe(false);
     } finally {
       firstRecorder.stop();
@@ -1808,6 +2936,8 @@ describe("Antigravity computer MCP config", () => {
       }
       await secondTurn;
       await secondRecorder.until((event) => event.type === "turn.completed");
+      expect(JSON.parse(readFileSync(configPath(home), "utf8")).mcpServers).toEqual(staticEntries);
+      await second.dispose();
       await expect.poll(() => existsSync(configPath(home)), { timeout: 6_000 }).toBe(false);
     } finally {
       secondRecorder.stop();
@@ -1816,6 +2946,271 @@ describe("Antigravity computer MCP config", () => {
       rmSync(home, { recursive: true, force: true });
     }
   }, 10_000);
+
+  describe("standby agy for the chat's next turn", () => {
+    let dir: string;
+    let log: string;
+    let dump: string;
+    let cli: string;
+    let instances: ProviderInstance[];
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    /** Turn processes in start order: a standby is logged when it starts, before any prompt. */
+    const spawns = (): Array<{ pid: number; argv: string[] }> =>
+      existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+    const make = async (name: string, environment: Record<string, string> = {}) => {
+      const instance = await AntigravityDriver.create({
+        instanceId: `agy-standby-${name}`,
+        displayName: undefined,
+        environment: { HOME: dir, ...environment },
+        enabled: true,
+        config: { cli: `"${process.execPath}" "${cli}"`, fullAuto: true },
+      });
+      instances.push(instance);
+      return instance;
+    };
+    const turn = async (instance: ProviderInstance, input: Parameters<ProviderInstance["adapter"]["sendTurn"]>[0]) => {
+      const recorder = recordEvents(instance.adapter);
+      try {
+        const { turnId } = await instance.adapter.sendTurn(input);
+        await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+        const events = recorder.events.filter((event) => event.turnId === turnId);
+        const served = JSON.parse(readFileSync(dump, "utf8"));
+        const session = events.find((event) => event.type === "session.started") as { sessionId: string } | undefined;
+        return { events, cursor: session?.sessionId, pid: Number(served.env.WRAP_PID), prompt: served.prompt as string };
+      } finally {
+        recorder.stop();
+      }
+    };
+    const standbyAfter = async (count: number) => {
+      await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(count);
+      return spawns()[count - 1]!;
+    };
+    const chat = { threadId: "t-standby", integrations: botIntegrations("python") };
+
+    beforeEach(() => {
+      ensureDirs();
+      dir = mkdtempSync(join(tmpdir(), "omb-agy-standby-"));
+      log = join(dir, "spawns.ndjson");
+      dump = join(dir, "dump.json");
+      const fake = oldOfflineAgy(dir, join(dir, "calls.txt"), { FAKE_AGY_DUMP: dump, FAKE_AGY_HOLD_FILE: join(dir, "go") });
+      writeFileSync(join(dir, "go"), "");
+      cli = join(dir, "spawn-log.cjs");
+      writeFileSync(cli, `
+if (process.argv.includes("--input-format")) {
+  require("node:fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, argv: process.argv.slice(2) }) + "\\n");
+  process.env.WRAP_PID = String(process.pid);
+}
+require(${JSON.stringify(fake)});
+`);
+      instances = [];
+    });
+
+    afterEach(async () => {
+      for (const instance of instances) await instance.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("runs the next turn on the agy started on its conversation after the last one", async () => {
+      const instance = await make("reuse");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      expect(standby.argv[standby.argv.indexOf("--conversation") + 1]).toBe(first.cursor);
+
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+      expect(second.pid).toBe(standby.pid);
+      expect(second.prompt).toBe("two");
+      expect(second.cursor).toBe(first.cursor);
+      expect(second.events.map((event) => event.type)).toEqual(first.events.map((event) => event.type));
+      // and the turn after it gets its own
+      await standbyAfter(3);
+    });
+
+    it.each([
+      ["model", { model: "gemini-4-neon-low" }],
+      ["effort", { effort: "high" as const }],
+      ["folder", { cwd: tmpdir() }],
+      ["permissions", { readOnly: true as const }],
+      ["tools", { integrations: botIntegrations("teacher") }],
+      ["cursor", { resumeCursor: "conv-elsewhere" }],
+    ])("starts a fresh agy when the %s changed, and retires the standby", async (_change, change) => {
+      const instance = await make("refuse");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor, ...change });
+      expect(second.pid).not.toBe(standby.pid);
+      expect(second.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+    });
+
+    it("keeps no standby after a stopped turn", async () => {
+      const instance = await make("stop");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      rmSync(join(dir, "go"));
+      const recorder = recordEvents(instance.adapter);
+      try {
+        await instance.adapter.sendTurn({ ...chat, text: "two", resumeCursor: first.cursor });
+        await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("two");
+        await instance.adapter.interruptTurn(chat.threadId);
+        await recorder.until((event) => event.type === "turn.completed");
+      } finally {
+        recorder.stop();
+      }
+      expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", stopReason: "interrupted" });
+      await expect.poll(() => alive(standby.pid), { timeout: 5_000 }).toBe(false);
+      writeFileSync(join(dir, "go"), "");
+      const third = await turn(instance, { ...chat, text: "three", resumeCursor: first.cursor });
+      expect(third.pid).not.toBe(standby.pid);
+      expect(spawns()).toHaveLength(3);
+    });
+
+    it("retires an idle standby before a computer turn mounts its own config", async () => {
+      const instance = await make("ordinary");
+      await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      const computer = await make("computer");
+      const clicked = await turn(computer, { threadId: "t-standby-computer", text: "click", integrations: boxIntegrations });
+      expect(clicked.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+      // a computer turn leaves none (its mount holds the box token): its exit restores the config instead of handing it over
+      await vi.waitFor(() => expect(existsSync(join(dir, ".gemini", "config", "mcp_config.json"))).toBe(false));
+      expect(spawns()).toHaveLength(3);
+    });
+
+    it("never rewrites agy's config while a chat runs on its standby and hands over to the next", async () => {
+      const instance = await make("handoff");
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      const first = await turn(instance, { ...chat, text: "one" });
+      await standbyAfter(2);
+      const before = readFileSync(config, "utf8");
+      const changes: string[] = [];
+      const watcher = watch(dirname(config), (event, name) => changes.push(`${event} ${name}`));
+      try {
+        await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+        await standbyAfter(3);
+        // fs.watch reports in order, so every earlier config write is in by the time this one is
+        writeFileSync(join(dirname(config), "sentinel"), "");
+        await vi.waitFor(() => expect(changes).toContain("rename sentinel"));
+      } finally {
+        watcher.close();
+      }
+      expect(changes.filter((change) => !change.endsWith("sentinel"))).toEqual([]);
+      expect(readFileSync(config, "utf8")).toBe(before);
+    });
+
+    it("drops Wink's entries a crash left in agy's config when Wink starts again", async () => {
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      mkdirSync(dirname(config), { recursive: true });
+      const user = { "sqlite-helper": { command: "sqlite-mcp-server" } };
+      // the crashed run's mount, never restored
+      ensureAntigravityComputerMcp(null, { HOME: dir });
+      writeFileSync(config, JSON.stringify({ mcpServers: { ...user, ...staticEntries }, futureTopLevelKey: { keep: true } }));
+      await make("after-crash");
+      expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ mcpServers: user, futureTopLevelKey: { keep: true } });
+    });
+
+    it("keeps a user's own openmausbot-* server in its place through start, turns and quit", async () => {
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      mkdirSync(dirname(config), { recursive: true });
+      const user = { zeta: { command: "zeta" }, "openmausbot-my-notes": { command: "notes" }, alpha: { command: "alpha" } };
+      writeFileSync(config, JSON.stringify({ mcpServers: user }));
+      const servers = () => JSON.parse(readFileSync(config, "utf8")).mcpServers;
+      const instance = await make("user-prefix");
+      expect(Object.keys(servers())).toEqual(Object.keys(user));
+      await turn(instance, { ...chat, text: "one" });
+      await standbyAfter(2);
+      expect(Object.keys(servers())).toEqual([...Object.keys(user), ...Object.keys(staticEntries)]);
+      await instance.dispose();
+      await vi.waitFor(() => expect(Object.keys(servers())).toEqual(Object.keys(user)));
+      expect(servers()).toEqual(user);
+    });
+
+    it.each([
+      ["added", (servers: Record<string, unknown>) => ({ ...servers, omega: { command: "omega" } })],
+      ["edited", (servers: Record<string, unknown>) => ({ ...servers, alpha: { command: "alpha", args: ["--v2"] } })],
+      ["removed", ({ alpha: _alpha, ...servers }: Record<string, unknown>) => servers],
+    ])("starts a fresh agy when the user's MCP server list was %s, and retires the standby", async (_change, change) => {
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      mkdirSync(dirname(config), { recursive: true });
+      writeFileSync(config, JSON.stringify({ mcpServers: { alpha: { command: "alpha" } } }));
+      const instance = await make("mcp-list");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      const mounted = JSON.parse(readFileSync(config, "utf8"));
+      writeFileSync(config, JSON.stringify({ ...mounted, mcpServers: change(mounted.mcpServers) }));
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+      expect(second.pid).not.toBe(standby.pid);
+      expect(second.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+    });
+
+    it("retires the standby when agy's account changes outside Wink", async () => {
+      const logs = join(dir, ".gemini", "antigravity-cli", "log");
+      mkdirSync(logs, { recursive: true });
+      const signInAs = (email: string, stamp: string) => writeFileSync(
+        join(logs, `cli-20261125_${stamp}.log`),
+        `I1125 10:47:13.5 261 server_oauth.go:221] applyAuthResult: email=${email}, authMethod=consumer, quotaProject=\n`,
+      );
+      signInAs("ed@example.com", "100000");
+      const instance = await make("account");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      signInAs("other@example.com", "110000");
+      expect((await instance.snapshot({ refresh: true })).account).toBe("other@example.com");
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+      expect(second.pid).not.toBe(standby.pid);
+      expect(second.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+    });
+
+    it("retires the standby on dispose", async () => {
+      const instance = await make("dispose");
+      await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      await instance.dispose();
+      await expect.poll(() => alive(standby.pid), { timeout: 5_000 }).toBe(false);
+    });
+
+    // sign-in first: agy's sign-out is module state that outlives the registry
+    it.each(["sign-in", "sign-out"] as const)("retires the standby before %s touches agy's saved sign-in", async (action) => {
+      const keyring = fakeKeyring(dir);
+      const registry = new ProviderRegistry([AntigravityDriver]);
+      // a registry hold outlives disposeAll until a probe settles it, so each case is its own instance
+      const id = `agy-standby-${action}`;
+      try {
+        await registry.load({ [id]: { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${cli}"`, fullAuto: true } } });
+        await turn(registry.get(id)!, { ...chat, text: "one" });
+        const standby = await standbyAfter(2);
+        let aliveAtKeyring: boolean | undefined;
+        const forget = keyring.forget.getMockImplementation()!;
+        keyring.forget.mockImplementation(async (target) => {
+          aliveAtKeyring = alive(standby.pid);
+          return forget(target);
+        });
+        if (action === "sign-out") {
+          expect(await registry.signOut(id)).toBe(true);
+        } else {
+          const login = vi.spyOn(registry.logins, "start").mockImplementation(() => {
+            aliveAtKeyring = alive(standby.pid);
+            return undefined as never;
+          });
+          await registry.startSignIn(id).catch(() => {});
+          expect(login).toHaveBeenCalled();
+        }
+        expect(aliveAtKeyring).toBe(false);
+      } finally {
+        await registry.disposeAll();
+        rmSync(SIGNED_OUT_MARK, { force: true });
+      }
+    });
+  });
 });
 
 
@@ -1984,11 +3379,105 @@ describe("Antigravity Windows long-prompt transport", () => {
 
   it("maps ENAMETOOLONG spawn failures to a clear recoverable message", () => {
     const err = Object.assign(new Error("spawn agy ENAMETOOLONG"), { code: "ENAMETOOLONG" });
-    expect(describeSpawnFailure(err, "agy")).toEqual({
+    expect(procs.describeSpawnFailure(err, "agy")).toEqual({
       message: "spawn failed: command line too long for this OS (`agy`)",
       setup: false,
     });
     const e2big = Object.assign(new Error("spawn agy E2BIG"), { code: "E2BIG" });
-    expect(describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
+    expect(procs.describeSpawnFailure(e2big, "agy").message).toMatch(/command line too long/);
+  });
+});
+
+describe("agy's token file", () => {
+  // agy 1.5 saves its sign-in to this file instead of the keyring over SSH (the phone sign-in sets SSH_CONNECTION) and reads both.
+  const tokenHome = () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-token-"));
+    mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+    return { home, token: join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token") };
+  };
+  beforeEach(() => {
+    vi.spyOn(auth, "probeAntigravitySignIn").mockResolvedValue(false);
+    vi.mocked(auth.antigravitySignIn).mockImplementation((probe, unprobed) => createSignIn(probe ?? auth.probeAntigravitySignIn, unprobed));
+  });
+
+  async function load(home: string, fake: string) {
+    const registry = new ProviderRegistry([AntigravityDriver]);
+    await registry.load({ agy: { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${fake}"`, fullAuto: false }, environment: { HOME: home, USERPROFILE: home } } });
+    return registry;
+  }
+
+  it("finishes a phone sign-in that agy saved to its token file", async () => {
+    const { home, token } = tokenHome();
+    const fake = join(home, "fake-agy.cjs");
+    writeFileSync(fake, `
+if (process.argv.includes("--version")) { console.log("1.5.14"); process.exit(0); }
+process.stdout.write("Open this link in a browser to log in with Google:\\n  https://accounts.google.com/o/oauth2/auth?x=1\\nThen paste the authorization code, or the full URL of the page you land on, and press Enter:\\n");
+require("node:readline").createInterface({ input: process.stdin }).once("line", () => {
+  require("node:fs").writeFileSync(${JSON.stringify(token)}, "{}");
+  process.exit(0);
+});
+`);
+    const registry = await load(home, fake);
+    try {
+      expect(await geminiShown(registry, "agy")).toBe(false);
+      const capture = await registry.startSignIn("agy", true);
+      expect(capture?.inputGeneration).toBeDefined();
+      expect(registry.logins.submit("agy", capture!.inputGeneration!, "4/fake-code")).toBe(true);
+      await registry.logins.wait("agy");
+      expect(registry.logins.state("agy")).toBe("complete");
+      await registry.describeCached();
+      expect(registry.logins.state("agy")).toBe("complete");
+      expect(await geminiShown(registry, "agy")).toBe(true);
+    } finally {
+      await registry.disposeAll();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("finishes a computer sign-in that agy answers from its token file with no browser", async () => {
+    const { home, token } = tokenHome();
+    const fake = join(home, "fake-agy.cjs");
+    writeFileSync(fake, `
+if (process.argv.includes("--version")) { console.log("1.5.14"); process.exit(0); }
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (method === "authenticate" && !require("node:fs").existsSync(${JSON.stringify(token)})) process.exit(1);
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: {} }) + "\\n");
+});
+`);
+    const registry = await load(home, fake);
+    try {
+      writeFileSync(token, "{}");
+      await registry.startSignIn("agy");
+      await registry.logins.wait("agy");
+      expect(registry.logins.state("agy")).toBe("complete");
+      await registry.describeCached();
+      expect(registry.logins.state("agy")).toBe("complete");
+      expect(await geminiShown(registry, "agy")).toBe(true);
+    } finally {
+      await registry.disposeAll();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("sees an agy sign-in made outside Wink without a restart, and an empty or missing file as none", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const { home, token } = tokenHome();
+    const instance = await AntigravityDriver.create({
+      instanceId: "agy-outside", displayName: undefined, environment: { HOME: home, USERPROFILE: home }, enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await instance.snapshot({ refresh: true })).authenticated).toBe(false);
+      writeFileSync(token, "");
+      expect((await instance.snapshot({ refresh: true })).authenticated).toBe(false);
+      writeFileSync(token, "{}");
+      expect((await instance.snapshot({ refresh: true })).authenticated).toBe(true);
+      rmSync(token);
+      expect((await instance.snapshot({ refresh: true })).authenticated).toBe(false);
+    } finally {
+      await instance.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

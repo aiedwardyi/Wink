@@ -4,18 +4,18 @@
 // transcript AND its own provider session. If resume cursors leaked
 // between tasks, a "fresh" task would silently resume the previous
 // conversation, which is the exact thing tasks exist to prevent.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 let home: string;
 
 async function freshStore() {
-  home = mkdtempSync(join(tmpdir(), "omb-tasks-"));
+  home = mkdtempSync(join(testHome(), "omb-tasks-"));
   vi.resetModules();
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("USERPROFILE", home);
+  vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, UNTITLED_TASK, titleFromMessage } = await import("./store.ts");
   return { store: new Store(() => ({ instanceId: "claude", model: "m" })), UNTITLED_TASK, titleFromMessage };
 }
@@ -26,7 +26,7 @@ afterEach(async () => {
   const { closeMessageDb } = await import("./message-db.ts");
   closeMessageDb();
   vi.unstubAllEnvs();
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 describe("tasks", () => {
@@ -41,6 +41,7 @@ describe("tasks", () => {
     const { store } = await freshStore();
     const bot = store.createBot();
     const firstThread = bot.threadId;
+    store.appendMessage(firstThread, { role: "user", kind: "text", text: "hello" });
     const task = store.createTask(bot.id)!;
 
     expect(task.threadId).not.toBe(firstThread);

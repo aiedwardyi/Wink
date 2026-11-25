@@ -299,6 +299,25 @@ describe("phone relay runtime status", () => {
     expect(back.lastError).toBeNull();
   });
 
+  it("reports a front-door certificate the CA refuses while the saved name stays connected", async () => {
+    r = await rig();
+    r.relay.otherBases.push("front.test");
+    const { handler } = harness();
+    const deps = { env: {}, connector: r.relay.connector(), ctSource: null, acmeInsecureDirectories: true };
+    const first = new StatusLog();
+    relayHandle = createPhoneRelay({ dataDir: r.dataDir, config: r.config, handler, onStatus: first.push }, { ...deps, clock: new FakeClock() });
+    await first.until((s) => s.state === "connected");
+    await relayHandle.stop();
+    r.acme.mode = "limited";
+    const clock = new FakeClock();
+    const statuses = new StatusLog();
+    relayHandle = createPhoneRelay({ dataDir: r.dataDir, config: r.config, handler, onStatus: statuses.push, frontDoor: "front.test" }, { ...deps, clock });
+    await vi.waitFor(() => expect(relayHandle!.status().lastError ?? "").toMatch(/^certificate request failed/), { timeout: 5000 });
+    const refused = relayHandle.status();
+    expect(refused.state).toBe("connected");
+    expect(refused.nextRetryAt).toBe(clock.now() + 3_600_000);
+  });
+
   it("surfaces a CT alert in lastError", async () => {
     r = await rig();
     const rr = r;

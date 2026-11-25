@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
 import { holdRoomFiles, moveRoomFiles, roomFilesFolder, roomFilesRoot } from "./files-folder.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const disk = vi.hoisted(() => ({ corrupt: false }));
 vi.mock("node:fs/promises", async (original) => {
@@ -22,7 +23,7 @@ const setting = join(DATA_DIR, "room-files-folder.json");
 const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(join(old, "room1"), { recursive: true });
   writeFileSync(join(old, "room1", "file1"), "original");
   disk.corrupt = false;
@@ -74,7 +75,7 @@ describe("room files folder", () => {
     writeFileSync(setting, JSON.stringify({ path: join(DATA_DIR, "unplugged-drive") }));
     mkdirSync(join(next, "room1"), { recursive: true });
     await expect(moveRoomFiles(pick)).rejects.toMatchObject({ status: 503 });
-    rmSync(next, { recursive: true });
+    removeTestData(next);
     expect(await moveRoomFiles(pick)).toEqual({ path: next, error: null });
     expect(JSON.parse(readFileSync(setting, "utf8"))).toEqual({ path: next });
     expect(() => holdRoomFiles()()).not.toThrow();

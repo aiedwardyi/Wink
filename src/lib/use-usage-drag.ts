@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "./phone-swipe";
-import { LIFT_SCALE, soften, travel, useTouchDrag, type Travel } from "./use-touch-drag";
+import { LIFT_SCALE, LONG_PRESS_SLOP, soften, travel, useTouchDrag, type Travel } from "./use-touch-drag";
 
 const KEY = "openmausbot.usageOrder.v1";
 const CHANGE = "usage-order";
@@ -166,6 +166,8 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     if (!pressed) return;
     unbind.current();
     const { clientX: startX, clientY: startY } = event;
+    // a press on a button keeps a tap's give, so a jiggly click near the list edge stays a click
+    const slop = event.target.closest("button") ? LONG_PRESS_SLOP : SLOP;
     let node: HTMLElement | null = null;
     let pointerY = startY;
     let frame = 0;
@@ -187,7 +189,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const move = (next: globalThis.PointerEvent) => {
       pointerY = next.clientY;
       if (!node) {
-        if (Math.hypot(next.clientX - startX, next.clientY - startY) < SLOP) return;
+        if (Math.hypot(next.clientX - startX, next.clientY - startY) <= slop) return;
         node = lift(pressed);
         if (!node || !active.current) { unbind.current(); return; }
         active.current.y = startY;

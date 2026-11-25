@@ -1,15 +1,15 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 let home: string;
 
 async function freshStore() {
-  home = mkdtempSync(join(tmpdir(), "omb-group-tasks-"));
+  home = mkdtempSync(join(testHome(), "omb-group-tasks-"));
   vi.resetModules();
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("USERPROFILE", home);
+  vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, UNTITLED_TASK } = await import("./store.ts");
   return { store: new Store(() => ({ instanceId: "claude", model: "m" })), Store, UNTITLED_TASK };
 }
@@ -18,7 +18,7 @@ afterEach(async () => {
   const { closeMessageDb } = await import("./message-db.ts");
   closeMessageDb();
   vi.unstubAllEnvs();
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 describe("channel tasks", () => {

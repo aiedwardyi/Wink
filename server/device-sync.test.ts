@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -9,8 +11,10 @@ import {
   DEVICE_DIR,
   DEVICE_STALE_MS,
   deviceDisplayName,
+  heldRemovals,
   listDevices,
   loadDeviceName,
+  machineKey,
   namedDevicePeers,
   pickerDevices,
   saveDeviceName,
@@ -19,12 +23,17 @@ import {
 } from "./device-sync.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
+const { relayDeviceUrl } = createRequire(import.meta.url)("../electron/device-window.cjs");
+
 const temps = createTempDirs();
 afterAll(() => temps.remove());
 
 const NOW = 1_800_000_000_000;
 const freshDir = () => temps.make(join(tmpdir(), "orbit-devices-"));
 const rec = (id: string, host = `${id}.tail1234.ts.net`) => ({ deviceId: id, name: id, host });
+
+vi.mock("node:child_process", { spy: true });
+vi.mock("node:os", { spy: true });
 
 describe("device sync", () => {
   it("keeps launch presence checking until its mirror record is known", () => {
@@ -168,6 +177,109 @@ describe("relay presence", () => {
       expect(oldReader.safeParse(JSON.parse(readFileSync(join(folder, DEVICE_DIR, `${id}.json`), "utf8"))).success).toBe(true);
     }
     expect(scanDevices(folder).unreadable).toEqual([]);
+  });
+
+  it("shows a reinstalled PC once: its stale old id on the same tailnet host drops out", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("laptop-old"), name: "Laptop", host: "laptop.tail1234.ts.net", laptop: true }, NOW - 2 * 60 * 60_000);
+    writeDeviceRecord(folder, { ...rec("laptop-new"), name: "LAPTOP-7Q2", host: "laptop.tail1234.ts.net", laptop: true }, NOW);
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, rec("work"), NOW - 2 * 60 * 60_000);
+    expect(listDevices(folder, "laptop-new", NOW).map((d) => [d.deviceId, d.current])).toEqual([["home", false], ["laptop-new", true], ["work", false]]);
+    expect(listDevices(folder, "home", NOW).map((d) => d.deviceId)).toEqual(["home", "laptop-new", "work"]);
+    expect(listDevices(folder, "home", NOW + 3 * DEVICE_STALE_MS).map((d) => d.deviceId)).toEqual(["home", "laptop-new", "work"]);
+  });
+
+  it("shows a reinstalled PC once right away, by machine key or tailnet host", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("lap-old", "laptop.tail1234.ts.net"), name: "LAPTOP" }, NOW - 3 * 60_000);
+    writeDeviceRecord(folder, { ...rec("lap-new", "laptop.tail1234.ts.net"), name: "LAPTOP", machine: "0123456789abcdef" }, NOW);
+    writeDeviceRecord(folder, { deviceId: "relay-old", name: "Den", host: relay("denold"), relayHost: relay("denold"), machine: "fedcba9876543210" }, NOW - 60_000);
+    writeDeviceRecord(folder, { deviceId: "relay-new", name: "Den", host: relay("dennew"), relayHost: relay("dennew"), machine: "fedcba9876543210" }, NOW);
+    writeDeviceRecord(folder, rec("home"), NOW);
+    expect(listDevices(folder, "lap-new", NOW).map((d) => d.deviceId)).toEqual(["relay-new", "home", "lap-new"]);
+    expect(listDevices(folder, "home", NOW).map((d) => d.deviceId)).toEqual(["relay-new", "home", "lap-new"]);
+  });
+
+  it("keys a PC by machine and data dir", () => {
+    const os = vi.mocked(platform).mockReturnValue("darwin");
+    const query = vi.mocked(execFileSync).mockReturnValue('    "IOPlatformUUID" = "11111111-2222-3333-4444-555555555555"\n');
+    try {
+      const first = machineKey("/a/.orbit");
+      expect(first).toMatch(/^[0-9a-f]{32}$/);
+      expect(first).not.toContain("11111111222233334444555555555555");
+      expect(first).toBe(machineKey("/a/.orbit"));
+      expect(first).not.toBe(machineKey("/b/.orbit"));
+      query.mockReturnValue("");
+      expect(machineKey("/a/.orbit")).toBeUndefined();
+    } finally {
+      os.mockRestore();
+      query.mockRestore();
+    }
+  });
+
+  it("keeps live PCs with the same name and paths separate from every PC", () => {
+    const os = vi.mocked(platform).mockReturnValue("win32");
+    const query = vi.mocked(execFileSync).mockReturnValue("    MachineGuid    REG_SZ    11111111-1111-1111-1111-111111111111\r\n");
+    try {
+      const first = machineKey("/a/.orbit");
+      const folder = freshDir();
+      query.mockReturnValue("    MachineGuid    REG_SZ    22222222-2222-2222-2222-222222222222\r\n");
+      const second = machineKey("/a/.orbit");
+      writeDeviceRecord(folder, { ...rec("pc-a"), name: "PC", machine: first }, NOW - 60_000);
+      writeDeviceRecord(folder, { ...rec("pc-b"), name: "PC", machine: second }, NOW);
+      for (const current of ["pc-a", "pc-b", "observer"]) {
+        expect(listDevices(folder, current, NOW).map((device) => device.deviceId)).toEqual(["pc-a", "pc-b"]);
+      }
+    } finally {
+      os.mockRestore();
+      query.mockRestore();
+    }
+  });
+
+  it("never merges different machines, even on one tailnet host, or different hosts", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("a", "pc.tail1234.ts.net"), machine: "aaaaaaaaaaaaaaaa" }, NOW - 60_000);
+    writeDeviceRecord(folder, { ...rec("b", "pc.tail1234.ts.net"), machine: "bbbbbbbbbbbbbbbb" }, NOW);
+    writeDeviceRecord(folder, { ...rec("copy", "pc-1.tail1234.ts.net") }, NOW - 2 * 60 * 60_000);
+    writeDeviceRecord(folder, { deviceId: "r1", name: "r1", host: relay("relayone"), relayHost: relay("relayone") }, NOW);
+    writeDeviceRecord(folder, { deviceId: "r2", name: "r2", host: relay("relaytwo"), relayHost: relay("relaytwo") }, NOW);
+    expect(listDevices(folder, "x", NOW).map((d) => d.deviceId)).toEqual(["a", "b", "copy", "r1", "r2"]);
+  });
+
+  it("hides a removed offline PC on every PC until it runs Wink again", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("laptop-old"), NOW - 2 * 60 * 60_000);
+    writeDeviceRecord(folder, rec("work"), NOW);
+    writeDeviceRecord(folder, { ...rec("home"), removed: heldRemovals(folder, { "laptop-old": NOW }) }, NOW);
+    expect(listDevices(folder, "home", NOW).map((d) => d.deviceId)).toEqual(["home", "work"]);
+    expect(listDevices(folder, "work", NOW).map((d) => d.deviceId)).toEqual(["home", "work"]);
+    expect(listDevices(folder, "laptop-old", NOW).map((d) => d.deviceId)).toEqual(["home", "laptop-old", "work"]);
+    writeDeviceRecord(folder, rec("laptop-old"), NOW + 1);
+    expect(listDevices(folder, "work", NOW + 1).map((d) => d.deviceId)).toEqual(["home", "laptop-old", "work"]);
+    expect(heldRemovals(folder, { "laptop-old": NOW, gone: NOW })).toEqual({});
+  });
+
+  it("removing a PC rewrites only this PC's own record", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, rec("laptop-old"), NOW - 2 * 60 * 60_000);
+    const data = { "threads-v2/bot/thread/w1/head.json": "{}", "changes/1-laptop-old-x.json": "{}", "memory-v2/bot/abcdefabcdef.json": "{}", "board/laptop-old/deleted.json": "{}" };
+    for (const [path, text] of Object.entries(data)) {
+      mkdirSync(join(folder, path, ".."), { recursive: true });
+      writeFileSync(join(folder, path), text);
+    }
+    const files = () => Object.fromEntries(readdirSync(folder, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => {
+      const path = join(entry.parentPath, entry.name);
+      return [path, readFileSync(path, "utf8")];
+    }));
+    const before = files();
+    writeDeviceRecord(folder, { ...rec("home"), removed: heldRemovals(folder, { "laptop-old": NOW }) }, NOW);
+    const after = files();
+    const own = join(folder, DEVICE_DIR, "home.json");
+    expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
+    for (const path of Object.keys(before)) if (path !== own) expect(after[path]).toBe(before[path]);
+    expect(JSON.parse(after[own]!).removed).toEqual({ "laptop-old": NOW });
   });
 
   it("reads old records and drops a relay host that is not a relay label", () => {
@@ -325,5 +437,57 @@ describe("relay presence", () => {
     const listed = createDevicePresence(request)(listDevices(folder, "home", NOW), "home.tail1234.ts.net");
     expect(pickerDevices(listed, null, BASE, NOW).map((d) => [d.deviceId, d.offline])).toEqual([["cafe", false], ["dorm", true], ["home", false]]);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("gives the local app both routes and keeps live tailnet presence for stale records", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("home"), relayHost: relay("home") }, NOW);
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+    writeDeviceRecord(folder, { ...rec("dorm"), relayHost: relay("dorm") }, NOW - DEVICE_STALE_MS - 1);
+    // The tailnet answers for every other PC.
+    const listed = listDevices(folder, "home", NOW).map((item) => (item.current ? item : { ...item, offline: false, checking: false }));
+    const picked = pickerDevices(listed, null, BASE, NOW, true);
+    expect(picked.map((d) => [d.deviceId, d.host, d.relayHost, d.offline, d.checking])).toEqual([
+      ["dorm", "dorm.tail1234.ts.net", relay("dorm"), false, false],
+      ["home", "home.tail1234.ts.net", undefined, false, false],
+      ["work", "work.tail1234.ts.net", relay("work"), false, false],
+    ]);
+    // main.mjs sends that host to the PC's Google sign-in page, never a key.
+    const opened = relayDeviceUrl(picked.find((d) => d.deviceId === "work")?.relayHost, BASE);
+    expect(opened).toBe(`https://${relay("work")}/pair?g=1`);
+    expect(opened).not.toMatch(/key|token|remote/);
+    // A tailnet browser and another PC's window keep the tailnet hosts.
+    expect(pickerDevices(listed, null, BASE, NOW).map((d) => d.host)).toEqual(["dorm.tail1234.ts.net", "home.tail1234.ts.net", "work.tail1234.ts.net"]);
+  });
+
+  it("keeps the base relay route on loopback when the tailnet does not answer", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+    writeDeviceRecord(folder, { ...rec("dorm"), relayHost: relay("dorm") }, NOW - DEVICE_STALE_MS - 1);
+    const listed = listDevices(folder, "home", NOW).map((item) => ({ ...item, unreachable: true }));
+    const picked = pickerDevices(listed, null, BASE, NOW, true);
+    expect(picked).toEqual(pickerDevices(listed, null, BASE, NOW));
+    expect(picked.map((d) => [d.host, d.offline])).toEqual([[relay("dorm"), true], [relay("work"), false]]);
+  });
+
+  it("leaves the link window only to PCs with no signed-in path", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, rec("work"), NOW);
+    writeDeviceRecord(folder, { ...rec("lab"), relayHost: `${"l".padEnd(16, "a")}.other.test` }, NOW);
+    writeDeviceRecord(folder, { ...rec("cafe"), relayHost: relay("cafe") }, NOW);
+    const listed = listDevices(folder, "home", NOW).map((item) => ({ ...item, checking: false }));
+    const hosts = (team: string | null) => Object.fromEntries(pickerDevices(listed, null, team, NOW, true).map((d) => [d.deviceId, d.relayHost ?? d.host]));
+    expect(hosts(BASE)).toEqual({ cafe: relay("cafe"), home: "home.tail1234.ts.net", lab: "lab.tail1234.ts.net", work: "work.tail1234.ts.net" });
+    // No baked team relay: every PC stays on its tailnet window.
+    expect(hosts(null)).toEqual({ cafe: "cafe.tail1234.ts.net", home: "home.tail1234.ts.net", lab: "lab.tail1234.ts.net", work: "work.tail1234.ts.net" });
+    for (const host of ["work.tail1234.ts.net", "lab.tail1234.ts.net"]) expect(relayDeviceUrl(host, BASE)).toBe("");
+  });
+
+  it("adds a trusted relay candidate to setup peers without replacing their tailnet host", () => {
+    const peers = [rec("desktop"), rec("laptop")];
+    const devices = [{ ...rec("desktop"), name: "Home", relayHost: relay("desktop") }, { ...rec("laptop"), name: "Work", relayHost: `${"l".padEnd(16, "a")}.other.test` }];
+    expect(namedDevicePeers(peers, devices, BASE)).toEqual([{ ...rec("desktop"), name: "Home", relayHost: relay("desktop") }, { ...rec("laptop"), name: "Work" }]);
+    expect(namedDevicePeers(peers, devices)).toEqual([{ ...rec("desktop"), name: "Home" }, { ...rec("laptop"), name: "Work" }]);
   });
 });

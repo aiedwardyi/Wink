@@ -1,7 +1,7 @@
 {
   "name": "orbit-desktop",
   "private": true,
-  "version": "1.0.286",
+  "version": "1.0.300",
   "description": "A local-first desktop workspace for AI teammates.",
   "homepage": "https://github.com/aiedwardyi/Wink",
   "repository": {
@@ -29,6 +29,7 @@
     "check:fixture-dates": "node scripts/check-fixture-dates.mjs",
     "check:hidden-starts": "node scripts/check-hidden-starts.mjs",
     "check:test-sleeps": "node scripts/check-test-sleeps.mjs",
+    "check:gemini-links": "node scripts/check-gemini-links.mjs",
     "check:ui-kit": "node scripts/check-ui-kit.mjs",
     "dev": "node scripts/dev.mjs",
     "companion": "node --experimental-strip-types companion/src/index.ts",

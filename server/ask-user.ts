@@ -24,6 +24,8 @@ export const askUserRequestSchema = z
     question: z.string().catch(""),
     choices: z.array(z.string().catch("")).catch([]),
     close: z.boolean().optional().catch(undefined),
+    // models also send the mark as "true" or 1
+    fact: z.preprocess((value) => (value === "true" || value === 1 ? true : value), z.boolean()).optional().catch(undefined),
   })
   .catch({ fromBotId: "", fromThreadId: "", question: "", choices: [] });
 export type AskUserRequest = z.infer<typeof askUserRequestSchema>;
@@ -56,17 +58,21 @@ export interface AskUserDeps<B extends Sender> {
   appendMessage(threadId: string, message: Omit<Message, "id" | "at">): Message;
   activePath: Store["activePath"];
   patchMessage: Store["patchMessage"];
-  cancelHeld(botId: string, threadId: string, question: string): boolean;
+  cancelHeld(botId: string, threadId: string, question: string, forumOnly?: boolean): boolean;
   /** The thread the alert opens, read when the bot asks: a routine run is over by release. */
   alertThread(bot: B, threadId: string): string;
   notifyQuestion(bot: B, target: string, question: string): void;
   /** Runs `post` now, or once the asking turn has replied. */
-  whenSettled(botId: string, threadId: string, post: () => void, question: string): void;
+  whenSettled(botId: string, threadId: string, post: () => void, question: string, forum?: boolean): void;
+  /** Forum posts that may answer a question the bot marked as a fact, sent to the bot while its card waits for the turn to settle; "" for none. */
+  forum?(botId: string, threadId: string, question: string, choices: readonly string[]): string;
+  /** The last text the bot's current turn in that thread wrote. */
+  turnText?(botId: string, threadId: string): string | undefined;
 }
 
 export interface AskUserResult {
   status: number;
-  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean; settled?: true };
+  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean; settled?: true } | { notice: string };
 }
 
 export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: AskUserRequest): AskUserResult {
@@ -91,23 +97,57 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     }
     return { status: 200, body: closed || !settled ? { closed } : { closed, settled: true } };
   }
+  const choices = askUserChoices(request.choices);
+  const notice = request.fact && (() => {
+    try {
+      return deps.forum?.(from.id, request.fromThreadId, question, choices);
+    } catch (cause) {
+      console.warn(`board: ${cause}`);
+      return "";
+    }
+  })();
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",
     kind: "options",
-    card: { title: ASK_USER_TITLE, subtitle: question, options: askUserChoices(request.choices), askUser: true, staysOpen: true },
+    card: { title: ASK_USER_TITLE, subtitle: question, options: choices, askUser: true, staysOpen: true },
   };
   // rooms attribute the question to the member who asked, like show_image
   if (owner.group) message.from = { botId: from.id, name: from.name, color: from.color };
   const threadId = request.fromThreadId;
   const target = deps.alertThread(from, threadId);
+  // a Forum-held card asked again posts once
+  if (!notice) deps.cancelHeld(from.id, threadId, question, true);
   let posted: Message | undefined;
   deps.whenSettled(from.id, threadId, () => {
     // a bot deleted or removed from the room while its card waited has nobody to ask for
     if (!deps.conversation(from.id, threadId)) return;
-    posted = deps.appendMessage(threadId, message);
+    const replyId = deps.turnText?.(from.id, threadId);
+    posted = deps.appendMessage(threadId, replyId ? { ...message, card: { ...message.card!, replyId } } : message);
     deps.notifyQuestion(from, target, question);
-  }, question);
+  }, question, Boolean(notice));
+  if (notice) return { status: 200, body: { notice } };
   return posted ? { status: 201, body: { messageId: posted.id } } : { status: 202, body: { held: true } };
+}
+
+/** Per bot and thread, the current turn's last text: where a tap on its ask_user card lands. */
+export function askTurnTexts() {
+  const turns = new Map<string, { turnId?: string; messageId?: string; final?: boolean }>();
+  const key = (botId: string, threadId: string) => `${botId}\n${threadId}`;
+  return {
+    started(botId: string, threadId: string, turnId: string | undefined) {
+      turns.set(key(botId, threadId), { turnId });
+    },
+    text(botId: string, threadId: string, turnId: string | undefined, messageId: string, phase?: string) {
+      const turn = turns.get(key(botId, threadId));
+      const same = turn && (!turn.turnId || !turnId || turn.turnId === turnId);
+      // commentary after the final answer is hidden
+      if (same && turn.final && phase === "commentary") return;
+      turns.set(key(botId, threadId), { turnId: (same && turn.turnId) || turnId, messageId, final: (same && turn.final) || phase === "final_answer" });
+    },
+    last(botId: string, threadId: string): string | undefined {
+      return turns.get(key(botId, threadId))?.messageId;
+    },
+  };
 }
 
 const isAskUserCard = (message: Message) => message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
@@ -120,14 +160,14 @@ export function settledAsk(messages: readonly Message[], messageId: string): Mes
 
 /** The bot's notes on the person's message: an older ask_user card it closed unanswered, or every card still open when two or more wait. No `closerId`: a steer not yet in `messages`. */
 export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string): string[] {
-  const end = closerId === undefined ? messages.length : messages.findIndex((message) => message.id === closerId);
+  // ids are unique, and the closer is the newest line: read from the end
+  const end = closerId === undefined ? messages.length : messages.findLastIndex((message) => message.id === closerId);
   if (end < 0 || (closerId !== undefined && !isSentByPerson(messages[end]!))) return [];
-  const before = messages.slice(0, end);
-  return [...closedNote(before, text, botId), ...openAsksNote(before, text, botId)];
+  return [...closedNote(messages, end, text, botId), ...openAsksNote(messages, end, text, botId)];
 }
 
-function closedNote(messages: readonly Message[], text: string, botId?: string): string[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
+function closedNote(messages: readonly Message[], end: number, text: string, botId?: string): string[] {
+  for (let i = end - 1; i >= 0; i--) {
     const message = messages[i]!;
     if (isSentByPerson(message)) return [];
     if (!isAskUserCard(message)) continue;
@@ -141,9 +181,9 @@ function closedNote(messages: readonly Message[], text: string, botId?: string):
 }
 
 // full questions, not excerpts: closing one needs its exact text
-function openAsksNote(messages: readonly Message[], text: string, botId?: string): string[] {
+function openAsksNote(messages: readonly Message[], end: number, text: string, botId?: string): string[] {
   const typed: Message = { id: "", at: 0, role: "user", kind: "text", text };
-  const states = [...askStates([...messages, typed])];
+  const states = [...askStates(messages, end, typed)];
   // `by` is the row itself, so identity marks what the typed message answered
   if (states.some(([, state]) => state.state === "answered" && state.by === typed)) return [];
   const open = states.filter(([card, state]) => state.state === "waiting" && (!botId || card.from?.botId === botId)).map(([card]) => `"${card.card!.subtitle.trim()}"`);
