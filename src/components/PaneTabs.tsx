@@ -217,12 +217,15 @@ export function PaneTabs({ row, threadId, tabs, active, onOpen, onClose, onSay }
 
   const down = (tab: TabView) => (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !row.current || (event.target as HTMLElement).closest("[data-tab-close]")) return;
+    // A second finger puts the held tab back instead of orphaning its ghost.
+    if (drag.current) return finish(false);
     const els = Array.from(row.current.querySelectorAll<HTMLElement>("[data-pane-tab]"));
     const from = els.findIndex((el) => el.dataset.paneTab === tab.key);
     const { scrollLeft, clientWidth } = row.current;
     const d: Drag = { key: tab.key, id: event.pointerId, x0: event.clientX, y0: event.clientY, x: 0, from, to: from, els, lefts: els.map((el) => el.offsetLeft), widths: els.map((el) => el.offsetWidth), view: [scrollLeft, scrollLeft + clientWidth], left: 0 };
     drag.current = d;
     if (event.pointerType === "touch") d.hold = setTimeout(() => {
+      d.hold = undefined;
       lift(d);
       hapticTick();
     }, LONG_PRESS_MS);
@@ -231,7 +234,7 @@ export function PaneTabs({ row, threadId, tabs, active, onOpen, onClose, onSay }
   const move = (event: PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d || event.pointerId !== d.id) return;
-    if (d.hold && !d.ghost) {
+    if (d.hold) {
       if (Math.hypot(event.clientX - d.x0, event.clientY - d.y0) > LONG_PRESS_SLOP) finish(false);
       return;
     }

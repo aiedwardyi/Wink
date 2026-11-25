@@ -95,7 +95,7 @@ it("a held finger lifts a tab, drags it past its neighbour and drops it there, w
   await act(async () => { showMedia("t6"); showMap("t6"); showTimeline("t6"); });
   await act(async () => root.render(createElement(Strip, { threadId: "t6", onSay: said })));
   layOut(0, 300);
-  const touch = (el: Element, type: string, clientX: number, clientY = 10) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 2, pointerType: "touch", clientX, clientY })); });
+  const touch = (el: Element, type: string, clientX: number, clientY = 10, pointerId = 2) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId, pointerType: "touch", clientX, clientY })); });
   const swipe = () => { const event = new TouchEvent("touchmove", { bubbles: true, cancelable: true }); label("media").dispatchEvent(event); return event.defaultPrevented; };
   // A swipe that leaves before the hold is a scroll: nothing lifts, and the row keeps its touchmoves.
   await touch(label("media"), "pointerdown", 50);
@@ -118,6 +118,17 @@ it("a held finger lifts a tab, drags it past its neighbour and drops it there, w
   expect(document.querySelector("[data-ghost]")).toBeNull();
   expect(paneTabs("t6")).toEqual(["map", "media", "timeline"]);
   expect(said).toHaveBeenCalledWith("Media moved to position 2 of 3");
+  // A second finger on another tab puts the held one back and starts nothing.
+  await touch(label("media"), "pointerdown", 150);
+  await act(async () => { vi.advanceTimersByTime(400); });
+  await touch(label("timeline"), "pointerdown", 250, 10, 3);
+  await act(async () => { vi.advanceTimersByTime(400); });
+  expect(document.querySelector("[data-ghost]")).toBeNull();
+  expect(tabs().some((tab) => tab.hasAttribute("data-slot"))).toBe(false);
+  expect(document.documentElement.hasAttribute("data-pane-dragging")).toBe(false);
+  await touch(label("media"), "pointerup", 150);
+  await touch(label("timeline"), "pointerup", 250, 10, 3);
+  expect(paneTabs("t6")).toEqual(["map", "media", "timeline"]);
   vi.useRealTimers();
 });
 
