@@ -59,7 +59,7 @@ describe("memory notes prompt", () => {
         expect(prompt).toContain("do not edit memory files or files your 1:1 is editing");
         expect(prompt).not.toContain("MEMORY.conflict-e059d14f.md");
       }
-      if (memory?.truncated) expect(prompt).toContain("[MEMORY.md was cut off here.]");
+      if (memory?.truncated) expect(prompt).toContain(memory.newest ? `[${memory.cut} older lines of MEMORY.md were cut here; its newest lines follow.]\n${memory.newest}` : "[MEMORY.md was cut off here.]");
     }
   });
 

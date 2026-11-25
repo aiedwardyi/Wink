@@ -55,10 +55,22 @@ const KEY_PREFIXES: RegExp[] = [
   /\bxai-[A-Za-z0-9]{16,}/g, // xai
   /\b[sr]k_(?:live_|test_)?[A-Za-z0-9]{24,}/g, // elevenlabs / stripe
   /\bak_[A-Za-z0-9_-]{16,}/g, // composio
+  /\b(?:hf|api_org)_[A-Za-z0-9]{34,}/g, // hugging face user / org
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // jwt
   /\b[a-f0-9]{8}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, // mailbox pane grant
   /\bwk[pdig]_[A-Za-z0-9_-]{43,}/g, // wink phone pairing / device token, team room invite / guest key
 ];
+/** Each key shape once, without /g, so a test never carries lastIndex over. */
+const KEY_SHAPES = KEY_PREFIXES.map((pattern) => new RegExp(pattern.source));
+/** Shorter forms of the same prefixes, as Import Memory's base filter knows them. */
+const SHORT_KEY_SHAPES = [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/, /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}/, /\bxox[abposr][_-][A-Za-z0-9_-]{8,}/, /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/];
+const PEM_MARK = /-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+
+/** A credential only a machine reads (sk-…, ghp_…, github_pat_…, AKIA…, a JWT, a PEM line): never a fact a person keeps. */
+export function hasMachineKey(text: string): boolean {
+  return PEM_MARK.test(text) || KEY_SHAPES.some((shape) => shape.test(text)) || SHORT_KEY_SHAPES.some((shape) => shape.test(text));
+}
+
 const BEARER = /(\bBearer\s+)([A-Za-z0-9._~+/=-]{12,})/gi;
 const PEM_BLOCK = /(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]*?)(-----END [A-Z ]*PRIVATE KEY-----)/g;
 /** The same block with its END still in flight. PEM_BLOCK cannot match it, so
@@ -78,7 +90,7 @@ const KEY_VALUE =
 const PROSE_SECRET = /((?:\b(?:wifi[ \t]+password|password|passcode|passphrase)\b[ \t]*(?:is[ \t]+|[:=][ \t]*)|비밀번호(?:는|가)?[ \t]*(?:[:=][ \t]*)?))(["']?)((?!\$\{)[A-Za-z0-9._~+/=!@#$%^*?-]+)\2/gi;
 /** 4+ chars with a digit or symbol; plain words ("stored", "opensesame") stay prose. */
 const PROSE_VALUE = /^(?=.{4}).*[\d!@#$%^*?~+=]/;
-const ROOM_CODE = /(?<![\p{L}\p{N}_#])[2-9A-HJ-NP-Z]{6}(?![\p{L}\p{N}_])/gu;
+const ROOM_CODE = /(?<![\p{L}\p{N}_#])[2-9A-HJ-NP-Z]{6}(?:[2-9A-HJ-NP-Z]{2})?(?![\p{L}\p{N}_])/gu;
 
 const CODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const ENV_REF = /^\$[A-Z_][A-Z0-9_]*$/;
@@ -123,7 +135,7 @@ const PEM_TAIL_HOLD = 96;
 const STREAM_MATCHERS: RegExp[] = [PEM_BLOCK, ...KEY_PREFIXES, BEARER, KEY_VALUE, CONFIG_KEY_FIELD];
 
 /** A literal every content pattern above needs; text with none has nothing to mask. */
-const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|wk[pdig]_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
+const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|hf_|api_org_|wk[pdig]_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
 
 const WORD_CHAR = /[A-Za-z0-9_]/;
 const JWT_SEG_CHAR = /[A-Za-z0-9_-]/;
@@ -170,6 +182,8 @@ const KEY_STARTERS: Array<readonly [string, RegExp]> = [
   ["sk_", /[A-Za-z0-9]/],
   ["rk_", /[A-Za-z0-9]/],
   ["ak_", /[A-Za-z0-9_-]/],
+  ["hf_", /[A-Za-z0-9]/],
+  ["api_org_", /[A-Za-z0-9]/],
   ["wkp_", /[A-Za-z0-9_-]/],
   ["wkd_", /[A-Za-z0-9_-]/],
   ["wki_", /[A-Za-z0-9_-]/],

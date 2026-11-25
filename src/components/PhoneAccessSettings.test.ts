@@ -535,6 +535,32 @@ describe("This PC", () => {
     vi.unstubAllGlobals();
   });
 
+  it("hands its sign-in out only while it shows one", async () => {
+    const signIn = vi.fn(async () => ({ ok: true as const, email: EMAIL }));
+    vi.stubGlobal("ogb", { googleAccount: { signIn, finish: vi.fn(async () => {}), cancel: vi.fn(), signOut: vi.fn() } });
+    const onSignIn = vi.fn<(open: (() => void) | null) => void>();
+    let google = "signed-out";
+    let relay = status({ enabled: false, state: "off", host: null });
+    serve({ "GET /api/phone-relay/status": () => relay, "GET /api/google-account": () => ({ state: google, email: EMAIL }) });
+    const { root } = await renderView({ onSignIn });
+    const open = onSignIn.mock.lastCall?.[0];
+    expect(open).toBeTypeOf("function");
+    await act(async () => open!());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Connect to this PC from your devices?");
+    await act(async () => click(button(document.body, "Turn On")));
+    expect(signIn).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+    for (const [state, answer] of [["signed-in", relay], ["signed-out", status({ available: true, configured: false, enabled: false, state: "off", host: null })]] as const) {
+      onSignIn.mockClear();
+      resetRelay();
+      google = state;
+      relay = answer;
+      const view = await renderView({ onSignIn });
+      expect(onSignIn.mock.lastCall?.[0], state).toBeNull();
+      await act(async () => view.root.unmount());
+    }
+  });
+
   it("signing in waits for Google, then says why it failed in plain words", async () => {
     let finish: (value: { ok: false; error: string }) => void = () => {};
     const signIn = vi.fn(() => new Promise<{ ok: false; error: string }>((resolve) => (finish = resolve)));

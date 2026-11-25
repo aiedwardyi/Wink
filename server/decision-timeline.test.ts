@@ -769,7 +769,7 @@ describe("decision timeline", () => {
     expect(timeline()).toContain('- Picked: 30-voice grid in Settings\n- Said: "yes the grid"\n');
   });
 
-  it("holds the current picks to the cap with 40 picks, the rest on file", () => {
+  it("shows all 40 current picks in full, none left to the file", () => {
     const entries = Array.from({ length: 40 }, (_, i) => [
       `## 2026-11-${String(1 + Math.floor(i / 4)).padStart(2, "0")} 0${i % 4}:00 | question ${i + 1} | current`,
       `- Picked: answer ${i + 1} with a few more words to read`,
@@ -781,10 +781,10 @@ describe("decision timeline", () => {
     const prompt = memorySystemPrompt(BOT);
     expect(prompt).toContain("Current picks");
     const block = prompt.slice(prompt.indexOf("Current picks"));
-    expect(block.length).toBeLessThanOrEqual(780);
-    expect(block).toContain("- question 40 (11-10): answer 40");
-    expect(block).not.toContain("- question 1 (");
-    expect(block).toMatch(/\nAlso current, on file: question 39; question 38; .* \(\+\d+ more\)$/);
+    expect(block.split("\n").filter((line) => line.startsWith("- question "))).toHaveLength(40);
+    expect(block).toContain("- question 40 (11-10): answer 40 with a few more words to read (C:\\Users\\me\\Desktop\\cards\\mock-40\\C.png)");
+    expect(block).toContain("- question 1 (11-01): answer 1 with a few more words to read (C:\\Users\\me\\Desktop\\cards\\mock-1\\C.png)");
+    expect(block).not.toMatch(/Also current, on file|\(\+\d+ more\)/);
   });
 
   it("keeps a pick across restarts, even one made just before the server stopped", async () => {

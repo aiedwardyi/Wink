@@ -12,10 +12,12 @@ import {
   joinedEntries,
   joinedEntry,
   joinedCursor,
+  joinedCode,
   joinedKey,
   joinedRoom,
   joinedRooms,
   joinedWorks,
+  moveJoined,
   myRoomBots,
   removeJoined,
   resetJoined,
@@ -46,6 +48,12 @@ beforeAll(() => mkdirSync(DATA_DIR, { recursive: true }));
 afterEach(() => closeJoinedDb());
 
 describe("joined.db", () => {
+  it("keeps a moved host in the saved code exactly as given", () => {
+    saveJoined("r1", HOST, ME, KEY, `wkr1:${HOST}:inv1.secret`);
+    moveJoined("r1", KEY, "a$&b.app.test");
+    expect(joinedCode("r1")).toBe("wkr1:a$&b.app.test:inv1.secret");
+  });
+
   it("finds held entry ids through an index", () => {
     saveJoined("r1", HOST, ME, KEY);
     addJoinedEntries("r1", [entry(1)]);

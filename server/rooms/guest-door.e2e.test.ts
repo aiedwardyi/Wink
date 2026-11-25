@@ -4,7 +4,7 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:
 import { createServer as createHttpsServer, request as httpsRequest, type Server } from "node:https";
 import { createConnection, createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import { Readable } from "node:stream";
-import type { TLSSocket } from "node:tls";
+import { createSecureContext, type SecureContext, type TLSSocket } from "node:tls";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -27,7 +27,7 @@ import { GuestClient } from "./guest-client.ts";
 import * as invites from "./invites.ts";
 import { barRoomPerson, closeInvitesDb, createInvite, revokeGuestKeys, roomCode } from "./invites.ts";
 import { joinedRoute } from "./joined-routes.ts";
-import { addJoinedEntries, closeJoinedDb, joinedCursor, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, joinedCode, joinedCursor, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
 import { publishTurnAnswer } from "./multiplayer.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { MyRoomBotTurns } from "./my-room-bots.ts";
@@ -45,6 +45,9 @@ const olderEntry = z.object({
   replyToId: z.string().optional(),
 });
 const HOST = `abcdefghijklmnop.${BASE}`;
+/** The same PC after its relay base moved. */
+const MOVED_BASE = "app.test";
+const MOVED = `abcdefghijklmnop.${MOVED_BASE}`;
 
 let door: Server;
 let caPem = "";
@@ -58,6 +61,8 @@ let ownName = "Mina";
 let refusePicture: (() => Promise<number>) | undefined;
 let hostAlert = vi.fn();
 let guestAlert = vi.fn();
+/** The one name the PC answers to, as its ingress does. */
+let served = HOST;
 const device = "pc-mina-0123456789abcdef";
 
 /** The relay hop: splices TCP to the PC, which ends TLS, as the real relay does. */
@@ -74,6 +79,12 @@ const hop = {
 
 /** The PC: relay traffic goes through the gate, which hands /room to the door. Nothing else is served. */
 async function app(req: IncomingMessage, res: ServerResponse) {
+  if (req.headers.host === `relay.${MOVED_BASE}`) {
+    const short = /^\/v1\/room-codes\/(\w+)$/.exec(req.url ?? "")?.[1];
+    const known = short && invites.shortCodeTarget(short);
+    res.writeHead(known ? 200 : 404, { "content-type": "application/json" });
+    return res.end(JSON.stringify(known ? { label: "abcdefghijklmnop" } : { error: "not-found" }));
+  }
   if (isRelayRequest(req)) {
     doorHeaders.push(req.headers);
     if (refusePicture && req.url?.split("?")[0]?.endsWith("/bot-picture")) {
@@ -92,8 +103,12 @@ async function app(req: IncomingMessage, res: ServerResponse) {
 beforeAll(async () => {
   const ca = await TestCa.create();
   caPem = ca.certPem;
-  const { keyPem, certPem } = await ca.issue(HOST);
-  door = createHttpsServer({ key: keyPem, cert: certPem }, (req, res) => void app(req, res));
+  const contexts = new Map<string, SecureContext>();
+  for (const name of [HOST, MOVED, `relay.${MOVED_BASE}`]) {
+    const { keyPem, certPem } = await ca.issue(name);
+    contexts.set(name, createSecureContext({ key: keyPem, cert: certPem }));
+  }
+  door = createHttpsServer({ SNICallback: (name, cb) => (name === served || name === `relay.${MOVED_BASE}` ? cb(null, contexts.get(name)) : cb(new Error("wrong server name"))) }, (req, res) => void app(req, res));
   door.on("secureConnection", (socket: TLSSocket) => markRelaySocket(socket));
   const doorPort = await listenLocal(door);
   hop.server = createTcpServer((inbound) => {
@@ -110,7 +125,7 @@ beforeAll(async () => {
     }
   });
   hop.port = await listenLocal(hop.server);
-  const relay = { status: () => ({ ...PHONE_RELAY_OFF, state: "connected" as const, host: HOST }), stop: async () => {} };
+  const relay = { status: () => ({ ...PHONE_RELAY_OFF, state: "connected" as const, host: served }), stop: async () => {} };
   access = new PhoneAccess({
     dataDir: DATA_DIR,
     env: {},
@@ -154,6 +169,7 @@ beforeEach(() => {
   removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   hop.up = true;
+  served = HOST;
   doorHeaders = [];
   changes = [];
   ownName = "Mina";
@@ -183,9 +199,9 @@ afterEach(() => {
   close();
 });
 
-const teammate = (timing?: { silenceMs?: number; retryMs?: number; maxRetryMs?: number }) =>
+const teammate = (timing?: { silenceMs?: number; retryMs?: number; maxRetryMs?: number }, bases: Array<string | null> = [null, BASE]) =>
   (client = new GuestClient({
-    bases: () => [null, BASE],
+    bases: () => bases,
     joiner: () => ({ name: ownName, device }),
     https: { ca: caPem, lookup: loopbackLookup, port: hop.port },
     onChange: (roomId) => changes.push({ kind: "joined", hosted: true, roomId }),
@@ -1063,7 +1079,7 @@ describe("bots in two homes hand work to each other", () => {
       "스타줌: Done: Sat 7:30 at Mapo. @Edward @JJ",
     ]);
     expect(joinedLog()).toEqual(log());
-    expect(prompts[0]).toContain('"Rando" ("Edward"\'s bot) asked you: @스타줌 Edward is free Sat after 6');
+    expect(prompts[0]).toContain('"Rando" ("Edward"\'s bot) asked you: \u200B@스타줌 Edward is free Sat after 6');
   });
 
   it("answers the host's @ on the teammate's PC, and runs a teammate's two asks in a row", async () => {
@@ -1097,5 +1113,65 @@ describe("bots in two homes hand work to each other", () => {
     expect(log()).toHaveLength(stopped);
     expect(joinedLog()).toEqual(log());
     expect(roomAsks(roomId, ["queued", "running"])).toEqual([]);
+  });
+});
+
+describe("a host whose relay name moved", () => {
+  /** Joined under the old name; the host now answers only MOVED, and this PC's update knows only the new base. */
+  async function stranded() {
+    const group = store.createGroup("TK", [], false, undefined, undefined, { roomId: createRoom("TK").id }) as HostedGroup;
+    const { roomId } = group.hosted;
+    hostSays(group, "before the move");
+    const c = teammate();
+    c.start();
+    expect((await c.join(codeFor(group, "JJ"))).ok).toBe(true);
+    await live(c, roomId);
+    expect((await c.addBot(roomId, "jj-local", "Helper", "teal")).ok).toBe(true);
+    await until(() => Boolean(joinedRoom(roomId)?.state?.teamBots?.length));
+    const before = { person: joinedRoom(roomId)!.me.id, key: joinedKey(roomId)!.key, people: roomPeople(roomId).length };
+    c.stop();
+    served = MOVED;
+    hop.drop();
+    door.closeAllConnections();
+    hostSays(group, "after the move");
+    const after = teammate(undefined, [null, MOVED_BASE]);
+    after.start();
+    await until(() => after.rooms()[0]?.link === "offline");
+    return { group, roomId, before, after };
+  }
+
+  it("follows the host to the new name by itself, and keeps it", async () => {
+    const { roomId, after } = await stranded();
+    await live(after, roomId);
+    await until(() => texts(roomId).includes("after the move"));
+    expect(joinedRoom(roomId)?.relayHost).toBe(MOVED);
+    expect(joinedCode(roomId)?.startsWith(`wkr1:${MOVED}:`)).toBe(true);
+    after.stop();
+    const next = teammate(undefined, [null, MOVED_BASE]);
+    next.start();
+    await live(next, roomId);
+  });
+
+  it.each(["long", "8-character"])("takes the seat back from a fresh %s code: same person, fresh key, history and bots kept", async (kind) => {
+    const { roomId, before, after } = await stranded();
+    const { id, secret } = roomCode(roomId);
+    const code = kind === "long" ? `wkr1:${MOVED}:${id}.${secret}` : (await invites.shortRoomCode(roomId, async () => ({ code: "ABCDEF23", exp: Date.now() + 86_400_000 })))!;
+    const joined = await after.join(code);
+    expect(joined).toMatchObject({ ok: true, value: { me: { id: before.person } } });
+    expect(roomPeople(roomId)).toHaveLength(before.people);
+    expect(joinedKey(roomId)).toMatchObject({ relayHost: MOVED });
+    expect(joinedKey(roomId)!.key).not.toBe(before.key);
+    await live(after, roomId);
+    await until(() => texts(roomId).includes("after the move"));
+    expect(texts(roomId)).toContain("before the move");
+    expect(after.rooms()[0]?.myBots.map((bot) => bot.botId)).toEqual(["jj-local"]);
+  });
+
+  it("rejoins a room left while stranded from a fresh code for the new name", async () => {
+    const { roomId, before, after } = await stranded();
+    expect((await after.leave(roomId)).ok).toBe(true);
+    const { id, secret } = roomCode(roomId);
+    expect(await after.rejoin(roomId, `wkr1:${MOVED}:${id}.${secret}`)).toMatchObject({ ok: true, value: { status: "joined", me: { id: before.person } } });
+    await live(after, roomId);
   });
 });

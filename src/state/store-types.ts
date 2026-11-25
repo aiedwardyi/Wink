@@ -4,7 +4,7 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
-import type { CallPrefs, LiveVoice } from "../../shared/live-call";
+import type { CallAnswer, CallPrefs, LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
@@ -25,6 +25,8 @@ export interface OptionCardData {
   askUser?: true;
   /** an ask_user card that waits until answered; older ones closed when typed past */
   staysOpen?: true;
+  /** an ask_user card: the asking turn's last text; absent when that turn wrote none */
+  replyId?: string;
   /** permission asks: the tool being requested (drives the approval box) */
   tool?: string;
   /** why auto mode stopped to ask anyway */
@@ -386,7 +388,7 @@ export type TerminalAttentionMap = Record<string, TerminalAttention>;
 export interface ConfigStatus {
   xai?: { configured: boolean };
   gemini?: { configured: boolean; introSeen?: boolean };
-  liveCall?: { voice: LiveVoice };
+  liveCall?: { voice: LiveVoice; answer?: CallAnswer };
   openaiCompat?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
@@ -435,6 +437,7 @@ export interface RateLimitReport {
 export interface InstanceInfo {
   loginState?: "pending" | "complete" | "failed" | "cancelled";
   loginCapture?: { url?: string; code?: string; inputGeneration?: number };
+  loginError?: string;
   instanceId: string;
   driverKind: string;
   accountOf?: string;
@@ -665,6 +668,8 @@ export type Action =
       sendSeq?: number;
       sentAfterId?: string | null;
       onError?: () => void;
+      /** The send will never run though nothing threw: Stop took it back (stopped), or its turn could not start. */
+      onRejected?: (stopped: boolean) => void;
     }
   | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }
   | { type: "sendQueuedNow"; botId: string; threadId: string; queueId: string }

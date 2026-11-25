@@ -47,13 +47,15 @@ import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, inSendOrder, queuedSendIds, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
-import { picturedReplies } from "@/lib/show-pane";
+import { paneOpensOnMedia, picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
+import { warmMedia } from "@/lib/media-index";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
 import { hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
 import { useLiveReply, useThreadTurn } from "@/lib/thread-stream";
 import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
+import { ImportMemoryCard, useImportOffer } from "./ImportMemoryCard";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
 import { FolderFix } from "./FolderFix";
@@ -67,7 +69,7 @@ import { TurnRail } from "./TurnRail";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
-import { ShowPaneButton } from "./ShowPaneButton";
+import { paneWorkers, ShowPaneButton } from "./ShowPaneButton";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
 import { WorkerRow, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
@@ -115,6 +117,7 @@ import {
 } from "@/lib/transcript-window";
 import { timelineEvents } from "@/lib/taskTimeline";
 import { useReplyDraft } from "@/lib/drafts";
+import { useReplyFocus } from "@/lib/reply-focus";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { usageAccount } from "@/lib/accounts";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
@@ -719,6 +722,9 @@ const MessagesList = memo(function MessagesList({
     return answers;
   }, [transcript]);
   const importOffer = useMemo(() => importOfferId(transcript), [transcript]);
+  // the import row is for a chat with nothing in it yet; a quiz older builds seeded never shows, so it does not count
+  const empty = useMemo(() => transcript.every(shouldHideOnboardingCard), [transcript]);
+  const importRow = useImportOffer(bot.id, empty);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
@@ -741,7 +747,13 @@ const MessagesList = memo(function MessagesList({
   const slots = new Set<string>();
   return (
     <>
-      {idleAfterOnboarding && !bot.busy && (
+      {importRow.offer && (
+        <div data-import-row className="contents">
+          <DaySeparator at={bot.tasks?.find((task) => task.threadId === bot.threadId)?.createdAt ?? bot.createdAt ?? Date.now()} />
+          <ImportMemoryCard key={bot.threadId} botId={bot.id} onClose={importRow.close} />
+        </div>
+      )}
+      {idleAfterOnboarding && !bot.busy && importRow.offer === false && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
           <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />
           <RenameTitle
@@ -818,7 +830,7 @@ const MessagesList = memo(function MessagesList({
                   />
                 );
               }
-              if (shouldHideOnboardingCard(m, transcript)) return null;
+              if (shouldHideOnboardingCard(m)) return null;
               return <OptionCard botId={bot.id} message={m} />;
             case "routine.run": {
               const executionThreadId = m.routineRun?.executionThreadId;
@@ -1018,11 +1030,12 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   });
   const find = useSearchFindSeed(bot.threadId, !preview);
   const findOpen = find.findOpen;
-  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
+  const { replyTo, selectReply: pickReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     bot.threadId,
     `bot:${bot.id}:${bot.threadId}`,
     bot.messages,
   );
+  const selectReply = useReplyFocus(pickReply);
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
     dispatch({
@@ -1075,6 +1088,29 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const sessionKey = runs.map((run) => run.sessionId).filter(Boolean).sort().join("\n");
   const livePanes = useLivePanes(bot.id, !preview && (runs.length > 0 || (state.terminalPanes[bot.id]?.length ?? 0) > 0), paneLabelsKey(state.terminalPanes[bot.id]), sessionKey, dispatch, runs);
   const workers = useMemo(() => runs.map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })), [runs, livePanes, bot.id]);
+  const paneMap = listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle";
+  const paneSource = { name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal };
+  const paneWorkerTab = paneWorkers(paneSource);
+  // The side pane opens on Media, which waits for the whole chat's list: ask once the page is idle, with no turn live and nothing typed, only when the button would open Media.
+  useEffect(() => {
+    if (preview || hidden || bot.busy || !window.requestIdleCallback) return;
+    const box = composerInputRef.current;
+    let idle: number | undefined;
+    // the pick and the draft are read when idle, since neither re-renders this view
+    const ask = () => {
+      if (idle !== undefined || box?.value) return;
+      idle = window.requestIdleCallback(() => {
+        idle = undefined;
+        if (!box?.value && paneOpensOnMedia(bot.threadId, paneMap, paneWorkerTab)) warmMedia(bot.threadId);
+      });
+    };
+    ask();
+    box?.addEventListener("input", ask);
+    return () => {
+      box?.removeEventListener("input", ask);
+      if (idle !== undefined) window.cancelIdleCallback(idle);
+    };
+  }, [bot.threadId, bot.busy, preview, hidden, paneMap, paneWorkerTab]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(messages, jump.messages).map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })) : workers, [messages, jump.messages, livePanes, workers, bot.id]);
   const skin = useSkin();
   const scene = sceneOf(skin);
@@ -1660,7 +1696,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           )}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
 
-          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} workers={{ name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal }} />
+          <ShowPaneButton threadId={bot.threadId} map={paneMap} workers={paneSource} />
           </ChatPeekPart>
         </div>
       </div>

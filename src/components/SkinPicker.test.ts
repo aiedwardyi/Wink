@@ -36,7 +36,7 @@ vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("
 const { SkinPicker } = await import("./SkinPicker");
 
 let root: Root;
-const featured = ["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon", "Lagoon Night", "Snow", "Snow Night", "Bronze", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Dim Sand", "Wink Day", "Notebook"];
+const featured = ["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon", "Lagoon Night", "Snow", "Snow Night", "Bronze", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Dim Sand", "Wink Day", "Notebook", "Messenger"];
 const lightStart = 17;
 const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", "Neon Grid": "네온 그리드", "Samurai Ink": "사무라이 잉크", "Night Rain": "나이트 레인", Warp: "워프", Circuit: "서킷", Lagoon: "라군", Snow: "스노우" };
 const scene = ["Lagoon Night", "Snow Night", "Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Lagoon", "Snow"];
@@ -83,7 +83,7 @@ afterEach(async () => {
 });
 
 describe("featured themes", () => {
-  it.each(["en", "ko"] as const)("starts folded with twenty featured themes in %s and reveals every offered theme", async (locale) => {
+  it.each(["en", "ko"] as const)("starts folded with twenty-one featured themes in %s and reveals every offered theme", async (locale) => {
     await mount("precision", locale);
     const shown = locale === "en" ? featured : featured.map((name) => koScene[name] ?? name);
     expect(names()).toEqual(shown);

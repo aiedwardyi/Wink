@@ -6,7 +6,7 @@ export interface TurnAccess {
   edits: Grant;
   commands: Grant;
 }
-export type AccessTurn = Pick<SendTurnInput, "approval" | "readOnly" | "cwd" | "leanStartup" | "integrations">;
+export type AccessTurn = Pick<SendTurnInput, "approval" | "readOnly" | "ownerText" | "cwd" | "leanStartup" | "integrations">;
 export const FREE_ACCESS: TurnAccess = { edits: "free", commands: "free" };
 
 /** Grants of a driver whose asks reach Wink: the chip decides, and a read-only turn has nobody to approve (index.ts denies its asks). */

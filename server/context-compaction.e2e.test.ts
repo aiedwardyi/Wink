@@ -18,8 +18,44 @@ const FAKE_CODEX_CLI = join(SERVER_DIR, "testing", "fake-codex-app-server.ts");
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
+
+type CodexCall = {
+  method: string;
+  params: {
+    threadId?: string;
+    developerInstructions?: string;
+    input?: Array<{ text: string }>;
+    items?: Array<{ type: string; role: string; content: Array<{ text: string }> }>;
+  };
+};
+
+function codexTurn(calls: CodexCall[], text: string) {
+  const index = calls.findLastIndex((call) => call.method === "turn/start" && call.params.input?.[0]?.text.includes(text));
+  if (index < 0) return null;
+  const { params } = calls[index]!;
+  const previous = calls.slice(0, index).findLast((call) => (call.method === "turn/start" || call.method === "thread/inject_items") &&
+    call.params.threadId === params.threadId);
+  const item = previous?.method === "thread/inject_items" ? previous.params.items?.[0] : undefined;
+  return {
+    prompt: params.input![0]!.text,
+    history: item?.type === "message" && item.role === "user" ? item.content[0]?.text : undefined,
+  };
+}
+
 const BOT_ID = "compaction-bot";
 const THREAD_ID = "compaction-thread";
+const CODEX_RESTORED = [
+  { id: "restored-resume", cursor: "saved-resume", hasSessionSystem: true },
+  { id: "restored-reset", cursor: "saved-reset", hasSessionSystem: false },
+];
+const COVERED_CONTACT = "covered-owner@example.test";
+const LATER_CONTACT = "launch-owner@example.test";
+const RECENT_MILESTONE = "violet telescope";
+const CODEX_SWITCH = [
+  { id: "restored-switch", summary: "The launch is approved for review." },
+  { id: "restored-switch-full", summary: "The launch is approved for review. ".repeat(1_000).slice(0, 31_990) },
+];
+const switchRoom = (id: string) => `${id}-room`;
 const CLAUDE_BOT_ID = "compaction-claude-bot";
 const CLAUDE_THREAD_ID = "compaction-claude-thread";
 const CLAUDE_RESUME = {
@@ -136,6 +172,7 @@ type ApiBody =
   | { title: string }
   | { threadId: string }
   | { memberIds: string[] }
+  | { modelSelection: { mode: "pinned"; instanceId: string; model: string; effort: string } }
   | { cwd: string | null };
 
 describe("context compaction e2e", () => {
@@ -171,11 +208,11 @@ describe("context compaction e2e", () => {
   };
 
   // store.ts keys one file per resume cursor this way
-  const sessionSystemPath = (cursor: string) => join(
+  const sessionSystemPath = (cursor: string, instanceId = "claude") => join(
     home,
     ".orbit",
     "session-system",
-    `${createHash("sha256").update(`claude\n${JSON.stringify(cursor)}`).digest("hex").slice(0, 32)}.txt`,
+    `${createHash("sha256").update(`${instanceId}\n${JSON.stringify(cursor)}`).digest("hex").slice(0, 32)}.txt`,
   );
   /** Records the bot's saved session as already holding the system text the
    * server sends it, read off a real fresh turn on the bot's probe task so
@@ -201,6 +238,44 @@ describe("context compaction e2e", () => {
       if (Date.now() > deadline) throw new Error(`timed out waiting for server state. stderr:\n${stderr}`);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+  };
+
+  const startServer = async () => {
+    const env: NodeJS.ProcessEnv = {
+      HOME: home,
+      USERPROFILE: home,
+      APPDATA: join(home, "Roaming"),
+      LOCALAPPDATA: join(home, "Local"),
+      OMB_DATA_DIR: join(home, ".orbit"),
+      OMB_USER_DATA: join(home, "user-data"),
+      CODEX_HOME: join(home, ".codex"),
+      CLAUDE_CONFIG_DIR: join(home, ".claude"),
+      NODE_OPTIONS: process.env.NODE_OPTIONS,
+      OMB_PORT: String(PORT),
+    };
+    if (process.env.PATH) env.PATH = process.env.PATH;
+    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+      cwd: ROOT,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    child.stderr!.on("data", (chunk) => (stderr += chunk));
+
+    await waitFor(async () => {
+      try {
+        return (await fetch(`${BASE}/api/health`)).ok;
+      } catch {
+        return false;
+      }
+    });
+    await waitFor(async () => {
+      const instances = (await api("GET", "/api/instances")).body.instances;
+      return ["codex", "claude"].every((instanceId) =>
+        instances.find((instance: { instanceId: string }) => instance.instanceId === instanceId)?.snapshot.state === "available",
+      );
+    });
   };
 
   beforeAll(async () => {
@@ -233,6 +308,22 @@ describe("context compaction e2e", () => {
       },
     }));
     writeFileSync(join(dataDir, "bots.json"), JSON.stringify([
+      ...CODEX_SWITCH.map(({ id }) => ({
+        id, threadId: id, name: "Restored handoff", title: "Release", color: "blue", createdAt: 1,
+        modelSelection: { instanceId: "codex", model: "gpt-fake-default" },
+        resumeCursors: {}, tasks: [{ threadId: id, title: "Release", createdAt: 1, resumeCursors: {} }],
+      })),
+      ...CODEX_RESTORED.map(({ id, cursor }) => ({
+        id, threadId: id, name: "Restored", title: "Release", color: "blue", createdAt: 1,
+        modelSelection: { instanceId: "codex", model: "gpt-fake-default" },
+        resumeCursors: { codex: cursor },
+        tasks: [{
+          threadId: id, title: "Release", createdAt: 1, resumeCursors: { codex: cursor },
+          resumeSeed: { instanceId: "codex", cursor, compactionId: "saved", nativeReplay: true },
+          nativePrompt: { cursor, first: 20_000, last: 20_000, window: { model: "gpt-fake-default", tokens: 128_000 } },
+          lastInstanceId: "codex", lastModel: "gpt-fake-default",
+        }],
+      })),
       {
         id: BOT_ID,
         threadId: THREAD_ID,
@@ -539,6 +630,11 @@ describe("context compaction e2e", () => {
       })),
     ]));
     writeFileSync(join(dataDir, "groups.json"), JSON.stringify([
+      ...CODEX_SWITCH.map(({ id }) => ({
+        id: switchRoom(id), threadId: `${switchRoom(id)}-thread`, name: "Handoff room", memberIds: [id],
+        defaultResponder: { kind: "member", botId: id }, bulletin: "", unread: false, createdAt: 1,
+        tasks: [{ threadId: `${switchRoom(id)}-thread`, title: "Release", createdAt: 1 }],
+      })),
       {
         id: ROOM_FIRST.groupId,
         threadId: ROOM_FIRST.roomThreadId,
@@ -593,6 +689,40 @@ describe("context compaction e2e", () => {
       kind: "text",
       text: `history ${index}`,
     }));
+    for (const { id, summary } of CODEX_SWITCH) writeFileSync(join(dataDir, `messages-${id}.json`), JSON.stringify({
+      activeLeafId: "milestone",
+      messages: [
+        { id: "covered", at: 1, parentId: null, role: "user", kind: "text", text: `Send the handoff to ${COVERED_CONTACT}.` },
+        { id: "saved", at: 2, parentId: "covered", role: "bot", kind: "compaction", compaction: {
+          v: 1, summary, coveredThroughId: "covered", firstKeptId: null,
+          contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
+        } },
+        { id: "later", at: 3, parentId: "saved", role: "user", kind: "text", text: `Please use ${LATER_CONTACT} for the release handoff.` },
+        { id: "archive1", at: 4, parentId: "later", role: "user", kind: "text", text: "First archived log. " + "an example line. ".repeat(7_000) },
+        { id: "archive2", at: 5, parentId: "archive1", role: "user", kind: "text", text: "Second archived log. " + "another example line. ".repeat(5_300) },
+        { id: "milestone", at: 6, parentId: "archive2", role: "user", kind: "text", text: `The current milestone is ${RECENT_MILESTONE}.` },
+      ],
+    }));
+    for (const { id, cursor, hasSessionSystem } of CODEX_RESTORED) {
+      writeFileSync(join(dataDir, `messages-${id}.json`), JSON.stringify({
+        activeLeafId: "milestone",
+        messages: [
+          { id: "covered", at: 1, parentId: null, role: "user", kind: "text", text: `Send the handoff to ${COVERED_CONTACT}.` },
+          { id: "saved", at: 2, parentId: "covered", role: "bot", kind: "compaction", compaction: {
+            v: 1, summary: "The launch is approved for review.", coveredThroughId: "covered", firstKeptId: null,
+            contextWindow: 128_000, estimatedTokensBefore: 30, sourceMessageCount: 1,
+          } },
+          ...messages.map((message, index) => ({ ...message, at: index + 3, parentId: message.parentId ?? "saved" })),
+          { id: "contact", at: 124, parentId: "m120", role: "bot", kind: "text", text: `The later contact is ${LATER_CONTACT}.` },
+          { id: "milestone", at: 125, parentId: "contact", role: "user", kind: "text", text: `The current milestone is ${RECENT_MILESTONE}.` },
+        ],
+      }));
+      if (hasSessionSystem) {
+        const systemPath = sessionSystemPath(cursor, "codex");
+        mkdirSync(dirname(systemPath), { recursive: true });
+        writeFileSync(systemPath, "You are Restored, a personal bot in Wink.");
+      }
+    }
     for (const threadId of [
       THREAD_ID,
       CLAUDE_THREAD_ID,
@@ -746,39 +876,74 @@ describe("context compaction e2e", () => {
       turnsAtWrite: 0,
     }));
 
-    const env: NodeJS.ProcessEnv = {
-      HOME: home,
-      USERPROFILE: home,
-      OMB_PORT: String(PORT),
-    };
-    if (process.env.PATH) env.PATH = process.env.PATH;
-    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
-    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
-      cwd: ROOT,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    child.stderr!.on("data", (chunk) => (stderr += chunk));
-
-    await waitFor(async () => {
-      try {
-        return (await fetch(`${BASE}/api/health`)).ok;
-      } catch {
-        return false;
-      }
-    });
-    await waitFor(async () => {
-      const instances = (await api("GET", "/api/instances")).body.instances;
-      return ["codex", "claude"].every((instanceId) =>
-        instances.find((instance: { instanceId: string }) => instance.instanceId === instanceId)?.snapshot.state === "available",
-      );
-    });
+    await startServer();
   }, 30_000);
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
     removeTestData(home);
+  });
+
+  it.each(CODEX_SWITCH)("keeps covered values on the provider wire after restart and engine switch for $id", async ({ id }) => {
+    const route = `/api/bots/${id}`;
+    const first = `What did we work on in ${id}?`;
+    expect((await api("POST", `${route}/messages`, { text: first })).status).toBe(202);
+    await waitFor(async () => existsSync(dumpPath) && (await botById(id))?.busy === false);
+    const { calls }: { calls: CodexCall[] } = JSON.parse(readFileSync(dumpPath, "utf8"));
+    const sentFirst = codexTurn(calls, first);
+    expect(sentFirst?.history ?? sentFirst?.prompt).toContain(COVERED_CONTACT);
+    const saved = (await botById(id))?.messages.findLast((message: { kind: string }) => message.kind === "compaction");
+    expect(saved?.compaction.summary, "covered contact in the summary field older Wink reads").toContain(COVERED_CONTACT);
+
+    const stopped = waitForExit(child);
+    child.send({ type: "openmausbot:shutdown" });
+    await stopped;
+    await startServer();
+    expect((await api("PATCH", route, {
+      modelSelection: { mode: "pinned", instanceId: "claude", model: "claude-sonnet-5-5", effort: "low" },
+    })).status).toBe(200);
+
+    const promptRow = z.object({ systemPrompt: z.string(), text: z.string() });
+    const providerInput = (text: string) => {
+      if (!existsSync(claudePromptLogPath)) return "";
+      const sent = readFileSync(claudePromptLogPath, "utf8").split("\n").slice(0, -1)
+        .map((line) => promptRow.parse(JSON.parse(line)))
+        .findLast((line) => line.text.includes(text));
+      return sent ? `${sent.text}\n${sent.systemPrompt}` : "";
+    };
+    const roomText = `Who is handling the release in the ${id} room?`;
+    expect((await api("POST", `/api/groups/${switchRoom(id)}/messages`, { text: roomText })).status).toBe(202);
+    await waitFor(async () => Boolean(providerInput(roomText)) && (await botById(id))?.busy === false);
+    // The full summary takes the summarizer path; this fake engine's summarizer only yields a fallback row, which rooms skip on base too.
+    if (id === "restored-switch") {
+      expect.soft(providerInput(roomText).includes(COVERED_CONTACT), "covered contact in room handoff").toBe(true);
+      expect.soft(providerInput(roomText).includes(LATER_CONTACT), "later contact in room handoff").toBe(true);
+    }
+
+    const text = `Who receives the release handoff after the ${id} switch?`;
+    expect((await api("POST", `${route}/messages`, { text })).status).toBe(202);
+    await waitFor(async () => Boolean(providerInput(text)) && (await botById(id))?.busy === false);
+    const prompt = providerInput(text);
+    expect(prompt).toContain(LATER_CONTACT);
+    expect(prompt).toContain(RECENT_MILESTONE);
+    expect(prompt.includes(COVERED_CONTACT), "covered contact in switched Claude input").toBe(true);
+  }, 45_000);
+
+  it.each(CODEX_RESTORED)("keeps covered values on the fresh provider thread for $id", async ({ id, hasSessionSystem }) => {
+    const text = "Who receives the release handoff?";
+    rmSync(dumpPath, { force: true });
+    expect((await api("POST", `/api/bots/${id}/messages`, { text })).status).toBe(202);
+    await waitFor(async () => existsSync(dumpPath) && (await botById(id))?.busy === false);
+
+    const { calls }: { calls: CodexCall[] } = JSON.parse(readFileSync(dumpPath, "utf8"));
+    const methods = calls.map((call) => call.method);
+    expect(methods.filter((method) => method === "thread/resume")).toHaveLength(hasSessionSystem ? 1 : 0);
+    expect(methods).toContain("thread/start");
+    const prompt = codexTurn(calls, text)?.prompt;
+    expect(prompt).toContain(hasSessionSystem ? "provider session could not be resumed" : "because your instructions changed");
+    expect(prompt).toContain(LATER_CONTACT);
+    expect(prompt).toContain(RECENT_MILESTONE);
+    expect(prompt).toContain(COVERED_CONTACT);
   });
 
   it("dispatches a long thread through a driver without generateText", async () => {
