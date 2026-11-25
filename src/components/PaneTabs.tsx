@@ -331,12 +331,6 @@ export function PaneEdge({ pane, width, onWidth }: { pane: RefObject<HTMLElement
   });
   return (
     <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={t("show.resizePane")}
-      tabIndex={0}
-      aria-valuenow={width}
-      aria-valuemin={PANE_MIN}
       data-pane-edge
       data-drag={held || undefined}
       onPointerDown={(event) => {
@@ -374,7 +368,10 @@ export function PaneEdge({ pane, width, onWidth }: { pane: RefObject<HTMLElement
         write(undefined);
         keep(undefined);
       }}
-      className="show-pane-edge absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize touch-none hover:bg-accent/40 focus-visible:bg-accent/60 data-[drag]:bg-accent/60"
-    />
+      className="show-pane-edge absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize touch-none"
+    >
+      {/* Focus sits on the grip, so its ring hugs the grip instead of running the pane's full height. */}
+      <div role="separator" aria-orientation="vertical" aria-label={t("show.resizePane")} tabIndex={0} aria-valuenow={width} aria-valuemin={PANE_MIN} className="show-pane-grip" />
+    </div>
   );
 }
