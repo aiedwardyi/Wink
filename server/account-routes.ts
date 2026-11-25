@@ -47,7 +47,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       }
       if (id && !isInstanceId(id)) throw new AccountError("Invalid account id", 400);
       if (id && action === "sign-in" && method === "GET") {
-        const result = legacy ? registry.signIn(id) : lifecycle.signInResult(id) ?? (lifecycle.accounts.list().some((row) => row.id === id) ? { state: registry.logins.state(id), ...registry.logins.capture(id) } : null);
+        const result = legacy ? registry.signIn(id) : lifecycle.signInResult(id, owner) ?? (lifecycle.accounts.list().some((row) => row.id === id) ? { state: registry.logins.state(id), ...registry.signInCapture(id, owner) } : null);
         if (!result) throw new AccountError("Unknown account", 404);
         json(res, 200, result);
       } else if (id && action === "sign-in/code" && method === "POST") {

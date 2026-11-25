@@ -247,7 +247,7 @@ describe("account lifecycle", () => {
     release();
     await f.controller.settled(added.id);
     expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
-    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.controller.signInResult(added.id, "pc:")).toEqual({ state: "duplicate", existingId: existing.id });
     expect(f.accounts.get(existing.id)).toEqual(existing);
     expect(f.start.mock.calls.some(([, , args]) => args.includes("logout"))).toBe(false);
   });
@@ -262,7 +262,7 @@ describe("account lifecycle", () => {
     release();
     await f.controller.settled(added.id);
     expect(f.accounts.snapshot).toHaveLength(0);
-    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: "claude" });
+    expect(f.controller.signInResult(added.id, "pc:")).toEqual({ state: "duplicate", existingId: "claude" });
   });
 
   it("rechecks account changes without blocking them on duplicate probes", async () => {
@@ -290,7 +290,7 @@ describe("account lifecycle", () => {
       await observation;
       await f.controller.settled(added.id);
     }
-    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.controller.signInResult(added.id, "pc:")).toEqual({ state: "duplicate", existingId: existing.id });
     expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
   });
 
@@ -438,7 +438,9 @@ describe("account lifecycle", () => {
       const response = await request({ controller, registry }, "POST", `/api/instances/${account.id}/sign-in`);
       await controller.settled(account.id);
       expect(existsSync(failed), "the broken shim received auth login").toBe(false);
-      expect(response).toMatchObject({ status: 200, body: { url: "https://claude.com/cai/oauth/authorize?code=true" } });
+      expect(response).toMatchObject({ status: 200 });
+      // The fake CLI exits at once, so its link ended with the attempt.
+      expect(response.body).toEqual({});
       expect(readFileSync(opened, "utf8")).toBe(account.home);
     } finally {
       vi.unstubAllEnvs();
@@ -482,10 +484,10 @@ describe("account lifecycle", () => {
     expect((await request(f, "POST", path)).status).toBe(404);
     expect((await request(f, "POST", path)).status).toBe(500);
     expect(log.mock.calls).toEqual([
-      ["sign-in refused code=http-400 status=400 stderr=-"],
-      ["sign-in refused code=provider-config-busy status=409 stderr=-"],
-      ["sign-in refused code=unknown-engine-sign-in status=404 stderr=-"],
-      ["sign-in refused code=http-500 status=500 stderr=-"],
+      ["sign-in refused code=http-400 status=400 reason=-"],
+      ["sign-in refused code=provider-config-busy status=409 reason=-"],
+      ["sign-in refused code=unknown-engine-sign-in status=404 reason=-"],
+      ["sign-in refused code=http-500 status=500 reason=-"],
     ]);
   });
 

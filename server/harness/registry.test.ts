@@ -304,7 +304,9 @@ describe("ProviderRegistry", () => {
       const rows = await registry.describe();
       expect(rows.find((row) => row.instanceId === "a")?.loginState).toBe("cancelled");
       expect(rows.find((row) => row.instanceId === "b")?.loginState).toBe("pending");
-      expect(rows.find((row) => row.instanceId === "b")?.loginCapture).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
+      expect(rows.find((row) => row.instanceId === "b")).not.toHaveProperty("loginCapture");
+      expect(registry.signInCapture("b", "pc:")).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
+      expect(registry.signInCapture("b", "phone:p1:")).toEqual({});
     } finally {
       await registry.disposeAll();
       removeTestData(dir);
@@ -470,10 +472,11 @@ describe("ProviderRegistry", () => {
       vi.spyOn(registry.logins, "cancel").mockImplementation(() => new Promise((resolve) => { release = resolve; }));
       vi.spyOn(registry.logins, "start").mockResolvedValue({});
       const logout = registry.signOut("a");
-      const capture = registry.describeSaved()[0].loginCapture;
+      const row = registry.describeSaved()[0];
       release();
       await logout;
-      expect(capture).toEqual({});
+      expect(row).not.toHaveProperty("loginCapture");
+      expect(registry.signInCapture("a", "pc:")).toEqual({});
     } finally {
       vi.restoreAllMocks();
       await registry.disposeAll();
@@ -618,7 +621,7 @@ describe("ProviderRegistry", () => {
     await registry.disposeAll();
   });
 
-  it("retains managed Claude paste-back input for start and pushed rows", async () => {
+  it("retains managed Claude paste-back input for start and its starter's read", async () => {
     const fake = makeFakeDriver({ kind: "claudeAgent" });
     const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }),
       install: { login: { args: ["auth", "login"] } },
@@ -628,9 +631,10 @@ describe("ProviderRegistry", () => {
       await registry.load({ added: { driver: "claudeAgent", account: { id: "added", of: "claude", home: testHome(), generation: 1 } } });
       const capture = { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 };
       vi.spyOn(registry.logins, "start").mockResolvedValue({ ...capture, code: "ABCD-EFGH" });
-      vi.spyOn(registry.logins, "capture").mockReturnValue({ ...capture, code: "ABCD-EFGH" });
+      vi.spyOn(registry.logins, "captureFor").mockReturnValue({ ...capture, code: "ABCD-EFGH" });
       expect(await registry.startSignIn("added", false, "pc:")).toEqual(capture);
-      expect((await registry.describeCached())[0].loginCapture).toEqual(capture);
+      expect(registry.signInCapture("added", "pc:")).toEqual(capture);
+      expect((await registry.describeCached())[0]).not.toHaveProperty("loginCapture");
     } finally { await registry.disposeAll(); vi.restoreAllMocks(); }
   });
 

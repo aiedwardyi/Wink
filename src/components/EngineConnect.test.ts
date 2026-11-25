@@ -146,6 +146,20 @@ describe("first engine connection", () => {
     expect(base.snapshot.authenticated).toBe(authenticated);
   });
 
+  it("offers a remote start when the added Main account is waiting for its own PC browser", async () => {
+    Object.assign(window, { ogb: undefined });
+    vi.stubGlobal("location", new URL("https://remote.example/"));
+    const base = { ...instances[0]!, accountOf: "claude", accountState: "ready" as const,
+      install: { ...instances[0]!.install, login: { args: ["auth", "login"], deviceArgs: ["auth", "login", "--claudeai"] } },
+      snapshot: { state: "available" as const, authenticated: true }, pickerSnapshot: { state: "unavailable" as const } };
+    const main = { ...base, instanceId: "acct_11111111-1111-1111-1111-111111111111", accountMain: true,
+      loginState: "pending" as const, loginOpensBrowser: true, snapshot: { state: "available" as const, authenticated: false } };
+    instances = [base,main];
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const row = host.querySelector('[data-engine-connect="claude"]')!;
+    expect(row.textContent).toContain("Sign In");
+  });
+
   it("keeps a missing CLI installable even when Main's picker is ready", async () => {
     const base = { ...instances[0]!, pickerSnapshot: { state: "available" as const, authenticated: true } };
     await render(createElement(EngineConnect, { instances: [base], onRefresh: refreshInstances }));
@@ -480,7 +494,7 @@ describe("first engine connection", () => {
     for (const instance of instances.slice(0, 2)) instance.snapshot = { state: "available", authenticated: false };
     let signedIn = false;
     fetchMock.mockImplementation(async (url: string) => Response.json(url === "/api/instances"
-      ? { instances: instances.map((row) => row.instanceId === "claude" && signedIn ? { ...row, snapshot: { state: "available", authenticated: true } } : { ...row, loginState: "pending", loginCapture: { url: "https://auth.example/sign-in" } }) }
+      ? { instances: instances.map((row) => row.instanceId === "claude" && signedIn ? { ...row, snapshot: { state: "available", authenticated: true } } : { ...row, loginState: "pending" }) }
       : { url: "https://auth.example/sign-in" }));
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
     const claude = host.querySelector('[data-engine-connect="claude"]')!;

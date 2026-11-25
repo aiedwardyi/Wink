@@ -82,6 +82,27 @@ describe("antigravityHelperHome", () => {
     expect(existsSync(copy)).toBe(false);
   });
 
+  it("drops the helper's token copy at sign-out, before any helper starts", async () => {
+    ensureDirs();
+    const home = join(scratch("signout"), "home");
+    const token = join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+    mkdirSync(dirname(token), { recursive: true });
+    writeFileSync(token, "token-fixture");
+    const env = { HOME: home, USERPROFILE: home };
+    const copy = join(antigravityHelperHome(env), ".gemini", "antigravity-cli", "antigravity-oauth-token");
+    expect(readFileSync(copy, "utf8")).toBe("token-fixture");
+    const agy = await AntigravityDriver.create({
+      instanceId: "agy-home-signout", displayName: undefined, environment: env, enabled: true, config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      rmSync(token);
+      agy.signedOutByCli!();
+      expect(existsSync(copy)).toBe(false);
+    } finally {
+      await agy.dispose();
+    }
+  });
+
   it("holds only Wink's empty MCP config: no link, hard link or copy of the real ~/.gemini", () => {
     const root = scratch("shape");
     const { home, gemini } = realHome(root);

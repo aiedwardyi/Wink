@@ -258,9 +258,10 @@ it.each([false, true])("opens the existing add/sign-in flow with desktop bridge 
   await render();
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
-      state.instances = [...state.instances, { ...engine("new", false), loginState: "pending", loginCapture: { code: "ABCD", url: "https://example.com/login" } }];
+      state.instances = [...state.instances, { ...engine("new", false), loginState: "pending" }];
       return { id: "new", state: "pending" };
     }
+    if (path === "/api/accounts/new/sign-in") return { state: "pending", code: "ABCD", url: "https://example.com/login" };
     return {};
   });
   await act(async () => buttons("Add Account")[0]!.click());
@@ -441,8 +442,10 @@ it("drops Sign Out from an open phone menu when the account starts draining", as
 it.each(["en", "ko"] as const)("submits a managed Claude browser code without exposing it in %s", async (locale) => {
   persistPreference(locale);
   await render();
-  state.instances[1] = { ...engine("account-1", false), loginState: "pending",
-    loginCapture: { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 } };
+  state.instances[1] = { ...engine("account-1", false), loginState: "pending" };
+  request.mockImplementation(async (path: string) => path === "/api/accounts/account-1/sign-in"
+    ? { state: "pending", url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 } : {});
+  await update();
   await update();
   const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
   expect(input).not.toBeNull();
@@ -509,11 +512,11 @@ it("keeps the failure line after an added account rejects its code and its row i
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
       failed = false;
-      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending" });
       return { id: "new" };
     }
     if (path === "/api/accounts/new/sign-in/code") { failed = true; state.instances = state.instances.filter((row) => row.instanceId !== "new"); return {}; }
-    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    if (path === "/api/accounts/new/sign-in") return failed ? { state: "failed" } : { state: "pending", url: "https://example.test/login", inputGeneration: 4 };
     return {};
   });
   vi.useFakeTimers();
@@ -543,11 +546,11 @@ it("keeps the failure line when Connections remounts before the added account re
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
       failed = false;
-      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending" });
       return { id: "new" };
     }
     if (path === "/api/accounts/new/sign-in/code") { failed = true; state.instances = state.instances.filter((row) => row.instanceId !== "new"); return {}; }
-    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    if (path === "/api/accounts/new/sign-in") return failed ? { state: "failed" } : { state: "pending", url: "https://example.test/login", inputGeneration: 4 };
     return {};
   });
   vi.useFakeTimers();
@@ -578,11 +581,11 @@ it("shows the failure line once when the user returns after the failed added acc
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
       failed = false;
-      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending" });
       return { id: "new" };
     }
     if (path === "/api/accounts/new/sign-in/code") return {};
-    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    if (path === "/api/accounts/new/sign-in") return failed ? { state: "failed" } : { state: "pending", url: "https://example.test/login", inputGeneration: 4 };
     return {};
   });
   vi.useFakeTimers();
@@ -618,12 +621,12 @@ it("stops waiting on an addition the server no longer knows", async () => {
   let known = true;
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
-      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending" });
       return { id: "new" };
     }
     if (path === "/api/accounts/new/sign-in") {
       if (!known) throw Object.assign(new Error("Unknown account"), { status: 404 });
-      return { state: "pending" };
+      return { state: "pending", url: "https://example.test/login", inputGeneration: 4 };
     }
     return {};
   });

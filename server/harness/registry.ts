@@ -409,9 +409,23 @@ export class ProviderRegistry {
       throw error;
     }
     if (signInEnded) void this.logins.wait(instanceId).then(() => signInEnded(this.logins.state(instanceId) === "complete"));
-    return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
-      ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
-    };
+    return this.shownCapture(instanceId, capture);
+  }
+
+  /** The waiting sign-in's details for `owner`, empty unless that session started it; no shared row carries them. */
+  signInCapture(instanceId: InstanceId, owner: string): LoginCapture {
+    return this.shownCapture(instanceId, this.logins.captureFor(instanceId, owner));
+  }
+
+  private shownCapture(instanceId: InstanceId, capture: LoginCapture): LoginCapture {
+    const kind = this.get(instanceId)?.driverKind;
+    const login = kind ? this.driversByKind.get(kind)?.install?.login : undefined;
+    if (login?.deviceArgs) return capture;
+    const shown: LoginCapture = {};
+    if (capture.url) shown.url = capture.url;
+    if (capture.error) shown.error = capture.error;
+    if (this.accounts.has(instanceId) && kind === "claudeAgent" && capture.inputGeneration) shown.inputGeneration = capture.inputGeneration;
+    return shown;
   }
 
   async cancelSignIn(instanceId: InstanceId) {
@@ -771,7 +785,6 @@ export class ProviderRegistry {
         instanceId: entry.instanceId,
         loginState: undefined,
         loginOpensBrowser: undefined,
-        loginCapture: undefined,
         loginError: undefined,
         driverKind: entry.shadow.driverKind,
         displayName: entry.shadow.displayName ?? retiredEngineLabel(entry.shadow.driverKind) ?? entry.shadow.driverKind,
@@ -793,12 +806,6 @@ export class ProviderRegistry {
       ...(this.logins.capture(inst.instanceId).error ? { loginError: this.logins.capture(inst.instanceId).error } : {}),
       loginState: this.signingOut.has(inst.instanceId) ? "cancelled" : this.logins.state(inst.instanceId),
       loginOpensBrowser: (!this.signingOut.has(inst.instanceId) && this.logins.opensBrowser(inst.instanceId)) || undefined,
-      loginCapture: this.signingOut.has(inst.instanceId) ? {}
-        : driver?.install?.login?.deviceArgs ? this.logins.capture(inst.instanceId)
-        : { url: this.logins.capture(inst.instanceId).url,
-          ...(inst.account && inst.driverKind === "claudeAgent" && this.logins.capture(inst.instanceId).inputGeneration
-            ? { inputGeneration: this.logins.capture(inst.instanceId).inputGeneration } : {}),
-        },
       driverKind: inst.driverKind,
       displayName: inst.displayName ?? inst.driverKind,
       snapshot,

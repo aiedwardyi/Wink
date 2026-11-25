@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { join, relative } from "node:path";
@@ -92,5 +92,54 @@ describe("one sign-in path for every engine", () => {
     const files = readdirSync(server, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".ts") && !/\.test\.ts$|[\\/]testing[\\/]/.test(file));
     const callers = files.filter((file) => /registry\.(startSignIn|signOut)\(/.test(readFileSync(join(server, file), "utf8")));
     expect(callers.map((file) => relative(".", file).replace(/\\/g, "/"))).toEqual(["account-lifecycle.ts"]);
+  });
+});
+
+describe("a sign-in's link and code", () => {
+  const PHONE = `phone:p1:${"a".repeat(32)}`;
+  const PC = `pc:${"b".repeat(32)}`;
+
+  async function live() {
+    const dir = join(DATA_DIR, `sign-in-owner-${++next}`);
+    mkdirSync(dir, { recursive: true });
+    const script = join(dir, "login.cjs");
+    writeFileSync(script, "process.stdout.write('https://auth.example/device\\nCode: abcd-efgh\\n'); setInterval(() => {}, 1000);");
+    const bases = { codex: { driver: "codex" } };
+    const accounts = new AccountService(dir, () => bases);
+    const fake = makeFakeDriver({ kind: "codex" }).driver;
+    const registry = new ProviderRegistry([{ ...fake, defaultConfig: () => ({ cli: `"${process.execPath}" "${script}"` }),
+      install: { login: { args: ["login"], deviceArgs: ["device"] }, logout: ["logout"] } }]);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: bases }, accounts.snapshot));
+    const lifecycle = new AccountLifecycle(accounts, registry, { reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn() });
+    const routes = createAccountRoutes(lifecycle, registry);
+    const request = async (method: string, path: string, owner: string, body?: { device: boolean }) => {
+      const req = new IncomingMessage(new Socket());
+      req.headers = { "content-type": "application/json" };
+      if (body) req.push(JSON.stringify(body));
+      req.push(null);
+      const res = new ServerResponse(req);
+      let status = 0;
+      let data: unknown;
+      vi.spyOn(res, "writeHead").mockImplementation((code: number) => { status = code; return res; });
+      vi.spyOn(res, "end").mockImplementation((raw?: string | (() => void)) => { data = JSON.parse(String(raw)); return res; });
+      await routes(req, res, method, path, owner);
+      return { status, data };
+    };
+    return { registry, request };
+  }
+
+  it("reaches only the session that started it, through no shared read, and ends with it", async () => {
+    const f = await live();
+    const shown = { url: "https://auth.example/device", code: "abcd-efgh" };
+    expect(await f.request("POST", "/api/instances/codex/sign-in", PHONE, { device: true })).toEqual({ status: 200, data: shown });
+    const leaked = /abcd-efgh|auth\.example/i;
+    expect(JSON.stringify(await f.registry.describe())).not.toMatch(leaked);
+    expect(JSON.stringify(await f.registry.describeCached())).not.toMatch(leaked);
+    expect(JSON.stringify(await f.request("GET", "/api/accounts", PC))).not.toMatch(leaked);
+    expect(await f.request("GET", "/api/accounts/codex/sign-in", PC)).toEqual({ status: 200, data: { state: "pending" } });
+    expect(await f.request("GET", "/api/accounts/codex/sign-in", PHONE)).toEqual({ status: 200, data: { ...shown, state: "pending" } });
+    expect((await f.request("DELETE", "/api/instances/codex/sign-in", PHONE)).status).toBe(200);
+    expect(f.registry.logins.capture("codex")).toEqual({});
   });
 });

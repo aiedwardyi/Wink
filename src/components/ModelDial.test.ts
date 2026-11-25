@@ -353,7 +353,8 @@ describe("ModelDial", () => {
 
   it("leaves keys typed into the sign-in code field alone", async () => {
     media();
-    await mount({ grokSignedIn: false, grokLogin: { loginState: "pending", loginCapture: { inputGeneration: 1 } } });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ state: "pending", inputGeneration: 1 })));
+    await mount({ grokSignedIn: false, grokLogin: { loginState: "pending" } });
     await key("ArrowUp");
     const input = document.querySelector<HTMLInputElement>(".dial-stats input")!;
     const typed = new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true });

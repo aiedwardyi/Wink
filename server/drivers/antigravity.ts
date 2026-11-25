@@ -52,7 +52,7 @@ import { AGY_TEXT_MODEL, textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
 import { ANTIGRAVITY_KEYRING, antigravityCredentialStore, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
-import { antigravityHelperHome } from "./antigravity-home.ts";
+import { antigravityHelperHome, dropAntigravityHelperToken } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
@@ -690,6 +690,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const credentials = () => credentialStore(env());
     const signIn = antigravitySignIn(() => credentials().has(), () => readAntigravityLogSignIn(env()));
     const forgetSignedOut = keyringSignOut.onSignedOut(() => {
+      dropAntigravityHelperToken(env());
       signIn.record(false);
       void retireStandbys("signed out");
     });
@@ -1497,6 +1498,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         return keyringSignOut.signingIn();
       },
       signedOutByCli: () => {
+        dropAntigravityHelperToken(env());
         void retireStandbys("signed out");
         keyringSignOut.signedOutByAgy();
       },

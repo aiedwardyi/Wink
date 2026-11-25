@@ -125,7 +125,7 @@ describe("engine sign-in row", () => {
     await click("Cancel");
     expect(host.textContent).toBe("Sign In");
     const push = async (loginState: InstanceInfo["loginState"]) => act(async () => root!.render(createElement(I18nProvider, null,
-      createElement(EngineSignIn, { instance: { ...row, loginState, loginCapture: capture } }))));
+      createElement(EngineSignIn, { instance: { ...row, loginState } }))));
     await push("pending");
     expect(host.textContent).toBe("Sign In");
     await act(async () => finish(json({})));
@@ -141,10 +141,8 @@ describe("engine sign-in row", () => {
   it.each(["en", "ko"] as const)("uses the same browser-code hint in shared sign-in surfaces in %s", async (locale) => {
     vi.stubGlobal("localStorage", window.localStorage);
     persistPreference(locale);
-    vi.stubGlobal("fetch", vi.fn(async () => json({})));
-    await render(createElement(EngineSignIn, { instance: instance("claudeAgent", {
-      loginState: "pending", loginCapture: { url: "https://example.com/login", inputGeneration: 1 },
-    }) }));
+    vi.stubGlobal("fetch", vi.fn(async () => json({ state: "pending", url: "https://example.com/login", inputGeneration: 1 })));
+    await render(createElement(EngineSignIn, { instance: instance("claudeAgent", { loginState: "pending" }) }));
     expect(host.querySelector("input")?.placeholder).toBe(locale === "en" ? "Paste the code here" : "여기에 코드를 붙여넣으세요");
     expect(host.textContent).toContain(locale === "en" ? "Sign in with your browser" : "브라우저로 로그인하세요");
     persistPreference("en");
@@ -152,7 +150,7 @@ describe("engine sign-in row", () => {
 
   it("keeps stopped credentials actionable until the account is ready", async () => {
     const row = instance("claudeAgent", { accountState: "stopped", snapshot: { state: "available", authenticated: true } });
-    const fetchMock = vi.fn(async (url: string) => json(url === "/api/instances" ? { instances: [{ ...row, loginState: "pending", loginCapture: capture }] } : capture));
+    const fetchMock = vi.fn(async (url: string) => json(url === "/api/instances" ? { instances: [{ ...row, loginState: "pending" }] } : capture));
     vi.stubGlobal("fetch", fetchMock);
     await render(createElement(EngineSignIn, { instance: row }));
     expect(host.textContent).toBe("Sign In");
@@ -223,7 +221,8 @@ describe("engine sign-in row", () => {
 
   it("ignores the previous engine's late start response after switching", async () => {
     let finish!: (response: Response) => void;
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => init?.method === "POST"
+      ? new Promise<Response>((resolve) => { finish = resolve; }) : Promise.resolve(json({ state: "pending" }))));
     await render(createElement(EngineSignIn, { instance: instance() }));
     await click("Sign In");
     await act(async () => root!.render(createElement(I18nProvider, null,
@@ -463,7 +462,7 @@ describe("sign-in from a phone or another PC's window", () => {
     surface(name);
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ url: "https://auth.example/sign-in", inputGeneration: 3 }));
     vi.stubGlobal("fetch", fetchMock);
-    await render(createElement(EngineSignIn, { instance: instance(kind, { install: install(kind), loginState: "pending", loginOpensBrowser: true, loginCapture: { url: "https://auth.example/browser" } }) }));
+    await render(createElement(EngineSignIn, { instance: instance(kind, { install: install(kind), loginState: "pending", loginOpensBrowser: true }) }));
     expect(host.textContent).not.toContain("Sign in with your browser");
     await click("Sign In");
     expect(fetchMock.mock.calls[0]).toEqual([`/api/instances/${kind}/sign-in`, expect.objectContaining({ method: "POST", body: '{"device":true}' })]);
@@ -473,7 +472,7 @@ describe("sign-in from a phone or another PC's window", () => {
   it("keeps following a browser-mode sign-in in a browser on this PC", async () => {
     surface("this PC");
     vi.stubGlobal("fetch", vi.fn(async () => json({})));
-    await render(createElement(EngineSignIn, { instance: instance("antigravityAgent", { install: install("antigravityAgent"), loginState: "pending", loginOpensBrowser: true, loginCapture: { url: "https://auth.example/browser" } }) }));
+    await render(createElement(EngineSignIn, { instance: instance("antigravityAgent", { install: install("antigravityAgent"), loginState: "pending", loginOpensBrowser: true }) }));
     expect(host.textContent).toContain("Cancel");
     expect([...host.querySelectorAll("button")].some((button) => button.textContent === "Sign In")).toBe(false);
   });
@@ -484,9 +483,10 @@ describe("a sign-in started on another device or tab", () => {
 
   it.each(["Cancel", "code"] as const)("offers plain Sign In when its %s is refused, and that Sign In takes it over", async (action) => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => init?.method === "DELETE" || url.endsWith("/sign-in/code") ? elsewhere()
+      : !init?.method ? json({ state: "pending", url: "https://auth.example/theirs", inputGeneration: 3 })
       : json({ url: "https://auth.example/mine", inputGeneration: 4 }));
     vi.stubGlobal("fetch", fetchMock);
-    await render(createElement(EngineSignIn, { instance: instance("claudeAgent", { loginState: "pending", loginCapture: { url: "https://auth.example/theirs", inputGeneration: 3 } }) }));
+    await render(createElement(EngineSignIn, { instance: instance("claudeAgent", { loginState: "pending" }) }));
     if (action === "Cancel") await click("Cancel");
     else {
       const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;

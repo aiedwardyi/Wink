@@ -51,8 +51,8 @@ export class AccountLifecycle {
 
   get busy() { return this.mutations > 0 || this.jobs.size > 0 || Object.values(this.accounts.drains).some((row) => row.phase !== "failed"); }
   settled(id: string) { return this.pending.get(id) ?? Promise.resolve(); }
-  signInResult(id: string) {
-    return this.results.get(id) ?? (this.pending.has(id) ? { ...this.registry.logins.capture(id), state: "pending" as const }
+  signInResult(id: string, owner: string) {
+    return this.results.get(id) ?? (this.pending.has(id) ? { ...this.registry.signInCapture(id, owner), state: "pending" as const }
       : this.accounts.get(id)?.state === "ready" ? { state: "complete" as const } : undefined);
   }
 
@@ -140,7 +140,7 @@ export class AccountLifecycle {
       if (drain?.phase === "failed") await this.accounts.clearDrain(id);
       else if (drain) throw new AccountError("This account is draining");
       const logins = this.registry.logins;
-      if (logins.joins(id, owner, this.registry.signInMode(id, device))) return logins.capture(id);
+      if (logins.joins(id, owner, this.registry.signInMode(id, device))) return this.registry.signInCapture(id, owner);
       // Any other start replaces the waiting sign-in, so its pending job must not read as this account's active work.
       if (logins.state(id) === "pending" && !this.registry.signingOutNow(id)) await this.registry.cancelSignIn(id);
       const account = this.accounts.get(id);

@@ -226,6 +226,8 @@ function refusal(error: unknown): MessageKey {
     : code === "host-unknown" ? "engines.signInHostUnknown" : DIDNT_FINISH;
 }
 
+type SignInCapture = { url?: string; code?: string; inputGeneration?: number };
+
 // A phone or another PC's window cannot finish a sign-in whose browser opened on the PC, so it offers Sign In instead.
 const joinable = (instance: InstanceInfo) => instance.loginState === "pending" && !(instance.loginOpensBrowser && signsInElsewhere());
 
@@ -233,7 +235,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
   const [current, setCurrent] = useState(instance);
   const [waiting, setWaiting] = useState(joinable(instance));
   const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && loginFailure(instance));
-  const [capture, setCapture] = useState(instance.loginCapture ?? {});
+  const [capture, setCapture] = useState<SignInCapture>({});
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const cancelled = useRef(false);
@@ -241,22 +243,30 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
   const { device, computerOnly, deviceFlow } = engineSignInFlow(instance.install?.login);
   const connected = accountReady(current);
   const path = `/api/instances/${encodeURIComponent(instance.instanceId)}/sign-in`;
+  // Shared rows never carry a sign-in's link, code or paste prompt: the server hands them only to the tab that started it.
+  const loadCapture = () => {
+    const request = generation.current;
+    void api(`/api/accounts/${encodeURIComponent(instance.instanceId)}/sign-in`).then(({ url, code, inputGeneration }: SignInCapture) => {
+      if (request === generation.current && !cancelled.current) setCapture({ url, code, inputGeneration });
+    }, () => {});
+  };
 
   useEffect(() => { setLoginCode(""); }, [capture.inputGeneration]);
 
   useEffect(() => {
     setWaiting(joinable(instance));
     setFailed(instance.loginState === "failed" && loginFailure(instance));
-    setCapture(instance.loginCapture ?? {});
+    setCapture({});
     setBusy(false);
     cancelled.current = false;
+    if (joinable(instance)) loadCapture();
     return () => { generation.current += 1; };
   }, [instance.instanceId]);
   useEffect(() => {
     setCurrent(instance);
-    if (joinable(instance) && !cancelled.current) {
+    if (joinable(instance) && !cancelled.current && !waiting) {
       setWaiting(true);
-      setCapture(instance.loginCapture ?? {});
+      loadCapture();
     }
     if (accountReady(instance)) setWaiting(false);
   }, [instance]);
@@ -266,7 +276,8 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     const next = instances.find((row) => row.instanceId === instance.instanceId);
     if (!next) return;
     setCurrent(next);
-    setCapture(next.loginCapture ?? {});
+    if (next.loginState === "pending") loadCapture();
+    else setCapture({});
     onUpdated?.(next);
     if (accountReady(next)) { setWaiting(false); setFailed(false); }
     else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled" && loginFailure(next)); }

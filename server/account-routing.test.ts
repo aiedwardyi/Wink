@@ -113,15 +113,16 @@ async function fixture(empty = false, of = "claude") {
 }
 
 describe("engine default account routing", () => {
-  it("pushes Claude paste-back capture only for the managed account", async () => {
+  it("hands Claude paste-back capture only to the managed account's starter, never in pushed rows", async () => {
     const f = await fixture();
     const added = f.added[0].id;
     const capture = { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 };
-    vi.spyOn(f.registry.logins, "capture").mockReturnValue(capture);
+    vi.spyOn(f.registry.logins, "captureFor").mockReturnValue(capture);
     vi.spyOn(f.registry.logins, "state").mockReturnValue("pending");
     const instances = await f.registry.describeCached();
-    expect(instances.find((row) => row.instanceId === added)?.loginCapture).toEqual(capture);
-    expect(instances.find((row) => row.instanceId === "claude")?.loginCapture).toEqual({ url: capture.url });
+    expect(instances.filter((row) => "loginCapture" in row)).toEqual([]);
+    expect(f.registry.signInCapture(added, "pc:")).toEqual(capture);
+    expect(f.registry.signInCapture("claude", "pc:")).toEqual({ url: capture.url });
   });
 
   it("submits a code only to a known engine's pending login", async () => {

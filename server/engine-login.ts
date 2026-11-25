@@ -4,7 +4,6 @@ import { stripVTControlCharacters } from "node:util";
 import { augmentedPath, findCliCandidates, resolveCliSpawn } from "./env-path.ts";
 import { cliVersion, killCliTree } from "./procs.ts";
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
-import { redactSecretsInText } from "./redact.ts";
 
 export interface LoginCapture {
   url?: string;
@@ -28,7 +27,7 @@ export function signInOwner(headers: { [name: string]: string | string[] | undef
 }
 
 export function logSignInRefusal(status: number, code?: string): void {
-  console.warn(`sign-in refused code=${code ?? `http-${status}`} status=${status} stderr=-`);
+  console.warn(`sign-in refused code=${code ?? `http-${status}`} status=${status} reason=-`);
 }
 
 function launchErrorCode(error: unknown): string {
@@ -36,17 +35,9 @@ function launchErrorCode(error: unknown): string {
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : "launch-error";
 }
 
-function safeStderr(line: string): string {
-  return redactSecretsInText(line
-    .replace(/\bhttps?:\/\/\S+/gi, "[url]")
-    .replace(/\b(?:[\w-]*(?:token|secret|password|api[-_]?key|authorization)|code)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, "[credential]")
-    .replace(/\bBearer\s+\S+/gi, "[credential]")
-    .replace(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4,5}){1,2}\b|[A-Za-z0-9_+\/=-]{24,}/g, "[code]"))
-    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, " ").slice(0, 320);
-}
-
-function logCliExit(code: string, line?: string): void {
-  console.warn(`sign-in CLI exit code=${code} stderr=${line ? JSON.stringify(line) : "-"}`);
+// CLI output can carry a device code or link in any form, so a failed exit logs only what Wink parsed from it.
+function logCliExit(code: string, reason?: LoginCapture["error"]): void {
+  console.warn(`sign-in CLI exit code=${code} reason=${reason ?? "-"}`);
 }
 
 const VERSION_PROBE_MS = 10_000;
@@ -69,7 +60,6 @@ interface LoginJob {
   pasteBack: boolean;
   mode: SignInMode | "sign-out";
   owner?: string;
-  lastStderr?: string;
 }
 
 export class EngineLogin {
@@ -99,6 +89,12 @@ export class EngineLogin {
 
   capture(engine: string): LoginCapture {
     return { ...this.jobs.get(engine)?.capture };
+  }
+
+  /** The waiting sign-in's link, code and paste prompt, for the session that started it only. */
+  captureFor(engine: string, owner: string): LoginCapture {
+    const job = this.jobs.get(engine);
+    return job?.state === "pending" && job.owner === owner ? { ...job.capture } : {};
   }
 
   /** A pending sign-in that opened its browser on this PC, which a code-flow device can neither see nor finish. */
@@ -178,11 +174,11 @@ export class EngineLogin {
         job.child = child;
         child.stdin.on("error", () => {});
         this.read(child.stdout, job, authHosts);
-        this.read(child.stderr, job, authHosts, options.logExit);
+        this.read(child.stderr, job, authHosts);
         let spawnError: string | undefined;
         child.once("error", (error) => { spawnError = launchErrorCode(error); job!.finish("failed"); });
         child.once("close", (code, signal) => {
-          if (options.logExit && (spawnError || signal || code !== 0)) logCliExit(spawnError ?? signal ?? String(code), job!.lastStderr);
+          if (options.logExit && (spawnError || signal || code !== 0)) logCliExit(spawnError ?? signal ?? String(code), job!.capture.error);
           job!.finish(code === 0 ? "complete" : "failed");
         });
       } catch (error) {
@@ -236,6 +232,7 @@ export class EngineLogin {
       finish: (state) => {
         if (job.state !== "pending") return;
         job.state = state;
+        job.capture = job.capture.error ? { error: job.capture.error } : {};
         clearTimeout(timer);
         if (job.child && job.child.exitCode === null && job.child.signalCode === null) {
           let childClosed = false;
@@ -267,13 +264,12 @@ export class EngineLogin {
     return job;
   }
 
-  private read(stream: NodeJS.ReadableStream, job: LoginJob, authHosts: string[], stderr = false): void {
+  private read(stream: NodeJS.ReadableStream, job: LoginJob, authHosts: string[]): void {
     let line = "";
     let dropping = false;
     stream.setEncoding("utf8");
     const parse = () => {
       const clean = stripVTControlCharacters(line).trim();
-      if (stderr && clean) job.lastStderr = safeStderr(clean);
       if (job.state !== "pending") { line = ""; return; }
       if (job.pasteBack && PASTE_PROMPT.test(clean)) job.capture.inputGeneration = job.generation;
       if (job.scope === "codex" && /\bdevice[ _-]+limit(?:[ _-]+reached)?\b|\btoo many (?:paid )?accounts (?:on|for) (?:this|the same) device\b/i.test(clean)) {
@@ -310,7 +306,6 @@ export class EngineLogin {
           line += char;
           if (job.pasteBack && char === ">" && /^Paste code here if prompted\s*>$/.test(stripVTControlCharacters(line).trim())) parse();
           if (line.length > 8192) {
-            if (stderr) job.lastStderr = "[line too long]";
             line = ""; dropping = true;
           }
         }

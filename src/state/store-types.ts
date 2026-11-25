@@ -438,7 +438,6 @@ export interface InstanceInfo {
   loginState?: "pending" | "complete" | "failed" | "cancelled";
   /** The pending sign-in opened its browser on the PC. */
   loginOpensBrowser?: boolean;
-  loginCapture?: { url?: string; code?: string; inputGeneration?: number };
   loginError?: string;
   instanceId: string;
   driverKind: string;

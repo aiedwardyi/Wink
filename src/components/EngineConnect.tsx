@@ -39,7 +39,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   const signInAs = (instance: InstanceInfo) => {
     const main = needsSignIn(instance) ? usageAccount(instances, instance.instanceId) : undefined;
     return main && main.instanceId !== instance.instanceId
-      ? { ...instance, instanceId: main.instanceId, loginState: main.loginState, loginCapture: main.loginCapture } : instance;
+      ? { ...instance, instanceId: main.instanceId, loginState: main.loginState, loginOpensBrowser: main.loginOpensBrowser, loginError: main.loginError } : instance;
   };
 
   const install = async (instance: InstanceInfo) => {

@@ -19,14 +19,21 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-it("logs one CLI exit with the last stderr line and redacts sign-in secrets", async () => {
+it("logs one CLI exit with its parsed reason and none of the CLI's text", async () => {
   const { manager, cli } = fixture();
   const log = vi.spyOn(console, "warn").mockImplementation(() => {});
   await manager.start("added", cli, ["stderr-exit"], {}, [], { ...ME, logExit: true });
   await manager.wait("added");
-  expect(log.mock.calls).toEqual([[
-    'sign-in CLI exit code=3 stderr="OAuth failed: [url] [credential] [code]"',
-  ]]);
+  expect(log.mock.calls).toEqual([["sign-in CLI exit code=3 reason=-"]]);
+});
+
+it("logs no device code from a failed sign-in in any letter case", async () => {
+  const { manager, cli } = fixture();
+  const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await manager.start("added", cli, ["stderr-code"], {}, [], { ...ME, logExit: true });
+  await manager.wait("added");
+  expect(log).toHaveBeenCalledOnce();
+  expect(JSON.stringify(log.mock.calls)).not.toMatch(/abcd-?efgh/i);
 });
 
 it("does not log a CLI exit for a successful sign-in", async () => {
@@ -80,6 +87,10 @@ function fixture(timeout = 15000, capture = 2500) {
     const fs = require('node:fs');
     const { spawn } = require('node:child_process');
     const [mode, file] = process.argv.slice(2);
+    if (mode === 'stderr-code') {
+      process.stderr.write('Enter the code abcd-efgh\\nOr Abcd-EfGh, then retry', () => process.exit(3));
+      return;
+    }
     if (mode === 'stderr-exit') {
       process.stderr.write('Earlier diagnostic\\r\\n\\x1b[31mOAuth failed: https://example.test/private-fixture-token?code=private accessToken=short ABCD-EFGH\\x1b[0m', () => process.exit(3));
       return;
