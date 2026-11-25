@@ -111,21 +111,19 @@ it("starts a terminal open's timing at the tap, so the lazy chunk's download is 
   } finally { await f.unmount(); }
 });
 
-it("finishes a worker open when that worker's read is shown, not when the first pane's is", async () => {
+it("finishes a worker open when that worker's read is shown, with no first-pane read before it", async () => {
   chunk.release();
   const f = await mount();
   try {
     const { first, hold } = f.hold(PANES[1]);
-    await f.openWorker(2);
-    await vi.waitFor(() => expect(first.requested).toBe(true));
-    vi.advanceTimersByTime(300);
     first.release();
+    await f.openWorker(2);
     await vi.waitFor(() => expect(hold.requested).toBe(true));
+    expect(first.requested).toBe(false);
     vi.advanceTimersByTime(300);
     hold.release();
     await vi.waitFor(() => expect(f.records()).toHaveLength(1));
-    const { tap, fetchStart, paint } = f.records()[0].terminal!;
-    expect(fetchStart! - tap).toBeGreaterThanOrEqual(300);
+    const { fetchStart, paint } = f.records()[0].terminal!;
     expect(paint! - fetchStart!).toBeGreaterThanOrEqual(300);
   } finally { await f.unmount(); }
 });
