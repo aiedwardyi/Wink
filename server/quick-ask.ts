@@ -22,8 +22,8 @@ const BLOCK_HEAD =
 const NOTE_HEAD =
   "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you. The user's own words decide; if they don't match what you asked (like 'both' for 3 items), take every item or ask one short question.]";
 // An order gets a fixed line, never the helper's reading of it; the bot decides what the order means.
-const ORDER_ACK = "Got it, one moment while I finish this step, then I'll do it.";
-const ORDER_ACK_KO = "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요.";
+const ORDER_ACK = "One moment while I finish this step, then I'll do it.";
+const ORDER_ACK_KO = "이 단계 마무리하고 바로 할게요. 잠시만요.";
 const HANGUL = /[\u3131-\u318e\uac00-\ud7a3]/g;
 const LATIN = /[a-z]/gi;
 // the message's main script: one stray Hangul character ("merge 2번") stays English

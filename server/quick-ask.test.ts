@@ -167,14 +167,14 @@ describe("quick route", () => {
   });
 
   it.each([
-    ["merge both", "Got it, one moment while I finish this step, then I'll do it."],
-    ["squash both", "Got it, one moment while I finish this step, then I'll do it."],
-    ["also update the docs when you are done", "Got it, one moment while I finish this step, then I'll do it."],
-    ["2", "Got it, one moment while I finish this step, then I'll do it."],
-    ["둘 다 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
-    ["PR 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
-    ["npm install 다시 해볼까?", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
-    ["merge 2번", "Got it, one moment while I finish this step, then I'll do it."],
+    ["merge both", "One moment while I finish this step, then I'll do it."],
+    ["squash both", "One moment while I finish this step, then I'll do it."],
+    ["also update the docs when you are done", "One moment while I finish this step, then I'll do it."],
+    ["2", "One moment while I finish this step, then I'll do it."],
+    ["둘 다 머지해줘", "이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["PR 머지해줘", "이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["npm install 다시 해볼까?", "이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["merge 2번", "One moment while I finish this step, then I'll do it."],
   ])("answers an order with the fixed line only: %s", async (text, line) => {
     const h = harness({ consumed: true, result: { route: "answer", text: "Merging PR 12 and PR 14 now.", ms: 4 } });
     await h.send({ text });
@@ -188,9 +188,9 @@ describe("quick route", () => {
   });
 
   it.each([
-    ["merge both", "Got it, one moment while I finish this step, then I'll do it."],
-    ["squash both", "Got it, one moment while I finish this step, then I'll do it."],
-    ["둘 다 머지해줘", "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요."],
+    ["merge both", "One moment while I finish this step, then I'll do it."],
+    ["squash both", "One moment while I finish this step, then I'll do it."],
+    ["둘 다 머지해줘", "이 단계 마무리하고 바로 할게요. 잠시만요."],
   ])("gives a mid-turn order one reply, even when its send is replayed: %s", async (text, line) => {
     const h = harness({ consumed: true, result: { route: "answer", text: "I take that to mean the first two.", ms: 4 } });
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "PRs 12, 14 and 15 are ready. Which should I merge?" });
@@ -225,7 +225,7 @@ describe("quick route", () => {
     h.release();
     await vi.waitFor(() => expect(h.steer).toHaveBeenCalledTimes(2));
     expect(h.ask).not.toHaveBeenCalled();
-    expect(botLines(h).slice(1)).toEqual(["Got it, one moment while I finish this step, then I'll do it."]);
+    expect(botLines(h).slice(1)).toEqual(["One moment while I finish this step, then I'll do it."]);
   });
 
   it("leaves a steered send alone when the helper has no reply", async () => {
@@ -307,7 +307,7 @@ describe("quick route", () => {
     h.store.setActivity(h.bot.id, "idle");
     const run = vi.fn();
     drainSteeredMessages(h.store, run);
-    expect(botLines(h).slice(-1)).toEqual(["Got it, one moment while I finish this step, then I'll do it."]);
+    expect(botLines(h).slice(-1)).toEqual(["One moment while I finish this step, then I'll do it."]);
     expect(h.rows().filter((row) => row.text === text)).toHaveLength(1);
     if (stopped) return expect(run).not.toHaveBeenCalled();
     expect(run).toHaveBeenCalledOnce();
@@ -698,7 +698,7 @@ describe("quick route", () => {
     h.release();
     await vi.waitFor(() => expect(h.rows().at(-1)).toMatchObject({ role: "bot", kind: "text" }));
     const [sent, reply] = h.rows().slice(-2);
-    expect(reply).toMatchObject({ text: "Got it, one moment while I finish this step, then I'll do it.", quick: { state: "answer", askId: sent!.id } });
+    expect(reply).toMatchObject({ text: "One moment while I finish this step, then I'll do it.", quick: { state: "answer", askId: sent!.id } });
     expect(h.ask).not.toHaveBeenCalled();
     expect(h.steer).not.toHaveBeenCalled();
     h.store.setActivity(h.bot.id, "idle");
