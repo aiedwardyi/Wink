@@ -340,6 +340,11 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && ["/api/internal/board-search", "/api/internal/board-post", "/api/internal/room-fix"].includes(req.url ?? "")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ text: `${req.url} ok` }));
+      return;
+    }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unknown" }));
   });
@@ -1464,6 +1469,35 @@ describe("agents-proxy catalog", () => {
     expect(direct.list.result.tools.map((tool: { name: string }) => tool.name)).toContain(name);
     const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
     expect(gateway.call.result.isError).toBe(true);
+  });
+
+  // Offline stand-in for a model turn: the words a model would search with,
+  // then the call it would make. Real-model accuracy is the nightly eval's arm.
+  it.each([
+    ["create_bot", "create a new bot", { name: "Pixel", role: "Designer", instructions: "Draw things." }],
+    ["create_channel", "make a group channel", { name: "Design", member_ids: ["bot-helper"] }],
+    ["generate_image", "generate an image", { prompt: "A test image", show: true }],
+    ["call_api", "call an api with a saved key", { credential_id: "ttsKey", method: "POST", url: "https://api.example.com/audio" }],
+    ["request_credential", "ask the user for an api key credential", { credential_id: "geminiApiKey", reason: "Task needs it" }],
+    ["usage_status", "usage limits left", {}],
+    ["link_room_fix", "link_room_fix", { sessionId: "pane-1", title: "Login bug" }],
+    ["board_search", "search the board for fixes", { query: "EADDRINUSE" }],
+    ["board_post", "post a tip to the board", { kind: "tip", title: "Port", body: "Kill the old dev server." }],
+    ["wake_me", "wake me later", { at: "2099-01-01T09:00:00+00:00", note: "Check the deploy." }],
+    ["web_read", "read a web page url", { url: "https://example.com/" }],
+  ])("finds %s by a model's words and reaches its original handler", async (name, query, args) => {
+    webReadResponse = { status: "ok", url: "https://example.com/", route: "fetch", text: "Example Domain", tried: [] };
+    const found = await probeWithIdentity(identity(), "find_wink_tool", { query });
+    expect(JSON.parse(found.call.result.content[0].text).tools.map((tool: { name: string }) => tool.name)).toContain(name);
+    const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name, args);
+    const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
+    expect(gateway.call.result).toMatchObject({ ...direct.call.result, _meta: { winkTool: name } });
+    expect(gateway.call.result.isError).toBeFalsy();
+  });
+
+  it.each(["hello", "thanks!", "good morning"])("finds no tool for a chat turn that needs none: %s", async (query) => {
+    const found = await probeWithIdentity(identity(), "find_wink_tool", { query });
+    expect(JSON.parse(found.call.result.content[0].text).tools).toEqual([]);
   });
 
   it.each(["create_bot", "create_channel", "generate_image", "request_credential"])("preserves %s argument refusals", async (name) => {

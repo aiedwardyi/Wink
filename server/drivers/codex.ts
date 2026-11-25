@@ -398,7 +398,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
         }
         if (turn.integrations?.agents) {
-          mountMcpServer(appServerArgs, env, "agents", experimentalAgents(turn.integrations.agents), AGENTS_TOOL_TIMEOUT_SEC);
+          mountMcpServer(appServerArgs, env, "agents", experimentalAgents(turn.integrations.agents, true), AGENTS_TOOL_TIMEOUT_SEC);
         }
         if (turn.integrations?.computer) {
           const proxyEnv = computerProxyEnv(turn.integrations.computer);
