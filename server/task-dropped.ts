@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
-import { redactSecretsInText } from "./redact.ts";
+import { redactRoomMemory } from "./redact.ts";
 import type { TaskAsk } from "./task-asks.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 
@@ -13,11 +13,11 @@ const DROPPED_DIR = join(DATA_DIR, "task-state-dropped");
 const KEEP_MS = 90 * 24 * 60 * 60 * 1000;
 const lineSchema = z.object({ at: z.number() });
 
-// the input and seen asks have not been through normalize, so the redactor has not seen their text yet
+// normalize's generic redactor keeps prose passwords, and the input and seen asks never went through it
 function redacted(ask: TaskAsk): TaskAsk {
-  const copy = { ...ask, ask: redactSecretsInText(ask.ask) };
-  if (ask.ref) copy.ref = redactSecretsInText(ask.ref);
-  if (ask.choices) copy.choices = redactSecretsInText(ask.choices);
+  const copy = { ...ask, ask: redactRoomMemory(ask.ask) };
+  if (ask.ref) copy.ref = redactRoomMemory(ask.ref);
+  if (ask.choices) copy.choices = redactRoomMemory(ask.choices);
   return copy;
 }
 

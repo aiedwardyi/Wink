@@ -3027,12 +3027,12 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
-function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }): TaskResumePacket | null {
+function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) clearTimeout(pending.timer);
   pendingTaskPackets.delete(packet.threadId);
   try {
-    return store.writeTaskPacket(packet, opts, [...(pending?.seen ?? []), ...(pending?.packet.asks ?? [])]);
+    return store.writeTaskPacket(packet, opts, [...(pending?.seen ?? []), ...(pending?.packet.asks ?? []), ...seen]);
   } catch (error) {
     console.error("task state: write failed", error);
     return null;

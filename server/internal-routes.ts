@@ -38,7 +38,7 @@ import type { RoutineManager, RoutineRun } from "./routines.ts";
 import { cancelWake, setWake } from "./self-wake.ts";
 import { agentRoster, sectionKey, type BotRecord, type GroupDefaultResponder, type GroupRecord, type Store } from "./store.ts";
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
-import { mergeTaskAsks } from "./task-asks.ts";
+import { mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
 import { foldCompletedNextAction } from "./task-state-fold.ts";
 import { assignTaskNextAction, groundTaskArtifacts, taskStateNotice, taskStateUpdateError, taskStateUpdateSchema, type TaskResumePacket } from "./task-state.ts";
 import { workspaceDir } from "./workspace.ts";
@@ -61,7 +61,7 @@ type InternalRouteDeps = {
   wireBot: (bot: BotRecord) => Record<string, unknown>;
   broadcast: (payload: Record<string, unknown>) => void;
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
-  persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
+  persistTaskPacket: (packet: TaskResumePacket, opts?: { staged?: boolean }, seen?: readonly TaskAsk[]) => TaskResumePacket | null;
   readOnlyTurn: (botId: string, threadId: string) => boolean;
   /** The user line a running room turn was dispatched to answer. */
   answeredLine: (threadId: string) => string | undefined;
@@ -231,7 +231,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       next.updatedBy = "bot";
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
-      const saved = persistTaskPacket(next);
+      const saved = persistTaskPacket(next, {}, asks?.trimmed);
       if (saved && body.blockers !== undefined) {
         deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
         try {

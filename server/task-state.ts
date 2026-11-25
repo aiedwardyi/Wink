@@ -283,12 +283,13 @@ export function stageTaskResumePacket(
 export function settleTaskResumePacket(
   threadId: ThreadId,
   options: TaskStateOptions = {},
-): void {
+): TaskResumePacket | null {
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
-  if (!existsSync(stagedPath(path))) return;
+  if (!existsSync(stagedPath(path))) return null;
   const staged = stagedRecord(path, threadId);
   if (staged) writeFileAtomic(path, staged.raw, { mode: 0o600 });
   dropStaged(path);
+  return staged?.packet ?? null;
 }
 
 export function readTaskResumePacket(
