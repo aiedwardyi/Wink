@@ -41,6 +41,7 @@ import {
   writeTaskResumePacket,
   type TaskResumePacket,
 } from "./task-state.ts";
+import { logDroppedAsks } from "./task-dropped.ts";
 import { lastUserInstruction, packetAfterInterruption } from "./task-recovery-flush.ts";
 import {
   botAvatarChoiceSchema,
@@ -2273,11 +2274,10 @@ export class Store {
     }
     let saved: TaskResumePacket;
     try {
-      saved = writeTaskResumePacket({ ...packet, botId });
+      saved = this.savePacket({ ...packet, botId });
     } catch {
       return null;
     }
-    this.taskPackets.set(threadId, saved);
     this.emit({ type: "task.packet", threadId });
     return saved;
   }
@@ -2315,18 +2315,27 @@ export class Store {
     return latestTaskAsks(records, (ask) => ask.ask).filter((ask) => isOpenAsk(ask) && !own.has(key(ask)));
   }
 
-  /** `staged` is a send's write: readers have the record at once, and settleTaskPacket pays its fsync after the dispatch. */
-  writeTaskPacket(packet: TaskResumePacket, opts: { staged?: boolean } = {}): TaskResumePacket | null {
+  /** `staged` is a send's write: readers have the record at once, and settleTaskPacket pays its fsync after the dispatch. `seen` holds the asks of queued records this one replaced and the closed asks its update trimmed. */
+  writeTaskPacket(packet: TaskResumePacket, opts: { staged?: boolean } = {}, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
     if (!this.conversationForBot(packet.botId, packet.threadId)) return null;
-    const saved = opts.staged ? stageTaskResumePacket(packet) : writeTaskResumePacket(packet);
-    this.taskPackets.set(packet.threadId, saved);
+    const saved = this.savePacket(packet, opts, seen);
     this.emit({ type: "task.packet", threadId: packet.threadId });
     return structuredClone(saved);
   }
 
+  // every packet write comes through here, so an ask a write drops is logged, never lost silently
+  private savePacket(packet: TaskResumePacket, opts: { staged?: boolean; settle?: boolean } = {}, seen: readonly TaskAsk[] = []): TaskResumePacket {
+    const before = this.taskPackets.has(packet.threadId) ? this.taskPackets.get(packet.threadId) : readTaskResumePacket(packet.threadId);
+    const saved = opts.settle ? settleTaskResumePacket(packet.threadId) ?? packet : opts.staged ? stageTaskResumePacket(packet) : writeTaskResumePacket(packet);
+    this.taskPackets.set(packet.threadId, saved);
+    logDroppedAsks(saved, before?.asks, seen, packet.asks);
+    return saved;
+  }
+
   settleTaskPacket(threadId: string): void {
+    const staged = this.taskPackets.get(threadId);
     try {
-      settleTaskResumePacket(threadId);
+      if (staged) this.savePacket(staged, { settle: true });
     } catch (error) {
       console.error("task state: settle failed", error);
     }

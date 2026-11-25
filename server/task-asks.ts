@@ -67,18 +67,20 @@ const untilTime = (text: string) => {
 };
 
 // only closed asks fall off, oldest first; an open ask is never dropped or refused
-function trimClosed(asks: TaskAsk[]): void {
+function trimClosed(asks: TaskAsk[]): TaskAsk[] {
+  const trimmed: TaskAsk[] = [];
   for (let closed = asks.findIndex((ask) => !isOpenAsk(ask)); asks.length > ASK_LIMITS.kept && closed >= 0; closed = asks.findIndex((ask) => !isOpenAsk(ask))) {
-    asks.splice(closed, 1);
+    trimmed.push(...asks.splice(closed, 1));
   }
+  return trimmed;
 }
 
-/** No id adds an ask unless an open one matches its words, an id updates it; closing keeps it, and only the oldest closed asks fall off past the cap. */
+/** No id adds an ask unless an open one matches its words, an id updates it; closing keeps it, and only the oldest closed asks fall off past the cap, into trimmed as this update left them. */
 export function mergeTaskAsks(
   book: AskBook | undefined,
   updates: readonly TaskAskUpdate[],
   now: number,
-): (SavedAsks & { note: string }) | { error: string } {
+): (SavedAsks & { note: string; trimmed: TaskAsk[] }) | { error: string } {
   const asks = (book?.asks ?? []).map((ask) => ({ ...ask }));
   const added: string[] = [];
   const merged: string[] = [];
@@ -112,11 +114,11 @@ export function mergeTaskAsks(
     asks.push({ id: `A${last}`, ask: text, status, ...(update.ref ? { ref: update.ref } : {}), ...(parked ? { until } : {}), at: now, changedAt: now });
     added.push(`A${last}`);
   }
-  trimClosed(asks);
+  const trimmed = trimClosed(asks);
   const saved = [added.length ? `added ${added.join(", ")}` : "", merged.length ? `merged into ${merged.join(", ")}` : ""].filter(Boolean).join("; ");
   const parkedCount = asks.filter((ask) => isParked(ask, now)).length;
   const open = asks.filter(isOpenAsk).length - parkedCount;
-  return { asks, lastAskId: last, note: `Asks saved${saved ? `: ${saved}` : ""}; ${open} open${parkedCount ? `, ${parkedCount} parked` : ""}.` };
+  return { asks, lastAskId: last, trimmed, note: `Asks saved${saved ? `: ${saved}` : ""}; ${open} open${parkedCount ? `, ${parkedCount} parked` : ""}.` };
 }
 
 const clip = (text: string, max: number) => {
