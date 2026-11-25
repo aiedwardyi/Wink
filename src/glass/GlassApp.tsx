@@ -16,12 +16,14 @@ const DECK_MS = 1200;
 function focusOf() {
   const el = document.activeElement;
   const role = el instanceof HTMLElement ? el.dataset.glass : undefined;
-  const focus: GlassFocus = role === "speak" || role === "header" || role === "listen" || role === "send" || role === "again" ? role : "other";
+  const focus: GlassFocus = role === "speak" || role === "bar" || role === "older" || role === "listen" || role === "send" || role === "again" ? role : "other";
   return { focus, field: el instanceof HTMLInputElement ? el : null };
 }
 
 function focusGlass(role: GlassFocus) {
-  document.querySelector<HTMLElement>('.glass [data-glass="' + role + '"]')?.focus();
+  const el = document.querySelector<HTMLElement>('.glass [data-glass="' + role + '"]');
+  el?.focus();
+  return Boolean(el);
 }
 
 function Glasses() {
@@ -99,13 +101,21 @@ function Glasses() {
           break;
         }
         case "reply": {
-          const step = chat.current?.move(action.dir);
-          if (step === "header") focusGlass("header");
-          else if (step === "none") focusGlass("listen");
+          if (chat.current?.move(action.dir) === "bar" && !focusGlass("bar")) focusGlass("listen");
           break;
         }
         case "messages":
           focusGlass("speak");
+          chat.current?.back();
+          break;
+        case "older":
+          chat.current?.older();
+          break;
+        case "toListen":
+          focusGlass("listen");
+          break;
+        case "toBar":
+          if (!focusGlass("bar")) focusGlass("speak");
           break;
         case "models":
           if (!models.length) break;

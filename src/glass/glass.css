@@ -31,7 +31,8 @@
 .glass-dot.on { width: 22px; background: #fff; }
 
 /* One focus per screen: a white ring on what Enter opens. */
-.glass-chip:focus,
+.glass-bar:focus,
+.glass-older:focus,
 .glass-listen:focus,
 .glass-pill:focus-within,
 .glass-btn.redo:focus-within {
@@ -58,12 +59,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.glass-chip {
-  display: inline-flex;
+.glass-bar {
+  display: flex;
   align-items: center;
   gap: 7px;
-  height: 38px;
-  padding: 0 13px 0 12px;
+  height: 42px;
+  margin-bottom: 12px;
+  padding: 0 16px 0 14px;
   border-radius: 999px;
   background: #14161d;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -74,6 +76,23 @@
   white-space: nowrap;
   flex: none;
 }
+.glass-bar-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.glass-bar-left { margin-left: auto; color: #8cf2c1; font-variant-numeric: tabular-nums; }
+.glass-older {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  padding: 0 30px;
+  border-radius: 999px;
+  background: #181b25;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 20px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.015em;
+}
+.glass-older .glass-chev { width: 20px; height: 20px; color: #fff; }
 
 .glass-stream { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 16px; padding: 10px 0 14px; }
 .glass-you { display: flex; justify-content: flex-end; }
@@ -93,12 +112,14 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.glass-bot { min-height: 0; background: #14161d; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px 24px 24px 8px; padding: 20px 24px 23px; }
+/* A column, so a tall question shrinks the reply's scroller instead of pushing its last lines past the card. */
+.glass-bot { min-height: 0; display: flex; flex-direction: column; background: #14161d; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px 24px 24px 8px; padding: 20px 24px 23px; }
 .glass-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .glass-who { display: inline-flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 560; color: #abb2c4; letter-spacing: -0.005em; }
 .glass-time { font-size: 13.5px; font-weight: 450; color: #676e80; }
 .glass-more { margin: -4px 0 8px; font-size: 13.5px; font-weight: 500; color: #8890a2; }
 .glass-scroll {
+  min-height: 0;
   max-height: calc(7 * 1.44em);
   overflow: hidden;
   font-size: 22px;

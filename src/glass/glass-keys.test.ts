@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 import { neighborId } from "@/lib/phone-swipe";
-import { glassKey, linesAbove, replyMove, spokenDigits, type GlassAction } from "./glass-keys";
+import { glassKey, linesAbove, olderWindow, replyMove, spokenDigits, type GlassAction } from "./glass-keys";
 
 const ARROWS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"] as const;
 const KEYS = [...ARROWS, "Enter"] as const;
@@ -40,23 +40,30 @@ describe("glasses keys", () => {
     expect(step("atlas", "ArrowLeft")).toBe("juno");
     expect(step("vega", "ArrowRight")).toBeNull();
     expect(step("juno", "ArrowLeft")).toBeNull();
-    expect(glassKey("chat", "header", "ArrowRight")).toEqual({ type: "chat", step: 1 });
+    expect(glassKey("chat", "bar", "ArrowRight")).toEqual({ type: "chat", step: 1 });
+    expect(glassKey("chat", "older", "ArrowLeft")).toEqual({ type: "chat", step: -1 });
   });
 
-  it("ArrowUp and ArrowDown move through the reply, never to the model chip", () => {
+  it("ArrowUp and ArrowDown move through the replies from Speak", () => {
     expect(glassKey("chat", "speak", "ArrowUp")).toEqual({ type: "reply", dir: -1 });
     expect(glassKey("chat", "speak", "ArrowDown")).toEqual({ type: "reply", dir: 1 });
   });
 
-  it("Enter on the model chip opens the model list; ArrowDown goes back to the messages", () => {
-    expect(glassKey("chat", "header", "Enter")).toEqual({ type: "models" });
-    expect(glassKey("chat", "header", "ArrowDown")).toEqual({ type: "messages" });
-    expect(glassKey("chat", "header", "ArrowUp")).toBeNull();
+  it("the model bar under the newest reply: Enter opens the model list, ArrowUp returns to the reply, ArrowDown to Read aloud", () => {
+    expect(glassKey("chat", "bar", "Enter")).toEqual({ type: "models" });
+    expect(glassKey("chat", "bar", "ArrowUp")).toEqual({ type: "messages" });
+    expect(glassKey("chat", "bar", "ArrowDown")).toEqual({ type: "toListen" });
   });
 
-  it("Read aloud sits under the newest reply: Enter reads it, ArrowUp returns to Speak", () => {
+  it("See more: Enter loads older replies, ArrowDown returns to the oldest shown, ArrowUp stays", () => {
+    expect(glassKey("chat", "older", "Enter")).toEqual({ type: "older" });
+    expect(glassKey("chat", "older", "ArrowDown")).toEqual({ type: "messages" });
+    expect(glassKey("chat", "older", "ArrowUp")).toBeNull();
+  });
+
+  it("Read aloud sits under the model bar: Enter reads the reply, ArrowUp returns to the bar", () => {
     expect(glassKey("chat", "listen", "Enter")).toEqual({ type: "listen" });
-    expect(glassKey("chat", "listen", "ArrowUp")).toEqual({ type: "messages" });
+    expect(glassKey("chat", "listen", "ArrowUp")).toEqual({ type: "toBar" });
     expect(glassKey("chat", "listen", "ArrowDown")).toBeNull();
     expect(glassKey("chat", "listen", "ArrowLeft")).toEqual({ type: "chat", step: -1 });
   });
@@ -69,7 +76,7 @@ describe("glasses keys", () => {
   it("only Enter on Send in Check sends", () => {
     const sends: string[] = [];
     for (const screen of ["chat", "check", "models"] as const) {
-      for (const focus of ["speak", "header", "listen", "send", "again", "other"] as const) {
+      for (const focus of ["speak", "bar", "older", "listen", "send", "again", "other"] as const) {
         for (const key of KEYS) {
           for (const text of [false, true]) {
             const action: GlassAction = glassKey(screen, focus, key, text);
@@ -97,18 +104,29 @@ describe("glasses keys", () => {
     expect(glassKey("models", "other", "ArrowLeft")).toBeNull();
   });
 
-  it("ArrowUp past the top of a reply steps to older messages, then to the header", () => {
-    expect(replyMove({ index: 2, count: 3, atTop: false, atBottom: true }, -1)).toEqual({ type: "scroll", dir: -1 });
-    expect(replyMove({ index: 2, count: 3, atTop: true, atBottom: false }, -1)).toEqual({ type: "message", index: 1, edge: "bottom" });
-    expect(replyMove({ index: 1, count: 3, atTop: true, atBottom: true }, -1)).toEqual({ type: "message", index: 0, edge: "bottom" });
-    expect(replyMove({ index: 0, count: 3, atTop: true, atBottom: false }, -1)).toEqual({ type: "header" });
-    expect(replyMove({ index: 0, count: 0, atTop: true, atBottom: true }, -1)).toEqual({ type: "header" });
+  it("ArrowUp scrolls a long reply to its start, then steps to older replies, then to See more", () => {
+    const at = { index: 2, count: 3, atTop: true, atBottom: true, older: true };
+    expect(replyMove({ ...at, atTop: false }, -1)).toEqual({ type: "scroll", dir: -1 });
+    expect(replyMove(at, -1)).toEqual({ type: "message", index: 1 });
+    expect(replyMove({ ...at, index: 1 }, -1)).toEqual({ type: "message", index: 0 });
+    expect(replyMove({ ...at, index: 0 }, -1)).toEqual({ type: "older" });
+    expect(replyMove({ ...at, index: 0, older: false }, -1)).toEqual({ type: "none" });
+    expect(replyMove({ ...at, index: 0, count: 0, older: false }, -1)).toEqual({ type: "none" });
   });
 
-  it("ArrowDown returns toward the newest message and stops there", () => {
-    expect(replyMove({ index: 0, count: 3, atTop: true, atBottom: false }, 1)).toEqual({ type: "scroll", dir: 1 });
-    expect(replyMove({ index: 0, count: 3, atTop: false, atBottom: true }, 1)).toEqual({ type: "message", index: 1, edge: "top" });
-    expect(replyMove({ index: 2, count: 3, atTop: false, atBottom: true }, 1)).toEqual({ type: "none" });
+  it("ArrowDown scrolls a long reply to its end, then steps to newer replies, then to the model bar", () => {
+    const at = { index: 0, count: 3, atTop: true, atBottom: true, older: false };
+    expect(replyMove({ ...at, atBottom: false }, 1)).toEqual({ type: "scroll", dir: 1 });
+    expect(replyMove(at, 1)).toEqual({ type: "message", index: 1 });
+    expect(replyMove({ ...at, index: 2 }, 1)).toEqual({ type: "bar" });
+  });
+
+  it("Up reaches the 10 newest replies; See more shows while older ones are loaded or on the server", () => {
+    expect(olderWindow(4, 10, false)).toEqual({ first: 0, older: false });
+    expect(olderWindow(4, 10, true)).toEqual({ first: 0, older: true });
+    expect(olderWindow(25, 10, false)).toEqual({ first: 15, older: true });
+    expect(olderWindow(25, 20, false)).toEqual({ first: 5, older: true });
+    expect(olderWindow(25, 30, false)).toEqual({ first: 0, older: false });
   });
 
   it("counts the lines above the panel's cue, the hidden line under it included", () => {

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { en } from "@/lib/i18n-catalog";
 import type { Bot, InstanceInfo, Message } from "@/state/store";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
+import { speaker } from "@/lib/tts";
 
 import { GlassApp } from "./GlassApp";
 
@@ -48,6 +49,12 @@ const press = (key: string) => act(() => {
 });
 const focus = (role: string) => act(() => document.querySelector<HTMLElement>(`.glass [data-glass="${role}"]`)?.focus());
 const posts = (path: RegExp) => calls.filter((call) => call.method !== "GET" && path.test(call.url));
+const focused = () => document.activeElement?.getAttribute("data-glass");
+const shownReply = () => document.querySelector(".glass-scroll")?.textContent;
+const talk = (from: number, to: number): Message[] => Array.from({ length: to - from }, (_, i): Message[] => [
+  { id: "u" + (from + i), at: (from + i) * 2 + 1, role: "user", kind: "text", text: "ask " + (from + i) },
+  { id: "b" + (from + i), at: (from + i) * 2 + 2, role: "bot", kind: "text", text: "reply " + (from + i) },
+]).flat();
 
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -110,7 +117,7 @@ describe("glasses keys", () => {
   it("two fast Enters on a model pick it once and stay on the chat", async () => {
     await mount(atlas(), [ready]);
     const back = vi.spyOn(history, "back").mockImplementation(() => {});
-    focus("header");
+    focus("bar");
     await press("Enter");
     expect(document.querySelector(".glass-wheel")).not.toBeNull();
     await press("ArrowDown");
@@ -121,15 +128,101 @@ describe("glasses keys", () => {
     expect(document.querySelector(".glass-wheel")).toBeNull();
   });
 
-  it("Enter on the model chip does nothing when no model can be picked", async () => {
+  it("Enter on the model bar does nothing when no model can be picked", async () => {
     await mount(atlas(), [missing]);
     const push = vi.spyOn(history, "pushState");
-    focus("header");
+    focus("bar");
     await press("Enter");
     await press("Enter");
     expect(push).not.toHaveBeenCalled();
     expect(document.querySelector(".glass-wheel")).toBeNull();
-    expect(document.activeElement?.classList.contains("glass-chip")).toBe(true);
+    expect(focused()).toBe("bar");
+  });
+});
+
+describe("glasses navigation", () => {
+  it("ArrowDown from the newest reply reaches the model bar with the engine's usage left; ArrowUp returns, Enter opens the models", async () => {
+    const used: InstanceInfo = { ...ready, rateLimits: { observedAt: new Date().toISOString(), windows: [{ id: "five_hour", usedPercent: 62, resetsAt: Date.now() + 3_600_000, windowMinutes: 300 }] } };
+    await mount(atlas(), [used]);
+    expect(document.querySelector(".glass-top [data-glass]")).toBeNull();
+    await press("ArrowDown");
+    expect(focused()).toBe("bar");
+    expect(document.querySelector(".glass-bar")?.textContent).toBe("Opus 5.55h · 38% left");
+    await press("ArrowUp");
+    expect(focused()).toBe("speak");
+    expect(shownReply()).toBe("Hello");
+    await press("ArrowDown");
+    await press("Enter");
+    expect(document.querySelector(".glass-wheel")).not.toBeNull();
+  });
+
+  it("Read aloud sits under the bar: Enter reads the newest reply, ArrowUp returns to the bar", async () => {
+    const speak = vi.spyOn(speaker, "speak").mockImplementation(async () => {});
+    await mount(atlas(), [ready]);
+    await press("ArrowDown");
+    await press("ArrowDown");
+    expect(focused()).toBe("listen");
+    await press("Enter");
+    expect(speak).toHaveBeenCalledWith("Hello", expect.objectContaining({ messageId: "b1" }));
+    await press("ArrowUp");
+    expect(focused()).toBe("bar");
+  });
+
+  it("ArrowUp walks the 10 newest replies, then See 10 more; Enter adds 10 older until none are left", async () => {
+    await mount(atlas({ messages: talk(0, 25) }), [ready]);
+    expect(shownReply()).toBe("reply 24");
+    for (let i = 0; i < 9; i++) await press("ArrowUp");
+    expect(shownReply()).toBe("reply 15");
+    await press("ArrowUp");
+    expect(focused()).toBe("older");
+    expect(document.querySelector(".glass-older")?.textContent).toBe("See 10 more");
+    await press("ArrowDown");
+    expect([focused(), shownReply()]).toEqual(["speak", "reply 15"]);
+    await press("ArrowUp");
+    await press("Enter");
+    expect([focused(), shownReply()]).toEqual(["speak", "reply 14"]);
+    for (let i = 0; i < 9; i++) await press("ArrowUp");
+    expect(shownReply()).toBe("reply 5");
+    await press("ArrowUp");
+    await press("Enter");
+    expect([focused(), shownReply()]).toEqual(["speak", "reply 4"]);
+    for (let i = 0; i < 5; i++) await press("ArrowUp");
+    expect([focused(), shownReply()]).toEqual(["speak", "reply 0"]);
+    expect(document.querySelector(".glass-older")).toBeNull();
+  });
+
+  it("See 10 more fetches the page before the oldest loaded message and shows the reply it brings", async () => {
+    await mount(atlas({ messages: talk(1, 4), hasMore: true }), [ready]);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      calls.push({ url: String(url), method: "GET" });
+      return String(url).includes("before=u1")
+        ? new Response(JSON.stringify({ messages: talk(0, 1), hasMore: false }), { status: 200, headers: { "Content-Type": "application/json" } })
+        : new Response("{}", { status: 404 });
+    }));
+    for (let i = 0; i < 3; i++) await press("ArrowUp");
+    expect([focused(), shownReply()]).toEqual(["older", undefined]);
+    await press("Enter");
+    await vi.waitFor(() => expect([focused(), shownReply()]).toEqual(["speak", "reply 0"]));
+    await press("ArrowUp");
+    expect([focused(), shownReply()]).toEqual(["speak", "reply 0"]);
+    expect(document.querySelector(".glass-older")).toBeNull();
+  });
+
+  it("a long reply opens at its start; Up and Down scroll inside it before moving on", async () => {
+    const glassScroll = (el: Element) => el.classList.contains("glass-scroll");
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) { return glassScroll(this) ? 600 : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return glassScroll(this) ? 200 : 0; });
+    await mount(atlas({ messages: talk(0, 2) }), [ready]);
+    const top = () => document.querySelector<HTMLElement>(".glass-scroll")?.scrollTop;
+    expect([shownReply(), top()]).toEqual(["reply 1", 0]);
+    await press("ArrowDown");
+    expect([focused(), top()]).toEqual(["speak", 168]);
+    await press("ArrowUp");
+    expect([focused(), shownReply(), top()]).toEqual(["speak", "reply 1", 0]);
+    await press("ArrowUp");
+    expect([shownReply(), top()]).toEqual(["reply 0", 0]);
+    await press("ArrowDown");
+    expect([shownReply(), top()]).toEqual(["reply 0", 168]);
   });
 });
 
@@ -143,7 +236,7 @@ describe("glasses thread fixes", () => {
   it("Enter on the current model row keeps a non-first Gemini tier", async () => {
     await mount(atlas({ modelSelection: { instanceId: "gem", model: "gemini-4-carbon-medium" } }), [gemini]);
     vi.spyOn(history, "back").mockImplementation(() => {});
-    focus("header");
+    focus("bar");
     await press("Enter");
     expect(document.querySelector(".glass-wheel")).not.toBeNull();
     await press("Enter");

@@ -1,13 +1,19 @@
 import { useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { BotAvatar } from "@/components/Avatar";
+import { lineFacts, meterTarget, meterWindows } from "@/components/ChatPlanMeters";
 import { ProviderBrandMark } from "@/components/ProviderIcons";
+import { shortLabel } from "@/components/UsageDesk";
 import { agoText } from "@/lib/ago";
 import { chatErrorText } from "@/lib/error-text";
 import { useI18n, type Translate } from "@/lib/i18n";
+import { useOlderMessages } from "@/lib/message-pages";
 import { catalogModelLabel, chipPhoneName, modelChipText } from "@/lib/model-chip";
 import { isShownMessage } from "@/lib/shown-message";
+import { leftOf } from "@/lib/usage-pace";
+import { useUsageBoard } from "@/lib/use-usage-board";
+import { useVisibleClock } from "@/lib/use-visible-clock";
 import { shownModelSelection, useStore, useStreamSelect, visibleMessages, type Bot } from "@/state/store";
-import { linesAbove, replyMove, type ReplyMove } from "./glass-keys";
+import { linesAbove, OLDER_STEP, olderWindow, replyMove, type ReplyMove } from "./glass-keys";
 
 const LINE = 32;
 const ENGINES = new Map([
@@ -19,7 +25,7 @@ const ENGINES = new Map([
 ]);
 
 export type Reply = { id: string; you?: string; text: string; at?: number; live?: boolean };
-export type GlassChatHandle = { move: (dir: -1 | 1) => ReplyMove["type"]; reply: () => Reply | undefined };
+export type GlassChatHandle = { move: (dir: -1 | 1) => ReplyMove["type"]; older: () => void; back: () => void; reply: () => Reply | undefined };
 
 /** Bot replies oldest first, each with the message you sent before it; a turn still running is the last one, a failed one shows the phone's error line. */
 export function replies(bot: Bot, stream: string, t: Translate): Reply[] {
@@ -66,6 +72,19 @@ export function useModel(bot: Bot | undefined) {
   };
 }
 
+/** The tightest window of the bot's engine, read like the desktop chat's usage line: "5h · 62% left". */
+function useUsageLeft(instanceId: string | undefined) {
+  const { t } = useI18n();
+  const { state } = useStore();
+  const board = useUsageBoard();
+  const now = useVisibleClock();
+  if (!instanceId) return null;
+  const target = meterTarget(board.board, state.instances, instanceId);
+  const engine = state.instances.find((instance) => instance.instanceId === instanceId);
+  const binding = lineFacts(meterWindows(target, engine?.rateLimits?.windows, now), target?.account.coverage ?? "unknown", t).binding;
+  return binding ? shortLabel(binding, t) + " · " + t("usage.desk.windowLeft", { percent: Math.round(leftOf(binding)) }) : null;
+}
+
 export function MicIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -76,8 +95,8 @@ export function MicIcon() {
   );
 }
 
-export function Chevron({ dir }: { dir: "down" | "left" | "right" }) {
-  const points = dir === "down" ? "6 9 12 15 18 9" : dir === "left" ? "15 18 9 12 15 6" : "9 18 15 12 9 6";
+export function Chevron({ dir }: { dir: "up" | "down" | "left" | "right" }) {
+  const points = dir === "up" ? "6 15 12 9 18 15" : dir === "down" ? "6 9 12 15 18 9" : dir === "left" ? "15 18 9 12 15 6" : "9 18 15 12 9 6";
   return (
     <svg className="glass-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <polyline points={points} />
@@ -106,31 +125,52 @@ export function Dots({ count, at }: { count: number; at: number }) {
 
 export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string[]; pressed: boolean; handle: Ref<GlassChatHandle> }) {
   const { t } = useI18n();
+  const { dispatch } = useStore();
   const model = useModel(bot);
+  const usage = useUsageLeft(model.shown?.instanceId);
   const stream = useStreamSelect((s) => s.streaming[bot.threadId] ?? "");
   const list = replies(bot, stream, t);
-  const [index, setIndex] = useState<number | null>(null);
-  const [edge, setEdge] = useState<"top" | "bottom">("bottom");
+  const [at, setAt] = useState<string | null>(null);
+  const [limit, setLimit] = useState(OLDER_STEP);
+  const [older, setOlder] = useState<"shown" | "loading" | null>(null);
   const [above, setAbove] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
+  const olderButton = useRef<HTMLButtonElement>(null);
+  const speak = useRef<HTMLInputElement>(null);
   const follow = useRef(true);
-  const shown = index === null ? list.length - 1 : Math.min(index, list.length - 1);
+  const oldest = useRef<string | undefined>(undefined);
+  const loadOlder = useOlderMessages(dispatch, bot.threadId, bot.messages[0]?.id, bot.hasMore);
+  const reach = olderWindow(list.length, limit, Boolean(bot.hasMore));
+  const found = at === null ? -1 : list.findIndex((candidate) => candidate.id === at);
+  const shown = found >= reach.first ? found : list.length - 1;
   const reply = list[shown];
-  const newest = shown === list.length - 1;
+  const live = Boolean(reply?.live);
 
   const measure = () => setAbove(scroller.current ? linesAbove(scroller.current.scrollTop, LINE) : 0);
 
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && follow.current && newest) el.scrollTop = el.scrollHeight;
+    if (el) el.scrollTop = 0;
+    follow.current = true;
     measure();
-  }, [reply?.text, shown, newest]);
+  }, [reply?.id, older === null]);
 
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = edge === "top" ? 0 : el.scrollHeight;
+    if (el && live && follow.current) el.scrollTop = el.scrollHeight;
     measure();
-  }, [index, edge]);
+  }, [reply?.text, live]);
+
+  useLayoutEffect(() => {
+    if (older === "shown") olderButton.current?.focus();
+    if (older !== "loading") return;
+    const index = list.findIndex((candidate) => candidate.id === oldest.current);
+    if (index > 0 || !bot.hasMore) {
+      if (index > 0) setAt(list[index - 1]!.id);
+      setOlder(null);
+      speak.current?.focus();
+    } else loadOlder(undefined, () => setOlder("shown"));
+  }, [older, list.length, bot.hasMore, loadOlder]);
 
   const api: GlassChatHandle = {
     reply: () => reply,
@@ -138,18 +178,23 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
       const el = scroller.current;
       const max = el ? el.scrollHeight - el.clientHeight : 0;
       const top = el ? el.scrollTop : 0;
-      const step = replyMove({ index: shown, count: list.length, atTop: top <= 0, atBottom: top >= max - 1 }, dir);
+      const step = replyMove({ index: shown - reach.first, count: list.length - reach.first, atTop: top <= 0, atBottom: top >= max - 1, older: reach.older }, dir);
       if (step.type === "scroll" && el) {
         el.scrollTop = top + dir * Math.max(LINE, el.clientHeight - LINE);
-        follow.current = newest && el.scrollTop >= max - 1;
+        follow.current = el.scrollTop >= max - 1;
         measure();
       } else if (step.type === "message") {
-        follow.current = false;
-        setEdge(step.edge);
-        setIndex(step.index === list.length - 1 ? null : step.index);
-      }
+        const index = reach.first + step.index;
+        setAt(index === list.length - 1 ? null : list[index]!.id);
+      } else if (step.type === "older") setOlder("shown");
       return step.type;
     },
+    older: () => {
+      oldest.current = list[reach.first]?.id;
+      setLimit(limit + OLDER_STEP);
+      setOlder("loading");
+    },
+    back: () => setOlder(null),
   };
   useImperativeHandle(handle, () => api);
 
@@ -162,21 +207,20 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
           <GlassAvatar bot={bot} size={38} className="glass-av" />
           <div className="glass-title">{bot.name}</div>
         </div>
-        {model.chip && (
-          <button type="button" tabIndex={-1} className="glass-chip" data-glass="header">
-            <ProviderBrandMark driverKind={model.kind} size={17} />
-            <span>{model.chip}</span>
-            <Chevron dir="down" />
-          </button>
-        )}
       </div>
       <div className="glass-stream">
-        {reply?.you && (
+        {older !== null && (
+          <button ref={olderButton} type="button" tabIndex={-1} className="glass-older" data-glass="older">
+            <Chevron dir="up" />
+            <span>{older === "loading" ? "Loading…" : "See " + OLDER_STEP + " more"}</span>
+          </button>
+        )}
+        {older === null && reply?.you && (
           <div className="glass-you">
             <div>{reply.you}</div>
           </div>
         )}
-        {reply && (
+        {older === null && reply && (
           <div className="glass-bot">
             <div className="glass-meta">
               <span className="glass-who">
@@ -198,11 +242,19 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
           </div>
         )}
       </div>
+      {model.chip && (
+        <button type="button" tabIndex={-1} className="glass-bar" data-glass="bar">
+          <ProviderBrandMark driverKind={model.kind} size={17} />
+          <span className="glass-bar-model">{model.chip}</span>
+          <Chevron dir="down" />
+          {usage && <span className="glass-bar-left">{usage}</span>}
+        </button>
+      )}
       <div className="glass-dock">
         <label className={pressed ? "glass-pill pressed" : "glass-pill"}>
           <MicIcon />
           <span>Speak a reply...</span>
-          <input data-glass="speak" type="text" aria-label="Speak a reply" autoComplete="off" />
+          <input ref={speak} data-glass="speak" type="text" aria-label="Speak a reply" autoComplete="off" />
         </label>
         <button type="button" tabIndex={-1} className="glass-listen" data-glass="listen" aria-label="Read aloud">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
