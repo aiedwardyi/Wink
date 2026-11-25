@@ -70,6 +70,8 @@ export const coldOpenRecordSchema = z
     hello: ms.optional(),
     sse: sse.optional(),
     bots: botsRequest.optional(),
+    ping: botsRequest.optional(),
+    pingMissing: z.enum(["none", "cut"]).optional(),
     taskSwitch: request.optional(),
     cache: cache.optional(),
     terminal: terminal.optional(),
@@ -185,7 +187,7 @@ export async function receiveColdOpen(req: AsyncIterable<Buffer>, dataDir: strin
   const joined = id ? opens.get(id) : undefined;
   if (id) opens.delete(id);
   // The page sends its record after its last mark, so the open reaches back that far from its arrival.
-  const span = Math.max(0, ...[record.mount, record.sseOpen, record.hello, record.chatPaint, record.bots?.end, record.sse?.open].filter((mark) => mark !== undefined));
+  const span = Math.max(0, ...[record.mount, record.sseOpen, record.hello, record.chatPaint, record.bots?.end, record.ping?.end, record.sse?.open].filter((mark) => mark !== undefined));
   const stalls = loopStallsDuring(now - span, now).map((stall) => ({ at: new Date(stall.start).toISOString(), ms: stall.ms }));
   const timings = { ...joined, uptimeS: Math.round(process.uptime()), ...(stalls.length ? { stalls } : {}) };
   lines.push(JSON.stringify({ receivedAt: new Date(now).toISOString(), via, ...record, server: timings, serverStart: SERVER_START }));

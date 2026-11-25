@@ -57,11 +57,26 @@ const resources = [
   { name: "https://home.example/api/bots/b1/terminal", startTime: 5100.6, responseEnd: 8000.4, transferSize: 5000, encodedBodySize: 4500, ...hidden },
 ];
 
+const checkIn = {
+  name: "https://home.example/api/phone-seen",
+  startTime: 60_020.4,
+  responseEnd: 75_600,
+  transferSize: 300,
+  encodedBodySize: 11,
+  connectStart: 60_021,
+  connectEnd: 75_440.2,
+  requestStart: 75_453,
+  responseStart: 75_590,
+  decodedBodySize: 11,
+  nextHopProtocol: "h2",
+};
+
 const USER_AGENT = "Mozilla/5.0 (Linux; Android 14; SM-S928N) SamsungBrowser/27.0";
 
-function fakePage(href: string, navType: NavigationTimingType = "navigate", extra: { nav?: object; userAgent?: string } = {}) {
+function fakePage(href: string, navType: NavigationTimingType = "navigate", extra: { nav?: object; userAgent?: string; checksIn?: boolean } = {}) {
   const sent: any[] = [];
   const paintsQueued: Array<() => void> = [];
+  let observed: (entry: (typeof resources)[number]) => void = () => {};
   let now = 0;
   let url = href;
   const page: ColdOpenPage = {
@@ -72,6 +87,8 @@ function fakePage(href: string, navType: NavigationTimingType = "navigate", extr
     navigation: () => ({ ...navigation, ...extra.nav, type: navType }),
     paints: () => paints,
     resources: () => resources,
+    observeResources: (seen) => (observed = seen),
+    checksIn: extra.checksIn ?? false,
     replaceUrl: (next) => (url = next),
     standalone: () => true,
     visibility: () => "visible",
@@ -87,6 +104,7 @@ function fakePage(href: string, navType: NavigationTimingType = "navigate", extr
     url: () => url,
     at: (ms: number) => (now = ms),
     paint: () => paintsQueued.splice(0).forEach((done) => done()),
+    land: (entry: (typeof resources)[number]) => observed(entry),
     expire: () => vi.advanceTimersByTime(COLD_OPEN_TIMEOUT_MS),
   };
 }
@@ -153,40 +171,90 @@ describe("cold-open timing", () => {
     expect(fake.sent[0].nav).toBeUndefined();
   });
 
-  it("records a resumed phone page's own bots request, counted from its return", () => {
-    const wake = {
-      name: "https://home.example/api/bots?messages=0",
-      startTime: 60_020.4,
-      responseEnd: 75_600,
-      transferSize: 4_000,
-      encodedBodySize: 3_700,
-      connectStart: 60_021,
-      connectEnd: 75_440.2,
-      requestStart: 75_453,
-      responseStart: 75_590,
-      decodedBodySize: 12_000,
-      nextHopProtocol: "h2",
-    };
-    const fake = fakePage("https://home.example/remote", "reload");
-    const timing = createColdOpenTiming({ ...fake.page, resources: () => [...resources, wake] });
+  it("times a plain return by its check-in, with no alert showing", () => {
+    const fake = fakePage("https://home.example/remote", "reload", { checksIn: true });
+    const timing = createColdOpenTiming(fake.page);
     timing.visibility(true);
     fake.at(60_000);
     timing.visibility(false);
+    fake.land({ ...checkIn, startTime: 59_000, responseEnd: 60_100 });
+    fake.land(checkIn);
     timing.resumeCurrent();
     fake.at(75_700);
     fake.paint();
-    expect(fake.sent[0].bots).toEqual({
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].bots).toBeUndefined();
+    expect(fake.sent[0].ping).toEqual({
       start: 20,
       end: 15_600,
-      transferSize: 4_000,
-      encodedBodySize: 3_700,
+      transferSize: 300,
+      encodedBodySize: 11,
       connectStart: 21,
       connectEnd: 15_440,
       requestStart: 15_453,
       responseStart: 15_590,
-      decodedBodySize: 12_000,
+      decodedBodySize: 11,
       nextHopProtocol: "h2",
     });
+  });
+
+  it("waits for a check-in that answers after the paint", () => {
+    const fake = fakePage("https://home.example/remote", "reload", { checksIn: true });
+    const timing = createColdOpenTiming(fake.page);
+    timing.visibility(true);
+    fake.at(60_000);
+    timing.visibility(false);
+    fake.at(60_200);
+    timing.mark("hello");
+    timing.resumeCurrent();
+    fake.at(60_210);
+    fake.paint();
+    expect(fake.sent).toEqual([]);
+    fake.at(60_240);
+    fake.land({ ...checkIn, responseEnd: 60_240 });
+    expect(fake.sent).toEqual([expect.objectContaining({ label: "resume", hello: 200, chatPaint: 210, ping: expect.objectContaining({ end: 240 }) })]);
+    expect(fake.sent[0].pingMissing).toBeUndefined();
+  });
+
+  it("keeps timing returns once the browser's resource list is full", () => {
+    const full = Array.from({ length: 250 }, (_, i) => ({ ...resources[0], startTime: i }));
+    const fake = fakePage("https://home.example/remote", "reload", { checksIn: true });
+    const timing = createColdOpenTiming({ ...fake.page, resources: () => full });
+    let at = 0;
+    for (let i = 0; i < 30; i++) {
+      timing.visibility(true);
+      at += 60_000;
+      fake.at(at);
+      timing.visibility(false);
+      fake.land({ ...checkIn, startTime: at + 20, responseEnd: at + 90 });
+      timing.resumeCurrent();
+      fake.at(at + 100);
+      fake.paint();
+    }
+    expect(fake.sent).toHaveLength(30);
+    expect(fake.sent.every((record) => record.ping?.end === 90)).toBe(true);
+  });
+
+  it("names why a return has no check-in timing", () => {
+    const cut = fakePage("https://home.example/remote", "reload", { checksIn: true });
+    const waiting = createColdOpenTiming(cut.page);
+    waiting.visibility(true);
+    cut.at(5_000);
+    waiting.visibility(false);
+    waiting.resumeCurrent();
+    cut.at(5_050);
+    cut.paint();
+    expect(cut.sent).toEqual([]);
+    cut.expire();
+    expect(cut.sent).toEqual([expect.objectContaining({ label: "resume", chatPaint: 50, pingMissing: "cut" })]);
+    const quiet = fakePage("http://127.0.0.1:8799/", "reload");
+    const local = createColdOpenTiming(quiet.page);
+    local.visibility(true);
+    quiet.at(5_000);
+    local.visibility(false);
+    local.resumeCurrent();
+    quiet.paint();
+    expect(quiet.sent).toEqual([expect.objectContaining({ label: "resume", pingMissing: "none" })]);
   });
 
   it("sends a resume whose link never came back, without its hello", () => {

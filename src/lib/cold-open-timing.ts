@@ -1,3 +1,4 @@
+import { PHONE_SEEN_PATH, phoneSeenOn } from "./phone-seen";
 import { trackOpen } from "./usage-stats";
 
 // Where a phone page's open spends its time, from a notification tap or a plain launch.
@@ -73,6 +74,10 @@ export interface ColdOpenRecord {
   hello?: number;
   sse?: ColdOpenSse;
   bots?: ColdOpenBots;
+  /** A resumed page's check-in, the first request it makes on return, so it carries the reconnect. */
+  ping?: ColdOpenBots;
+  /** "none": this page never checks in; "cut": the check-in had not answered by the 30 s cut. */
+  pingMissing?: "none" | "cut";
   taskSwitch?: ColdOpenRequest;
   cache?: { hit: boolean; paint?: number };
   terminal?: ColdOpenTerminal;
@@ -102,6 +107,10 @@ export interface ColdOpenPage {
   navigation: () => Navigation | undefined;
   paints: () => readonly Paint[];
   resources: () => readonly Resource[];
+  /** Every resource entry as it lands, including those a full timing buffer no longer keeps. */
+  observeResources: (seen: (entry: Resource) => void) => void;
+  /** The page checks in on every return (src/lib/phone-seen.ts). */
+  checksIn: boolean;
   replaceUrl: (url: string) => void;
   standalone: () => boolean;
   visibility: () => string;
@@ -128,6 +137,8 @@ interface Pending {
   cachePainting: boolean;
   marks: Partial<Record<ColdOpenMark, number>>;
   painting: boolean;
+  chatPaint?: number;
+  ping?: Resource;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -218,8 +229,8 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     const { created, ...sse } = open.sse;
     const link = created === undefined ? undefined : { created, ...sse };
     if (open.label === "resume") {
-      const bots = page.resources().find((entry) => BOTS.test(entry.name) && entry.startTime >= open.since);
-      return { openId: open.id, label: "resume", hiddenMs: open.hiddenMs, ...open.marks, sse: link, bots: botsRequest(bots, open.since), chatPaint, ...meta };
+      const pingMissing = open.ping ? undefined : page.checksIn ? ("cut" as const) : ("none" as const);
+      return { openId: open.id, label: "resume", hiddenMs: open.hiddenMs, ...open.marks, sse: link, ping: botsRequest(open.ping, open.since), pingMissing, chatPaint, ...meta };
     }
     const paint = (name: string) => {
       const at = page.paints().find((entry) => entry.name === name)?.startTime;
@@ -256,7 +267,7 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     pending = null;
     clearTimeout(open.timer);
     try {
-      const sent = record(open, chatPaint);
+      const sent = record(open, chatPaint ?? open.chatPaint);
       page.send(JSON.stringify(sent));
       trackOpen(sent);
     } catch {
@@ -293,6 +304,13 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     return TERMINAL_READ.test(url.pathname) && (pane === undefined || url.searchParams.get("sessionId") === pane);
   };
 
+  page.observeResources((entry) => {
+    const open = pending;
+    if (open?.label !== "resume" || open.ping || entry.startTime < open.since || new URL(entry.name, page.href).pathname !== PHONE_SEEN_PATH) return;
+    open.ping = entry;
+    if (open.chatPaint !== undefined) finish();
+  });
+
   const search = new URL(page.href).searchParams;
   const t0 = clickTime(Number(search.get("t0")));
   const stripped = withoutClickTime(page.href);
@@ -312,7 +330,10 @@ export function createColdOpenTiming(page: ColdOpenPage) {
       if (open?.label !== "resume" || open.painting) return;
       open.painting = true;
       page.afterPaint(() => {
-        if (pending === open) finish(Math.round(page.now() - open.since));
+        if (pending !== open) return;
+        open.chatPaint = Math.round(page.now() - open.since);
+        // A check-in that answers after this paint still carries the reconnect, so the record waits for it.
+        if (open.ping || !page.checksIn) finish();
       });
     },
     visibility(hidden: boolean) {
@@ -423,6 +444,14 @@ function browserPage(): ColdOpenPage {
     navigation: () => performance.getEntriesByType("navigation").find((entry) => entry instanceof PerformanceNavigationTiming),
     paints: () => performance.getEntriesByType("paint"),
     resources: () => performance.getEntriesByType("resource").filter((entry) => entry instanceof PerformanceResourceTiming),
+    observeResources: (seen) => {
+      try {
+        new PerformanceObserver((list) => list.getEntries().forEach((entry) => entry instanceof PerformanceResourceTiming && seen(entry))).observe({ type: "resource" });
+      } catch {
+        // Timing is best effort; it never surfaces.
+      }
+    },
+    checksIn: phoneSeenOn(),
     replaceUrl: (url) => window.history.replaceState(window.history.state, "", url),
     standalone: () => window.matchMedia?.("(display-mode: standalone)").matches ?? false,
     visibility: () => document.visibilityState,

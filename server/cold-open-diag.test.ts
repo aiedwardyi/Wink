@@ -95,6 +95,16 @@ describe("cold-open diagnostics", () => {
     expect(await receiveColdOpen(post(JSON.stringify(extra)), dir, "local")).toEqual({ status: 400, error: "invalid cold-open record" });
   });
 
+  it("stores a return's check-in timing, or why it has none", async () => {
+    const dir = freshDir();
+    const resume = { label: "resume", hiddenMs: 150000, hello: 200, chatPaint: 210, displayMode: "standalone", visibility: "visible", userAgent: "Mozilla/5.0" };
+    const ping = { ...traced.bots, start: 20, end: 15600 };
+    expect(await receiveColdOpen(post(JSON.stringify({ ...resume, ping })), dir, "tailnet")).toEqual({ status: 200 });
+    expect(await receiveColdOpen(post(JSON.stringify({ ...resume, pingMissing: "cut" })), dir, "relay")).toEqual({ status: 200 });
+    expect(lines(dir)).toEqual([expect.objectContaining({ ...resume, ping }), expect.objectContaining({ ...resume, pingMissing: "cut" })]);
+    expect(await receiveColdOpen(post(JSON.stringify({ ...resume, pingMissing: "slow" })), dir, "relay")).toEqual({ status: 400, error: "invalid cold-open record" });
+  });
+
   it("stores the stream, bots and cache fields and drops the page's id", async () => {
     const dir = freshDir();
     expect(await receiveColdOpen(post(JSON.stringify(traced)), dir, "local")).toEqual({ status: 200 });
