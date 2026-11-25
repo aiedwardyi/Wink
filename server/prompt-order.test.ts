@@ -22,7 +22,7 @@ describe("system prompt order", () => {
       for (const stable of ["accessRules(", "DEFAULT_RULES", ...(prompt === solo ? ["skillInstructions", "packagePlaybooks", "opts?.automationSource", "tagged.length"] : ["renderSkillInstructions(", "installedPlaybookInstructions(", "LANE_HANDOFF_LINE"])]) {
         expect(prompt.indexOf(stable), `Place ${stable} before the playbook, saved keys and memory`).toBeLessThan(prompt.indexOf("harnessPlaybookPrompt("));
       }
-      expect(prompt.indexOf("aboutYouPrompt("), "Place private facts after the playbook and saved keys").toBeGreaterThan(prompt.indexOf("savedKeysPrompt("));
+      expect(prompt.indexOf(prompt === solo ? "aboutYou)" : "aboutYouPrompt("), "Place private facts after the playbook and saved keys").toBeGreaterThan(prompt.indexOf("savedKeysPrompt("));
     }
   });
 
@@ -54,7 +54,7 @@ describe("system prompt order", () => {
       detailedRepliesEnabled: () => false, DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", accessRules: () => "", live: { adapter: {} },
       approval: "ask", readOnly: false, leanStartup: false, opts: {}, keepGoing: { rules: () => "" }, bot: { id: botId, playbooks: [] },
       memoryParts: parts, skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => playbook, tagged: [], cfg: {}, savedKeysPrompt: () => keys,
-      roomTaskThreads: () => new Set(), threadId: "thread", aboutYouPrompt: () => "", tracePart: (_kind: string, text: string) => text,
+      roomTaskThreads: () => new Set(), threadId: "thread", aboutYouPrompt: () => "", aboutYou: "", tracePart: (_kind: string, text: string) => text,
       system: "PERSONA CREDENTIAL ROUTINE", workspace: true, selectedSkills: [], renderSkillInstructions: () => "", installedPlaybookInstructions: () => "", text: "", handoff: null,
       instance: { adapter: {} }, access: {}, memberTurnSelection: () => ({}), selection: {}, asked: true,
     };

@@ -449,19 +449,41 @@ export function systemLinesReordered(delivered: string, system: string): boolean
   return retainedLinesReordered(systemLines(delivered), systemLines(system));
 }
 
+function cut(from: string, part: string): string | undefined {
+  const at = from.indexOf(part);
+  return at < 0 ? undefined : from.slice(0, at) + from.slice(at + part.length);
+}
+
 /** A resumed session keeps the system text it started with. Prepends what
  * changed since `delivered` to this turn's text; null when the change is
- * too big for that and the session should recycle instead. */
+ * too big for that and the session should recycle instead. `memory` are the
+ * user's own parts of `system`: one `delivered` lacks byte for byte resends whole. */
 export function withSystemChanges(
   text: string,
   delivered: string | undefined,
   system: string,
   maxChars = SYSTEM_REMINDER_MAX_CHARS,
+  memory: readonly string[] = [],
 ): string | null {
   if (delivered === undefined || delivered === system) return text;
-  const { removed, added } = systemDelta(delivered, system);
+  // in the user's notes a moved line can change what it means, so no diff decides one only moved
+  let before = delivered;
+  let after = system;
+  const notes: string[] = [];
+  for (const part of memory) {
+    if (!part.trim()) continue;
+    after = cut(after, part) ?? after;
+    const held = cut(before, part);
+    if (held !== undefined) before = held;
+    else notes.push(...part.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim()));
+  }
+  const delta = systemDelta(before, after);
+  const resent = new Set(notes);
+  const removed = delta.removed.filter((line) => !resent.has(line));
+  const added = [...delta.added, ...notes];
   if (!removed.length && !added.length) return text;
-  if ([...removed, ...added].reduce((sum, line) => sum + line.length, 0) > maxChars) return null;
+  // the notes have their own budget, and resending them beats reopening the session
+  if ([...removed, ...delta.added].reduce((sum, line) => sum + line.length, 0) > maxChars) return null;
   // Untagged, Haiku kept the stale system prompt in about half of real-CLI
   // trials; the CLI's own prompt treats tags in a user message as system info.
   return [

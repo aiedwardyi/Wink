@@ -196,7 +196,9 @@ describe("pinned session across a prompt reorder", () => {
     await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
   }, 120_000);
 
-  it.each(ENGINE_NAMES)("delivers values that traded headings to the open %s chat and after a restart", async (engine) => {
+  const LABELS = { markdown: (name: string) => `## ${name}`, plain: (name: string) => `${name}:` };
+  it.each(ENGINE_NAMES.flatMap((engine) => (["markdown", "plain"] as const).map((labels) => [labels, engine] as const)))("delivers values that traded places under %s labels to the open %s chat and after a restart", async (labels, engine) => {
+    const label = LABELS[labels];
     await restart(() => writeConfig({ tts: { key: "fixture-tts" } }));
     const bot = (await api("POST", "/api/bots")).body.bot;
     expect((await api("PATCH", `/api/bots/${bot.id}`, {
@@ -204,8 +206,8 @@ describe("pinned session across a prompt reorder", () => {
     })).status).toBe(200);
     const path = `/api/bots/${bot.id}/memory`;
     const notes = (a: string, b: string) => [
-      "# Project notes", "", "## Project A", "Owner: Alex.", "", `Budget: ${a} dollars.`, "",
-      "## Project B", "Owner: Billie.", "", `Budget: ${b} dollars.`, "", "## Status", "Both active.", "",
+      "# Project notes", "", label("Project A"), "Owner: Alex.", "", `Budget: ${a} dollars.`, "",
+      label("Project B"), "Owner: Billie.", "", `Budget: ${b} dollars.`, "", label("Status"), "Both active.", "",
     ].join("\n");
     const save = async (a: string, b: string) => {
       const { revision } = (await api("GET", path)).body;
@@ -214,19 +216,19 @@ describe("pinned session across a prompt reorder", () => {
     const knows = (got: { input: string; startup: string }, a: string, b: string) => {
       if (!got.input.includes(UPDATE)) return got.startup.includes(notes(a, b).trim());
       const added = got.input.slice(got.input.indexOf("[Added:]"));
-      return added.includes(`## Project A\nOwner: Alex.\nBudget: ${a} dollars.`) && added.includes(`## Project B\nOwner: Billie.\nBudget: ${b} dollars.`);
+      return added.includes(`${label("Project A")}\nOwner: Alex.\nBudget: ${a} dollars.`) && added.includes(`${label("Project B")}\nOwner: Billie.\nBudget: ${b} dollars.`);
     };
 
     await save("500", "740");
-    expect(knows(await send(engine, bot.id, `read the notes on ${engine}`), "500", "740")).toBe(true);
+    expect(knows(await send(engine, bot.id, `read the ${labels} notes on ${engine}`), "500", "740")).toBe(true);
     await save("740", "500");
-    const warm = await send(engine, bot.id, `the Project A budget on ${engine}`);
+    const warm = await send(engine, bot.id, `the ${labels} Project A budget on ${engine}`);
     expect(warm.input).not.toContain(REPLAY);
     expect(knows(warm, "740", "500")).toBe(true);
 
     await save("500", "740");
     await restart();
-    const restarted = await send(engine, bot.id, `the Project A budget after a restart on ${engine}`);
+    const restarted = await send(engine, bot.id, `the ${labels} Project A budget after a restart on ${engine}`);
     expect(restarted.resumed).toBe(true);
     expect(knows(restarted, "500", "740")).toBe(true);
 

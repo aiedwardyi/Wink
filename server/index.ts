@@ -298,6 +298,7 @@ import {
   resumeSessionUnseeded,
   sessionPromptFor,
   shouldRecycleProviderSession,
+  SYSTEM_REMINDER_MAX_CHARS,
   systemTurnInput,
   TASK_RESUME_PROMPT,
   taskRecordBlock,
@@ -6370,7 +6371,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const withLate = (base: string) =>
           [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\n\n");
         const approval = bot.autoApprove && !readOnly ? "auto" : "ask";
-        const memoryParts = privateWorkspace ? memorySystemParts(bot.id, false, memoryNotesEnabled(cfg, bot)) : { guidance: "", content: "" };
+        const memoryParts = privateWorkspace ? memorySystemParts(bot.id, false, memoryNotesEnabled(cfg, bot)) : { guidance: "", content: "", notes: [] };
+        // a joined room's session answers everyone there, so it never carries the owner's About You
+        const aboutYou = roomTaskThreads().has(threadId) ? "" : aboutYouPrompt(bot.id);
         const system =
           persona +
           // The folder is already this turn's cwd, but nothing told the model
@@ -6424,8 +6427,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             : "") +
           tracePart("playbook", harnessPlaybookPrompt(Boolean(integrations.terminal))) +
           (canMessage ? savedKeysPrompt(cfg).replace(/^ /, "\n") : "") +
-          // a joined room's session answers everyone there, so it never carries the owner's About You
-          tracePart("memory", roomTaskThreads().has(threadId) ? "" : aboutYouPrompt(bot.id)) +
+          tracePart("memory", aboutYou) +
           tracePart("memory", memoryParts.content);
         // a rewound, Orbit-compacted, or pre-compact fat thread never
         // resumes the abandoned provider session. the active task's own
@@ -6442,8 +6444,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           const delivered = resumeCursor === undefined ? undefined : store.sessionSystem(instanceId, resumeCursor);
           // A cursor with no record (saved before records existed) may hold any older text.
           const unknown = resumeCursor !== undefined && delivered === undefined;
-          const updated = (unknown ? null : withSystemChanges(text, delivered, system))
-            ?? (live.adapter.hasBackgroundWork?.(threadId) === true ? withSystemChanges(text, delivered ?? "", system, Infinity) : null);
+          const memory = [aboutYou, ...memoryParts.notes];
+          const updated = (unknown ? null : withSystemChanges(text, delivered, system, SYSTEM_REMINDER_MAX_CHARS, memory))
+            ?? (live.adapter.hasBackgroundWork?.(threadId) === true ? withSystemChanges(text, delivered ?? "", system, Infinity, memory) : null);
           if (updated !== null) ({ text, systemUpdate } = systemTurnInput(text, updated, instance.driverKind));
           else systemRecycle = true;
         }

@@ -179,8 +179,9 @@ describe("every bot reads About You", () => {
     }) as string;
 
   it("goes into 1:1 sessions, never a joined room's session, whoever asked there", () => {
-    const block = inside(fn("startClaimedTurn"), (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(index) === "tracePart" && node.arguments[1]?.getText(index).includes("aboutYouPrompt") === true)!;
-    const aboutYou = (threadId: string) => evaluate(`return ${js(`(${block.arguments[1]!.getText(index)})`)}`, { threadId, aboutYouPrompt, bot: { id: "bot" }, roomTaskThreads: () => new Set(["joined-room-task"]) });
+    const block = inside(fn("startClaimedTurn"), (node): node is ts.VariableDeclaration => ts.isVariableDeclaration(node) && node.name.getText(index) === "aboutYou")!;
+    expect(inside(fn("startClaimedTurn"), (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(index) === "tracePart" && node.arguments[1]?.getText(index) === "aboutYou")).toBeDefined();
+    const aboutYou = (threadId: string) => evaluate(`return ${js(`(${block.initializer!.getText(index)})`)}`, { threadId, aboutYouPrompt, bot: { id: "bot" }, roomTaskThreads: () => new Set(["joined-room-task"]) });
     addToAboutYou(paste, "2026-11-16");
     expect(aboutYou("own-chat")).toContain("- The user is Dana Park; call her Dana. (noted 2026-11-16)");
     expect(aboutYou("joined-room-task")).toBe("");
