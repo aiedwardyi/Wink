@@ -4,7 +4,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly;
 // spawnCli resolves it to `node <script>`, so these run everywhere.
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,15 @@ import {
 } from "./antigravity.ts";
 import { noteGenerator } from "../memory-pass.ts";
 import * as procs from "../procs.ts";
+
+vi.mock("./warm-pool.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./warm-pool.ts")>();
+  const warmPool = actual.createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+  // every test's registry runs the app's final closeAll on dispose
+  const closeAll = warmPool.closeAll.bind(warmPool);
+  warmPool.closeAll = (reason, opts = {}) => closeAll(reason, { ...opts, final: false });
+  return { ...actual, warmPool };
+});
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
 
@@ -2377,17 +2386,18 @@ describe("Antigravity computer MCP config", () => {
 
       restoreExistingEntry();
       restored = readConfig(home);
-      // an openmausbot-* key found at mount time is a crash leftover, never written back
+      // a key Wink mounts over is Wink's from then on, never written back
       expect(restored.mcpServers).toEqual({ "another-helper": { command: "another-mcp" } });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("restore strips a stale openmausbot-* key and keeps the user's own keys and unknown top-level keys", () => {
+  it("restore strips the keys a crashed mount left and keeps the user's own keys and unknown top-level keys", () => {
     const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpstale-"));
     try {
-      mkdirSync(join(home, ".gemini", "config"), { recursive: true });
+      // the crashed run's mount, never restored
+      ensureAntigravityComputerMcp(boxEntry(), { HOME: home });
       writeFileSync(
         configPath(home),
         JSON.stringify({
@@ -2523,6 +2533,10 @@ describe("Antigravity computer MCP config", () => {
       await teacherRecorder.until((event) => event.type === "turn.completed");
       expect(pythonRecorder.events.at(-1)).toMatchObject({ ok: true });
       expect(teacherRecorder.events.at(-1)).toMatchObject({ ok: true });
+      // each chat's standby keeps Wink's entries mounted until it is retired
+      expect(JSON.parse(readFileSync(configPath(home), "utf8")).mcpServers).toEqual({ "sqlite-helper": { command: "sqlite-mcp-server" }, ...staticEntries });
+      await python.dispose();
+      await teacher.dispose();
       await expect.poll(() => readFileSync(configPath(home), "utf8")).toBe(original);
     } finally {
       writeFileSync(hold, "");
@@ -2600,6 +2614,10 @@ describe("Antigravity computer MCP config", () => {
         [ANTIGRAVITY_COMPUTER_MCP_KEY]: boxEntry(),
       });
       expect(JSON.parse(readFileSync(laterDump, "utf8")).mcpServers).toEqual(staticEntries);
+      // the later chat's standby holds the shared mount; the computer turn left none
+      expect(JSON.parse(readFileSync(configPath(home), "utf8")).mcpServers).toEqual(staticEntries);
+      await shared.dispose();
+      await later.dispose();
       await expect.poll(() => existsSync(configPath(home))).toBe(false);
     } finally {
       writeFileSync(holdShared, "");
@@ -2786,6 +2804,8 @@ describe("Antigravity computer MCP config", () => {
 
       expect(JSON.parse(readFileSync(firstDump, "utf8")).mcpServers[ANTIGRAVITY_COMPUTER_MCP_KEY]).toEqual(boxEntry());
       expect(JSON.parse(readFileSync(secondDump, "utf8"))?.mcpServers?.[ANTIGRAVITY_COMPUTER_MCP_KEY]).toBeUndefined();
+      expect(JSON.parse(readFileSync(configPath(home), "utf8")).mcpServers).toEqual(staticEntries);
+      await second.dispose();
       await expect.poll(() => existsSync(configPath(home))).toBe(false);
     } finally {
       firstRecorder.stop();
@@ -2838,6 +2858,8 @@ describe("Antigravity computer MCP config", () => {
       }
       await secondTurn;
       await secondRecorder.until((event) => event.type === "turn.completed");
+      expect(JSON.parse(readFileSync(configPath(home), "utf8")).mcpServers).toEqual(staticEntries);
+      await second.dispose();
       await expect.poll(() => existsSync(configPath(home)), { timeout: 6_000 }).toBe(false);
     } finally {
       secondRecorder.stop();
@@ -2846,6 +2868,271 @@ describe("Antigravity computer MCP config", () => {
       rmSync(home, { recursive: true, force: true });
     }
   }, 10_000);
+
+  describe("standby agy for the chat's next turn", () => {
+    let dir: string;
+    let log: string;
+    let dump: string;
+    let cli: string;
+    let instances: ProviderInstance[];
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    /** Turn processes in start order: a standby is logged when it starts, before any prompt. */
+    const spawns = (): Array<{ pid: number; argv: string[] }> =>
+      existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+    const make = async (name: string, environment: Record<string, string> = {}) => {
+      const instance = await AntigravityDriver.create({
+        instanceId: `agy-standby-${name}`,
+        displayName: undefined,
+        environment: { HOME: dir, ...environment },
+        enabled: true,
+        config: { cli: `"${process.execPath}" "${cli}"`, fullAuto: true },
+      });
+      instances.push(instance);
+      return instance;
+    };
+    const turn = async (instance: ProviderInstance, input: Parameters<ProviderInstance["adapter"]["sendTurn"]>[0]) => {
+      const recorder = recordEvents(instance.adapter);
+      try {
+        const { turnId } = await instance.adapter.sendTurn(input);
+        await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+        const events = recorder.events.filter((event) => event.turnId === turnId);
+        const served = JSON.parse(readFileSync(dump, "utf8"));
+        const session = events.find((event) => event.type === "session.started") as { sessionId: string } | undefined;
+        return { events, cursor: session?.sessionId, pid: Number(served.env.WRAP_PID), prompt: served.prompt as string };
+      } finally {
+        recorder.stop();
+      }
+    };
+    const standbyAfter = async (count: number) => {
+      await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(count);
+      return spawns()[count - 1]!;
+    };
+    const chat = { threadId: "t-standby", integrations: botIntegrations("python") };
+
+    beforeEach(() => {
+      ensureDirs();
+      dir = mkdtempSync(join(tmpdir(), "omb-agy-standby-"));
+      log = join(dir, "spawns.ndjson");
+      dump = join(dir, "dump.json");
+      const fake = oldOfflineAgy(dir, join(dir, "calls.txt"), { FAKE_AGY_DUMP: dump, FAKE_AGY_HOLD_FILE: join(dir, "go") });
+      writeFileSync(join(dir, "go"), "");
+      cli = join(dir, "spawn-log.cjs");
+      writeFileSync(cli, `
+if (process.argv.includes("--input-format")) {
+  require("node:fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, argv: process.argv.slice(2) }) + "\\n");
+  process.env.WRAP_PID = String(process.pid);
+}
+require(${JSON.stringify(fake)});
+`);
+      instances = [];
+    });
+
+    afterEach(async () => {
+      for (const instance of instances) await instance.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("runs the next turn on the agy started on its conversation after the last one", async () => {
+      const instance = await make("reuse");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      expect(standby.argv[standby.argv.indexOf("--conversation") + 1]).toBe(first.cursor);
+
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+      expect(second.pid).toBe(standby.pid);
+      expect(second.prompt).toBe("two");
+      expect(second.cursor).toBe(first.cursor);
+      expect(second.events.map((event) => event.type)).toEqual(first.events.map((event) => event.type));
+      // and the turn after it gets its own
+      await standbyAfter(3);
+    });
+
+    it.each([
+      ["model", { model: "gemini-4-neon-low" }],
+      ["effort", { effort: "high" as const }],
+      ["folder", { cwd: tmpdir() }],
+      ["permissions", { readOnly: true as const }],
+      ["tools", { integrations: botIntegrations("teacher") }],
+      ["cursor", { resumeCursor: "conv-elsewhere" }],
+    ])("starts a fresh agy when the %s changed, and retires the standby", async (_change, change) => {
+      const instance = await make("refuse");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor, ...change });
+      expect(second.pid).not.toBe(standby.pid);
+      expect(second.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+    });
+
+    it("keeps no standby after a stopped turn", async () => {
+      const instance = await make("stop");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      rmSync(join(dir, "go"));
+      const recorder = recordEvents(instance.adapter);
+      try {
+        await instance.adapter.sendTurn({ ...chat, text: "two", resumeCursor: first.cursor });
+        await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("two");
+        await instance.adapter.interruptTurn(chat.threadId);
+        await recorder.until((event) => event.type === "turn.completed");
+      } finally {
+        recorder.stop();
+      }
+      expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", stopReason: "interrupted" });
+      await expect.poll(() => alive(standby.pid), { timeout: 5_000 }).toBe(false);
+      writeFileSync(join(dir, "go"), "");
+      const third = await turn(instance, { ...chat, text: "three", resumeCursor: first.cursor });
+      expect(third.pid).not.toBe(standby.pid);
+      expect(spawns()).toHaveLength(3);
+    });
+
+    it("retires an idle standby before a computer turn mounts its own config", async () => {
+      const instance = await make("ordinary");
+      await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      const computer = await make("computer");
+      const clicked = await turn(computer, { threadId: "t-standby-computer", text: "click", integrations: boxIntegrations });
+      expect(clicked.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+      // a computer turn leaves none (its mount holds the box token): its exit restores the config instead of handing it over
+      await vi.waitFor(() => expect(existsSync(join(dir, ".gemini", "config", "mcp_config.json"))).toBe(false));
+      expect(spawns()).toHaveLength(3);
+    });
+
+    it("never rewrites agy's config while a chat runs on its standby and hands over to the next", async () => {
+      const instance = await make("handoff");
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      const first = await turn(instance, { ...chat, text: "one" });
+      await standbyAfter(2);
+      const before = readFileSync(config, "utf8");
+      const changes: string[] = [];
+      const watcher = watch(dirname(config), (event, name) => changes.push(`${event} ${name}`));
+      try {
+        await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+        await standbyAfter(3);
+        // fs.watch reports in order, so every earlier config write is in by the time this one is
+        writeFileSync(join(dirname(config), "sentinel"), "");
+        await vi.waitFor(() => expect(changes).toContain("rename sentinel"));
+      } finally {
+        watcher.close();
+      }
+      expect(changes.filter((change) => !change.endsWith("sentinel"))).toEqual([]);
+      expect(readFileSync(config, "utf8")).toBe(before);
+    });
+
+    it("drops Wink's entries a crash left in agy's config when Wink starts again", async () => {
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      mkdirSync(dirname(config), { recursive: true });
+      const user = { "sqlite-helper": { command: "sqlite-mcp-server" } };
+      // the crashed run's mount, never restored
+      ensureAntigravityComputerMcp(null, { HOME: dir });
+      writeFileSync(config, JSON.stringify({ mcpServers: { ...user, ...staticEntries }, futureTopLevelKey: { keep: true } }));
+      await make("after-crash");
+      expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ mcpServers: user, futureTopLevelKey: { keep: true } });
+    });
+
+    it("keeps a user's own openmausbot-* server in its place through start, turns and quit", async () => {
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      mkdirSync(dirname(config), { recursive: true });
+      const user = { zeta: { command: "zeta" }, "openmausbot-my-notes": { command: "notes" }, alpha: { command: "alpha" } };
+      writeFileSync(config, JSON.stringify({ mcpServers: user }));
+      const servers = () => JSON.parse(readFileSync(config, "utf8")).mcpServers;
+      const instance = await make("user-prefix");
+      expect(Object.keys(servers())).toEqual(Object.keys(user));
+      await turn(instance, { ...chat, text: "one" });
+      await standbyAfter(2);
+      expect(Object.keys(servers())).toEqual([...Object.keys(user), ...Object.keys(staticEntries)]);
+      await instance.dispose();
+      await vi.waitFor(() => expect(Object.keys(servers())).toEqual(Object.keys(user)));
+      expect(servers()).toEqual(user);
+    });
+
+    it.each([
+      ["added", (servers: Record<string, unknown>) => ({ ...servers, omega: { command: "omega" } })],
+      ["edited", (servers: Record<string, unknown>) => ({ ...servers, alpha: { command: "alpha", args: ["--v2"] } })],
+      ["removed", ({ alpha: _alpha, ...servers }: Record<string, unknown>) => servers],
+    ])("starts a fresh agy when the user's MCP server list was %s, and retires the standby", async (_change, change) => {
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      mkdirSync(dirname(config), { recursive: true });
+      writeFileSync(config, JSON.stringify({ mcpServers: { alpha: { command: "alpha" } } }));
+      const instance = await make("mcp-list");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      const mounted = JSON.parse(readFileSync(config, "utf8"));
+      writeFileSync(config, JSON.stringify({ ...mounted, mcpServers: change(mounted.mcpServers) }));
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+      expect(second.pid).not.toBe(standby.pid);
+      expect(second.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+    });
+
+    it("retires the standby when agy's account changes outside Wink", async () => {
+      const logs = join(dir, ".gemini", "antigravity-cli", "log");
+      mkdirSync(logs, { recursive: true });
+      const signInAs = (email: string, stamp: string) => writeFileSync(
+        join(logs, `cli-20261125_${stamp}.log`),
+        `I1125 10:47:13.5 261 server_oauth.go:221] applyAuthResult: email=${email}, authMethod=consumer, quotaProject=\n`,
+      );
+      signInAs("ed@example.com", "100000");
+      const instance = await make("account");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      signInAs("other@example.com", "110000");
+      expect((await instance.snapshot({ refresh: true })).account).toBe("other@example.com");
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+      expect(second.pid).not.toBe(standby.pid);
+      expect(second.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+    });
+
+    it("retires the standby on dispose", async () => {
+      const instance = await make("dispose");
+      await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      await instance.dispose();
+      await expect.poll(() => alive(standby.pid), { timeout: 5_000 }).toBe(false);
+    });
+
+    // sign-in first: agy's sign-out is module state that outlives the registry
+    it.each(["sign-in", "sign-out"] as const)("retires the standby before %s touches agy's saved sign-in", async (action) => {
+      const keyring = fakeKeyring(dir);
+      const registry = new ProviderRegistry([AntigravityDriver]);
+      // a registry hold outlives disposeAll until a probe settles it, so each case is its own instance
+      const id = `agy-standby-${action}`;
+      try {
+        await registry.load({ [id]: { driver: "antigravityAgent", config: { cli: `"${process.execPath}" "${cli}"`, fullAuto: true } } });
+        await turn(registry.get(id)!, { ...chat, text: "one" });
+        const standby = await standbyAfter(2);
+        let aliveAtKeyring: boolean | undefined;
+        const forget = keyring.forget.getMockImplementation()!;
+        keyring.forget.mockImplementation(async (target) => {
+          aliveAtKeyring = alive(standby.pid);
+          return forget(target);
+        });
+        if (action === "sign-out") {
+          expect(await registry.signOut(id)).toBe(true);
+        } else {
+          const login = vi.spyOn(registry.logins, "start").mockImplementation(() => {
+            aliveAtKeyring = alive(standby.pid);
+            return undefined as never;
+          });
+          await registry.startSignIn(id).catch(() => {});
+          expect(login).toHaveBeenCalled();
+        }
+        expect(aliveAtKeyring).toBe(false);
+      } finally {
+        await registry.disposeAll();
+        rmSync(SIGNED_OUT_MARK, { force: true });
+      }
+    });
+  });
 });
 
 
