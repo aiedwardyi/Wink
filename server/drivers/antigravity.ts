@@ -213,7 +213,6 @@ export function readAntigravityModelCatalog(env: Record<string, string | undefin
 export const ANTIGRAVITY_COMPUTER_MCP_KEY = "openmausbot-computer";
 export const ANTIGRAVITY_AGENTS_MCP_KEY = "openmausbot-agents";
 export const ANTIGRAVITY_TERMINAL_MCP_KEY = "openmausbot-terminal";
-const WINK_MCP_KEY_PREFIX = "openmausbot-";
 
 type TurnUsage = { input: number; output: number; cachedInput?: number };
 
@@ -301,8 +300,52 @@ function antigravityMcpConfigPath(env: Record<string, string | undefined>): stri
   return join(env.HOME || env.USERPROFILE || homedir(), ".gemini", "config", "mcp_config.json");
 }
 
-function withoutWinkMcpServers(servers: z.infer<typeof mcpConfigFileSchema>["mcpServers"] = {}) {
-  return Object.fromEntries(Object.entries(servers).filter(([key]) => !key.startsWith(WINK_MCP_KEY_PREFIX)));
+function withoutWinkMcpServers(servers: z.infer<typeof mcpConfigFileSchema>["mcpServers"] = {}, owned: Iterable<string>) {
+  const keys = new Set(owned);
+  return Object.fromEntries(Object.entries(servers).filter(([key]) => !keys.has(key)));
+}
+
+// Per config file, the keys Wink mounted and has not yet restored. Only these are Wink's: a user's own
+// openmausbot-* server is theirs, and a crash leaves the record for the next run to clean.
+const OWNED_MCP_RECORD = join(DATA_DIR, "gemini-mcp-owned.json");
+const ownedMcpRecordSchema = z.record(z.string(), z.array(z.string()));
+
+function readOwnedMcpRecord(): z.infer<typeof ownedMcpRecordSchema> {
+  try {
+    return ownedMcpRecordSchema.parse(JSON.parse(readFileSync(OWNED_MCP_RECORD, "utf8")));
+  } catch {
+    return {};
+  }
+}
+
+function ownedMcpKeys(path: string): string[] {
+  return readOwnedMcpRecord()[path] ?? [];
+}
+
+function recordOwnedMcpKeys(path: string, keys: string[]): void {
+  const record = readOwnedMcpRecord();
+  if (keys.length) record[path] = keys;
+  else if (path in record) delete record[path];
+  else return;
+  mkdirSync(dirname(OWNED_MCP_RECORD), { recursive: true });
+  writeFileSync(OWNED_MCP_RECORD, JSON.stringify(record));
+}
+
+/** agy's MCP config without Wink's keys: a standby started on other servers is not this turn's launch. */
+function userMcpConfig(env: Record<string, string | undefined>): string {
+  const path = antigravityMcpConfigPath(env);
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+  try {
+    const config = mcpConfigFileSchema.parse(JSON.parse(text));
+    return JSON.stringify({ ...config, mcpServers: withoutWinkMcpServers(config.mcpServers, ownedMcpKeys(path)) });
+  } catch {
+    return text;
+  }
 }
 
 function winkProxyMcpServer(proxy: string): AntigravityComputerMcpServer {
@@ -347,24 +390,28 @@ export function antigravityComputerMcpServer(
 
 const sweptMcpConfigs = new Set<string>();
 
-/** Once per run, before any mount: drops openmausbot-* keys a crash or kill left in agy's config (a standby keeps them there while it idles). */
+/** Once per run, before any mount: drops the keys a crash or kill left in agy's config (a standby keeps them there while it idles). */
 function sweepAntigravityMcpLeftover(env: Record<string, string | undefined>): void {
   const path = antigravityMcpConfigPath(env);
   if (sweptMcpConfigs.has(path) || sharedMcpMounts.has(path) || mcpExclusiveHeld) return;
   sweptMcpConfigs.add(path);
+  const owned = new Set(ownedMcpKeys(path));
+  if (!owned.size) return;
   let config: z.infer<typeof mcpConfigFileSchema>;
   try {
     config = mcpConfigFileSchema.parse(JSON.parse(readFileSync(path, "utf8")));
   } catch {
     return;
   }
-  if (!Object.keys(config.mcpServers ?? {}).some((key) => key.startsWith(WINK_MCP_KEY_PREFIX))) return;
-  writeFileSync(path, `${JSON.stringify({ ...config, mcpServers: withoutWinkMcpServers(config.mcpServers) }, null, 2)}\n`, { mode: 0o600 });
+  if (Object.keys(config.mcpServers ?? {}).some((key) => owned.has(key))) {
+    writeFileSync(path, `${JSON.stringify({ ...config, mcpServers: withoutWinkMcpServers(config.mcpServers, owned) }, null, 2)}\n`, { mode: 0o600 });
+  }
+  recordOwnedMcpKeys(path, []);
 }
 
 /** Mount Wink's static agents and terminal entries, plus the computer entry
- * when given, into the global mcp_config.json. Any openmausbot-* key already
- * there is a crash leftover: left out of the mount and never restored. */
+ * when given, into the global mcp_config.json. A key a crash left, or one Wink
+ * writes over, is Wink's: left out of the restore. */
 export function ensureAntigravityComputerMcp(
   server: AntigravityComputerMcpServer | null,
   env: Record<string, string | undefined> = process.env,
@@ -379,7 +426,9 @@ export function ensureAntigravityComputerMcp(
   } catch {
     // Missing or malformed user config — rebuild only what the mount needs.
   }
-  const userServers = withoutWinkMcpServers(config.mcpServers);
+  const keys = [ANTIGRAVITY_AGENTS_MCP_KEY, ANTIGRAVITY_TERMINAL_MCP_KEY, ...(server ? [ANTIGRAVITY_COMPUTER_MCP_KEY] : [])];
+  const owned = new Set([...ownedMcpKeys(path), ...keys]);
+  const userServers = withoutWinkMcpServers(config.mcpServers, owned);
   const servers = {
     ...userServers,
     [ANTIGRAVITY_AGENTS_MCP_KEY]: winkProxyMcpServer(SPAWNED_PROXIES.agents),
@@ -391,10 +440,11 @@ export function ensureAntigravityComputerMcp(
   chmodSync(directory, 0o700);
   if (existed) chmodSync(path, 0o600);
   const mounted = `${JSON.stringify({ ...config, mcpServers: servers }, null, 2)}\n`;
+  recordOwnedMcpKeys(path, keys);
   writeFileSync(path, mounted, { mode: 0o600 });
   chmodSync(path, 0o600);
 
-  const hadLeftover = Object.keys(config.mcpServers ?? {}).some((key) => key.startsWith(WINK_MCP_KEY_PREFIX));
+  const hadLeftover = Object.keys(config.mcpServers ?? {}).some((key) => owned.has(key));
   const restoreTo =
     original !== null && hadLeftover ? `${JSON.stringify({ ...config, mcpServers: userServers }, null, 2)}\n` : original;
 
@@ -410,16 +460,16 @@ export function ensureAntigravityComputerMcp(
     try {
       current = readFileSync(path, "utf8");
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return recordOwnedMcpKeys(path, []);
       throw error;
     }
     if (current === mounted) {
-      if (restoreTo === null) {
-        unlinkSync(path);
-        return;
+      if (restoreTo === null) unlinkSync(path);
+      else {
+        writeFileSync(path, restoreTo, { mode: 0o600 });
+        chmodSync(path, 0o600);
       }
-      writeFileSync(path, restoreTo, { mode: 0o600 });
-      chmodSync(path, 0o600);
+      recordOwnedMcpKeys(path, []);
       return;
     }
 
@@ -436,10 +486,11 @@ export function ensureAntigravityComputerMcp(
     const currentConfig = parsed.data;
     writeFileSync(
       path,
-      `${JSON.stringify({ ...currentConfig, mcpServers: withoutWinkMcpServers(currentConfig.mcpServers) }, null, 2)}\n`,
+      `${JSON.stringify({ ...currentConfig, mcpServers: withoutWinkMcpServers(currentConfig.mcpServers, owned) }, null, 2)}\n`,
       { mode: 0o600 },
     );
     chmodSync(path, 0o600);
+    recordOwnedMcpKeys(path, []);
   };
 }
 
@@ -574,6 +625,8 @@ type Standby = {
   releaseMcpLock: () => void;
   detach: () => void;
   lease: Lease;
+  /** agy's account as its logs named it at launch */
+  account: string | undefined;
 };
 
 /** Idle standbys of every instance, each resolving when its process exits. */
@@ -591,7 +644,7 @@ async function retireStandbys(reason: string): Promise<void> {
 /** Everything fixed at spawn; a turn runs on a standby only when its own launch hashes the same. */
 function launchFingerprint(cli: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, turn: SendTurnInput): string {
   return createHash("sha256")
-    .update(JSON.stringify([cli, args, cwd, Object.entries(env).sort(([a], [b]) => (a < b ? -1 : 1)), turn.model ?? "", turn.effort ?? "", turn.approval ?? ""]))
+    .update(JSON.stringify([cli, args, cwd, Object.entries(env).sort(([a], [b]) => (a < b ? -1 : 1)), turn.model ?? "", turn.effort ?? "", turn.approval ?? "", userMcpConfig(env)]))
     .digest("hex");
 }
 
@@ -734,7 +787,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       const standby: Standby = {
         child, lines: [], partial: "", stderr: "", closed: false, broken: false,
         exited: new Promise((done) => { exited = done; }),
-        restoreMcp: mcp.restoreMcp, releaseMcpLock: mcp.releaseMcpLock, detach: () => {}, lease,
+        restoreMcp: mcp.restoreMcp, releaseMcpLock: mcp.releaseMcpLock, detach: () => {}, lease, account: readAntigravityAccount(env()),
       };
       const unusable = (reason: string) => {
         standby.broken = true;
@@ -1401,7 +1454,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // Only a failed lookup is Not Installed; a slow or failing agy is installed but not answering.
       if (!version) return missing ? cliNotFound(config.cli) : { state: "unavailable", reason: `\`${config.cli}\` did not answer --version` };
       const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
-      return { state: "available", version, authenticated, account: authenticated ? readAntigravityAccount(env()) : undefined };
+      const account = authenticated ? readAntigravityAccount(env()) : undefined;
+      // a sign-in made outside Wink changes agy's account under the idle standbys
+      if ([...standbyOf.values()].some((standby) => standby.account !== account)) void retireStandbys("account changed");
+      return { state: "available", version, authenticated, account };
     };
 
     const textModelDenied = new Set<string>();

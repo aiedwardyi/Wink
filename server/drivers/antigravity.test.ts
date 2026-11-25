@@ -2386,17 +2386,18 @@ describe("Antigravity computer MCP config", () => {
 
       restoreExistingEntry();
       restored = readConfig(home);
-      // an openmausbot-* key found at mount time is a crash leftover, never written back
+      // a key Wink mounts over is Wink's from then on, never written back
       expect(restored.mcpServers).toEqual({ "another-helper": { command: "another-mcp" } });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("restore strips a stale openmausbot-* key and keeps the user's own keys and unknown top-level keys", () => {
+  it("restore strips the keys a crashed mount left and keeps the user's own keys and unknown top-level keys", () => {
     const home = mkdtempSync(join(tmpdir(), "omb-agy-mcpstale-"));
     try {
-      mkdirSync(join(home, ".gemini", "config"), { recursive: true });
+      // the crashed run's mount, never restored
+      ensureAntigravityComputerMcp(boxEntry(), { HOME: home });
       writeFileSync(
         configPath(home),
         JSON.stringify({
@@ -3030,9 +3031,65 @@ require(${JSON.stringify(fake)});
       const config = join(dir, ".gemini", "config", "mcp_config.json");
       mkdirSync(dirname(config), { recursive: true });
       const user = { "sqlite-helper": { command: "sqlite-mcp-server" } };
+      // the crashed run's mount, never restored
+      ensureAntigravityComputerMcp(null, { HOME: dir });
       writeFileSync(config, JSON.stringify({ mcpServers: { ...user, ...staticEntries }, futureTopLevelKey: { keep: true } }));
       await make("after-crash");
       expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ mcpServers: user, futureTopLevelKey: { keep: true } });
+    });
+
+    it("keeps a user's own openmausbot-* server in its place through start, turns and quit", async () => {
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      mkdirSync(dirname(config), { recursive: true });
+      const user = { zeta: { command: "zeta" }, "openmausbot-my-notes": { command: "notes" }, alpha: { command: "alpha" } };
+      writeFileSync(config, JSON.stringify({ mcpServers: user }));
+      const servers = () => JSON.parse(readFileSync(config, "utf8")).mcpServers;
+      const instance = await make("user-prefix");
+      expect(Object.keys(servers())).toEqual(Object.keys(user));
+      await turn(instance, { ...chat, text: "one" });
+      await standbyAfter(2);
+      expect(Object.keys(servers())).toEqual([...Object.keys(user), ...Object.keys(staticEntries)]);
+      await instance.dispose();
+      await vi.waitFor(() => expect(Object.keys(servers())).toEqual(Object.keys(user)));
+      expect(servers()).toEqual(user);
+    });
+
+    it.each([
+      ["added", (servers: Record<string, unknown>) => ({ ...servers, omega: { command: "omega" } })],
+      ["edited", (servers: Record<string, unknown>) => ({ ...servers, alpha: { command: "alpha", args: ["--v2"] } })],
+      ["removed", ({ alpha: _alpha, ...servers }: Record<string, unknown>) => servers],
+    ])("starts a fresh agy when the user's MCP server list was %s, and retires the standby", async (_change, change) => {
+      const config = join(dir, ".gemini", "config", "mcp_config.json");
+      mkdirSync(dirname(config), { recursive: true });
+      writeFileSync(config, JSON.stringify({ mcpServers: { alpha: { command: "alpha" } } }));
+      const instance = await make("mcp-list");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      const mounted = JSON.parse(readFileSync(config, "utf8"));
+      writeFileSync(config, JSON.stringify({ ...mounted, mcpServers: change(mounted.mcpServers) }));
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+      expect(second.pid).not.toBe(standby.pid);
+      expect(second.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
+    });
+
+    it("retires the standby when agy's account changes outside Wink", async () => {
+      const logs = join(dir, ".gemini", "antigravity-cli", "log");
+      mkdirSync(logs, { recursive: true });
+      const signInAs = (email: string, stamp: string) => writeFileSync(
+        join(logs, `cli-20261125_${stamp}.log`),
+        `I1125 10:47:13.5 261 server_oauth.go:221] applyAuthResult: email=${email}, authMethod=consumer, quotaProject=\n`,
+      );
+      signInAs("ed@example.com", "100000");
+      const instance = await make("account");
+      const first = await turn(instance, { ...chat, text: "one" });
+      const standby = await standbyAfter(2);
+      signInAs("other@example.com", "110000");
+      expect((await instance.snapshot({ refresh: true })).account).toBe("other@example.com");
+      const second = await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
+      expect(second.pid).not.toBe(standby.pid);
+      expect(second.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+      expect(alive(standby.pid)).toBe(false);
     });
 
     it("retires the standby on dispose", async () => {
