@@ -2,6 +2,17 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.301] - 2026-11-25
+
+### Fixed
+- Messenger is back in the featured themes.
+- Notes resume after a usage-limit hit instead of staying paused.
+
+### Changed
+- Gemini chats answer faster: the next turn is already warm.
+- Codex and Gemini chats use fewer tokens per message.
+- Changing model or effort in a Claude chat takes effect without restarting it.
+
 ## [1.0.300] - 2026-11-25
 
 ### Fixed
