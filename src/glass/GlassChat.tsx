@@ -7,6 +7,7 @@ import { agoText } from "@/lib/ago";
 import { chatErrorText } from "@/lib/error-text";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { useOlderMessages } from "@/lib/message-pages";
+import { pinnedQuestion } from "@/lib/open-question";
 import { catalogModelLabel, chipPhoneName, modelChipText } from "@/lib/model-chip";
 import { isShownMessage } from "@/lib/shown-message";
 import { leftOf } from "@/lib/usage-pace";
@@ -25,7 +26,14 @@ const ENGINES = new Map([
 ]);
 
 export type Reply = { id: string; you?: string; text: string; at?: number; live?: boolean };
-export type GlassChatHandle = { move: (dir: -1 | 1) => ReplyMove["type"]; older: () => void; back: () => void; reply: () => Reply | undefined };
+export type GlassChatHandle = {
+  move: (dir: -1 | 1) => ReplyMove["type"];
+  ask: (dir: -1 | 1) => "scroll" | "reply" | "choices";
+  answer: (choice: string) => void;
+  older: () => void;
+  back: () => void;
+  reply: () => Reply | undefined;
+};
 
 /** Bot replies oldest first, each with the message you sent before it; a turn still running is the last one, a failed one shows the phone's error line. */
 export function replies(bot: Bot, stream: string, t: Translate): Reply[] {
@@ -123,7 +131,7 @@ export function Dots({ count, at }: { count: number; at: number }) {
   );
 }
 
-export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string[]; pressed: boolean; handle: Ref<GlassChatHandle> }) {
+export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; ids: string[]; pressed: boolean; reading: boolean; handle: Ref<GlassChatHandle> }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
   const model = useModel(bot);
@@ -135,6 +143,7 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
   const [older, setOlder] = useState<"shown" | "loading" | null>(null);
   const [above, setAbove] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
+  const asked = useRef<HTMLDivElement>(null);
   const olderButton = useRef<HTMLButtonElement>(null);
   const speak = useRef<HTMLInputElement>(null);
   const follow = useRef(true);
@@ -145,6 +154,9 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
   const shown = found >= reach.first ? found : list.length - 1;
   const reply = list[shown];
   const live = Boolean(reply?.live);
+  // the phone's pinned question, under the newest reply only
+  const question = older === null && shown === list.length - 1 ? pinnedQuestion(bot.messages, visibleMessages(bot)) : null;
+  const card = question?.card;
 
   const measure = () => setAbove(scroller.current ? linesAbove(scroller.current.scrollTop, LINE) : 0);
 
@@ -178,7 +190,7 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
       const el = scroller.current;
       const max = el ? el.scrollHeight - el.clientHeight : 0;
       const top = el ? el.scrollTop : 0;
-      const step = replyMove({ index: shown - reach.first, count: list.length - reach.first, atTop: top <= 0, atBottom: top >= max - 1, older: reach.older }, dir);
+      const step = replyMove({ index: shown - reach.first, count: list.length - reach.first, atTop: top <= 0, atBottom: top >= max - 1, older: reach.older, ask: Boolean(card) }, dir);
       if (step.type === "scroll" && el) {
         el.scrollTop = top + dir * Math.max(LINE, el.clientHeight - LINE);
         follow.current = el.scrollTop >= max - 1;
@@ -188,6 +200,19 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
         setAt(index === list.length - 1 ? null : list[index]!.id);
       } else if (step.type === "older") setOlder("shown");
       return step.type;
+    },
+    ask: (dir) => {
+      const el = asked.current;
+      const max = el ? el.scrollHeight - el.clientHeight : 0;
+      const top = el ? el.scrollTop : 0;
+      if (el && (dir < 0 ? top > 0 : top < max - 1)) {
+        el.scrollTop = top + dir * Math.max(LINE, el.clientHeight - LINE);
+        return "scroll";
+      }
+      return dir < 0 ? "reply" : "choices";
+    },
+    answer: (choice) => {
+      if (question) dispatch({ type: "answerCard", botId: bot.id, messageId: question.id, answer: choice });
     },
     older: () => {
       oldest.current = list[reach.first]?.id;
@@ -215,7 +240,7 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
             <span>{older === "loading" ? "Loading…" : "See " + OLDER_STEP + " more"}</span>
           </button>
         )}
-        {older === null && reply?.you && (
+        {older === null && !card && reply?.you && (
           <div className="glass-you">
             <div>{reply.you}</div>
           </div>
@@ -241,6 +266,23 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
             </div>
           </div>
         )}
+        {question && card && (
+          <div key={question.id} className="glass-ask">
+            <div className="glass-ask-who">{t("ask.asks", { name: bot.name })}</div>
+            <div ref={asked} className="glass-ask-q" data-glass="ask" tabIndex={-1}>
+              {card.subtitle}
+            </div>
+            {card.options.length > 0 && (
+              <div className="glass-choices">
+                {card.options.map((choice) => (
+                  <button key={choice} type="button" tabIndex={-1} className="glass-choice" data-glass="choice">
+                    {choice}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       {model.chip && (
         <button type="button" tabIndex={-1} className="glass-bar" data-glass="bar">
@@ -256,7 +298,7 @@ export function GlassChat({ bot, ids, pressed, handle }: { bot: Bot; ids: string
           <span>Speak a reply...</span>
           <input ref={speak} data-glass="speak" type="text" aria-label="Speak a reply" autoComplete="off" />
         </label>
-        <button type="button" tabIndex={-1} className="glass-listen" data-glass="listen" aria-label="Read aloud">
+        <button type="button" tabIndex={-1} className={reading ? "glass-listen on" : "glass-listen"} data-glass="listen" aria-label={reading ? "Stop reading" : "Read aloud"} aria-pressed={reading}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polygon points="11 5 6 9 2.5 9 2.5 15 6 15 11 19 11 5" />
             <path d="M15.5 8.8a4.5 4.5 0 0 1 0 6.4" />

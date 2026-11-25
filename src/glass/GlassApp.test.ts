@@ -51,6 +51,29 @@ const focus = (role: string) => act(() => document.querySelector<HTMLElement>(`.
 const posts = (path: RegExp) => calls.filter((call) => call.method !== "GET" && path.test(call.url));
 const focused = () => document.activeElement?.getAttribute("data-glass");
 const shownReply = () => document.querySelector(".glass-scroll")?.textContent;
+const listen = () => document.querySelector('[data-glass="listen"]');
+
+/** The lens's speechSynthesis: what it was asked to say, and the utterances to end. */
+function lensVoice() {
+  const said: string[] = [];
+  type Utterance = { text: string; onend: (() => void) | null };
+  const utterances: Utterance[] = [];
+  const cancel = vi.fn();
+  vi.stubGlobal("SpeechSynthesisUtterance", class {
+    onend: ((event: Event) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    constructor(public text: string) {}
+  });
+  vi.stubGlobal("speechSynthesis", {
+    cancel,
+    speak: (utterance: Utterance) => {
+      said.push(utterance.text);
+      utterances.push(utterance);
+    },
+  });
+  return { said, utterances, cancel };
+}
+
 const talk = (from: number, to: number): Message[] => Array.from({ length: to - from }, (_, i): Message[] => [
   { id: "u" + (from + i), at: (from + i) * 2 + 1, role: "user", kind: "text", text: "ask " + (from + i) },
   { id: "b" + (from + i), at: (from + i) * 2 + 2, role: "bot", kind: "text", text: "reply " + (from + i) },
@@ -156,14 +179,23 @@ describe("glasses navigation", () => {
     expect(document.querySelector(".glass-wheel")).not.toBeNull();
   });
 
-  it("Read aloud sits under the bar: Enter reads the newest reply, ArrowUp returns to the bar", async () => {
-    const speak = vi.spyOn(speaker, "speak").mockImplementation(async () => {});
+  it("Read aloud sits under the bar: Enter reads the newest reply with the lens voice, Enter again stops it, ArrowUp returns to the bar", async () => {
+    const synth = lensVoice();
+    const clip = vi.spyOn(speaker, "speak").mockImplementation(async () => {});
     await mount(atlas(), [ready]);
     await press("ArrowDown");
     await press("ArrowDown");
     expect(focused()).toBe("listen");
     await press("Enter");
-    expect(speak).toHaveBeenCalledWith("Hello", expect.objectContaining({ messageId: "b1" }));
+    expect(synth.said).toEqual(["Hello"]);
+    expect(clip).not.toHaveBeenCalled();
+    expect(listen()?.getAttribute("aria-pressed")).toBe("true");
+    await press("Enter");
+    expect(synth.cancel).toHaveBeenCalled();
+    expect(listen()?.getAttribute("aria-pressed")).toBe("false");
+    await press("Enter");
+    await act(() => synth.utterances.at(-1)?.onend?.());
+    expect(listen()?.getAttribute("aria-pressed")).toBe("false");
     await press("ArrowUp");
     expect(focused()).toBe("bar");
   });
@@ -266,5 +298,96 @@ describe("glasses thread fixes", () => {
     focus("send");
     await press("Enter");
     await vi.waitFor(() => expect(document.querySelector(".glass-dtext")?.textContent).toBe("ship it"));
+  });
+});
+
+describe("glasses voice reply", () => {
+  it("a dictated reply that commits through input opens the draft, and text still being composed does not", async () => {
+    await mount(atlas(), [ready]);
+    const speak = document.querySelector<HTMLInputElement>('[data-glass="speak"]')!;
+    speak.value = "ship";
+    await act(() => {
+      speak.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    });
+    expect(document.querySelector(".glass-dtext")).toBeNull();
+    speak.value = "ship it";
+    await act(() => {
+      speak.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    });
+    expect(document.querySelector(".glass-dtext")?.textContent).toBe("ship it");
+    await vi.waitFor(() => expect(focused()).toBe("send"));
+  });
+});
+
+describe("glasses question card", () => {
+  const ask = (subtitle: string, options: string[]): Message => ({
+    id: "ask", at: 3, role: "bot", kind: "options", card: { title: "Your bot has a question", subtitle, options, askUser: true, staysOpen: true },
+  });
+  const sent: { url: string; body: string }[] = [];
+  const answering = () => {
+    sent.length = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({ url: String(url), method: init.method ?? "GET" });
+      if (init.method === "POST" || init.method === "PATCH") sent.push({ url: String(url), body: String(init.body) });
+      return new Response("{}", { status: 404 });
+    }));
+  };
+  const card = () => ({
+    question: document.querySelector(".glass-ask-q")?.textContent,
+    choices: [...document.querySelectorAll(".glass-choice")].map((choice) => choice.textContent),
+  });
+
+  it("shows the bot's open question under the newest reply with its choices", async () => {
+    await mount(atlas({ messages: [...chat, ask("Prod or staging?", ["Prod", "Staging"])] }), [ready]);
+    expect(shownReply()).toBe("Hello");
+    expect(card()).toEqual({ question: "Prod or staging?", choices: ["Prod", "Staging"] });
+    expect(document.querySelector(".glass-ask-who")?.textContent).toBe("Atlas asks");
+  });
+
+  it("Down walks the question and its choices to the bar; Enter answers like a phone tap and the card closes", async () => {
+    await mount(atlas({ messages: [...chat, ask("Prod or staging?", ["Prod", "Staging"])] }), [ready]);
+    answering();
+    await press("ArrowDown");
+    expect(focused()).toBe("ask");
+    await press("ArrowDown");
+    expect([focused(), document.activeElement?.textContent]).toEqual(["choice", "Prod"]);
+    await press("ArrowDown");
+    expect(document.activeElement?.textContent).toBe("Staging");
+    await press("ArrowDown");
+    expect(focused()).toBe("bar");
+    await press("ArrowUp");
+    expect(document.activeElement?.textContent).toBe("Staging");
+    await press("ArrowUp");
+    await press("ArrowUp");
+    expect(focused()).toBe("ask");
+    await press("ArrowUp");
+    expect([focused(), shownReply()]).toEqual(["speak", "Hello"]);
+    await press("ArrowDown");
+    await press("ArrowDown");
+    await press("ArrowDown");
+    await press("Enter");
+    expect(document.querySelector(".glass-ask")).toBeNull();
+    expect(focused()).toBe("speak");
+    await vi.waitFor(() => expect(sent.map((call) => call.url)).toEqual(["/api/bots/atlas/cards/ask", "/api/bots/atlas/messages"]));
+    expect(JSON.parse(sent[0]!.body)).toEqual({ answered: "Staging" });
+    expect(JSON.parse(sent[1]!.body)).toMatchObject({ text: "Staging", threadId: "thread-atlas", cardId: "ask" });
+  });
+
+  it("a long question scrolls before its choices", async () => {
+    const question = (el: Element) => el.classList.contains("glass-ask-q");
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) { return question(this) ? 300 : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return question(this) ? 80 : 0; });
+    await mount(atlas({ messages: [...chat, ask("A long question", ["Yes"])] }), [ready]);
+    const top = () => document.querySelector<HTMLElement>(".glass-ask-q")?.scrollTop;
+    await press("ArrowDown");
+    await press("ArrowDown");
+    expect([focused(), top()]).toEqual(["ask", 48]);
+    await press("ArrowUp");
+    expect([focused(), top()]).toEqual(["ask", 0]);
+  });
+
+  it("an answered or older question does not show", async () => {
+    await mount(atlas({ messages: [...chat, { ...ask("Prod?", ["Prod"]), card: { title: "Q", subtitle: "Prod?", options: ["Prod"], askUser: true, answered: "Prod" } }] }), [ready]);
+    expect(document.querySelector(".glass-ask")).toBeNull();
   });
 });

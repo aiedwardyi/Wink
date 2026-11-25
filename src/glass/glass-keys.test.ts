@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 import { neighborId } from "@/lib/phone-swipe";
-import { glassKey, linesAbove, olderWindow, replyMove, spokenDigits, type GlassAction } from "./glass-keys";
+import { choiceMove, glassKey, linesAbove, olderWindow, replyMove, spokenDigits, type GlassAction } from "./glass-keys";
 
 const ARROWS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"] as const;
 const KEYS = [...ARROWS, "Enter"] as const;
@@ -28,6 +28,23 @@ describe("glasses keys", () => {
   it("both glasses pages ask the device to route D-pad and wrist input to them", () => {
     const indexSource = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
     for (const page of [indexSource, pairSource]) expect(page).toContain('<meta name="mrbd-web-app-capable" content="yes" />');
+  });
+
+  it.each(["../../public/pair.html", "./glass.css"])("%s draws every text field, since the lens never opens dictation on an opacity 0 one", (path) => {
+    const unseen = [...readFileSync(new URL(path, import.meta.url), "utf8").matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .filter(([, selector, body]) => /\binput\b/.test(selector!) && /opacity:\s*0(?![.\d])/.test(body!))
+      .map(([, selector]) => selector!.trim());
+    expect(unseen, "draw it with color: transparent and padding-left: 100% (see .glass-pill input) instead of opacity: 0").toEqual([]);
+  });
+
+  it("a question under the newest reply: ArrowUp and ArrowDown walk it and its choices, Enter answers", () => {
+    expect(glassKey("chat", "ask", "ArrowDown")).toEqual({ type: "ask", dir: 1 });
+    expect(glassKey("chat", "ask", "Enter")).toBeNull();
+    expect(glassKey("chat", "choice", "ArrowUp")).toEqual({ type: "choice", dir: -1 });
+    expect(glassKey("chat", "choice", "Enter")).toEqual({ type: "answer" });
+    expect(glassKey("chat", "choice", "ArrowRight")).toEqual({ type: "chat", step: 1 });
+    expect(replyMove({ index: 0, count: 1, atTop: true, atBottom: true, older: false, ask: true }, 1)).toEqual({ type: "ask" });
+    expect([choiceMove(0, 2, -1), choiceMove(0, 2, 1), choiceMove(1, 2, 1)]).toEqual([{ type: "ask" }, { type: "choice", index: 1 }, { type: "bar" }]);
   });
 
   it("ArrowLeft and ArrowRight step chats in the phone's order and stop at both ends", () => {

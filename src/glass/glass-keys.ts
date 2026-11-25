@@ -1,13 +1,16 @@
 import type { SwipeStep } from "@/lib/phone-swipe";
 
 export type GlassScreen = "chat" | "check" | "models";
-export type GlassFocus = "speak" | "bar" | "older" | "listen" | "send" | "again" | "other";
+export type GlassFocus = "speak" | "ask" | "choice" | "bar" | "older" | "listen" | "send" | "again" | "other";
 
 export type GlassAction =
   | { type: "chat"; step: Exclude<SwipeStep, 0> }
   | { type: "reply"; dir: -1 | 1 }
   | { type: "messages" }
   | { type: "older" }
+  | { type: "ask"; dir: -1 | 1 }
+  | { type: "choice"; dir: -1 | 1 }
+  | { type: "answer" }
   | { type: "models" }
   | { type: "listen" }
   | { type: "toListen" }
@@ -28,6 +31,11 @@ export function glassKey(screen: GlassScreen, focus: GlassFocus, key: string, te
     if (focus === "older") {
       if (key === "ArrowDown") return { type: "messages" };
       return key === "Enter" ? { type: "older" } : null;
+    }
+    if (focus === "ask") return key === "ArrowUp" || key === "ArrowDown" ? { type: "ask", dir: key === "ArrowUp" ? -1 : 1 } : null;
+    if (focus === "choice") {
+      if (key === "ArrowUp" || key === "ArrowDown") return { type: "choice", dir: key === "ArrowUp" ? -1 : 1 };
+      return key === "Enter" ? { type: "answer" } : null;
     }
     if (focus === "bar") {
       if (key === "ArrowUp") return { type: "messages" };
@@ -54,15 +62,16 @@ export function glassKey(screen: GlassScreen, focus: GlassFocus, key: string, te
   return null;
 }
 
-export type ReplyPosition = { index: number; count: number; atTop: boolean; atBottom: boolean; older: boolean };
+export type ReplyPosition = { index: number; count: number; atTop: boolean; atBottom: boolean; older: boolean; ask?: boolean };
 export type ReplyMove =
   | { type: "scroll"; dir: -1 | 1 }
   | { type: "message"; index: number }
   | { type: "older" }
+  | { type: "ask" }
   | { type: "bar" }
   | { type: "none" };
 
-/** Replies open at their start. A key scrolls inside one first; past its top ArrowUp opens the older one, past the oldest shown it reaches "See 10 more"; past the newest ArrowDown reaches the model bar. */
+/** Replies open at their start. A key scrolls inside one first; past its top ArrowUp opens the older one, past the oldest shown it reaches "See 10 more"; past the newest ArrowDown reaches the bot's open question, then the model bar. */
 export function replyMove(at: ReplyPosition, dir: -1 | 1): ReplyMove {
   if (dir < 0) {
     if (!at.atTop) return { type: "scroll", dir };
@@ -70,7 +79,15 @@ export function replyMove(at: ReplyPosition, dir: -1 | 1): ReplyMove {
     return at.older ? { type: "older" } : { type: "none" };
   }
   if (!at.atBottom) return { type: "scroll", dir };
-  return at.index < at.count - 1 ? { type: "message", index: at.index + 1 } : { type: "bar" };
+  if (at.index < at.count - 1) return { type: "message", index: at.index + 1 };
+  return at.ask ? { type: "ask" } : { type: "bar" };
+}
+
+/** Where a key on a question's choices goes: the next choice, the question above the first, the bar below the last. */
+export function choiceMove(index: number, count: number, dir: -1 | 1): { type: "choice"; index: number } | { type: "ask" } | { type: "bar" } {
+  const next = index + dir;
+  if (next < 0) return { type: "ask" };
+  return next < count ? { type: "choice", index: next } : { type: "bar" };
 }
 
 /** Replies a "See more" step adds. */

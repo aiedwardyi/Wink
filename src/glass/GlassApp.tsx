@@ -4,11 +4,12 @@ import { neighborId, swipeChatIds } from "@/lib/phone-swipe";
 import { loadSidebarOrder } from "@/lib/sidebar-preferences";
 import { speaker } from "@/lib/tts";
 import { StoreProvider, useStore } from "@/state/store";
-import { glassKey, type GlassFocus } from "./glass-keys";
+import { choiceMove, glassKey, type GlassFocus } from "./glass-keys";
 import { GlassChat, type GlassChatHandle } from "./GlassChat";
 import { GlassDeck } from "./GlassDeck";
 import { GlassModels, useGlassModels } from "./GlassModels";
 import { GlassSpeak } from "./GlassSpeak";
+import { readAloud, stopReading } from "./glass-voice";
 import "./glass.css";
 
 const DECK_MS = 1200;
@@ -16,7 +17,8 @@ const DECK_MS = 1200;
 function focusOf() {
   const el = document.activeElement;
   const role = el instanceof HTMLElement ? el.dataset.glass : undefined;
-  const focus: GlassFocus = role === "speak" || role === "bar" || role === "older" || role === "listen" || role === "send" || role === "again" ? role : "other";
+  const focus: GlassFocus =
+    role === "speak" || role === "ask" || role === "choice" || role === "bar" || role === "older" || role === "listen" || role === "send" || role === "again" ? role : "other";
   return { focus, field: el instanceof HTMLInputElement ? el : null };
 }
 
@@ -26,6 +28,8 @@ function focusGlass(role: GlassFocus) {
   return Boolean(el);
 }
 
+const choices = () => [...document.querySelectorAll<HTMLElement>('.glass [data-glass="choice"]')];
+
 function Glasses() {
   const { state, dispatch } = useStore();
   const [draft, setDraft] = useState<string | null>(null);
@@ -33,6 +37,7 @@ function Glasses() {
   const [deck, setDeck] = useState(false);
   const [bump, setBump] = useState(0);
   const [pressed, setPressed] = useState(false);
+  const [reading, setReading] = useState<string | null>(null);
   const chat = useRef<GlassChatHandle | null>(null);
   const deckTimer = useRef(0);
 
@@ -57,8 +62,13 @@ function Glasses() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  const latest = useRef({ bot, ids, draft, picking, models, deck });
-  latest.current = { bot, ids, draft, picking, models, deck };
+  useEffect(() => {
+    setReading(null);
+    return stopReading;
+  }, [bot?.id]);
+
+  const latest = useRef({ bot, ids, draft, picking, models, deck, reading });
+  latest.current = { bot, ids, draft, picking, models, deck, reading };
 
   useEffect(() => {
     const showDeck = () => {
@@ -74,12 +84,14 @@ function Glasses() {
       setDraft(text);
       requestAnimationFrame(() => focusGlass("send"));
     };
+    // the lens composer commits through input and change; text still being composed is not committed
     const onChange = (event: Event) => {
       const field = event.target;
+      if (event instanceof InputEvent && event.isComposing) return;
       if (field instanceof HTMLInputElement && (field.dataset.glass === "speak" || field.dataset.glass === "again")) toCheck(field);
     };
     const onKey = (event: KeyboardEvent) => {
-      const { bot, ids, draft, picking, models, deck } = latest.current;
+      const { bot, ids, draft, picking, models, deck, reading } = latest.current;
       if (!bot) return;
       if (deck && event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
         clearTimeout(deckTimer.current);
@@ -101,10 +113,37 @@ function Glasses() {
           break;
         }
         case "reply": {
-          if (chat.current?.move(action.dir) === "bar" && !focusGlass("bar")) focusGlass("listen");
+          const step = chat.current?.move(action.dir);
+          if (step === "ask") focusGlass("ask");
+          else if (step === "bar" && !focusGlass("bar")) focusGlass("listen");
+          break;
+        }
+        case "ask": {
+          const step = chat.current?.ask(action.dir);
+          if (step === "reply") focusGlass("speak");
+          else if (step === "choices" && !focusGlass("choice") && !focusGlass("bar")) focusGlass("listen");
+          break;
+        }
+        case "choice": {
+          const list = choices();
+          const step = choiceMove(list.findIndex((choice) => choice === document.activeElement), list.length, action.dir);
+          if (step.type === "choice") list[step.index]?.focus();
+          else if (step.type === "ask") focusGlass("ask");
+          else if (!focusGlass("bar")) focusGlass("listen");
+          break;
+        }
+        case "answer": {
+          const choice = document.activeElement?.textContent;
+          if (choice) chat.current?.answer(choice);
+          focusGlass("speak");
           break;
         }
         case "messages":
+          if (focus === "bar") {
+            const last = choices().at(-1);
+            last?.focus();
+            if (last || focusGlass("ask")) break;
+          }
           focusGlass("speak");
           chat.current?.back();
           break;
@@ -137,8 +176,15 @@ function Glasses() {
           break;
         }
         case "listen": {
+          if (reading) {
+            stopReading();
+            setReading(null);
+            break;
+          }
           const reply = chat.current?.reply();
-          if (reply?.text && !reply.live) void speaker.speak(reply.text, { botId: bot.id, messageId: reply.id, voiceId: bot.voice });
+          if (!reply?.text || reply.live) break;
+          if (readAloud(reply.text, () => setReading(null))) setReading(reply.id);
+          else void speaker.speak(reply.text, { botId: bot.id, messageId: reply.id, voiceId: bot.voice });
           break;
         }
         case "composer":
@@ -180,10 +226,14 @@ function Glasses() {
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keyup", onKeyUp, true);
     document.addEventListener("change", onChange, true);
+    document.addEventListener("input", onChange, true);
+    document.addEventListener("compositionend", onChange, true);
     return () => {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKeyUp, true);
       document.removeEventListener("change", onChange, true);
+      document.removeEventListener("input", onChange, true);
+      document.removeEventListener("compositionend", onChange, true);
       clearTimeout(deckTimer.current);
     };
   }, [dispatch]);
@@ -203,7 +253,7 @@ function Glasses() {
         <GlassModels bot={bot} models={models} at={picking} />
       ) : (
         <>
-          <GlassChat key={bot.id} bot={bot} ids={ids} pressed={pressed} handle={chat} />
+          <GlassChat key={bot.id} bot={bot} ids={ids} pressed={pressed} reading={reading !== null} handle={chat} />
           {deck && <GlassDeck ids={ids} at={bot.id} bump={bump} />}
         </>
       )}
