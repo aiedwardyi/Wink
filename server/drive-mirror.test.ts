@@ -217,8 +217,8 @@ describe("Drive mirror", () => {
     expect(table(pcs[0]).syncedAt).toBe(100);
   });
 
-  it("downloads devices first, then write-once files before memory and heads", async () => {
-    const paths = ["devices/device-home.json", "workspace.json", "assets/a.png", "pictures/a.png", "threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "changes/000000000001-device-home-op.json", "memory-v2/bot/aaaaaaaaaaaa.json", "threads-v2/bot/thread/writer-home/head.json"];
+  it("downloads write-once files before memory, heads and devices", async () => {
+    const paths = ["workspace.json", "assets/a.png", "pictures/a.png", "threads-v2/bot/thread/writer-home/seg-1-2.json.gz", "changes/000000000001-device-home-op.json", "memory-v2/bot/aaaaaaaaaaaa.json", "threads-v2/bot/thread/writer-home/head.json", "devices/device-home.json"];
     for (const path of paths.toReversed()) seed(path, path);
     expect((await pcs[1].mirror.syncOnce()).downloaded).toEqual(paths);
     expect(drive.downloads.map((id) => decodeDrivePath(drive.records.get(id)!.file.name))).toEqual(paths);
@@ -249,7 +249,7 @@ describe("Drive mirror", () => {
     expect(paths.indexOf(`${dir(9)}/head.json`)).toBeLessThan(paths.indexOf(segments(0)[0]));
   });
 
-  it("sends and takes PC presence before a chat-first catch-up lands any chat", async () => {
+  it("sends this PC's presence before a chat-first catch-up and takes peer presence after it", async () => {
     for (let chat = 0; chat < 5; chat++) seed(`threads-v2/bot/chat-${chat}/writer-home/seg-1-1.json.gz`, `chat ${chat}`);
     seed("devices/device-home.json", "home");
     write(pcs[1], "devices/device-work.json", "work");
@@ -258,8 +258,22 @@ describe("Drive mirror", () => {
       if (decodeDrivePath(file.name)!.startsWith("threads-v2/")) sentBefore.push(drive.uploads.some((upload) => decodeDrivePath(upload.name) === "devices/device-work.json"));
     };
     await mirrorFor(pcs[1], { chatFirst: true }).syncOnce();
-    expect(decodeDrivePath(drive.records.get(drive.downloads[0]!)!.file.name)).toBe("devices/device-home.json");
     expect(sentBefore).toEqual(Array(5).fill(true));
+    expect(decodeDrivePath(drive.records.get(drive.downloads.at(-1)!)!.file.name)).toBe("devices/device-home.json");
+  });
+
+  it("lands workspace and chats before a throttled peer presence stops the pass", async () => {
+    const peer = seed("devices/device-home.json", "home");
+    const landed = ["workspace.json", "threads-v2/bot/thread/writer-home/seg-1-1.json.gz"];
+    for (const path of landed) seed(path, path);
+    const client = createDriveClient({ getAccessToken: async () => "test-access", fetch: async (input, init) => {
+      const url = new URL(input instanceof URL ? input.href : input instanceof Request ? input.url : input);
+      return url.pathname.endsWith(`/${peer.id}`) && url.searchParams.get("alt") === "media" ? new Response(null, { status: 429, headers: { "retry-after": "3" } }) : withParents(input, init);
+    } });
+    const summary = await mirrorFor(pcs[1], { client }).syncOnce();
+    expect(summary.retryAfterMs).toBe(3_000);
+    expect(summary.downloaded).toEqual(landed);
+    expect(existsSync(join(pcs[1].folder, "devices/device-home.json"))).toBe(false);
   });
 
   describe("boot and wake catch-up", () => {
@@ -347,7 +361,7 @@ describe("Drive mirror", () => {
       await google.kick();
       const paths = downloaded();
       expect(paths.indexOf(`${open}/head.json`)).toBeLessThan(paths.findIndex((path) => path.startsWith("pictures/")));
-      expect(paths.slice(0, segments.length + 1)).toEqual(["devices/device-home.json", ...segments.toSorted()]);
+      expect(paths.slice(0, segments.length)).toEqual(segments.toSorted());
       expect(paths.indexOf(`${open}/head.json`)).toBeLessThan(paths.indexOf(`${other}/seg-1-2.json.gz`));
       expect(paths.indexOf(`${other}/head.json`)).toBeLessThan(paths.findIndex((path) => path.startsWith("pictures/")));
       expect(readyAtHead).toEqual([true]);
@@ -385,7 +399,7 @@ describe("Drive mirror", () => {
       clock.now += 30_000 + 60_000;
       await vi.advanceTimersByTimeAsync(30_000);
       await google.kick();
-      expect(downloaded().slice(0, 2)).toEqual(["devices/device-home.json", expect.stringMatching(/^pictures\//)]);
+      expect(downloaded()[0]).toMatch(/^pictures\//);
 
       drive.downloads.length = 0;
       seed("pictures/wake.png", "new picture");
@@ -447,8 +461,7 @@ describe("Drive mirror", () => {
       google.resume();
       await google.kick();
       const paths = downloaded();
-      expect(paths[0]).toBe("devices/device-home.json");
-      expect(paths.slice(1, segments.length + 1).toSorted()).toEqual(segments.toSorted());
+      expect(paths.slice(0, segments.length)).toEqual(segments.toSorted());
       expect(paths.indexOf(`${open}/head.json`)).toBeLessThan(paths.indexOf(`${other}/seg-1-2.json.gz`));
       const picture = paths.findIndex((path) => path.startsWith("pictures/"));
       expect(paths.filter((path) => path.startsWith("threads-v2")).every((path) => paths.indexOf(path) < picture)).toBe(true);
@@ -658,7 +671,7 @@ describe("Drive mirror", () => {
 
   it("reports a stuck download and keeps syncing later paths on every pass", async () => {
     const stuck = seed("pictures/big.png", "picture");
-    const peers = ["devices/device-work.json", "threads-v2/bot/thread/writer-work/head.json"];
+    const peers = ["threads-v2/bot/thread/writer-work/head.json", "devices/device-work.json"];
     for (const path of peers) seed(path, "peer");
     drive.onDownload = (file) => { if (file.id === stuck.id) throw new Error("simulated transport failure"); };
     for (let pass = 0; pass < 3; pass++) {
@@ -688,7 +701,7 @@ describe("Drive mirror", () => {
 
   it("keeps binding errors fatal when a transfer also fails", async () => {
     const stuck = seed("pictures/big.png", "picture");
-    seed("threads-v2/bot/thread/writer-work/head.json", "peer");
+    seed("devices/device-work.json", "peer");
     drive.onDownload = (file) => {
       if (file.id !== stuck.id) return;
       const state = table(pcs[0]);
@@ -697,7 +710,7 @@ describe("Drive mirror", () => {
       throw new Error("simulated transport failure");
     };
     await expect(pcs[0].mirror.syncOnce()).rejects.toMatchObject({ problem: "binding" });
-    expect(existsSync(join(pcs[0].folder, "threads-v2/bot/thread/writer-work/head.json"))).toBe(false);
+    expect(existsSync(join(pcs[0].folder, "devices/device-work.json"))).toBe(false);
   });
 
   it("releases the table guard after a rejected pass", async () => {
@@ -1176,7 +1189,7 @@ describe("Drive mirror", () => {
     drive.root();
     write(pcs[0], "assets/a.png", "asset");
     write(pcs[0], "pictures/b.png", "picture");
-    seed("threads-v2/bot/thread/writer-laptop/head.json", "peer");
+    seed("devices/device-laptop.json", "peer");
     const limited = createDriveClient({
       getAccessToken: async () => "test-access",
       fetch: async (input, init) => init?.method === "POST"
@@ -1187,7 +1200,7 @@ describe("Drive mirror", () => {
     expect(stopped.retryAfterMs).toBe(3_000);
     expect(stopped.uploaded).toEqual([]);
     expect(stopped.downloaded).toEqual([]);
-    expect(existsSync(join(pcs[0].folder, "threads-v2/bot/thread/writer-laptop/head.json"))).toBe(false);
+    expect(existsSync(join(pcs[0].folder, "devices/device-laptop.json"))).toBe(false);
     write(pcs[1], "assets/a.png", "asset");
     const plain = createDriveClient({
       getAccessToken: async () => "test-access",
@@ -1197,7 +1210,7 @@ describe("Drive mirror", () => {
     });
     const continued = await mirrorFor(pcs[1], { client: plain }).syncOnce();
     expect(continued.failed).toEqual(["assets/a.png"]);
-    expect(continued.downloaded).toEqual(["threads-v2/bot/thread/writer-laptop/head.json"]);
+    expect(continued.downloaded).toEqual(["devices/device-laptop.json"]);
     expect(continued.retryAfterMs).toBeNull();
     expect(read(pcs[1], "assets/a.png")).toBe("asset");
   });
