@@ -280,9 +280,10 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { sweepDroppedAsks } from "./task-dropped.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import {
@@ -3008,7 +3009,7 @@ const unreadTurns = turnUnread();
 const TASK_PACKET_FLUSH_MS = 30_000;
 const pendingTaskPackets = new Map<
   string,
-  { packet: TaskResumePacket; timer: ReturnType<typeof setTimeout> }
+  { packet: TaskResumePacket; timer: ReturnType<typeof setTimeout>; seen?: TaskAsk[] }
 >();
 
 function eventTime(event: RuntimeEvent): number {
@@ -3031,7 +3032,7 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   if (pending) clearTimeout(pending.timer);
   pendingTaskPackets.delete(packet.threadId);
   try {
-    return store.writeTaskPacket(packet, opts);
+    return store.writeTaskPacket(packet, opts, [...(pending?.seen ?? []), ...(pending?.packet.asks ?? [])]);
   } catch (error) {
     console.error("task state: write failed", error);
     return null;
@@ -3068,6 +3069,7 @@ function closeMergedAsks(botId: string, threadId: string, record: TaskResumePack
 function queueTaskPacket(packet: TaskResumePacket): void {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) {
+    pending.seen = [...(pending.seen ?? []), ...(pending.packet.asks ?? [])];
     pending.packet = packet;
     return;
   }
@@ -10038,6 +10040,7 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
+startupTiming.afterPaint("droppedAsks", async () => sweepDroppedAsks());
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")
