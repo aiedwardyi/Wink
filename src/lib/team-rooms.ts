@@ -187,7 +187,7 @@ const refused = (status: number, body: any): Refused => ({
   status, error: typeof body?.error === "string" ? body.error : "", ...(typeof body?.groupId === "string" ? { groupId: body.groupId } : {}),
 });
 
-/** `short` is the 6-character code, missing while this PC's relay can't mint one. */
+/** `short` is the 8-character code (6 if minted before), missing while this PC's relay can't mint one. */
 export type RoomInviteCode = { code: string; short?: string };
 
 const shortOf = (body: any) => (typeof body?.short === "string" ? { short: body.short } : {});

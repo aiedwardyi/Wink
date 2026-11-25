@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { boardLine, createBoard, fromRoom } from "./board.ts";
-import { createBoardRoutes } from "./board-routes.ts";
+import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const temps = createTempDirs();
@@ -30,6 +30,38 @@ describe("board_post", () => {
     expect(status).toBe(200);
     expect(changes).toBe(1);
     expect(board.get(stuck.id)).toMatchObject({ status: "solved", fix: "Use Claude." });
+  });
+});
+
+describe("board_search", () => {
+  const search = async (routes: ReturnType<typeof createBoardRoutes>, query: string) => {
+    let reply = "";
+    const res = { writeHead() {}, end(text: string) { reply = text; } } as unknown as ServerResponse;
+    const req = new EventEmitter() as IncomingMessage;
+    req.headers = { authorization: "Bearer tok" };
+    const pending = routes.search(req, res);
+    req.emit("data", JSON.stringify({ query }));
+    req.emit("end");
+    await pending;
+    return JSON.parse(reply) as { count: number; total: number; text: string };
+  };
+
+  it("names how many matches the top results left out", async () => {
+    const board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-board-search-")), "board"), pcId: () => "home" });
+    const routes = createBoardRoutes({ board, caller: () => ({ botId: "astra", threadId: "ta" }), known: () => true, projectOf: () => "", roomTurn: () => null });
+    for (const n of [1, 2, 3, 4, 5]) board.post({ author_bot_id: "astra", kind: "tip", title: `Codex usage limit ${n}`, body: "Codex usage limit", source_ref: `tip:${n}` });
+    const five = await search(routes, "codex usage limit");
+    expect(five.count).toBe(5);
+    expect(five.total).toBe(5);
+    expect(five.text).not.toContain("more match");
+
+    for (const n of [6, 7]) board.post({ author_bot_id: "astra", kind: "tip", title: `Codex usage limit ${n}`, body: "Codex usage limit\n\nThen wait an hour", source_ref: `tip:${n}` });
+    const seven = await search(routes, "codex usage limit");
+    expect(seven.count).toBe(5);
+    expect(seven.total).toBe(7);
+    // one header per shown post, whatever blank lines a post body holds
+    expect(seven.text.match(/^\[[^\]\n]+\] tip, /gm)).toHaveLength(5);
+    expect(seven.text.endsWith("\n\n+2 more matches, search more specifically.")).toBe(true);
   });
 });
 
@@ -151,10 +183,11 @@ describe("Forum replies and helped", () => {
   it("deletes the user's own reply for real and nothing else", async () => {
     const { board, routes } = setup();
     const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:3" });
+    const botReply = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "Try again.", parent_id: stuck.id, source_ref: "tool:tc:3" });
     const saved = await call(routes.reply, { parent_id: stuck.id, body: "Switching is fine by me." });
-    expect((await call(routes.remove, { id: stuck.id })).status).toBe(403);
+    expect((await call(routes.remove, { id: botReply.id })).status).toBe(403);
     expect(await call(routes.remove, { id: saved.body.post.id })).toMatchObject({ status: 200 });
-    expect(board.list().map((post) => post.id)).toContain(stuck.id);
+    expect(board.list().map((post) => post.id)).toEqual(expect.arrayContaining([stuck.id, botReply.id]));
     expect(board.get(saved.body.post.id)).toBeUndefined();
     expect(existsSync(join(board.dir, `${saved.body.post.id}.json`))).toBe(false);
     expect((await call(routes.remove, { id: saved.body.post.id })).status).toBe(404);
@@ -167,5 +200,22 @@ describe("Forum replies and helped", () => {
     const under = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "That worked.", parent_id: saved.body.post.id, source_ref: "tool:tc:5" });
     await call(routes.remove, { id: saved.body.post.id });
     expect(board.get(under.id)).toMatchObject({ parent_id: stuck.id, body: "That worked." });
+  });
+
+  it("deletes a top-level post and every reply under it, for real", async () => {
+    const { board, routes, tip } = setup();
+    const stuck = board.post({ author_bot_id: "astra", kind: "stuck", title: "Phone build stops at sign-in", body: "Stops.", source_ref: "tool:ta:6" });
+    const other = board.post({ author_bot_id: "astra", kind: "stuck", title: "Another", body: "Other.", source_ref: "tool:ta:7" });
+    const saved = await call(routes.reply, { parent_id: stuck.id, body: "Try the work account." });
+    const under = board.post({ author_bot_id: "carbon", kind: "tip", title: stuck.title, body: "That worked.", parent_id: saved.body.post.id, source_ref: "tool:tc:8" });
+    expect(await call(routes.remove, { id: stuck.id })).toMatchObject({ status: 200 });
+    expect(board.list().map((post) => post.id).sort()).toEqual([other.id, tip.id].sort());
+    for (const id of [stuck.id, saved.body.post.id, under.id]) expect(existsSync(join(board.dir, `${id}.json`))).toBe(false);
+    expect((await call(routes.remove, { id: stuck.id })).status).toBe(404);
+  });
+
+  it("delete is a user route: no bot route deletes", () => {
+    expect(BOARD_ROUTES.remove.startsWith("/api/internal/")).toBe(false);
+    expect(Object.keys(createBoardRoutes({ board: setup().board, caller: () => undefined, known: () => false, projectOf: () => "", roomTurn: () => null })).sort()).toEqual(["list", "post", "remove", "reply", "search"]);
   });
 });

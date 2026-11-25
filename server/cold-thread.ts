@@ -4,7 +4,7 @@ import { Worker } from "node:worker_threads";
 
 import { offscreenLimit } from "./chat-tail.ts";
 import type { TailRead, TailReply, TailRequest } from "./cold-thread-worker.ts";
-import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowToMessage, scanThreadRows, storedHead, threadOver, threadVersion, type ThreadRows } from "./message-db.ts";
+import { messageDbFile, messageTransactionEnd, onMessageChange, readMessage, rowCursor, rowToMessage, scanThreadRows, searchMessages, storedHead, threadOver, threadVersion, type FindPlace, type SearchHit, type ThreadRows } from "./message-db.ts";
 import { paneReason, type PaneLine } from "../shared/pane-note.ts";
 import type { Message, Store } from "./store.ts";
 import { rowChars } from "./thread-cache.ts";
@@ -82,6 +82,27 @@ export async function chatListPage(
   return { messages: messages.slice(start), hasMore: start > 0 };
 }
 
+/** The page messagePage would send before `before`, or null when the store must answer (loaded, an unknown cursor, or the read failed). */
+export async function coldPageBefore(store: Pick<Store, "loaded">, threadId: string, before: string, limit: number): Promise<{ messages: Message[]; hasMore: boolean } | null> {
+  await committed();
+  if (store.loaded(threadId)) return null;
+  const cursor = rowCursor(threadId, before);
+  if (cursor === undefined) return null;
+  let page: Tail;
+  try {
+    // one row past the page: chained gives the oldest its parent with it
+    page = await (reader ??= startReader())({ threadId, before: cursor, count: limit + 1 });
+  } catch (error) {
+    console.error("cold older page read failed; the store answers", threadId, error);
+    return null;
+  }
+  // a write during the read loaded the chat
+  if (store.loaded(threadId)) return null;
+  const { messages } = chained(page, limit + 1);
+  const start = Math.max(0, messages.length - limit);
+  return { messages: messages.slice(start), hasMore: start > 0 };
+}
+
 // per unloaded chat, Map's reads of one version of it: each Map refresh asks again, a change to its rows or a load drops them, and the two chats read last keep theirs
 type ColdReads = { version: string; writes?: Promise<Message[]>; notes?: { since: number; lines: Promise<PaneLine[]> } };
 const coldReads = new Map<string, ColdReads>();
@@ -121,6 +142,45 @@ export async function coldWriteRows(store: Pick<Store, "loaded">, threadId: stri
   }
   // a write during the read loaded the chat, and its newest rows may not be saved yet
   return store.loaded(threadId) ? null : rows;
+}
+
+/** A page of searchMessages for one chat, read on the scan worker: a gigabyte chat's find held the thread that serves the app ~4 s, its jump to the first hit included. */
+export async function findInChat(threadId: string, query: string, limit: number, options: { before?: string; place?: FindPlace; chips?: boolean; skip: ReadonlySet<string> }): Promise<{ hits: SearchHit[]; more: boolean }> {
+  await committed();
+  // the worker reads the chat as it stood when it began; a hit's row edited or removed since is read again here, as it stands now
+  const changed = new Set<string>();
+  const stop = onMessageChange((thread, id) => {
+    if (thread === threadId) changed.add(id);
+  });
+  const live = (found: SearchHit[]) => {
+    const ids = found.filter((hit) => changed.has(hit.messageId)).map((hit) => hit.messageId);
+    const now = new Map(ids.length ? searchMessages(query, ids.length, threadId, { chips: options.chips, skip: options.skip, ids }).map((hit) => [hit.messageId, hit]) : []);
+    return found.flatMap((hit) => (!changed.has(hit.messageId) ? [hit] : now.has(hit.messageId) ? [now.get(hit.messageId)!] : []));
+  };
+  const found: SearchHit[] = [];
+  let hits: SearchHit[] = [];
+  try {
+    // hits dropped above leave the page short: read on from the last row scanned until it is full or the chat ends
+    for (let { before, place } = options; ;) {
+      const wanted = limit + 1 - hits.length;
+      let page: SearchHit[];
+      try {
+        page = await (scans ??= startReader())({ threadId, find: { query, limit: wanted, before, place, chips: options.chips, skip: [...options.skip] } });
+      } catch (error) {
+        console.error("chat find read failed; the server thread reads it", threadId, error);
+        page = searchMessages(query, wanted, threadId, { ...options, before, place });
+      }
+      found.push(...page);
+      hits = live(found);
+      const last = page.at(-1);
+      if (hits.length > limit || !last || page.length < wanted) break;
+      before = last.messageId;
+      place = { at: last.at, row: last.row };
+    }
+  } finally {
+    stop();
+  }
+  return { hits: hits.slice(0, limit), more: hits.length > limit };
 }
 
 /** A Map row's reason from an unloaded chat, or null when the store must answer (loaded, no rows here, or the read failed). */
@@ -181,8 +241,8 @@ export function coldSendIds(store: Pick<Store, "loaded">, threadId: string): voi
   for (const older of sendIdReads.keys()) if (sendIdReads.size > 2) sendIdReads.delete(older);
 }
 
-/** The row a send was first accepted as: the store's when the chat is loaded, else by key from Map's sendId read and the rows stored since, else from the chat once a load under way lands. */
-export async function sentRow(store: Pick<Store, "loaded" | "messagesFor" | "row">, threadId: string, sendId: string): Promise<Message | undefined> {
+/** The row a send was first accepted as: the store's when the chat is loaded, else by key from Map's sendId read and the rows stored since, else from the chat once it loads off the server thread. */
+export async function sentRow(store: Pick<Store, "adopt" | "loaded" | "messagesFor" | "row">, threadId: string, sendId: string): Promise<Message | undefined> {
   const read = store.loaded(threadId) ? undefined : sendIdReads.get(threadId);
   const known = await read?.ids;
   if (known && !read!.stale && !store.loaded(threadId)) {
@@ -193,16 +253,41 @@ export async function sentRow(store: Pick<Store, "loaded" | "messagesFor" | "row
     const since = scanThreadRows(threadId, known.cursor, 1024);
     if (since.messages.length < 1024) return since.messages.find((message) => message.sendId === sendId);
   }
-  const loading = loads.get(threadId);
-  if (loading) await loading;
+  if (!store.loaded(threadId)) await coldLoad(store, threadId);
   return store.messagesFor(threadId).find((message) => message.sendId === sendId);
+}
+
+/** sendClock's newest stamp of an unloaded chat, read on the reader; undefined when the store holds the chat and answers itself. */
+export async function coldNewestStamp(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<number | undefined> {
+  if (store.loaded(threadId)) return undefined;
+  try {
+    await committed();
+    const newest = await (reader ??= startReader())({ threadId, newest: true });
+    return store.loaded(threadId) ? undefined : newest;
+  } catch (error) {
+    console.error("cold send clock read failed; the send waits for the chat to load", threadId, error);
+    await coldLoad(store, threadId);
+    return undefined;
+  }
+}
+
+/** A chat's open quick asks as the boot reads find them, read on the reader: a send before those land recovers its own chat. */
+export async function coldQuickAsks(threadId: string): Promise<Array<{ id: string; at: number }>> {
+  await committed();
+  return (reader ??= startReader())({ threadId, asks: true });
 }
 
 /** Loads an unloaded chat into the store, a worker reading its pages and this thread parsing one per turn: else the first send after Map's cold read reads it all at once. */
 export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
   let load = loads.get(threadId);
   if (!load) {
-    load = loadPages(store, threadId)
+    load = readPages(store, threadId)
+      .then((read) => {
+        if (!read || store.loaded(threadId)) return;
+        store.adopt(threadId, read);
+        coldReads.delete(threadId);
+        sendIdReads.delete(threadId);
+      })
       .catch((error) => console.error("cold chat load failed; the store loads it when used", threadId, error))
       .finally(() => loads.delete(threadId));
     loads.set(threadId, load);
@@ -210,7 +295,31 @@ export function coldLoad(store: Pick<Store, "adopt" | "loaded">, threadId: strin
   return load;
 }
 
-async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: string): Promise<void> {
+const reads = new Map<string, Promise<ColdRead | undefined>>();
+
+type ColdRead = ThreadRows & { chars: number };
+
+/** One read of a chat's pages at a time, shared by a load and a look. */
+function readPages(store: Pick<Store, "loaded">, threadId: string): Promise<ColdRead | undefined> {
+  let read = reads.get(threadId);
+  if (!read) {
+    read = loadPages(store, threadId).finally(() => reads.delete(threadId));
+    reads.set(threadId, read);
+  }
+  return read;
+}
+
+/** An unloaded chat's active path, read as coldLoad reads it but kept only in spare cache room: a look ahead never pushes out a chat in use. */
+export async function coldPath(store: Pick<Store, "activePath" | "loaded" | "look">, threadId: string): Promise<readonly Message[]> {
+  if (!store.loaded(threadId)) {
+    const read = await readPages(store, threadId).catch((error) => console.error("cold path read failed; the store reads it", threadId, error));
+    // a write during the read loaded the chat
+    if (read && !store.loaded(threadId)) return store.look(threadId, read);
+  }
+  return store.activePath(threadId);
+}
+
+async function loadPages(store: Pick<Store, "loaded">, threadId: string): Promise<ColdRead | undefined> {
   // only this handle writes rows (a peer's land through applySyncChanges), so its updates and deletes are all the pages can miss
   const changed = new Set<string>();
   // a new row takes the table's top rowid + 1, so once a page's last row is deleted an insert can land behind the cursor
@@ -248,11 +357,19 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
       chars = before;
       cursor = after;
     };
+    // the reader reads the next page while this thread parses the last
+    const ask = (after: number) => {
+      const page = (reader ??= startReader())({ threadId, after });
+      page.catch(() => {});
+      return { asked: deletes, page };
+    };
+    let next = ask(cursor);
     for (;;) {
-      const asked = deletes;
-      const page = await (reader ??= startReader())({ threadId, after: cursor });
+      const { asked, page: reading } = next;
+      const page = await reading;
       if (store.loaded(threadId) || changed.size > 1024) return;
       if (page.length) {
+        next = ask(page.at(-1)!.cursor);
         const length = messages.length;
         const before = chars;
         for (const row of page) {
@@ -261,11 +378,15 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
         }
         pages.push({ after: cursor, asked, length, chars: before, last: messages.at(-1)!.id });
         cursor = page.at(-1)!.cursor;
+        // a page read ahead is already here, so let the server answer between pages
+        await new Promise((resolve) => setImmediate(resolve));
       }
       // read again from the first page whose last row was deleted after it was asked for
       const from = pages.findIndex((read) => (deletedAt.get(read.last) ?? 0) > read.asked);
-      if (from >= 0) rewind(from);
-      else if (!page.length) break;
+      if (from >= 0) {
+        rewind(from);
+        next = ask(cursor);
+      } else if (!page.length) break;
     }
     // rows added since the worker's last page
     for (let tail = scanThreadRows(threadId, cursor, 1024); tail.messages.length; tail = scanThreadRows(threadId, tail.cursor, 1024)) {
@@ -284,9 +405,7 @@ async function loadPages(store: Pick<Store, "adopt" | "loaded">, threadId: strin
     }
     const activeLeafId = storedHead(threadId);
     if (activeLeafId === undefined) return;
-    store.adopt(threadId, { messages: gone.size ? messages.filter((_, index) => !gone.has(index)) : messages, activeLeafId, chars });
-    coldReads.delete(threadId);
-    sendIdReads.delete(threadId);
+    return { messages: gone.size ? messages.filter((_, index) => !gone.has(index)) : messages, activeLeafId, chars };
   } finally {
     stop();
   }

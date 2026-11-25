@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { testHome } from "../server/testing/test-home.ts";
 import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 
@@ -14,7 +15,7 @@ afterEach(async () => {
 });
 
 async function fixture(status = 200) {
-  const profile = await fs.mkdtemp(path.join(os.homedir(), "outbox-"));
+  const profile = await fs.mkdtemp(path.join(testHome(), "outbox-"));
   const dir = path.join(profile, "mailbox-outbox");
   await fs.mkdir(dir);
   const posts = [];
@@ -107,7 +108,7 @@ it.skipIf(process.platform !== "win32")("waits for a live sender's Windows shari
 });
 
 it("does nothing on an absent outbox and rejects remote drain destinations", async () => {
-  const profile = await fs.mkdtemp(path.join(os.homedir(), "empty-outbox-"));
+  const profile = await fs.mkdtemp(path.join(testHome(), "empty-outbox-"));
   expect((await deliverMailboxOutbox(profile, "http://127.0.0.1:1")).delivered).toBe(0);
   expect(await fs.readdir(profile)).toEqual([]);
   await expect(deliverMailboxOutbox(profile, "https://example.com")).rejects.toThrow();

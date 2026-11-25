@@ -22,7 +22,7 @@ describe("system prompt order", () => {
       for (const stable of ["accessRules(", "DEFAULT_RULES", ...(prompt === solo ? ["skillInstructions", "packagePlaybooks", "opts?.automationSource", "tagged.length"] : ["renderSkillInstructions(", "installedPlaybookInstructions(", "LANE_HANDOFF_LINE"])]) {
         expect(prompt.indexOf(stable), `Place ${stable} before the playbook, saved keys and memory`).toBeLessThan(prompt.indexOf("harnessPlaybookPrompt("));
       }
-      expect(prompt.indexOf("aboutYouPrompt()"), "Place private facts after the playbook and saved keys").toBeGreaterThan(prompt.indexOf("savedKeysPrompt("));
+      expect(prompt.indexOf("aboutYouPrompt("), "Place private facts after the playbook and saved keys").toBeGreaterThan(prompt.indexOf("savedKeysPrompt("));
     }
   });
 

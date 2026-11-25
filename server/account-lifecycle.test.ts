@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -16,6 +16,9 @@ import { createUsageRefresh } from "./usage-refresh.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { resetPathCacheForTests } from "./env-path.ts";
 import { ClaudeDriver } from "./drivers/claude.ts";
+import { accountLaunch } from "./account-policy.ts";
+import { shareUserSetup } from "./account-shared-setup.ts";
+import { markCodexPromo } from "../electron/codex-promo.mjs";
 
 const core = await import("./accounts.ts").catch(() => null);
 const lifecycle = await import("./account-lifecycle.ts").catch(() => null);
@@ -34,15 +37,15 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function fixture(onMainChanged?: (change: MainChange) => void) {
+async function fixture(onMainChanged?: (change: MainChange) => void, grok = false) {
   expect(core, "account service exists").not.toBeNull();
   expect(lifecycle, "account lifecycle exists").not.toBeNull();
   const dir = join(DATA_DIR, `lifecycle-${++next}`);
   mkdirSync(dir, { recursive: true });
-  const bases = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" } };
+  const bases = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" }, ...grok ? { grok: { driver: "grokAgent" } } : {} };
   const accounts = new core!.AccountService(dir, () => bases);
   const statuses = new Map<string, ProviderSnapshot>();
-  const drivers = ["claudeAgent", "codex"].map((kind) => {
+  const drivers = ["claudeAgent", "codex", "grokAgent"].map((kind) => {
     const fake = makeFakeDriver({ kind }).driver;
     const create = fake.create;
     return { ...fake, defaultConfig: () => ({ cli: "fake" }), install: { login: { args: ["login"], deviceArgs: ["device"], env: { OPENAI_API_KEY: "fake-install-key" } }, logout: ["logout"] },
@@ -84,7 +87,7 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
     referenced: async (id) => references.has(id), invalidate, changed, configBusy: () => configBusy,
   });
   controllers.push(controller);
-  return { dir, accounts, registry, drivers, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
+  return { dir, bases, accounts, registry, drivers, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
     busy: (value: boolean) => { configBusy = value; }, failLogout: () => { logoutFails = true; },
     state: (value: typeof state) => { state = value; }, wait: (value: Promise<void>) => { waiting = value; },
     add: async (of = "claude") => { const result = await controller.add(of); await controller.settled(result.id); return accounts.get(result.id)!; },
@@ -92,6 +95,113 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
 }
 
 describe("account lifecycle", () => {
+  it.each(["claude", "codex", "grok"])("a saved %s account whose home is gone reads signed out and Sign In creates it", async (of) => {
+    const f = await fixture(undefined, true);
+    const account = await f.add(of);
+    rmSync(account.home, { recursive: true });
+    const snapshot = vi.spyOn(f.registry.get(account.id)!, "snapshot");
+    await f.registry.describe({ refresh: true });
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(f.accounts.get(account.id)?.state).toBe("stopped");
+    expect(f.registry.accountBlocked(account.id)).toBe(true);
+    expect(existsSync(account.home)).toBe(false);
+    await f.controller.signIn(account.id);
+    await f.controller.settled(account.id);
+    expect(readdirSync(account.home)).toEqual(of === "codex" ? ["state"] : []);
+    expect(f.start.mock.calls.at(-1)?.[2]).toEqual(["login"]);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+  });
+
+  it("a saved account whose home went missing before a restart reads signed out without launching", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    rmSync(account.home, { recursive: true });
+    const accounts = new core!.AccountService(f.dir, () => f.bases);
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: f.bases }, accounts.snapshot), { deferAccountAuth: true });
+    const snapshot = vi.spyOn(registry.get(account.id)!, "snapshot");
+    const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    });
+    controllers.push(controller);
+    await controller.restore();
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(accounts.get(account.id)?.state).toBe("stopped");
+    expect(registry.accountStopped(account.id)).toBe(true);
+    expect(existsSync(account.home)).toBe(false);
+  });
+
+  it("keeps a signed-in Codex account ready when only its state folder is missing", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    rmSync(join(account.home, "state"), { recursive: true });
+    const snapshot = vi.spyOn(f.registry.get(account.id)!, "snapshot");
+    await f.registry.describe({ refresh: true });
+    expect(snapshot).toHaveBeenCalled();
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+    const accounts = new core!.AccountService(f.dir, () => f.bases);
+    expect(accounts.error).toBeUndefined();
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: f.bases }, accounts.snapshot), { deferAccountAuth: true });
+    const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    });
+    controllers.push(controller);
+    await controller.restore();
+    expect(accounts.get(account.id)?.state).toBe("ready");
+    expect(registry.accountAvailable(account.id)).toBe(true);
+    expect(existsSync(join(account.home, "state"))).toBe(false);
+  });
+
+  it("never brings back the missing home of a removed account", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    rmSync(account.home, { recursive: true });
+    await expect(f.controller.remove(account.id)).resolves.toEqual({});
+    await expect(f.controller.signIn(account.id)).rejects.toMatchObject({ status: 404 });
+    await f.registry.describe({ refresh: true });
+    expect(() => markCodexPromo(account.home, account.generation)).toThrow();
+    const base = join(f.dir, "base");
+    mkdirSync(join(base, "skills", "fixture"), { recursive: true });
+    writeFileSync(join(base, "AGENTS.md"), "fixture");
+    shareUserSetup("codex", account, base);
+    expect(new core!.AccountService(f.dir, () => f.bases).error).toBeUndefined();
+    expect(existsSync(account.home)).toBe(false);
+  });
+
+  it("removes a saved Codex account whose home is a junction as it always did", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    const target = join(f.dir, "target");
+    mkdirSync(target);
+    writeFileSync(join(target, "keep"), "keep");
+    rmSync(account.home, { recursive: true });
+    symlinkSync(target, account.home, "junction");
+    // As the Codex driver does: its login env resolves through accountLaunch.
+    f.registry.get(account.id)!.loginConfig = () => ({ cli: "fake", env: accountLaunch(account, "codex", [], {}).env });
+    await expect(f.controller.remove(account.id)).resolves.toEqual({});
+    expect(f.accounts.get(account.id)).toBeUndefined();
+    expect(readdirSync(target)).toEqual(["keep"]);
+  });
+
+  it("refuses Sign In through a saved home that became a junction and creates nothing", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    await f.accounts.stop(account.id);
+    const target = join(f.dir, "target");
+    mkdirSync(target);
+    rmSync(account.home, { recursive: true });
+    symlinkSync(target, account.home, "junction");
+    const logins = f.start.mock.calls.length;
+    await expect(f.controller.signIn(account.id)).rejects.toThrow("link or alias");
+    expect(readdirSync(target)).toEqual([]);
+    expect(f.start.mock.calls.length).toBe(logins);
+    expect(f.accounts.get(account.id)?.state).toBe("stopped");
+  });
+
   it("clears a base account's promo mark after sign-in completes", async () => {
     const f = await fixture();
     const home = join(f.dir, "base-codex");
@@ -1110,5 +1220,32 @@ describe("account HTTP routes", () => {
     const added = await f.add();
     f.references.add(added.id);
     expect((await request(f, "POST", `/api/instances/${added.id}/sign-out`)).status).toBe(409);
+  });
+});
+
+describe("base sign-out beside added accounts", () => {
+  it("reads the signed-out base as signed out, never as not installed", async () => {
+    const f = await fixture();
+    await f.add();
+    f.invalidate.mockImplementation((id: string) => f.registry.invalidateAccount(id));
+    await f.controller.remove("claude");
+    expect(f.invalidate).toHaveBeenCalledWith("claude");
+    expect(f.registry.accountStopped("claude")).toBe(true);
+    for (const rows of [await f.registry.describeKnown(), await f.registry.describeCached()]) {
+      expect(rows.find((row) => row.instanceId === "claude")!.snapshot).toMatchObject({ state: "available", authenticated: false });
+    }
+  });
+
+  it("reads a signed-out Main base as signed out after a hand-over and keeps the saved account", async () => {
+    const f = await fixture(vi.fn());
+    const account = await f.add();
+    expect(f.accounts.defaultFor("claude") ?? "claude").toBe("claude");
+    await expect(f.controller.remove("claude", account.id)).resolves.toEqual({ state: "removed", destinationId: account.id });
+    expect(f.registry.accountStopped("claude")).toBe(true);
+    for (const rows of [await f.registry.describeKnown(), await f.registry.describeCached()]) {
+      expect(rows.find((row) => row.instanceId === "claude")!.snapshot).toMatchObject({ state: "available", authenticated: false });
+    }
+    expect(f.accounts.list().filter((row) => row.of === "claude").map((row) => row.id)).toEqual(["claude", account.id]);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
   });
 });

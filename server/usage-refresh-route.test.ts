@@ -1,14 +1,14 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -73,7 +73,7 @@ const findHappy = async () => {
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1], 24_100, 2_000);
-  home = mkdtempSync(join(tmpdir(), "omb-usage-refresh-route-"));
+  home = createFixtureHome("omb-usage-refresh-route-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   const reset = new Date(Date.now() + 3_600_000).toISOString();
   writeFileSync(join(home, "claude-usage.json"), JSON.stringify({ rate_limits_available: true, rate_limits: {
@@ -152,7 +152,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("usage refresh throttle vs runtime reports", () => {

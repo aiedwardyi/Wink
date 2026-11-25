@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const store = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => store);
-const relay = vi.hoisted(() => ({ on: true }));
+const relay = vi.hoisted(() => ({ on: true, signIn: null as (() => void) | null }));
 vi.mock("./PhoneAccessSettings", () => ({
-  PhoneAccessSettings: ({ onEnabled, onNoRelay }: { onEnabled?: (on: boolean) => void; onNoRelay?: () => void }) => {
+  PhoneAccessSettings: ({ onEnabled, onNoRelay, onSignIn }: { onEnabled?: (on: boolean) => void; onNoRelay?: () => void; onSignIn?: (open: (() => void) | null) => void }) => {
     useEffect(() => onEnabled?.(relay.on), [onEnabled]);
+    useEffect(() => onSignIn?.(relay.signIn), [onSignIn]);
     return createElement("div", { "data-this-pc": true }, createElement("button", { type: "button", "data-no-relay": "", onClick: onNoRelay }));
   },
 }));
@@ -43,6 +44,7 @@ afterEach(async () => {
   host.remove();
   store.api.mockReset();
   relay.on = true;
+  relay.signIn = null;
   localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -275,7 +277,7 @@ describe("Phone setup steps", () => {
     await act(async () => button("Copy Link").click());
     expect(writeText).toHaveBeenCalledWith(url);
     await act(async () => button("Open Laptop").click());
-    expect(open).toHaveBeenCalledExactlyOnceWith("laptop.tail1234.ts.net", "Laptop");
+    expect(open).toHaveBeenCalledExactlyOnceWith("laptop.tail1234.ts.net", "Laptop", undefined);
   });
 
   it.each(["missing", "not-running", "serve-disabled", "checking", "error", "ready"])("renders %s with one next PC step", async (state) => {
@@ -371,6 +373,21 @@ describe("Phone setup steps", () => {
     await act(async () => button("Other ways to connect").click());
     expect((button("Get Code") as HTMLButtonElement).disabled).toBe(true);
     expect((button("Set Up") as HTMLButtonElement).disabled).toBe(false);
+    expect(store.api.mock.calls.some(([path]) => path === "/api/phone/pairing")).toBe(false);
+  });
+
+  it("get code leads a signed-out PC to sign in instead of graying out", async () => {
+    relay.on = false;
+    relay.signIn = vi.fn();
+    store.api.mockResolvedValue({ url: null, setup: { state: "missing" } });
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
+    await act(async () => button("Other ways to connect").click());
+    const code = button("Get Code") as HTMLButtonElement;
+    expect(code.disabled).toBe(false);
+    await act(async () => code.click());
+    expect(relay.signIn).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("[data-phone-pairing]")).toBeNull();
     expect(store.api.mock.calls.some(([path]) => path === "/api/phone/pairing")).toBe(false);
   });
 

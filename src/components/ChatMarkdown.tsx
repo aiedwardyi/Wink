@@ -12,6 +12,7 @@ import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy, PanelRight } from "lucide-react";
 import { LinkedFolderLink } from "./LinkedFolderLink";
 import { FileMenu, type FileMenuAt } from "./MediaMenu";
+import { ImportProviderButtons } from "./ImportProviderButtons";
 import { InlineAudio } from "./InlineAudio";
 import { ReadableImage, useMediaViewer } from "./MediaViewerProvider";
 import { PhoneVideo } from "./PhoneVideo";
@@ -19,6 +20,7 @@ import { BADGE, ShowCard } from "./ShowCard";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { importOfferFence, isImportPrompt } from "@/lib/import-links";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { fileOpen, openFile, openInApp, openOnPc, pcOffline, type FileHands } from "@/lib/open-file";
 import { linkedFileSrc, showKind, showName } from "@/lib/show-pane";
@@ -314,7 +316,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, components }: { text: 
   );
 });
 
-function CodeBlock({ code, lang }: { code: string; lang: string }) {
+function CodeBlock({ code, lang, importOffer = false }: { code: string; lang: string; importOffer?: boolean }) {
   const streaming = useContext(StreamingContext);
   const [html, setHtml] = useState<string | null>(() => (streaming ? null : highlightCache.get(highlightKey(code, lang)) ?? null));
   const highlighted = useMemo(() => ({ __html: html ?? "" }), [html]);
@@ -370,6 +372,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const tall = code.split("\n").length > TALL_CODE_LINES;
 
   return (
+    <>
     <div className="my-2 overflow-hidden rounded-lg border border-hairline/40 bg-inset">
       <div className="flex items-center justify-between border-b border-hairline/30 px-3 py-1">
         <span className="text-[11px] uppercase tracking-wide text-ink-secondary">{lang || "code"}</span>
@@ -401,6 +404,8 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         </div>
       )}
     </div>
+    {importOffer && isImportPrompt(code) && <ImportProviderButtons prompt={code} />}
+    </>
   );
 }
 
@@ -721,6 +726,8 @@ function Spoiler({ children }: { children?: ReactNode }) {
   );
 }
 
+const OFFER_LANG = "text-import-offer";
+
 function ChatMarkdownComponent({
   text: source,
   streaming = false,
@@ -729,6 +736,7 @@ function ChatMarkdownComponent({
   threadId,
   localLinks = true,
   pictured = false,
+  importOffer = false,
 }: {
   text: string;
   streaming?: boolean;
@@ -739,8 +747,15 @@ function ChatMarkdownComponent({
   localLinks?: boolean;
   /** The chat already shows this reply's picture, so its file links draw none. */
   pictured?: boolean;
+  /** The new-bot offer reply: its import prompt gets provider buttons. */
+  importOffer?: boolean;
 }) {
-  const text = useMemo(() => unwrapUserTags(source), [source]);
+  const { text, marked } = useMemo(() => {
+    const plain = unwrapUserTags(source);
+    // relabel the offer's own fence, so a quote of the prompt elsewhere in the reply gets no buttons
+    const at = importOffer && !plain.includes(OFFER_LANG) ? importOfferFence(plain) : -1;
+    return at < 0 ? { text: plain, marked: false } : { text: plain.slice(0, at) + "```" + OFFER_LANG + plain.slice(at + "```text".length), marked: true };
+  }, [source, importOffer]);
   const style = useReplyStyle();
   const root = useRef<HTMLDivElement>(null);
   const seen = useRef(new WeakSet<Element>());
@@ -795,7 +810,8 @@ function ChatMarkdownComponent({
       const flat = (n: any): string =>
         typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
       const code = flat(child?.props?.children).replace(/\n$/, "");
-      return <CodeBlock code={code} lang={lang} />;
+      const offer = marked && lang === OFFER_LANG;
+      return <CodeBlock code={code} lang={offer ? "text" : lang} importOffer={offer} />;
     },
     img({ src, alt }: { src?: string; alt?: string }) {
       return (
@@ -885,7 +901,7 @@ function ChatMarkdownComponent({
     hr() {
       return <hr className="border-hairline/40" />;
     },
-  }), [baseDir, threadId, localLinks, pictured]);
+  }), [baseDir, threadId, localLinks, pictured, marked]);
   return (
     <StreamingContext.Provider value={streaming}>
       <PictureContext.Provider value={picture}>

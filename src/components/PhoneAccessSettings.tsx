@@ -116,8 +116,8 @@ export function resetRelay(): void {
   pending = null;
 }
 
-/** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. With no relay set up, the switch calls `onNoRelay`. */
-export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onNoRelay, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; onNoRelay: () => void; pcs?: ReactNode }) {
+/** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. With no relay set up, the switch calls `onNoRelay`. `onSignIn` gets this row's sign-in while it shows one, else null. */
+export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onNoRelay, onSignIn, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; onNoRelay: () => void; onSignIn?: (open: (() => void) | null) => void; pcs?: ReactNode }) {
   const { t, locale } = useI18n();
   const [status, setStatus] = useState<RelayStatus | null>(() => saved().status);
   const [refused, setRefused] = useState(false);
@@ -353,15 +353,16 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       <span className={cnKnob(enabled)} />
     </button>
   );
-  const signInButton = window.ogb?.googleAccount ? (
-    <button type="button" onClick={() => setAsking(true)} className={ROW_BUTTON}>
-      {t("settings.devices.signIn")}
-    </button>
-  ) : null;
   // Already on: keep the switch so turning it off never needs a sign-in.
+  const asksSignIn = !enabled && !unavailable && signedOut && Boolean(window.ogb?.googleAccount);
+  useEffect(() => onSignIn?.(asksSignIn ? () => setAsking(true) : null), [asksSignIn, onSignIn]);
   const control = !known
     ? <span data-switch-pending="" aria-hidden="true" className="h-6 w-11 shrink-0 animate-pulse rounded-full bg-control motion-reduce:animate-none" />
-    : enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
+    : asksSignIn ? (
+      <button type="button" onClick={() => setAsking(true)} className={ROW_BUTTON}>
+        {t("settings.devices.signIn")}
+      </button>
+    ) : toggle;
   const sub = enabled ? google?.email : unavailable || (known && !configured && !joinable) ? t("settings.devices.reachUnavailable") : signedOut ? t(signingIn ? "settings.sync.waitingGoogle" : "settings.devices.reachSignIn") : google?.email;
 
   const tag = localeTag(locale);

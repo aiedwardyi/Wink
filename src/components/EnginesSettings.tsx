@@ -32,11 +32,13 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
     setBusy(true);
     setError(false);
     try {
-      await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/sign-out`, { method: "POST", body: "{}" });
-      const { instances } = await api("/api/instances?refresh=1");
+      const failed = await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/sign-out`, { method: "POST", body: "{}" }).then(() => false, () => true);
+      // A done sign-out already re-probed this engine; only a failure waits on a fresh probe, so the row shows what it left behind.
+      const { instances } = await api(failed ? "/api/instances?refresh=1" : "/api/instances");
       dispatch?.({ type: "instances", instances, preserveRateLimits: true });
       const next = (instances as InstanceInfo[]).find((row) => row.instanceId === instance.instanceId);
       if (next) { setCurrent(next); onUpdated?.(next); }
+      if (failed) setError(true);
     } catch { setError(true); }
     finally { setBusy(false); }
   };

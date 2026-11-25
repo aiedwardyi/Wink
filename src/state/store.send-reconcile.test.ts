@@ -151,13 +151,14 @@ it("keeps a room tap's action time while its card save waits", async () => {
   let release!: (response: Response) => void;
   const saving = new Promise<Response>((resolve) => { release = resolve; });
   const post = vi.fn(async (_init?: RequestInit) => Response.json({ ok: true, threadId: group.threadId }));
-  await mount(() => Response.json({ messages: [], hasMore: false }), post, [bot], [{ ...group, messages: [ask] }], {}, () => saving);
+  const peer: Message = { id: "peer", at: 1_300, role: "bot", kind: "text", text: "already here" };
+  await mount(() => Response.json({ messages: [], hasMore: false }), post, [bot], [{ ...group, messages: [ask, peer] }], {}, () => saving);
   const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
   await act(async () => store.dispatch({ type: "answerGroupCard", groupId: group.id, messageId: ask.id, answer: "Yes, swap" }));
   clock.mockReturnValue(3_000);
   await act(async () => { release(Response.json({})); await saving; });
   await vi.waitFor(() => expect(post).toHaveBeenCalled());
-  expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ actedAt: 1_000, cardId: ask.id });
+  expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ actedAt: 1_301, cardId: ask.id, sentAfterId: peer.id });
 });
 
 describe("send reject after the server accepted", () => {

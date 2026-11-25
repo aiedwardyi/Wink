@@ -1,13 +1,13 @@
 // The bot⇄bot channel a peer exchange mirrors into. A pair channel is a
 // real room in the sidebar: the user can rename it, file it, and talk in
 // it, so ask_bot must not quietly move it out from under them.
-import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { getOrCreateChannel, mirrorOutcomeToRoom, type CommsBus } from "./comms-visibility.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { Store, type BotRecord } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "fake-model" });
 
@@ -17,7 +17,7 @@ describe("getOrCreateChannel", () => {
   let target: BotRecord;
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     store = new Store(selection);
     from = store.patchBot(store.createBot().id, { name: "Atlas", section: "Launch" })!;
     target = store.patchBot(store.createBot().id, { name: "Helper", section: "Launch" })!;
@@ -51,7 +51,7 @@ describe("mirrorOutcomeToRoom", () => {
   let bus: CommsBus;
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     store = new Store(selection);
     from = store.patchBot(store.createBot().id, { name: "Atlas" })!;
     target = store.patchBot(store.createBot().id, { name: "Helper" })!;

@@ -8,6 +8,8 @@ import { spawnCli } from "../procs.ts";
 import { awaitDyingAppServers, codexHome, decodeCodexSelection, retireAppServer } from "./codex-catalog.ts";
 import { codexDirect } from "./codex-direct.ts";
 import { codexLocalProviderArgs } from "./local-inject.ts";
+import { textUsageError } from "./rate-limits.ts";
+import { isSignOut } from "./signout.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
 
 export const CODEX_TEXT_TIMEOUT_MS = 90_000;
@@ -16,6 +18,8 @@ const DISABLED_FEATURES = [
   "shell_tool", "apply_patch_freeform", "view_image", "code_mode", "js_repl", "tool_search",
   "multi_agent", "apps", "plugins", "search_tool", "memories", "sleep_tool", "request_permissions_tool", "goals", "code_mode_only",
 ];
+
+const textFailure = (label: string, message: unknown) => new Error(isSignOut(message) ? `${label}: ${String(message)}` : label);
 
 function textCatalog(env: Record<string, string | undefined>, model: string, cwd: string, account?: AccountContext): string {
   const path = join(account?.home ?? codexHome(env), "models_cache.json");
@@ -126,19 +130,22 @@ export function createCodexText(cli: string, childEnv: () => Record<string, stri
             const call = pending.get(msg.id);
             if (call) {
               pending.delete(msg.id);
-              if (msg.error) call.reject(new Error("Codex text RPC failed"));
+              if (msg.error) call.reject(textUsageError(msg.error.message, msg.error) ?? textFailure("Codex text RPC failed", msg.error.message));
               else call.resolve(msg.result);
               continue;
             }
             const params = msg.params ?? {};
-            if (msg.method === "error" && !params.willRetry) return finish(new Error("Codex text generation failed"));
+            if (msg.method === "error" && !params.willRetry) {
+              return finish(textUsageError(params.error?.message, { data: params.error }) ?? textFailure("Codex text generation failed", params.error?.message));
+            }
             if (msg.method === "item/completed" && params.item?.type === "agentMessage") {
               const item = params.item;
               messages.set(item.id, item.text ?? "");
               if (item.phase === "final_answer") finals.add(item.id);
             }
             if (msg.method === "turn/completed") {
-              finish(params.turn?.status === "completed" ? undefined : new Error("Codex text turn failed"));
+              const error = params.turn?.error;
+              finish(params.turn?.status === "completed" ? undefined : textUsageError(error?.message, { data: error }) ?? textFailure("Codex text turn failed", error?.message));
             }
           }
         });

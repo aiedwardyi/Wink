@@ -1,14 +1,14 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 import { freePortBlock } from "./testing/ports.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -40,7 +40,7 @@ const messages = async (threadId: string) => z.object({ messages: z.array(messag
 
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
-  home = mkdtempSync(join(tmpdir(), "omb-auth-expired-route-"));
+  home = createFixtureHome("omb-auth-expired-route-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
     join(home, ".orbit", "config.json"),
@@ -81,17 +81,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("an expired Claude login", () => {
-  it("answering the first question card fails into a sign-in row", { timeout: 30_000 }, async () => {
+  it("a new chat's first message fails into a sign-in row", { timeout: 30_000 }, async () => {
     const bot = z.object({ bot: z.object({ id: z.string(), threadId: z.string() }).passthrough() }).parse((await api("POST", "/api/bots", { name: "Nova" })).body).bot;
-    const card = (await messages(bot.threadId)).find((message) => message.kind === "options" && message.card);
-    expect(card).toBeDefined();
-    const answer = card!.card!.options[0]!;
-    expect((await api("PATCH", `/api/bots/${bot.id}/cards/${card!.id}`, { answered: answer, dismissed: true })).status).toBe(200);
-    expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: answer, threadId: bot.threadId, actedAt: Date.now() })).status).toBeLessThan(300);
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "hi", threadId: bot.threadId, actedAt: Date.now() })).status).toBeLessThan(300);
     const failed = await vi.waitFor(async () => {
       const row = (await messages(bot.threadId)).find((message) => message.kind === "activity" && message.tool?.ok === false);
       if (!row) throw new Error("no error row yet");

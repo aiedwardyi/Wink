@@ -9,6 +9,9 @@ import { openWorkerCount } from "@/lib/worker-status";
 import { COUNT_BADGE } from "./SidebarConversations";
 import { listedFor, useShareWorkers, WORKER_STATUS, workerCounts, type WorkerSource } from "./WorkerRows";
 
+/** What togglePane hears about a chat's workers: listed ones open Workers, else a Workers tab when the terminal is there. */
+export const paneWorkers = (workers?: WorkerSource): "listed" | "tab" | undefined => workers && listedFor(workers).length > 0 ? "listed" : workers?.onOpenTerminal ? "tab" : undefined;
+
 export function ShowPaneButton({ threadId, map, workers, className, inPane = false }: { threadId: string; map?: "idle" | "live"; workers?: WorkerSource; className?: string; inPane?: boolean }) {
   const { t } = useI18n();
   const shown = useShowItem();
@@ -53,7 +56,7 @@ export function ShowPaneButton({ threadId, map, workers, className, inPane = fal
       aria-pressed={open}
       aria-label={workerTab ? t("workers.stripAria", counts) : t("show.pane")}
       title={t("show.pane")}
-      onClick={() => open ? closePane() : togglePane(threadId, map, hasWorkers ? "listed" : workerTab ? "tab" : undefined)}
+      onClick={() => open ? closePane() : togglePane(threadId, map, paneWorkers(workers))}
       className={cn("relative shrink-0 rounded-md p-1.5 hover:text-ink md:hover:bg-raised text-ink-secondary", !inPane && "md:translate-x-3.5 md:-translate-y-[11px]", open && !inPane && "md:hidden", className)}
     >
       {open ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}

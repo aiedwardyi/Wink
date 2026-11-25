@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,12 +7,14 @@ import type { ModelSelection } from "./contracts.ts";
 import { buildMediaIndex, createMediaIndex } from "./media-index.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // a test can hold every disk size read until it lets go
-const disk = vi.hoisted(() => ({ hold: undefined as Promise<void> | undefined }));
+type Disk = { hold?: Promise<void>; arrived?: () => void };
+const disk = vi.hoisted((): Disk => ({}));
 vi.mock("node:fs/promises", async (load) => {
   const real = await load<typeof import("node:fs/promises")>();
-  return { ...real, stat: async (...args: Parameters<typeof real.stat>) => { await disk.hold; return real.stat(...args); } };
+  return { ...real, stat: async (...args: Parameters<typeof real.stat>) => { disk.arrived?.(); await disk.hold; return real.stat(...args); } };
 });
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -24,11 +26,20 @@ const upload = 'see\n<attached-image path="C:\\att\\abc-1.png" />\n<attached-fil
 describe("media index", () => {
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 
-  it("lists a whole chat in one answer, newest first, each file once", () => {
+  it("lets the server answer other requests while a long chat's list builds", async () => {
+    let ran = false;
+    const built = buildMediaIndex("t1", Array.from({ length: 10_000 }, (_, n) => shot(n))).then((index) => ({ index, ran }));
+    setImmediate(() => { ran = true; });
+    const { index, ran: answered } = await built;
+    expect(answered).toBe(true);
+    expect(index.ids).toHaveLength(10_000);
+  });
+
+  it("lists a whole chat in one answer, newest first, each file once", async () => {
     const path: Message[] = [
       { id: "u1", at: START - HOUR, role: "user", kind: "text", text: upload },
       ...Array.from({ length: 5_000 }, (_, n) => shot(n)),
@@ -36,7 +47,7 @@ describe("media index", () => {
       { id: "b2", at: START + 5_001 * HOUR, role: "bot", kind: "text", text: "[gone.png](C:\\w\\gone.png)", summarized: true },
     ];
 
-    const index = buildMediaIndex("t1", path);
+    const index = await buildMediaIndex("t1", path);
 
     expect(index.ids).toHaveLength(5_004);
     expect(index.ids.slice(0, 4)).toEqual(["b1", "b1", "b1", "m4999"]);
@@ -120,8 +131,11 @@ describe("media index", () => {
 
     let release!: () => void;
     disk.hold = new Promise((resolve) => { release = resolve; });
+    const stalled = new Promise<void>((resolve) => { disk.arrived = resolve; });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[b.pdf](C:\\w\\b.pdf)" });
     const older = media(threadId);
+    await stalled;
+    disk.arrived = undefined;
     disk.hold = undefined;
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "[c.pdf](C:\\w\\c.pdf)" });
     const newer = await media(threadId);

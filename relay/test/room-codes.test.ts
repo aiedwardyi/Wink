@@ -63,6 +63,19 @@ describe("room codes over the control channel", () => {
     ctl.socket.destroy();
   });
 
+  it("mints 8 characters for a PC that asks, and 6 for an older PC", async () => {
+    h = await startRelay();
+    const pc = makePc();
+    const ctl = await openControl(h, pc);
+    const old = (await mint(ctl)) as { code: string };
+    ctl.socket.write(encodeFrame({ type: "roomcode", id: "r2", long: true }));
+    const long = (await ctl.reader.next()) as { id: string; code: string };
+    expect(old.code).toMatch(/^[2-9A-HJ-NP-Z]{6}$/);
+    expect(long).toMatchObject({ id: "r2", code: expect.stringMatching(/^[2-9A-HJ-NP-Z]{8}$/) });
+    for (const code of [old.code, long.code]) expect(await lookup(h, code)).toEqual({ status: 200, body: { label: pc.label } });
+    ctl.socket.destroy();
+  });
+
   it("answers a wrong, lowercase or malformed code with not-found", async () => {
     h = await startRelay();
     const ctl = await openControl(h, makePc());

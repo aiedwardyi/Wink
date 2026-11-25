@@ -32,6 +32,8 @@ import { createQuietEnd } from "../quiet-end.ts";
 import { inputDigest } from "../repeat-detector.ts";
 import type { Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
+import { spawnTestNode } from "../testing/harness-auth.ts";
+import { removeTestData } from "../testing/test-home.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
@@ -261,11 +263,11 @@ describe("ClaudeDriver.decodeConfig", () => {
     expect(ClaudeDriver.decodeConfig(undefined)).toEqual({ cli: "claude", permissionMode: "acceptEdits" });
   });
 
-  it("publishes the native Windows installer and npm on macOS/Linux", () => {
+  it("publishes the native installers, which need no Node", () => {
     expect(ClaudeDriver.install).toMatchObject({
       command: {
-        darwin: "npm install -g @anthropic-ai/claude-code",
-        linux: "npm install -g @anthropic-ai/claude-code",
+        darwin: "curl -fsSL https://claude.ai/install.sh | bash",
+        linux: "curl -fsSL https://claude.ai/install.sh | bash",
         win32: "irm https://claude.ai/install.ps1 | iex",
       },
       docsUrl: "https://claude.com/claude-code",
@@ -1243,7 +1245,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1].split(",")).toContain("AskUserQuestion");
 
     const server = seen.mcpConfig.mcpServers.agents;
-    const child = spawnChild(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
+    const child = spawnTestNode(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     const listed = new Promise<{ name: string; description: string; inputSchema: object; _meta?: Record<string, unknown> }[]>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("agents proxy never answered tools/list")), 10_000);
@@ -1262,8 +1264,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     child.kill();
     const eager = tools.filter((tool) => tool._meta?.["anthropic/alwaysLoad"] !== false);
     const chars = JSON.stringify(eager.map((tool) => ({ name: `mcp__agents__${tool.name}`, description: tool.description, input_schema: tool.inputSchema }))).length;
-    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix"]);
-    expect(chars, `Claude re-reads ${chars} chars of agents tool schemas on every call. Defer a rarely used tool (tool-catalog.ts OPTIONAL, deferOptional) or shorten a description; raise this budget only with measured token numbers.`).toBeLessThanOrEqual(16_000);
+    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["web_read", "board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix"]);
+    expect(chars, `Claude re-reads ${chars} chars of agents tool schemas on every call. Defer a rarely used tool (tool-catalog.ts OPTIONAL, deferOptional) or shorten a description; raise this budget only with measured token numbers.`).toBeLessThanOrEqual(16_500);
   });
 
   it("pre-allows terminal_read but leaves terminal_send to the permission prompt", async () => {
@@ -1315,6 +1317,36 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
     expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
+  });
+
+  it("turns off @file attach on a guest's read-only turn, not on an owner turn or the owner's own lane", async () => {
+    await create();
+    const mentions = async (threadId: string, extra: { readOnly?: true; ownerText?: true }) => {
+      const dump = join(scratch, `${threadId}.json`);
+      process.env.FAKE_CLAUDE_DUMP = dump;
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "summarize @C:/Users/someone/Documents/secret.txt", cwd: scratch, ...extra });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      return JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_FILE_MENTIONS;
+    };
+    expect(await mentions("t-guest", { readOnly: true })).toBe("1");
+    expect(await mentions("t-owner", {})).toBeUndefined();
+    expect(await mentions("t-lane", { readOnly: true, ownerText: true })).toBeUndefined();
+  });
+
+  it("never hands a guest's read-only turn the owner lane's warm process", async () => {
+    await create();
+    const dump = join(scratch, "lane-then-guest.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-lane-guest", text: "owner", cwd: scratch, readOnly: true, ownerText: true });
+    await recorder.until((e) => e.type === "turn.completed");
+    const lane = JSON.parse(readFileSync(dump, "utf8")) as { pid: number };
+    const cursor = (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
+
+    const guest = await instance.adapter.sendTurn({ threadId: "t-lane-guest", text: "guest", cwd: scratch, readOnly: true, resumeCursor: cursor });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === guest.turnId);
+    const seen = JSON.parse(readFileSync(dump, "utf8")) as { pid: number; env: Record<string, string> };
+    expect(seen.pid).not.toBe(lane.pid);
+    expect(seen.env.CLAUDE_CODE_DISABLE_FILE_MENTIONS).toBe("1");
   });
 
   it("passes an explicit empty available set to disable every Claude built-in", async () => {
@@ -1380,6 +1412,23 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     // the user's Composio key must not be readable via `ps`
     expect(JSON.stringify(seen.argv)).not.toContain("ak_test");
     expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__composio");
+  });
+
+  it("leaves connected apps unallowed in Ask, so each call reaches the Ask card", async () => {
+    await create(undefined, {}, { permissionMode: "acceptEdits" });
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({
+      threadId: "t-composio-ask",
+      text: "hi",
+      approval: "ask",
+      integrations: { composio: { command: process.execPath, args: ["/tmp/connector-proxy.js"], env: {} } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.composio).toBeDefined();
+    expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1].split(",")).not.toContain("mcp__composio");
+    expect(seen.argv[seen.argv.indexOf("--permission-prompt-tool") + 1]).toBe("mcp__ogb__approve");
   });
 
   // the config file holds live credentials, so it must not outlive the turn —
@@ -4105,6 +4154,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     for (const name of names) expect(seen.env[name]).toBeUndefined();
   });
 
+  it.each([{}, { ephemeral: true, lean: true }])("turns off @file attach in a helper call %o", async (opts) => {
+    await create();
+    const dump = join(scratch, "helper-mentions.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.generateText?.("Mina: summarize @C:/Users/someone/.ssh/id_ed25519", opts);
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_FILE_MENTIONS).toBe("1");
+  });
+
   it.each(["summary", "notes", "review"] as const)("runs the %s helper with its own argv and cwd", async (kind) => {
     await create();
     const spawn = vi.spyOn(procs, "spawnCli");
@@ -4135,7 +4192,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
   it("creates the lean helper folder when it is missing", async () => {
     await create();
-    rmSync(join(DATA_DIR, "helper"), { recursive: true, force: true });
+    removeTestData(join(DATA_DIR, "helper"));
     await instance.generateText?.("notes prompt", { ephemeral: true, lean: true });
     expect(readdirSync(join(DATA_DIR, "helper"))).toEqual([]);
   });
