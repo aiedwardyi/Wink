@@ -2,6 +2,15 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.300] - 2026-11-25
+
+### Fixed
+- Phone: Live Verify replays of long pages keep pace with the page.
+
+### Changed
+- Bots hand big jobs to a helper instead of building them alone.
+- A to-do item a cleanup drops is logged, never lost silently.
+
 ## [1.0.299] - 2026-11-25
 
 ### Fixed
