@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -776,6 +776,75 @@ describe("sends while a chat catches up", () => {
       put(path, corrected);
     }
     list();
+    await h.sync.pull("thread");
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
+  });
+
+  // Drive keeps the stale copy in its own folder, so these files land beside it.
+  const beside = async () => {
+    const h = await boot(true);
+    h.deliverSegment();
+    const doc: SyncHead = { ...JSON.parse(h.head), generation: 111 };
+    writeFileSync(join(h.folder, h.headPath), JSON.stringify(doc));
+    await h.sync.pull("thread");
+    const { syncHold } = await import("./sync-hold.ts");
+    const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
+    const copyPath = "threads-v2 (1)/bot/thread/peer/head.json";
+    const list = (listed: string) => syncHold.feed(h.folder, new Map([[h.headPath, JSON.stringify(doc)], [copyPath, listed]].map(([path, data]) => [path, [{
+      id: path, name: "head.json", md5Checksum: createHash("md5").update(data).digest("hex"),
+      createdTime: "2026-11-17T00:00:00Z", modifiedTime: "2026-11-17T00:00:00Z", trashed: false,
+    }]])), ids);
+    const put = (path: string, data: string | Buffer) => {
+      mkdirSync(dirname(join(h.folder, path)), { recursive: true });
+      writeFileSync(join(h.folder, path), data);
+    };
+    const copy = JSON.stringify({ ...doc, generation: 5 });
+    put(copyPath, copy);
+    // SAFETY: the fixture's first packet is a text row.
+    const differing = (text: string) => gzipSync(JSON.stringify({ ...JSON.parse(gunzipSync(readFileSync(join(h.folder, "threads-v2/bot/thread/peer/seg-1-2.json.gz"))).toString()),
+      versions: h.versions.slice(0, 2).map((packet) => packet.seq === 1 ? { ...packet, value: { ...packet.value as Message, text } } : packet) }), { level: 0 });
+    const correct = () => {
+      const corrected = JSON.stringify({ ...doc, generation: 113, lastSeq: 6, seen: { ...doc.seen, peer: 6 }, versions: [...doc.versions,
+        { seq: 5, seen: { ...doc.seen, peer: 4 }, kind: "row", rowId: "peer-six", origin: "peer", baseStamp: null, value: { id: "peer-six", parentId: "peer-tip", at: 4, role: "user", kind: "text", text: "peer correction" } },
+        { seq: 6, seen: { ...doc.seen, peer: 5 }, kind: "head", rowId: "", baseStamp: "4:peer", value: "peer-six" },
+      ] });
+      list(corrected);
+      put(copyPath, corrected);
+    };
+    return { h, syncHold, list, put, copy, differing, correct };
+  };
+
+  it("holds a send beside a matched segment restored with other bytes at the same size and time", async () => {
+    const { h, syncHold, list, put, copy, differing, correct } = await beside();
+    const segment = join(h.folder, "threads-v2 (8)/bot/thread/peer/seg-1-2.json.gz");
+    put("threads-v2 (8)/bot/thread/peer/seg-1-2.json.gz", differing("peer first"));
+    utimesSync(segment, 1767225600, 1767225600);
+    list(copy);
+    await h.sync.pull("thread");
+    expect(syncHold.until("thread")).toBeUndefined();
+    const before = statSync(segment);
+    writeFileSync(segment, differing("peer other"));
+    utimesSync(segment, 1767225600, 1767225600);
+    expect([statSync(segment).size, statSync(segment).mtimeMs]).toEqual([before.size, before.mtimeMs]);
+    list(copy);
+    expectHeld(await h.send());
+    correct();
+    await h.sync.pull("thread");
+    await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
+    expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
+  });
+
+  it("keeps holding a send after the folder with a differing segment leaves the mirror", async () => {
+    const { h, list, put, copy, differing, correct } = await beside();
+    put("threads-v2 (2)/bot/thread/peer/seg-1-2.json.gz", differing("different bytes"));
+    list(copy);
+    expectHeld(await h.send());
+    rmSync(join(h.folder, "threads-v2 (2)"), { recursive: true, maxRetries: 5 });
+    await h.sync.pull("thread");
+    await new Promise((done) => setImmediate(done));
+    expect(h.run).not.toHaveBeenCalled();
+    correct();
     await h.sync.pull("thread");
     await vi.waitFor(() => expect(h.run).toHaveBeenCalledTimes(1));
     expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-six");
