@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
-import { exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
+import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
@@ -41,6 +41,9 @@ const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
 const SUMMARY_MAX = 120;
 const STATE_FILE = "memory-pass.json";
+// A helper limit that named no reset holds notes for the shortest subscription
+// window: a spent window is back by then, and a throttle long over.
+const BARE_LIMIT_MS = 5 * 60 * 60_000;
 export const OVERFLOW_FILE = "auto-notes-overflow.md";
 const OVERFLOW_HEAD = "# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n";
 const OVERFLOW_POINTER = `memory/${OVERFLOW_FILE}: Auto Notes saved while this file was full; read it when a fact seems missing`;
@@ -111,7 +114,7 @@ export interface MemoryPass {
   dispose(): void;
 }
 
-type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string };
+type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText" | "textModel"> & { instanceId?: string };
 export type NoteLimits = { limits: RateLimitsMap; save(): void; signedOut?: Set<string> };
 
 export function noteGenerator(
@@ -126,7 +129,8 @@ export function noteGenerator(
   const id = helper.instanceId;
   const report = id && usage ? usage.limits.get(id) : undefined;
   const now = Date.now();
-  if (exhaustedWindow(report?.windows, now) || (report?.noteLimit && (report.noteLimit.resetsAt === null || report.noteLimit.resetsAt > now))) return null;
+  // a window spent in one pool while the helper's own pool still has room: the helper's own rejection decides
+  if (exhaustedWindow(report?.windows?.filter((w) => !w.otherPoolLeft || (helper.textModel ?? AGY_TEXT_MODEL) !== AGY_TEXT_MODEL), now) || (report?.noteLimit?.resetsAt ?? 0) > now) return null;
   if (id && usage?.signedOut?.has(id)) return null;
   const generate: NoteGenerator = async (prompt, signal, onUsage) => {
     try {
@@ -135,7 +139,7 @@ export function noteGenerator(
       const limit = !signal.aborted && error instanceof Error && usageLimitFromError(error, true);
       if (limit && id && usage) {
         const previous = usage.limits.get(id);
-        usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: limit });
+        usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: { resetsAt: limit.resetsAt ?? Date.now() + BARE_LIMIT_MS } });
         usage.save();
       } else if (id && !signal.aborted && error instanceof Error && (isSignOut(error.message) || UNAVAILABLE.test(error.message))) usage?.signedOut?.add(id);
       throw error;
