@@ -2387,13 +2387,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         child.on("error", (error) => finish(error));
         child.on("close", (code) => {
           if (code !== 0) return finish(new Error(stderr.trim() || `Claude review exited ${code}`));
-          let reply: { result?: unknown; usage?: any };
+          let reply: { result?: unknown; usage?: any } | undefined;
           try {
             reply = JSON.parse(stdout);
           } catch {
             return finish(new Error("Claude review returned no JSON"));
           }
-          if (typeof reply.result !== "string") return finish(new Error("Claude review returned no result"));
+          // with "verbose" on in the CLI's config, json mode prints every message as an array
+          if (Array.isArray(reply)) reply = reply.findLast((item) => item?.type === "result");
+          if (typeof reply?.result !== "string") return finish(new Error("Claude review returned no result"));
           finish(undefined, reply.result, reply.usage ? { ...claudeUsage(reply.usage)!, cacheCreation: reply.usage.cache_creation_input_tokens } : undefined);
         });
         if (signal?.aborted) onAbort();

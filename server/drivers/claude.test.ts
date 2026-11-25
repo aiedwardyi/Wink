@@ -4306,6 +4306,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
   });
 
+  it("reads the reply and usage from a verbose CLI's json array", async () => {
+    await create(undefined, { FAKE_CLAUDE_VERBOSE: "1" });
+    const onUsage = vi.fn();
+    await expect(instance.generateText?.("summarize", { onUsage })).resolves.toBe("fake generated text");
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ input: 6188, output: 1436, cacheCreation: 468 }));
+  });
+
   it("creates the lean helper folder when it is missing", async () => {
     await create();
     removeTestData(join(DATA_DIR, "helper"));

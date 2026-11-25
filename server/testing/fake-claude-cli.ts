@@ -106,6 +106,8 @@
 //                      answers only once <dir>/<name> exists
 //   FAKE_CLAUDE_REJECT_FLAG  a flag the text helper rejects the way an older
 //                      CLI's Commander does: unknown option, exit 1
+//   FAKE_CLAUDE_VERBOSE  1: the json helper prints every message as one array,
+//                      as the real CLI does with "verbose": true in its config
 //   FAKE_CLAUDE_HOOKS  1: run SessionStart (once per process) and UserPromptSubmit
 //                      command hooks loaded the way 2.1.326 loads them: each
 //                      --setting-sources file (the last flag wins; user,project,local
@@ -193,7 +195,11 @@ if (argAfter("--output-format") === "json") {
   if (Number.isFinite(delayMs) && delayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
-  process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "fake generated text", usage: { input_tokens: 2, cache_creation_input_tokens: 468, cache_read_input_tokens: 5718, output_tokens: 1436 } })}\n`);
+  const result = { type: "result", subtype: "success", is_error: false, result: "fake generated text", usage: { input_tokens: 2, cache_creation_input_tokens: 468, cache_read_input_tokens: 5718, output_tokens: 1436 } };
+  const reply = process.env.FAKE_CLAUDE_VERBOSE === "1"
+    ? [{ type: "system", subtype: "init", model: "claude-haiku-5-5" }, { type: "assistant", message: { content: [{ type: "text", text: "fake generated text" }] } }, result]
+    : result;
+  process.stdout.write(`${JSON.stringify(reply)}\n`);
   process.exit(0);
 }
 
