@@ -43,7 +43,7 @@ const traced = {
   ...record,
   openId: OPEN_ID,
   sse: { created: 300, open: 2000, errors: 2, lastError: 1400 },
-  bots: { ...record.bots, requestStart: 1611, responseStart: 2300, decodedBodySize: 900000, nextHopProtocol: "h2" },
+  bots: { ...record.bots, connectStart: 1600, connectEnd: 1600, requestStart: 1611, responseStart: 2300, decodedBodySize: 900000, nextHopProtocol: "h2" },
   cache: { hit: true, paint: 520 },
 };
 
@@ -55,7 +55,7 @@ describe("cold-open diagnostics", () => {
   it("releases desktop startup work on hydrated chat paint", async () => {
     const paint = vi.spyOn(startupTiming, "paint").mockImplementation(() => {});
     try {
-      expect(await receiveColdOpen(post(JSON.stringify({ ...record, desktop: true, label: "open", nav: { responseStart: 25 } })), freshDir())).toEqual({ status: 200 });
+      expect(await receiveColdOpen(post(JSON.stringify({ ...record, desktop: true, label: "open", nav: { responseStart: 25 } })), freshDir(), "local")).toEqual({ status: 200 });
       expect(paint).toHaveBeenCalledWith({ firstResponse: 25, chatPaint: 2701 });
     } finally {
       paint.mockRestore();
@@ -64,12 +64,19 @@ describe("cold-open diagnostics", () => {
 
   it("appends one line with the server's receive time", async () => {
     const dir = freshDir();
-    expect(await receiveColdOpen(post(JSON.stringify(record)), dir, Date.UTC(2026, 9, 11, 1, 2, 3))).toEqual({ status: 200 });
-    expect(await receiveColdOpen(post(JSON.stringify({ ...record, label: "warm" })), dir, Date.UTC(2026, 9, 11, 1, 5))).toEqual({ status: 200 });
+    expect(await receiveColdOpen(post(JSON.stringify(record)), dir, "local", Date.UTC(2026, 9, 11, 1, 2, 3))).toEqual({ status: 200 });
+    expect(await receiveColdOpen(post(JSON.stringify({ ...record, label: "warm" })), dir, "local", Date.UTC(2026, 9, 11, 1, 5))).toEqual({ status: 200 });
     expect(lines(dir)).toEqual([
-      { receivedAt: "2026-10-11T01:02:03.000Z", ...record, ...served },
-      { receivedAt: "2026-10-11T01:05:00.000Z", ...record, label: "warm", ...served },
+      { receivedAt: "2026-10-11T01:02:03.000Z", via: "local", ...record, ...served },
+      { receivedAt: "2026-10-11T01:05:00.000Z", via: "local", ...record, label: "warm", ...served },
     ]);
+  });
+
+  it("stamps the path the server saw the record come by", async () => {
+    const dir = freshDir();
+    await receiveColdOpen(post(JSON.stringify(record)), dir, "relay");
+    await receiveColdOpen(post(JSON.stringify(record)), dir, "tailnet");
+    expect(lines(dir).map((line) => line.via)).toEqual(["relay", "tailnet"]);
   });
 
   it("stores a terminal open's marks and refuses any other field in them", async () => {
@@ -82,15 +89,25 @@ describe("cold-open diagnostics", () => {
       visibility: "visible",
       userAgent: "Mozilla/5.0",
     };
-    expect(await receiveColdOpen(post(JSON.stringify(terminal)), dir)).toEqual({ status: 200 });
+    expect(await receiveColdOpen(post(JSON.stringify(terminal)), dir, "local")).toEqual({ status: 200 });
     expect(lines(dir)[0]).toMatchObject(terminal);
     const extra = { ...terminal, terminal: { ...terminal.terminal, text: "$ secret" } };
-    expect(await receiveColdOpen(post(JSON.stringify(extra)), dir)).toEqual({ status: 400, error: "invalid cold-open record" });
+    expect(await receiveColdOpen(post(JSON.stringify(extra)), dir, "local")).toEqual({ status: 400, error: "invalid cold-open record" });
+  });
+
+  it("stores a return's check-in timing, or why it has none", async () => {
+    const dir = freshDir();
+    const resume = { label: "resume", hiddenMs: 150000, hello: 200, chatPaint: 210, displayMode: "standalone", visibility: "visible", userAgent: "Mozilla/5.0" };
+    const ping = { ...traced.bots, start: 20, end: 15600 };
+    expect(await receiveColdOpen(post(JSON.stringify({ ...resume, ping })), dir, "tailnet")).toEqual({ status: 200 });
+    expect(await receiveColdOpen(post(JSON.stringify({ ...resume, pingMissing: "cut" })), dir, "relay")).toEqual({ status: 200 });
+    expect(lines(dir)).toEqual([expect.objectContaining({ ...resume, ping }), expect.objectContaining({ ...resume, pingMissing: "cut" })]);
+    expect(await receiveColdOpen(post(JSON.stringify({ ...resume, pingMissing: "slow" })), dir, "relay")).toEqual({ status: 400, error: "invalid cold-open record" });
   });
 
   it("stores the stream, bots and cache fields and drops the page's id", async () => {
     const dir = freshDir();
-    expect(await receiveColdOpen(post(JSON.stringify(traced)), dir)).toEqual({ status: 200 });
+    expect(await receiveColdOpen(post(JSON.stringify(traced)), dir, "local")).toEqual({ status: 200 });
     const { openId: _id, ...stored } = traced;
     expect(lines(dir)[0]).toMatchObject(stored);
     expect(lines(dir)[0]).not.toHaveProperty("openId");
@@ -105,8 +122,8 @@ describe("cold-open diagnostics", () => {
     res.emit("finish");
     now.mockRestore();
     const lie = { botsMs: 1, sseClients: 99, uptimeS: 1 };
-    await receiveColdOpen(post(JSON.stringify({ ...traced, server: lie, serverStart: "1999-01-01T00:00:00.000Z" })), dir);
-    await receiveColdOpen(post(JSON.stringify(traced)), dir);
+    await receiveColdOpen(post(JSON.stringify({ ...traced, server: lie, serverStart: "1999-01-01T00:00:00.000Z" })), dir, "local");
+    await receiveColdOpen(post(JSON.stringify(traced)), dir, "local");
     const [first, second] = lines(dir);
     expect(first.server).toEqual({ botsMs: 1134, sseClients: 3, uptimeS: expect.any(Number) });
     expect(first.serverStart).not.toBe("1999-01-01T00:00:00.000Z");
@@ -120,7 +137,7 @@ describe("cold-open diagnostics", () => {
     traceOpenBots({ headers: {} }, new EventEmitter());
     traceOpenSse(new URL("http://x/api/events?coldOpen=nope"), 2);
     traceOpenSse(new URL("http://x/api/events"), 2);
-    await receiveColdOpen(post(JSON.stringify(traced)), dir);
+    await receiveColdOpen(post(JSON.stringify(traced)), dir, "local");
     expect(lines(dir)[0].server).toEqual({ uptimeS: expect.any(Number) });
   });
 
@@ -128,7 +145,7 @@ describe("cold-open diagnostics", () => {
     const dir = freshDir();
     const { label, nav, firstPaint, bots, jsCached, navigationType, t0, ...meta } = record;
     const resume = { ...meta, label: "resume", hiddenMs: 300_000, sseOpen: 3_000, hello: 3_010, chatPaint: 3_030 };
-    expect(await receiveColdOpen(post(JSON.stringify(resume)), dir)).toEqual({ status: 200 });
+    expect(await receiveColdOpen(post(JSON.stringify(resume)), dir, "local")).toEqual({ status: 200 });
     expect(JSON.parse(readFileSync(join(dir, COLD_OPEN_FILE), "utf8"))).toMatchObject({ label: "resume", hiddenMs: 300_000, chatPaint: 3_030 });
   });
 
@@ -141,7 +158,7 @@ describe("cold-open diagnostics", () => {
     mkdirSync(join(dir, "diag"));
     const old = Array.from({ length: COLD_OPEN_KEEP }, (_, i) => JSON.stringify({ receivedAt: "old", n: i })).join("\n");
     writeFileSync(join(dir, COLD_OPEN_FILE), `${old}\n`);
-    await receiveColdOpen(post(JSON.stringify(record)), dir);
+    await receiveColdOpen(post(JSON.stringify(record)), dir, "local");
     const kept = lines(dir);
     expect(kept).toHaveLength(COLD_OPEN_KEEP);
     expect(kept[0]).toEqual({ receivedAt: "old", n: 1 });
@@ -151,7 +168,7 @@ describe("cold-open diagnostics", () => {
   it("rejects a body over 8 KB", async () => {
     const dir = freshDir();
     const big = JSON.stringify({ ...record, userAgent: "x".repeat(COLD_OPEN_MAX_BYTES) });
-    expect(await receiveColdOpen(post(big), dir)).toEqual({ status: 413, error: "body too large" });
+    expect(await receiveColdOpen(post(big), dir, "local")).toEqual({ status: 413, error: "body too large" });
     expect(existsSync(join(dir, COLD_OPEN_FILE))).toBe(false);
   });
 
@@ -163,6 +180,7 @@ describe("cold-open diagnostics", () => {
     ["a text timing", JSON.stringify({ ...record, hello: "1590" })],
     ["an unknown request field", JSON.stringify({ ...record, bots: { ...record.bots, url: "/api/bots" } })],
     ["an array", "[]"],
+    ["a path the page claims", JSON.stringify({ ...record, via: "local" })],
     ["a text error count", JSON.stringify({ ...traced, sse: { ...traced.sse, errors: "2" } })],
     ["a fractional error count", JSON.stringify({ ...traced, sse: { ...traced.sse, errors: 1.5 } })],
     ["no stream creation time", JSON.stringify({ ...traced, sse: { errors: 0 } })],
@@ -180,7 +198,7 @@ describe("cold-open diagnostics", () => {
     ["a malformed open id", JSON.stringify({ ...traced, openId: "../etc" })],
   ])("rejects %s", async (_name, body) => {
     const dir = freshDir();
-    expect((await receiveColdOpen(post(body), dir)).status).toBe(400);
+    expect((await receiveColdOpen(post(body), dir, "local")).status).toBe(400);
     expect(existsSync(join(dir, COLD_OPEN_FILE))).toBe(false);
   });
 });
