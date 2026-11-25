@@ -451,6 +451,28 @@ export function systemLinesReordered(delivered: string, system: string): boolean
   return retainedLinesReordered(systemLines(delivered), systemLines(system));
 }
 
+// Blank and tag lines bound a block and a heading keeps its body; a whole block that moves changes nothing.
+function systemBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  let block: string[] = [];
+  const close = () => {
+    if (block.length) blocks.push(block.join("\n"));
+    block = [];
+  };
+  for (const raw of text.split("\n")) {
+    const line = raw.trimEnd();
+    if (!line.trim()) {
+      if (!/^#{1,6}\s/.test(block.at(-1) ?? "")) close();
+      continue;
+    }
+    if (/^<[\w-]+>$/.test(line.trim())) close();
+    block.push(line);
+    if (/^<\/[\w-]+>$/.test(line.trim())) close();
+  }
+  close();
+  return blocks;
+}
+
 /** Lines of `from` that `other` does not also hold, in `from`'s order. */
 function linesOnlyIn(from: string[], other: string[]): string[] {
   const left = new Map<string, number>();
@@ -472,8 +494,10 @@ export function withSystemChanges(
   maxChars = SYSTEM_REMINDER_MAX_CHARS,
 ): string | null {
   if (delivered === undefined || delivered === system) return text;
-  const before = systemLines(delivered);
-  const after = systemLines(system);
+  const blocksBefore = systemBlocks(delivered);
+  const blocksAfter = systemBlocks(system);
+  const before = linesOnlyIn(blocksBefore, blocksAfter).flatMap(systemLines);
+  const after = linesOnlyIn(blocksAfter, blocksBefore).flatMap(systemLines);
   const reordered = retainedLinesReordered(before, after);
   const removed = reordered ? before : linesOnlyIn(before, after);
   const added = reordered ? after : linesOnlyIn(after, before);
