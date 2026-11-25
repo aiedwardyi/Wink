@@ -3000,8 +3000,8 @@ require(${JSON.stringify(fake)});
       const clicked = await turn(computer, { threadId: "t-standby-computer", text: "click", integrations: boxIntegrations });
       expect(clicked.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
       expect(alive(standby.pid)).toBe(false);
-      // a computer turn leaves none: its mount holds the box token
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // a computer turn leaves none (its mount holds the box token): its exit restores the config instead of handing it over
+      await vi.waitFor(() => expect(existsSync(join(dir, ".gemini", "config", "mcp_config.json"))).toBe(false));
       expect(spawns()).toHaveLength(3);
     });
 
@@ -3016,12 +3016,13 @@ require(${JSON.stringify(fake)});
       try {
         await turn(instance, { ...chat, text: "two", resumeCursor: first.cursor });
         await standbyAfter(3);
-        // fs.watch reports after the fact
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        // fs.watch reports in order, so every earlier config write is in by the time this one is
+        writeFileSync(join(dirname(config), "sentinel"), "");
+        await vi.waitFor(() => expect(changes).toContain("rename sentinel"));
       } finally {
         watcher.close();
       }
-      expect(changes).toEqual([]);
+      expect(changes.filter((change) => !change.endsWith("sentinel"))).toEqual([]);
       expect(readFileSync(config, "utf8")).toBe(before);
     });
 
