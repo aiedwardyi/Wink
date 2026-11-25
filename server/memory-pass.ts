@@ -8,7 +8,7 @@ import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
-import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import { applyPicks, currentPicks, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { redactRoomMemory, redactSecretsInText } from "./redact.ts";
@@ -551,6 +551,8 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   const seen = new Set<string>();
   const decided = new Set<string>();
   const taken = new Set<string>();
+  const answered = new Set<string>();
+  const cardKeys = new Map<string, string>();
   const accept = (fact: Fact): HeldNote | null => {
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
@@ -609,6 +611,8 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
         overPictures: fact.over_pictures == null ? undefined : listOf(fact.over_pictures),
       }, bound, before, sources.filter((other) => other !== bound && (quoting.includes(other) || offersOption(other, line))));
       const old = target ? NOTED.exec(target) : null;
+      if (source.tap && source.id) answered.add(source.id);
+      if (binding) cardKeys.set(binding.questionId, thing);
       seen.add(id);
       live.add(pickKey(thing));
       decided.add(squash(said));
@@ -637,7 +641,25 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   const rank = (fact: Fact) => (fact.kind === "decision" ? 0 : fact.kind === "tweak" ? 1 : 2);
   const order = facts.map((fact, index) => ({ fact, index })).sort((a, b) => rank(a.fact) - rank(b.fact));
   const kept = new Map(order.map(({ fact, index }) => [index, accept(fact)] as const));
-  return facts.flatMap((_, index) => kept.get(index) ?? []);
+  return [...facts.flatMap((_, index) => kept.get(index) ?? []), ...cardAnswers(sources, answered, cardKeys, archived)];
+}
+
+// what userTyping leaves of answerPrefix: the quote, or nothing once a long quote was cut
+const ANSWER_PREFIX = /^Re: (?:“[^\n]*”)?[ \t]*\n/;
+
+/** Card answers the note-taker did not file, each a pick in the user's words; a card on file keeps its key, so a revised answer replaces the older one. */
+function cardAnswers(sources: UserLine[], answered: Set<string>, keys: Map<string, string>, archived: string): HeldNote[] {
+  const entries = parseTimeline(archived).entries;
+  return sources.flatMap((source) => {
+    const question = source.question?.replace(/\s+/g, " ").trim();
+    const picked = source.text.replace(ANSWER_PREFIX, "").trim();
+    if (!source.tap || !source.id || answered.has(source.id) || !question || !picked || secretValue(question) || secretValue(picked)) return [];
+    const binding = validatePickBinding({ key: question, picked, over: [] }, source);
+    if (!binding) return [];
+    const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key ?? question;
+    keys.set(binding.questionId, key);
+    return [{ line: `${key}: ${picked}`, kind: "decision", pick: { kind: "pick", at: binding.at, key, picked, said: picked, binding, tapped: true } }];
+  });
 }
 
 function day(ms: number): string {
@@ -1051,6 +1073,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         line.pictures = reply.pictures;
         line.previousAnswerId = reply.previousAnswerId;
         line.invalidCard = reply.invalidCard;
+        line.question = reply.question;
         if (reply.prior) line.prior = { ...reply.prior, context: reply.prior.context ? replyContext(reply.prior.context) : undefined };
       }
       if (files.length) line.files = files;

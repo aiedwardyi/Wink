@@ -13,7 +13,7 @@ const CONFIRMATION = /^(?:option\s+)?[a-z1-9]\s+it is\b[^?]*$/i;
 
 export type ShownPicture = Picture & { original?: string };
 type PictureTurn = { questionId: string; context?: string; options?: string[]; pictures: ShownPicture[] };
-export type ReplyPictures = PictureTurn & { prior?: PictureTurn & { kind: "preview" | "correction" }; previousAnswerId?: string; invalidCard?: boolean };
+export type ReplyPictures = PictureTurn & { prior?: PictureTurn & { kind: "preview" | "correction" }; previousAnswerId?: string; invalidCard?: boolean; question?: string };
 type PickSource = Partial<ReplyPictures> & { id?: string; at?: number; thread?: string; files?: string[] };
 type PickClaim = {
   key: string; picked: string; over: string[]; messageId?: string | null; questionId?: string | null; at?: number; thread?: string;
@@ -87,7 +87,7 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     const preview = current.pictures.length > 0 && PREVIEW_REQUEST.test(previousAnswer?.text?.trim() ?? "");
     const correction = !current.pictures.length && !current.options?.length && (!current.context || CONFIRMATION.test(current.context)) && CORRECTION.test(answer.text?.trim() ?? "");
     const prior = previousAnswer && !answered && (preview || correction) ? picturesIn(botTurn(messages, parent(previous), parent).turn, attachments) : undefined;
-    found.set(answer.id, { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered) });
+    found.set(answer.id, { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered), question: answered?.card?.subtitle });
   }
   return found;
 }

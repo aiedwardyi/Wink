@@ -412,6 +412,42 @@ describe("decision timeline", () => {
     expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
   });
 
+  describe("card answers filed in code", () => {
+    const swapCard = () => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Marketing", subtitle: "Swap the marketing bot or keep it?", options: ["Yes, swap", "Keep marketing bot"], askUser: true } });
+    const answer = (card: Message, text: string) => store.appendMessage("t1", { role: "user", kind: "text", text, answersCard: card.id, actedAt: Date.now() });
+    const picks = () => currentPicks(timeline()).map(({ key, picked, questionId }) => [key, picked, questionId]);
+
+    it("files a tap the note-taker also filed once", async () => {
+      const card = swapCard();
+      answer(card, "Yes, swap");
+      reply({ kind: "decision", key: "marketing bot", fact: "Swap marketing bot", quote: "Yes, swap" });
+      await settle();
+      expect(picks()).toEqual([["marketing bot", "Swap marketing bot", card.id]]);
+    });
+
+    it("lands a revised answer the note-taker skipped on the key its card is filed under", async () => {
+      const card = swapCard();
+      answer(card, "Yes, swap");
+      reply({ kind: "decision", key: "marketing bot", fact: "Swap marketing bot", quote: "Yes, swap" });
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, "Re: “Swap the marketing bot or keep it?”\nKeep marketing bot");
+      reply();
+      await settle();
+      expect(picks()).toEqual([["marketing bot", "Keep marketing bot", card.id]]);
+    });
+
+    it("never files a card answer or question holding a secret", async () => {
+      const deploy = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Deploy", subtitle: "Save sk-live-4f9a8b7c6d5e4f3a2b1c as the deploy key?", options: ["Yes", "No"], askUser: true } });
+      answer(deploy, "Yes");
+      const wifi = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Wi-Fi", subtitle: "Which network should the glasses join?", options: ["Home", "Office"], askUser: true } });
+      answer(wifi, "Re: “Which network should the glasses join?”\nHomeNet, password Tr0ub4dor&3xQ");
+      reply();
+      await settle();
+      expect(timeline()).toBe("");
+    });
+  });
+
   describe("one pick per source", () => {
     const shot = (name: string) => `/shots/${name}.png`;
     const ask = (topic: string, options = "A - red cards or B - blue cards") => bot(`${topic}: ${options}?`);
