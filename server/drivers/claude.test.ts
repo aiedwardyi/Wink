@@ -2600,8 +2600,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
   });
 
-  it("replaces and resumes a live process when its spawn contract changes", async () => {
-    await create();
+  it("replaces and resumes a live process that refuses a model switch", async () => {
+    await create(undefined, { FAKE_CLAUDE_MODEL_REPLY: "error" });
     const dumpPath = join(scratch, "dump.json");
     process.env.FAKE_CLAUDE_DUMP = dumpPath;
     await instance.adapter.sendTurn({ threadId: "t-switch", text: "one" });
@@ -2618,6 +2618,29 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     const dump = JSON.parse(readFileSync(dumpPath, "utf8"));
     expect(dump.argv).toContain("--resume");
     expect(dump.argv).toContain("claude-other");
+  });
+
+  it("switches model and effort on the idle kept process", async () => {
+    const efforts = join(scratch, "efforts.log");
+    process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+    await create(undefined, { FAKE_CLAUDE_EFFORT_LOG: efforts });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const first = await instance.adapter.sendTurn({ threadId: "t-live", text: "one", model: "claude-one", effort: "max" });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+    const cursor = (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
+    const switched = [{ model: "claude-other", effort: "max" as const }, { model: "claude-other", effort: "high" as const }];
+    for (const change of switched) {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-live", text: change.effort, resumeCursor: cursor, ...change });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    }
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(3);
+    const prompts = readFileSync(join(scratch, "prompts.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { pid: number; text: string });
+    expect(prompts.map(({ pid, text }) => [pid, text])).toEqual(["one", "max", "high"].map((text) => [spawn.mock.results[0]!.value.pid, text]));
+    const started = recorder.events.flatMap((e) => (e.type === "session.started" ? [[e.sessionId, e.model]] : []));
+    expect(started).toEqual([[cursor, "claude-one"], [cursor, "claude-other"], [cursor, "claude-other"]]);
+    expect(readFileSync(efforts, "utf8").split("\n").filter(Boolean)).toEqual(["max", "max", "high"]);
+    vi.restoreAllMocks();
   });
 
   it("closes an idle session after the configured window", async () => {
@@ -2705,12 +2728,21 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       expect(await exited(prepared)).toBe(true);
     });
 
-    it("prepares nothing without a closed session, once the bot's settings moved, or twice", async () => {
+    it("re-opens the closed session on the bot's new model and effort", async () => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, { ...focus, model: "claude-other", effort: "high" });
+      expect(spawn).toHaveBeenCalledTimes(2);
+      const argv = spawn.mock.calls[1]![1];
+      expect([argv[argv.indexOf("--resume") + 1], argv[argv.indexOf("--model") + 1], argv[argv.indexOf("--effort") + 1]]).toEqual([cursor, "claude-other", "high"]);
+      const { turnId } = await instance.adapter.sendTurn({ threadId: focus.threadId, text: "two", approval: "ask", resumeCursor: cursor, model: "claude-other", effort: "high" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("prepares nothing without a closed session, once the approval moved, or twice", async () => {
       const { spawn } = await closed();
       await instance.prepare!(undefined, { ...focus, threadId: "t-never" });
-      await instance.prepare!(undefined, { ...focus, effort: "high" });
       await instance.prepare!(undefined, { ...focus, approval: "auto" });
-      await instance.prepare!(undefined, { ...focus, model: "claude-other" });
       await instance.prepare!();
       const release = warmPool.barrier({ instanceId: "claude-test" }, "test");
       await instance.prepare!(undefined, focus);

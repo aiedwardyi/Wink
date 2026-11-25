@@ -64,7 +64,7 @@ import {
 } from "./local-inject.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, claudeRateLimitWindows } from "./rate-limits.ts";
-import { switchEffort, type EffortRequest } from "./claude-effort.ts";
+import { switchEffort, switchIdle, type SwitchRequest } from "./claude-effort.ts";
 import { forkClaude, type ClaudeSpawn } from "./claude-fork.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
@@ -852,7 +852,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     // new turn, and folds a message that arrives MID-turn into the running
     // one before its next model call (verified against 2.1.221 — that fold
     // is what "steer" is). So a session is spawned once, reused while its
-    // spawn contract (args, MCP config, cwd, model) is unchanged and the
+    // spawn contract (args, MCP config, cwd; model and effort switch in place) is unchanged and the
     // harness still names this session, closed after SESSION_IDLE_MS of
     // quiet, and resumed by --resume when a matching cursor must attach
     // to a new process. An omitted cursor never reuses.
@@ -1050,7 +1050,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const writeControl = (
       s: Session,
       threadId: string,
-      msg: { type: "control_request"; request_id: string; request: { subtype: "interrupt" } | { subtype: "initialize"; appendSystemPrompt?: string } } | EffortRequest,
+      msg: { type: "control_request"; request_id: string; request: { subtype: "interrupt" } | { subtype: "initialize"; appendSystemPrompt?: string } } | SwitchRequest,
     ): Promise<boolean> => {
       if (!s.child.stdin.writable || s.child.stdin.destroyed) return Promise.resolve(false);
       return new Promise((resolve) => {
@@ -1324,7 +1324,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           return { turnId };
         }
         lease = reserved;
-      } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && (sessionId === null ? live.systemDeferred === true : sessionId === live.sessionId)) {
+      } else if (live && !live.turn && !live.closing && live.child.exitCode === null && (sessionId === null ? live.systemDeferred === true : sessionId === live.sessionId) &&
+        (live.argsKey === argsKey || (!injected.injected && await switchIdle(live, argsKey, (request) => writeControl(live, threadId, request), EFFORT_REPLY_MS)))) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
         unprepare(live, "adopted");
         const deferred = live.systemDeferred === true;
@@ -1777,11 +1778,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         }
         // a prepared process belongs to no turn until one takes it
         if (session.prepared) return;
-        // a subagent's output belongs to the turn that spawned it; it never opens one
+        // a subagent's output belongs to the turn that spawned it, and a replayed echo (set_model's) to none; neither opens one
         if (
           !session.turn &&
           !o.parent_tool_use_id &&
-          ((o.type === "system" && o.subtype === "init") || o.type === "stream_event" || o.type === "assistant" || o.type === "user")
+          ((o.type === "system" && o.subtype === "init") || o.type === "stream_event" || o.type === "assistant" || (o.type === "user" && !o.isReplay))
         ) {
           openContinuation();
         }
@@ -2486,12 +2487,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // a thread whose next turn starts a new session gets that session now, its system text at Send
         const plan = fresh ? { ...settings, ...fresh, text: "" } : plans.get(focus.threadId);
         if (!plan || (!fresh && !plan.resumeCursor)) return;
-        if (plan.model !== focus.model || plan.effort !== focus.effort || plan.approval !== focus.approval) return;
+        if (plan.approval !== focus.approval) return;
         preparing.add(focus.threadId);
         try {
           // let completed closes release their pool slots
           if (moved) await new Promise((resolve) => setImmediate(resolve));
-          await sendTurn(plan, undefined, undefined, true);
+          await sendTurn({ ...plan, model: focus.model, effort: focus.effort }, undefined, undefined, true);
         } finally {
           preparing.delete(focus.threadId);
         }

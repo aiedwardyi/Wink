@@ -279,7 +279,7 @@ export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | 
   captured: import("./drivers/warm-pool.ts").Captured;
 };
 
-/** The focused bot's thread and settings; Claude re-opens that thread's closed session only while they still match it.
+/** The focused bot's thread and settings; Claude re-opens that thread's closed session on them.
  *  `fresh` is the spawn shape of a thread whose next turn starts a new session; Claude starts it ahead of Send. */
 export type PrepareFocus = Pick<SendTurnInput, "threadId" | "model" | "effort" | "approval"> & {
   fresh?: Pick<SendTurnInput, "integrations" | "cwd" | "leanStartup">;
