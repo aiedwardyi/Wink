@@ -237,6 +237,32 @@ describe("whats new card", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it("opens the model picker in Quick style from the Quick tile's Show me", () => {
+    const views: unknown[] = [];
+    const opened = (event: Event) => views.push((event as CustomEvent).detail?.view);
+    window.addEventListener("orbit:open-model-picker", opened);
+    const { tile, text } = showMe("1.0.303", "Quick model picker");
+    window.removeEventListener("orbit:open-model-picker", opened);
+    expect(views).toEqual(["quick"]);
+    expect(tile.textContent).toBe(text);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("shows the Quick picker tile alone in 1.0.303, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.303"];
+    expect(entry.tiles.map((tile) => "show" in tile && tile.show)).toEqual(["quick"]);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.303");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles).toHaveLength(1);
+      expect(tiles[0].querySelector(".whats-new-tile-title")?.textContent).toBe(entry.tiles[0].title[locale]);
+      expect(tiles[0].textContent).toContain(entry.tiles[0].line[locale]);
+    }
+  });
+
   it("opens Settings > Themes at the four new themes from its Show me", () => {
     const { tile, text } = showMe("1.0.273", "Four new themes that move");
     expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "toggleAppSettings", open: true, section: "themes", skins: ["samurai-ink", "night-rain", "warp", "circuit"] });

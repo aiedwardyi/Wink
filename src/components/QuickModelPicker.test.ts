@@ -302,3 +302,30 @@ describe("Quick picker style", () => {
     expect(triggerBtn().querySelector("[data-quick-flourish]")).toBeNull();
   });
 });
+
+describe("Quick from What's New", () => {
+  it("opens Quick for that open and keeps the saved style for the next one", async () => {
+    await mountPicker(atHigh, [claude, codex], "dial");
+    await act(async () => window.dispatchEvent(new CustomEvent("orbit:open-model-picker", { detail: { view: "quick" } })));
+    expect(quickCard()).not.toBeNull();
+    expect(fullDialog()).toBeNull();
+    expect(localStorage.getItem("omb-model-picker-view")).toBe("dial");
+
+    await click('[data-quick-lab="codex"]');
+    await click('[data-quick-model="gpt-6.2-astra"]');
+    expect(triggerBtn().querySelector("[data-model-label]")?.textContent).toContain("GPT-6.2 Astra");
+
+    await altKey(quickCard()!, "KeyM");
+    await act(async () => triggerBtn().click());
+    expect(fullDialog()).not.toBeNull();
+    expect(quickCard()).toBeNull();
+    expect(localStorage.getItem("omb-model-picker-view")).toBe("dial");
+  });
+
+  it("opens the saved style from a plain What's New open", async () => {
+    await mountPicker(atHigh, [claude, codex], "dial");
+    await act(async () => window.dispatchEvent(new Event("orbit:open-model-picker")));
+    expect(fullDialog()).not.toBeNull();
+    expect(quickCard()).toBeNull();
+  });
+});

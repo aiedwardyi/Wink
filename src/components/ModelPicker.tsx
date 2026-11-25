@@ -75,7 +75,10 @@ export function ModelPickerControl({
   useBackLayer(open && customOpen, () => setCustomOpen(false));
   const [query, setQuery] = useState("");
   const dialFits = useModelDialFits(dial);
-  const view = useModelPickerView();
+  const savedView = useModelPickerView();
+  // What's New's Quick tile opens Quick for that open and leaves the saved style as it was.
+  const [triedView, setTriedView] = useState<ModelPickerView | null>(null);
+  const view = triedView ?? savedView;
   const dialView = dial && dialFits && view === "dial";
   const chartView = dial && dialFits && view === "chart";
   const quickView = dial && dialFits && view === "quick";
@@ -153,8 +156,9 @@ export function ModelPickerControl({
   const price = pickerPrice(draft.model);
   const runCost = dialRunCost(draft.model, draft.effort);
 
-  const show = (switching = false) => {
-    const next = loadModelPickerView();
+  const show = (switching = false, tryView: ModelPickerView | null = null) => {
+    const next = tryView ?? loadModelPickerView();
+    setTriedView(tryView);
     trackScreen(dial && dialFits && next !== "list" ? (next === "chart" ? "model-chart" : next === "quick" ? "model-quick" : "model-dial") : "model-picker");
     setDraft(selection);
     setCustomOpen(false);
@@ -226,6 +230,7 @@ export function ModelPickerControl({
     setCustomOpen(false);
   };
   const chooseStyle = (next: ModelPickerView) => {
+    setTriedView(null);
     saveModelPickerView(next, "picker");
     // The strip unmounts with the focused tile.
     requestAnimationFrame(() => { if (!dialogRef.current?.contains(document.activeElement)) dialogRef.current?.focus(); });
@@ -257,7 +262,7 @@ export function ModelPickerControl({
   // What's New opens the picker Alt+M would open.
   useEffect(() => {
     if (!shortcutEnabled || open) return;
-    const onOpen = () => show();
+    const onOpen = (event: Event) => show(false, (event as CustomEvent<{ view?: string } | null>).detail?.view === "quick" ? "quick" : null);
     window.addEventListener("orbit:open-model-picker", onOpen);
     return () => window.removeEventListener("orbit:open-model-picker", onOpen);
   }, [open, shortcutEnabled, selection]);
