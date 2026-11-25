@@ -173,6 +173,11 @@ function pick(threadId: string, tab: PaneTab) {
   }
 }
 
+// The pane is in one chat: a tab fronted in another chat lets go of the file this one showed.
+function leaveFile(threadId: string) {
+  if (showing?.threadId !== threadId) showing = null;
+}
+
 let pulses = 0;
 
 /** False when this exact file was already on the Show tab, so nothing changed. */
@@ -210,6 +215,7 @@ function openMedia(threadId: string) {
   addTab(threadId, "media");
   if (media === threadId) return;
   media = threadId;
+  leaveFile(threadId);
   checking = null;
   mapping = null;
   working = null;
@@ -228,6 +234,7 @@ export function showCheck(threadId: string) {
   addTab(threadId, "check");
   if (checking === threadId) return;
   checking = threadId;
+  leaveFile(threadId);
   media = null;
   mapping = null;
   working = null;
@@ -258,16 +265,18 @@ export function togglePane(threadId: string, map?: "idle" | "live", workers?: "l
   openEntry(threadId, nextTab(threadId, map, workers));
 }
 
-/** Where an open pane lands when it follows a chat switch: the new chat's own tab, else its tool list. */
-const followTab = (threadId: string, map: boolean) => nextTab(threadId, map ? "idle" : undefined, "tab");
+/** Where an open pane lands when it follows a chat switch: the new chat's own tab, else its tool list. `check`: the chat has a check its Check tab can open. */
+const followTab = (threadId: string, map: boolean, check: boolean) => nextTab(threadId, map ? "idle" : undefined, "tab", check);
 
 /** On desktop an open pane goes along to a chat it does not show yet: the tab it lands on there, so that chat draws it in the same render and it never shuts in between. */
-export function hopTab(threadId: string, open: readonly (string | null | undefined)[], checking: string | null, map: boolean) {
-  return open.some(Boolean) && ![...open, checking].includes(threadId) ? followTab(threadId, map) : undefined;
+export function hopTab(threadId: string, open: readonly (string | null | undefined)[], checking: string | null, map: boolean, check: boolean) {
+  return open.some(Boolean) && ![...open, checking].includes(threadId) ? followTab(threadId, map, check) : undefined;
 }
 
-export function followPane(threadId: string, map: boolean) {
-  openEntry(threadId, followTab(threadId, map));
+export function followPane(threadId: string, map: boolean, check: boolean) {
+  const tab = followTab(threadId, map, check);
+  openEntry(threadId, tab);
+  return tab;
 }
 
 function openEntry(threadId: string, tab: PaneEntry | "tools") {
@@ -286,9 +295,9 @@ export function paneLeadsToMedia(threadId: string, map?: "idle" | "live", worker
   return tab === "media" || tab === "tools";
 }
 
-function nextTab(threadId: string, map?: "idle" | "live", workers?: "listed" | "tab"): PaneEntry | "tools" {
+function nextTab(threadId: string, map?: "idle" | "live", workers?: "listed" | "tab", check = false): PaneEntry | "tools" {
   if (workers === "listed") return "workers";
-  const usable = (entry: PaneEntry) => typeof entry !== "string" || entry === "media" || (entry === "workers" ? Boolean(workers) : entry !== "check" && Boolean(map));
+  const usable = (entry: PaneEntry) => typeof entry !== "string" || entry === "media" || (entry === "workers" ? Boolean(workers) : entry === "check" ? check : Boolean(map));
   const tabs = paneTabs(threadId);
   const tab: PaneTab | undefined = picked.get(threadId) ?? picks()[threadId];
   return (tab && tabs.find((entry) => tabKey(entry) === tabKey(tab) && usable(entry))) ?? tabs.find(usable) ?? "tools";
@@ -297,6 +306,7 @@ function nextTab(threadId: string, map?: "idle" | "live", workers?: "listed" | "
 function openTools(threadId: string) {
   if (tools === threadId) return;
   tools = threadId;
+  leaveFile(threadId);
   media = null;
   checking = null;
   mapping = null;
@@ -328,6 +338,7 @@ function openMap(threadId: string) {
   addTab(threadId, "map");
   if (mapping === threadId) return;
   mapping = threadId;
+  leaveFile(threadId);
   checking = null;
   media = null;
   working = null;
@@ -349,6 +360,7 @@ function openWorkers(threadId: string) {
   addTab(threadId, "workers");
   if (working === threadId) return;
   working = threadId;
+  leaveFile(threadId);
   checking = null;
   media = null;
   mapping = null;
@@ -371,6 +383,7 @@ function openTimeline(threadId: string) {
   addTab(threadId, "timeline");
   if (timeline === threadId) return;
   timeline = threadId;
+  leaveFile(threadId);
   checking = null;
   media = null;
   mapping = null;

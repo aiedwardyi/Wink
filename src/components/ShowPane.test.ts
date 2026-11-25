@@ -418,6 +418,33 @@ it("keeps Check behind the other tabs like any kept tab, never display: none, wh
   expect(readFileSync("src/components/ShowPane.css", "utf8")).not.toMatch(/\.show-pane[^{}]*>[^{}]*\{[^}]*display:\s*none/);
 });
 
+it("a kept site check stops drawing until its tab is open again", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  await act(async () => tab("a.png").click());
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
+  const frames = vi.spyOn(globalThis, "requestAnimationFrame");
+  await act(() => new Promise<void>((done) => setTimeout(done, 100)));
+  expect(frames).not.toHaveBeenCalled();
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  await act(() => new Promise<void>((done) => setTimeout(done, 100)));
+  expect(frames).toHaveBeenCalled();
+});
+
+it("a phone tap near an unselected tab's x opens the tab: its x takes no tap and the label reaches under it", () => {
+  const phone = readFileSync("src/components/ShowPane.css", "utf8").split("@media (max-width: 767px)")[1]!;
+  expect(phone).toMatch(/\.show-pane-tab:not\(\[data-selected\]\) \.show-pane-tab-close \{ pointer-events: none; \}/);
+  expect(phone).toMatch(/\.show-pane-tab > \[role="tab"\]::after \{[^}]*inset: -6px -22px -6px 0/);
+});
+
+it("the pane head's buttons point and take focus like the chat header's", () => {
+  const css = readFileSync("src/components/ShowPane.css", "utf8");
+  expect(css).toMatch(/\.show-pane-head \.verify-watch-icon \{[^}]*cursor: default/);
+  expect(css).toMatch(/\.show-pane-head \.verify-watch-icon:focus-visible \{[^}]*color: var\(--color-ink-secondary\)/);
+});
+
 it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row, and the sheet starts under the Windows caption", () => {
   const css = readFileSync("src/components/ShowPane.css", "utf8");
   const row = css.match(/^\.show-pane-tabs \{[^}]*\}/m)![0];

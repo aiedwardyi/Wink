@@ -127,6 +127,49 @@ describe("side pane", () => {
     expect(openTab()).toBe(tool);
   });
 
+  it("going back to a chat shows the tab left open there, not a file opened before it", async () => {
+    await act(async () => root.render(createElement(App)));
+    await act(async () => pane.showItem({ threadId: "t1", path: "C:\\work\\plan.pdf", kind: "pdf" }));
+    await act(async () => pane.showMedia("t1"));
+    expect(await onTab("media")).toBeTruthy();
+    await pick("b2");
+    expect(await onTab("tools")).toBeTruthy();
+    await pick("b1");
+    expect(await onTab("media")).toBeTruthy();
+    expect(openTab()).toBe("media");
+  });
+
+  it("a pane with only Check open comes back to its chat on Check", async () => {
+    await act(async () => root.render(createElement(App)));
+    await until(() => document.querySelector("button[data-show-pane-button]"));
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyC", altKey: true, bubbles: true, cancelable: true })); });
+    expect(await onTab("check")).toBeTruthy();
+    expect(pane.paneTabs("t1")).toEqual(["check"]);
+    await pick("b2");
+    expect(await onTab("tools")).toBeTruthy();
+    await pick("b1");
+    expect(await onTab("check")).toBeTruthy();
+    expect(openTab()).toBe("check");
+    expect(watchPanel()?.querySelector("[data-pane-tools]")).toBeNull();
+  });
+
+  it.each(["textarea[data-orbit-composer]", ".xterm-helper-textarea"])("leaves Alt+P, C, G and L to a focused %s", async (field) => {
+    await act(async () => root.render(createElement(App)));
+    await until(() => document.querySelector("textarea[data-orbit-composer]"));
+    const terminal = Object.assign(document.body.appendChild(document.createElement("div")), { className: "xterm" }).appendChild(Object.assign(document.createElement("textarea"), { className: "xterm-helper-textarea" }));
+    const target = document.querySelector<HTMLTextAreaElement>(field)!;
+    await act(async () => target.focus());
+    for (const key of ["P", "C", "G", "L"]) {
+      const press = new KeyboardEvent("keydown", { code: `Key${key}`, altKey: true, bubbles: true, cancelable: true });
+      await act(async () => { target.dispatchEvent(press); });
+      expect(press.defaultPrevented).toBe(false);
+    }
+    await act(() => new Promise<void>(done => setTimeout(done, 50)));
+    expect(watchPanel()).toBeNull();
+    expect(document.activeElement).toBe(target);
+    terminal.parentElement!.remove();
+  });
+
   it("gives every tab one width, so switching to Check never resizes the pane", async () => {
     localStorage.setItem("omb-pane-width", "520");
     await act(async () => root.render(createElement(App)));

@@ -112,7 +112,7 @@ export function PaneToolList({ rows, onPick }: { rows: readonly ToolRow[]; onPic
   );
 }
 
-interface Drag { key: string; id: number; x0: number; x: number; from: number; to: number; els: HTMLElement[]; lefts: number[]; widths: number[]; left: number; ghost?: HTMLElement }
+interface Drag { key: string; id: number; x0: number; x: number; from: number; to: number; els: HTMLElement[]; lefts: number[]; widths: number[]; view: [number, number]; left: number; ghost?: HTMLElement }
 interface Landing { key: string; at: Map<string, number>; look: { scale: string; boxShadow: string; backgroundColor: string; color: string } }
 
 /** The open tabs. A pressed tab follows the pointer from the first pixel; past 4 px it lifts (a copy, so the row's scroll clip never cuts its shadow) and its neighbors slide aside to open its spot. */
@@ -206,7 +206,8 @@ export function PaneTabs({ row, threadId, tabs, active, onOpen, onClose, onSay }
     if (event.button !== 0 || event.pointerType === "touch" || !row.current || (event.target as HTMLElement).closest("[data-tab-close]")) return;
     const els = Array.from(row.current.querySelectorAll<HTMLElement>("[data-pane-tab]"));
     const from = els.findIndex((el) => el.dataset.paneTab === tab.key);
-    drag.current = { key: tab.key, id: event.pointerId, x0: event.clientX, x: 0, from, to: from, els, lefts: els.map((el) => el.offsetLeft), widths: els.map((el) => el.offsetWidth), left: 0 };
+    const { scrollLeft, clientWidth } = row.current;
+    drag.current = { key: tab.key, id: event.pointerId, x0: event.clientX, x: 0, from, to: from, els, lefts: els.map((el) => el.offsetLeft), widths: els.map((el) => el.offsetWidth), view: [scrollLeft, scrollLeft + clientWidth], left: 0 };
   };
 
   const move = (event: PointerEvent<HTMLDivElement>) => {
@@ -215,7 +216,8 @@ export function PaneTabs({ row, threadId, tabs, active, onOpen, onClose, onSay }
     const last = d.els.length - 1;
     const w = d.widths[d.from]!;
     const home = d.lefts[d.from]!;
-    d.x = soften(event.clientX - d.x0, [d.lefts[0]! - home - 8, d.lefts[last]! + d.widths[last]! - w - home + 8]);
+    // A row that scrolls ends where it is cut off, not where its hidden tabs end.
+    d.x = soften(event.clientX - d.x0, [Math.max(d.lefts[0]!, d.view[0]) - home - 8, Math.min(d.lefts[last]! + d.widths[last]!, d.view[1]) - w - home + 8]);
     if (!d.ghost) {
       if (Math.abs(event.clientX - d.x0) < 4) {
         d.els[d.from]!.style.translate = `${d.x}px 0`;

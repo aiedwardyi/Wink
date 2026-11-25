@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { useI18n } from "@/lib/i18n";
-import { closeShow, paneTabs, showMap, showMedia, showTimeline, usePaneTabs, type PaneTool } from "@/lib/show-pane";
+import { closeShow, paneTabs, showCheck, showMap, showMedia, showTimeline, showWorkers, usePaneTabs, type PaneTool } from "@/lib/show-pane";
 import { PANE_WIDTH_KEY, PaneEdge, PaneTabs, PaneToolMenu, TOOL_ICON, TOOL_LABEL, usePaneWidth, type TabView } from "./PaneTabs";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -31,11 +31,16 @@ const label = (key: string) => host.querySelector(`[data-pane-tab="${key}"] [rol
 const point = (el: Element, type: string, clientX: number) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, pointerType: "mouse", clientX })); });
 const press = (el: EventTarget, key: string) => act(async () => { el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
 
-// happy-dom has no layout, so each tab gets a 100 px box by hand.
+// happy-dom has no layout, so each tab gets a 100 px box by hand, and the row the width it scrolls in.
+const layOut = (scrollLeft: number, clientWidth: number) => {
+  tabs().forEach((tab, i) => Object.defineProperties(tab, { offsetLeft: { configurable: true, value: i * 100 }, offsetWidth: { configurable: true, value: 100 } }));
+  Object.defineProperties(host.querySelector("[role=tablist]")!, { scrollLeft: { configurable: true, value: scrollLeft }, clientWidth: { configurable: true, value: clientWidth } });
+};
+
 async function liftMedia(threadId: string, onSay: (said: string) => void) {
   await act(async () => { showMedia(threadId); showMap(threadId); showTimeline(threadId); });
   await act(async () => root.render(createElement(Strip, { threadId, onSay })));
-  tabs().forEach((tab, i) => Object.defineProperties(tab, { offsetLeft: { configurable: true, value: i * 100 }, offsetWidth: { configurable: true, value: 100 } }));
+  layOut(0, 300);
   await point(label("media"), "pointerdown", 50);
   await point(label("media"), "pointermove", 200);
   expect(document.querySelector("[data-ghost]")).not.toBeNull();
@@ -68,6 +73,20 @@ it("a released drag moves the tab past the neighbour it crossed", async () => {
   expect(paneTabs("t2")).toEqual(["map", "media", "timeline"]);
   expect(tabs().map((tab) => tab.dataset.paneTab)).toEqual(["map", "media", "timeline"]);
   expect(said).toHaveBeenCalledWith("Media moved to position 2 of 3");
+});
+
+it.each([[-1000, -108], [1000, 8]])("a dragged tab in a row that scrolls stays inside the strip you can see (to %i)", async (to, end) => {
+  const threadId = `t5${to}`;
+  await act(async () => { showWorkers(threadId); showMedia(threadId); showCheck(threadId); showMap(threadId); showTimeline(threadId); });
+  await act(async () => root.render(createElement(Strip, { threadId, onSay() {} })));
+  // 500 px of tabs scrolled 200 px into a 200 px strip: Map, at 300, is the last one in view.
+  layOut(200, 200);
+  await point(label("map"), "pointerdown", 350);
+  await point(label("map"), "pointermove", 350 + to);
+  const x = parseFloat(document.querySelector<HTMLElement>("[data-ghost]")!.style.translate);
+  expect(Math.abs(x)).toBeLessThanOrEqual(Math.abs(end));
+  expect(Math.abs(x)).toBeGreaterThan(Math.abs(end) - 8);
+  await point(label("map"), "pointerup", 350 + to);
 });
 
 it("Esc cancels an edge resize, the arrow keys step the width and a double-click resets it", async () => {

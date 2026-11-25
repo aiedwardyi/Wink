@@ -51,17 +51,19 @@ export function openPaneTool(tool: PaneTool, threadId: string, card: VerifyCardD
   else if (tool === "map") showMap(threadId);
   else if (tool === "timeline") showTimeline(threadId);
   else if (open?.threadId === threadId) showCheck(threadId);
-  else {
-    // A phone watches a doc check live; only a site check waits for the end.
-    const action = card && verifyCardAction(card, phone && !card.doc);
-    if (card && (action === "live" || action === "watch")) openVerifyWatch({ threadId, owner: card.owner, live: action === "live" });
-  }
+  else if (card && canWatch(card, phone)) openVerifyWatch({ threadId, owner: card.owner, live: verifyCardAction(card, phone && !card.doc) === "live" });
 }
 
-/** A desktop chat switch: the checker stays with its chat while the pane goes along to the next one. */
-export function followChat(threadId: string, map: boolean) {
+/** Whether the Check tab can open this check: live while it runs, its replay once done. A phone watches a doc check live; only a site check waits for the end. */
+export function canWatch(card: VerifyCardData | undefined, phone = false) {
+  const action = card && verifyCardAction(card, phone && !card.doc);
+  return action === "live" || action === "watch";
+}
+
+/** A desktop chat switch: the checker stays with its chat while the pane goes along to the next one, and reopens the next chat's own check when Check is where it lands. */
+export function followChat(threadId: string, map: boolean, card: VerifyCardData | undefined) {
   closeVerifyWatch();
-  followPane(threadId, map);
+  if (followPane(threadId, map, canWatch(card)) === "check") openPaneTool("check", threadId, card);
 }
 
 export function useVerifyWatch(): VerifyWatchOpen | null {

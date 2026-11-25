@@ -8,7 +8,7 @@ import { mediaFile, type MediaSource } from "@/lib/show-media";
 import { openOutside, saveFile } from "@/lib/open-file";
 import { closeTab, linkedFileSrc, linkedFolder, PANE_TOOLS, showItem, showName, tabKey, takeFolder, usePanePulse, usePaneTabs, watchFolder, type FolderListing, type PaneEntry, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { closePane, closeVerifyWatch, openPaneTool, verifyCardAction } from "@/lib/verify-watch";
+import { canWatch, closePane, closeVerifyWatch, openPaneTool } from "@/lib/verify-watch";
 import { edgeFade } from "./Segmented";
 import { FILE_ICON, PaneEdge, PaneTabs, PaneToolList, PaneToolMenu, TOOL_ICON, TOOL_LABEL, usePaneWidth, type TabView, type ToolRow } from "./PaneTabs";
 import { MediaFiles, ShowMedia } from "./ShowMedia";
@@ -60,9 +60,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
   const crew = useSharedWorkers(source?.threadId);
   const hasWorkers = Boolean(crew && (crew.onOpenTerminal || listedFor(crew).length > 0));
   const tab = tools ? "tools" : workers && source ? "workers" : map ? "map" : timeline ? "timeline" : media && source ? "media" : watch && (check || !item) ? "check" : item ? "show" : "tools";
-  // A phone watches a doc check live; only a site check waits for the end.
-  const action = card && verifyCardAction(card, phone && !card.doc);
-  const checkable = Boolean(watch) || action === "live" || action === "watch";
+  const checkable = Boolean(watch) || canWatch(card, phone);
   const threadId = source?.threadId ?? item?.threadId ?? watch?.threadId;
   const opened = usePaneTabs(threadId);
   const activeEntry: PaneEntry | null = tab === "show" ? item! : tab === "tools" ? null : tab;
@@ -177,8 +175,8 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
         ? <ShowFolder key={`${entry.threadId}:${entry.path}`} item={entry} maximized={expanded} kept={hides(entry)} />
         : <ShowFrame key={`${entry.threadId}:${entry.src ?? entry.path}`} item={entry} maximized={expanded} kept={hides(entry)} />)}
       {watch && (watch.card.doc
-        ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} kept={hides("check")} onClose={closeVerifyWatch} />
-        : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} kept={hides("check")} onClose={closeVerifyWatch} />)}
+        ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden || Boolean(hides("check"))} closing={closing} hosted={{ maximized: expanded }} kept={hides("check")} onClose={closeVerifyWatch} />
+        : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden || Boolean(hides("check"))} closing={closing} hosted={{ maximized: expanded }} kept={hides("check")} onClose={closeVerifyWatch} />)}
       {tab === "tools" && <PaneToolList rows={rows} onPick={open} />}
       {keep.includes("media") && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} kept={hides("media")} />}
       {keep.includes("workers") && <WorkerPage source={crew} maximized={expanded} kept={hides("workers")} onClose={closePane} />}

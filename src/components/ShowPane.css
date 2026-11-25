@@ -21,8 +21,8 @@ html[data-pane-dragging] iframe { pointer-events: none; }
 .verify-watch-icon[aria-expanded="true"] { background: var(--color-control); color: var(--color-ink); }
 /* The head's buttons are the chat header's icon buttons on a panel: one box, hover and focus ring. */
 @media (min-width: 768px) {
-  .show-pane-head .verify-watch-icon { width: 30px; height: 30px; }
-  .show-pane-head .verify-watch-icon:focus-visible { background: none; }
+  .show-pane-head .verify-watch-icon { width: 30px; height: 30px; cursor: default; }
+  .show-pane-head .verify-watch-icon:focus-visible { background: none; color: var(--color-ink-secondary); }
   .show-pane-head .verify-watch-icon[aria-expanded="true"] { background: var(--color-raised); color: var(--color-ink); }
 }
 @media (min-width: 768px) and (hover: hover) {
@@ -80,9 +80,12 @@ html[data-pane-dragging] iframe { pointer-events: none; }
   .show-pane-head { height: auto; padding: 6px 0 0 12px; }
   .show-pane-tab, .show-media-kinds button { height: 32px; }
   .show-pane-tab > [role="tab"] { position: relative; padding-left: 9px; }
-  .show-pane-tab > [role="tab"]::after { content: ""; position: absolute; inset: -6px 0; }
+  /* The label's tap area runs under its hidden x, so a tap there opens the tab. */
+  .show-pane-tab > [role="tab"]::after { content: ""; position: absolute; inset: -6px -22px -6px 0; }
   /* No hover on touch, so the open tab keeps its x. */
   .show-pane-tab[data-selected] .show-pane-tab-close { opacity: 1; }
+  /* A tap focuses its tab first, and focus-within would show the x under the finger: only the open tab's x takes a tap. */
+  .show-pane-tab:not([data-selected]) .show-pane-tab-close { pointer-events: none; }
   .show-pane-tab-close { position: relative; }
   .show-pane-tab-close::after { content: ""; position: absolute; inset: -7px -4px; }
   .show-pane > .verify-watch-frame { margin: 6px 0 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
