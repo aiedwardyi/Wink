@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Download, ExternalLink, LogIn, TerminalSquare } from "lucide-react";
 import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } from "@/state/store";
-import { isPhone } from "@/lib/phone-swipe";
+import { signsInElsewhere } from "@/lib/devices-setup";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
@@ -226,27 +226,30 @@ function refusal(error: unknown): MessageKey {
     : code === "host-unknown" ? "engines.signInHostUnknown" : DIDNT_FINISH;
 }
 
+// A phone or another PC's window cannot finish a sign-in whose browser opened on the PC, so it offers Sign In instead.
+const joinable = (instance: InstanceInfo) => instance.loginState === "pending" && !(instance.loginOpensBrowser && signsInElsewhere());
+
 export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: InstanceInfo) => void) {
   const [current, setCurrent] = useState(instance);
-  const [waiting, setWaiting] = useState(instance.loginState === "pending");
+  const [waiting, setWaiting] = useState(joinable(instance));
   const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && loginFailure(instance));
   const [capture, setCapture] = useState(instance.loginCapture ?? {});
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const cancelled = useRef(false);
   const [loginCode, setLoginCode] = useState("");
-  const phone = !window.ogb && isPhone();
+  const elsewhere = signsInElsewhere();
   const login = instance.install?.login;
-  const computerOnly = phone && !login?.deviceArgs;
+  const computerOnly = elsewhere && !login?.deviceArgs;
   // Same argv both ways is a device-only flow (Muse): nothing opens on desktop either.
-  const deviceFlow = phone || Boolean(login?.deviceArgs && login.deviceArgs.length === login.args.length && login.deviceArgs.every((arg, i) => arg === login.args[i]));
+  const deviceFlow = elsewhere || Boolean(login?.deviceArgs && login.deviceArgs.length === login.args.length && login.deviceArgs.every((arg, i) => arg === login.args[i]));
   const connected = accountReady(current);
   const path = `/api/instances/${encodeURIComponent(instance.instanceId)}/sign-in`;
 
   useEffect(() => { setLoginCode(""); }, [capture.inputGeneration]);
 
   useEffect(() => {
-    setWaiting(instance.loginState === "pending");
+    setWaiting(joinable(instance));
     setFailed(instance.loginState === "failed" && loginFailure(instance));
     setCapture(instance.loginCapture ?? {});
     setBusy(false);
@@ -255,7 +258,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
   }, [instance.instanceId]);
   useEffect(() => {
     setCurrent(instance);
-    if (instance.loginState === "pending" && !cancelled.current) {
+    if (joinable(instance) && !cancelled.current) {
       setWaiting(true);
       setCapture(instance.loginCapture ?? {});
     }
@@ -284,7 +287,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setCapture({});
     let started = false;
     try {
-      const result = await api(path, { method: "POST", body: JSON.stringify({ device: phone }) });
+      const result = await api(path, { method: "POST", body: JSON.stringify({ device: elsewhere }) });
       started = true;
       if (request !== generation.current) return;
       setCapture(result);

@@ -406,3 +406,53 @@ describe("engine sign-in row", () => {
     expect(host.querySelector("button")).toBeNull();
   });
 });
+
+describe("sign-in from a phone or another PC's window", () => {
+  const ENGINES = ["claudeAgent", "codex", "antigravityAgent", "grokAgent", "museAgent"] as const;
+  const install = (kind: string) => BUILT_IN_DRIVERS.find((driver) => driver.driverKind === kind)!.install;
+  function surface(name: "phone" | "PC window" | "this PC") {
+    // SAFETY: the phone check reads only `matches`.
+    vi.mocked(window.matchMedia).mockReturnValue({ matches: name === "phone" } as MediaQueryList);
+    if (name !== "this PC") vi.stubGlobal("location", new URL("https://home.tail1234.ts.net/"));
+  }
+
+  it.each(ENGINES.flatMap((kind) => [["phone", kind], ["PC window", kind]] as const))("signs %s in with the code flow for %s", async (name, kind) => {
+    surface(name);
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ url: "https://auth.example/sign-in", inputGeneration: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await render(createElement(EngineSignIn, { instance: instance(kind, { install: install(kind) }) }));
+    expect(host.querySelector("[data-computer-only]")).toBeNull();
+    await click("Sign In");
+    expect(fetchMock.mock.calls[0]).toEqual([`/api/instances/${kind}/sign-in`, expect.objectContaining({ method: "POST", body: '{"device":true}' })]);
+    expect(host.querySelector("a")?.textContent).toBe("Open Link");
+    expect(host.querySelector('input[type="password"]')).not.toBeNull();
+  });
+
+  it.each(["claudeAgent", "antigravityAgent"])("keeps the browser login for %s in a browser on this PC", async (kind) => {
+    surface("this PC");
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ url: "https://auth.example/sign-in" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await render(createElement(EngineSignIn, { instance: instance(kind, { install: install(kind) }) }));
+    await click("Sign In");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ body: '{"device":false}' });
+  });
+
+  it.each(ENGINES.flatMap((kind) => [["phone", kind], ["PC window", kind]] as const))("offers a %s Sign In over a browser-mode %s sign-in pending on the PC", async (name, kind) => {
+    surface(name);
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ url: "https://auth.example/sign-in", inputGeneration: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await render(createElement(EngineSignIn, { instance: instance(kind, { install: install(kind), loginState: "pending", loginOpensBrowser: true, loginCapture: { url: "https://auth.example/browser" } }) }));
+    expect(host.textContent).not.toContain("Sign in with your browser");
+    await click("Sign In");
+    expect(fetchMock.mock.calls[0]).toEqual([`/api/instances/${kind}/sign-in`, expect.objectContaining({ method: "POST", body: '{"device":true}' })]);
+    expect(host.querySelector('input[type="password"]')).not.toBeNull();
+  });
+
+  it("keeps following a browser-mode sign-in in a browser on this PC", async () => {
+    surface("this PC");
+    vi.stubGlobal("fetch", vi.fn(async () => json({})));
+    await render(createElement(EngineSignIn, { instance: instance("antigravityAgent", { install: install("antigravityAgent"), loginState: "pending", loginOpensBrowser: true, loginCapture: { url: "https://auth.example/browser" } }) }));
+    expect(host.textContent).toContain("Cancel");
+    expect([...host.querySelectorAll("button")].some((button) => button.textContent === "Sign In")).toBe(false);
+  });
+});

@@ -77,7 +77,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         json(res, 200, { accounts: accounts.map((account) => {
           const instance = instances.find((row) => row.instanceId === account.id);
           const named = deps.names?.get(account.id);
-          return { ...account, ...(!account.error && lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: account.error ? { state: "unavailable", reason: account.error } : instance?.snapshot, loginState: instance?.loginState, loginError: instance?.loginError,
+          return { ...account, ...(!account.error && lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: account.error ? { state: "unavailable", reason: account.error } : instance?.snapshot, loginState: instance?.loginState, loginOpensBrowser: instance?.loginOpensBrowser, loginError: instance?.loginError,
             ...(named ? { number: named.number, nickname: named.nickname, name: named.name } : {}),
             state: account.existing && registry.accountStopped(account.id) ? "stopped" : account.state,
             models: instance?.models, effortLevels: instance?.capabilities.effortLevels,

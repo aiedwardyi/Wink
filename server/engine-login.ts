@@ -64,6 +64,7 @@ interface LoginJob {
   changed: Set<() => void>;
   acknowledged: boolean;
   pasteBack: boolean;
+  mode?: "browser" | "code";
   owner?: string;
   lastStderr?: string;
 }
@@ -97,6 +98,12 @@ export class EngineLogin {
     return { ...this.jobs.get(engine)?.capture };
   }
 
+  /** A pending sign-in that opened its browser on this PC, which a code-flow device can neither see nor finish. */
+  opensBrowser(engine: string): boolean {
+    const job = this.jobs.get(engine);
+    return job?.state === "pending" && job.mode === "browser";
+  }
+
   /** Whether `owner` may answer or cancel this engine's sign-in: always, unless another session's is pending. */
   owns(engine: string, owner?: string): boolean {
     const job = this.jobs.get(engine);
@@ -117,11 +124,18 @@ export class EngineLogin {
     return job?.state === "pending" || (job?.state === "complete" && !job.acknowledged);
   }
 
-  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean; owner?: string } = {}): Promise<LoginCapture> {
+  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean; owner?: string; mode?: "browser" | "code" } = {}): Promise<LoginCapture> {
     if (this.disposed) return {};
     let job = this.jobs.get(engine);
     const scope = options.scope ?? engine;
     const owner = this.scopes.get(scope);
+    // A code-flow start replaces a browser-mode sign-in instead of joining one it could never finish.
+    const stale = options.mode === "code" ? [job, owner].find((other) => other?.state === "pending" && other.mode === "browser") : undefined;
+    if (stale) {
+      stale.finish("cancelled");
+      await stale.done;
+      return this.start(engine, cli, args, env, authHosts, options);
+    }
     if (owner && owner !== job) {
       if (owner.state === "pending") throw new LoginBusyError();
       await owner.done;
@@ -136,6 +150,7 @@ export class EngineLogin {
     if (job?.state !== "pending") {
       job = this.create(engine, scope);
       job.pasteBack = options.paste === true;
+      job.mode = options.mode;
       job.owner = options.owner;
       try {
         // A cold Windows sign-in can beat the status check that selects the usable Claude binary.

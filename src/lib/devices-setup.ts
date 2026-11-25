@@ -1,7 +1,11 @@
+import { isPhone } from "./phone-swipe";
 import { remotePhoneSetup, type RemotePhoneLink } from "./phone-setup";
 
 /** Relay management answers only on this PC; a phone, browser or device window is elsewhere. */
 export const onThisPc = () => ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+
+/** An engine sign-in opens its browser on the PC: a phone, or a browser or PC window on another computer, never sees it. */
+export const signsInElsewhere = () => !window.ogb && (isPhone() || !onThisPc());
 
 /** The sign-in site a relay browser signs out to; null in the desktop app and its PC windows, on the tailnet and on this PC. */
 export function relaySignInSite(): string | null {

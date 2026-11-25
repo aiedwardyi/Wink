@@ -738,3 +738,19 @@ it("keeps the Claude section, Add Account and the added accounts after the base 
   expect(section.querySelector('[data-connection-account="claude"]')!.textContent).toContain("Sign In");
   expect(host.textContent).not.toMatch(/Not Installed|More Engines/);
 });
+
+it.each(["claudeAgent", "codex", "grokAgent"])("adds a %s account and signs a signed-out one in with the code flow from another PC's window", async (kind) => {
+  // SAFETY: the phone check reads only `matches`.
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: false } as MediaQueryList);
+  vi.stubGlobal("location", new URL("https://home.tail1234.ts.net/"));
+  await render(2);
+  const { install } = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === kind)!;
+  for (const account of state.instances) account.install = install;
+  state.instances[1] = { ...engine("account-1", false), install };
+  await update();
+  expect(host.querySelector("[data-computer-only]")).toBeNull();
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: true }) });
+  await act(async () => buttons("Sign In")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/instances/account-1/sign-in", { method: "POST", body: JSON.stringify({ device: true }) });
+});

@@ -172,7 +172,8 @@ export class AccountLifecycle {
         }
         return capture;
       }
-      if (this.jobs.has(id)) return this.registry.logins.capture(id);
+      // A code-flow device restarts a browser-mode sign-in; begin() takes over its job, so the old one never settles the account.
+      if (this.jobs.has(id) && !(device && this.registry.logins.opensBrowser(id))) return this.registry.logins.capture(id);
       const blocked = this.registry.accountBlocked(id);
       this.registry.blockAccount(id, true);
       try {

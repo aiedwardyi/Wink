@@ -390,3 +390,41 @@ describe("EngineLogin", () => {
     expect(manager.state("missing")).toBe("failed");
   });
 });
+
+describe("code-flow sign-in from another device", () => {
+  it("replaces a pending browser-mode sign-in of the same engine", async () => {
+    const { manager, cli, dir } = fixture();
+    await manager.start("gemini", cli, ["normal"], {}, [], { mode: "browser" });
+    expect(manager.opensBrowser("gemini")).toBe(true);
+    const file = join(dir, "code");
+    await manager.start("gemini", cli, ["count", file], {}, [], { mode: "code" });
+    expect(readFileSync(file, "utf8")).toBe(".");
+    expect(manager.state("gemini")).toBe("pending");
+    expect(manager.opensBrowser("gemini")).toBe(false);
+  });
+
+  it("replaces another account's pending browser-mode sign-in on the engine", async () => {
+    const { manager, cli, dir } = fixture();
+    await manager.start("a", cli, ["normal"], {}, [], { scope: "claudeAgent", mode: "browser" });
+    const file = join(dir, "code");
+    await manager.start("b", cli, ["count", file], {}, [], { scope: "claudeAgent", mode: "code" });
+    expect(readFileSync(file, "utf8")).toBe(".");
+    expect([manager.state("a"), manager.state("b")]).toEqual(["cancelled", "pending"]);
+  });
+
+  it("joins a pending code-flow sign-in from a browser-mode start", async () => {
+    const { manager, cli, dir } = fixture();
+    const file = join(dir, "code");
+    await manager.start("gemini", cli, ["count", file], {}, [], { mode: "code" });
+    await manager.start("gemini", cli, ["count", file], {}, [], { mode: "browser" });
+    expect(readFileSync(file, "utf8")).toBe(".");
+    expect(manager.opensBrowser("gemini")).toBe(false);
+  });
+
+  it("never ends a running sign-out", async () => {
+    const { manager, cli } = fixture();
+    await manager.start("a", cli, ["normal"], {}, [], { scope: "claudeAgent" });
+    await expect(manager.start("b", cli, ["normal"], {}, [], { scope: "claudeAgent", mode: "code" })).rejects.toThrow("Another sign-in");
+    expect(manager.state("a")).toBe("pending");
+  });
+});

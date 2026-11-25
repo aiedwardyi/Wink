@@ -507,3 +507,30 @@ describe("Antigravity account from agy's logs", () => {
     expect(readAntigravityAccount(env)).toBe("b@example.com");
   });
 });
+
+describe("agy's code-flow sign-in log", () => {
+  const homes: string[] = [];
+  afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
+  const home = (logs: Record<string, string>) => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-agy-login-"));
+    homes.push(dir);
+    const logDir = join(dir, ".gemini", "antigravity-cli", "log");
+    mkdirSync(logDir, { recursive: true });
+    for (const [name, text] of Object.entries(logs)) writeFileSync(join(logDir, name), text);
+    return { HOME: dir };
+  };
+  const signedIn = "I1125 19:14:52.1 29948 server_oauth.go:221] applyAuthResult: email=ed@example.com, authMethod=consumer, quotaProject=\n";
+  const loggedOut = "I1125 19:07:20.4 1 auth_manager.go:315] Logging out current user\n";
+
+  it("names the account from an acp-login log newer than the last sign-out", () => {
+    const env = home({ "acp-server-20261125_190716-1.log": loggedOut, "acp-login-20261125_191430-29948.log": signedIn });
+    expect(readAntigravityAccount(env)).toBe("ed@example.com");
+    expect(readAntigravityLogSignIn(env)).toBe(true);
+  });
+
+  it("orders acp-login logs by stamp with the others", () => {
+    const env = home({ "acp-login-20261125_191430-29948.log": signedIn, "acp-server-20261125_200000-1.log": loggedOut });
+    expect(readAntigravityAccount(env)).toBeUndefined();
+    expect(readAntigravityLogSignIn(env)).toBe(false);
+  });
+});

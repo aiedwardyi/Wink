@@ -570,7 +570,7 @@ describe("ProviderRegistry", () => {
     await registry.startSignIn("a", true);
     expect(start).toHaveBeenCalledTimes(1);
     const [id, cli, args, env, hosts, options] = start.mock.calls[0];
-    expect([id, cli, args, hosts, options]).toEqual(["a", "custom-cli", ["device"], ["auth.example"], { scope: "fake", account: undefined, logExit: true, paste: true }]);
+    expect([id, cli, args, hosts, options]).toEqual(["a", "custom-cli", ["device"], ["auth.example"], { scope: "fake", account: undefined, logExit: true, paste: true, mode: "code" }]);
     expect(env?.TEST_ENV).toBe("yes");
     expect(env?.MUSE_LOGIN).toBe("0");
     expect(await registry.startSignIn("missing")).toBeNull();
@@ -1296,6 +1296,46 @@ describe("ProviderRegistry", () => {
     } finally {
       vi.restoreAllMocks();
       await registry.disposeAll();
+    }
+  });
+});
+
+describe("sign-in from a device that cannot see the PC's browser", () => {
+  it("marks a browser-mode sign-in and lets a code-flow start replace it", async () => {
+    const dir = mkdtempSync(join(testHome(), "login-replace-"));
+    const script = join(dir, "cli.cjs");
+    writeFileSync(script, `
+      require('node:fs').appendFileSync(process.env.CLAUDE_CONFIG_DIR, process.argv[2]);
+      process.stdout.write('https://auth.example/device\\nCode: ABCD-EFGH\\n');
+      setInterval(() => {}, 1000);
+    `);
+    const fake = makeFakeDriver({ kind: "claudeAgent" });
+    const registry = new ProviderRegistry([{ ...fake.driver,
+      defaultConfig: () => ({ cli: `"${process.execPath}" "${script}"` }),
+      install: { login: { args: ["b"], deviceArgs: ["c"] } },
+    }]);
+    const first = join(dir, "first");
+    const second = join(dir, "second");
+    try {
+      await registry.load({
+        a: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: first } },
+        b: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: second } },
+      });
+      await registry.startSignIn("a");
+      expect((await registry.describe()).find((row) => row.instanceId === "a")?.loginOpensBrowser).toBe(true);
+      await registry.startSignIn("a", true);
+      expect(readFileSync(first, "utf8")).toBe("bc");
+      expect((await registry.describe()).find((row) => row.instanceId === "a")?.loginOpensBrowser).toBeUndefined();
+      await registry.cancelSignIn("a");
+      await registry.startSignIn("a");
+      await registry.startSignIn("b", true);
+      const rows = await registry.describe();
+      expect(rows.find((row) => row.instanceId === "a")?.loginState).toBe("cancelled");
+      expect(rows.find((row) => row.instanceId === "b")?.loginState).toBe("pending");
+      expect(readFileSync(second, "utf8")).toBe("c");
+    } finally {
+      await registry.disposeAll();
+      removeTestData(dir);
     }
   });
 });

@@ -395,7 +395,7 @@ export class ProviderRegistry {
     const signInEnded = await this.get(instanceId)?.signingIn?.();
     let capture: LoginCapture;
     try {
-      capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner });
+      capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner, mode: device ? "code" : "browser" });
     } catch (error) {
       signInEnded?.(false);
       throw error;
@@ -762,6 +762,7 @@ export class ProviderRegistry {
       return {
         instanceId: entry.instanceId,
         loginState: undefined,
+        loginOpensBrowser: undefined,
         loginCapture: undefined,
         loginError: undefined,
         driverKind: entry.shadow.driverKind,
@@ -783,6 +784,7 @@ export class ProviderRegistry {
       ...(inst.account ? { accountOf: inst.account.of, accountGeneration: inst.account.generation, canRefreshUsage: true } : {}),
       ...(this.logins.capture(inst.instanceId).error ? { loginError: this.logins.capture(inst.instanceId).error } : {}),
       loginState: this.signingOut.has(inst.instanceId) ? "cancelled" : this.logins.state(inst.instanceId),
+      loginOpensBrowser: (!this.signingOut.has(inst.instanceId) && this.logins.opensBrowser(inst.instanceId)) || undefined,
       loginCapture: this.signingOut.has(inst.instanceId) ? {}
         : driver?.install?.login?.deviceArgs ? this.logins.capture(inst.instanceId)
         : { url: this.logins.capture(inst.instanceId).url,

@@ -208,8 +208,8 @@ export function antigravityKeyringSignOut(forget: () => Promise<boolean>, opts: 
 }
 
 const LOG_EVENT = /applyAuthResult: email=([^,\s]+),|Logging out current user/g;
-// `agy -p` writes cli-<stamp>.log and `agy acp` (Wink's sign-in and sign-out) acp-server-<stamp>-<n>.log.
-const LOG_NAME = /^(?:cli|acp-server)-(\d{8}_\d{6})\S*\.log$/;
+// `agy -p` writes cli-<stamp>.log, `agy acp` (Wink's sign-in and sign-out) acp-server-<stamp>-<n>.log and `agy acp --login` acp-login-<stamp>-<n>.log.
+const LOG_NAME = /^(?:cli|acp-server|acp-login)-(\d{8}_\d{6})\S*\.log$/;
 const LOG_FILES = 20;
 const LOG_MAX_BYTES = 8 * 1024 * 1024;
 const logResults = new Map<string, { identity: string; last: string | null | undefined }>();

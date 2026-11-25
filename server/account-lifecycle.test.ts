@@ -1249,3 +1249,34 @@ describe("base sign-out beside added accounts", () => {
     expect(f.accounts.get(account.id)?.state).toBe("ready");
   });
 });
+
+describe("code-flow sign-in over a browser-mode one", () => {
+  it("restarts an added account's browser-mode sign-in in code mode and keeps the account", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    f.state("pending");
+    await f.controller.signIn(account.id);
+    expect(f.start.mock.calls.at(-1)?.[2]).toEqual(["login"]);
+    vi.spyOn(f.registry.logins, "opensBrowser").mockReturnValue(true);
+    await f.controller.signIn(account.id, true);
+    expect(f.start.mock.calls.at(-1)?.[2]).toEqual(["device"]);
+    f.state("complete");
+    release();
+    await f.controller.settled(account.id);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+  });
+
+  it("joins an added account's code-flow sign-in", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.wait(new Promise<void>(() => {}));
+    f.state("pending");
+    await f.controller.signIn(account.id, true);
+    const starts = f.start.mock.calls.length;
+    vi.spyOn(f.registry.logins, "opensBrowser").mockReturnValue(false);
+    await f.controller.signIn(account.id, true);
+    expect(f.start.mock.calls).toHaveLength(starts);
+  });
+});
