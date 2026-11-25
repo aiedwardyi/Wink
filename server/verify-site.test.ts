@@ -643,6 +643,29 @@ describe("verify_site Auto", () => {
     expect(second).not.toBe(first);
   });
 
+  it("moves an existing card to checking, then could not check, when a later check cannot run", async () => {
+    store.patchBot(botId, { autoApprove: true });
+    const none = { planned: 0, completed: 0, passed: 0, failed: 0, blocked: 0, notRun: 0 };
+    const crashed = (): VerifyRunState[] => [{ runId: "x", revision: 1, state: "blocked", counts: none, result: result([], { counts: none, errorCode: "page-failed" }), errorCode: "page-failed" }];
+    const seen: string[] = [];
+    store.onChange((change) => { if ((change.type === "message" || change.type === "message.patch") && change.message.verify) seen.push(change.message.verify.status); });
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site" });
+    seen.length = 0;
+    bridge!.states = crashed();
+    expect((await tool({ entry: "site" })).body.errorCode).toBe("page-failed");
+    expect(card()).toMatchObject({ status: "blocked", errorCode: "page-failed", counts: none });
+    expect(seen[0]).toBe("preparing");
+    bridge!.states = finalStates(result());
+    await verify.startAuto({ botId, threadId, entry: join(work, "site"), episode: "again" });
+    seen.length = 0;
+    bridge!.states = crashed();
+    await verify.startAuto({ botId, threadId, entry: join(work, "site"), episode: "again" });
+    expect(card()).toMatchObject({ status: "blocked", errorCode: "page-failed" });
+    expect(seen[0]).toBe("preparing");
+    expect(store.activePath(threadId).filter((m) => m.verify)).toHaveLength(2);
+  });
+
   it("marks a same-turn recheck that passes after problems as fixed, once", async () => {
     store.patchBot(botId, { autoApprove: true });
     const dead = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "a#x", measured: "#x has no target" } as const;

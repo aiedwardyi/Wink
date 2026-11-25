@@ -271,13 +271,15 @@ export function createVerifySite(deps: VerifySiteDeps) {
     if (!run.recording && runs.get(run.runId) === run) runs.delete(run.runId);
   };
 
+  const cardFor = (run: Run) => run.episode ? store.activePath(run.threadId).find(message => message.id === episodes.get(run.episode!)) : store.activePath(run.threadId).findLast((message) => message.kind === "note" && message.verify?.owner === run.botId);
+
   const writeCard = (run: Run, patch: Partial<VerifyCardData>) => {
     run.card = { ...run.card, ...patch };
     const bot = store.bot(run.botId);
     const group = store.conversationForBot(run.botId, run.threadId)?.group;
     const fields = { text: verifyCardText(run.card), verify: run.card, quiet: true as const, ...(group && bot ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {}) };
     if (run.messageId && store.patchMessage(run.threadId, run.messageId, fields)) return;
-    const existing = run.episode ? store.activePath(run.threadId).find(message => message.id === episodes.get(run.episode!)) : store.activePath(run.threadId).findLast((message) => message.kind === "note" && message.verify?.owner === run.botId);
+    const existing = cardFor(run);
     if (existing && store.patchMessage(run.threadId, existing.id, fields)) {
       run.messageId = existing.id;
       return;
@@ -356,7 +358,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const turnCheck = signal ? setInterval(() => { if (!turnLive(run)) stop("cancelled"); }, TURN_CHECK_MS) : undefined;
     try {
       run.card = { ...run.card, status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, fixed: undefined, endedAt: undefined };
-      run.held = !run.messageId;
+      run.held = !run.messageId && !cardFor(run);
       if (!run.held) writeCard(run, {});
       const started = await bridge.start(run, watch, aborter.signal);
       if (stopped) return finish(run, "blocked", { errorCode: stopped });
