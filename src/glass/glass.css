@@ -182,7 +182,7 @@
 .glass-listen.on { background: #fff; color: #08090c !important; }
 
 /* The bot's open question under the newest reply; its text and choices scroll inside the 600x600 window. */
-/* floors fit two question lines and one choice, three choice lines while one is focused */
+/* floors fit two question lines and one choice, five choice lines (a 200-character choice) while one is focused */
 .glass-ask { flex: 0 1 auto; min-height: 182px; display: flex; flex-direction: column; gap: 10px; padding: 16px 20px 18px; border-radius: 22px; background: #14161d; border: 1px solid rgba(255, 77, 157, 0.45); }
 .glass-ask-who { flex: none; font-size: 13.5px; font-weight: 560; color: #ff8cc0; }
 .glass-ask-q {
@@ -201,7 +201,9 @@
 .glass-ask:focus-within { min-height: 236px; }
 .glass-ask-q:focus { outline: 2.5px solid #fff; outline-offset: 4px; }
 .glass-choices { min-height: 52px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; padding: 3px; }
-.glass-choices:focus-within { min-height: 107px; }
+.glass-choices:focus-within { min-height: 146px; }
+/* a focused choice takes the reply's room, back on ArrowUp */
+.glass-stream:has(.glass-choice:focus) .glass-bot { display: none; }
 .glass-choice {
   flex: none;
   padding: 9px 18px;
@@ -210,7 +212,7 @@
   border: 2.5px solid transparent;
   font-size: 18px !important;
   font-weight: 520 !important;
-  line-height: 1.3;
+  line-height: 1.3 !important;
   text-align: left;
   overflow-wrap: anywhere;
 }

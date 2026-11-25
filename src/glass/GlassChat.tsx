@@ -147,6 +147,7 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
   const olderButton = useRef<HTMLButtonElement>(null);
   const speak = useRef<HTMLInputElement>(null);
   const follow = useRef(true);
+  const read = useRef(false);
   const oldest = useRef<string | undefined>(undefined);
   const loadOlder = useOlderMessages(dispatch, bot.threadId, bot.messages[0]?.id, bot.hasMore);
   const reach = olderWindow(list.length, limit, Boolean(bot.hasMore));
@@ -164,6 +165,7 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
     const el = scroller.current;
     if (el) el.scrollTop = 0;
     follow.current = true;
+    read.current = false;
     measure();
   }, [reply?.id, older === null]);
 
@@ -190,7 +192,7 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
       const el = scroller.current;
       const max = el ? el.scrollHeight - el.clientHeight : 0;
       const top = el ? el.scrollTop : 0;
-      const step = replyMove({ index: shown - reach.first, count: list.length - reach.first, atTop: top <= 0, atBottom: top >= max - 1, older: reach.older, ask: Boolean(card) }, dir);
+      const step = replyMove({ index: shown - reach.first, count: list.length - reach.first, atTop: top <= 0, atBottom: top >= max - 1, older: reach.older, ask: Boolean(card), askFirst: Boolean(card) && !read.current }, dir);
       if (step.type === "scroll" && el) {
         el.scrollTop = top + dir * Math.max(LINE, el.clientHeight - LINE);
         follow.current = el.scrollTop >= max - 1;
@@ -209,7 +211,9 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
         el.scrollTop = top + dir * Math.max(LINE, el.clientHeight - LINE);
         return "scroll";
       }
-      return dir < 0 ? "reply" : "choices";
+      if (dir > 0) return "choices";
+      read.current = true;
+      return "reply";
     },
     answer: (choice) => {
       if (question) dispatch({ type: "answerCard", botId: bot.id, messageId: question.id, answer: choice });

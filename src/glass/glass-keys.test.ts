@@ -47,6 +47,26 @@ describe("glasses keys", () => {
     expect([choiceMove(0, 2, -1), choiceMove(0, 2, 1), choiceMove(1, 2, 1)]).toEqual([{ type: "ask" }, { type: "choice", index: 1 }, { type: "bar" }]);
   });
 
+  it("an open question takes the newest reply's first ArrowDown, however long the reply", () => {
+    const at = { index: 1, count: 2, atTop: true, atBottom: false, older: false, ask: true };
+    expect(replyMove({ ...at, askFirst: true }, 1)).toEqual({ type: "ask" });
+    expect(replyMove(at, 1)).toEqual({ type: "scroll", dir: 1 });
+    expect(replyMove({ ...at, index: 0, askFirst: true }, 1)).toEqual({ type: "scroll", dir: 1 });
+  });
+
+  it("a focused 200-character choice fits its card: five lines, the reply steps aside", () => {
+    const css = readFileSync(new URL("./glass.css", import.meta.url), "utf8");
+    const rule = (selector: string) => new RegExp(selector.replace(/[.()]/g, "\\$&") + " \\{([^}]*)\\}").exec(css)?.[1] ?? "";
+    const px = (body: string, prop: string) => Number(new RegExp("(?:^|[;\\s])" + prop + ":\\s*([\\d.]+)").exec(body)?.[1]);
+    const choice = rule(".glass-choice");
+    // .glass button's font: inherit outranks .glass-choice, so its line-height needs !important like its font-size
+    expect(choice).toMatch(/line-height:\s*[\d.]+ !important/);
+    const line = px(choice, "font-size") * px(choice, "line-height");
+    const fivelines = 5 * line + 2 * 9 + 2 * 2.5 + 2 * px(rule(".glass-choices"), "padding");
+    expect(px(rule(".glass-choices:focus-within"), "min-height")).toBeGreaterThanOrEqual(Math.floor(fivelines));
+    expect(rule(".glass-stream:has(.glass-choice:focus) .glass-bot")).toMatch(/display:\s*none/);
+  });
+
   it("ArrowLeft and ArrowRight step chats in the phone's order and stop at both ends", () => {
     const ids = ["juno", "atlas", "orion", "vega"];
     const step = (current: string, key: string) => {

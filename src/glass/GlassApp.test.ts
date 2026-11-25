@@ -386,6 +386,20 @@ describe("glasses question card", () => {
     expect([focused(), top()]).toEqual(["ask", 0]);
   });
 
+  it("a long reply's first Down reaches the question; Up from it reads the reply through", async () => {
+    const glassScroll = (el: Element) => el.classList.contains("glass-scroll");
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) { return glassScroll(this) ? 2400 : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return glassScroll(this) ? 64 : 0; });
+    await mount(atlas({ messages: [...chat, ask("Prod or staging?", ["Prod", "Staging"])] }), [ready]);
+    const top = () => document.querySelector<HTMLElement>(".glass-scroll")?.scrollTop;
+    await press("ArrowDown");
+    expect([focused(), top()]).toEqual(["ask", 0]);
+    await press("ArrowUp");
+    expect([focused(), top()]).toEqual(["speak", 0]);
+    await press("ArrowDown");
+    expect([focused(), top()]).toEqual(["speak", 32]);
+  });
+
   it("an answered or older question does not show", async () => {
     await mount(atlas({ messages: [...chat, { ...ask("Prod?", ["Prod"]), card: { title: "Q", subtitle: "Prod?", options: ["Prod"], askUser: true, answered: "Prod" } }] }), [ready]);
     expect(document.querySelector(".glass-ask")).toBeNull();

@@ -62,7 +62,7 @@ export function glassKey(screen: GlassScreen, focus: GlassFocus, key: string, te
   return null;
 }
 
-export type ReplyPosition = { index: number; count: number; atTop: boolean; atBottom: boolean; older: boolean; ask?: boolean };
+export type ReplyPosition = { index: number; count: number; atTop: boolean; atBottom: boolean; older: boolean; ask?: boolean; askFirst?: boolean };
 export type ReplyMove =
   | { type: "scroll"; dir: -1 | 1 }
   | { type: "message"; index: number }
@@ -71,13 +71,14 @@ export type ReplyMove =
   | { type: "bar" }
   | { type: "none" };
 
-/** Replies open at their start. A key scrolls inside one first; past its top ArrowUp opens the older one, past the oldest shown it reaches "See 10 more"; past the newest ArrowDown reaches the bot's open question, then the model bar. */
+/** Replies open at their start. A key scrolls inside one first; past its top ArrowUp opens the older one, past the oldest shown it reaches "See 10 more"; past the newest ArrowDown reaches the bot's open question, then the model bar. An open question takes the newest reply's first ArrowDown; after ArrowUp from it, ArrowDown reads the reply through. */
 export function replyMove(at: ReplyPosition, dir: -1 | 1): ReplyMove {
   if (dir < 0) {
     if (!at.atTop) return { type: "scroll", dir };
     if (at.index > 0) return { type: "message", index: at.index - 1 };
     return at.older ? { type: "older" } : { type: "none" };
   }
+  if (at.askFirst && at.index === at.count - 1) return { type: "ask" };
   if (!at.atBottom) return { type: "scroll", dir };
   if (at.index < at.count - 1) return { type: "message", index: at.index + 1 };
   return at.ask ? { type: "ask" } : { type: "bar" };
