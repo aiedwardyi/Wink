@@ -200,6 +200,11 @@ export function createRevertIndex(deps: { git?: RevertGit; now?: () => number } 
   return {
     // a shallow history undercounts how often a file changed
     refresh: (cwd: string): Promise<void> => homeOf(cwd).then((home) => home && !home.shallow ? check(cwd, home) : undefined),
+    /** A revert in the last pass over the folder's repo undid this PR; false for a folder with no pass. */
+    undid(cwd: string, pr: number): boolean {
+      const home = homes.get(cwd)?.home;
+      return Boolean(home && repos.get(repoId(home.common))?.log.reverts.some((revert) => revert.undid.prs.includes(pr)));
+    },
     /** A folder seen before answers from memory; a new one waits for its home probe, never for git or the refs check. */
     async hit(cwd: string, card: string): Promise<RevertHit | undefined> {
       const seen = homes.get(cwd);
