@@ -91,6 +91,12 @@ export function choiceMove(index: number, count: number, dir: -1 | 1): { type: "
   return next < count ? { type: "choice", index: next } : { type: "bar" };
 }
 
+/** How far a key scrolls the choices first: a focused choice taller than its box shows its rest before the key moves on (0). */
+export function choiceScroll(box: { top: number; bottom: number }, choice: { top: number; bottom: number }, dir: -1 | 1, step: number): number {
+  const past = dir < 0 ? box.top - choice.top : choice.bottom - box.bottom;
+  return past > 1 ? dir * Math.min(past, step) : 0;
+}
+
 /** Replies a "See more" step adds. */
 export const OLDER_STEP = 10;
 

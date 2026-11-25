@@ -125,6 +125,7 @@ function Glasses() {
           break;
         }
         case "choice": {
+          if (chat.current?.choice(action.dir) === "scroll") break;
           const list = choices();
           const step = choiceMove(list.findIndex((choice) => choice === document.activeElement), list.length, action.dir);
           if (step.type === "choice") list[step.index]?.focus();

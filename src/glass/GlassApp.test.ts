@@ -11,8 +11,12 @@ import { speaker } from "@/lib/tts";
 import { GlassApp } from "./GlassApp";
 
 class FakeEventSource {
+  static last: FakeEventSource | undefined;
   onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
   close = vi.fn();
+  constructor() {
+    FakeEventSource.last = this;
+  }
 }
 
 const models = { default: "claude-opus-5-5", options: [{ id: "claude-opus-5-5", label: "Opus 5.5" }, { id: "claude-sonnet-5-5", label: "Sonnet 5.5" }] };
@@ -398,6 +402,56 @@ describe("glasses question card", () => {
     expect([focused(), top()]).toEqual(["speak", 0]);
     await press("ArrowDown");
     expect([focused(), top()]).toEqual(["speak", 32]);
+  });
+
+  it("a new question after Up from the last one takes the first Down again", async () => {
+    const glassScroll = (el: Element) => el.classList.contains("glass-scroll");
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) { return glassScroll(this) ? 2400 : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return glassScroll(this) ? 64 : 0; });
+    const linked = [...chat, ask("First question before reading back", ["One", "Two"])].map((message, i, all): Message => ({ ...message, parentId: all[i - 1]?.id ?? null }));
+    const first = atlas({ messages: linked });
+    await mount(first, [ready]);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).startsWith("/api/bots?") ? Response.json({ bots: [first], groups: [] }) : new Response("{}", { status: 404 })));
+    const top = () => document.querySelector<HTMLElement>(".glass-scroll")?.scrollTop;
+    await press("ArrowDown");
+    await press("ArrowUp");
+    expect([focused(), top()]).toEqual(["speak", 0]);
+    const next: Message = { ...ask("New question while the same reply is open", ["New A", "New B"]), id: "ask-2", at: 4, parentId: "ask" };
+    type Frame = { kind: "hello"; resumed: boolean; cursor: string } | { kind: "message"; threadId: string; message: Message };
+    const frame = (data: Frame) => act(async () => FakeEventSource.last?.onmessage?.({ data: JSON.stringify(data), lastEventId: "" }));
+    await frame({ kind: "hello", resumed: false, cursor: "qa:1" });
+    await frame({ kind: "message", threadId: "thread-atlas", message: next });
+    expect(card().question).toBe("New question while the same reply is open");
+    await press("ArrowDown");
+    expect([focused(), top()]).toEqual(["ask", 0]);
+  });
+
+  it("a 200-character Japanese choice taller than its box shows its last line before Down moves on", async () => {
+    // geometry measured at 600x600: a nine-line choice at 218-451 in a 218-427 box under a three-line question
+    const box = { top: 218, bottom: 427 };
+    const offsets = [3, 61, 302, 360];
+    const heights = [50, 233, 50, 50];
+    const panel = () => document.querySelector<HTMLElement>(".glass-choices")!;
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("glass-choices") ? box.bottom - box.top : 0; });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList.contains("glass-choices")) return DOMRect.fromRect({ y: box.top, height: box.bottom - box.top });
+      const at = [...panel().children].indexOf(this);
+      return at < 0 ? DOMRect.fromRect() : DOMRect.fromRect({ y: box.top + offsets[at]! - offsets[1]! - panel().scrollTop, height: heights[at] });
+    });
+    const japanese = "最初に想定結果を確認して記録を比較してください。生成したメッセージが対象の会話に届いたことを確認したら、再現手順と計測結果を担当者へ共有してください。追加の検証が必要な場合は対象の環境を選択してください。".repeat(3).slice(0, 200);
+    await mount(atlas({ messages: [...chat, ask("What should we show in the next check?", ["Short", japanese, "Next choice", "Last"])] }), [ready]);
+    focus("choice");
+    await press("ArrowDown");
+    expect(document.activeElement?.textContent).toBe(japanese);
+    await press("ArrowDown");
+    expect([document.activeElement?.textContent, panel().scrollTop]).toEqual([japanese, 24]);
+    await press("ArrowDown");
+    expect(document.activeElement?.textContent).toBe("Next choice");
+    await press("ArrowUp");
+    await press("ArrowUp");
+    expect([document.activeElement?.textContent, panel().scrollTop]).toEqual([japanese, 0]);
+    await press("ArrowUp");
+    expect(document.activeElement?.textContent).toBe("Short");
   });
 
   it("an answered or older question does not show", async () => {

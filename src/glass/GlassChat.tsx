@@ -14,7 +14,7 @@ import { leftOf } from "@/lib/usage-pace";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { shownModelSelection, useStore, useStreamSelect, visibleMessages, type Bot } from "@/state/store";
-import { linesAbove, OLDER_STEP, olderWindow, replyMove, type ReplyMove } from "./glass-keys";
+import { choiceScroll, linesAbove, OLDER_STEP, olderWindow, replyMove, type ReplyMove } from "./glass-keys";
 
 const LINE = 32;
 const ENGINES = new Map([
@@ -29,6 +29,7 @@ export type Reply = { id: string; you?: string; text: string; at?: number; live?
 export type GlassChatHandle = {
   move: (dir: -1 | 1) => ReplyMove["type"];
   ask: (dir: -1 | 1) => "scroll" | "reply" | "choices";
+  choice: (dir: -1 | 1) => "scroll" | "move";
   answer: (choice: string) => void;
   older: () => void;
   back: () => void;
@@ -144,10 +145,12 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
   const [above, setAbove] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const asked = useRef<HTMLDivElement>(null);
+  const offered = useRef<HTMLDivElement>(null);
   const olderButton = useRef<HTMLButtonElement>(null);
   const speak = useRef<HTMLInputElement>(null);
   const follow = useRef(true);
-  const read = useRef(false);
+  // the open question whose Up read the reply through; any other question takes the first Down
+  const read = useRef<string | undefined>(undefined);
   const oldest = useRef<string | undefined>(undefined);
   const loadOlder = useOlderMessages(dispatch, bot.threadId, bot.messages[0]?.id, bot.hasMore);
   const reach = olderWindow(list.length, limit, Boolean(bot.hasMore));
@@ -165,7 +168,7 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
     const el = scroller.current;
     if (el) el.scrollTop = 0;
     follow.current = true;
-    read.current = false;
+    read.current = undefined;
     measure();
   }, [reply?.id, older === null]);
 
@@ -192,7 +195,7 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
       const el = scroller.current;
       const max = el ? el.scrollHeight - el.clientHeight : 0;
       const top = el ? el.scrollTop : 0;
-      const step = replyMove({ index: shown - reach.first, count: list.length - reach.first, atTop: top <= 0, atBottom: top >= max - 1, older: reach.older, ask: Boolean(card), askFirst: Boolean(card) && !read.current }, dir);
+      const step = replyMove({ index: shown - reach.first, count: list.length - reach.first, atTop: top <= 0, atBottom: top >= max - 1, older: reach.older, ask: Boolean(card), askFirst: Boolean(card) && read.current !== question?.id }, dir);
       if (step.type === "scroll" && el) {
         el.scrollTop = top + dir * Math.max(LINE, el.clientHeight - LINE);
         follow.current = el.scrollTop >= max - 1;
@@ -212,8 +215,17 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
         return "scroll";
       }
       if (dir > 0) return "choices";
-      read.current = true;
+      read.current = question?.id;
       return "reply";
+    },
+    choice: (dir) => {
+      const el = offered.current;
+      const at = document.activeElement;
+      if (!el || !at || !el.contains(at)) return "move";
+      const step = choiceScroll(el.getBoundingClientRect(), at.getBoundingClientRect(), dir, Math.max(LINE, el.clientHeight - LINE));
+      if (!step) return "move";
+      el.scrollTop += step;
+      return "scroll";
     },
     answer: (choice) => {
       if (question) dispatch({ type: "answerCard", botId: bot.id, messageId: question.id, answer: choice });
@@ -277,7 +289,7 @@ export function GlassChat({ bot, ids, pressed, reading, handle }: { bot: Bot; id
               {card.subtitle}
             </div>
             {card.options.length > 0 && (
-              <div className="glass-choices">
+              <div ref={offered} className="glass-choices">
                 {card.options.map((choice) => (
                   <button key={choice} type="button" tabIndex={-1} className="glass-choice" data-glass="choice">
                     {choice}

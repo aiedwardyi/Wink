@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 import { neighborId } from "@/lib/phone-swipe";
-import { choiceMove, glassKey, linesAbove, olderWindow, replyMove, spokenDigits, type GlassAction } from "./glass-keys";
+import { choiceMove, choiceScroll, glassKey, linesAbove, olderWindow, replyMove, spokenDigits, type GlassAction } from "./glass-keys";
 
 const ARROWS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"] as const;
 const KEYS = [...ARROWS, "Enter"] as const;
@@ -65,6 +65,28 @@ describe("glasses keys", () => {
     const fivelines = 5 * line + 2 * 9 + 2 * 2.5 + 2 * px(rule(".glass-choices"), "padding");
     expect(px(rule(".glass-choices:focus-within"), "min-height")).toBeGreaterThanOrEqual(Math.floor(fivelines));
     expect(rule(".glass-stream:has(.glass-choice:focus) .glass-bot")).toMatch(/display:\s*none/);
+  });
+
+  it("a focused choice of any height shows every line before a key moves past it", () => {
+    const box = { top: 218, bottom: 427 };
+    const step = Math.max(32, box.bottom - box.top - 32);
+    for (let height = 40; height <= 900; height += 7) {
+      for (const dir of [1, -1] as const) {
+        let top = dir > 0 ? box.top : box.bottom - height;
+        // the part of the choice seen so far, in its own pixels; each press must keep it one unbroken run
+        let seen = [Math.max(top, box.top) - top, Math.min(top + height, box.bottom) - top];
+        for (let presses = 0; ; presses++) {
+          const scroll = choiceScroll(box, { top, bottom: top + height }, dir, step);
+          if (!scroll) break;
+          expect(presses).toBeLessThan(height / 32 + 2);
+          top -= scroll;
+          const shown = [Math.max(top, box.top) - top, Math.min(top + height, box.bottom) - top];
+          expect(shown[0]! <= seen[1]! && shown[1]! >= seen[0]!).toBe(true);
+          seen = [Math.min(seen[0]!, shown[0]!), Math.max(seen[1]!, shown[1]!)];
+        }
+        expect([height, dir, seen[0]! <= 1, seen[1]! >= height - 1]).toEqual([height, dir, true, true]);
+      }
+    }
   });
 
   it("ArrowLeft and ArrowRight step chats in the phone's order and stop at both ends", () => {
