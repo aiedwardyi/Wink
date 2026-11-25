@@ -67,7 +67,7 @@ const untilTime = (text: string) => {
 };
 
 // only closed asks fall off, oldest first; an open ask is never dropped or refused
-function trimClosed(asks: TaskAsk[]): TaskAsk[] {
+export function trimClosed(asks: TaskAsk[]): TaskAsk[] {
   const trimmed: TaskAsk[] = [];
   for (let closed = asks.findIndex((ask) => !isOpenAsk(ask)); asks.length > ASK_LIMITS.kept && closed >= 0; closed = asks.findIndex((ask) => !isOpenAsk(ask))) {
     trimmed.push(...asks.splice(closed, 1));

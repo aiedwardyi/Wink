@@ -19,7 +19,7 @@ import {
   type MemorySleep,
 } from "./memory-sleep.ts";
 import { markTalked, markTidied, memorySyncDir, pinMemoryJobOwner, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
-import { listMemoryTopics, loadMemory, MEMORY_MAX_LINES, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
+import { listMemoryTopics, loadMemory, shownMemory, MEMORY_MAX_LINES, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const hooks = vi.hoisted(() => ({ beforeWrite: (_path: string) => {}, beforeRename: (_from: string) => {} }));
@@ -48,7 +48,10 @@ const OLD_HISTORY = '# Memory history\n\n## 2026-11-03 09:00\n- "Lives in Busan"
 
 const memory = (...lines: string[]) => `# Memory\n\n${lines.join("\n")}\n`;
 const reply = (value: { duplicates?: Array<{ keep: string; drop: string[] }>; disagree?: Array<[string, string]> }): NoteGenerator => async () => JSON.stringify(value);
-const loaded = (botId: string) => loadMemory(botId)?.text ?? "";
+const loaded = (botId: string) => {
+  const memory = loadMemory(botId);
+  return memory ? shownMemory(memory) : "";
+};
 const historyFile = (botId: string) => join(workspaceDir(botId), "memory-history", "2026-11.md");
 const history = (botId: string) => {
   try {

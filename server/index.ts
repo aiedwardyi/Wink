@@ -341,6 +341,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
+import { createDreamLive } from "./dream-live.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
 import { goalRoute } from "./goal-route.ts";
@@ -3168,6 +3169,25 @@ const memoryPass = createMemoryPass({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   host: deviceMachine,
 });
+const dreamLive = createDreamLive({
+  dataDir: DATA_DIR,
+  pc: () => profileSyncSettings.deviceId,
+  threads: (botId) => {
+    const bot = store.bot(botId);
+    return bot ? ownerChats(bot, notOwnerChats()) : [];
+  },
+  packet: (threadId) => taskPacketForWrite(threadId),
+  busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  cite: (botId) => knownRepos.cite(botId),
+  merged: (botId, threadId, ask, start) => askPrs.merged(botId, threadId, ask, start),
+  checked: () => askPrs.settled(),
+  reverted: async (botId, threadId) => {
+    const pinned = store.taskByThread(botId, threadId)?.cwd;
+    const dir = pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+    if (dir) await revertIndex.refresh(dir);
+    return (pr) => Boolean(dir && revertIndex.undid(dir, pr));
+  },
+});
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
@@ -3184,6 +3204,7 @@ const memorySleep = createMemorySleep({
     markTidied(memorySyncLedger, botSyncId, before, after);
     saveMemoryLedger();
   },
+  dream: dreamLive,
 });
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
@@ -9378,6 +9399,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "PUT") {
       return await botRoutes.putMemory(req, res, m);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean$/);
+    if (m && method === "GET") {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const run = dreamLive.latest(m[1]);
+      return run ? json(res, 200, { run }) : json(res, 404, { error: "no-run" });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
     if (m && method === "POST") {
