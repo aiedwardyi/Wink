@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { agreed, dreamPrompt, expired, neverMoves, parseDream, planDream, type Flag } from "./dream-judge.ts";
 import { noteLines } from "./memory-sleep.ts";
+import { hiddenFromRecall } from "./recall-row.ts";
 import { at, SAFETY_IDS, SAFETY_MEMORY, SAFETY_REPLIES, SAFETY_RIGHT, SAFETY_TODAY, SAFETY_WRONG } from "./testing/dream-safety.ts";
 
 const memory = (...lines: string[]) => `# Memory\n\n${lines.join("\n")}\n`;
@@ -137,5 +138,38 @@ describe("exact twins", () => {
     const raw = memory("- Uses pnpm", "- Uses pnpm", "- Uses pnpm");
     expect(planDream(raw, both(raw, { repeat: [{ drop: "L3", by: ["L5"], lost: "" }] }), today).map(({ at }) => at)).toEqual([2]);
     expect(planDream(raw, both(raw, {}), today)).toEqual([]);
+  });
+});
+
+describe("recall", () => {
+  const today = "2026-11-26";
+  const twins = (line: string) => {
+    const raw = memory(line, line);
+    return planDream(raw, agreed(flags(raw, { repeat: [{ drop: "L3", by: ["L4"], lost: "" }] }), flags(raw, { repeat: [{ drop: "L3", by: ["L4"], lost: "" }] })), today);
+  };
+  const stale = (line: string) => planDream(memory(line), [{ kind: "expired", at: 2, by: [] }], today);
+
+  it("moves a note recall can return", () => {
+    const line = "- Arcade tickets for the indigo hornbill consignment went to Wiveliscombe on 11-02";
+    expect(hiddenFromRecall(line)).toBe(false);
+    expect(twins(line)).toHaveLength(1);
+    expect(stale(line)).toHaveLength(1);
+  });
+
+  // each row rule of the lookup filter a note line can meet
+  it.each([
+    ["a secret word", "- Arcade tokens for the indigo hornbill consignment went to Wiveliscombe on 11-02"],
+    ["a Korean secret word", "- 인디고 코뿔새 화물의 토큰은 11-02에 위벨리스콤으로 갔다"],
+    ["a redacted value", "- Rotated «redacted 40 chars» on 11-02"],
+    ["a key-shaped value", "- Rotated sk-abcdefgh12345678 on 11-02"],
+    ["a GitHub token shape", "- Rotated ghp_abcdefgh12345678 on 11-02"],
+    ["a JWT shape", "- Pasted eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl on 11-02"],
+    ["a long mixed run", "- Pasted Ab3dEf6hIj9kLm2nOp5qRs8tUv on 11-02"],
+    ["a struck line", "- ~~Arcade tickets went to Wiveliscombe on 11-02~~"],
+    ["no words", "- → ✓"],
+  ])("never moves a note recall hides: %s", (_, line) => {
+    expect(twins(line)).toEqual([]);
+    expect(stale(line)).toEqual([]);
+    expect(hiddenFromRecall(line)).toBe(true);
   });
 });

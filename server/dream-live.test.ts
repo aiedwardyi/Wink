@@ -298,7 +298,7 @@ describe("dreaming, dry", () => {
   });
 
   it("copies no note that may hold a login, and redacts the rest", async () => {
-    writeMemoryFile(bot, memory("- Wifi password is SunnyHarbor!42", "- Wifi password is SunnyHarbor!42"));
+    writeMemoryFile(bot, memory("- Wifi at home is SunnyHarbor!42", "- Wifi at home is SunnyHarbor!42"));
     generator = reply({ repeat: [{ drop: "L3", by: ["L4"], lost: "" }] });
     await quiet();
     const plan = plans()[0]!;

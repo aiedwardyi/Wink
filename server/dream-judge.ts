@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { NoteGenerator } from "./memory-pass.ts";
 import { loadWindow, negates, noteLines, planTidy, replaces, tokens, twinKey, type Move, type NoteLine } from "./memory-sleep.ts";
+import { hiddenFromRecall } from "./recall-row.ts";
 
 export const DREAM_MOVES_MAX = 20;
 export const DREAM_GEMINI = "gemini-4-hydrogen-low";
@@ -49,11 +50,11 @@ export function expired(text: string, today: string): boolean {
   return days.length > 0 && days.every((day) => day < today);
 }
 
-/** Lines no judge may move: a standing rule, the user's quoted words with a date, and anything under a pinned, locked, picks or decisions heading. */
+/** Lines no judge may move: a standing rule, the user's quoted words with a date, anything under a pinned, locked, picks or decisions heading, and a line recall could not return from the archive. */
 export function neverMoves(line: NoteLine, lines: readonly string[]): boolean {
   const heading = line.section >= 0 ? lines[line.section] ?? "" : "";
   const dated = STAMP.test(line.text) || writtenDays(line.text, "2000-01-01").length > 0;
-  return RULE_CAPS.test(line.text) || RULE_WORDS.test(line.text) || (QUOTED.test(line.text) && dated) || PINNED.test(heading) || /📌/.test(line.text);
+  return RULE_CAPS.test(line.text) || RULE_WORDS.test(line.text) || (QUOTED.test(line.text) && dated) || PINNED.test(heading) || /📌/.test(line.text) || hiddenFromRecall(line.text);
 }
 
 // the day a note was written: its stamp, else the first day it names, else unknown

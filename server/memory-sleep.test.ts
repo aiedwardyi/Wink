@@ -1069,6 +1069,38 @@ describe("memory sleep", () => {
       }
     });
 
+    it("no archive line recall cannot return: the note stays in MEMORY.md", async () => {
+      const bot = bots[0]!;
+      const tokens = "- Arcade tokens for the indigo hornbill consignment went to Wiveliscombe on 11-02";
+      writeMemoryFile(bot, memory("- Uses pnpm", tokens));
+      generator = reply({ stale: ["L4"] });
+      await quiet();
+      expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", tokens));
+      expect(loaded(bot)).toContain(tokens);
+      expect(history(bot)).not.toContain("Arcade tokens");
+    });
+
+    it("an archived dated note the next owner question asks about", async () => {
+      const bot = bots[0]!;
+      const tickets = "- Arcade tickets for the indigo hornbill consignment went to Wiveliscombe on 11-02";
+      writeMemoryFile(bot, memory("- Uses pnpm", tickets));
+      generator = reply({ stale: ["L4"] });
+      await quiet();
+      expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm"));
+      vi.useRealTimers();
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(join(DATA_DIR, "lookup-bots.json"), JSON.stringify([bot]));
+      try {
+        const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+        await lookup.refresh(bot);
+        const found = lookup.take(bot, "t1", undefined, "where did the indigo hornbill consignment go?").join("\n");
+        expect(found).toContain("memory/dreamed.md");
+        expect(found).toContain("Wiveliscombe");
+      } finally {
+        rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
+      }
+    });
+
     it("archived lines in recall once the archive passes 2 MiB, the oldest and the newest", async () => {
       const bot = bots[0]!;
       const lines = filler(120);
