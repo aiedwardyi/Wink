@@ -144,7 +144,7 @@ describe("turn leftovers", () => {
 
   it("closes nothing on an acknowledgment, a request, a still-needs or a failure, and closes what a line says is done", () => {
     const open = [ask("A1", "Where are the keyboard shortcuts documented?", "open"), ask("A2", "I'll read the release notes.", "open", "promise"), ask("A3", "I'll set the backup schedule.", "open", "promise"), ask("A4", "I'll fix the picker labels.", "open", "promise")];
-    for (const reply of ["The keyboard shortcuts are a good question. I'll get back to you.", "Please read the release notes.", "Please set the backup schedule.", "The picker labels still need to be fixed.", "I couldn't read the release notes."]) {
+    for (const reply of ["The keyboard shortcuts are a good question. I'll get back to you.", "I'm checking where the keyboard shortcuts are documented.", "Please read the release notes.", "Please set the backup schedule.", "The picker labels still need to be fixed.", "I couldn't read the release notes."]) {
       expect(settle([user("go on"), bot(reply)], open).map((item) => item.status)).toEqual(["open", "open", "open", "open"]);
     }
     expect(settle([user("go on"), bot("I read the release notes. I set the backup schedule. The picker labels are fixed.")], open).map((item) => item.status)).toEqual(["open", "done", "done", "done"]);

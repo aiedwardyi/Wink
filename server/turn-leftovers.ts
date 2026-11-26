@@ -22,6 +22,8 @@ const TIMES = new RegExp(DEFERRED.source, "gi");
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
 const CODE = /(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g;
 const QUESTION = /[?？]$/;
+// "I'm checking where the shortcuts are": the bot on its way, never an answer
+const PROGRESS = /\b(?:i['’]m|i am|we['’]re|we are)\s+(?:\p{L}+\s+)?\p{L}+ing\b/iu;
 
 const sentences = (text: string) => text.replace(CODE, "$1").split(SENTENCE)
   .map((part) => part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -136,7 +138,7 @@ export function settledAsks(rows: readonly Message[], asks: readonly TaskAsk[] |
   const text = rows.filter((row) => said(row) && !row.quick);
   const reports = text.flatMap((row) => sentences(row.text!)).filter((line) => !COMMIT.test(line) && !QUESTION.test(line));
   const shown = text.filter((row) => !row.summarized).flatMap((row) => sentences(row.text!))
-    .filter((line) => !COMMIT.test(line) && !QUESTION.test(line)).map((line) => words(clauses(line).join(" ")));
+    .filter((line) => !COMMIT.test(line) && !QUESTION.test(line) && !PROGRESS.test(line)).map((line) => words(clauses(line).join(" ")));
   const promises = open.filter((ask) => ask.kind === "promise").map((ask) => ask.ask);
   return open.flatMap((ask): Settled[] => {
     if (ask.kind !== "promise") {
