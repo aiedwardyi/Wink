@@ -283,6 +283,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
         // pinned first: the identity hashes the time, and a merge must still find the tap
         current.source = identity(current);
         delete current.tapped;
+        delete current.retired;
         current.at = binding === "unbound" ? undefined : change.at;
         current.binding = binding;
         if (evidence.messageId || binding === "unbound") {

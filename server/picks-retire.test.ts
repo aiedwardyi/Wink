@@ -60,6 +60,14 @@ describe("retiring finished one-off picks", () => {
     expect(retirePicks(text, NOW)).toBeNull();
   });
 
+  it("brings a retired pick back when the user confirms it again", () => {
+    // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane tonight?", picked: "Work PC", said: "Work PC", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    const old = retirePicks(tapped, NOW)!;
+    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane tonight?", picked: "Work PC", said: "Work PC again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    expect(picksBlock(typed)).toContain("Work PC");
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();
