@@ -600,6 +600,23 @@ describe("paged transcripts", () => {
     expect(scroller.scrollTop).toBe(500);
   });
 
+  it("keeps an older window's answers while a turn runs", async () => {
+    const thread: Message[] = Array.from({ length: 600 }, (_, i) => i % 2
+      ? { id: `a${i}`, parentId: `q${i - 1}`, at: 1, role: "bot", kind: "text", text: `answer ${i};` }
+      : { id: `q${i}`, parentId: i ? `a${i - 1}` : null, at: 1, role: "user", kind: "text", text: `ask ${i};` });
+    thread.push({ id: "prompt", parentId: "a599", at: 1, role: "user", kind: "text", text: "running prompt;" });
+    pagedServer("thread-a", thread, { bots: [{ ...bot(thread, false), busy: true } as Bot], groups: [] });
+    const host = await mount("chat");
+    await vi.waitFor(() => expect(host.textContent).toContain("running prompt;"));
+    await act(async () => store.dispatch({ type: "focusMessage", threadId: "thread-a", messageId: "q100" }));
+    await vi.waitFor(() => expect(host.querySelector('[data-mid="q100"]')).not.toBeNull());
+    const ids = [...host.querySelectorAll("[data-mid]")].map((row) => row.getAttribute("data-mid"));
+    expect(host.querySelector('[data-mid="prompt"]')).toBeNull();
+    const start = thread.findIndex((row) => row.id === ids[0]);
+    expect(ids).toEqual(thread.slice(start, start + ids.length).map((row) => row.id));
+    expect(ids.at(-1)).toMatch(/^a/);
+  });
+
   it("pages back to a search hit older than every loaded page", async () => {
     const thread = rows(0, 600);
     pagedServer("thread-a", thread, { bots: [bot(thread.slice(-200), true)], groups: [] });

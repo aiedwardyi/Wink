@@ -98,7 +98,9 @@ export function turnSummaries(
     if (restated.size) hide?.(threadId, [...restated], true);
     const visible = turn.shown.filter((row) => !hidden.has(row.id) && !restated.has(row.id));
     const earlier = new Set(visible.slice(0, -1).filter((row) => row.foldable).map((row) => row.id));
-    const steps = turn.shown.filter((row) => earlier.has(row.id) || commentary.includes(row.id)).map((row) => row.id);
+    // a steer or peer reply stays out of Steps, its commentary too
+    const folded = new Set([...earlier, ...commentary]);
+    const steps = turn.shown.filter((row) => row.foldable && folded.has(row.id)).map((row) => row.id);
     if (steps.length) markSteps?.(threadId, steps);
   };
   return {

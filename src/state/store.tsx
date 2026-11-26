@@ -1335,7 +1335,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   };
   const streamTails = useRef<Record<string, string>>({});
   const liveTurns = useRef<Record<string, string>>({});
-  const heldReplies = useRef(new Map<string, HeldFrame>());
+  const heldReplies = useRef(new Map<string, HeldFrame[]>());
   const [origins, updateOrigin] = useReducer(nextTurnOrigins, {});
   // a finished turn's origin is not the next send's; that one counts from its own dispatch
   const turnOrigin = useCallback((threadId: string) => origins[threadId]?.active ? origins[threadId].origin?.originMs : undefined, [origins]);
@@ -2461,7 +2461,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const reset = frame.message && streamResetFor(frame.message);
           if (reset === "reasoning") clearReasoning(frame.threadId);
           if (reset === "stream") clearStream(frame.threadId);
-          if (held) heldReplies.current.set(frame.threadId, frame);
+          if (held) heldReplies.current.set(frame.threadId, [...(heldReplies.current.get(frame.threadId) ?? []), frame]);
           else if (frame.message?.role === "bot" && frame.message?.kind === "text" && !isVoiceLine(frame.message)) replyEffects(frame);
           break;
         }
@@ -2470,6 +2470,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const arrivalId = arrivalChatForRoutinePatch(frame, stateRef.current);
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
           if (arrivalId) noteArrival(arrivalId);
+          // a held text the turn's end folds into Steps or hides was never its answer
+          const heldTexts = heldReplies.current.get(frame.threadId);
+          if (heldTexts && frame.message?.id) {
+            heldReplies.current.set(frame.threadId, heldTexts
+              .map((entry) => entry.message.id === frame.message.id ? { ...entry, message: { ...entry.message, ...frame.message } } : entry)
+              .filter((entry) => !entry.message.step && !entry.message.summarized));
+          }
           break;
         }
         case "thread":
@@ -2589,7 +2596,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             flushDeltas();
             clearStream(event.threadId, "completed", event.ok !== false);
             turnCompleted(event.threadId);
-            const held = heldReplies.current.get(event.threadId);
+            const held = heldReplies.current.get(event.threadId)?.at(-1);
             heldReplies.current.delete(event.threadId);
             if (held) {
               const arrivalId = arrivalChatForFrame(held, stateRef.current);
