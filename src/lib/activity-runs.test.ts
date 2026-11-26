@@ -600,7 +600,7 @@ describe("server handoff lines", () => {
 describe("memory cleanup boundary", () => {
   it("never folds a tidy row and splits saves around it", () => {
     const save = (id: string): Message => ({ id, at: 1, role: "bot", kind: "activity", tool: { name: "memory.save", ok: true } });
-    const tidy = { ...save("tidy"), tool: { name: "memory.save", ok: true, tidy: { runId: "r" } } };
+    const tidy = { ...save("tidy"), tool: { name: "memory.save", ok: true, tidy: { runId: "r", count: 1 } } };
     const items = groupActivityRuns([save("a"), save("b"), tidy, save("c"), save("d")], false);
     expect(items.map((item) => item.kind)).toEqual(["memory", "message", "memory"]);
   });

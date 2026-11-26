@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { DATA_DIR } from "./config.ts";
+import { dreamedPath } from "./dream-archive.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { ClaudeDriver } from "./drivers/claude.ts";
 import { noteGenerator, type NoteGenerator } from "./memory-pass.ts";
@@ -16,6 +19,7 @@ import {
   SLEEP_IDLE_MS,
   SLEEP_TIMEOUT_MS,
   tidyPrompt,
+  twinKey,
   withoutLines,
   noteLines,
   type MemorySleep,
@@ -24,7 +28,7 @@ import { markTalked, markTidied, memorySyncDir, pinMemoryJobOwner, syncBotMemory
 import { listMemoryTopics, loadMemory, shownMemory, MEMORY_MAX_LINES, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
-const hooks = vi.hoisted(() => ({ beforeWrite: (_path: string) => {}, beforeRename: (_from: string) => {} }));
+const hooks = vi.hoisted(() => ({ beforeWrite: (_path: string) => {}, beforeRename: (_from: string) => {}, afterRaw: (_botId: string) => {} }));
 
 vi.mock("./atomic.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("./atomic.ts")>();
@@ -41,23 +45,43 @@ vi.mock("./atomic.ts", async (importOriginal) => {
   };
 });
 
+vi.mock("./workspace.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./workspace.ts")>();
+  return {
+    ...real,
+    memoryFileRaw: (botId: string) => {
+      const raw = real.memoryFileRaw(botId);
+      hooks.afterRaw(botId);
+      return raw;
+    },
+  };
+});
+
 const temps = createTempDirs();
 afterAll(() => temps.remove());
 const NOW = new Date(2026, 10, 19, 12).getTime();
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
-const OLD_HISTORY = '# Memory history\n\n## 2026-11-03 09:00\n- "Lives in Busan" replaced by "Lives in Seoul (noted 2026-11-03)", 2026-11-03\n';
 
 const memory = (...lines: string[]) => `# Memory\n\n${lines.join("\n")}\n`;
-const reply = (value: { duplicates?: Array<{ keep: string; drop: string[] }>; disagree?: Array<[string, string]> }): NoteGenerator => async () => JSON.stringify(value);
+// written as the old tidy reply; each judge reads it as its own dream reply, and like both judges flags each exact twin as a repeat
+const reply = ({ duplicates, ...rest }: { duplicates?: Array<{ keep: string; drop: string[] }>; disagree?: Array<[string, string]>; stale?: string[] }): NoteGenerator => async (prompt) => {
+  const notes = [...prompt.matchAll(/^(L\d+): (.*)$/gm)].map(([, ref, text]) => ({ ref: ref!, key: twinKey(text!) }));
+  const twins = notes.flatMap((note) => {
+    const other = notes.find((each) => each !== note && each.key === note.key);
+    return other ? [{ drop: note.ref, by: [other.ref], lost: "" }] : [];
+  });
+  return JSON.stringify({ ...rest, repeat: [...twins, ...(duplicates ?? []).flatMap(({ keep, drop }) => drop.map((each) => ({ drop: each, by: [keep], lost: "" })))] });
+};
 const loaded = (botId: string) => {
   const memory = loadMemory(botId);
   return memory ? shownMemory(memory) : "";
 };
 const historyFile = (botId: string) => join(workspaceDir(botId), "memory-history", "2026-11.md");
+const OLD_ARCHIVE = "# Dreamed notes\n\n## 2026-11-03 (run old)\n- Lives in Busan\n  - from MEMORY.md:3 on 2026-11-03: a newer note replaces it\n";
 const history = (botId: string) => {
   try {
-    return readFileSync(historyFile(botId), "utf8");
+    return readFileSync(dreamedPath(botId), "utf8");
   } catch {
     return "";
   }
@@ -192,6 +216,8 @@ describe("memory sleep", () => {
   let changed: string[];
   let generator: NoteGenerator | null;
   let generate: ReturnType<typeof vi.fn<NoteGenerator>>;
+  let second: NoteGenerator | null | undefined;
+  let gemini: ReturnType<typeof vi.fn<NoteGenerator>>;
   let perBot: Map<string, NoteGenerator>;
   let ledgers: Map<string, MemorySyncLedger>;
   let bots: string[];
@@ -203,7 +229,11 @@ describe("memory sleep", () => {
     const created = createMemorySleep({
       dataDir,
       bots: () => bots,
-      generate: (botId) => perBot.get(botId) ?? (generator && generate),
+      live: () => true,
+      judges: (botId) => {
+        const own = perBot.get(botId);
+        return own ? { claude: own, gemini: own } : { claude: generator && generate, gemini: second === null ? null : generator && gemini };
+      },
       enabled: (botId) => on && !away.has(botId),
       busy: (botId) => busy.has(botId),
       changed: (botId) => void changed.push(botId),
@@ -234,6 +264,9 @@ describe("memory sleep", () => {
     changed = [];
     generator = reply({});
     generate = vi.fn<NoteGenerator>((...args) => generator!(...args));
+    second = undefined;
+    // the same answer as Claude's, from one call, unless a test gives Gemini its own
+    gemini = vi.fn<NoteGenerator>((...args) => (second ? second(...args) : generate.mock.results.at(-1)!.value as Promise<string>));
     perBot = new Map();
     ledgers = new Map();
     bots = [`sleep-bot-${++seq}`];
@@ -252,7 +285,7 @@ describe("memory sleep", () => {
     generator = reply({ disagree: [["L3", "L5"]] });
     await quiet();
     expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Prefers dark mode, not light mode (noted 2026-11-12)"));
-    expect(history(bot)).toContain('- "Prefers light mode (noted 2026-10-01)" replaced by "Prefers dark mode, not light mode (noted 2026-11-12)", 2026-11-19');
+    expect(history(bot)).toContain("- Prefers light mode (noted 2026-10-01)\n  - from MEMORY.md:3 on 2026-11-19: a newer note replaces it");
   });
 
   it("merges exact twins and model duplicates, and a rerun changes nothing and calls no model", async () => {
@@ -263,7 +296,7 @@ describe("memory sleep", () => {
     const tidied = memoryFileRaw(bot);
     expect(tidied).toBe(memory("- Uses pnpm, not npm", "- Wants short replies with bullets (noted 2026-11-10)"));
     const logs = history(bot);
-    expect(logs.match(/replaced by/g)).toHaveLength(2);
+    expect(logs.match(/ {2}- from MEMORY\.md:/g)).toHaveLength(2);
     expect(generate).toHaveBeenCalledTimes(1);
     sleep.onSettled(bot);
     await quiet(SLEEP_GAP_MS);
@@ -308,12 +341,12 @@ describe("memory sleep", () => {
     writeMemoryFile(bot, lines);
     generator = reply({ duplicates: [{ keep: "L5", drop: ["L6"] }] });
     await quiet();
-    expect(count(history(bot), "replaced by")).toBe(2);
+    expect(count(history(bot), "  - from MEMORY.md:")).toBe(2);
     writeMemoryFile(bot, lines);
     sleep.onSettled(bot);
     await quiet(SLEEP_GAP_MS);
     expect(memoryFileRaw(bot)).toBe(lines);
-    expect(count(history(bot), "replaced by")).toBe(2);
+    expect(count(history(bot), "  - from MEMORY.md:")).toBe(2);
   });
 
   it("waits while the bot is busy, its Auto notes are off, or a tidy ran within the gap", async () => {
@@ -339,12 +372,62 @@ describe("memory sleep", () => {
     expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Lives in Seoul"));
   });
 
-  it("still merges exact twins when no Claude is set up", async () => {
+  it.each([
+    ["is signed out", () => { second = null; }, "gemini judge unavailable"],
+    ["fails", () => { second = async () => { throw new Error("quota"); }; }, "gemini judge failed"],
+    ["answers with no JSON", () => { second = async () => "sorry"; }, "gemini judge reply unreadable"],
+  ])("moves nothing, not even twins, and logs why while the Gemini judge %s", async (_, down, why) => {
     const bot = bots[0]!;
-    generator = null;
-    writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm"));
+    const raw = memory("- Uses  pnpm.", "- Uses pnpm", "- Prefers light mode (noted 2026-10-01)", "- Prefers dark mode, not light mode (noted 2026-11-12)");
+    generator = reply({ disagree: [["L5", "L6"]] });
+    down();
+    writeMemoryFile(bot, raw);
     await quiet();
-    expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm"));
+    expect(memoryFileRaw(bot)).toBe(raw);
+    expect(existsSync(dreamedPath(bot))).toBe(false);
+    expect(vi.mocked(console.info).mock.calls.some(([line]) => String(line).includes(`"reason":"${why}"`) && String(line).includes('"result":"unjudged"'))).toBe(true);
+  });
+
+  it("moves a line only when both judges flag it for the same kind", async () => {
+    const bot = bots[0]!;
+    const raw = memory("- Prefers light mode (noted 2026-10-01)", "- Prefers dark mode, not light mode (noted 2026-11-12)", "- Dentist on 11-02 at 3pm");
+    writeMemoryFile(bot, raw);
+    generator = reply({ disagree: [["L3", "L4"]], stale: ["L5"] });
+    second = reply({ stale: ["L3"] });
+    await quiet();
+    expect(memoryFileRaw(bot)).toBe(raw);
+    second = reply({ disagree: [["L3", "L4"]], stale: ["L5"] });
+    writeMemoryFile(bot, `${raw}`.replace("3pm", "3 pm"));
+    sleep.onSettled(bot);
+    await quiet(SLEEP_GAP_MS);
+    expect(memoryFileRaw(bot)).toBe(memory("- Prefers dark mode, not light mode (noted 2026-11-12)"));
+    expect(count(history(bot), "  - from MEMORY.md:")).toBe(2);
+    expect(history(bot)).toContain("- Dentist on 11-02 at 3 pm\n  - from MEMORY.md:5 on 2026-11-19: every date it names is past");
+  });
+
+  it("puts every line of the newest run back with one undo, and never moves them again", async () => {
+    const bot = bots[0]!;
+    const archived: string[] = [];
+    sleep.dispose();
+    sleep = createMemorySleep({ dataDir, bots: () => bots, live: () => true, judges: () => ({ claude: generate, gemini }), enabled: () => true, busy: () => false, changed: () => {}, archived: (_, run) => void archived.push(run.runId) });
+    const raw = memory("- Uses  pnpm.", "- Uses pnpm", "## Home", "- Prefers light mode (noted 2026-10-01)", "- Prefers dark mode, not light mode (noted 2026-11-12)", "- Dentist on 11-02 at 3pm");
+    writeMemoryFile(bot, raw);
+    generator = reply({ disagree: [["L6", "L7"]], stale: ["L8"] });
+    await quiet();
+    expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "## Home", "- Prefers dark mode, not light mode (noted 2026-11-12)"));
+    const run = sleep.latest(bot)!;
+    expect(run).toMatchObject({ runId: archived[0], moved: 3, merged: 1, replaced: 1, undoable: true, undoneAt: null, files: ["MEMORY.md", "memory/dreamed.md"] });
+    expect(sleep.undo(bot, "other")).toEqual({ ok: false, error: "not-newest" });
+    expect(sleep.undo(bot, run.runId)).toMatchObject({ ok: true, restored: 3, skipped: 0 });
+    expect(memoryFileRaw(bot)).toBe(raw);
+    expect(history(bot)).toContain(`(run ${run.runId}), undone 2026-11-19`);
+    expect(sleep.latest(bot)).toMatchObject({ undoable: false });
+    expect(sleep.undo(bot, run.runId)).toEqual({ ok: false, error: "undone" });
+    writeMemoryFile(bot, `${raw}- Lives in Seoul\n`);
+    sleep.onSettled(bot);
+    await quiet(SLEEP_GAP_MS);
+    expect(memoryFileRaw(bot)).toBe(`${raw}- Lives in Seoul\n`);
+    expect(archived).toHaveLength(1);
   });
 
   it("gives up on a model that never answers, logs it and moves to the next bot", async () => {
@@ -375,7 +458,8 @@ describe("memory sleep", () => {
     await quiet(SLEEP_IDLE_MS + SLEEP_GAP_MS);
     const ms = vi.getRealSystemTime() - started;
     expect(generate).toHaveBeenCalledTimes(30);
-    for (const bot of bots) expect(noteLines(memoryFileRaw(bot))).toHaveLength(150);
+    // a twin past the lines the judges read is never flagged, so it stays
+    for (const bot of bots) expect(noteLines(memoryFileRaw(bot))).toHaveLength(190);
     expect(Math.max(...generate.mock.calls.map(([prompt]) => Buffer.byteLength(prompt, "utf8")))).toBeLessThan(40_000);
     expect(ms).toBeLessThan(30 * 1000);
   });
@@ -391,7 +475,7 @@ describe("memory sleep", () => {
       ["letter case", ["- Locker code: Ab3xK", "- Locker code: ab3xk"]],
     ])("of two notes that differ only in %s", async (_, lines) => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, memory(...lines));
       await quiet();
       for (const line of lines) expect(loaded(bot)).toContain(line);
@@ -399,7 +483,7 @@ describe("memory sleep", () => {
 
     it("of the same note when the line it would fold into has a line under it", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       const lines = ["- Reply in English", "  - except Korean when I write Korean", "- Reply in English (noted 2026-11-10)"];
       writeMemoryFile(bot, memory(...lines));
       await quiet();
@@ -408,7 +492,7 @@ describe("memory sleep", () => {
 
     it("of the same note under two headings", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, ["# Memory", "", "## Project Alpha", "- Deploys on Fridays", "- Owner is Dana", "", "## Project Beta", "- Deploys on Fridays", "- Owner is Lee", ""].join("\n"));
       await quiet();
       expect(count(loaded(bot), "- Deploys on Fridays")).toBe(2);
@@ -416,7 +500,7 @@ describe("memory sleep", () => {
 
     it("of the same note with different lines under it", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, ["# Memory", "", "## Alice", "- Contact:", "  - phone 555-1111", "- Contact:", "  - email alice@acme.com", "", "## Bob", "- Contact:", "  - phone 555-2222", ""].join("\n"));
       await quiet();
       expect(count(loaded(bot), "- Contact:")).toBe(3);
@@ -487,7 +571,7 @@ describe("memory sleep", () => {
   describe("writes", () => {
     it("puts back a line another writer added while MEMORY.md was being saved", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm.", "- Lives in Seoul"));
       let landed = false;
       hooks.beforeWrite = (path) => {
@@ -502,7 +586,7 @@ describe("memory sleep", () => {
 
     it("puts back a save another program made by renaming its own file over MEMORY.md", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
       let landed = false;
       hooks.beforeWrite = (path) => {
@@ -519,7 +603,7 @@ describe("memory sleep", () => {
 
     it("names the file a save made during the tidy is in when it cannot go back", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       let landed = false;
@@ -547,7 +631,7 @@ describe("memory sleep", () => {
       ],
     ])("records no move when %s, and one when the next tidy moves it", async (_, write) => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
       vi.spyOn(console, "warn").mockImplementation(() => {});
       let landed = false;
@@ -559,11 +643,11 @@ describe("memory sleep", () => {
       await quiet();
       expect(landed).toBe(true);
       expect(memoryFileRaw(bot)).toContain("- Uses  pnpm.");
-      expect(history(bot)).not.toContain("replaced by");
+      expect(history(bot)).not.toContain("- from MEMORY.md");
       sleep.onSettled(bot);
       await quiet(SLEEP_GAP_MS);
       expect(memoryFileRaw(bot)).not.toContain("- Uses  pnpm.");
-      expect(count(history(bot), '"Uses  pnpm." replaced by')).toBe(1);
+      expect(count(history(bot), "- Uses  pnpm.\n  - from")).toBe(1);
     });
 
     it("calls the model once while MEMORY.md cannot be written", async () => {
@@ -580,38 +664,49 @@ describe("memory sleep", () => {
       expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Uses  pnpm.", "- Lives in Seoul"));
     });
 
-    it("never writes over earlier history", async () => {
+    it("never writes over the earlier archive", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm"));
-      mkdirSync(join(workspaceDir(bot), "memory-history"), { recursive: true });
-      writeFileSync(historyFile(bot), OLD_HISTORY);
+      mkdirSync(dirname(dreamedPath(bot)), { recursive: true });
+      writeFileSync(dreamedPath(bot), OLD_ARCHIVE);
       await quiet();
-      expect(history(bot)).toContain(OLD_HISTORY);
-      expect(history(bot)).toContain('- "Uses  pnpm." replaced by "Uses pnpm", 2026-11-19 (duplicate)');
+      expect(history(bot)).toContain(OLD_ARCHIVE);
+      expect(history(bot)).toContain("- Uses  pnpm.\n  - from MEMORY.md:3 on 2026-11-19: a newer note says all of it");
     });
 
-    it("stops before MEMORY.md when the history cannot be opened", async () => {
+    it("still keeps a line an older build's history moved and someone put back", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({ disagree: [["L3", "L4"]] });
+      const raw = memory("- Lives in Busan (noted 2026-11-01)", "- Lives in Seoul, not Busan (noted 2026-11-03)");
+      writeMemoryFile(bot, raw);
+      mkdirSync(join(workspaceDir(bot), "memory-history"), { recursive: true });
+      writeFileSync(historyFile(bot), '# Memory history\n\n## 2026-11-03 09:00\n- "Lives in Busan (noted 2026-11-01)" replaced by "Lives in Seoul, not Busan (noted 2026-11-03)", 2026-11-03\n');
+      await quiet();
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it("stops before MEMORY.md when the archive cannot be opened", async () => {
+      const bot = bots[0]!;
+      generator = reply({});
       writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
-      mkdirSync(historyFile(bot), { recursive: true });
+      mkdirSync(dreamedPath(bot), { recursive: true });
       await quiet();
       expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Uses  pnpm."));
     });
 
     it.runIf(process.platform === "win32")(
-      "stops before MEMORY.md while another process locks the history",
+      "stops before MEMORY.md while another process locks the archive",
       async () => {
         const bot = bots[0]!;
         writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
-        mkdirSync(join(workspaceDir(bot), "memory-history"), { recursive: true });
-        writeFileSync(historyFile(bot), OLD_HISTORY);
+        mkdirSync(dirname(dreamedPath(bot)), { recursive: true });
+        writeFileSync(dreamedPath(bot), OLD_ARCHIVE);
         let finish!: (text: string) => void;
         generator = () => new Promise<string>((resolve) => (finish = resolve));
         await vi.advanceTimersByTimeAsync(SLEEP_IDLE_MS);
         const script = "$f=[System.IO.File]::Open($env:SLEEP_LOCK,'Open','ReadWrite','None'); [Console]::Out.WriteLine('LOCKED'); [Console]::Out.Flush(); [System.Threading.Thread]::Sleep(300); $f.Close()";
-        const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { env: { ...process.env, SLEEP_LOCK: historyFile(bot) }, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+        const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { env: { ...process.env, SLEEP_LOCK: dreamedPath(bot) }, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
         const exited = new Promise<void>((resolve) => child.on("exit", () => resolve()));
         let out = "";
         await new Promise<void>((resolve, reject) => {
@@ -625,7 +720,7 @@ describe("memory sleep", () => {
         await sleep.idle();
         await exited;
         expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Uses  pnpm."));
-        expect(history(bot)).toBe(OLD_HISTORY);
+        expect(history(bot)).toBe(OLD_ARCHIVE);
       },
       20_000,
     );
@@ -707,7 +802,7 @@ describe("memory sleep", () => {
         sleep = start();
         await vi.advanceTimersByTimeAsync(SLEEP_IDLE_MS);
         await vi.waitFor(() => expect(vi.mocked(console.info)).toHaveBeenCalledOnce(), { timeout: 15_000 });
-        expect(JSON.parse(String(vi.mocked(console.info).mock.calls[0]![0]).replace("[memory-sleep] ", ""))).toMatchObject({ botId: bot, input: 6188, output: 1436, result: "none" });
+        expect(JSON.parse(String(vi.mocked(console.info).mock.calls[0]![0]).replace("[memory-sleep] ", ""))).toMatchObject({ botId: bot, input: 6188, output: 1436, judges: { claude: { input: 6188, output: 1436 } }, reason: "claude judge reply unreadable", result: "unjudged" });
       } finally {
         await claude.dispose?.();
       }
@@ -787,7 +882,7 @@ describe("memory sleep", () => {
       standby();
       expect([...away]).toEqual([botB]);
       writeMemoryFile(botB, `${memoryFileRaw(botB)}- Phone is 555-0100\n`);
-      generator = null;
+      generator = reply({});
       await quiet();
       expect(noteLines(memoryFileRaw(botA))).toHaveLength(2);
       settle();
@@ -803,7 +898,7 @@ describe("memory sleep", () => {
       share();
       away.add(botB);
       writeMemoryFile(botB, memoryFileRaw(botB).replace("- Lives in Busan", "- Lives in Seoul"));
-      generator = null;
+      generator = reply({});
       await quiet();
       expect(noteLines(memoryFileRaw(botA))).toHaveLength(2);
       settle();
@@ -819,7 +914,7 @@ describe("memory sleep", () => {
       share();
       away.add(botB);
       writeMemoryFile(botB, `${memoryFileRaw(botB)}- Phone is 555-0100\n`);
-      generator = null;
+      generator = reply({});
       await quiet();
       expect(noteLines(memoryFileRaw(botA))).toHaveLength(2);
       // the restart: the ledger as saved, and memory sync loaded afresh
@@ -849,7 +944,7 @@ describe("memory sleep", () => {
       writeMemoryFile(botA, `${memoryFileRaw(botA)}- Daughter Mina starts school 2027-03-02 (noted 2026-11-18)\n- Uses pnpm (noted 2026-11-19)\n`);
       sync(a);
       away.add(botB);
-      generator = null;
+      generator = reply({});
       await quiet();
       expect(memoryFileRaw(botA)).toBe(memory("- Lives in Seoul", "- Daughter Mina starts school 2027-03-02 (noted 2026-11-18)", "- Uses pnpm (noted 2026-11-19)"));
       sync(a);
@@ -882,7 +977,7 @@ describe("memory sleep", () => {
       const { share, settle } = twoPcs(botA, botB);
       writeMemoryFile(botA, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
       share();
-      generator = null;
+      generator = reply({});
       await quiet();
       await vi.advanceTimersByTimeAsync(7 * MIN);
       sleep.onSettled(botB);
@@ -912,27 +1007,81 @@ describe("memory sleep", () => {
     });
   });
 
-  describe("shows", () => {
-    it("no history file among the bot's memory topics", async () => {
+  it("leaves an edit that lands while Undo reads MEMORY.md to the editor", async () => {
+    const bot = bots[0]!;
+    const raw = memory("- Uses pnpm", "- Uses pnpm", "- Lives in Seoul");
+    writeMemoryFile(bot, raw);
+    generator = reply({ duplicates: [{ keep: "L4", drop: ["L3"] }] });
+    await quiet();
+    const edited = `${memoryFileRaw(bot)}- Likes tea\n`;
+    hooks.afterRaw = () => {
+      hooks.afterRaw = () => {};
+      writeFileSync(join(workspaceDir(bot), "MEMORY.md"), edited);
+    };
+    try {
+      expect(sleep.undo(bot, sleep.latest(bot)!.runId)).toEqual({ ok: false, error: "busy" });
+    } finally {
+      hooks.afterRaw = () => {};
+    }
+    expect(memoryFileRaw(bot)).toBe(edited);
+  });
+
+  describe("undo after a restart puts back", () => {
+    const moveThenUndo = async (raw: string, judged: NoteGenerator) => {
       const bot = bots[0]!;
-      generator = null;
+      mkdirSync(workspaceDir(bot), { recursive: true });
+      writeFileSync(join(workspaceDir(bot), "MEMORY.md"), raw);
+      generator = judged;
+      await quiet();
+      expect(memoryFileRaw(bot)).not.toBe(raw);
+      const runId = sleep.latest(bot)!.runId;
+      sleep.dispose();
+      sleep = start();
+      return sleep.undo(bot, runId);
+    };
+
+    it("the moved copy of an exact twin", async () => {
+      const raw = memory("- Uses pnpm", "- Uses pnpm", "- Lives in Seoul");
+      expect(await moveThenUndo(raw, reply({ duplicates: [{ keep: "L4", drop: ["L3"] }] }))).toMatchObject({ ok: true, restored: 1, skipped: 0 });
+      expect(memoryFileRaw(bots[0]!)).toBe(raw);
+    });
+
+    it("a line between two blank lines where it was", async () => {
+      const raw = memory("- Keeps tea in the blue tin", "", "- Dentist on 11-02 at 3pm", "", "- Lives in Seoul");
+      expect(await moveThenUndo(raw, reply({ stale: ["L5"] }))).toMatchObject({ ok: true, restored: 1 });
+      expect(memoryFileRaw(bots[0]!)).toBe(raw);
+    });
+
+    it.each([
+      ["a CRLF file", "# Memory\r\n\r\n- Keeps tea in the blue tin\r\n- Dentist on 11-02 at 3pm\n- Lives in Seoul\r\n"],
+      ["an LF file", "# Memory\n\n- Keeps tea in the blue tin\n- Dentist on 11-02 at 3pm\r\n- Lives in Seoul\n"],
+    ])("a line with its own line ending in %s", async (_, raw) => {
+      expect(await moveThenUndo(raw, reply({ stale: ["L4"] }))).toMatchObject({ ok: true, restored: 1 });
+      expect(memoryFileRaw(bots[0]!)).toBe(raw);
+    });
+  });
+
+  describe("shows", () => {
+    it("the archive among the bot's memory topics, where sync and recall reach it", async () => {
+      const bot = bots[0]!;
+      generator = reply({});
       writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm"));
       const before = listMemoryTopics(bot).map(({ name }) => name);
       await quiet();
       expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm"));
-      expect(listMemoryTopics(bot).map(({ name }) => name)).toEqual(before);
+      expect(listMemoryTopics(bot).map(({ name }) => name)).toEqual([...before, "dreamed.md"]);
     });
 
     it("an open Memory page the new file once it saves", async () => {
       const bot = bots[0]!;
-      generator = null;
+      generator = reply({});
       writeMemoryFile(bot, memory("- Uses  pnpm.", "- Uses pnpm", "- Lives in Seoul"));
       await quiet();
       expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", "- Lives in Seoul"));
       expect(changed).toEqual([bot]);
     });
 
-    it("no moved-out line in recall", async () => {
+    it("an archived line in recall", async () => {
       const bot = bots[0]!;
       const lines = filler(120);
       writeMemoryFile(bot, memory("- Cobalt walrus invoices go to the north office (noted 2026-10-01)", ...lines, "- Cobalt walrus invoices go to the south office, no longer the north office (noted 2026-11-12)"));
@@ -945,10 +1094,92 @@ describe("memory sleep", () => {
       try {
         const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
         await lookup.refresh(bot);
-        expect(lookup.take(bot, "t1", undefined, "where do cobalt walrus invoices go, north office?").join("\n")).not.toContain("2026-10-01");
+        const found = lookup.take(bot, "t1", undefined, "where do cobalt walrus invoices go?").join("\n");
+        expect(found).toContain("memory/dreamed.md");
+        expect(found).toContain("Cobalt walrus invoices go to the north office");
       } finally {
         rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
       }
     });
+
+    it("no archive line recall cannot return: the note stays in MEMORY.md", async () => {
+      const bot = bots[0]!;
+      const tokens = "- Arcade tokens for the indigo hornbill consignment went to Wiveliscombe on 11-02";
+      writeMemoryFile(bot, memory("- Uses pnpm", tokens));
+      generator = reply({ stale: ["L4"] });
+      await quiet();
+      expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm", tokens));
+      expect(loaded(bot)).toContain(tokens);
+      expect(history(bot)).not.toContain("Arcade tokens");
+    });
+
+    it("an archived dated note the next owner question asks about", async () => {
+      const bot = bots[0]!;
+      const tickets = "- Arcade tickets for the indigo hornbill consignment went to Wiveliscombe on 11-02";
+      writeMemoryFile(bot, memory("- Uses pnpm", tickets));
+      generator = reply({ stale: ["L4"] });
+      await quiet();
+      expect(memoryFileRaw(bot)).toBe(memory("- Uses pnpm"));
+      vi.useRealTimers();
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(join(DATA_DIR, "lookup-bots.json"), JSON.stringify([bot]));
+      try {
+        const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+        await lookup.refresh(bot);
+        const found = lookup.take(bot, "t1", undefined, "where did the indigo hornbill consignment go?").join("\n");
+        expect(found).toContain("memory/dreamed.md");
+        expect(found).toContain("Wiveliscombe");
+      } finally {
+        rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
+      }
+    });
+
+    it("archived lines in recall once the archive passes 2 MiB, the oldest and the newest", async () => {
+      const bot = bots[0]!;
+      const lines = filler(120);
+      writeMemoryFile(bot, memory("- Cobalt walrus invoices go to the north office (noted 2026-10-01)", ...lines, "- Cobalt walrus invoices go to the south office, no longer the north office (noted 2026-11-12)"));
+      const old = Array.from({ length: 15_000 }, (_, n) => `- Filler pebble${n} meadow${n} quartz${n} lagoon${n} saffron${n} tundra${n} orchid${n}\n  - from MEMORY.md:9 on 2026-10-02: a newer note says all of it`);
+      mkdirSync(dirname(dreamedPath(bot)), { recursive: true });
+      writeFileSync(dreamedPath(bot), `# Dreamed notes\n\n## 2026-10-02 (run old)\n- Vermilion heron tickets live in the attic drawer\n${old.join("\n")}\n`);
+      generator = reply({ disagree: [["L3", `L${lines.length + 4}`]] });
+      await quiet();
+      expect(statSync(dreamedPath(bot)).size).toBeGreaterThan(2 * 1024 * 1024);
+      expect(memoryFileRaw(bot)).not.toContain("2026-10-01");
+      vi.useRealTimers();
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(join(DATA_DIR, "lookup-bots.json"), JSON.stringify([bot]));
+      try {
+        const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+        await lookup.refresh(bot);
+        expect(lookup.take(bot, "t1", undefined, "where do vermilion heron tickets live?").join("\n")).toContain("Vermilion heron tickets live in the attic drawer");
+        expect(lookup.take(bot, "t2", undefined, "where do cobalt walrus invoices go?").join("\n")).toContain("Cobalt walrus invoices go to the north office");
+      } finally {
+        rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
+      }
+    }, 60_000);
+  });
+});
+
+describe("the undo route", () => {
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const from = "    m = path.match(/^\\/api\\/bots\\/([\\w-]+)\\/memory\\/clean\\/undo$/);";
+  const body = source.slice(source.indexOf(from), source.indexOf("    m = path.match(/^\\/api\\/bots\\/([\\w-]+)\\/memory\\/import$/);"));
+  const route = new Function(`${ts.transpileModule(`async function run(scope) { with (scope) { ${body} } }`, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None },
+  }).outputText}\nreturn run;`)() as (scope: object) => Promise<unknown>;
+
+  it("marks the line in the task the run wrote it to, after a switch to another task", async () => {
+    expect(body).toContain("memorySleep.undo(");
+    const line = { id: "m1", role: "bot", kind: "activity", tool: { name: "memory.save", ok: true, tidy: { runId: "r1", count: 2 } } };
+    const messages: Record<string, unknown[]> = { "task-a": [line], "task-b": [] };
+    const patchMessage = vi.fn();
+    const store = { bot: () => ({ id: "b1", threadId: "task-b" }), tasks: () => [{ threadId: "task-b" }, { threadId: "task-a" }], messagesFor: (threadId: string) => messages[threadId] ?? [], patchMessage };
+    const result = await route({
+      m: null, path: "/api/bots/b1/memory/clean/undo", method: "POST", req: { headers: {} }, res: {}, z, store,
+      commsCallers: { resolve: () => null }, readBody: async () => ({ runId: "r1" }), memorySleep: { undo: () => ({ ok: true }) },
+      json: (_res: unknown, status: number, value: unknown) => ({ status, value }),
+    });
+    expect(result).toEqual({ status: 200, value: { ok: true } });
+    expect(patchMessage).toHaveBeenCalledWith("task-a", "m1", { tool: { ...line.tool, tidy: { runId: "r1", count: 2, undoneAt: expect.any(Number) } } });
   });
 });

@@ -1563,7 +1563,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               ["--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
               { cwd: dir, env: helperEnv, stdio: ["pipe", "pipe", "pipe"] },
             );
-            let result: { status?: unknown; response?: unknown; error?: unknown } | null = null;
+            let result: { status?: unknown; response?: unknown; error?: unknown; usage?: { input_tokens?: number; cache_read_tokens?: number; output_tokens?: number } } | null = null;
             let failure: Error | null = null;
             const stop = (error: Error) => {
               failure ??= error;
@@ -1605,10 +1605,16 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               else if (result.status !== "SUCCESS" || !response) {
                 reject(textUsageError(error) ?? textUsageError(stderr) ?? new Error(`agy summary failed (${String(result.status)})${error && isAgyAccountError(error) ? `: ${error}` : ""}`));
               }
-              else resolve(response);
+              else {
+                const usage = result.usage;
+                if (usage) opts?.onUsage?.({ input: (usage.input_tokens || 0) + (usage.cache_read_tokens || 0), output: usage.output_tokens || 0 });
+                resolve(response);
+              }
             });
             child.stdin.end(antigravityStreamUserLine(prompt));
           });
+          // a caller that names its model gets that model or an error, never a stand-in
+          if (opts?.model) return await run(opts.model);
           // an account denied the text model writes notes on the bot's own chat model
           const fallback = opts?.fallbackModel && opts.fallbackModel !== AGY_TEXT_MODEL ? opts.fallbackModel : undefined;
           const account = fallback ? readAntigravityAccount(env()) ?? "" : "";
