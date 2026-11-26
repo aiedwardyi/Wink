@@ -262,17 +262,17 @@ export function QuickModelPicker({
   const viewedRow = rows[viewedRowIndex] ?? selectedRow;
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [scoreTip, setScoreTip] = useState(false);
-  const scoreTipTimer = useRef(0);
-  useEffect(() => () => window.clearTimeout(scoreTipTimer.current), []);
+  const scoreTipTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(scoreTipTimer.current), []);
   const holdScoreTip = (event: ReactPointerEvent) => {
     if (event.pointerType === "mouse") return;
-    window.clearTimeout(scoreTipTimer.current);
-    scoreTipTimer.current = window.setTimeout(() => {
+    clearTimeout(scoreTipTimer.current);
+    scoreTipTimer.current = setTimeout(() => {
       setScoreTip(true);
-      scoreTipTimer.current = window.setTimeout(() => setScoreTip(false), SCORE_TIP_SHOW_MS);
+      scoreTipTimer.current = setTimeout(() => setScoreTip(false), SCORE_TIP_SHOW_MS);
     }, SCORE_TIP_HOLD_MS);
   };
-  const dropScoreHold = () => { if (!scoreTip) window.clearTimeout(scoreTipTimer.current); };
+  const dropScoreHold = () => { if (!scoreTip) clearTimeout(scoreTipTimer.current); };
 
   const prevSelectedInstance = useRef(selection.instanceId);
   useEffect(() => {

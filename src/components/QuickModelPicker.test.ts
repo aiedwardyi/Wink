@@ -326,14 +326,15 @@ describe("Quick picker style", () => {
     expect(head.textContent).toBe("Intelligence");
     expect(head.title).toBe("Artificial Analysis Intelligence Index v5.0.1");
 
-    const wait = (ms: number) => act(() => new Promise((resolve) => setTimeout(resolve, ms)));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await act(async () => { head.dispatchEvent(new window.PointerEvent("pointerdown", { pointerType: "touch", bubbles: true })); });
-    await wait(300);
+    await act(async () => { vi.advanceTimersByTime(300); });
     expect(quickCard()!.querySelector("[data-quick-score-tip]")).toBeNull();
-    await wait(250);
+    await act(async () => { vi.advanceTimersByTime(150); });
     expect(quickCard()!.querySelector("[data-quick-score-tip]")?.textContent).toBe("Artificial Analysis Intelligence Index v5.0.1");
-    await wait(2450);
+    await act(async () => { vi.advanceTimersByTime(2400); });
     expect(quickCard()!.querySelector("[data-quick-score-tip]")).toBeNull();
+    vi.useRealTimers();
   });
 
   it.each([
