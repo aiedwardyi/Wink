@@ -606,6 +606,17 @@ describe("whats new card", () => {
     expect(soft, `capture at deviceScaleFactor 2: a clip needs ${minWidth} source px or text blurs on a 2x screen`).toEqual([]);
   });
 
+  it("plays previews from 1.0.302 on at 60 fps", () => {
+    const dir = "src/assets/whats-new";
+    const slow = readdirSync(dir)
+      .filter((file) => !newerRelease("1.0.302", file.split("-")[0]))
+      .filter((file) => {
+        const durations = clipFacts(join(dir, file))?.durations ?? [];
+        return durations.length === 0 || Math.max(...durations) > 1000 / 59;
+      });
+    expect(slow, "re-encode from the 60 fps capture: every frame 1/60 s, none held longer").toEqual([]);
+  });
+
   it("keeps animated previews moving smoothly", () => {
     const dir = "src/assets/whats-new";
     const failures: string[] = [];
