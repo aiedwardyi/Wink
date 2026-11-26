@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Every file the built UI asks for under /assets must ship. electron-builder
 // only warns when a copy goes wrong, and a missing clip or font shows up as a
 // blank tile in the installed app, not as a build error.
