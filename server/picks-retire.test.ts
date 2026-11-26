@@ -55,6 +55,11 @@ describe("retiring finished one-off picks", () => {
     expect(picksBlock(tweaked)).toContain("Work PC second lane for checks");
   });
 
+  it("dates a pick retyped on a later day by when it was last confirmed", () => {
+    const text = ["# Decision timeline", "", ...entry("2026-11-25 20:00", "Which lane tonight?", "Work PC", `- At: ${new Date("2026-11-26T09:00:00").getTime()}`, "- Binding: verified")].join("\n");
+    expect(retirePicks(text, NOW)).toBeNull();
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();
