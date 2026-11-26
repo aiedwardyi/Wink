@@ -926,6 +926,38 @@ describe("ChatView transcript window", () => {
       await unmount();
     }
   });
+
+  it("seats Jump to latest in the dock above the composer, never over a row", async () => {
+    const { host, render, unmount } = await mount();
+    const messages = Array.from({ length: 370 }, (_, i) => userMsg(`m${i}`, `row ${i};`));
+    try {
+      await render({ ...botA, messages });
+      await act(async () => button(host, "Show earlier messages")!.click());
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => TRANSCRIPT_PX });
+      scroller.scrollTop = 0;
+      await act(async () => scroller.dispatchEvent(new Event("scroll")));
+      const jump = button(host, "Jump to latest")!;
+      expect(jump.closest("[data-dock-rail]")).not.toBeNull();
+      // the rail shares the dock with the composer, below the transcript, so the pill takes its own line
+      expect(jump.closest("[data-dock-rail]")!.parentElement!.querySelector("[data-orbit-composer-frame]")).not.toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("keeps every waiting question out of the transcript while the dock holds them", async () => {
+    const { host, render, unmount } = await mount();
+    const ask = (id: string, subtitle: string): Message => ({ id, at: 1, role: "bot", kind: "options", card: { title: "A asks", subtitle, options: ["Yes", "No"], askUser: true, staysOpen: true } });
+    try {
+      await render({ ...botA, busy: false, messages: [userMsg("u1", "two things"), ask("q1", "Older question?"), ask("q2", "Newest question?")] });
+      expect(host.querySelectorAll('[data-ask-user-record="waiting"]')).toHaveLength(0);
+      expect(host.querySelector("[data-pending-question]")).not.toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
 });
 
 describe("a box opening in a row", () => {

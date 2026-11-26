@@ -230,6 +230,7 @@ describe("question folding", () => {
     const options = ["Yes, both", "Only the open speed", "Change it"];
 
     beforeEach(() => {
+      // happy-dom has no layout: a chip is 8px a character, in room px
       vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
         if (!this.matches("[data-row-choices]")) return 0;
         return [...this.querySelectorAll("button:not([hidden])")].reduce((width, chip) => width + 8 * (chip.textContent?.length ?? 0), 0);

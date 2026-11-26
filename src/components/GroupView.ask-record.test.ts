@@ -66,4 +66,34 @@ describe("GroupView ask records", () => {
     );
     expect(host.querySelector("[data-ask-user-record]")?.getAttribute("data-ask-user-record")).toBe("answered");
   });
+
+  it("keeps every waiting question out of the transcript while the dock holds them", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const older: Message = { ...ask, card: { ...ask.card!, staysOpen: true } };
+    const newest: Message = { ...ask, id: "q2", at: 2, card: { ...ask.card!, subtitle: "Which branch?", staysOpen: true } };
+    const messages = [older, newest];
+    const group = { id: "room-1", name: "Room", threadId: "t1", messages } as unknown as Group;
+    await act(async () =>
+      root!.render(
+        createElement(
+          I18nProvider,
+          null,
+          createElement(Transcript, {
+            group,
+            members: [],
+            messages,
+            transcript: messages,
+            streamingMessage: null,
+            dock: null,
+            onReply: () => undefined,
+            onMessageMenu: () => undefined,
+            workers: [],
+          }),
+        ),
+      ),
+    );
+    expect(host.querySelectorAll('[data-ask-user-record="waiting"]')).toHaveLength(0);
+  });
 });
