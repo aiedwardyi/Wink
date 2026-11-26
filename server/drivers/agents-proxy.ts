@@ -700,6 +700,19 @@ const TOOLS = [
       required: ["sessionId", "title"],
     },
   },
+  {
+    name: "post_to_group",
+    description: "Post one text message as yourself in an existing group room you belong to. Call only when the owner directly asks you to post there.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        group: { type: "string", description: "The existing group's exact name." },
+        text: { type: "string", description: "The text to post." },
+      },
+      required: ["group", "text"],
+    },
+  },
 ];
 
 type Json = Record<string, unknown>;
@@ -1226,6 +1239,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   if (name === "link_room_fix") {
     const r = await api("/api/internal/room-fix", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
     return { text: String(r.text ?? "Linked.") };
+  }
+  if (name === "post_to_group") {
+    const r = await api("/api/internal/post-to-group", { method: "POST", body: JSON.stringify(args) });
+    return { text: String(r.text ?? "") };
   }
   return { text: `Unknown tool: ${name}`, isError: true };
 }
