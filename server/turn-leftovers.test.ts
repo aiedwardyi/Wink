@@ -59,6 +59,7 @@ describe("turn leftovers", () => {
     // a quoted example is no promise; a quoted name inside one is
     expect(turnLeftovers([user("Go on"), bot(`The sentence "I'll delete the backup tomorrow." is in the future tense.`), bot("Back soon.")])).toEqual([]);
     expect(turnLeftovers([user("Go on"), bot(`I'll rename the "Save" button.`)])).toEqual([promise(`I'll rename the "Save" button.`)]);
+    expect(turnLeftovers([user("Go on"), bot(`I'll rename "Save".`)])).toEqual([promise(`I'll rename "Save".`)]);
     const kept = ["I'll fix the API.", "I'll check if the backup exists.", "I'll implement the feature you want."];
     expect(turnLeftovers([user("Keep going."), ...kept.map((line) => bot(line, { summarized: true })), bot("Back soon.")])).toEqual(kept.map(promise));
   });
@@ -183,6 +184,10 @@ describe("turn leftovers", () => {
     // a fresh engine's full list marks an open promise unchecked and says to close it by ID, not redo it
     expect(asksBlock(saved.asks, 6)).toContain("close each by ID or set it building with the job's ref through update_task_state; never start one twice.");
     expect(asksBlock([{ ...saved.asks[0]!, status: "building", ref: "PID 4128" }], 6)).toContain("- A1 building promise 01-01: I'll update the picker labels. (PID 4128)");
+    // a carried question alone gets the same check on a fresh engine's full list
+    const invoice = fileLeftovers(undefined, [{ ask: "Could you email the invoice?" }], 5)!.asks;
+    expect(asksBlock(invoice, 6)).toContain("An unchecked row may be done or running already: check the transcript, files and running processes first");
+    expect(asksBlock(invoice, 6)).toContain("- A1 open unchecked 01-01: Could you email the invoice?");
   });
 
   it("keeps a long question's mark and never nags a question or promise to be built", () => {

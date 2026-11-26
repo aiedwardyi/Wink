@@ -75,8 +75,10 @@ function namesPromise(line: string, promise: string, others: readonly string[]):
 }
 
 // a final "I'll" that names its work, "the picker labels" or "PC A", is concrete; "I'll keep it simple" is where the turn stopped
+// an "I'll" in quotes is an example, not the bot's word; quotes keep their place, so a quoted name still makes one concrete
+const spoken = (line: string) => line.replace(/"[^"]*"|“[^”]*”/g, (quoted) => " ".repeat(quoted.length));
 const concrete = (line: string) => {
-  const marker = COMMIT.exec(line)!;
+  const marker = COMMIT.exec(spoken(line))!;
   // Korean names its object before the ending, with 을/를 or a name
   return DEFERRED.test(line) || (/^i/i.test(marker[0])
     ? /\b(?:the|my|your|our|their)\s+\p{L}|\p{Lu}|\p{N}/u.test(line.slice(marker.index + marker[0].length))
@@ -103,10 +105,8 @@ export interface Leftover { ask: string; promise?: true; note?: string }
 export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   const own = (row: Message) => said(row) && !row.quick;
   const last = rows.findLast(own);
-  // an "I'll" in quotes is an example, not the bot's word
-  const spoken = (line: string) => line.replace(/"[^"]*"|“[^”]*”/g, " ");
   const lines = rows.flatMap((row) => !own(row) ? [] : sentences(row.text!)
-    .map((line) => ({ line, commit: COMMIT.test(spoken(line)) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) && (row !== last || concrete(spoken(line))) })));
+    .map((line) => ({ line, commit: COMMIT.test(spoken(line)) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) && (row !== last || concrete(line)) })));
   for (const [at, { line }] of lines.entries()) {
     if (!WITHDRAWN.test(line)) continue;
     const taken = line.replace(WITHDRAWN, " ");
