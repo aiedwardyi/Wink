@@ -273,7 +273,7 @@ describe("Quick picker style", () => {
     expect(sheet).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
   });
 
-  it("picks the focused row on Enter, leaves other controls their keys, and drops the dialog role while closing", async () => {
+  it("picks the focused row on Enter, leaves other controls their Enter, and drops the dialog role while closing", async () => {
     await mountPicker(atHigh, [claude, codex]);
     await act(async () => triggerBtn().click());
     const press = async (target: Element, key: string) => {
@@ -283,8 +283,6 @@ describe("Quick picker style", () => {
     };
     const lab = quickCard()!.querySelector('[data-quick-lab="codex"]')!;
     expect((await press(lab, "Enter")).defaultPrevented).toBe(false);
-    await press(lab, "ArrowRight");
-    expect(quickCard()?.querySelector('[data-quick-effort][aria-checked="true"]')?.getAttribute("data-quick-effort")).toBe("high");
     expect(quickCard()?.getAttribute("role")).toBe("dialog");
 
     await click('[data-quick-lab="codex"]');
@@ -292,6 +290,33 @@ describe("Quick picker style", () => {
     expect(triggerBtn().querySelector("[data-model-label]")?.textContent).toContain("GPT-6.2 Astra");
     expect(quickCard()?.hasAttribute("data-closing")).toBe(true);
     expect(isDialogActive(document)).toBe(false);
+  });
+
+  it("keeps arrows on effort and model after a click on a lab, row or effort step", async () => {
+    await mountPicker(atHigh, [claude, codex]);
+    await act(async () => triggerBtn().click());
+    const effort = () => quickCard()?.querySelector('[data-quick-effort][aria-checked="true"]')?.getAttribute("data-quick-effort");
+    const model = () => quickCard()?.querySelector('[data-quick-model][aria-checked="true"]')?.getAttribute("data-quick-model");
+    const clickThenPress = async (selector: string, key: string) => {
+      const el = quickCard()!.querySelector<HTMLButtonElement>(selector)!;
+      await act(async () => { el.focus(); el.click(); });
+      await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+    };
+
+    await clickThenPress('[data-quick-lab="codex"]', "ArrowRight");
+    expect(effort()).toBe("xhigh");
+    await clickThenPress('[data-quick-lab="codex"]', "ArrowLeft");
+    expect(effort()).toBe("high");
+    await clickThenPress('[data-quick-lab="claude"]', "ArrowDown");
+    expect(model()).toBe("gpt-6.2-astra");
+
+    await clickThenPress('[data-quick-model="gpt-6.2-astra"]', "ArrowRight");
+    expect(effort()).toBe("xhigh");
+    await clickThenPress('[data-quick-model="gpt-6.2-astra"]', "ArrowUp");
+    expect(model()).toBe("claude-opus-5-5");
+
+    await clickThenPress('[data-quick-effort="low"]', "ArrowRight");
+    expect(effort()).toBe("medium");
   });
 
   it.each(["dial", "list", "chart"] as const)("leaves the %s header button as it is today at Max", async (view) => {
