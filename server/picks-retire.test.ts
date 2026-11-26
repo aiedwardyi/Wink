@@ -100,6 +100,19 @@ describe("retiring finished one-off picks", () => {
     expect(picksBlock(out.text)).toContain("Keep the header small");
   });
 
+  it("dates tomorrow by the calendar across a clock change", () => {
+    // deleting TZ keeps the last zone on Windows, so put back the one in force
+    const zone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    process.env.TZ = "America/New_York";
+    try {
+      const at = new Date("2026-11-01T00:30:00").getTime();
+      const text = ["# Decision timeline", "", ...entry("2026-11-01 00:30", "Ship today or tomorrow?", "Tomorrow", `- At: ${at}`, "- Binding: verified")].join("\n");
+      expect(retirePicks(text, new Date("2026-11-02T12:00:00").getTime())).toBeNull();
+    } finally {
+      process.env.TZ = zone;
+    }
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();

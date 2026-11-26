@@ -604,7 +604,9 @@ export function retirePicks(text: string, now: number, done: (entry: PickEntry) 
     const tweak = entry.tweaks.at(-1);
     // a card question can say what holds "right now" before or after what it asks
     const asked = entry.key.match(/[^.?!]*\?/g)?.join(" ") ?? entry.key;
-    const day = tweak ? DATED_SAID.test(tweak.said) && tweak.at.slice(0, 10) : DATED.test(`${asked}\n${entry.picked}`) && pickStamp(entryTime(entry) + (/\btomorrow\b/i.test(entry.picked) ? 86_400_000 : 0)).slice(0, 10);
+    const due = new Date(entryTime(entry));
+    if (/\btomorrow\b/i.test(entry.picked)) due.setDate(due.getDate() + 1);
+    const day = tweak ? DATED_SAID.test(tweak.said) && tweak.at.slice(0, 10) : DATED.test(`${asked}\n${entry.picked}`) && pickStamp(due.getTime()).slice(0, 10);
     const dated = day && day < today && !RECURRING.test([entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n"));
     if (!dated && !done(entry)) continue;
     entry.retired = today;
