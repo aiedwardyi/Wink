@@ -345,6 +345,29 @@ it("its own voice transcribed after the read ended is still its own, and what he
     expect(s.sent).toEqual(["tell me"]);
   });
 
+  it("its own voice leaking into the mic through the read is still its own after the read, even after a sound", async () => {
+    const leak = () => new Int16Array(640).fill(4_000).buffer;
+    const question = "Should I go ahead and deploy it, or keep the old build?";
+    for (const [his, sent] of [["", []], [" Yes.", []], [" What time is it?", ["What time is it?"]]] as const) {
+      const s = await started();
+      answered(s, question);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(question);
+      s.engine().events.turnDone();
+      for (let i = 0; i < 25; i++) s.audio.mic!(leak());
+      s.engine().events.heard("should i go ahead and deploy it");
+      s.audio.flush();
+      s.audio.onIdle();
+      s.audio.mic!(loudFrame());
+      s.engine().events.heard(" or keep the old build");
+      if (his) s.engine().events.heard(his);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me", ...sent]);
+    }
+  });
+
   it("his own words heard after the read ended still go to the bot once", async () => {
     const s = await started();
     answered(s, "A reply long enough to be read aloud for a while.");

@@ -13,6 +13,9 @@ const READ = "[READ]\n";
 // A mutter is not a message to the bot; a yes or a no is.
 const MUTTER = /^(?:h?m+|mhm|u[hm]+|uh-?huh|er+|음+|어+)[.!?,\s]*$/i;
 
+// Half a second of 16 kHz mic: a cough or a tap is shorter.
+const LEAK = 8_000;
+
 function loud(pcm: ArrayBuffer): boolean {
   for (const sample of new Int16Array(pcm)) if (sample > 1_000 || sample < -1_000) return true;
   return false;
@@ -59,8 +62,11 @@ export class SameBotCall {
   private said = "";
   /** Heard while it reads, not yet his: it may be the voice coming back. */
   private over = "";
-  /** A sound reached Google while it read: until his next sound or Google's turn for it, its words may be the voice's own, even once the read is over. */
+  /** A sound reached Google while it read: until Google's turn for it, or his next sound if the read did not leak, its words may be the voice's own, even once the read is over. */
   private overSound = false;
+  /** Mic samples while its voice played this read, and the loud ones: its voice leaking back is loud through the read, a cough or a tap is not. */
+  private playedMic = 0;
+  private playedLoud = 0;
   /** Its own voice already dropped from what was heard over it: a held tail that goes on it is the voice's too. */
   private echoed = "";
   /** What is held came after the read: his unless it goes on its own voice. */
@@ -104,6 +110,10 @@ export class SameBotCall {
 
   private get ended() {
     return this.snapshot.status === "ended" || this.snapshot.status === "failed";
+  }
+
+  private get leaked() {
+    return this.playedLoud >= Math.max(LEAK, this.playedMic / 2);
   }
 
   private get speaking() {
@@ -176,10 +186,15 @@ export class SameBotCall {
   private frame(pcm: ArrayBuffer) {
     if (!this.connected || this.snapshot.muted) return;
     this.micOpen = true;
-    if (loud(pcm)) {
+    const isLoud = loud(pcm);
+    if (this.deps.audio.playing) {
+      this.playedMic += pcm.byteLength / 2;
+      if (isLoud) this.playedLoud += pcm.byteLength / 2;
+    }
+    if (isLoud) {
       if (this.speaking) this.overSound = true;
       else {
-        this.overSound = false;
+        if (!this.leaked) this.overSound = false;
         this.loudAt = this.now();
       }
     }
@@ -349,7 +364,11 @@ export class SameBotCall {
   }
 
   private read(text: string) {
-    if (!this.speaking) this.lastSaid = "";
+    if (!this.speaking) {
+      this.lastSaid = "";
+      this.playedMic = 0;
+      this.playedLoud = 0;
+    }
     this.reads.push(...toUtterances(text));
     this.readNext();
   }
