@@ -129,8 +129,8 @@ function piecesOfFile(file: NoteFile): Piece[][] {
     const text = clean(line);
     const table = line.startsWith("|");
     const cell = words(firstCell(text).slice(0, TITLE_CHARS));
-    // a timeline field like "Picked:" or a goal belongs to its own entry, never one topic across entries
-    const label = table ? cell : file.source === PICKS_SOURCE || /^(?:[-*]\s+)?Goal:\s/i.test(text) ? [] : words(/^(?:[-*]\s+)?([^:]{2,60}):\s/.exec(text)?.[1] ?? "");
+    // a timeline field like "Picked:", a goal or an archived note belongs to its own entry, never one topic across entries
+    const label = file.source === DREAMED_FILE ? [] : table ? cell : file.source === PICKS_SOURCE || /^(?:[-*]\s+)?Goal:\s/i.test(text) ? [] : words(/^(?:[-*]\s+)?([^:]{2,60}):\s/.exec(text)?.[1] ?? "");
     const key = `${file.source}\0${text.slice(0, 80)}`;
     const shared = {
       key,

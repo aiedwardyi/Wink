@@ -3,7 +3,9 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFile
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { DATA_DIR } from "./config.ts";
 import { dreamedPath } from "./dream-archive.ts";
@@ -26,7 +28,7 @@ import { markTalked, markTidied, memorySyncDir, pinMemoryJobOwner, syncBotMemory
 import { listMemoryTopics, loadMemory, shownMemory, MEMORY_MAX_LINES, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
-const hooks = vi.hoisted(() => ({ beforeWrite: (_path: string) => {}, beforeRename: (_from: string) => {} }));
+const hooks = vi.hoisted(() => ({ beforeWrite: (_path: string) => {}, beforeRename: (_from: string) => {}, afterRaw: (_botId: string) => {} }));
 
 vi.mock("./atomic.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("./atomic.ts")>();
@@ -39,6 +41,18 @@ vi.mock("./atomic.ts", async (importOriginal) => {
     renameRetrying: (from: string, to: string) => {
       hooks.beforeRename(from);
       real.renameRetrying(from, to);
+    },
+  };
+});
+
+vi.mock("./workspace.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./workspace.ts")>();
+  return {
+    ...real,
+    memoryFileRaw: (botId: string) => {
+      const raw = real.memoryFileRaw(botId);
+      hooks.afterRaw(botId);
+      return raw;
     },
   };
 });
@@ -993,6 +1007,25 @@ describe("memory sleep", () => {
     });
   });
 
+  it("leaves an edit that lands while Undo reads MEMORY.md to the editor", async () => {
+    const bot = bots[0]!;
+    const raw = memory("- Uses pnpm", "- Uses pnpm", "- Lives in Seoul");
+    writeMemoryFile(bot, raw);
+    generator = reply({ duplicates: [{ keep: "L4", drop: ["L3"] }] });
+    await quiet();
+    const edited = `${memoryFileRaw(bot)}- Likes tea\n`;
+    hooks.afterRaw = () => {
+      hooks.afterRaw = () => {};
+      writeFileSync(join(workspaceDir(bot), "MEMORY.md"), edited);
+    };
+    try {
+      expect(sleep.undo(bot, sleep.latest(bot)!.runId)).toEqual({ ok: false, error: "busy" });
+    } finally {
+      hooks.afterRaw = () => {};
+    }
+    expect(memoryFileRaw(bot)).toBe(edited);
+  });
+
   describe("undo after a restart puts back", () => {
     const moveThenUndo = async (raw: string, judged: NoteGenerator) => {
       const bot = bots[0]!;
@@ -1124,5 +1157,29 @@ describe("memory sleep", () => {
         rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
       }
     }, 60_000);
+  });
+});
+
+describe("the undo route", () => {
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const from = "    m = path.match(/^\\/api\\/bots\\/([\\w-]+)\\/memory\\/clean\\/undo$/);";
+  const body = source.slice(source.indexOf(from), source.indexOf("    m = path.match(/^\\/api\\/bots\\/([\\w-]+)\\/memory\\/import$/);"));
+  const route = new Function(`${ts.transpileModule(`async function run(scope) { with (scope) { ${body} } }`, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None },
+  }).outputText}\nreturn run;`)() as (scope: object) => Promise<unknown>;
+
+  it("marks the line in the task the run wrote it to, after a switch to another task", async () => {
+    expect(body).toContain("memorySleep.undo(");
+    const line = { id: "m1", role: "bot", kind: "activity", tool: { name: "memory.save", ok: true, tidy: { runId: "r1", count: 2 } } };
+    const messages: Record<string, unknown[]> = { "task-a": [line], "task-b": [] };
+    const patchMessage = vi.fn();
+    const store = { bot: () => ({ id: "b1", threadId: "task-b" }), tasks: () => [{ threadId: "task-b" }, { threadId: "task-a" }], messagesFor: (threadId: string) => messages[threadId] ?? [], patchMessage };
+    const result = await route({
+      m: null, path: "/api/bots/b1/memory/clean/undo", method: "POST", req: { headers: {} }, res: {}, z, store,
+      commsCallers: { resolve: () => null }, readBody: async () => ({ runId: "r1" }), memorySleep: { undo: () => ({ ok: true }) },
+      json: (_res: unknown, status: number, value: unknown) => ({ status, value }),
+    });
+    expect(result).toEqual({ status: 200, value: { ok: true } });
+    expect(patchMessage).toHaveBeenCalledWith("task-a", "m1", { tool: { ...line.tool, tidy: { runId: "r1", count: 2, undoneAt: expect.any(Number) } } });
   });
 });

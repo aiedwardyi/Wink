@@ -53,6 +53,12 @@ describe("cleanup copy", () => {
     expect(host.textContent).not.toContain("merged");
     expect(host.textContent).not.toContain("replaced");
   });
+  it.each(["en", "ko"] as const)("words a line saved before it counted its lines without a number in %s", async (locale) => {
+    applyLocale(locale);
+    await mount(createElement(MemoryTidyLine, { bot: "Ava", tidy: { runId: "old" }, run, onUndo: vi.fn() }));
+    expect(host.textContent).not.toContain("undefined");
+    expect(host.textContent).toBe(locale === "en" ? "Tidied memory, nothing lost" : "메모리 정리됨, 빠진 내용 없음");
+  });
   it("shows Undo only for the matching undoable run, and becomes inert after Undo", async () => {
     await mount(createElement(MemoryTidyLine, { bot: "Ava", tidy: { runId: "old", count: 1 }, run, onUndo: vi.fn() }));
     expect(host.querySelectorAll("button")).toHaveLength(1);

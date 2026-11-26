@@ -579,6 +579,23 @@ describe("a line Dreaming moved", () => {
   }, 60_000);
 });
 
+describe("archived notes that share a label", () => {
+  it("are each found, not only the newest", async () => {
+    const botId = `bot-${randomUUID()}`;
+    flag(botId);
+    try {
+      writeMemoryFile(botId, `# Memory\n\n${FILLER}\n`);
+      sideFile(botId, "dreamed.md", "# Dreamed notes\n\n## 2026-11-26 (run night)\n- Dentist: root canal booked 2026-10-02\n  - from MEMORY.md:3 on 2026-11-26: every date it names is past\n- Dentist: cleaning booked 2026-11-02\n  - from MEMORY.md:4 on 2026-11-26: every date it names is past\n");
+      const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+      await lookup.refresh(botId);
+      expect(ask(lookup, botId, "when was the root canal booked?").join("\n")).toContain("root canal booked 2026-10-02");
+      expect(ask(lookup, botId, "when was the cleaning booked?", undefined, "t2").join("\n")).toContain("cleaning booked 2026-11-02");
+    } finally {
+      unflag();
+    }
+  });
+});
+
 describe("send path wiring", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const section = (from: string, to: string) => {

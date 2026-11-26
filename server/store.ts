@@ -180,7 +180,7 @@ export interface Message {
     /** an auto-approval chip; the model replay skips it */
     approval?: boolean;
     /** Sleep's morning line: the run it archived and how many lines */
-    tidy?: { runId: string; count: number; undoneAt?: number };
+    tidy?: { runId: string; count?: number; undoneAt?: number };
   };
   /** user messages sent INTO a running turn (capabilities.queueing): the
    * model saw it mid-turn, so the transcript marks it — a reader should

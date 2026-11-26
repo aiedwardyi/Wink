@@ -5,7 +5,7 @@ import { useMemoryClean, type MemoryCleanRun } from "@/lib/memory-clean";
 import { MemoryCleanUndo } from "./MemoryCleanRow";
 import { MemorySaveChip } from "./MemorySaveChip";
 
-export function MemoryTidyLine({ bot, tidy, run, onUndo }: { bot: string; tidy: { runId: string; count: number; undoneAt?: number }; run: MemoryCleanRun | null; onUndo: () => void }) {
+export function MemoryTidyLine({ bot, tidy, run, onUndo }: { bot: string; tidy: { runId: string; count?: number; undoneAt?: number }; run: MemoryCleanRun | null; onUndo: () => void }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
   const undone = tidy.undoneAt !== undefined || (run?.runId === tidy.runId && run.undoneAt !== null);
@@ -14,7 +14,7 @@ export function MemoryTidyLine({ bot, tidy, run, onUndo }: { bot: string; tidy: 
       <div className="flex min-w-0 max-w-full items-start gap-2 rounded-lg border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary">
         <span className="inline-flex h-[1.5em] shrink-0 items-center"><Brain size={13} /></span>
         <span className="min-w-0 max-w-[480px] break-keep leading-[1.5]">
-          {undone ? t("chat.memoryTidyUndone") : <><button type="button" className="inline text-left" onClick={() => dispatch({ type: "toggleSettings", open: true, memory: { cleanup: true } })}>{t(tidy.count === 1 ? "chat.memoryTidiedOne" : "chat.memoryTidied", { bot, count: tidy.count })}</button>{run?.runId === tidy.runId && run.undoable && <> <MemoryCleanUndo onUndo={onUndo} /></>}</>}
+          {undone ? t("chat.memoryTidyUndone") : <><button type="button" className="inline text-left" onClick={() => dispatch({ type: "toggleSettings", open: true, memory: { cleanup: true } })}>{tidy.count === undefined ? t("chat.memoryTidiedUncounted") : t(tidy.count === 1 ? "chat.memoryTidiedOne" : "chat.memoryTidied", { bot, count: tidy.count })}</button>{run?.runId === tidy.runId && run.undoable && <> <MemoryCleanUndo onUndo={onUndo} /></>}</>}
         </span>
       </div>
     </div>

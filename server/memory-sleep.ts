@@ -11,7 +11,7 @@ import { agreed, dreamPrompt, parseDream, planDream, type DreamJudges, type Flag
 import { decisionSpan, type NoteGenerator } from "./memory-pass.ts";
 import type { DreamAsks, DryNotes } from "./dream-live.ts";
 import { pickStamp } from "./picks.ts";
-import { loadedMemory, memoryFileRaw, readMemoryFile, saveMemoryFile, workspaceDir } from "./workspace.ts";
+import { loadedMemory, memoryFileRaw, rawRevision, readMemoryFile, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 export const SLEEP_IDLE_MS = 30 * 60_000;
 export const SLEEP_GAP_MS = 6 * 60 * 60_000;
@@ -563,7 +563,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     const raw = memoryFileRaw(botId);
     const back = putBack(raw, last.moves as ArchivedMove[]);
     if (back.restored) {
-      const saved = saveMemoryFile(botId, back.text, readMemoryFile(botId).revision);
+      const saved = saveMemoryFile(botId, back.text, rawRevision(raw));
       if (saved.conflict) return { ok: false, error: "busy" };
     }
     try {

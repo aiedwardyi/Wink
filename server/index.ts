@@ -9434,8 +9434,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!body.success) return json(res, 400, { error: "runId required" });
       const result = memorySleep.undo(bot.id, body.data.runId);
       if (!result.ok) return json(res, result.error === "no-run" ? 404 : 409, result);
-      const line = store.messagesFor(bot.threadId).find((message) => message.tool?.tidy?.runId === body.data.runId);
-      if (line?.tool?.tidy) store.patchMessage(bot.threadId, line.id, { tool: { ...line.tool, tidy: { ...line.tool.tidy, undoneAt: Date.now() } } });
+      // the line sits in the task that was open when the run archived, which may not be the open one now
+      for (const threadId of new Set([bot.threadId, ...store.tasks(bot.id).map((task) => task.threadId)])) {
+        const line = store.messagesFor(threadId).find((message) => message.tool?.tidy?.runId === body.data.runId);
+        if (!line?.tool?.tidy) continue;
+        store.patchMessage(threadId, line.id, { tool: { ...line.tool, tidy: { ...line.tool.tidy, undoneAt: Date.now() } } });
+        break;
+      }
       return json(res, 200, result);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
