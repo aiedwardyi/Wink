@@ -66,6 +66,11 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("Status?"), bot("I'll fix the API."), tool(), bot("The API is fixed.")])).toEqual([]);
   });
 
+  it("keeps a question of short words a steer talked over", () => {
+    expect(turnLeftovers([user("Why is CI red?"), user("Color?", { steered: true }), bot("Blue.")])).toEqual([{ ask: "Why is CI red?" }]);
+    expect(turnLeftovers([user("Why is CI red?"), user("Color?", { steered: true }), bot("Blue. CI is red from a flaky test.")])).toEqual([]);
+  });
+
   it("keeps a question the quick helper handed into the turn as a steer", () => {
     expect(turnLeftovers([user("What font is it?"), user("And the ramp color?", { steered: true, quick: { state: "handoff" } }), bot("Blue.")])).toEqual([{ ask: "What font is it?" }]);
   });

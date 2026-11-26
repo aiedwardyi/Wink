@@ -58,9 +58,9 @@ export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   for (const [i, at] of asked.slice(0, -1).entries()) {
     const shown = (row: Message) => said(row) && !row.summarized;
     if (rows.slice(at + 1, asked[i + 1]).some(shown) || rows.some((row) => row.quick?.askId === rows[at]!.id)) continue;
-    const seen = askTerms(rows.slice(asked[i + 1]).filter(shown).map((row) => row.text).join("\n"));
+    const seen = words(rows.slice(asked[i + 1]).filter(shown).map((row) => row.text).join("\n"));
     for (const question of sentences(rows[at]!.text!).filter((line) => /[?？]$/.test(line))) {
-      const terms = askTerms(question);
+      const terms = words(question);
       if (terms.size && !covered(terms, seen)) left.push({ ask: question });
     }
   }
