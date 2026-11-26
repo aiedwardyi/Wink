@@ -3286,6 +3286,51 @@ require(${JSON.stringify(fake)});
         await expect.poll(() => alive(spawns()[2]!.pid), { timeout: 5_000 }).toBe(false);
       });
 
+      it("leaves no standby for a bot switched engine mid-reply, so the next chat still gets one", async () => {
+        const gemini = await make("reply-switch");
+        const codex = { instanceId: "codex", adapter: {} };
+        const store = new Store(() => ({ instanceId: gemini.instanceId, model: "gemini-4-neon" }));
+        const routes = createBotRoutes({
+          store, registry: { get: (id: string) => [gemini, codex].find((instance) => instance.instanceId === id) },
+          checkedModelSelection: (selection: unknown) => ({ ok: true, selection }), wireBot: (bot: unknown) => bot,
+        } as unknown as Parameters<typeof createBotRoutes>[0]);
+        const [first, second, third] = [store.createBot(), store.createBot(), store.createBot()];
+        const spawn = vi.spyOn(procs, "spawnCli");
+        const agys = () => spawn.mock.calls.filter(([, args]) => args.includes("--input-format"));
+        try {
+          for (const bot of [first, second]) {
+            rmSync(join(dir, "go"));
+            store.setActivity(bot.id, "working");
+            const recorder = recordEvents(gemini.adapter);
+            try {
+              const { turnId } = await gemini.adapter.sendTurn({ ...chat, threadId: bot.threadId, text: bot.id });
+              const child = spawn.mock.results[spawn.mock.calls.lastIndexOf(agys().at(-1)!)]!.value as ReturnType<typeof procs.spawnCli>;
+              const closed = new Promise((done) => child.once("close", done));
+              await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe(bot.id);
+              const req = Readable.from([JSON.stringify({ modelSelection: { instanceId: "codex", model: "gpt-5" } })]) as IncomingMessage;
+              await routes.patch(req, { writeHead: () => {}, end: () => {} } as unknown as ServerResponse, ["", bot.id] as RegExpMatchArray);
+              writeFileSync(join(dir, "go"), "");
+              await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+              store.setActivity(bot.id, "idle");
+              await closed;
+            } finally {
+              recorder.stop();
+            }
+            expect(store.bot(bot.id)!.modelSelection.instanceId).toBe("codex");
+          }
+          expect(agys()).toHaveLength(2);
+          await open(gemini, { threadId: third.threadId });
+          expect(agys()).toHaveLength(3);
+          await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
+          expect(alive(spawns()[2]!.pid)).toBe(true);
+          await gemini.dispose();
+          await expect.poll(() => alive(spawns()[2]!.pid), { timeout: 5_000 }).toBe(false);
+        } finally {
+          spawn.mockRestore();
+          writeFileSync(join(dir, "go"), "");
+        }
+      });
+
       it("retires the prepared agy on Stop (a bot delete stops its chat) and on dispose", async () => {
         const instance = await make("open-stop");
         await open(instance);

@@ -125,9 +125,10 @@ export class WarmPool {
   /** A small PC holds its one slot for a click-warmed host only briefly. */
   handshakeIdleMs(): number { return this.smaller() ? 60_000 : IDLE_TTL_MS; }
 
-  /** The pool's own generation for an instance; Captured uses it when the account has none. */
-  generation(key: Pick<WarmKey, "engine" | "instanceId">): number {
-    return (this.generations.get("") ?? 0) + (this.generations.get(`e:${key.engine}`) ?? 0) + (this.generations.get(`i:${key.instanceId}`) ?? 0);
+  /** The pool's own generation for an instance, and for a thread on it when given; Captured uses it when the account has none. */
+  generation(key: Pick<WarmKey, "engine" | "instanceId"> & { threadId?: string }): number {
+    const thread = key.threadId === undefined ? 0 : (this.generations.get(`t::${key.threadId}`) ?? 0) + (this.generations.get(`t:${key.instanceId}:${key.threadId}`) ?? 0);
+    return (this.generations.get("") ?? 0) + (this.generations.get(`e:${key.engine}`) ?? 0) + (this.generations.get(`i:${key.instanceId}`) ?? 0) + thread;
   }
 
   /** A same-key reserve joins a pending lease; every caller that got it releases once. `pendingMs` bounds a prepare that never becomes ready. */
@@ -194,6 +195,13 @@ export class WarmPool {
     this.holds.add(hold);
     this.invalidate(match, reason);
     return () => { this.holds.delete(hold); };
+  }
+
+  /** Also refuses the warm a turn already running on the thread would start when it ends. */
+  retire(match: { instanceId?: string; threadId: string }, reason: string): void {
+    const scope = `t:${match.instanceId ?? ""}:${match.threadId}`;
+    this.generations.set(scope, (this.generations.get(scope) ?? 0) + 1);
+    this.invalidate(match, reason);
   }
 
   invalidate(match: WarmMatch, reason: string): void {

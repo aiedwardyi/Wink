@@ -899,6 +899,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       if (disposed) throw new Error("Antigravity instance is disposed");
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = relaunchOf ?? newId();
+      const epoch = warmPool.generation(warmKey(threadId));
       if (signedOut) {
         emit({ ...base(threadId, turnId), type: "turn.started" });
         emit({ ...base(threadId, turnId), type: "runtime.error", message: "Gemini is not signed in.", setup: true, signIn: true, signedOut: true });
@@ -1399,7 +1400,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         clearTimeout(terminationEscalation);
         standby?.lease.release("used");
         // agy has saved the turn once it exits
-        if (next && !mcpFinalized) {
+        if (next && !mcpFinalized && epoch === warmPool.generation(warmKey(threadId))) {
           mcpFinalized = true;
           startStandby(threadId, next, turn, cwd, childEnv, { restoreMcp, releaseMcpLock });
         } else finalizeMcp();

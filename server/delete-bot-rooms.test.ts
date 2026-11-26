@@ -30,7 +30,7 @@ afterEach(async () => {
   const { closeMessageDb } = await import("./message-db.ts");
   closeMessageDb();
   vi.unstubAllEnvs();
-  removeTestData(home);
+  if (home) removeTestData(home);
 });
 
 describe("deleting a bot that leads a room", () => {
@@ -90,7 +90,7 @@ describe("deleteBotFully", () => {
       stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
       lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
       computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
-      perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(), warmPool: { invalidate: noop },
+      perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(), warmPool: { retire: noop },
       EVENTS_DIR: "", NATIVE_DIR: "", join, removeRotatingLog: noop,
       ...overrides,
     };
@@ -133,6 +133,8 @@ describe("deleteBotFully", () => {
     await deleteBotFully({ id: "bot-1", threadId: "t1", modelSelection: { instanceId: "codex" }, tasks: [] });
 
     expect(close).toHaveBeenCalledOnce();
+    // the standby its last turn starts at exit is refused
+    expect(warmPool.generation(lease.key)).toBe(1);
   });
 
   it("removes the event logs of every task, not just the open one", async () => {

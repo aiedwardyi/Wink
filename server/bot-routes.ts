@@ -478,10 +478,15 @@ export function createBotRoutes(deps: BotRouteDeps) {
       }
       const instanceOf = (record: BotRecord) => deps.accountBots ? deps.accountBots.instance(record) : registry.get(record.modelSelection.instanceId);
       const engineBefore = normalizedSelection && existingBot && instanceOf(existingBot)?.instanceId;
+      // a pick held for the running turn moves the bot all the same once it ends; instance() would name the running turn's engine
+      const engineAfter = (record: BotRecord) => {
+        const selection = record.pendingModelSelection ?? record.modelSelection;
+        try { return deps.accountBots ? deps.accountBots.resolve({ modelSelection: selection }).instanceId : selection.instanceId; } catch { return undefined; }
+      };
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
       // a warm child serves only the engine it started for; the new engine's Stop and Delete never reach it
-      if (engineBefore && engineBefore !== instanceOf(bot)?.instanceId) warmPool.invalidate({ instanceId: engineBefore, threadId: bot.threadId }, "engine switched");
+      if (engineBefore && engineBefore !== engineAfter(bot)) warmPool.retire({ instanceId: engineBefore, threadId: bot.threadId }, "engine switched");
       // A changed working folder must reach existing tasks: their pinned
       // cwd predates the change and their resume cursors point at
       // old-rooted CLI sessions. Reset both so the next turn re-pins the
