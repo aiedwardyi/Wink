@@ -92,6 +92,14 @@ describe("retiring finished one-off picks", () => {
     expect(picksBlock(retirePicks(text, NOW + 86_400_000))).toBe("");
   });
 
+  it("lands a tweak keyed like a revised card answer on the card's pick", () => {
+    // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+    const first = applyPicks("", [{ kind: "pick", key: "Which theme?", picked: "Dark", said: "Dark", tapped: true, at: NOW - 60_000, binding: { at: NOW - 60_000, messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    const out = applyPicks(first, [{ kind: "pick", key: "Theme", picked: "Light", said: "Light", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }, { kind: "tweak", key: "Theme", said: "Keep the header small", at: NOW }])!;
+    expect(out.tweaks).toBe(1);
+    expect(picksBlock(out.text)).toContain("Keep the header small");
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();

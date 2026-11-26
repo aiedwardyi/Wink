@@ -227,6 +227,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
   let tweaks = 0;
   let replaced = 0;
   let retyped = false;
+  // a revised card answer keeps its card's key; a tweak under the note-taker's key follows it
+  const moved = new Map<string, string>();
   // a tweak said with its pick lands after it
   for (const change of [...changes].sort((a, b) => a.at - b.at || Number(a.kind === "tweak") - Number(b.kind === "tweak"))) {
     const asked = clip(change.key.replace(/\|/g, "/"), KEY_MAX);
@@ -235,7 +237,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const card = change.kind === "pick" && change.binding && change.binding !== "unbound" && change.binding.questionId !== change.binding.messageId ? change.binding : undefined;
     // a later answer to the same card is that card's pick, whatever key the note-taker gave it
     const answers = card ? entries.filter((entry) => !entry.replacedBy && !entry.kind && entry.questionId === card.questionId && entry.thread === card.thread && entry.messageId !== card.messageId) : [];
-    const current = (answers.length === 1 ? answers[0] : undefined) ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === slot);
+    const current = (answers.length === 1 ? answers[0] : undefined) ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === (moved.get(slot) ?? slot));
+    if (card && current && slotOf(current) !== slot) moved.set(slot, slotOf(current));
     const key = current?.key ?? asked;
     if (change.kind === "goal") {
       // a replayed batch from before the current entry never lands on it
