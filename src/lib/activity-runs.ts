@@ -364,7 +364,8 @@ export interface LiveTurnSteps {
 
 /** Splits a running turn's bot texts so only the newest text renders in the quiet live line.
  * Steer replies and quick/sidekick/comm/voice lines stay out and remain visible bubbles.
- * `waitFloorId` is the tail row when the wait began: an unechoed send or a note there started the turn, later ones steer it. */
+ * `waitFloorId` is the tail row when the wait began: an unechoed send or a note there started the turn, later ones steer it.
+ * Leave it unset when the wait was already running, as the tail then sits inside the turn. */
 export function liveTurnSteps(
   messages: readonly Message[],
   streaming: Message | null,
@@ -387,7 +388,8 @@ export function liveTurnSteps(
   if (turnStart < 0 || messages[turnStart].from || messages[turnStart].placeholder) return { hiddenIds: EMPTY_IDS, holdStream: false, fallbackText: null, stepIndex: -1 };
   const turnTexts: Message[] = [];
   let afterSteer = false;
-  for (let i = turnStart + 1; i < messages.length; i++) {
+  // rows at or before a known floor had settled when the wait began, so a note that woke this turn never claims them
+  for (let i = Math.max(turnStart, waitFloorId === undefined ? -1 : floor) + 1; i < messages.length; i++) {
     const row = messages[i];
     // send order can draw a reply that finished before this turn below its line
     if (row.at < messages[turnStart].at) continue;
