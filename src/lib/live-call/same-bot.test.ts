@@ -348,7 +348,7 @@ it("its own voice transcribed after the read ended is still its own, and what he
   it("its own voice leaking into the mic through the read is still its own after the read, even after a sound", async () => {
     const leak = () => new Int16Array(640).fill(4_000).buffer;
     const question = "Should I go ahead and deploy it, or keep the old build?";
-    for (const [his, sent] of [["", []], [" Yes.", []], [" What time is it?", ["What time is it?"]]] as const) {
+    for (const [his, sent] of [["", []], [" Yes.", ["Yes."]], [" What time is it?", ["What time is it?"]]] as const) {
       const s = await started();
       answered(s, question);
       s.engine().events.answering();
@@ -366,6 +366,67 @@ it("its own voice transcribed after the read ended is still its own, and what he
       s.engine().events.turnDone();
       expect(s.sent).toEqual(["tell me", ...sent]);
     }
+  });
+
+  it("his short answer after a read the mic heard all through is his: a nod, the read's own words, a no", async () => {
+    const leak = () => new Int16Array(640).fill(4_000).buffer;
+    const question = "Should I go ahead and deploy it, or keep the old build?";
+    for (const his of ["Yes.", "Okay.", "네.", "Keep the old build.", "No, keep the old build."]) {
+      const s = await started();
+      answered(s, question);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(question);
+      s.engine().events.turnDone();
+      for (let i = 0; i < 25; i++) s.audio.mic!(leak());
+      s.engine().events.heard("should i go ahead and deploy it");
+      s.audio.flush();
+      s.audio.onIdle();
+      say(s, his);
+      expect(s.sent).toEqual(["tell me", his]);
+    }
+  });
+
+  it("a correction he talks over the read with is his: a not or another number, while the same number in words is its own", async () => {
+    for (const [reply, heard, his] of [
+      ["I think we should merge it now.", "I think we should not merge it now", true],
+      ["Do delete the production database.", "do not delete the production database", true],
+      ["The meeting is at 5 PM.", "the meeting is at six pm", true],
+      ["Set the timeout to 30 seconds.", "set the timeout to 60 seconds", true],
+      ["Deploy version 123 tonight.", "deploy version 999 tonight", true],
+      ["The meeting is at 5 PM.", "the meeting is at five pm", false],
+      ["Set the timeout to 30 seconds.", "set the timeout to thirty seconds", false],
+    ] as const) {
+      const s = await started();
+      answered(s, reply);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(reply);
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      s.engine().events.heard(heard);
+      expect(s.audio.flushed).toBe(his ? 1 : 0);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(his ? ["tell me", heard] : ["tell me"]);
+    }
+  });
+
+  it("a short read written back after it ended is its own, and his answer after it is his", async () => {
+    const s = await started();
+    answered(s, "All done.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said("All done.");
+    s.engine().events.turnDone();
+    s.audio.mic!(loudFrame());
+    s.audio.flush();
+    s.audio.onIdle();
+    s.engine().events.heard("all done");
+    s.engine().events.heard(" Thanks.");
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    expect(s.sent).toEqual(["tell me", "Thanks."]);
   });
 
   it("his own words heard after the read ended still go to the bot once", async () => {

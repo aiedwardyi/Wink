@@ -6,15 +6,12 @@ import { isShownMessage } from "@/lib/shown-message";
 import type { Message } from "@/state/store-types";
 import { MAX_RECONNECTS, MIC_ERRORS, READY_MS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
-import { afterNods, echoOf } from "./guard";
+import { afterNods, echoOf, readOn, readTo } from "./guard";
 
 const QUOTA = /quota|resource.?exhausted/i;
 const READ = "[READ]\n";
 // A mutter is not a message to the bot; a yes or a no is.
 const MUTTER = /^(?:h?m+|mhm|u[hm]+|uh-?huh|er+|음+|어+)[.!?,\s]*$/i;
-
-// Half a second of 16 kHz mic: a cough or a tap is shorter.
-const LEAK = 8_000;
 
 function loud(pcm: ArrayBuffer): boolean {
   for (const sample of new Int16Array(pcm)) if (sample > 1_000 || sample < -1_000) return true;
@@ -62,14 +59,11 @@ export class SameBotCall {
   private said = "";
   /** Heard while it reads, not yet his: it may be the voice coming back. */
   private over = "";
-  /** A sound reached Google while it read: until Google's turn for it, or his next sound if the read did not leak, its words may be the voice's own, even once the read is over. */
+  /** A sound reached Google while it read: until Google's turn for it, its words may be the voice's own, even once the read is over. */
   private overSound = false;
-  /** Mic samples while its voice played this read, and the loud ones: its voice leaking back is loud through the read, a cough or a tap is not. */
-  private playedMic = 0;
-  private playedLoud = 0;
-  /** Its own voice already dropped from what was heard over it: a held tail that goes on it is the voice's too. */
+  /** Its own voice already dropped from what was heard over it: after the read only the words of the read that come next are its voice too. */
   private echoed = "";
-  /** What is held came after the read: his unless it goes on its own voice. */
+  /** The read is over: what is heard is his unless it goes on from where its own words written back reached. */
   private overLate = false;
   private lastSaid = "";
   /** Whose words the voice is answering: his (never played) or a [READ] it was sent. */
@@ -110,10 +104,6 @@ export class SameBotCall {
 
   private get ended() {
     return this.snapshot.status === "ended" || this.snapshot.status === "failed";
-  }
-
-  private get leaked() {
-    return this.playedLoud >= Math.max(LEAK, this.playedMic / 2);
   }
 
   private get speaking() {
@@ -186,17 +176,9 @@ export class SameBotCall {
   private frame(pcm: ArrayBuffer) {
     if (!this.connected || this.snapshot.muted) return;
     this.micOpen = true;
-    const isLoud = loud(pcm);
-    if (this.deps.audio.playing) {
-      this.playedMic += pcm.byteLength / 2;
-      if (isLoud) this.playedLoud += pcm.byteLength / 2;
-    }
-    if (isLoud) {
+    if (loud(pcm)) {
       if (this.speaking) this.overSound = true;
-      else {
-        if (!this.leaked) this.overSound = false;
-        this.loudAt = this.now();
-      }
+      else this.loudAt = this.now();
     }
     this.engine?.sendAudio(pcm);
   }
@@ -220,7 +202,7 @@ export class SameBotCall {
       heard: (text) => {
         if (!mine()) return;
         if (this.speaking || this.overSound) return this.overlap(text);
-        this.keepHeld();
+        this.dropHeld();
         this.heard += text;
         this.caption("user", this.heard);
       },
@@ -242,7 +224,7 @@ export class SameBotCall {
           this.lastSaid += ` ${this.said}`;
         } else {
           this.overSound = false;
-          this.keepHeld();
+          this.dropHeld();
           this.commit();
         }
         this.turn = null;
@@ -275,35 +257,43 @@ export class SameBotCall {
     };
   }
 
-  /** Words heard while it reads: its own voice coming back, even behind a nod, is dropped and a nod lets it go on; anything else stops it like a tap and is his line. */
+  /** Words heard while it reads: its own voice coming back, even behind a nod, is dropped and a nod lets it go on; anything else stops it like a tap and is his line. After the read only its next words are its voice: a nod, a "not" or another number is his. */
   private overlap(text: string) {
+    const voice = `${this.lastSaid} ${this.said}`;
+    const next = (heard: string) => readOn(heard, voice, readTo(this.echoed, voice));
     if (!this.speaking && !this.overLate) {
       this.overLate = true;
-      this.echoed += this.over;
+      this.echoed += this.over.slice(0, this.over.length - next(this.over).length);
       this.over = "";
     }
     this.over += text;
-    const words = afterNods(spokenText(this.over));
-    if (!words) return;
-    const echo = echoOf(words, `${this.lastSaid} ${this.said}`, true);
-    if (echo === "echo") {
-      this.echoed += this.over;
+    let his = this.over;
+    if (this.overLate) {
+      his = next(this.over);
+      this.echoed += this.over.slice(0, this.over.length - his.length);
       this.over = "";
+      if (!spokenText(his)) return;
+    } else {
+      const words = afterNods(spokenText(this.over));
+      if (!words) return;
+      const echo = echoOf(words, voice, true);
+      if (echo === "echo") {
+        this.echoed += this.over;
+        this.over = "";
+      }
+      if (echo !== "no") return;
     }
-    if (echo !== "no") return;
     this.interrupt();
     this.overSound = false;
-    this.heard += this.over;
+    this.heard += his;
     this.over = "";
     this.echoed = "";
     this.overLate = false;
     this.caption("user", this.heard);
   }
 
-  /** Words held after the read as maybe its own voice are his, unless they go on its own words. */
-  private keepHeld() {
-    const held = afterNods(spokenText(this.over));
-    if (this.overLate && held && echoOf(afterNods(spokenText(`${this.echoed} ${this.over}`)), `${this.lastSaid} ${this.said}`, true) !== "echo") this.heard += this.over;
+  /** What is still held from the read is its own voice or a nod while it talked. */
+  private dropHeld() {
     this.over = "";
     this.echoed = "";
     this.overLate = false;
@@ -366,8 +356,7 @@ export class SameBotCall {
   private read(text: string) {
     if (!this.speaking) {
       this.lastSaid = "";
-      this.playedMic = 0;
-      this.playedLoud = 0;
+      this.dropHeld();
     }
     this.reads.push(...toUtterances(text));
     this.readNext();
