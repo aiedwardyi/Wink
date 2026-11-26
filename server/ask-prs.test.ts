@@ -554,6 +554,16 @@ describe("a closing turn in index.ts", () => {
     expect(stamp).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
     expect(source.lastIndexOf("store.markReactionsDelivered(bot.id, threadId, reactionsSeen);", stamp)).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
   });
+
+  it("keeps the last turn's held question until an engine took the next prompt, so a setup failure still carries it to a switch", () => {
+    const source = index();
+    const drops = source.split("heldQuestions.delete(threadId);");
+    // one drop when a settled turn holds nothing, one once the next prompt was taken
+    expect(drops).toHaveLength(3);
+    const taken = source.indexOf("heldQuestions.delete(threadId);", source.indexOf("function startClaimedTurn("));
+    expect(taken).toBeGreaterThan(source.indexOf("  stampShownAsks(threadId, turnText);"));
+    expect(source.slice(source.indexOf("function startClaimedTurn("), source.indexOf("return live.adapter.sendTurn({"))).not.toContain("heldQuestions.delete");
+  });
 });
 
 describe("an ask with a step left", () => {

@@ -5598,7 +5598,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     (task.lastModel !== undefined && task.lastModel !== model)
   );
   const held = heldQuestions.get(threadId);
-  heldQuestions.delete(threadId);
   if (held && selectionChanged) saveHarnessAsks(threadId, (book) => fileLeftovers(book, held, Date.now()));
   let storedTaskRecord = taskPacketForWrite(threadId);
   const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
@@ -6592,8 +6591,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (recallNotes.length) memoryLookup.accepted(bot.id, threadId);
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
-      // a leftover counts as shown once an engine took the prompt; a setup failure leaves it for the retry
+      // a leftover counts as shown once an engine took the prompt; a setup failure leaves it, and a held question, for the retry
       stampShownAsks(threadId, turnText);
+      heldQuestions.delete(threadId);
       boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (started.turnId && settledTurnIdByThread.get(threadId) !== started.turnId) liveTurnIdByThread.set(threadId, started.turnId);
