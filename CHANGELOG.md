@@ -2,6 +2,24 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.303] - 2026-11-26
+
+### Added
+- Quick model picker: a fourth picker style; Max glows in the model's color.
+
+### Changed
+- Gemini 4 Argon is removed from model pickers; a bot already on it keeps running.
+
+### Fixed
+- A PC that wakes up shows Online to your other devices sooner: its status now syncs before the rest of its catch-up.
+- The quick side reply only answers your questions; no more "Got it" lines.
+- Links and "sent mid-turn" in your own message bubble are readable in every theme.
+- Glasses: Speak and Listen work, and question cards show on the lens.
+- Phone: hold a side pane tab to drag it to a new spot.
+- Timeline: no red tick above crossed-out options.
+- The usage bar says "Payment due" when a Claude subscription is past due.
+- Phone and browser terminals show the worker you tapped right away.
+
 ## [1.0.302] - 2026-11-25
 
 ### Added
