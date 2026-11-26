@@ -238,25 +238,25 @@ describe("whats new card", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("opens the model picker in Quick style from the Quick tile's Show me", () => {
+  it.each(["1.0.303", "1.0.304"])("opens the model picker in Quick style from the Quick tile's Show me in %s", (release) => {
     const views: unknown[] = [];
     const opened = (event: Event) => views.push((event as CustomEvent).detail?.view);
     window.addEventListener("orbit:open-model-picker", opened);
-    const { tile, text } = showMe("1.0.303", "Quick model picker");
+    const { tile, text } = showMe(release, "Quick model picker");
     window.removeEventListener("orbit:open-model-picker", opened);
     expect(views).toEqual(["quick"]);
     expect(tile.textContent).toBe(text);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("shows the Quick picker tile alone in 1.0.303, in English and Korean", () => {
-    const entry = WHATS_NEW["1.0.303"];
+  it.each(["1.0.303", "1.0.304"])("shows the Quick picker tile alone in %s, in English and Korean", (release) => {
+    const entry = WHATS_NEW[release];
     expect(entry.tiles.map((tile) => "show" in tile && tile.show)).toEqual(["quick"]);
     for (const locale of ["en", "ko"] as const) {
       applyLocale(locale);
       act(() => root.unmount());
       root = createRoot(host);
-      render("1.0.303");
+      render(release);
       const tiles = [...host.querySelectorAll(".whats-new-tile")];
       expect(tiles).toHaveLength(1);
       expect(tiles[0].querySelector(".whats-new-tile-title")?.textContent).toBe(entry.tiles[0].title[locale]);
@@ -589,10 +589,10 @@ describe("whats new card", () => {
     await act(async () => document.documentElement.removeAttribute("data-orbit-idle"));
   });
 
-  it("keeps the previews small", () => {
+  it("keeps the previews under 5 MiB, room for 60 fps 2x tiles from 1.0.302 on", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
-    expect(bytes).toBeLessThan(4 * 1024 * 1024);
+    expect(bytes).toBeLessThan(5 * 1024 * 1024);
   });
 
   it("ships previews from 1.0.302 on sharp on a 2x screen", () => {

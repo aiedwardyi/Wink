@@ -3,12 +3,13 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
 import type { CallAnswer, CallRoom } from "../../../shared/live-call";
+import type { CallAudio } from "./audio";
 import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
 import { callAudio, type CallSound } from "./warm-audio";
 
-/** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about; `room` the team room it was placed from; `answer` who answers, fixed for the call. */
-export type ActiveCall = { id: number; botId: string; bot: Bot; sound: CallSound; opener?: string; room?: CallRoom & { name: string }; answer?: CallAnswer };
+/** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about; `room` the team room it was placed from; `answer` who answers; `handoff` the audio and mute of the session it took over from. */
+export type ActiveCall = { id: number; botId: string; bot: Bot; sound: CallSound; opener?: string; room?: CallRoom & { name: string }; answer?: CallAnswer; handoff?: { audio: CallAudio; muted: boolean } };
 
 let calls = 0;
 let call: ActiveCall | null = null;
@@ -39,6 +40,14 @@ export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: Ac
   note = null;
   notify();
   return call;
+}
+
+/** The same call, now answered by the other session: it keeps the mic and speaker the old one hands over. */
+export function switchAnswer(from: ActiveCall, answer: CallAnswer, handoff: NonNullable<ActiveCall["handoff"]>): boolean {
+  if (call !== from) return false;
+  call = { ...from, id: ++calls, opener: undefined, answer, handoff };
+  notify();
+  return true;
 }
 
 /** A tapped bot call: the page may open with no tap of its own yet, so the first one lets the voice play. */

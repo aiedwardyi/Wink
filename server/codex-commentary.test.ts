@@ -73,6 +73,7 @@ function chat(threadId: string) {
   const deps: Record<string, unknown> = {
     turnSummaries, takePeerReplyStamp, isVoiceLine, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(), askTexts: { text() {} }, turnOwnerId: undefined,
     store: {
+      botByThread: () => ({}),
       messagesFor: () => messages,
       findLast: (_threadId: string, predicate: (message: Message) => boolean) => messages.findLast(predicate),
       row: (_threadId: string, id: string) => messages.find((message) => message.id === id),
@@ -145,7 +146,7 @@ describe("a turn's commentary after its final answer", () => {
     const view = chat("t-commentary");
     for (const event of events) view.feed(event);
     expect(view.shown()).toEqual([commentary, "Still checking."]);
-    expect(view.patches).toEqual([]);
+    expect(view.patches).toEqual([{ step: true }]);
   });
 
   it("keeps the one-line answer to a steered message after the final answer", async () => {
@@ -386,5 +387,150 @@ describe("a final answer that restates a text from before a tool call", () => {
 
   it("drops the Gemini step a later step restates from its one row", async () => {
     expect(settled("t-gemini", await gemini()).shown).toEqual([final]);
+  });
+});
+
+describe("a turn's earlier texts fold under its answer as steps", () => {
+  const steps = ["Checking the repo layout first.", "Python turned my \\n into a real newline. Fixing the test file.", "Running the tests again."];
+  const final = "All 12 tests pass. The fix is in test_parse.py line 40.";
+  const scratch = mkdtempSync(join(tmpdir(), "steps-"));
+  const env: Record<string, string> = {};
+  let instance: ProviderInstance | undefined;
+
+  beforeEach(() => {
+    ensureDirs();
+    for (const cli of [FAKE_CLAUDE, FAKE_CODEX, FAKE_ACP, FAKE_AGY, FAKE_MSP]) chmodSync(cli, 0o755);
+  });
+
+  afterEach(async () => {
+    for (const key of Object.keys(env)) delete process.env[key];
+    await instance?.dispose();
+    instance = undefined;
+  });
+
+  const set = (values: Record<string, string>) => {
+    Object.assign(env, values);
+    Object.assign(process.env, values);
+  };
+  const run = async (created: ProviderInstance, threadId: string, text = "fix the parser test") => {
+    instance = created;
+    const recorder = recordEvents(created.adapter);
+    await created.adapter.sendTurn({ threadId, text, model: "fake" });
+    await recorder.until((e) => e.type === "turn.completed");
+    recorder.stop();
+    return recorder.events;
+  };
+  const settled = (threadId: string, events: RuntimeEvent[]) => {
+    const view = chat(threadId);
+    for (const event of events.filter((e) => e.type !== "turn.completed")) view.feed(event);
+    const live = view.shown().length;
+    view.feed(events.find((e) => e.type === "turn.completed")!);
+    const texts = view.messages.filter((m) => m.kind === "text");
+    return {
+      live,
+      answer: texts.filter((m) => !m.step && isShownMessage(m)).map((m) => m.text),
+      steps: texts.filter((m) => m.step).map((m) => m.text),
+    };
+  };
+  const base = { environment: {}, enabled: true } as const;
+  const tool = (id: string) => ({ type: "tool_use", id, name: "Bash", input: { command: "pnpm test" } });
+  const result = (id: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: "ok" }] }] } });
+  const claude = async (frames: object[]) => {
+    const fixture = join(scratch, "claude.json");
+    writeFileSync(fixture, JSON.stringify([
+      ...frames,
+      { type: "assistant", message: { id: "msg-final", stop_reason: "end_turn", content: [{ type: "text", text: final }] } },
+      { type: "result", subtype: "success", is_error: false, result: final, total_cost_usd: 0 },
+    ]));
+    set({ FAKE_CLAUDE_REPLY_FIXTURE: fixture });
+    return run(await ClaudeDriver.create({ ...base, instanceId: "claude-steps", displayName: "Claude", config: { cli: FAKE_CLAUDE, permissionMode: "acceptEdits" } }), "t-claude");
+  };
+
+  it.each([
+    ["Claude", () => claude(steps.flatMap((text, i) => [{ type: "assistant", message: { id: `msg-${i}`, stop_reason: "tool_use", content: [{ type: "text", text }, tool(`tu-${i}`)] } }, result(`tu-${i}`)])), "t-claude"],
+    // a text frame and its tool frame can share one assistant message id
+    ["Claude, split frames", () => claude(steps.flatMap((text, i) => [
+      { type: "assistant", message: { id: `msg-${i}`, content: [{ type: "text", text }] } },
+      { type: "assistant", message: { id: `msg-${i}`, stop_reason: "tool_use", content: [tool(`tu-${i}`)] } },
+      result(`tu-${i}`),
+    ])), "t-claude"],
+    ["Codex without phases", async () => {
+      set({ FAKE_CODEX_MESSAGES: JSON.stringify([...steps, final].map((text) => ({ text }))) });
+      return run(await CodexDriver.create({ ...base, instanceId: "codex-steps", displayName: "Codex", config: { cli: FAKE_CODEX, fullAuto: false } }), "t-codex");
+    }, "t-codex"],
+    ["Grok", async () => {
+      const fixture = join(scratch, "acp.json");
+      writeFileSync(fixture, JSON.stringify([
+        ...steps.flatMap((text, i) => [
+          { sessionUpdate: "agent_message_chunk", content: { text } },
+          { sessionUpdate: "tool_call", toolCallId: `tc-${i}`, title: "run tests" },
+          { sessionUpdate: "tool_call_update", toolCallId: `tc-${i}`, status: "completed" },
+        ]),
+        { sessionUpdate: "agent_message_chunk", content: { text: final } },
+      ]));
+      set({ FAKE_ACP_TOOL_FIXTURE: fixture });
+      return run(await GrokAgentDriver.create({ ...base, instanceId: "grok-steps", displayName: "Grok", config: { cli: FAKE_ACP, fullAuto: false } }), "t-grok");
+    }, "t-grok"],
+    ["Muse", async () => {
+      set({
+        META_API_KEY: "meta-key",
+        FAKE_MSP_MODE: "echo-gated",
+        FAKE_MSP_ITEMS: JSON.stringify(steps.flatMap((text, i) => [
+          { method: "item/started", params: { item: { id: `m-${i}`, kind: "agentMessage" } } },
+          { method: "item/completed", params: { item: { id: `m-${i}`, kind: "agentMessage", text } } },
+          { method: "item/started", params: { item: { itemId: `tc-${i}`, kind: "toolCall", tool: "bash", status: "inProgress" } } },
+          { method: "item/completed", params: { item: { itemId: `tc-${i}`, kind: "toolCall", status: "completed" } } },
+        ])),
+      });
+      // echo-gated ends the turn with "echo: <prompt>", so the prompt is the final answer
+      return run(await MspMuseAgentDriver.create({ ...base, instanceId: "muse-steps", displayName: "Muse", config: { cli: FAKE_MSP, fullAuto: false } }), "t-muse", final);
+    }, "t-muse"],
+    ["Gemini", async () => {
+      const conversation = "conv-steps";
+      const step = (step_index: number, step_type: string, extra: object = {}) => ({ event: "step_update", conversation_id: conversation, step_update: { conversation_id: conversation, step_index, state: "DONE", step_type, ...extra } });
+      set({
+        FAKE_AGY_REPLAY: JSON.stringify([
+          { event: "init", conversation_id: conversation, init: {} },
+          ...steps.flatMap((text, i) => [step(i * 2, "agent_response", { text_delta: text }), step(i * 2 + 1, "tool", { tool_name: "run_command", tool_info: { name: "run_command", parameters: {} } })]),
+          step(steps.length * 2, "agent_response", { text_delta: final }),
+          { event: "result", conversation_id: conversation, result: { conversation_id: conversation, status: "SUCCESS", response: [...steps, final].join(""), duration_seconds: 1, num_turns: 1 } },
+        ]),
+      });
+      return run(await AntigravityDriver.create({ ...base, instanceId: "agy-steps", displayName: "Gemini", config: { cli: FAKE_AGY, fullAuto: true } }), "t-gemini");
+    }, "t-gemini"],
+  ] as const)("%s: 3 step texts and a final settle as 1 answer and 3 reachable steps", async (_engine, play, threadId) => {
+    const events = await play();
+    const turn = settled(threadId, events);
+    expect(turn.live).toBe(4);
+    expect(turn.answer).toEqual([expect.stringContaining(final)]);
+    expect(turn.steps).toEqual(steps);
+  });
+
+  it("Codex with phases: the commentary a final hides is still its steps", async () => {
+    set({ FAKE_CODEX_MESSAGES: JSON.stringify([...steps.map((text) => ({ text, phase: "commentary" })), { text: final, phase: "final_answer" }]) });
+    const events = await run(await CodexDriver.create({ ...base, instanceId: "codex-steps", displayName: "Codex", config: { cli: FAKE_CODEX, fullAuto: false } }), "t-codex");
+    const turn = settled("t-codex", events);
+    expect(turn.answer).toEqual([final]);
+    expect(turn.steps).toEqual(steps);
+  });
+
+  it("a peer turn keeps every line as its own row", async () => {
+    const events = await claude(steps.flatMap((text, i) => [{ type: "assistant", message: { id: `msg-${i}`, stop_reason: "tool_use", content: [{ type: "text", text }, tool(`tu-${i}`)] } }, result(`tu-${i}`)]));
+    const view = chat("t-claude");
+    view.messages.push({ id: "inbound", at: 1, role: "user", kind: "text", text: "Check the release.", from: { botId: "atlas", name: "Atlas", color: "pink" } });
+    for (const event of events) view.feed(event);
+    expect(view.messages.filter((m) => m.step)).toEqual([]);
+  });
+
+  it("a steer reply and the answer stay out of the fold", async () => {
+    const events = await claude(steps.flatMap((text, i) => [{ type: "assistant", message: { id: `msg-${i}`, stop_reason: "tool_use", content: [{ type: "text", text }, tool(`tu-${i}`)] } }, result(`tu-${i}`)]));
+    const view = chat("t-claude");
+    const texts = events.filter(isText);
+    for (const event of events) {
+      if (event === texts[1]) view.messages.push({ id: "user-b", at: 1, role: "user", kind: "text", text: "also check the CI run", steered: true });
+      view.feed(event);
+    }
+    expect(view.messages.filter((m) => m.kind === "text" && m.role === "bot" && !m.step).map((m) => m.text)).toEqual([steps[1], final]);
+    expect(view.messages.filter((m) => m.step).map((m) => m.text)).toEqual([steps[0], steps[2]]);
   });
 });

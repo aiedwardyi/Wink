@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { Volume2 } from "lucide-react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
@@ -10,7 +10,7 @@ import { lazyView } from "@/lib/stale-build";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
-import { dropCall, onQueueCancelled, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
+import { dropCall, onQueueCancelled, switchAnswer, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
 import { CallAudio } from "@/lib/live-call/audio";
 import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, VOICE_OUT, type CallState, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
@@ -178,13 +178,31 @@ export function LiveCallHost() {
   return active.answer === "bot" ? <Suspense fallback={null}><SameBotSession key={active.id} active={active} bot={bot} /></Suspense> : <Session key={active.id} active={active} bot={bot} />;
 }
 
+/** A pick of who answers made during the call moves it to the other session once nothing is in flight; the true ref tells the unmount to leave the call up. */
+export function useAnswerSwitch(active: ActiveCall, call: { idle(): boolean }, audio: CallAudio, snap: CallState): RefObject<boolean> {
+  const { state } = useStore();
+  const want = active.room ? "gemini" : state.config?.liveCall?.answer ?? "gemini";
+  // A call the bot rang answers on Gemini voice whatever the setting; only a pick made during the call moves it.
+  const [placed] = useState(want);
+  const picked = useRef(false);
+  const moved = useRef(false);
+  useEffect(() => {
+    picked.current ||= want !== placed;
+    if (moved.current || !picked.current || want === (active.answer ?? "gemini") || !call.idle()) return;
+    if (!switchAnswer(active, want, { audio, muted: snap.muted })) return;
+    moved.current = true;
+    audio.handOver();
+  }, [active, audio, call, placed, snap, want]);
+  return moved;
+}
+
 function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const { state } = useStore();
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const onEnd = useCallback((note?: string) => dropCall(active, note), [active]);
   const [live] = useState(() => {
-    const audio = new CallAudio(active.sound);
+    const audio = active.handoff?.audio ?? new CallAudio(active.sound);
     const call = new LiveCall({
       botId: bot.id,
       botName: bot.name,
@@ -196,15 +214,17 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       prefs: bot.call,
       room: active.room && { id: active.room.id, kind: active.room.kind },
     });
-    return { call, level: (mic: boolean) => audio.level(mic) };
+    if (active.handoff?.muted) call.mute(true);
+    return { call, audio, level: (mic: boolean) => audio.level(mic) };
   });
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
+  const moved = useAnswerSwitch(active, call, live.audio, snap);
   const owner = useOnCall();
   const mounted = useRef(false);
   const kicked = useRef(false);
   const configured = Boolean(state.config?.gemini?.configured);
-  const [fresh, setFresh] = useState(() => !seenIntro());
+  const [fresh, setFresh] = useState(() => !active.handoff && !seenIntro());
   // A key saved mid-call shows the intro too, so the call never goes live unseen.
   const intro = (fresh && configured && !state.config?.gemini?.introSeen) || (snap.status === "needsKey" && configured);
   const introShown = usePresence(intro);
@@ -234,11 +254,12 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       queueMicrotask(() => {
         if (mounted.current) return;
         call.end();
+        if (moved.current) return;
         endCall(bot.id);
         onEnd();
       });
     };
-  }, [bot.id, call, onEnd]);
+  }, [bot.id, call, moved, onEnd]);
 
   // The first render still reads the call it replaces as owner; only a later switch hangs this one up.
   const owned = useRef(false);

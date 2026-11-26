@@ -73,7 +73,7 @@ import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { isPaymentDue, isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
-import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
+import { FREE_ACCESS, guestText, type AccessTurn, type TurnAccess } from "./turn-access.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 // Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
@@ -285,6 +285,8 @@ type AskResolutionSource = "user" | "timeout" | "system";
 // so Ask for approval reaches the broker even where Write, Bash or a Wink tool is allowed.
 // Sandbox auto-allow is switched off too, or sandboxed Bash would skip them.
 const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"];
+// The CLI's default mode runs these on the turn's own folder unasked.
+const READ_TOOLS = ["Read", "Glob", "Grep", "LSP"];
 const askSettings = (builtinAsks: string[], deny: string[] = []) => JSON.stringify({
   permissions: { ask: [...WRITE_TOOLS, ...builtinAsks], ...(deny.length ? { deny } : {}) },
   sandbox: { autoAllowBashIfSandboxed: false },
@@ -1165,7 +1167,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
       // `--tools ""` already removes it, so no deny entry there.
-      const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
+      // a read-only turn on someone else's words: the turn's folder is the host's project, so no tool reads a file
+      const guest = guestText(turn);
+      const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : []), ...(guest ? READ_TOOLS : [])];
       if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
       const turnModel = input.account ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
       if (input.account && turnModel && !models.options.some((model) => model.id === turnModel)) throw new Error("Unsupported subscription model");
@@ -1286,8 +1290,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
 
       const env = claudeEnvironment(turnModel, turnEnvironment, input.account);
       // the CLI attaches any typed @path with no ask, so a guest's text could name any file on the PC
-      const noMentions = turn.readOnly === true && turn.ownerText !== true;
-      if (noMentions) env.CLAUDE_CODE_DISABLE_FILE_MENTIONS = "1";
+      if (guest) env.CLAUDE_CODE_DISABLE_FILE_MENTIONS = "1";
       // the CLI skips its "no visible output" nudge when a turn ends on a listed tool
       if (mcpServers.agents) env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "mcp__agents__no_reply_needed";
       else delete env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
@@ -1300,7 +1303,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const unkeyed = new Set(["--mcp-config", "--append-system-prompt"]);
       const keyArgs = args.filter((a, i) => !unkeyed.has(a) && !unkeyed.has(args[i - 1] ?? ""));
       // injected credentials live in env, so leaving or entering them is a contract change
-      const argsKey = JSON.stringify({ args: keyArgs, mcpServers, cwd, model: injected.model ?? null, base: env.ANTHROPIC_BASE_URL ?? null, ...(injected.injected && { injected: true }), ...(noMentions && { noMentions }) });
+      const argsKey = JSON.stringify({ args: keyArgs, mcpServers, cwd, model: injected.model ?? null, base: env.ANTHROPIC_BASE_URL ?? null, ...(injected.injected && { injected: true }), ...(guest && { noMentions: guest }) });
 
       // Reuse the live process only when it is idle, unchanged, and the
       // harness named that same session. An omitted cursor (Orbit recycled

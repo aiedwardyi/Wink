@@ -89,7 +89,7 @@ export interface Message {
     ok?: boolean;
     spoken?: string;
     lines?: string[];
-    tidy?: { runId: string; undoneAt?: number };
+    tidy?: { runId: string; count?: number; undoneAt?: number };
     summary?: string;
     durationMs?: number;
     detail?: ToolDetail;
@@ -107,6 +107,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** Mid-turn progress line folded under Steps once the turn settles. */
+  step?: true;
   /** The new-bot offer reply that carries the Import Memory prompt. */
   importOffer?: true;
   call?: import("../../shared/live-call").CallTag;
@@ -384,6 +386,9 @@ export interface TerminalAttention {
 
 export type TerminalAttentionMap = Record<string, TerminalAttention>;
 
+/** Lists by engine base, plus "engines" for the sections. seed: "browser" marks a browser's old local copy sent up once. */
+export type UsageOrderStatus = { orders: Record<string, string[]>; seed?: "browser"; rev?: number } | null;
+
 /** GET /api/config - configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
@@ -394,6 +399,8 @@ export interface ConfigStatus {
   box: { configured: boolean };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
+  /** The order dragged on Usage and Connections, kept by this Wink; null until one is saved. */
+  usageOrder?: UsageOrderStatus;
   localVm: { mode: "shared" | "per-bot"; maxInstances: number };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
@@ -412,7 +419,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "gemini" | "liveCall" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
+  "xai" | "gemini" | "liveCall" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "usageOrder" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
 >;
 
 /** How an engine gets installed - declared by its driver, mirrors

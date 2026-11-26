@@ -145,7 +145,7 @@ const attach = (file: File) => act(async () => {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 });
 // the chat view hands the composer its bot again as messages land
-const rerender = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, props))));
+const rerender = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null, createElement(Probe), createElement(Composer, props))));
 const expand = async () => {
   await act(async () => row()!.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
   await settle();
@@ -469,13 +469,112 @@ describe("pinned ask_user question", () => {
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
-  it("outlines the choices in secondary ink with a 44px touch target", async () => {
+  it("steps between open questions from the open card, staying open", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    expect(card()!.textContent).toContain("2/2");
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("1/2");
+    expect(card()!.textContent).toContain("Which region?");
+    await act(async () => pinButton("Next question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which plan?");
+  });
+
+  it("steps from a card opened over a draft to the next question open, and from a row to a row", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await type("thinking");
+    await settle();
+    expect(card()).toBeNull();
+    await expand();
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    await act(async () => rowButton("Next question").click());
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which plan?");
+    await type("");
+  });
+
+  it("keeps the open card being read when a new question arrives, and moves on once it is answered", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    expect(card()!.textContent).toContain("1/3");
+    await rerender({ bot: bot([{ ...first, card: { ...first.card!, answered: "Seoul" } }, second, third]) });
+    await settle();
+    expect(card()!.textContent).toContain("Which color?");
+    expect(card()!.textContent).toContain("2/2");
+  });
+
+  it("keeps the card being read over a draft, open or folded, when a new question arrives", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    const fourth = ask({ subtitle: "Which size?", options: ["S", "L"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await type("thinking");
+    await settle();
+    await expand();
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    expect(card()!.textContent).toContain("1/3");
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third, fourth]) });
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which region?");
+    expect(row()!.textContent).toContain("1/4");
+    expect(textarea()!.value).toBe("thinking");
+    await type("");
+  });
+
+  it("shows a new question after the stepped-to row was swiped away", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    expect(row()!.textContent).toContain("Which region?");
+    await swipe(row()!, 200);
+    expect(pin()).toBeNull();
+    expect(dot()?.textContent).toBe("2");
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(pin()!.textContent).toContain("Which color?");
+    expect(pin()!.textContent).toContain("3/3");
+  });
+
+  it("outlines the choices in a subtle hairline chip with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;
-    expect(choice).toContain("rounded-full");
-    expect(choice).toContain("bg-control");
-    expect(choice).toContain("border-ink-secondary ");
-    expect(choice).toContain("pointer-coarse:after:-inset-y-[5px]");
+    expect(choice).toContain("rounded-xl");
+    expect(choice).toContain("bg-inset/60");
+    expect(choice).toContain("border-hairline/80 ");
+    expect(choice).toContain("pointer-coarse:after:-inset-y-[6px]");
   });
 
   it("gives the open card's x a 44px touch target without growing the card", async () => {
@@ -685,8 +784,8 @@ describe("jumping from the question card", () => {
     expect(focused).toBeNull();
   });
 
-  it("jumps to an older open question's own record, reached with the arrows", async () => {
-    const older = ask({ staysOpen: true, subtitle: "Older question?" });
+  it("jumps from an older docked open question to its turn's text, reached with the arrows", async () => {
+    const older = ask({ staysOpen: true, subtitle: "Older question?", replyId: "reply-1" });
     const newest = ask({ staysOpen: true, subtitle: "Newest question?" });
     await mount({ bot: bot([reply("reply-1"), older, newest]) });
     await shrink();
@@ -694,7 +793,7 @@ describe("jumping from the question card", () => {
     await expand();
     await tap();
     expect(card()?.textContent).toContain("Older question?");
-    expect(focused).toMatchObject({ messageId: older.id });
+    expect(focused).toMatchObject({ messageId: "reply-1" });
   });
 
   it("leaves the arrows and the choices to flip and answer, not jump", async () => {

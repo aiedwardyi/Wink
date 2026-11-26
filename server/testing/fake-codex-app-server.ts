@@ -298,7 +298,7 @@ process.stdin.on("data", (chunk) => {
         if (mode === "mcp-elicitation") {
           const [serverName, named] = (process.env.FAKE_CODEX_ELICIT ?? "agents/list_bots").split("/");
           // with the catalog mounted the model reaches these only through the gateway (tool-catalog.ts OPTIONAL)
-          const hidden = ["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix", "board_search", "board_post", "wake_me", "web_read"];
+          const hidden = ["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix", "post_to_group", "board_search", "board_post", "wake_me", "web_read"];
           const tool = serverName === "agents" && process.env.WINK_MCP_AGENTS_OMB_WINK_TOOL_CATALOG === "1" && hidden.includes(named) ? "call_wink_tool" : named;
           out({
             jsonrpc: "2.0",

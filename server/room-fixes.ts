@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { parsePaneNote } from "../shared/pane-note.ts";
 import { writeFileAtomic } from "./atomic.ts";
+import { committedRoomText, ROOM_TEXT_MAX } from "./rooms/db.ts";
 import { linkRoomEntry } from "./rooms/mirror.ts";
 import type { BotRecord, GroupRecord, Message, Store } from "./store.ts";
 import { APP_REPO } from "./unlanded.ts";
@@ -31,6 +32,8 @@ const fixSchema = z.object({
 });
 type RoomFix = z.infer<typeof fixSchema>;
 
+export const groupPostSchema = z.object({ group: z.string().trim().min(1), text: z.string().trim().min(1).max(ROOM_TEXT_MAX) }).strict();
+type GroupPost = z.infer<typeof groupPostSchema>;
 const mergedSchema = z.array(z.object({ mergedAt: z.string().nullish(), mergeCommit: z.object({ oid: z.string() }).nullish() }));
 
 export type RoomFixStore = Pick<Store, "bot" | "group" | "groupByThread" | "appendMessage" | "patchMessage" | "patchGroup" | "activePath" | "tasks"> & { groups: readonly GroupRecord[] };
@@ -62,7 +65,7 @@ function cleanTitle(value: string): string {
   return title.length > TITLE_CHARS ? `${title.slice(0, TITLE_CHARS - 1).replace(/[\ud800-\udbff]$/, "")}…` : title;
 }
 
-function roomFor(store: RoomFixStore, bot: BotRecord, threadId: string, name: string | undefined): { group: GroupRecord } | { error: string } {
+function roomFor(store: RoomFixStore, bot: BotRecord, name: string | undefined, threadId?: string): { group: GroupRecord } | { error: string } {
   const mine = store.groups.filter((group) => !group.dm && group.memberIds.includes(bot.id));
   const wanted = name?.trim().toLowerCase();
   if (wanted) {
@@ -70,8 +73,14 @@ function roomFor(store: RoomFixStore, bot: BotRecord, threadId: string, name: st
     if (named.length === 1) return { group: named[0]! };
     return { error: named.length ? `Several of your rooms are named "${name}".` : `You have no room named "${name}". Your rooms: ${mine.map((group) => group.name).join(", ") || "none"}.` };
   }
-  const here = store.groupByThread(threadId);
+  const here = threadId ? store.groupByThread(threadId) : undefined;
   return here && !here.dm && here.memberIds.includes(bot.id) ? { group: here } : { error: "This turn is not in a room. Pass room: the name of the room the report came from." };
+}
+
+function postRoomText(store: RoomFixStore, group: GroupRecord, bot: BotRecord, text: string): void {
+  const row = store.appendMessage(group.threadId, { role: "bot", kind: "text", text, from: { botId: bot.id, name: bot.name, color: bot.color } });
+  linkRoomEntry(store, group, row);
+  store.patchGroup(group.id, { unread: true });
 }
 
 /** The branch a pane's newest DONE report names, from its `branch=` header field. */
@@ -105,9 +114,7 @@ export function createRoomFixes(deps: RoomFixDeps) {
     const { catalogs } = await import("../src/lib/i18n-catalog.ts");
     let text: string = catalogs[fix.lang][key];
     for (const [name, value] of Object.entries(vars)) text = text.replaceAll(`{${name}}`, () => value);
-    const row = deps.store.appendMessage(group.threadId, { role: "bot", kind: "text", text, from: { botId: bot.id, name: bot.name, color: bot.color } });
-    linkRoomEntry(deps.store, group, row);
-    deps.store.patchGroup(group.id, { unread: true });
+    postRoomText(deps.store, group, bot, text);
   };
   const shipped = async (fix: RoomFix, version: string): Promise<boolean> => {
     const bot = deps.store.bot(fix.botId);
@@ -139,12 +146,22 @@ export function createRoomFixes(deps: RoomFixDeps) {
     }
   };
   return {
+    postToGroup(botId: string, input: GroupPost): { text: string } | { error: string } {
+      const bot = deps.store.bot(botId);
+      if (!bot) return { error: "unknown sender" };
+      const text = committedRoomText("bot", input.text);
+      if (!text) return { error: "post_to_group needs nonblank text." };
+      const found = roomFor(deps.store, bot, input.group);
+      if ("error" in found) return found;
+      postRoomText(deps.store, found.group, bot, text);
+      return { text: `Posted in "${found.group.name}".` };
+    },
     async link(input: RoomFixLink): Promise<{ text: string } | { error: string }> {
       const bot = deps.store.bot(input.botId);
       if (!bot) return { error: "unknown sender" };
       const title = cleanTitle(input.title);
       if (!title) return { error: "link_room_fix needs a title." };
-      const found = roomFor(deps.store, bot, input.threadId, input.room);
+      const found = roomFor(deps.store, bot, input.room, input.threadId);
       if ("error" in found) return found;
       const { group } = found;
       const pane = input.sessionId.trim() ? await deps.pane(bot.id, input.sessionId.trim()) : null;

@@ -214,13 +214,14 @@ describe("questionJumpId", () => {
     expect(jump([typed("u0"), { ...botText("b1"), summarized: true }, question], question)).toBeNull();
   });
 
-  it("keeps an older question's own record as the target, only while it is shown", () => {
-    const old = ask("q1", { staysOpen: true });
+  it("targets an older docked question's stamped reply, or its own record when no pin hides it", () => {
+    const old = ask("q1", { staysOpen: true, replyId: "b1" });
     const newest = ask("q2", { staysOpen: true });
     const messages = [typed("u0"), botText("b1"), old, newest];
-    expect(questionJumpId(messages, old, pinnedQuestion(messages))).toBe("q1");
+    expect(questionJumpId(messages, old, pinnedQuestion(messages))).toBe("b1");
+    expect(questionJumpId(messages, old, null)).toBe("q1");
     expect(questionJumpId(messages, newest, pinnedQuestion(messages))).toBeNull();
     // edited away: the older card sits on a branch the chat no longer shows
-    expect(questionJumpId([typed("u2"), botText("b2"), newest], old, newest)).toBeNull();
+    expect(questionJumpId([typed("u2"), botText("b2"), newest], old, null)).toBeNull();
   });
 });

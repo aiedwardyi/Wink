@@ -115,7 +115,7 @@ export function errorCode(message: string): ErrorCode {
   return "other";
 }
 
-const TIDY_RESULTS = ["saved", "none", "conflict", "error", "timeout", "cancelled", "no-log"] as const;
+const TIDY_RESULTS = ["saved", "none", "conflict", "error", "unjudged", "timeout", "cancelled", "no-log"] as const;
 
 /** What a night leaves in the results folder: numbers, booleans, codes, bot ids and 8-hex shas, never a free string. */
 export const nightSummarySchema = z.object({

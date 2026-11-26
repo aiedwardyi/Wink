@@ -29,7 +29,7 @@ import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { isTerminalSkin, isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
-import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
+import { isAskUserCard, openQuestions, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { DEFAULT_MAUS_COLOR, normalizeState } from "@/lib/mascot";
@@ -280,6 +280,10 @@ export const Transcript = memo(function Transcript({
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
+  // the waiting cards the composer's dock holds take no row, so no asker label stands over an empty one;
+  // an archive has no dock, so its cards stay
+  const dockedAsks = useMemo(() => new Set(!readOnly && pinnedQuestion(group.messages) ? openQuestions(group.messages).map((m) => m.id) : []), [readOnly, group.messages]);
+  const asksDocked = dockedAsks.size > 0;
   const items = useMemo(
     () => groupActivityRuns(
       streamingMessage ? [...messages, streamingMessage] : messages,
@@ -289,8 +293,8 @@ export const Transcript = memo(function Transcript({
     [messages, streamingMessage, terminal, showToolCalls, showActivities, workerAt],
   );
   const rows = useMemo(
-    () => roomTranscriptRows(items, { showToolCalls, showActivities, workers: workerAt }),
-    [items, showToolCalls, showActivities, workerAt],
+    () => roomTranscriptRows(items, { showToolCalls, showActivities, workers: workerAt, hidden: dockedAsks }),
+    [items, showToolCalls, showActivities, workerAt, dockedAsks],
   );
   const { pictured, tailPictures } = useMemo(() => picturedReplies(transcript), [transcript]);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
@@ -450,7 +454,7 @@ export const Transcript = memo(function Transcript({
                 message={m}
                 transcript={transcript}
                 askerName={memberOf(m.from?.botId)?.name ?? m.from?.name}
-                pinned={pinnedQuestion(group.messages)?.id === m.id}
+                pinned={asksDocked}
                 onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer })}
               />
             </div>
@@ -1595,12 +1599,13 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
         <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
       ) : null}
 
-      {(jump.messages || laterCount > 0 || (!follow && newestBelow)) && (
-        <JumpToLatest bottom={composerDock.height} onJump={jumpToLatest} />
-      )}
-
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
       <ChatPeekPart part="composer">
+      {(jump.messages || laterCount > 0 || (!follow && newestBelow)) && (
+        <div data-dock-rail="" className="flex min-h-[28px] justify-end bg-app px-5 py-1.5 max-md:border-t max-md:border-hairline/25 max-md:px-3">
+          <JumpToLatest inline onJump={jumpToLatest} />
+        </div>
+      )}
       {archive ? (
         <GroupArchiveBar />
       ) : (

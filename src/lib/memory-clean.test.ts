@@ -30,14 +30,14 @@ describe("cleanup summary", () => {
     const replies: Array<(response: Response) => void> = [];
     const fetch = vi.fn(() => new Promise<Response>((resolve) => replies.push(resolve)));
     vi.stubGlobal("fetch", fetch);
-    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r" } } };
+    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r", count: 1 } } };
     await mount();
     if (patched) {
       await act(async () => replies[0](Response.json({ run })));
       await act(async () => root.render(createElement(Probe, { messages: [message] })));
     }
     const before = replies.length;
-    const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", undoneAt: 3 } } } : message;
+    const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", count: 1, undoneAt: 3 } } } : message;
     await act(async () => root.render(createElement(Probe, { messages: [changed] })));
     const reads = replies.length;
     await act(async () => replies[before - 1](Response.json({ run: patched ? null : { ...run, runId: "stale" } })));
@@ -67,11 +67,11 @@ describe("cleanup summary", () => {
     const fetch = vi.fn(() => new Promise<Response>((resolve) => replies.push(resolve)));
     vi.stubGlobal("fetch", fetch);
     await mount();
-    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r" } } };
+    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r", count: 1 } } };
     const rows = (messages: Message[]) => createElement("div", null, ...[1, 2, 3].map((key) => createElement(Probe, { key, messages })));
     await act(async () => root.render(rows(patched ? [message] : [])));
     await act(async () => replies[0](Response.json({ run })));
-    const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", undoneAt: 3 } } } : message;
+    const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", count: 1, undoneAt: 3 } } } : message;
     const before = replies.length;
     await act(async () => root.render(rows([changed])));
     const reads = replies.length - before;
@@ -101,16 +101,16 @@ describe("cleanup summary", () => {
     await mount(); expect(value.run?.runId).toBe("r");
     await act(async () => root.render(createElement(Probe, { active: false })));
     await act(async () => root.render(createElement(Probe, { active: true })));
-    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r" } } };
+    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r", count: 1 } } };
     await act(async () => root.render(createElement(Probe, { messages: [message] })));
-    await act(async () => root.render(createElement(Probe, { messages: [{ ...message, tool: { ...message.tool!, tidy: { runId: "r", undoneAt: 2 } } }] })));
+    await act(async () => root.render(createElement(Probe, { messages: [{ ...message, tool: { ...message.tool!, tidy: { runId: "r", count: 1, undoneAt: 2 } } }] })));
     expect(fetch).toHaveBeenCalledTimes(4);
   });
   it("refetches a tidy append while the Memory tab is hidden", async () => {
     const fetch = vi.fn(async () => Response.json({ run })); vi.stubGlobal("fetch", fetch);
     await mount();
     await act(async () => root.render(createElement(Probe, { active: false })));
-    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r" } } };
+    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r", count: 1 } } };
     await act(async () => root.render(createElement(Probe, { active: false, messages: [message] })));
     expect(fetch).toHaveBeenCalledTimes(2);
   });

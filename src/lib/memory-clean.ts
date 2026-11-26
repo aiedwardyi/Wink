@@ -25,7 +25,7 @@ export type DreamRun = {
   mode: "dry";
   notes: {
     state: "checked" | "unchanged" | "off-here" | "no-model" | "stopped" | "conflict" | "error";
-    items: { op: "move"; target: string; text: string | null; by: string | null; why: "duplicate" | "replaced"; history: string }[];
+    items: { op: "move"; target: string; text: string | null; by: string | null; why: "duplicate" | "replaced" | "expired"; history: string }[];
   };
   asks: {
     threads: number;

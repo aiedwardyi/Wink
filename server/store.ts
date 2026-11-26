@@ -179,6 +179,8 @@ export interface Message {
     usageWait?: UsageWaitView;
     /** an auto-approval chip; the model replay skips it */
     approval?: boolean;
+    /** Sleep's morning line: the run it archived and how many lines */
+    tidy?: { runId: string; count?: number; undoneAt?: number };
   };
   /** user messages sent INTO a running turn (capabilities.queueing): the
    * model saw it mid-turn, so the transcript marks it — a reader should
@@ -192,6 +194,8 @@ export interface Message {
   summarized?: boolean;
   /** Hidden: a later text of its turn says the same, so replay skips it. */
   restated?: true;
+  /** Mid-turn progress line folded under Steps once the turn settles. */
+  step?: true;
   /** The reply of a new bot's offer turn that carries the Import Memory prompt; the provider buttons show only here. */
   importOffer?: true;
   /** Bot replies: the engine driver kind that wrote it; older rows have none. */
@@ -1721,6 +1725,14 @@ export class Store {
 
   botByThread(threadId: string) {
     return this.bots.find((b) => b.threadId === threadId || b.tasks?.some((t) => t.threadId === threadId)) ?? null;
+  }
+
+  /** The bots that run turns on a thread: its room's members or its chat's bot; none once the room or chat is deleted. */
+  threadBots(threadId: string): BotRecord[] {
+    const group = this.groupByThread(threadId);
+    if (group) return group.memberIds.flatMap((id) => this.bot(id) ?? []);
+    const bot = this.botByThread(threadId);
+    return bot ? [bot] : [];
   }
 
   conversationForBot(botId: string, threadId: string) {

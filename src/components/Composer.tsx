@@ -67,7 +67,7 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel, useQuestionHidden } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -287,9 +287,10 @@ export function Composer({
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
   const pinned = useMemo(() => pinnedQuestion(chatMessages, threadMessages), [chatMessages, threadMessages]);
   const questions = pinned ? openQuestions(chatMessages) : [];
-  // the row's arrows show an older open question until a newer one arrives
+  // the row's arrows show another open question until it is answered or dismissed; a swiped-away one gives way to a newer arrival
   const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
-  const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
+  const pickHidden = useQuestionHidden(questionPick?.id ?? "");
+  const question = ((!pickHidden || questionPick?.newest === pinned?.id) && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
   const jumpId = question ? questionJumpId(threadMessages, question, pinned, Boolean(group ? group.hasMore : bot?.hasMore)) : null;
   const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
@@ -298,6 +299,7 @@ export function Composer({
       ? (members?.find((member) => member.id === question.from?.botId)?.name ?? question.from?.name ?? t("chrome.aBot"))
       : (bot?.name ?? t("chrome.aBot"))
     : "";
+  const questionHidden = useQuestionHidden(question?.id ?? "");
   const approvalBot = group
     ? members?.find((member) => member.id === approval?.message.from?.botId) ??
       members?.find((member) => member.id === group.busyBotId)
@@ -1077,8 +1079,11 @@ export function Composer({
     </button>
   );
 
+  const questionAttached = Boolean(question && !questionHidden && !approval && !shownAttachments.length && !replyTo && !attachmentNotice);
+  const singleRowPhone = !callSlot.mounted;
+
   return (
-    <div className="pointer-events-none relative px-5 pb-3">
+    <div className="pointer-events-none relative px-5 pb-3 max-md:px-3 max-md:pb-2.5">
       {/* No fill or hairline on this wrapper — those were the black frame
           in the pill's top corners. The dock overlays the transcript. */}
       {speechError && (
@@ -1264,11 +1269,12 @@ export function Composer({
             askerName={questionAsker}
             count={questions.length}
             index={questionIndex}
+            docked={questionAttached}
             onJump={jumpId ? () => dispatch({ type: "focusMessage", threadId, messageId: jumpId }) : undefined}
-            onStep={(step) => {
+            onStep={(step, folded) => {
               const next = questions[questionIndex + step];
               if (!next || !pinned) return;
-              foldQuestion(next.id);
+              foldQuestion(next.id, folded);
               setQuestionPick({ id: next.id, newest: pinned.id });
             }}
             typed={text}
@@ -1317,8 +1323,15 @@ export function Composer({
           />
         <div
           data-orbit-composer-frame
+          data-dock-attached={questionAttached ? "" : undefined}
           data-rainbow={rainbow === "off" ? undefined : ""}
-          className="relative grid cursor-text grid-cols-[auto_1fr_auto] items-center gap-x-2 rounded-3xl bg-raised px-3 pb-2 pt-1"
+          className={cn(
+            "relative grid cursor-text grid-cols-[auto_1fr_auto] items-center gap-x-2 bg-raised px-3 pb-2 pt-1",
+            questionAttached
+              ? "rounded-b-[20px] rounded-t-none border-x border-b border-t border-hairline/70 border-t-hairline/40"
+              : "rounded-3xl max-md:rounded-[22px]",
+            singleRowPhone && "max-md:items-end max-md:gap-x-1 max-md:px-2 max-md:py-1.5",
+          )}
           onPointerDownCapture={(e) => {
             framePress.current = e.button === 0 && !(e.target as Element).closest(frameControl);
             if (framePress.current && !inputRef.current?.disabled) e.preventDefault();
@@ -1356,7 +1369,7 @@ export function Composer({
             }}
           />
           {((!locked && !room?.offline) || callStop) && (
-            <div className="col-start-1 row-start-3 mt-1 flex items-center gap-1">
+            <div className={cn("col-start-1 row-start-3 mt-1 flex items-center gap-1", singleRowPhone && "max-md:row-start-2 max-md:mt-0")}>
               {!locked && !room?.offline && <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
@@ -1476,9 +1489,12 @@ export function Composer({
               : busyChrome.placeholder
           }
           aria-label={t("composer.messageAria", { name: group ? group.name : room ? room.name : (bot?.name ?? "") })}
-            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none max-md:text-[16px]"
+            className={cn(
+              "col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none max-md:text-[16px]",
+              singleRowPhone && "max-md:col-span-1 max-md:col-start-2",
+            )}
           />
-        <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
+        <div className={cn("col-start-3 row-start-3 mt-1 flex items-center gap-1", singleRowPhone && "max-md:row-start-2 max-md:mt-0")}>
           {stoppable && !locked && !callSlot.mounted && stopButton}
         {!locked && !stoppable && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
           <button

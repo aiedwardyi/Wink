@@ -1264,7 +1264,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     child.kill();
     const eager = tools.filter((tool) => tool._meta?.["anthropic/alwaysLoad"] !== false);
     const chars = JSON.stringify(eager.map((tool) => ({ name: `mcp__agents__${tool.name}`, description: tool.description, input_schema: tool.inputSchema }))).length;
-    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["web_read", "board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix"]);
+    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["web_read", "board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix", "post_to_group"]);
     expect(chars, `Claude re-reads ${chars} chars of agents tool schemas on every call. Defer a rarely used tool (tool-catalog.ts OPTIONAL, deferOptional) or shorten a description; raise this budget only with measured token numbers.`).toBeLessThanOrEqual(16_500);
   });
 
@@ -1316,7 +1316,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(existsSync(join(scratch, "ran.txt"))).toBe(false);
     expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
-    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,LSP");
   });
 
   it("turns off @file attach on a guest's read-only turn, not on an owner turn or the owner's own lane", async () => {
