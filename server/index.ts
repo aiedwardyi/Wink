@@ -6454,6 +6454,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         // session - another task's cursor would resume the wrong
         // conversation and defeat the context bubble
         let resumeCursor = resume ? task.resumeCursors[instanceId] : undefined;
+        const quietLines = retiredPickLines(bot.id);
         let text = withLate(turnText);
         let systemUpdate = "";
         let systemRecycle = false;
@@ -6464,7 +6465,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           const delivered = resumeCursor === undefined ? undefined : store.sessionSystem(instanceId, resumeCursor);
           // A cursor with no record (saved before records existed) may hold any older text.
           const unknown = resumeCursor !== undefined && delivered === undefined;
-          const quiet = new Set(retiredPickLines(bot.id));
+          const quiet = new Set(quietLines);
           const updated = (unknown ? null : withSystemChanges(text, delivered, system, undefined, quiet))
             ?? (live.adapter.hasBackgroundWork?.(threadId) === true ? withSystemChanges(text, delivered ?? "", system, Infinity, quiet) : null);
           if (updated !== null) ({ text, systemUpdate } = systemTurnInput(text, updated, instance.driverKind));
@@ -6552,7 +6553,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,
-        systemQuiet: retiredPickLines(bot.id),
+        ...(quietLines.length ? { systemQuiet: quietLines } : {}),
         approval,
         ...(readOnly ? { readOnly } : {}),
         attended: !isUnattended(bot.id),
