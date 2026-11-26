@@ -413,7 +413,7 @@ function global:prompt {
   return ["-NoLogo", ...(noProfile ? ["-NoProfile"] : []), "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
 }
 
-// Bash 4.4+ (for PS0) and zsh mark each prompt and each command start as workerShellArgs does for PowerShell, without its command hash, and each prompt's job count; any other shell stays unmarked.
+// Bash 4.4+ (for PS0) and zsh mark each prompt and each command start as workerShellArgs does for PowerShell, without its command hash; any other shell stays unmarked.
 const BASH_MARKS = [
   'if [ -n "$ORBIT_SHELL_LOGIN" ]; then',
   '  unset ORBIT_SHELL_LOGIN',
@@ -426,7 +426,7 @@ const BASH_MARKS = [
   'fi',
   'if (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 404 )); then',
   '  __orbit_mark=0',
-  '  __orbit_prompt() { local __orbit_status=$? __orbit_jobs=\'\\j\'; __orbit_mark=$((__orbit_mark + 1)); printf \'\\033]133;D;%s;%s;%s\\007\' "$ORBIT_PANE" "$__orbit_mark" "${__orbit_jobs@P}"; return $__orbit_status; }',
+  '  __orbit_prompt() { local __orbit_status=$?; __orbit_mark=$((__orbit_mark + 1)); printf \'\\033]133;D;%s;%s\\007\' "$ORBIT_PANE" "$__orbit_mark"; return $__orbit_status; }',
   '  PROMPT_COMMAND="__orbit_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"',
   '  PS0="\\e]133;C;$ORBIT_PANE;\\a$PS0"',
   'fi',
@@ -444,7 +444,7 @@ const ZSH_MARKS = {
   ".zprofile": zshFile(".zprofile"),
   ".zshrc": zshFile(".zshrc", [
     "typeset -gi __orbit_mark=0",
-    "__orbit_precmd() { __orbit_mark+=1; printf '\\033]133;D;%s;%s;%s\\007' \"$ORBIT_PANE\" \"$__orbit_mark\" \"${(%):-%j}\"; }",
+    "__orbit_precmd() { __orbit_mark+=1; printf '\\033]133;D;%s;%s\\007' \"$ORBIT_PANE\" \"$__orbit_mark\"; }",
     "__orbit_preexec() { printf '\\033]133;C;%s;\\007' \"$ORBIT_PANE\"; }",
     "autoload -Uz add-zsh-hook && add-zsh-hook precmd __orbit_precmd && add-zsh-hook preexec __orbit_preexec",
     '[[ -o login ]] || ZDOTDIR="$ORBIT_USER_ZDOTDIR"',
@@ -1033,6 +1033,17 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }).catch(() => {});
     return snapshot;
   };
+  // A job the shell left running outlives the prompt that showed it idle; read only when an account action asks.
+  const shellsWithChildren = async (shells) => {
+    if (!processes) return shells.length;
+    try {
+      const table = await processes.list();
+      const slack = platform === "win32" ? 0 : 999;
+      return shells.filter((session) => !Number.isInteger(session.pty.pid) || paneDescendants(table, session.pty.pid, session.startedAt, now(), slack).size > 0).length;
+    } catch {
+      return shells.length;
+    }
+  };
   const retireQuietly = (session, forceKill = false, keepNotes = false) => {
     void retire(session, forceKill, keepNotes).catch(() => {});
   };
@@ -1359,12 +1370,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, rows: input.rows ?? 24, desktopSize: null, pendingInputEcho: "", truncated: false,
       workerReady: false, mail, compactSignal: paneEnv.ORBIT_COMPACT_SIGNAL ?? null, reportSignal: paneEnv.ORBIT_REPORT_SIGNAL ?? null, reportLost: null, teacher: folder.teacher ?? input.botId, worker: false, engine: null, stallArmedAt: 0, stallChangedAt: 0, stallScreenAt: 0, stallText: null,
       stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, blipNudge: null, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
-      commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, shellJobs: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, idleCompacting: false, agentSeen: false, contextNote: null, contextCompactPending: false,
+      commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, idleCompacting: false, agentSeen: false, contextNote: null, contextCompactPending: false,
       claudeTrust: false, claudeTrustMoved: false, claudeTrustAnswered: false, claudeTrustTimer: null,
     };
     session.outputParser = createTerminalOutputParser((osc) => {
       if (!session.botPane) return;
-      const [kind, markerId, value, jobs] = osc.startsWith("133;") ? osc.slice(4).split(";") : [];
+      const [kind, markerId, value] = osc.startsWith("133;") ? osc.slice(4).split(";") : [];
       if (markerId !== session.id) return;
       // A Unix shell's start mark carries no hash: it matches no command Wink typed.
       if (kind === "C" && (value === "" || /^[A-Za-z0-9+/]{43}=$/.test(value))) {
@@ -1379,8 +1390,6 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       if (kind !== "D" || !/^\d+$/.test(value)) return;
       session.marked = true;
-      // A Unix prompt counts the shell's background jobs: one still running may use the account.
-      session.shellJobs = jobs !== undefined && jobs !== "0";
       if (session.shellExecuting) {
         session.worker = false;
         session.workerFinished = true;
@@ -1812,19 +1821,26 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       return count;
     },
-    livePanesForAccount(accountId) {
+    async livePanesForAccount(accountId) {
       let count = 0;
       let unknown = reservedPanes;
       const generations = {};
+      const prompts = [];
       for (const session of sessions.values()) {
         if (!session.botPane || session.retired || session.exitCode !== null || active.get(session.key) !== session.id) continue;
         // Only a shell whose prompt marks show it idle is known to run no worker: a command Wink sent or the user started may run one on a login the host can't name.
-        if (!session.workerAccount) { if (!session.workerAccountKnown && (session.command || session.worker || session.shellExecuting || session.shellJobs || !session.marked)) unknown++; continue; }
+        if (!session.workerAccount) {
+          if (session.workerAccountKnown) continue;
+          if (session.command || session.worker || session.shellExecuting || !session.marked) unknown++;
+          else prompts.push(session);
+          continue;
+        }
         if (session.workerFinished || session.workerAccount.id !== accountId) continue;
         count++;
         const generation = session.workerAccount.generation;
         generations[generation] = (generations[generation] ?? 0) + 1;
       }
+      if (prompts.length) unknown += await shellsWithChildren(prompts);
       return { count, unknown, generations };
     },
     sendBot(botId, input, { person = false } = {}) {

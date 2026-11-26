@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
 import test, { describe } from "node:test";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
+import { createTerminalHost, createTerminalOutputParser, paneProcesses, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
 import { createPaneCleanup } from "./pane-cleanup.mjs";
 import { createRemoteHosts } from "./terminal-remote.mjs";
 import { installOrbitMsg, mailboxGrant, postPaneNote } from "./terminal-mailbox.mjs";
@@ -64,19 +65,38 @@ describe("captured worker account projections", () => {
 
   test("an empty shell is no worker on any login; a pane that runs one on a login it can't name is unknown", async (t) => {
     let owner;
-    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }) });
+    let table = [];
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }), processes: { list: async () => { if (!table) throw new Error("unreadable"); return table; }, stop() {} } });
     owner = f.owner;
     t.after(() => f.host.dispose());
     const shell = await f.host.openForBot("bot-1", { label: "shell" });
     // No prompt mark yet (a shell without them, such as sh): nothing shows it idle.
-    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
     f.children[0].data(`\x1b]133;D;${shell.sessionId};0\x07`);
-    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 0, generations: {} });
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 0, unknown: 0, generations: {} });
+    // A job the shell left running at its prompt, then gone with no new prompt.
+    table = [{ pid: f.children[0].pid + 1000, ppid: f.children[0].pid, created: Date.now() }];
+    assert.equal((await f.host.livePanesForAccount("claude")).unknown, 1);
+    table = [];
+    assert.equal((await f.host.livePanesForAccount("claude")).unknown, 0);
+    table = null;
+    assert.equal((await f.host.livePanesForAccount("claude")).unknown, 1);
+    table = [];
     await f.host.openForBot("bot-1", { label: "worker", command: "claude" });
-    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
     // The shell's own mark: the user started a command in it.
     f.children[0].data(`\x1b]133;C;${shell.sessionId};${"A".repeat(43)}=\x07`);
-    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 2, generations: {} });
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 0, unknown: 2, generations: {} });
+  });
+
+  test("an idle shell is unknown when the host can't read its processes", async (t) => {
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    const shell = await f.host.openForBot("bot-1", { label: "shell" });
+    f.children[0].data(`\x1b]133;D;${shell.sessionId};0\x07`);
+    assert.equal((await f.host.livePanesForAccount("claude")).unknown, 1);
   });
 
   test("projects busy, idle and limit states without changing the captured account", async (t) => {
@@ -5284,7 +5304,7 @@ for (const [name, shell] of UNIX_SHELLS) for (const platform of ["linux", "darwi
     const rc = name === "zsh" ? ".zshrc" : platform === "darwin" ? ".bash_profile" : ".bashrc";
     fs.writeFileSync(path.join(home, rc), "PS1='user-rc$ '\n");
     let owner;
-    const f = fixture({ platform, env: { SHELL: shell, HOME: home, PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) }, owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }) });
+    const f = fixture({ platform, env: { SHELL: shell, HOME: home, PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) }, owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }), processes: { list: async () => [], stop() {} } });
     owner = f.owner;
     t.after(async () => { await f.host.dispose(); fs.rmSync(home, { recursive: true, force: true }); });
     await f.host.openForBot("bot-1", { label: "shell" });
@@ -5302,32 +5322,75 @@ for (const [name, shell] of UNIX_SHELLS) for (const platform of ["linux", "darwi
     // Bash writes the prompt mark to stdout and PS0 to stderr, so only each kind's own order is fixed.
     const marks = output.match(/\x1b\]133;[CD];[^\x07]*\x07/g) ?? [];
     const [prompts, starts] = ["D", "C"].map((kind) => marks.filter((mark) => mark[6] === kind));
-    return { child, prompts, starts, output, unknown: () => f.host.livePanesForAccount("claude").unknown };
+    return { child, prompts, starts, output, unknown: async () => (await f.host.livePanesForAccount("claude")).unknown };
   };
 
   test(`a ${platform} ${name} pane reads idle at its own prompt and unknown while a command runs`, { skip: !fs.existsSync(shell) }, async (t) => {
     const { child, prompts, starts, output, unknown } = await marked(t, "true\nexit\n");
     assert.ok(prompts.length >= 2 && starts.length >= 1, JSON.stringify(output.slice(-300)));
-    assert.equal(unknown(), 1);
+    assert.equal(await unknown(), 1);
     child.data(prompts[0]);
-    assert.equal(unknown(), 0);
+    assert.equal(await unknown(), 0);
     child.data(starts[0]);
-    assert.equal(unknown(), 1);
+    assert.equal(await unknown(), 1);
     child.data(prompts[1]);
-    assert.equal(unknown(), 0);
+    assert.equal(await unknown(), 0);
   });
 
-  test(`a ${platform} ${name} pane stays unknown at its prompt while a background job runs`, { skip: !fs.existsSync(shell) }, async (t) => {
-    // The job outlives the next prompt and is gone by the one after "sleep 2".
-    const { child, prompts, output, unknown } = await marked(t, "sleep 1 &\ntrue\nsleep 2\nexit\n");
-    assert.ok(prompts.length >= 4, JSON.stringify(output.slice(-300)));
-    child.data(prompts[0]);
-    assert.equal(unknown(), 0);
-    child.data(prompts[1]);
-    assert.equal(unknown(), 1);
-    child.data(prompts[2]);
-    assert.equal(unknown(), 1);
-    child.data(prompts[3]);
-    assert.equal(unknown(), 0);
+  test(`a ${platform} ${name} pane is unknown while a background job runs and idle once it exits, with no new prompt`, { skip: !fs.existsSync(shell), timeout: 60_000 }, async (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-unix-home-"));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    // Git's bin/bash.exe is a launcher; the shell whose children count is the one it starts.
+    const real = process.platform === "win32" && name === "bash" ? path.join(path.dirname(path.dirname(shell)), "usr", "bin", "bash.exe") : shell;
+    const pane = await livePane(t, { platform, env: { SHELL: real, HOME: home, PATH: [path.dirname(real), process.env.PATH].join(path.delimiter), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) } });
+    await until(() => pane.marks("D") >= 1);
+    assert.equal(await pane.unknown(), 0);
+    await pane.write(`(sleep 2; : > '${path.join(home, "job-done").replaceAll("\\", "/")}') &\r`);
+    await until(() => pane.marks("D") >= 2);
+    assert.equal(await pane.unknown(), 1);
+    await until(() => fs.existsSync(path.join(home, "job-done")));
+    await until(async () => await pane.unknown() === 0);
+    assert.equal(pane.marks("D"), 2);
   });
 }
+
+const until = async (check, ms = 30_000) => {
+  for (const end = Date.now() + ms; !(await check());) {
+    if (Date.now() > end) throw new Error("Timed out");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+};
+
+// A real shell in a real PTY, as the host launches it; the raw output keeps the marks the host reads.
+async function livePane(t, options) {
+  let output = "";
+  let owner;
+  const f = fixture({ ...options, owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }), processes: paneProcesses,
+    loadPty: () => ({ spawn: (shell, args, ptyOptions) => {
+      const pty = spawnTerminalPty(createRequire(import.meta.url).resolve("node-pty"), shell, args, ptyOptions);
+      pty.onData((data) => { output += data; });
+      return pty;
+    } }) });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  const { sessionId } = await f.host.openForBot("bot-1", { label: "shell" });
+  return {
+    marks: (kind) => output.split(`\x1b]133;${kind};${sessionId};`).length - 1,
+    unknown: async () => (await f.host.livePanesForAccount("claude")).unknown,
+    write: (text) => f.host.write(f.event, sessionId, text),
+  };
+}
+
+test("a PowerShell pane is unknown while a Start-Job runs and idle once it ends, with no new prompt", { skip: process.platform !== "win32", timeout: 90_000 }, async (t) => {
+  const pane = await livePane(t, { platform: "win32", env: { ...process.env } });
+  await until(() => pane.marks("D") >= 1);
+  assert.equal(await pane.unknown(), 0);
+  await pane.write("$job = Start-Job { Start-Sleep 3 }\r");
+  await until(() => pane.marks("D") >= 2);
+  assert.equal(await pane.unknown(), 1);
+  await until(async () => await pane.unknown() === 0);
+  assert.equal(pane.marks("D"), 2);
+  await pane.write("Start-Sleep 5\r");
+  await until(() => pane.marks("C") >= 2);
+  assert.equal(await pane.unknown(), 1);
+});
