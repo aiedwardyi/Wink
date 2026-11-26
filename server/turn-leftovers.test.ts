@@ -56,6 +56,9 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("고쳐 주세요"), bot("API를 수정할게요.")])).toEqual([promise("API를 수정할게요.")]);
     expect(turnLeftovers([user("고쳐 주세요"), bot("설정 파일을 수정할게요.")])).toEqual([promise("설정 파일을 수정할게요.")]);
     expect(turnLeftovers([user("고쳐 주세요"), tool(), bot("확인할게요.")])).toEqual([]);
+    // a quoted example is no promise; a quoted name inside one is
+    expect(turnLeftovers([user("Go on"), bot(`The sentence "I'll delete the backup tomorrow." is in the future tense.`), bot("Back soon.")])).toEqual([]);
+    expect(turnLeftovers([user("Go on"), bot(`I'll rename the "Save" button.`)])).toEqual([promise(`I'll rename the "Save" button.`)]);
     const kept = ["I'll fix the API.", "I'll check if the backup exists.", "I'll implement the feature you want."];
     expect(turnLeftovers([user("Keep going."), ...kept.map((line) => bot(line, { summarized: true })), bot("Back soon.")])).toEqual(kept.map(promise));
   });
@@ -129,6 +132,10 @@ describe("turn leftovers", () => {
     // a path's punctuation tells two targets apart
     for (const status of ["open", "done"] as const) expect(fileLeftovers({ asks: [ask("A1", "I'll update the src/foo.ts file.", status, "promise")], lastAskId: 1 }, [promise("I'll update the src-foo.ts file.")], 9)?.asks).toHaveLength(2);
     expect(fileLeftovers(undefined, [promise("I'll update the src/foo.ts file."), promise("I'll update the src-foo.ts file.")], 9)?.asks).toHaveLength(2);
+    // two long promises alike up to the clip are not proven repeats
+    const docs = (os: string) => promise(`I'll update the installation instructions in the documentation for the desktop app on ${os}.`);
+    expect(fileLeftovers(undefined, [docs("Windows"), docs("Linux")], 9)?.asks).toHaveLength(2);
+    expect(fileLeftovers({ asks: [{ ...ask("A1", "x", "done", "promise"), ask: fileLeftovers(undefined, [docs("Windows")], 9)!.asks[0]!.ask }], lastAskId: 1 }, [docs("Linux")], 9)?.asks).toHaveLength(2);
     // reworded, or the user's ask in the bot's words: one more line the next engine checks
     const saved = fileLeftovers(book, [{ ask: "What color should the ramp be?" }, promise("I'll fix the API")], 9)!;
     expect(saved.asks.slice(0, 4)).toEqual(filed);

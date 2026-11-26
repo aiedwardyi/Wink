@@ -103,8 +103,10 @@ export interface Leftover { ask: string; promise?: true; note?: string }
 export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   const own = (row: Message) => said(row) && !row.quick;
   const last = rows.findLast(own);
+  // an "I'll" in quotes is an example, not the bot's word
+  const spoken = (line: string) => line.replace(/"[^"]*"|“[^”]*”/g, " ");
   const lines = rows.flatMap((row) => !own(row) ? [] : sentences(row.text!)
-    .map((line) => ({ line, commit: COMMIT.test(line) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) && (row !== last || concrete(line)) })));
+    .map((line) => ({ line, commit: COMMIT.test(spoken(line)) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) && (row !== last || concrete(spoken(line))) })));
   for (const [at, { line }] of lines.entries()) {
     if (!WITHDRAWN.test(line)) continue;
     const taken = line.replace(WITHDRAWN, " ");
