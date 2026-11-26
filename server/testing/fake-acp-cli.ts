@@ -56,6 +56,7 @@
 //   FAKE_ACP_USAGE_ROOT  put the prompt result's usage at the root instead of
 //                        under _meta (what opencode 1.18.18 actually does)
 //   FAKE_ACP_COMPACT     emit Grok's auto-compaction update while a prompt runs
+//   FAKE_ACP_LOAD_FAILS  session/load answers "session not found", as load-fails does, in any mode
 //   FAKE_ACP_PERMISSION_KINDS  comma-separated ACP option kinds, in the order
 //                        the agent advertises them (e.g.
 //                        "allow_always,allow_once,reject_always,reject_once").
@@ -422,7 +423,7 @@ function handle(msg: any) {
       break;
     }
     case "session/load": {
-      if (mode === "load-fails") {
+      if (mode === "load-fails" || process.env.FAKE_ACP_LOAD_FAILS) {
         out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "session not found" } });
         break;
       }

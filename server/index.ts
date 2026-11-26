@@ -5253,6 +5253,8 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
+  /** Anyone but this PC's person typed it in a room this PC joined: stamped on the user row. */
+  guest?: boolean;
   /** web_read's borrowed reader: page text steers it, so read-only with no Wink tools. */
   webReader?: boolean;
 };
@@ -5574,6 +5576,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sendSeq: opts?.sendSeq,
           sentAfterId: opts?.sentAfterId,
           waited: opts?.waited,
+          guest: opts?.guest,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -7206,7 +7209,7 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     joinedRoomThreads.add(threadId);
     if (guest) joinedGuestThreads.add(threadId);
     else joinedGuestThreads.delete(threadId);
-    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
+    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), ...(guest ? { guest } : {}) });
   },
   readOnlyTurns: (botId, threadId) => {
     const bot = store.bot(botId);

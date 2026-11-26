@@ -236,6 +236,8 @@ export interface Message {
   origin?: string;
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;
+  /** A joined room's row that anyone but this PC's person typed: no replay lets its @ name a file. */
+  guest?: boolean;
   roomEntryId?: string;
   roomFiles?: import("./rooms/db.ts").RoomFile[];
   quiet?: true;

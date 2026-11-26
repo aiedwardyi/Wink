@@ -46,10 +46,11 @@ describe("flat replies", () => {
     expect(lineWords({ author: { kind: "bot" } }, "@x")).toBe("@x");
     expect(lineWords({ author: { kind: "host" } }, "@x")).toBe("@x");
     expect(lineWords({ role: "bot" }, "@x")).toBe("@x");
+    expect(lineWords({ role: "user", guest: true }, "@x")).toBe("@\u200Bx");
   });
 
   it("in a group, lets only the host's own words name a file", () => {
-    for (const line of [{ author: { kind: "bot" } }, { author: { kind: "person" } }, { role: "bot" }, { role: "user", from: {} }, { role: "user", comm: {} }]) {
+    for (const line of [{ author: { kind: "bot" } }, { author: { kind: "person" } }, { role: "bot" }, { role: "user", from: {} }, { role: "user", comm: {} }, { role: "user", guest: true }]) {
       expect(lineWords(line, "@x", true)).toBe("@\u200Bx");
     }
     expect(lineWords({ author: { kind: "host" } }, "@x", true)).toBe("@x");

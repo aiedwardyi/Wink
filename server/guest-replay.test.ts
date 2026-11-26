@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -48,6 +49,15 @@ const javascript = ts.transpileModule(`async function run(scope) { with (scope) 
   return { started, recycled, resume };
 } }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
 const runDispatch = new Function(`${javascript}\nreturn run;`)();
+// The joined room's startTurn and the user row it appends
+const joined = section("  startTurn: (botId, threadId, prompt, typed, failed, readOnly, guest) => {", "\n  readOnlyTurns:");
+const append = section("  let userMessage = opts?.userMessage;", "\n  let rootId =");
+const rowJavascript = ts.transpileModule(`function row(scope) { with (scope) {
+  const opts = ({ ${joined} }).startTurn(bot.id, threadId, text, typed, () => {}, readOnly, guest);
+  ${append}
+  return { opts, userMessage };
+} }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
+const joinedRow = new Function(`${rowJavascript}\nreturn row;`)();
 
 const fakeCli = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-acp-cli.ts");
 const CANARY = "host-only file: canary GJR-7731";
@@ -98,8 +108,10 @@ const rig = async () => {
   const ref = { sessions: new GuestSessions() };
   const send = async (who: "owner" | "guest", typed: string) => {
     const prompt = who === "guest" ? `"Mina" asked you: ${inertMentions(typed)}` : `"Peter" asked you: ${typed}`;
-    const opts = who === "guest" ? { readOnly: true as const, transcriptText: typed } : { transcriptText: typed };
-    const userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text: typed });
+    const { opts, userMessage } = joinedRow({
+      store, bot, threadId, text: prompt, typed, readOnly: who === "guest", guest: who === "guest", randomUUID,
+      joinedRoomThreads: new Set(), joinedGuestThreads: new Set(), startTurn: (_botId: string, _text: string, startOpts: unknown) => startOpts,
+    });
     const activeMessages = store.activePath(threadId);
     const skipTranscript = new Set([userMessage.id]);
     const prepared = await context.prepareModelContext({ messages: activeMessages, contextWindow: 200_000, taskRecordText: "", excludeIds: skipTranscript, userName: "Peter", referenceMessages: store.messagesFor(threadId) });
@@ -152,6 +164,19 @@ it.each([["the owner's turn", "owner"], ["a Wink restart", "restart"]] as const)
   expect(again.sent.resumeCursor).toBeUndefined();
   expect(again.read).toBeNull();
   for (const text of [again.sent.text, ...(again.sent.transcript ?? []).map((line) => line.text)]) expect(text).not.toMatch(/@(?!\u200B)/);
+}, 30_000);
+
+// GATE-REVIEW-2239I: the owner's next turn that starts over replays the joined task, a guest's row included
+it.each([["@Pete-Coder thanks", 0], ["@Pete-Coder what does @notes.txt say?", 1]] as const)("an owner turn that starts over after a guest's @path inlines only the owner's own: %s", async (typed, own) => {
+  const r = await rig();
+  expect((await r.send("guest", r.ask)).read).toBeNull();
+  setEnv("FAKE_ACP_LOAD_FAILS", "1");
+  const owner = await r.send("owner", typed);
+  // the owner's tools read notes.txt once on their own; each live @notes.txt inlines one more copy
+  expect(owner.read?.split(CANARY).length).toBe(2 + own);
+  expect(owner.read).not.toContain("outside canary");
+  expect([owner.sent.text, owner.sent.resumeFallback?.text, ...(owner.sent.transcript ?? []).map((line) => line.text)].some((text) => text?.includes(inertMentions(r.ask)))).toBe(true);
+  expect(owner.sent.text).toContain(typed);
 }, 30_000);
 
 it("hands every engine send and steer in index.ts through guestTurnInput", () => {

@@ -13,13 +13,13 @@ export const ENGINE_SUMMARY_PREFIX = "[Engine summary of a mid-turn note, not sh
 
 const summaryLabel = (message: Message) => (message.summarized ? ENGINE_SUMMARY_PREFIX : "");
 
-type Line = { role?: string; author?: { kind: string; owner?: string }; from?: unknown; comm?: unknown };
+type Line = { role?: string; author?: { kind: string; owner?: string }; from?: unknown; comm?: unknown; guest?: boolean };
 
 /** Room words from anyone but the host: a teammate, or a teammate's own bot. */
 export const typedByGuest = (author?: { kind: string; owner?: string }) => author?.kind === "person" || (author?.kind === "bot" && author.owner !== undefined);
 
 /** Words the host typed: never a teammate's, a bot's, a bot's mail or a summary. */
-export const typedByHost = (line: Line) => (line.author ? line.author.kind === "host" : line.role === "user" && !line.from && !line.comm);
+export const typedByHost = (line: Line) => (line.author ? line.author.kind === "host" : line.role === "user" && !line.from && !line.comm && !line.guest);
 
 // Claude attaches the file an "@" starting a word names, and grok 1.0.92 the one after an "@" at the start, after a space,
 // a zero-width space or any of : , - / = \, with no ask; a zero-width space right after every "@" names no file in either
@@ -41,7 +41,7 @@ export const inert = (parts: TemplateStringsArray, ...values: readonly (string |
   }));
 
 /** A line's words as a prompt may carry them: a guest's @path names no file, and in a group nothing the host did not type does. */
-export const lineWords = (line: Line, text: string, group = false) => ((group ? !typedByHost(line) : typedByGuest(line.author)) ? inertMentions(text) : text);
+export const lineWords = (line: Line, text: string, group = false) => ((group ? !typedByHost(line) : line.guest || typedByGuest(line.author)) ? inertMentions(text) : text);
 
 export function replyExcerpt(text: string, limit = MAX_REPLY_EXCERPT): string {
   const clean = text
