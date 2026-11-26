@@ -94,6 +94,7 @@ export class WarmPool {
   private byKey = new Map<string, Entry>();
   private generations = new Map<string, number>();
   private holds = new Set<WarmMatch>();
+  private owners = new Map<string, (key: WarmKey) => boolean>();
   private closing = new Set<Promise<void>>();
   private paused = 0;
   private final = false;
@@ -119,6 +120,12 @@ export class WarmPool {
 
   setLiveTurns(probe: () => boolean) { this.liveTurns = probe; }
 
+  /** An engine's slot whose owner is gone stops counting and closes when the pool next counts, takes or sweeps, whatever path ended the owner. */
+  setOwner(engine: string, owns: (key: WarmKey) => boolean): () => void {
+    this.owners.set(engine, owns);
+    return () => { if (this.owners.get(engine) === owns) this.owners.delete(engine); };
+  }
+
   /** Boot and sign-in warms have no user intent: never on a small PC, and only with a free slot and RAM over the floor. */
   idleWarmAllowed(engine: string): boolean { return !this.smaller() && this.freemem() >= this.floor() && this.admits(engine); }
 
@@ -134,9 +141,10 @@ export class WarmPool {
   /** A same-key reserve joins a pending lease; every caller that got it releases once. `pendingMs` bounds a prepare that never becomes ready. */
   reserve(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, opts: { pendingMs?: number } = {}): Lease | "busy" | "denied" {
     if (this.final) return "denied";
+    this.reap();
     const existing = this.byKey.get(keyOf(key));
     if (existing?.state === "taken") return "busy";
-    if (this.held(key)) return "denied";
+    if (this.held(key) || this.orphaned(key)) return "denied";
     if (existing && this.reusable(existing, fingerprint, captured)) {
       if (existing.state === "pending") existing.holders += 1;
       return existing.lease;
@@ -153,6 +161,7 @@ export class WarmPool {
       this.closeIdle("sleep");
       this.lastSweep = this.now();
     }
+    this.reap();
     const entry = this.byKey.get(keyOf(key));
     if (!entry) return "miss";
     if (entry.state === "taken") return "busy";
@@ -351,12 +360,20 @@ export class WarmPool {
 
   private admits(engine: string, among = [...this.entries]) {
     if (this.paused || this.final) return false;
-    const held = among.filter((entry) => entry.state !== "taken");
+    this.reap();
+    // an orphan still closing frees its slot now: its owner can never use it
+    const held = among.filter((entry) => entry.state !== "taken" && !this.orphaned(entry.lease.key));
     if (this.smaller()) return held.length < 1 && !this.liveTurns() && !among.some((entry) => entry.state === "taken");
     return held.length < TOTAL_CAP && held.filter((entry) => entry.lease.key.engine === engine).length < ENGINE_CAP;
   }
 
   private drop(entry: Entry, reason: string) { entry.close(reason); }
+
+  private orphaned(key: WarmKey) { return this.owners.get(key.engine)?.(key) === false; }
+
+  private reap() {
+    for (const entry of [...this.entries]) if ((entry.state === "pending" || entry.state === "idle") && this.orphaned(entry.lease.key)) this.drop(entry, "orphaned");
+  }
 
   private closeIdle(reason: string) {
     for (const entry of [...this.entries]) if (entry.state === "idle") this.drop(entry, reason);
@@ -378,6 +395,7 @@ export class WarmPool {
 
   private sweep() {
     const now = this.now();
+    this.reap();
     if (now - this.lastSweep > SLEEP_GAP_MS) this.closeIdle("sleep");
     this.lastSweep = now;
     for (const entry of [...this.entries]) {

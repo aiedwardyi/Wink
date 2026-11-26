@@ -151,3 +151,60 @@ describe("deleteBotFully", () => {
     for (const dir of dirs) expect(["t1", "t2"].map((threadId) => existsSync(join(dir, `${threadId}.ndjson`)))).toEqual([false, false]);
   });
 });
+
+describe("a Gemini standby whose chat or room has ended", () => {
+  const gemini = { instanceId: "gemini", model: "gemini-4-neon" };
+  const codex = { instanceId: "codex", model: "gpt-5" };
+  // the owner index.ts registers, with each bot's own pick for its account
+  const ownerOf = (store: unknown) => {
+    const source = index.match(/warmPool\.setOwner\("antigravityAgent", (.+)\);\n/)?.[1];
+    if (!source) throw new Error("index.ts registers no Gemini owner");
+    return new Function("store", "botAccounts", `return ${source};`)(store, { instance: (bot: { modelSelection: { instanceId: string } }) => ({ instanceId: bot.modelSelection.instanceId }) });
+  };
+  const key = (threadId: string) => ({ engine: "antigravityAgent", instanceId: "gemini", threadId });
+  const captured = { generation: 0, incarnation: "i", identity: "" };
+
+  it.each([
+    ["bot delete", async (store: any, bot: any) => { store.deleteBot(bot.id); }],
+    ["room delete", async (store: any, _bot: any, room: any) => { store.deleteGroup(room.id); }],
+    ["engine pick", async (store: any, bot: any) => { store.patchBot(bot.id, { modelSelection: codex }); }],
+    ["room member's engine pick", async (store: any, bot: any) => { store.patchBot(bot.id, { modelSelection: codex }); }],
+    ["mid-reply pick", async (store: any, bot: any) => {
+      store.patchBot(bot.id, { pendingModelSelection: codex });
+      store.patchBot(bot.id, { modelSelection: codex, pendingModelSelection: undefined });
+    }],
+    ["quit", async (_store: any, _bot: any, _room: any, pool: any) => { await pool.closeAll("exit", { final: true }); }],
+  ])("leaves no slot held after %s", async (path, exit) => {
+    const { store } = await freshStore();
+    const pool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    pool.setOwner("antigravityAgent", ownerOf(store));
+    const children: Array<ReturnType<typeof vi.fn>> = [];
+    const stale = [store.createBot({ modelSelection: gemini }), store.createBot({ modelSelection: gemini })].map((bot) => {
+      const room = store.createGroup(bot.name, [bot.id]);
+      const threadId = path.startsWith("room") ? room.threadId : bot.threadId;
+      const lease = pool.reserve(key(threadId), "fp", captured, "speculative");
+      if (typeof lease === "string") throw new Error(lease);
+      const close = vi.fn(async () => {});
+      lease.attach({ session: { kind: "fresh" }, alive: () => true, close });
+      lease.ready();
+      children.push(close);
+      return { bot, room, lease, threadId };
+    });
+    // a pick held for a running turn lands at settle, then the exiting child asks for a standby
+    if (path === "mid-reply pick") for (const { lease, threadId } of stale) expect(pool.take(key(threadId), "fp", captured, null)).toEqual({ hit: lease });
+    for (const { bot, room } of stale) await exit(store, bot, room, pool);
+    if (path === "mid-reply pick") {
+      for (const { lease, threadId } of stale) {
+        lease.release("used");
+        expect(pool.reserve(key(threadId), "fp", captured, "speculative")).toBe("denied");
+      }
+    }
+
+    const next = store.createBot({ modelSelection: gemini });
+    const lease = pool.reserve(key(next.threadId), "fp", captured, "speculative");
+    if (path === "quit") expect(lease).toBe("denied");
+    else expect(typeof lease).toBe("object");
+    for (const close of children) expect(close).toHaveBeenCalledOnce();
+    await expect.poll(() => pool.stats().byEngine.antigravityAgent ?? 0).toBe(path === "quit" ? 0 : 1);
+  });
+});

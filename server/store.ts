@@ -1723,6 +1723,14 @@ export class Store {
     return this.bots.find((b) => b.threadId === threadId || b.tasks?.some((t) => t.threadId === threadId)) ?? null;
   }
 
+  /** The bots that run turns on a thread: its room's members or its chat's bot; none once the room or chat is deleted. */
+  threadBots(threadId: string): BotRecord[] {
+    const group = this.groupByThread(threadId);
+    if (group) return group.memberIds.flatMap((id) => this.bot(id) ?? []);
+    const bot = this.botByThread(threadId);
+    return bot ? [bot] : [];
+  }
+
   conversationForBot(botId: string, threadId: string) {
     const bot = this.bot(botId);
     if (!bot) return null;

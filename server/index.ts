@@ -1150,6 +1150,8 @@ roomFixes = createRoomFixes({
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
+// every way a Gemini chat or room ends (delete, engine pick, a room's roster) frees its standby's slot
+warmPool.setOwner("antigravityAgent", (key) => store.threadBots(key.threadId).some((bot) => botAccounts.instance(bot, key.threadId)?.instanceId === key.instanceId));
 const snagUserData = process.env.OMB_USER_DATA;
 const teamSnags = snagUserData ? new TeamSnags({
   userData: snagUserData,

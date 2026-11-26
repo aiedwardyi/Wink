@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as auth from "./antigravity-auth.ts";
 
 import { createBotRoutes } from "../bot-routes.ts";
+import { createGroupRoutes } from "../group-routes.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { PrepareFocus, ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
@@ -3331,6 +3332,32 @@ require(${JSON.stringify(fake)});
         } finally {
           spawn.mockRestore();
           writeFileSync(join(dir, "go"), "");
+        }
+      });
+
+      it("frees the slots of deleted rooms' standbys, so the next chat still gets one", async () => {
+        const gemini = await make("room-delete");
+        const store = new Store(() => ({ instanceId: gemini.instanceId, model: "gemini-4-neon" }));
+        // index.ts's owner, with the bot's own pick for its account
+        const unown = warmPool.setOwner("antigravityAgent", (key) => store.threadBots(key.threadId).some((bot) => bot.modelSelection.instanceId === key.instanceId));
+        const routes = createGroupRoutes({ store, groupIsWorking: () => false, lastReply: new Map() } as unknown as Parameters<typeof createGroupRoutes>[0]);
+        const [first, second, third] = [store.createBot(), store.createBot(), store.createBot()];
+        try {
+          for (const [i, bot] of [first, second].entries()) {
+            const room = store.createGroup(bot.name, [bot.id], false, undefined, { defaultResponder: { kind: "member", botId: bot.id } });
+            await turn(gemini, { ...chat, threadId: room.threadId, text: bot.id });
+            await standbyAfter(2 * i + 2);
+            await routes.remove({ writeHead: () => {}, end: () => {} } as unknown as ServerResponse, ["", room.id] as RegExpMatchArray);
+          }
+          const [, standby1, , standby2] = spawns();
+          await open(gemini, { threadId: third.threadId });
+          await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(5);
+          expect(alive(spawns()[4]!.pid)).toBe(true);
+          for (const { pid } of [standby1!, standby2!]) await expect.poll(() => alive(pid), { timeout: 5_000 }).toBe(false);
+          await gemini.dispose();
+          await expect.poll(() => alive(spawns()[4]!.pid), { timeout: 5_000 }).toBe(false);
+        } finally {
+          unown();
         }
       });
 
