@@ -75,31 +75,54 @@ export function unrestated(texts: string[]): string[] {
 
 /** Per thread, the turn's engine summaries. A turn that wrote no other text
  * shows them at its end, or it would look empty; one with a final answer
- * hides its commentary, and a text a later one restates. */
-export function turnSummaries(hide?: (threadId: string, ids: string[], restated?: true) => void) {
-  const turns = new Map<string, { turnId?: string; ids: string[]; replied: boolean; commentary: string[]; final: boolean; said: Said[] }>();
+ * hides its commentary, and a text a later one restates. The texts still
+ * shown before the last one, and the commentary a final hides, are its steps. */
+export function turnSummaries(
+  hide?: (threadId: string, ids: string[], restated?: true) => void,
+  markSteps?: (threadId: string, ids: string[]) => void,
+) {
+  const turns = new Map<string, { turnId?: string; ids: string[]; replied: boolean; commentary: string[]; final: boolean; said: Said[]; shown: Array<{ id: string; foldable: boolean }>; folded?: true }>();
+  const current = (threadId: string, turnId: string | undefined) => {
+    const turn = turns.get(threadId);
+    return !turn || (turn.turnId && turnId && turn.turnId !== turnId) ? undefined : turn;
+  };
+  const fold = (threadId: string, turnId: string | undefined) => {
+    const turn = current(threadId, turnId);
+    if (!turn || turn.folded) return;
+    turn.folded = true;
+    // commentary a final hides cannot stand in for an earlier row
+    const hidden = new Set(turn.final ? turn.commentary : []);
+    const restated = new Set(turn.said.filter((row, i) => turn.said.slice(i + 1).some((later) => !hidden.has(later.id) && restates(later, row))).map((row) => row.id));
+    const commentary = [...hidden].filter((id) => !restated.has(id));
+    if (commentary.length) hide?.(threadId, commentary);
+    if (restated.size) hide?.(threadId, [...restated], true);
+    const visible = turn.shown.filter((row) => !hidden.has(row.id) && !restated.has(row.id));
+    const earlier = new Set(visible.slice(0, -1).filter((row) => row.foldable).map((row) => row.id));
+    const steps = turn.shown.filter((row) => earlier.has(row.id) || commentary.includes(row.id)).map((row) => row.id);
+    if (steps.length) markSteps?.(threadId, steps);
+  };
   return {
-    /** `text` only for a row a later restatement may hide. */
-    note(threadId: string, turnId: string | undefined, messageId: string, summarized: boolean, phase?: Phase, text?: string) {
+    /** `text` only for a row a later restatement may hide; `foldable` false keeps a steer or peer reply out of Steps. */
+    note(threadId: string, turnId: string | undefined, messageId: string, summarized: boolean, phase?: Phase, text?: string, foldable = true) {
       let turn = turns.get(threadId);
-      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) turns.set(threadId, (turn = { turnId, ids: [], replied: false, commentary: [], final: false, said: [] }));
+      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) turns.set(threadId, (turn = { turnId, ids: [], replied: false, commentary: [], final: false, said: [], shown: [] }));
       turn.turnId ??= turnId;
       if (summarized) turn.ids.push(messageId);
-      else turn.replied = true;
+      else {
+        turn.replied = true;
+        turn.shown.push({ id: messageId, foldable: foldable && (!phase || phase === "commentary") });
+      }
       if (phase === "commentary") turn.commentary.push(messageId);
       else if (phase === "final_answer") turn.final = true;
       if (!summarized && text) turn.said.push(said(text, messageId));
     },
+    /** Runs before the turn's end reaches clients, so its answer never shows beside unfolded steps. */
+    fold,
     settle(threadId: string, turnId: string | undefined, quiet = false): string[] {
-      const turn = turns.get(threadId);
-      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return [];
+      const turn = current(threadId, turnId);
+      if (!turn) return [];
+      fold(threadId, turnId);
       turns.delete(threadId);
-      // commentary a final hides cannot stand in for an earlier row
-      const hidden = new Set(turn.final ? turn.commentary : []);
-      const restated = new Set(turn.said.filter((row, i) => turn.said.slice(i + 1).some((later) => !hidden.has(later.id) && restates(later, row))).map((row) => row.id));
-      const commentary = [...hidden].filter((id) => !restated.has(id));
-      if (commentary.length) hide?.(threadId, commentary);
-      if (restated.size) hide?.(threadId, [...restated], true);
       return turn.replied || quiet ? [] : turn.ids;
     },
   };

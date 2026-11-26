@@ -1415,7 +1415,9 @@ describe("open window and jump pill", () => {
     expect(host.querySelector("[data-term-status]")?.textContent).not.toContain("/new-default");
   });
 
-  it.each(["chat", "room"] as const)("keeps the working timer on every skin when a %s reply docks", async (view) => {
+  // a chat's live text sits in the step line above a standalone mascot; a room's reply still docks it
+  it.each(["chat", "room"] as const)("keeps the working timer on every skin while a %s reply streams", async (view) => {
+    const mascot = view === "chat" ? ".turn-presence [data-turn-mascot]" : "[data-turn-mascot].turn-mascot-docked";
     applySkin("terminal");
     const threadId = view === "chat" ? "thread-a" : "thread-g";
     const thread = [{ ...say("prompt", null, "user", "fixture prompt;"), at: Date.now() - 125_000 }];
@@ -1426,10 +1428,10 @@ describe("open window and jump pill", () => {
         ? { bots: [{ ...member, messages: thread }], groups: [] }
         : { bots: [member], groups: [{ ...room(thread, false), memberIds: [member.id], busyBotId: member.id }] });
       const host = await mount(view);
-      await vi.waitFor(() => expect(host.querySelector("[data-turn-mascot].turn-mascot-docked")).not.toBeNull());
-      expect(host.querySelector("[data-turn-mascot].turn-mascot-docked")?.textContent).toMatch(/\(2m \d+s\)/);
+      await vi.waitFor(() => expect(host.querySelector(mascot)).not.toBeNull());
+      expect(host.querySelector(mascot)?.textContent).toMatch(/\(2m \d+s\)/);
       await act(async () => applySkin("precision"));
-      expect(host.querySelector("[data-turn-mascot].turn-mascot-docked")?.textContent).toMatch(/\(2m \d+s\)/);
+      expect(host.querySelector(mascot)?.textContent).toMatch(/\(2m \d+s\)/);
     } finally {
       live.current = { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} };
     }
