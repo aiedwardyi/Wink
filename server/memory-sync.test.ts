@@ -233,6 +233,27 @@ describe("memory sync", () => {
     expect(read(a, DREAMED_FILE)).toBe(read(b, DREAMED_FILE));
   });
 
+  it.each([["deletes", null], ["empties", ""]] as const)("keeps a line one PC dreamed when the PC the user last messaged %s its older archive", (_, gone) => {
+    const [a, b] = pcs();
+    const at = new Date(2026, 10, 19, 12).getTime();
+    const archive = `${DREAMED_HEAD}\n${dreamedEntry("old", [{ at: 3, text: "- Lives in Busan", by: "", why: "replaced" }], at)}\n`;
+    edit(a, "# Memory\n\n- Keeps tea in the blue tin\n");
+    edit(a, archive, DREAMED_FILE);
+    settle(a, b);
+    edit(a, `${archive}\n${dreamedEntry("night", [{ at: 3, text: "- Opaline kestrel parcels go to Alverton", by: "", why: "expired" }], at)}\n`, DREAMED_FILE);
+    markTalked(a.ledger, "bot-1", 5_000);
+    sync(a);
+    edit(b, gone, DREAMED_FILE);
+    markTalked(b.ledger, "bot-1", 9_000);
+    sync(b);
+    settle(a, b);
+    for (const pc of [a, b]) {
+      expect(read(pc, DREAMED_FILE)).toContain("- Opaline kestrel parcels go to Alverton\n");
+      expect(parked(pc)).toEqual([]);
+    }
+    expect(read(a, DREAMED_FILE)).toBe(read(b, DREAMED_FILE));
+  });
+
   it("keeps the copy from the PC the user last messaged and sets the other aside on both PCs", () => {
     const [a, b] = pcs();
     seed("base\n", a, b);

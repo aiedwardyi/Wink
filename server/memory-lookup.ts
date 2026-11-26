@@ -386,7 +386,10 @@ export interface MemoryLookupDeps {
 
 /* oxlint-disable anti-slop/no-unknown-parameters -- provider resume cursors are opaque. */
 export interface MemoryLookup {
-  refresh(botId: string): Promise<void>;
+  /** held: the next turns' recall waits for this build, so a line just moved out of MEMORY.md is found. */
+  refresh(botId: string, held?: boolean): Promise<void>;
+  /** The build a held refresh still owes, or nothing to wait for. */
+  ready(botId: string): Promise<void> | undefined;
   /** The recall note for a typed turn, or nothing. No I/O and no build. */
   take(botId: string, threadId: string, cursor: unknown, text: string): string[];
   /** The provider took the last take's turn, so its rows now count as shown. */
@@ -534,6 +537,8 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const on = (botId: string) => !listed || listed.has(botId);
   const indexes = new Map<string, { index: RecallIndex; signature: string }>();
   const runs = new Map<string, number>();
+  const building = new Map<string, Promise<void>>();
+  const owed = new Set<string>();
   const shown = new Map<string, { cursor: string; rows: Set<string> }>();
   const pending = new Map<string, { session: string; rows: string[] }>();
   const markKey = (botId: string, threadId: string) => `${botId}\0${threadId}`;
@@ -566,14 +571,11 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     return found.filter((source) => source !== null);
   };
 
-  const refresh = async (botId: string) => {
+  const build = async (botId: string, run: number) => {
     try {
       await loadFlags();
       const overflow = Boolean(aboutYouPastTheCut());
       const ownOverflow = Boolean(botImportPastTheCut(botId));
-      // a build still running for an earlier state must find itself replaced, whether this refresh builds or drops
-      const run = (runs.get(botId) ?? 0) + 1;
-      runs.set(botId, run);
       if (!on(botId) && !overflow && !ownOverflow) {
         drop(botId);
         return;
@@ -592,6 +594,20 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     } catch (error) {
       console.warn(`[memory-lookup] index failed for ${botId}: ${error instanceof Error ? error.name : "unknown"}`);
     }
+  };
+
+  const refresh = (botId: string, held = false) => {
+    if (held) owed.add(botId);
+    // a build still running for an earlier state must find itself replaced, whether this refresh builds or drops
+    const run = (runs.get(botId) ?? 0) + 1;
+    runs.set(botId, run);
+    const done: Promise<void> = build(botId, run).finally(() => {
+      if (building.get(botId) !== done) return;
+      building.delete(botId);
+      owed.delete(botId);
+    });
+    building.set(botId, done);
+    return done;
   };
 
   const writeLog = (entry: LookupLog) => {
@@ -674,6 +690,13 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
 
   return {
     refresh,
+    ready(botId) {
+      if (!owed.has(botId)) return undefined;
+      // a later refresh replaces the one awaited, so wait out each until the newest lands
+      return (async () => {
+        while (owed.has(botId)) await building.get(botId);
+      })();
+    },
     take(botId, threadId, cursor, text) {
       if (!on(botId) && !indexes.has(botId)) return [];
       pending.delete(markKey(botId, threadId));

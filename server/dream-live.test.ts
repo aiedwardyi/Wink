@@ -434,7 +434,7 @@ describe("dreaming's wiring", () => {
 
   it("refreshes recall whenever Sleep changes a bot's memory, so the next question finds a moved line", () => {
     const sleepCall = index.slice(index.indexOf("const memorySleep = createMemorySleep({"), index.indexOf("const projectNotesCheck = "));
-    expect(sleepCall).toMatch(/changed: \(botId\) => \{\s*broadcast\(\{ kind: "memory\.changed", botId \}\);\s*void memoryLookup\.refresh\(botId\);/);
+    expect(sleepCall).toMatch(/changed: \(botId\) => \{\s*broadcast\(\{ kind: "memory\.changed", botId \}\);\s*void memoryLookup\.refresh\(botId, true\);/);
   });
 
   it("writes no packet in dry mode", () => {

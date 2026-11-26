@@ -3199,7 +3199,7 @@ const memorySleep = createMemorySleep({
   busy: (botId) => botHasActiveTurn(botId),
   changed: (botId) => {
     broadcast({ kind: "memory.changed", botId });
-    void memoryLookup.refresh(botId);
+    void memoryLookup.refresh(botId, true);
   },
   // saved now, so a restart before the next sync pass still knows the tidy alone made this change
   tidied: (botId, before, after) => {
@@ -5757,6 +5757,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     store.settleTaskPacket(threadId);
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
+  // a line Dreaming just moved out of MEMORY.md is searchable before this turn's recall
+  const recallBuild = memoryLookup.ready(bot.id);
+  if (recallBuild) await recallBuild;
   let latestCompactionId = prepared.compactionId ?? null;
   if (prepared.compaction || prepared.replaySummary) {
     try {

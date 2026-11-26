@@ -734,15 +734,17 @@ export function syncBotMemory(
       }
       // changed on two PCs at once, or the same versions with different text from a copied ledger
       const timeline = file === `memory/${PICKS_FILE}`;
-      // the archive only ever gains lines, so its two copies join even when no lineage settles them
-      const cuts: [string[], string[]] | undefined = text === null || entry.text === null || timeline ? undefined : joinCuts(mineCopy, theirCopy) ?? (file === DREAMED_FILE ? [[], []] : undefined);
-      const merged: string | null = text === null || entry.text === null
+      // the archive only ever gains lines, so its two copies join even when no lineage settles them, and a deleted copy joins as an empty one
+      const archive = file === DREAMED_FILE;
+      const [here, there]: [string | null, string | null] = archive ? [text ?? "", entry.text ?? ""] : [text, entry.text];
+      const cuts: [string[], string[]] | undefined = here === null || there === null || timeline ? undefined : joinCuts(mineCopy, theirCopy) ?? (archive ? [[], []] : undefined);
+      const merged: string | null = here === null || there === null
         ? null
-        : timeline ? mergeTimelines(text, entry.text) : cuts ? joinCopies(text, entry.text, cuts[0], cuts[1]) : null;
+        : timeline ? mergeTimelines(here, there) : cuts ? joinCopies(here, there, cuts[0], cuts[1]) : null;
       if (merged !== null) {
         // a line the join dropped or moved, beyond what a side cut on purpose, keeps a set-aside copy
         if (cuts) {
-          for (const [copy, at, cut] of [[text!, state.at, cuts[1]], [entry.text!, entry.at, cuts[0]]] as const) {
+          for (const [copy, at, cut] of [[here!, state.at, cuts[1]], [there!, entry.at, cuts[0]]] as const) {
             if (covered(merged, without(copy, cut))) continue;
             const parked = park(workspace, file, copy, at);
             if (!bot.files[parked.name]) {
@@ -752,7 +754,7 @@ export function syncBotMemory(
           }
         }
         writeText(path, merged);
-        const inputs = [short(text!), short(entry.text!)].sort();
+        const inputs = [short(here!), short(there!)].sort();
         text = merged;
         const next: FileState = { vv: { ...joined(state.vv, entry.vv), [me]: tick(ledger) }, hash: hash(merged), at: Math.max(state.at, entry.at) };
         if (cuts) next.joined = inputs;
