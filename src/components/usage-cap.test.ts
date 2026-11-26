@@ -9,13 +9,13 @@ import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
 import type { UsageBoardState } from "@/lib/usage-board-client";
 
-const h = vi.hoisted(() => ({ state: null as unknown as UsageBoardState, layout: "B", reduce: true }));
+const h = vi.hoisted(() => ({ state: null as unknown as UsageBoardState, layout: "B", reduce: true, api: vi.fn() }));
 vi.mock("@/lib/use-usage-board", () => ({ useUsageBoard: () => h.state }));
 vi.mock("@/lib/use-visible-clock", () => ({ useVisibleClock: () => usageBoardNow }));
 vi.mock("@/lib/use-phone-swipe", async (original) => ({ ...await original<typeof import("@/lib/use-phone-swipe")>(), useIsPhone: () => true }));
 vi.mock("@/lib/phone-swipe", async (original) => ({ ...await original<typeof import("@/lib/phone-swipe")>(), reducedMotion: () => h.reduce }));
 vi.mock("@/lib/skins", () => ({ useSkin: () => "github-dimmed", isTerminalSkin: () => false }));
-vi.mock("@/state/store", () => ({ useStore: () => ({ state: { instances: [] }, dispatch: vi.fn(), refreshInstances: vi.fn() }) }));
+vi.mock("@/state/store", () => ({ api: h.api, useStore: () => ({ state: { instances: [] }, dispatch: vi.fn(), refreshInstances: vi.fn() }) }));
 vi.mock("./usage-layout", async (original) => ({ ...await original<typeof import("./usage-layout")>(), get USAGE_LAYOUT() { return h.layout; } }));
 vi.mock("@/lib/usage-board-client", async (original) => ({
   ...await original<typeof import("@/lib/usage-board-client")>(),
@@ -26,11 +26,12 @@ vi.mock("@/lib/usage-board-client", async (original) => ({
 }));
 
 import { I18nProvider, persistPreference } from "@/lib/i18n";
+import { usageOrderHost } from "@/lib/usage-order.test-host";
 import { UsageDesk } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
 
 const KEY = "openmausbot.usageAccountsOpen.v1";
-const ORDER = "openmausbot.usageOrder.v1";
+let wink: ReturnType<typeof usageOrderHost>;
 let root: Root;
 let host: HTMLDivElement;
 let board: UsageBoard;
@@ -70,6 +71,9 @@ beforeEach(() => {
   h.reduce = true;
   board = structuredClone(usageBoardFixture);
   h.state = { board, status: "ready", pending: {}, failed: new Set() };
+  wink = usageOrderHost();
+  wink.open();
+  h.api.mockReset().mockImplementation((path: string, init?: RequestInit) => wink.answer(path, init) ?? Promise.resolve({}));
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -140,11 +144,10 @@ describe("Usage account cap", () => {
   it("follows a saved order changed in another view", async () => {
     accounts(5);
     const [a, b, c, d, e] = ids();
-    localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, e, c, d] }));
+    wink.push({ claude: [a!, b!, e!, c!, d!] });
     await render();
     expect(rows()).toEqual([a, b, e]);
-    localStorage.setItem(ORDER, JSON.stringify({ claude: [a, b, c, d, e] }));
-    await act(async () => { window.dispatchEvent(new StorageEvent("storage", { key: ORDER })); });
+    await act(async () => { wink.push({ claude: [a!, b!, c!, d!, e!] }); });
     expect(rows()).toEqual([a, b, c]);
   });
 
@@ -153,8 +156,7 @@ describe("Usage account cap", () => {
     const [a, b, c, d, e, f] = ids();
     await render();
     expect(rows()).toEqual([a, b, f]);
-    localStorage.setItem(ORDER, JSON.stringify({ claude: [f, a, b, c, d, e] }));
-    await act(async () => { window.dispatchEvent(new StorageEvent("storage", { key: ORDER })); });
+    await act(async () => { wink.push({ claude: [f!, a!, b!, c!, d!, e!] }); });
     expect(rows()).toEqual([f, a, b]);
     engine().accounts[0] = { ...engine().accounts[0]! };
     board.revision++;
