@@ -1151,6 +1151,8 @@ roomFixes = createRoomFixes({
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
+// every way a Gemini chat or room ends (delete, engine pick, a room's roster) frees its standby's slot
+warmPool.setOwner("antigravityAgent", (key) => store.threadBots(key.threadId).some((bot) => !bot.hidden && botAccounts.instance(bot, key.threadId)?.instanceId === key.instanceId));
 const snagUserData = process.env.OMB_USER_DATA;
 const teamSnags = snagUserData ? new TeamSnags({
   userData: snagUserData,
@@ -1974,6 +1976,8 @@ async function stopBotWork(bot: BotRecord): Promise<void> {
   const instance = botAccounts.instance(bot);
   for (const group of store.groups.filter((g) => g.busyBotId === bot.id)) await botAccounts.instance(bot, group.threadId)?.adapter.interruptTurn(group.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+  // a warm child from an engine the bot has left is not the current engine's to stop
+  warmPool.retire({ threadId: bot.threadId }, "bot deleted");
   stopScreenPoller(bot.id);
   activeVpsThreads.delete(bot.id);
   routines!.disableForBot(bot.id);
@@ -5408,8 +5412,8 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
 // turn mounts something only a send may set up (a remote or VM computer, connected apps).
 function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullable<PrepareFocus["fresh"]> | null {
   const task = store.taskByThread(bot.id, bot.threadId);
-  // only Claude starts a session ahead of Send; other engines' prepare ignores this shape
-  if (instance.driverKind !== "claudeAgent" || !task || task.resumeCursors[instance.instanceId]) return null;
+  // Claude starts a session and Gemini an agy ahead of Send; other engines' prepare ignores this shape
+  if (!["claudeAgent", "antigravityAgent"].includes(instance.driverKind) || !task || task.resumeCursors[instance.instanceId]) return null;
   if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) return null;
   if (bot.computer !== undefined && bot.computer !== "off") return null;
   if (bot.cloudBackend === "vps" || box.boxConfigured(cfg)) return null;
@@ -7662,6 +7666,7 @@ async function runClaimedGroupMemberTurn(
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
+        hosted: true,
         ...access,
         attended: !isUnattended(bot.id),
         cwd,

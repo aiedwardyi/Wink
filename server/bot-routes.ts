@@ -14,6 +14,7 @@ import { parseBotProfilePatch, type BotProfilePatchInput } from "./bot-profile.t
 import { cloudBackendChangeError } from "./cloud-backend.ts";
 import type { AppConfig } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
+import { warmPool } from "./drivers/warm-pool.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { KeepGoing } from "./keep-going.ts";
@@ -475,8 +476,17 @@ export function createBotRoutes(deps: BotRouteDeps) {
         if (!sameModelSelection(existingBot.pendingModelSelection ?? existingBot.modelSelection, normalizedSelection)) deps.cancelUsageWait?.(existingBot.id);
         Object.assign(patch, modelPickPatch(existingBot, normalizedSelection));
       }
+      const instanceOf = (record: BotRecord) => deps.accountBots ? deps.accountBots.instance(record) : registry.get(record.modelSelection.instanceId);
+      const engineBefore = normalizedSelection && existingBot && instanceOf(existingBot)?.instanceId;
+      // a pick held for the running turn moves the bot all the same once it ends; instance() would name the running turn's engine
+      const engineAfter = (record: BotRecord) => {
+        const selection = record.pendingModelSelection ?? record.modelSelection;
+        try { return deps.accountBots ? deps.accountBots.resolve({ modelSelection: selection }).instanceId : selection.instanceId; } catch { return undefined; }
+      };
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      // a warm child serves only the engine it started for; the new engine's Stop and Delete never reach it
+      if (engineBefore && engineBefore !== engineAfter(bot)) warmPool.retire({ instanceId: engineBefore, threadId: bot.threadId }, "engine switched");
       // A changed working folder must reach existing tasks: their pinned
       // cwd predates the change and their resume cursors point at
       // old-rooted CLI sessions. Reset both so the next turn re-pins the
