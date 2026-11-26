@@ -41,6 +41,7 @@ import {
 } from "./antigravity.ts";
 import { noteGenerator } from "../memory-pass.ts";
 import * as procs from "../procs.ts";
+import { warmPool } from "./warm-pool.ts";
 
 vi.mock("./warm-pool.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./warm-pool.ts")>();
@@ -3279,6 +3280,8 @@ require(${JSON.stringify(fake)});
         }
         // a Stop or Delete now reaches only Codex
         for (const { pid } of spawns()) await expect.poll(() => alive(pid), { timeout: 5_000 }).toBe(false);
+        // a slot frees on the child's close event, a beat after its pid dies
+        await expect.poll(() => warmPool.stats().reserved, { timeout: 5_000 }).toBe(0);
         await open(gemini, { threadId: third.threadId });
         await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
         expect(alive(spawns()[2]!.pid)).toBe(true);
