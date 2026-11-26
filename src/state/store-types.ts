@@ -107,6 +107,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** Mid-turn progress line folded under Steps once the turn settles. */
+  step?: true;
   /** The new-bot offer reply that carries the Import Memory prompt. */
   importOffer?: true;
   call?: import("../../shared/live-call").CallTag;

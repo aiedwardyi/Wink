@@ -1203,6 +1203,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       let deltaText = "";
       let streamed = "";
       const steps = new Map<number, string>();
+      // a tool between two texts splits them: the earlier one is a step, its own row
+      const spanOf = new Map<number, number>();
+      let span = 0;
+      let toolSinceText = false;
       const streamDelta = (delta: string) => {
         deltaText += delta;
         if (cancelledTool) return;
@@ -1277,6 +1281,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             if (payload.step_type === "checkpoint") checkpointed = true;
             if (payload.step_type === "tool") {
               toolRan = true;
+              toolSinceText = true;
               cancelledTool ||= isCancelledTool(payload);
               const itemId = `${conversationId ?? o.conversation_id ?? "conv"}:${payload.step_index}`;
               if (payload.state === "ACTIVE") {
@@ -1288,6 +1293,11 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               }
             } else if (payload.step_type === "agent_response") {
               if (typeof payload.text_delta === "string") {
+                if (!steps.has(payload.step_index)) {
+                  if (toolSinceText && steps.size) span++;
+                  spanOf.set(payload.step_index, span);
+                  toolSinceText = false;
+                }
                 steps.set(payload.step_index, (steps.get(payload.step_index) ?? "") + payload.text_delta);
                 streamDelta(payload.text_delta);
               }
@@ -1323,7 +1333,12 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               // item.completed carries the reply; a result that disagrees with the stream adds no delta
               const rest = response.startsWith(streamed) ? response.slice(streamed.length) : "";
               if (rest) emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: rest });
-              emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: response });
+              const spans: string[] = [];
+              for (const [index, text] of steps) spans[spanOf.get(index) ?? 0] = (spans[spanOf.get(index) ?? 0] ?? "") + text;
+              const split = unrestated(spans.filter((text) => text !== undefined)).map(stripAntigravitySystemNotices).filter((text) => text.trim());
+              for (const text of split.length > 1 && split.join("") === response ? split : [response]) {
+                emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text });
+              }
             }
             const conversation = conversationId ?? resumeCursor;
             if (busyReason && !recoveredTransient && conversation && busyResumes < BUSY_RESUME_DELAYS_MS.length) {

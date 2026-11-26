@@ -3009,7 +3009,17 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
 const askTexts = askTurnTexts();
-const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); });
+const turnSummary = turnSummaries(
+  (threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); },
+  // 1:1 only: a room keeps every line as its own entry
+  (threadId, ids) => {
+    if (!store.botByThread(threadId)) return;
+    for (const id of ids) {
+      const row = store.row(threadId, id);
+      if (row && !row.quick && !row.comm && !isVoiceLine(row)) store.patchRow(threadId, id, { step: true });
+    }
+  },
+);
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
@@ -4005,6 +4015,7 @@ bus.subscribe((event: RuntimeEvent) => {
   quickAnswersTaken(store, event);
   roomEchoesTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
+  if (event.type === "turn.completed") turnSummary.fold(event.threadId, event.turnId);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   // the settle below writes to disk; the reply's last frame must not wait behind it
   if (event.type === "turn.completed") for (const client of sseClients) sendNow(client.res);
@@ -4086,6 +4097,8 @@ bus.subscribe((event: RuntimeEvent) => {
         // the line answering a direct steer stays shown and is never hidden as restated: the final does not repeat it
         const anchor = event.summarized ? undefined : store.findLast(event.threadId, (m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
+        // a peer turn keeps every line as its own row, as before
+        const peerTurn = !event.summarized && Boolean(store.findLast(event.threadId, (m) => m.role === "user" && m.kind === "text" && !m.steered && !isVoiceLine(m))?.from);
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
@@ -4099,7 +4112,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
         if (!event.summarized && turnOwnerId) askTexts.text(turnOwnerId, event.threadId, event.turnId, message.id, event.phase);
-        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text);
+        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text, !steerReply && !stamp && !peerTurn);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
         const pending = toolMessageByItem.get(itemKey);
