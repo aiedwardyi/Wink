@@ -384,6 +384,8 @@ export function liveTurnSteps(
   let afterSteer = false;
   for (let i = turnStart + 1; i < messages.length; i++) {
     const row = messages[i];
+    // send order can draw a reply that finished before this turn below its line
+    if (row.at < messages[turnStart].at) continue;
     if (row.role === "user" && row.kind === "text" && row.steered && !row.queueId) {
       afterSteer = true;
       continue;

@@ -658,4 +658,11 @@ describe("Steps fold and live turn steps", () => {
     expect([...afterSteer.hiddenIds]).toEqual(["m1"]);
     expect(afterSteer.fallbackText).toBe("Reading logs.");
   });
+
+  it("leaves the last turn's answer out of a turn whose line was sent before it finished", () => {
+    const sent: Message = { id: "u2", at: 900, actedAt: 0, role: "user", kind: "text", text: "next ask" };
+    const answer: Message = { id: "r1", at: 300, role: "bot", kind: "text", text: "Last answer." };
+    const step: Message = { id: "m1", at: 1200, role: "bot", kind: "text", text: "Reading logs." };
+    expect([...liveTurnSteps([sent, answer, step], null, true).hiddenIds]).toEqual(["m1"]);
+  });
 });
