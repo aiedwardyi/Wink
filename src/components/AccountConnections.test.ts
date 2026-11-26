@@ -120,7 +120,7 @@ it.each(["en", "ko"] as const)("signs out a non-main account in one tap in %s", 
   const name = locale === "en" ? "Sign Out" : "로그아웃";
   expect(buttons(name)).toHaveLength(3);
   await act(async () => buttons(name)[1]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/account-1/sign-out", { method: "POST", body: "{}" });
+  expect(request).toHaveBeenCalledWith("/api/accounts/account-1/sign-out", { method: "POST", body: JSON.stringify({ login: "account-1@example.com" }) });
   expect(request.mock.calls.filter(([path]) => String(path).endsWith("/sign-out"))).toHaveLength(1);
   expect(host.querySelector('input, [role="radiogroup"]')).toBeNull();
   expect(host.textContent).not.toMatch(/Move|bots? use|옮|봇/);
@@ -200,7 +200,7 @@ it("skips stopped and loading accounts when choosing Main's destination", async 
   state.instances[2]!.snapshot = { state: "available" };
   await update();
   await act(async () => buttons("Sign Out")[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-3" }) });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-3", login: "claude@example.com" }) });
 });
 
 it("uses the server's compatible destination for Main sign-out", async () => {
@@ -208,7 +208,7 @@ it("uses the server's compatible destination for Main sign-out", async () => {
   request.mockImplementation(async (path: string) => path.endsWith("/destination") ? { destinationId: "account-2" } : {});
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/destination");
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-2" }) });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-2", login: "claude@example.com" }) });
 });
 
 it("keeps Main signed in when compatible destination selection fails", async () => {
@@ -359,7 +359,7 @@ it("signs out the main account with zero bots through the destination path", asy
   try {
     await render();
     await act(async () => buttons("Sign Out")[0]!.click());
-    expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1" }) });
+    expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1", login: "claude@example.com" }) });
     expect(host.textContent).not.toContain("Move");
     expect(host.querySelector('input, [role="radiogroup"]')).toBeNull();
   } finally { state.bots.push(...bots); }
@@ -371,7 +371,7 @@ it.each(["en", "ko"] as const)("signs out Main through another ready account in 
   const name = locale === "en" ? "Sign Out" : "로그아웃";
   expect(buttons(name)[0]!.disabled).toBe(false);
   await act(async () => buttons(name)[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1" }) });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1", login: "claude@example.com" }) });
   state.instances[0]!.accountMain = false;
   state.instances[1]!.accountMain = true;
   state.instances = [...state.instances];
@@ -379,14 +379,14 @@ it.each(["en", "ko"] as const)("signs out Main through another ready account in 
   expect(buttons(name)[0]!.disabled).toBe(false);
   expect(buttons(name)[1]!.disabled).toBe(false);
   await act(async () => buttons(name)[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ login: "claude@example.com" }) });
 });
 
 it("keeps single-account sign-out unchanged", async () => {
   await render(1);
   expect(buttons("Sign Out")[0]!.disabled).toBe(false);
   await act(async () => buttons("Sign Out")[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ login: "claude@example.com" }) });
 });
 
 it.each([false, true])("retries a failed drain with its recorded destination when Main is %s", async (main) => {
