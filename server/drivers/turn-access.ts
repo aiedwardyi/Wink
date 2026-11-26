@@ -1,4 +1,5 @@
 import type { SendTurnInput } from "../contracts.ts";
+import { inertMentions } from "../replies.ts";
 
 /** free: never asks. auto: Wink answers the engine's asks, except risky ones. ask: the user answers. own: the engine's own config decides. off: blocked. */
 export type Grant = "free" | "auto" | "ask" | "own" | "off";
@@ -10,6 +11,17 @@ export type AccessTurn = Pick<SendTurnInput, "approval" | "readOnly" | "ownerTex
 export const FREE_ACCESS: TurnAccess = { edits: "free", commands: "free" };
 /** A read-only turn on someone else's words (a room guest, a bot, a joined room): no file of this PC may reach it. */
 export const guestText = (turn: Pick<SendTurnInput, "readOnly" | "ownerText">) => turn.readOnly === true && turn.ownerText !== true;
+/** A guest turn's every prompt text, whichever builder made it (the ask, a replay, the task record): no "@" in it names a file. */
+export function guestTurnInput(turn: SendTurnInput): SendTurnInput {
+  if (!guestText(turn)) return turn;
+  return {
+    ...turn,
+    text: inertMentions(turn.text),
+    ...(turn.resumeFallback && { resumeFallback: { text: inertMentions(turn.resumeFallback.text) } }),
+    ...(turn.transcript && { transcript: turn.transcript.map((line) => ({ ...line, text: inertMentions(line.text) })) }),
+    ...(turn.nativeReplayPrefix !== undefined && { nativeReplayPrefix: inertMentions(turn.nativeReplayPrefix) }),
+  };
+}
 
 /** Grants of a driver whose asks reach Wink: the chip decides, and a read-only turn has nobody to approve (index.ts denies its asks). */
 export function routedAccess(turn: AccessTurn): TurnAccess {

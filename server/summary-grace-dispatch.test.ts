@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closedAskNotes } from "./ask-user.ts";
 import { estimateContextTokens, holdWorkerNotes, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, withoutTurnNotes } from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
+import { guestTurnInput } from "./drivers/turn-access.ts";
 import { composeUserTurnPrompt, userTurnReactionKeys } from "./replies.ts";
 import { adoptHumanRoot } from "./comms-root.ts";
 import { KEEP_GOING_RULES, keepGoingTurnOptions } from "./keep-going.ts";
@@ -209,7 +210,7 @@ describe("summary grace dispatch", () => {
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
-        leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
+        leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, guestTurnInput, runningTurnIdByThread: new Map(), readOnly: false,
       };
       const dispatched = runDispatch(scope);
       await vi.advanceTimersByTimeAsync(0);
@@ -360,7 +361,7 @@ describe("summary grace dispatch", () => {
       onSummaryWait: () => {}, logSummaryWait: () => {}, latencySendId: "send", isSendCancelled: () => false,
       systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
       pendingInterruptThreads: { started: () => {} }, model: "gpt-6.2-sol", effort: undefined,
-      leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
+      leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, guestTurnInput, runningTurnIdByThread: new Map(), readOnly: false,
     };
     await runDispatch(scope);
     expect(summaryBuild.settle).toHaveBeenCalledOnce();

@@ -367,7 +367,7 @@ describe("turn completion disposition after stop", () => {
   it("clears a rewound turn's cursors before the send, so a session announced during dispatch survives", () => {
     const claimed = indexSource.indexOf("async function startClaimedTurn(");
     const dispatch = indexSource.indexOf("const started = await dispatchAdapterTurn(", claimed);
-    const send = indexSource.indexOf("return live.adapter.sendTurn({", dispatch);
+    const send = indexSource.indexOf("return live.adapter.sendTurn(input);", dispatch);
     const clear = indexSource.indexOf("if (rewound) store.clearResumeCursors(bot.id, threadId);", claimed);
     const spent = indexSource.indexOf("if (rewound) store.patchBot(bot.id, { rewound: false });", claimed);
     expect(dispatch).toBeGreaterThan(claimed);

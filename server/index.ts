@@ -62,7 +62,7 @@ import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
-import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
+import { accessRules, guestTurnInput, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
 import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
@@ -6560,7 +6560,26 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           limitWaits.track(bot.id, threadId, selection, opts?.limitWaitId, { unattended: opts?.unattended, keepGoingWake: opts?.keepGoingWake, paneNoteWake: opts?.paneNoteWake });
         }
         pendingInterruptThreads.started(threadId, bot.id, epoch);
-        const joined = await joinRunningTurn(live.adapter, { threadId, text, resumeCursor, systemUpdate }, runningTurnIdByThread.get(threadId));
+        const input = guestTurnInput({
+          ...(trace ? { trace } : {}),
+          threadId,
+          text,
+          model,
+          effort,
+          leanStartup,
+          resumeCursor,
+          resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
+          ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
+          transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
+          system,
+          systemUpdate,
+          approval,
+          ...(readOnly ? { readOnly } : {}),
+          attended: !isUnattended(bot.id),
+          integrations,
+          cwd,
+        });
+        const joined = await joinRunningTurn(live.adapter, input, runningTurnIdByThread.get(threadId));
         if (joined) {
           disownedTurnIds.delete(joined.turnId);
           turnRegistry.started(joined.turnId, threadId);
@@ -6568,28 +6587,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           return joined;
         }
         trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice], durableTaskRecordText, systemUpdate);
-        trace?.assembled(system, text);
+        trace?.assembled(system, input.text);
         if (cwd) turnCwdByThread.set(threadId, cwd);
         else turnCwdByThread.delete(threadId);
-        return live.adapter.sendTurn({
-        ...(trace ? { trace } : {}),
-        threadId,
-        text,
-        model,
-        effort,
-        leanStartup,
-        resumeCursor,
-        resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
-        ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
-        transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
-        system,
-        systemUpdate,
-        approval,
-        ...(readOnly ? { readOnly } : {}),
-        attended: !isUnattended(bot.id),
-        integrations,
-        cwd,
-      });
+        return live.adapter.sendTurn(input);
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       if (reservation) commit(reservation);
@@ -7669,7 +7670,7 @@ async function runClaimedGroupMemberTurn(
       pendingInterruptThreads.started(threadId, turnKey, epoch);
       if (cwd) turnCwdByThread.set(threadId, cwd);
       else turnCwdByThread.delete(threadId);
-      return live.adapter.sendTurn({
+      return live.adapter.sendTurn(guestTurnInput({
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
@@ -7679,7 +7680,7 @@ async function runClaimedGroupMemberTurn(
         cwd,
         integrations,
         ...memberTurnSelection(selection, bot.leanStartup),
-      });
+      }));
     })
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);

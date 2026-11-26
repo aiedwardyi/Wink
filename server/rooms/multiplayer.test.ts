@@ -281,7 +281,8 @@ describe("a teammate's request under the host's setting for the bot", () => {
     const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
     let spread = false;
     const walk = (node: ts.Node) => {
-      const input = ts.isCallExpression(node) && node.expression.getText(index).endsWith(".sendTurn") ? node.arguments[0] : undefined;
+      const sent = ts.isCallExpression(node) && node.expression.getText(index).endsWith(".sendTurn") ? node.arguments[0] : undefined;
+      const input = sent && ts.isCallExpression(sent) && sent.expression.getText(index) === "guestTurnInput" ? sent.arguments[0] : sent;
       if (input && ts.isObjectLiteralExpression(input)) spread = input.properties.some((prop) => prop.getText(index) === "...access");
       ts.forEachChild(node, walk);
     };
